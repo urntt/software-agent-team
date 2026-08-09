@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "id": "phase1_deterministic",
+  "sandbox": {
+    "backend": "docker",
+    "image": "sat-task-manager-quality:phase1-v1",
+    "pull": "never",
+    "network": "none",
+    "read_only_root_filesystem": true,
+    "workspace_access": "read_only",
+    "workspace_target": "/workspace",
+    "tmpfs_target": "/tmp",
+    "user": "65534:65534",
+    "environment": {
+      "HOME": "/tmp/home",
+      "PYTHONDONTWRITEBYTECODE": "1",
+      "PYTHONUNBUFFERED": "1",
+      "RUFF_CACHE_DIR": "/tmp/ruff-cache",
+      "TASK_MANAGER_DATABASE_PATH": "/tmp/project-tests.sqlite3",
+      "TMPDIR": "/tmp",
+      "XDG_CACHE_HOME": "/tmp/cache"
+    }
+  },
+  "limits": {
+    "command_timeout_seconds": 120,
+    "total_timeout_seconds": 300,
+    "cpu_cores": 1.0,
+    "memory_mb": 512,
+    "pids": 128,
+    "open_files": 1024,
+    "writable_tmpfs_mb": 128,
+    "stdout_max_bytes": 1048576,
+    "stderr_max_bytes": 1048576
+  }
+}

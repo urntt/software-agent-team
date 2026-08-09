@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "id": "task_manager_phase1",
+  "policy_id": "phase1_deterministic",
+  "task_brief": "task-brief.json",
+  "input_mounts": [
+    {
+      "id": "acceptance_suite",
+      "source": "acceptance",
+      "target": "/opt/software-agent-team/inputs/task-manager-acceptance",
+      "read_only": true
+    }
+  ],
+  "gates": [
+    {
+      "id": "CHECK_COMPILE",
+      "argv": [
+        "python",
+        "-m",
+        "compileall",
+        "-q",
+        "app",
+        "tests"
+      ],
+      "working_directory": ".",
+      "timeout_seconds": 30,
+      "criterion_ids": [
+        "AC_QUALITY"
+      ]
+    },
+    {
+      "id": "CHECK_LINT",
+      "argv": [
+        "python",
+        "-m",
+        "ruff",
+        "check",
+        "."
+      ],
+      "working_directory": ".",
+      "timeout_seconds": 60,
+      "criterion_ids": [
+        "AC_QUALITY"
+      ]
+    },
+    {
+      "id": "CHECK_PROJECT_TESTS",
+      "argv": [
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider"
+      ],
+      "working_directory": ".",
+      "timeout_seconds": 90,
+      "criterion_ids": [
+        "AC_START",
+        "AC_QUALITY"
+      ]
+    },
+    {
+      "id": "CHECK_ACCEPTANCE",
+      "argv": [
+        "python",
+        "/opt/software-agent-team/inputs/task-manager-acceptance/run.py",
+        "--repository",
+        "/workspace"
+      ],
+      "working_directory": ".",
+      "timeout_seconds": 90,
+      "criterion_ids": [
+        "AC_START",
+        "AC_CREATE_READ",
+        "AC_UPDATE_DELETE",
+        "AC_FILTER",
+        "AC_PERSIST",
+        "AC_VALIDATION",
+        "AC_NOT_FOUND",
+        "AC_QUALITY",
+        "AC_ACCESSIBILITY"
+      ]
+    }
+  ],
+  "manual_review_criteria": [
+    "AC_DOCUMENTATION",
+    "AC_ACCESSIBILITY"
+  ]
+}

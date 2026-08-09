@@ -1,0 +1,81 @@
+{
+  "run_id": "task-manager-phase1",
+  "title": "Task-management Web application",
+  "source_request": "Build a small local Web application for managing personal tasks.",
+  "requirements": [
+    "Expose an ASGI application as app.main:app and use TASK_MANAGER_DATABASE_PATH when it is set.",
+    "Serve the task list at GET / and create tasks with POST /tasks.",
+    "Serve task details at GET /tasks/{id}, edit forms at GET /tasks/{id}/edit, and updates at POST /tasks/{id}/edit.",
+    "Serve an explicit deletion confirmation at GET /tasks/{id}/delete and delete only after POST /tasks/{id}/delete.",
+    "Support status and priority filters on GET / with the status and priority query parameters.",
+    "Persist tasks in SQLite across application process restarts.",
+    "Preserve valid submitted values and show a useful message when form input is invalid.",
+    "Return a user-visible HTTP 404 response for missing task identifiers.",
+    "Provide automated pytest coverage and a README with installation, startup, test, and limitation instructions.",
+    "Use semantic server-rendered HTML that supports the core workflow with a keyboard alone."
+  ],
+  "acceptance_criteria": [
+    {
+      "id": "AC_START",
+      "description": "The documented ASGI application starts from a clean checkout and initializes its database automatically.",
+      "verification": "Run CHECK_ACCEPTANCE and CHECK_PROJECT_TESTS in the fixed benchmark image."
+    },
+    {
+      "id": "AC_CREATE_READ",
+      "description": "A user can create a task with all supported fields, list it, and inspect its details.",
+      "verification": "Run the fixed create, list, and detail HTTP acceptance flow."
+    },
+    {
+      "id": "AC_UPDATE_DELETE",
+      "description": "A user can edit every task field and delete a task only after an explicit confirmation step.",
+      "verification": "Run the fixed edit and confirmed-delete HTTP acceptance flow."
+    },
+    {
+      "id": "AC_FILTER",
+      "description": "The task list can be filtered by status and priority.",
+      "verification": "Run the fixed status-and-priority filter acceptance flow."
+    },
+    {
+      "id": "AC_PERSIST",
+      "description": "Tasks remain available after the application process restarts.",
+      "verification": "Create a task, restart the ASGI server with the same SQLite path, and retrieve it again."
+    },
+    {
+      "id": "AC_VALIDATION",
+      "description": "Invalid input produces a useful message without losing valid submitted values.",
+      "verification": "Submit an empty title with a valid description and inspect the returned HTML."
+    },
+    {
+      "id": "AC_NOT_FOUND",
+      "description": "Missing task identifiers produce a user-visible HTTP 404 response.",
+      "verification": "Request a known-missing task identifier through the fixed acceptance flow."
+    },
+    {
+      "id": "AC_QUALITY",
+      "description": "Generated pytest tests, static compilation checks, and the fixed acceptance suite pass.",
+      "verification": "Run every command in the frozen task-manager policy."
+    },
+    {
+      "id": "AC_DOCUMENTATION",
+      "description": "The README explains installation, startup, tests, and known limitations without machine-specific paths.",
+      "verification": "Run the fixed repository-structure check and independent review."
+    },
+    {
+      "id": "AC_ACCESSIBILITY",
+      "description": "Core pages use semantic HTML, associated labels, and native keyboard-operable controls.",
+      "verification": "Run the fixed HTML checks and complete the human accessibility rubric."
+    }
+  ],
+  "constraints": [
+    "Use Python 3.12, FastAPI, Jinja2, SQLite, and pytest.",
+    "Do not require a hosted service, external database, frontend build service, credentials, or network access at runtime.",
+    "Do not change the fixed route and environment-variable contract used by the acceptance suite.",
+    "Keep all source, tests, templates, static files, and documentation inside the supplied Git repository."
+  ],
+  "assumptions": [
+    "The benchmark targets one local user and does not require authentication.",
+    "The fixed quality-gate image already contains the required Python packages."
+  ],
+  "open_questions": [],
+  "confirmed": true
+}
