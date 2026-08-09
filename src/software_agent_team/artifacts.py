@@ -703,10 +703,15 @@ class IterationRecord(IterationArtifact):
     review_report: ArtifactReference
     decision: IterationDecision
     blocking_finding_ids: tuple[str, ...] = ()
+    blocking_reasons: tuple[str, ...] = ()
     resolved_finding_ids: tuple[str, ...] = ()
     summary: str = Field(min_length=1)
 
-    @field_validator("blocking_finding_ids", "resolved_finding_ids")
+    @field_validator(
+        "blocking_finding_ids",
+        "blocking_reasons",
+        "resolved_finding_ids",
+    )
     @classmethod
     def require_clean_finding_ids(cls, values: tuple[str, ...]) -> tuple[str, ...]:
         """Reject duplicate finding references."""
@@ -728,12 +733,11 @@ class IterationRecord(IterationArtifact):
                 raise ValueError(f"{field} must reference {expected.value}")
         if self.input_commit == self.output_commit:
             raise ValueError("iteration output commit must differ from input")
-        if self.decision is IterationDecision.ACCEPT and self.blocking_finding_ids:
-            raise ValueError("accepted iterations cannot retain blocking findings")
-        if self.decision is not IterationDecision.ACCEPT and not (
-            self.blocking_finding_ids
-        ):
-            raise ValueError("revision and failure require blocking findings")
+        has_blocker = bool(self.blocking_finding_ids or self.blocking_reasons)
+        if self.decision is IterationDecision.ACCEPT and has_blocker:
+            raise ValueError("accepted iterations cannot retain blockers")
+        if self.decision is not IterationDecision.ACCEPT and not has_blocker:
+            raise ValueError("revision and failure require blocking evidence")
         overlap = set(self.blocking_finding_ids) & set(self.resolved_finding_ids)
         if overlap:
             raise ValueError("a finding cannot be both blocking and resolved")

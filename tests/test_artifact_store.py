@@ -542,6 +542,72 @@ def test_final_report_must_match_final_iteration_evidence(tmp_path: Path) -> Non
         store.write(final)
 
 
+def test_iteration_limit_failure_can_be_grounded_in_failed_gates(
+    tmp_path: Path,
+) -> None:
+    store = make_store(tmp_path)
+    plan_ref = store.write(implementation_plan())
+    work_ref = store.write(work_result())
+    payload = make_test_report().model_dump(mode="json")
+    payload["status"] = "failed"
+    payload["commands"][0]["exit_code"] = 1
+    payload["criteria"][0]["status"] = "failed"
+    payload["criteria"][0]["detail"] = "The deterministic gate failed."
+    failed_test = PhaseTestReport.model_validate(payload)
+    test_ref = store.write(failed_test)
+    review_ref = store.write(review_report())
+
+    iteration = IterationRecord(
+        run_id="task-manager-001",
+        team_id="function_specialized",
+        created_at=CREATED_AT,
+        iteration=1,
+        input_commit=INPUT_COMMIT,
+        output_commit=OUTPUT_COMMIT,
+        implementation_plan=plan_ref,
+        work_result=work_ref,
+        test_report=test_ref,
+        review_report=review_ref,
+        decision=IterationDecision.FAIL,
+        blocking_reasons=("The deterministic quality gate failed.",),
+        summary="The run stopped with reproducible failing gate evidence.",
+    )
+
+    reference = store.write(iteration)
+
+    assert store.load(reference) == iteration
+
+
+def test_non_accept_iteration_requires_blocking_evidence() -> None:
+    with pytest.raises(ValidationError, match="blocking evidence"):
+        IterationRecord(
+            run_id="task-manager-001",
+            team_id="function_specialized",
+            created_at=CREATED_AT,
+            iteration=1,
+            input_commit=INPUT_COMMIT,
+            output_commit=OUTPUT_COMMIT,
+            implementation_plan=reference(
+                ArtifactKind.IMPLEMENTATION_PLAN,
+                "implementation-plan.json",
+            ),
+            work_result=reference(
+                ArtifactKind.WORK_RESULT,
+                "iterations/01/work-result.json",
+            ),
+            test_report=reference(
+                ArtifactKind.TEST_REPORT,
+                "iterations/01/test-report.json",
+            ),
+            review_report=reference(
+                ArtifactKind.REVIEW_REPORT,
+                "iterations/01/review-report.json",
+            ),
+            decision=IterationDecision.FAIL,
+            summary="Missing blocking evidence must be rejected.",
+        )
+
+
 @pytest.mark.parametrize(
     "artifact",
     [

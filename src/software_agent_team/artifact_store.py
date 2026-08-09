@@ -432,11 +432,11 @@ class ArtifactStore:
                         "revision decision does not match test and review evidence"
                     )
             elif (
-                review.verdict is not ReviewVerdict.FAIL
-                and test.status is not CheckStatus.BLOCKED
+                test.status is CheckStatus.PASSED
+                and review.verdict is ReviewVerdict.ACCEPT
             ):
                 raise ArtifactStoreError(
-                    "failure decision requires failed review or blocked test evidence"
+                    "failure decision cannot replace an acceptance decision"
                 )
 
         elif isinstance(artifact, FinalReport) and artifact.iterations:
