@@ -1,0 +1,36 @@
+{
+  "run_id": "task-manager-001",
+  "title": "Task-management Web application",
+  "source_request": "Build a small Web application for managing personal tasks.",
+  "requirements": [
+    "Users can create, view, update, delete, and filter persisted tasks.",
+    "The application provides useful validation and not-found responses.",
+    "The application starts locally from a clean checkout."
+  ],
+  "acceptance_criteria": [
+    {
+      "id": "AC_CREATE",
+      "description": "A user can create a task with a required title.",
+      "verification": "Run the create-task acceptance test."
+    },
+    {
+      "id": "AC_PERSIST",
+      "description": "Tasks remain available after an application restart.",
+      "verification": "Run the persistence acceptance test."
+    },
+    {
+      "id": "AC_QUALITY",
+      "description": "All fixed tests and static checks pass.",
+      "verification": "Run the benchmark quality-gate commands."
+    }
+  ],
+  "constraints": [
+    "Use Python 3.12, FastAPI, Jinja2, SQLite, and pytest.",
+    "Do not require a hosted service."
+  ],
+  "assumptions": [
+    "The first benchmark targets one local user."
+  ],
+  "open_questions": [],
+  "confirmed": true
+}

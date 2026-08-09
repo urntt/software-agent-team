@@ -1,0 +1,43 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Local agent instructions
+AGENTS.md
+
+# Node and OpenClaw runtime state
+node_modules/
+.openclaw/
+openclaw.json
+configs/openclaw.local.json5
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# Generated runs and benchmark workspaces
+runs/
+worktrees/
+artifacts/generated/
+openclaw/workspaces/*/
+
+# Editors and operating systems
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~

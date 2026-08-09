@@ -1,0 +1,115 @@
+{
+  "schema_version": 1,
+  "default_team": "function_specialized",
+  "shared_roles": [
+    "clarifier"
+  ],
+  "teams": [
+    {
+      "id": "single_agent",
+      "kind": "baseline",
+      "description": "One generalist Agent implements the confirmed task brief without independent Agent review or review-driven revision.",
+      "roles": [
+        "single_agent"
+      ],
+      "stages": [
+        {
+          "id": "implement",
+          "mode": "sequential",
+          "roles": [
+            "single_agent"
+          ]
+        }
+      ],
+      "max_iterations": 1,
+      "independent_review": false,
+      "revision_enabled": false
+    },
+    {
+      "id": "function_specialized",
+      "kind": "multi_agent",
+      "description": "Planning, generalist implementation, testing, and review are separate responsibilities.",
+      "roles": [
+        "planner",
+        "generalist_developer",
+        "tester",
+        "reviewer"
+      ],
+      "stages": [
+        {
+          "id": "plan",
+          "mode": "sequential",
+          "roles": [
+            "planner"
+          ]
+        },
+        {
+          "id": "implement",
+          "mode": "sequential",
+          "roles": [
+            "generalist_developer"
+          ]
+        },
+        {
+          "id": "verify",
+          "mode": "parallel",
+          "roles": [
+            "tester",
+            "reviewer"
+          ]
+        }
+      ],
+      "max_iterations": 3,
+      "independent_review": true,
+      "revision_enabled": true
+    },
+    {
+      "id": "implementation_domain_specialized",
+      "kind": "multi_agent",
+      "description": "Planning and quality control stay stable while frontend and backend implementation use separate Agents with explicit integration.",
+      "roles": [
+        "planner",
+        "frontend_developer",
+        "backend_developer",
+        "integrator",
+        "tester",
+        "reviewer"
+      ],
+      "stages": [
+        {
+          "id": "plan",
+          "mode": "sequential",
+          "roles": [
+            "planner"
+          ]
+        },
+        {
+          "id": "implement",
+          "mode": "parallel",
+          "roles": [
+            "frontend_developer",
+            "backend_developer"
+          ]
+        },
+        {
+          "id": "integrate",
+          "mode": "sequential",
+          "roles": [
+            "integrator"
+          ]
+        },
+        {
+          "id": "verify",
+          "mode": "parallel",
+          "roles": [
+            "tester",
+            "reviewer"
+          ]
+        }
+      ],
+      "max_iterations": 3,
+      "independent_review": true,
+      "revision_enabled": true
+    }
+  ]
+}

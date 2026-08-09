@@ -1,0 +1,90 @@
+{
+  // Sanitized template only. Materialize active configuration and credentials
+  // outside Git before live execution.
+  agents: {
+    defaults: {
+      repoRoot: "${SOFTWARE_AGENT_TEAM_ROOT}",
+      sandbox: {
+        mode: "all",
+        backend: "docker",
+        scope: "agent",
+        workspaceAccess: "ro",
+      },
+    },
+    list: [
+      {
+        id: "clarifier",
+        default: true,
+        name: "Requirements Clarifier",
+        workspace: "${SOFTWARE_AGENT_TEAM_ROOT}/openclaw/workspaces/clarifier",
+        tools: {
+          deny: ["write", "edit", "apply_patch", "exec", "process"],
+        },
+      },
+      {
+        id: "single_agent",
+        name: "Single-Agent Baseline",
+        workspace: "${SOFTWARE_AGENT_TEAM_ROOT}/openclaw/workspaces/single_agent",
+        sandbox: {
+          workspaceAccess: "rw",
+        },
+      },
+      {
+        id: "planner",
+        name: "Planner",
+        workspace: "${SOFTWARE_AGENT_TEAM_ROOT}/openclaw/workspaces/planner",
+        tools: {
+          deny: ["write", "edit", "apply_patch", "exec", "process"],
+        },
+      },
+      {
+        id: "generalist_developer",
+        name: "Generalist Developer",
+        workspace: "${SOFTWARE_AGENT_TEAM_ROOT}/openclaw/workspaces/generalist_developer",
+        sandbox: {
+          workspaceAccess: "rw",
+        },
+      },
+      {
+        id: "frontend_developer",
+        name: "Frontend Developer",
+        workspace: "${SOFTWARE_AGENT_TEAM_ROOT}/openclaw/workspaces/frontend_developer",
+        sandbox: {
+          workspaceAccess: "rw",
+        },
+      },
+      {
+        id: "backend_developer",
+        name: "Backend Developer",
+        workspace: "${SOFTWARE_AGENT_TEAM_ROOT}/openclaw/workspaces/backend_developer",
+        sandbox: {
+          workspaceAccess: "rw",
+        },
+      },
+      {
+        id: "integrator",
+        name: "Integrator",
+        workspace: "${SOFTWARE_AGENT_TEAM_ROOT}/openclaw/workspaces/integrator",
+        sandbox: {
+          workspaceAccess: "rw",
+        },
+      },
+      {
+        id: "tester",
+        name: "Tester",
+        workspace: "${SOFTWARE_AGENT_TEAM_ROOT}/openclaw/workspaces/tester",
+        tools: {
+          deny: ["write", "edit", "apply_patch", "exec", "process"],
+        },
+      },
+      {
+        id: "reviewer",
+        name: "Reviewer",
+        workspace: "${SOFTWARE_AGENT_TEAM_ROOT}/openclaw/workspaces/reviewer",
+        tools: {
+          deny: ["write", "edit", "apply_patch", "exec", "process"],
+        },
+      },
+    ],
+  },
+}
