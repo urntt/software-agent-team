@@ -8,6 +8,7 @@ from software_agent_team.artifact_store import (
 )
 from software_agent_team.artifacts import (
     AcceptanceCriterion,
+    AgentExecutionRecord,
     AgentRole,
     ArtifactKind,
     ArtifactReference,
@@ -68,6 +69,7 @@ from software_agent_team.teams import (
 
 __all__ = [
     "AcceptanceCriterion",
+    "AgentExecutionRecord",
     "AgentRole",
     "ArtifactAlreadyExistsError",
     "ArtifactIntegrityError",

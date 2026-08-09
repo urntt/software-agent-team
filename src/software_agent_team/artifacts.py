@@ -1,6 +1,8 @@
 """Validated contracts for requests, phase artifacts, and Agent handoffs."""
 
+import re
 from datetime import UTC, datetime
+from decimal import Decimal
 from enum import StrEnum
 from pathlib import PurePosixPath
 from typing import Literal, Self
@@ -44,6 +46,8 @@ class ArtifactKind(StrEnum):
     REVIEW_REPORT = "review_report"
     ITERATION_RECORD = "iteration_record"
     FINAL_REPORT = "final_report"
+    HANDOFF_ENVELOPE = "handoff_envelope"
+    AGENT_EXECUTION_RECORD = "agent_execution_record"
 
 
 class CheckStatus(StrEnum):
@@ -195,16 +199,26 @@ class ArtifactReference(BaseModel):
 
 
 class HandoffEnvelope(BaseModel):
-    """Common metadata exchanged between Agent responsibilities."""
+    """Durable metadata exchanged between Agent responsibilities.
 
-    model_config = ConfigDict(extra="forbid")
+    ``stage``, ``sequence``, and ``created_at`` have compatibility defaults so
+    older envelopes remain structurally readable. The context-bound artifact
+    store requires explicit, valid values before persisting an envelope.
+    """
 
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[ARTIFACT_SCHEMA_VERSION] = ARTIFACT_SCHEMA_VERSION
+    kind: Literal[ArtifactKind.HANDOFF_ENVELOPE] = ArtifactKind.HANDOFF_ENVELOPE
     run_id: str = Field(min_length=1, pattern=r"^[a-z0-9][a-z0-9_-]*$")
     team_id: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9_]*$")
     iteration: int = Field(ge=1, le=3)
+    stage: str = Field(default="handoff", pattern=r"^[a-z][a-z0-9_]*$")
+    sequence: int = Field(default=1, ge=1, le=999)
     source_role: AgentRole
     target_role: AgentRole | None = None
     status: HandoffStatus
+    created_at: datetime | None = None
     summary: str = Field(min_length=1)
     input_commit: str | None = Field(
         default=None,
@@ -212,6 +226,13 @@ class HandoffEnvelope(BaseModel):
     )
     artifacts: list[ArtifactReference] = Field(default_factory=list)
     blockers: list[str] = Field(default_factory=list)
+
+    @field_validator("created_at")
+    @classmethod
+    def require_utc_timestamp(cls, value: datetime | None) -> datetime | None:
+        """Normalize explicit durable timestamps while accepting legacy input."""
+
+        return None if value is None else _require_utc(value)
 
     @field_validator("blockers")
     @classmethod
@@ -236,6 +257,9 @@ class HandoffEnvelope(BaseModel):
             raise ValueError("blocked or failed handoffs must identify a blocker")
         if self.target_role is not None and self.target_role == self.source_role:
             raise ValueError("source and target roles must differ")
+        artifact_paths = [artifact.path for artifact in self.artifacts]
+        if len(artifact_paths) != len(set(artifact_paths)):
+            raise ValueError("handoff artifact references must be unique")
         return self
 
 
@@ -263,6 +287,97 @@ class IterationArtifact(PhaseArtifact):
     """Metadata shared by artifacts produced within one implementation pass."""
 
     iteration: int = Field(ge=1, le=3)
+
+
+class AgentExecutionRecord(BaseModel):
+    """Controller-recorded telemetry for one bounded Agent invocation."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[ARTIFACT_SCHEMA_VERSION] = ARTIFACT_SCHEMA_VERSION
+    kind: Literal[ArtifactKind.AGENT_EXECUTION_RECORD] = (
+        ArtifactKind.AGENT_EXECUTION_RECORD
+    )
+    run_id: str = Field(min_length=1, pattern=r"^[a-z0-9][a-z0-9_-]*$")
+    team_id: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9_]*$")
+    iteration: int = Field(ge=1, le=3)
+    stage: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
+    attempt: int = Field(default=1, ge=1, le=99)
+    role: AgentRole
+    session_key: str = Field(min_length=1)
+    session_id: str | None = Field(default=None, min_length=1)
+    model: str | None = Field(default=None, min_length=1)
+    provider: str | None = Field(default=None, min_length=1)
+    started_at: datetime
+    finished_at: datetime
+    duration_ms: int = Field(ge=0)
+    exit_code: int | None = None
+    timed_out: bool = False
+    input_tokens: int | None = Field(default=None, ge=0)
+    output_tokens: int | None = Field(default=None, ge=0)
+    estimated_cost_usd: Decimal | None = Field(default=None, ge=0)
+    stdout_path: str = Field(min_length=1)
+    stderr_path: str = Field(min_length=1)
+    stdout_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    stderr_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    response_artifact: ArtifactReference | None = None
+    error: str | None = Field(default=None, min_length=1)
+
+    @field_validator("started_at", "finished_at")
+    @classmethod
+    def require_utc_timestamp(cls, value: datetime) -> datetime:
+        """Normalize execution timestamps to UTC."""
+
+        return _require_utc(value)
+
+    @field_validator("stdout_path", "stderr_path")
+    @classmethod
+    def require_safe_output_path(cls, value: str) -> str:
+        """Keep captured Agent output within the run directory."""
+
+        return _require_safe_relative_path(value)
+
+    @field_validator("session_key", "session_id", "model", "provider", "error")
+    @classmethod
+    def reject_blank_optional_text(cls, value: str | None) -> str | None:
+        """Reject whitespace-only runtime identifiers and errors."""
+
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("execution text fields must not be blank")
+        return cleaned
+
+    @model_validator(mode="after")
+    def validate_execution(self) -> Self:
+        """Keep timing, exit, timeout, and response evidence coherent."""
+
+        if self.finished_at < self.started_at:
+            raise ValueError("execution finish time cannot precede start time")
+        if self.timed_out:
+            if self.exit_code is not None:
+                raise ValueError("timed-out executions cannot report an exit code")
+            if self.error is None:
+                raise ValueError("timed-out executions must record an error")
+            if self.response_artifact is not None:
+                raise ValueError(
+                    "timed-out executions cannot report a response artifact"
+                )
+        else:
+            if self.exit_code is None and self.error is None:
+                raise ValueError("executions without an exit code require an error")
+            if self.exit_code != 0 and self.error is None:
+                raise ValueError("failed executions must record an error")
+            if (
+                self.exit_code == 0
+                and self.error is None
+                and self.response_artifact is None
+            ):
+                raise ValueError("successful executions require a response artifact")
+            if self.exit_code == 0 and self.error is None and self.model is None:
+                raise ValueError("successful executions require model metadata")
+        return self
 
 
 class PlanTask(BaseModel):
@@ -684,6 +799,8 @@ type PersistedArtifact = (
     | ReviewReport
     | IterationRecord
     | FinalReport
+    | HandoffEnvelope
+    | AgentExecutionRecord
 )
 
 
@@ -694,6 +811,8 @@ ARTIFACT_MODELS: dict[ArtifactKind, type[PersistedArtifact]] = {
     ArtifactKind.REVIEW_REPORT: ReviewReport,
     ArtifactKind.ITERATION_RECORD: IterationRecord,
     ArtifactKind.FINAL_REPORT: FinalReport,
+    ArtifactKind.HANDOFF_ENVELOPE: HandoffEnvelope,
+    ArtifactKind.AGENT_EXECUTION_RECORD: AgentExecutionRecord,
 }
 
 
@@ -719,6 +838,7 @@ def validate_artifact_context(
     team_id: str,
     team_roles: set[AgentRole],
     iteration_limit: int,
+    team_stages: dict[str, set[AgentRole]] | None = None,
 ) -> None:
     """Validate one phase artifact against its frozen run inputs."""
 
@@ -726,10 +846,40 @@ def validate_artifact_context(
         raise ValueError("artifact run ID does not match the task brief")
     if artifact.team_id != team_id:
         raise ValueError("artifact team ID does not match the selected team")
-    if isinstance(artifact, IterationArtifact) and artifact.iteration > iteration_limit:
+    if (
+        isinstance(artifact, (IterationArtifact, HandoffEnvelope, AgentExecutionRecord))
+        and artifact.iteration > iteration_limit
+    ):
         raise ValueError("artifact iteration exceeds the run iteration limit")
-    if isinstance(artifact.producer, AgentRole) and artifact.producer not in team_roles:
+    producer = getattr(artifact, "producer", None)
+    if isinstance(producer, AgentRole) and producer not in team_roles:
         raise ValueError("artifact producer is not part of the selected team")
+
+    if isinstance(artifact, (HandoffEnvelope, AgentExecutionRecord)):
+        if team_stages is None:
+            raise ValueError("Agent runtime artifacts require team stage context")
+        stage_roles = team_stages.get(artifact.stage)
+        if stage_roles is None:
+            raise ValueError("artifact stage is not part of the selected team")
+        role = (
+            artifact.source_role
+            if isinstance(artifact, HandoffEnvelope)
+            else artifact.role
+        )
+        if role not in team_roles:
+            raise ValueError("artifact role is not part of the selected team")
+        if role not in stage_roles:
+            raise ValueError("artifact role is not assigned to its declared stage")
+
+    if isinstance(artifact, HandoffEnvelope):
+        if artifact.created_at is None:
+            raise ValueError("persisted handoffs require a creation timestamp")
+        if artifact.target_role is not None and artifact.target_role not in team_roles:
+            raise ValueError("handoff target is not part of the selected team")
+        if artifact.input_commit is None:
+            raise ValueError("persisted handoffs require an input commit")
+        if re.fullmatch(COMMIT_PATTERN, artifact.input_commit) is None:
+            raise ValueError("persisted handoffs require a full commit ID")
 
     expected_criteria = {criterion.id for criterion in task_brief.acceptance_criteria}
     referenced_criteria: set[str] = set()

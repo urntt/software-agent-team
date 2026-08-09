@@ -12,15 +12,19 @@ from pydantic import ValidationError
 
 from software_agent_team.artifacts import (
     ARTIFACT_MODELS,
+    AgentExecutionRecord,
     ArtifactReference,
     CheckStatus,
     FinalReport,
     FinalStatus,
+    HandoffEnvelope,
+    HandoffStatus,
     ImplementationPlan,
     IterationArtifact,
     IterationDecision,
     IterationRecord,
     PersistedArtifact,
+    PhaseArtifact,
     ReviewReport,
     ReviewVerdict,
     TaskBrief,
@@ -44,6 +48,24 @@ class ArtifactIntegrityError(ArtifactStoreError):
 
 
 def _artifact_path(artifact: PersistedArtifact) -> PurePosixPath:
+    if isinstance(artifact, HandoffEnvelope):
+        target = (
+            artifact.target_role.value
+            if artifact.target_role is not None
+            else "controller"
+        )
+        filename = (
+            f"{artifact.sequence:02d}-{artifact.source_role.value}-to-{target}.json"
+        )
+        return (
+            PurePosixPath("iterations")
+            / f"{artifact.iteration:02d}"
+            / "handoffs"
+            / artifact.stage
+            / filename
+        )
+    if isinstance(artifact, AgentExecutionRecord):
+        return _execution_directory(artifact) / f"{_execution_stem(artifact)}.json"
     if isinstance(artifact, ImplementationPlan):
         return PurePosixPath("implementation-plan.json")
     if isinstance(artifact, FinalReport):
@@ -52,6 +74,27 @@ def _artifact_path(artifact: PersistedArtifact) -> PurePosixPath:
         raise ArtifactStoreError(f"unsupported artifact model: {type(artifact)!r}")
     filename = f"{artifact.kind.value.replace('_', '-')}.json"
     return PurePosixPath("iterations") / f"{artifact.iteration:02d}" / filename
+
+
+def _execution_directory(record: AgentExecutionRecord) -> PurePosixPath:
+    return (
+        PurePosixPath("iterations")
+        / f"{record.iteration:02d}"
+        / "executions"
+        / record.stage
+    )
+
+
+def _execution_stem(record: AgentExecutionRecord) -> str:
+    return f"{record.role.value}-attempt-{record.attempt:02d}"
+
+
+def _execution_output_paths(
+    record: AgentExecutionRecord,
+) -> tuple[PurePosixPath, PurePosixPath]:
+    directory = _execution_directory(record)
+    stem = _execution_stem(record)
+    return directory / f"{stem}.stdout.txt", directory / f"{stem}.stderr.txt"
 
 
 def _serialize(artifact: PersistedArtifact) -> bytes:
@@ -174,6 +217,8 @@ class ArtifactStore:
         try:
             self._validate_context(artifact)
             self._validate_references(artifact)
+        except ArtifactIntegrityError:
+            raise
         except ValueError as error:
             raise ArtifactIntegrityError(
                 f"artifact context is invalid: {reference.path}"
@@ -187,10 +232,74 @@ class ArtifactStore:
             team_id=self.team.id,
             team_roles=set(self.team.roles),
             iteration_limit=self.iteration_limit,
+            team_stages={stage.id: set(stage.roles) for stage in self.team.stages},
         )
 
     def _validate_references(self, artifact: PersistedArtifact) -> None:
-        if isinstance(artifact, IterationRecord):
+        if isinstance(artifact, HandoffEnvelope):
+            if artifact.status is HandoffStatus.COMPLETED and not artifact.artifacts:
+                raise ArtifactStoreError(
+                    "completed handoffs require a persisted source artifact"
+                )
+            loaded_artifacts = [
+                self.load(reference) for reference in artifact.artifacts
+            ]
+            for loaded in loaded_artifacts:
+                if (
+                    isinstance(loaded, IterationArtifact)
+                    and not isinstance(loaded, ImplementationPlan)
+                    and loaded.iteration != artifact.iteration
+                ):
+                    raise ArtifactStoreError(
+                        "handoff references must use the envelope's iteration"
+                    )
+            if artifact.status is HandoffStatus.COMPLETED and not any(
+                isinstance(loaded, PhaseArtifact)
+                and loaded.producer is artifact.source_role
+                for loaded in loaded_artifacts
+            ):
+                raise ArtifactStoreError(
+                    "completed handoffs require evidence produced by the source role"
+                )
+
+        elif isinstance(artifact, AgentExecutionRecord):
+            expected_stdout, expected_stderr = _execution_output_paths(artifact)
+            if PurePosixPath(artifact.stdout_path) != expected_stdout:
+                raise ArtifactStoreError(
+                    "execution stdout is not stored at its canonical path"
+                )
+            if PurePosixPath(artifact.stderr_path) != expected_stderr:
+                raise ArtifactStoreError(
+                    "execution stderr is not stored at its canonical path"
+                )
+            self._validate_file_digest(
+                artifact.stdout_path,
+                artifact.stdout_sha256,
+                label="execution stdout",
+            )
+            self._validate_file_digest(
+                artifact.stderr_path,
+                artifact.stderr_sha256,
+                label="execution stderr",
+            )
+            if artifact.response_artifact is not None:
+                response = self.load(artifact.response_artifact)
+                if not isinstance(response, PhaseArtifact):
+                    raise ArtifactStoreError(
+                        "execution response must reference a phase artifact"
+                    )
+                if response.producer is not artifact.role:
+                    raise ArtifactStoreError(
+                        "execution response producer does not match the Agent role"
+                    )
+                if isinstance(response, IterationArtifact) and (
+                    response.iteration != artifact.iteration
+                ):
+                    raise ArtifactStoreError(
+                        "execution response must use the execution iteration"
+                    )
+
+        elif isinstance(artifact, IterationRecord):
             plan = self.load(artifact.implementation_plan)
             work = self.load(artifact.work_result)
             test = self.load(artifact.test_report)
@@ -285,6 +394,19 @@ class ArtifactStore:
                 raise ArtifactStoreError(
                     "completed final report does not match final iteration evidence"
                 )
+
+    def _validate_file_digest(self, path: str, digest: str, *, label: str) -> None:
+        relative_path = PurePosixPath(path)
+        destination = self.root.joinpath(*relative_path.parts)
+        self._require_inside_root(destination, must_exist=True)
+        if destination.is_symlink() or not destination.is_file():
+            raise ArtifactIntegrityError(f"{label} is not a regular file")
+        try:
+            content = destination.read_bytes()
+        except OSError as error:
+            raise ArtifactIntegrityError(f"cannot read {label}") from error
+        if hashlib.sha256(content).hexdigest() != digest:
+            raise ArtifactIntegrityError(f"{label} digest does not match")
 
     def _require_inside_root(self, path: Path, *, must_exist: bool) -> None:
         try:

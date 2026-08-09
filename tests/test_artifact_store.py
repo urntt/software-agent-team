@@ -1,7 +1,8 @@
 """Tests for concrete phase artifacts and immutable artifact persistence."""
 
+import hashlib
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,7 @@ from software_agent_team.artifact_store import (
     ArtifactStoreError,
 )
 from software_agent_team.artifacts import (
+    AgentExecutionRecord,
     AgentRole,
     ArtifactKind,
     ArtifactReference,
@@ -23,6 +25,8 @@ from software_agent_team.artifacts import (
     CriterionResult,
     FinalReport,
     FinalStatus,
+    HandoffEnvelope,
+    HandoffStatus,
     ImplementationPlan,
     IterationDecision,
     IterationRecord,
@@ -184,6 +188,79 @@ def write_iteration_artifacts(
     return plan_reference, work_reference, test_reference, review_reference
 
 
+def handoff(
+    *,
+    stage: str,
+    source_role: AgentRole,
+    target_role: AgentRole | None,
+    artifacts: tuple[ArtifactReference, ...],
+    sequence: int = 1,
+) -> HandoffEnvelope:
+    """Return one context-bound durable handoff."""
+
+    return HandoffEnvelope(
+        run_id="task-manager-001",
+        team_id="function_specialized",
+        iteration=1,
+        stage=stage,
+        sequence=sequence,
+        source_role=source_role,
+        target_role=target_role,
+        status=HandoffStatus.COMPLETED,
+        created_at=CREATED_AT,
+        summary="Persisted attributable work for the downstream role.",
+        input_commit=INPUT_COMMIT,
+        artifacts=list(artifacts),
+    )
+
+
+def execution_record(
+    store: ArtifactStore,
+    *,
+    role: AgentRole,
+    stage: str,
+    response: ArtifactReference,
+    attempt: int = 1,
+) -> AgentExecutionRecord:
+    """Create captured output and return matching Agent telemetry."""
+
+    stem = f"{role.value}-attempt-{attempt:02d}"
+    output_directory = store.root / "iterations" / "01" / "executions" / stage
+    output_directory.mkdir(parents=True, exist_ok=True)
+    stdout_path = output_directory / f"{stem}.stdout.txt"
+    stderr_path = output_directory / f"{stem}.stderr.txt"
+    stdout = b'{"status":"completed"}\n'
+    stderr = b""
+    stdout_path.write_bytes(stdout)
+    stderr_path.write_bytes(stderr)
+    started_at = CREATED_AT
+    finished_at = started_at + timedelta(milliseconds=1250)
+    return AgentExecutionRecord(
+        run_id="task-manager-001",
+        team_id="function_specialized",
+        iteration=1,
+        stage=stage,
+        attempt=attempt,
+        role=role,
+        session_key=f"agent:{role.value}:test-session",
+        session_id=f"session-{role.value}",
+        model="test-provider/test-model",
+        provider="test-provider",
+        started_at=started_at,
+        finished_at=finished_at,
+        duration_ms=1250,
+        exit_code=0,
+        input_tokens=120,
+        output_tokens=80,
+        estimated_cost_usd="0.001",
+        stdout_path=stdout_path.relative_to(store.root).as_posix(),
+        stderr_path=stderr_path.relative_to(store.root).as_posix(),
+        stdout_sha256=hashlib.sha256(stdout).hexdigest(),
+        stderr_sha256=hashlib.sha256(stderr).hexdigest(),
+        response_artifact=response,
+    )
+
+
 def test_store_round_trips_all_six_phase_artifacts(tmp_path: Path) -> None:
     store = make_store(tmp_path)
     plan_ref, work_ref, test_ref, review_ref = write_iteration_artifacts(store)
@@ -228,6 +305,129 @@ def test_store_round_trips_all_six_phase_artifacts(tmp_path: Path) -> None:
         assert len(artifact_reference.sha256) == 64
         loaded = store.load(artifact_reference)
         assert loaded.kind is artifact_reference.kind
+
+
+def test_store_round_trips_multiple_durable_handoffs(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    plan_ref = store.write(implementation_plan())
+    plan_handoff_ref = store.write(
+        handoff(
+            stage="plan",
+            source_role=AgentRole.PLANNER,
+            target_role=AgentRole.GENERALIST_DEVELOPER,
+            artifacts=(plan_ref,),
+        )
+    )
+    work_ref = store.write(work_result())
+    test_handoff_ref = store.write(
+        handoff(
+            stage="implement",
+            source_role=AgentRole.GENERALIST_DEVELOPER,
+            target_role=AgentRole.TESTER,
+            artifacts=(work_ref,),
+        )
+    )
+    review_handoff_ref = store.write(
+        handoff(
+            stage="implement",
+            source_role=AgentRole.GENERALIST_DEVELOPER,
+            target_role=AgentRole.REVIEWER,
+            artifacts=(work_ref,),
+        )
+    )
+    repeated_handoff_ref = store.write(
+        handoff(
+            stage="implement",
+            source_role=AgentRole.GENERALIST_DEVELOPER,
+            target_role=AgentRole.TESTER,
+            artifacts=(work_ref,),
+            sequence=2,
+        )
+    )
+
+    assert plan_handoff_ref.path == (
+        "iterations/01/handoffs/plan/01-planner-to-generalist_developer.json"
+    )
+    assert test_handoff_ref.path == (
+        "iterations/01/handoffs/implement/01-generalist_developer-to-tester.json"
+    )
+    assert review_handoff_ref.path == (
+        "iterations/01/handoffs/implement/01-generalist_developer-to-reviewer.json"
+    )
+    assert repeated_handoff_ref.path.endswith("02-generalist_developer-to-tester.json")
+    assert store.load(plan_handoff_ref).kind is ArtifactKind.HANDOFF_ENVELOPE
+    assert store.load(test_handoff_ref).kind is ArtifactKind.HANDOFF_ENVELOPE
+    with pytest.raises(ArtifactAlreadyExistsError, match="already exists"):
+        store.write(
+            handoff(
+                stage="implement",
+                source_role=AgentRole.GENERALIST_DEVELOPER,
+                target_role=AgentRole.TESTER,
+                artifacts=(work_ref,),
+            )
+        )
+
+
+def test_store_round_trips_agent_execution_telemetry(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    response = store.write(work_result())
+    record = execution_record(
+        store,
+        role=AgentRole.GENERALIST_DEVELOPER,
+        stage="implement",
+        response=response,
+    )
+
+    record_ref = store.write(record)
+
+    assert record_ref.path == (
+        "iterations/01/executions/implement/generalist_developer-attempt-01.json"
+    )
+    assert store.load(record_ref) == record
+
+
+def test_store_detects_agent_output_tampering(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    response = store.write(work_result())
+    record = execution_record(
+        store,
+        role=AgentRole.GENERALIST_DEVELOPER,
+        stage="implement",
+        response=response,
+    )
+    record_ref = store.write(record)
+    (store.root / record.stdout_path).write_text("tampered", encoding="utf-8")
+
+    with pytest.raises(ArtifactIntegrityError, match="stdout digest"):
+        store.load(record_ref)
+
+
+def test_store_rejects_execution_response_from_another_role(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    response = store.write(work_result())
+    record = execution_record(
+        store,
+        role=AgentRole.REVIEWER,
+        stage="verify",
+        response=response,
+    )
+
+    with pytest.raises(ArtifactStoreError, match="producer"):
+        store.write(record)
+
+
+def test_store_rejects_handoff_role_outside_declared_stage(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    work_ref = store.write(work_result())
+    invalid = handoff(
+        stage="plan",
+        source_role=AgentRole.GENERALIST_DEVELOPER,
+        target_role=AgentRole.TESTER,
+        artifacts=(work_ref,),
+    )
+
+    with pytest.raises(ArtifactStoreError, match="context"):
+        store.write(invalid)
 
 
 def test_store_rejects_overwriting_an_artifact(tmp_path: Path) -> None:

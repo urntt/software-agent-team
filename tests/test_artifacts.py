@@ -1,11 +1,13 @@
 """Tests for task-brief and cross-Agent handoff contracts."""
 
 from copy import deepcopy
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from pydantic import ValidationError
 
 from software_agent_team.artifacts import (
+    AgentExecutionRecord,
     HandoffEnvelope,
     HandoffStatus,
     TaskBrief,
@@ -136,3 +138,77 @@ def test_unknown_fields_are_rejected() -> None:
 
     with pytest.raises(ValidationError):
         HandoffEnvelope.model_validate(payload)
+
+
+def valid_execution_payload() -> dict[str, object]:
+    """Return structurally valid telemetry for one Agent invocation."""
+
+    started_at = datetime(2026, 8, 10, 10, 0, tzinfo=UTC)
+    return {
+        "run_id": "task-manager-001",
+        "team_id": "function_specialized",
+        "iteration": 1,
+        "stage": "implement",
+        "role": "generalist_developer",
+        "session_key": "agent:generalist_developer:test-session",
+        "session_id": "session-generalist-developer",
+        "model": "test-provider/test-model",
+        "started_at": started_at,
+        "finished_at": started_at + timedelta(seconds=2),
+        "duration_ms": 2000,
+        "exit_code": 0,
+        "stdout_path": (
+            "iterations/01/executions/implement/"
+            "generalist_developer-attempt-01.stdout.txt"
+        ),
+        "stderr_path": (
+            "iterations/01/executions/implement/"
+            "generalist_developer-attempt-01.stderr.txt"
+        ),
+        "stdout_sha256": "a" * 64,
+        "stderr_sha256": "b" * 64,
+        "response_artifact": {
+            "kind": "work_result",
+            "path": "iterations/01/work-result.json",
+            "sha256": "c" * 64,
+        },
+    }
+
+
+def test_valid_agent_execution_record_is_accepted() -> None:
+    record = AgentExecutionRecord.model_validate(valid_execution_payload())
+
+    assert record.role.value == "generalist_developer"
+    assert record.duration_ms == 2000
+
+
+def test_execution_finish_cannot_precede_start() -> None:
+    payload = valid_execution_payload()
+    payload["finished_at"] = payload["started_at"] - timedelta(milliseconds=1)
+
+    with pytest.raises(ValidationError, match="finish time"):
+        AgentExecutionRecord.model_validate(payload)
+
+
+def test_timed_out_execution_requires_error_without_exit_or_response() -> None:
+    payload = valid_execution_payload()
+    payload["timed_out"] = True
+    payload["exit_code"] = None
+    payload["response_artifact"] = None
+
+    with pytest.raises(ValidationError, match="record an error"):
+        AgentExecutionRecord.model_validate(payload)
+
+
+def test_launch_failure_can_lack_session_model_and_exit_code() -> None:
+    payload = valid_execution_payload()
+    payload["session_id"] = None
+    payload["model"] = None
+    payload["exit_code"] = None
+    payload["response_artifact"] = None
+    payload["error"] = "OpenClaw could not be launched."
+
+    record = AgentExecutionRecord.model_validate(payload)
+
+    assert record.exit_code is None
+    assert record.model is None
