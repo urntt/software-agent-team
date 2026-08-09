@@ -15,6 +15,7 @@ from software_agent_team.artifacts import (
     ARTIFACT_MODELS,
     AgentExecutionRecord,
     AgentRole,
+    ArtifactKind,
     ArtifactReference,
     CheckStatus,
     FinalReport,
@@ -257,6 +258,25 @@ class ArtifactStore:
             stdout_sha256=hashlib.sha256(stdout_content).hexdigest(),
             stderr_sha256=hashlib.sha256(stderr_content).hexdigest(),
         )
+
+    def write_final_report_markdown(
+        self,
+        final_report: ArtifactReference,
+        content: str,
+    ) -> str:
+        """Write a derived human report only after its JSON authority exists."""
+
+        if final_report.kind is not ArtifactKind.FINAL_REPORT:
+            raise ArtifactStoreError("human report requires a final-report reference")
+        loaded = self.load(final_report)
+        if not isinstance(loaded, FinalReport):
+            raise ArtifactStoreError("human report authority has the wrong type")
+        if not content.strip() or "\x00" in content:
+            raise ArtifactStoreError("human report content is invalid")
+        relative_path = PurePosixPath("final-report.md")
+        destination = self.root / relative_path.as_posix()
+        self._write_immutable_file(destination, content.encode("utf-8"))
+        return relative_path.as_posix()
 
     def load(self, reference: ArtifactReference) -> PersistedArtifact:
         """Load one referenced artifact after path, digest, type, and context checks."""

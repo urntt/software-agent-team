@@ -306,6 +306,15 @@ def test_store_round_trips_all_six_phase_artifacts(tmp_path: Path) -> None:
         loaded = store.load(artifact_reference)
         assert loaded.kind is artifact_reference.kind
 
+    markdown_path = store.write_final_report_markdown(
+        final_ref,
+        "# Final report\n\nThe accepted result is ready.\n",
+    )
+    assert markdown_path == "final-report.md"
+    assert (store.root / markdown_path).read_text(encoding="utf-8").startswith("#")
+    with pytest.raises(ArtifactAlreadyExistsError, match="already exists"):
+        store.write_final_report_markdown(final_ref, "# Replacement\n")
+
 
 def test_store_round_trips_multiple_durable_handoffs(tmp_path: Path) -> None:
     store = make_store(tmp_path)
