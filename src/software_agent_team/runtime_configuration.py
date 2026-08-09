@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import subprocess
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -20,6 +21,27 @@ class RuntimeConfigurationError(ValueError):
     """Raised when a safe run-scoped Agent configuration cannot be created."""
 
 
+class SandboxImageInspection(BaseModel):
+    """Non-secret identity returned for one local Docker image reference."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    sandbox_binary: str = Field(min_length=1)
+    sandbox_version: str = Field(min_length=1)
+    sandbox_image: str = Field(min_length=1)
+    sandbox_image_id: str | None = Field(
+        default=None,
+        pattern=r"^sha256:[0-9a-f]{64}$",
+    )
+    sandbox_image_present: bool
+
+    @property
+    def ready(self) -> bool:
+        """Return whether the reference resolves to a valid local image ID."""
+
+        return self.sandbox_image_present and self.sandbox_image_id is not None
+
+
 class RuntimePreflight(BaseModel):
     """Non-secret evidence that the local runtime is ready for a live run."""
 
@@ -31,6 +53,10 @@ class RuntimePreflight(BaseModel):
     sandbox_binary: str = Field(min_length=1)
     sandbox_version: str = Field(min_length=1)
     sandbox_image: str = Field(min_length=1)
+    sandbox_image_id: str | None = Field(
+        default=None,
+        pattern=r"^sha256:[0-9a-f]{64}$",
+    )
     config_valid: bool
     sandbox_image_present: bool
 
@@ -38,7 +64,11 @@ class RuntimePreflight(BaseModel):
     def ready(self) -> bool:
         """Return whether every offline prerequisite is available."""
 
-        return self.config_valid and self.sandbox_image_present
+        return (
+            self.config_valid
+            and self.sandbox_image_present
+            and self.sandbox_image_id is not None
+        )
 
 
 def persist_runtime_preflight(
@@ -89,6 +119,78 @@ def _fsync_directory(path: Path) -> None:
         os.close(descriptor)
 
 
+def inspect_sandbox_image(
+    *,
+    sandbox_binary: str,
+    sandbox_image: str,
+    timeout_seconds: int = 30,
+    environment: Mapping[str, str] | None = None,
+) -> SandboxImageInspection:
+    """Resolve a local Docker reference without pulling or running an image."""
+
+    if timeout_seconds < 1:
+        raise RuntimeConfigurationError("preflight timeout must be positive")
+    if (
+        not sandbox_image.strip()
+        or sandbox_image != sandbox_image.strip()
+        or sandbox_image.startswith("-")
+        or any(character in sandbox_image for character in ("\x00", "\r", "\n"))
+    ):
+        raise RuntimeConfigurationError("sandbox image reference is invalid")
+    resolved_sandbox = shutil.which(sandbox_binary)
+    if resolved_sandbox is None:
+        raise RuntimeConfigurationError(
+            f"sandbox binary is unavailable: {sandbox_binary}"
+        )
+    try:
+        sandbox_version = subprocess.run(
+            [resolved_sandbox, "--version"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            env=environment,
+        )
+        image = subprocess.run(
+            [
+                resolved_sandbox,
+                "image",
+                "inspect",
+                "--format",
+                "{{.Id}}",
+                sandbox_image,
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            env=environment,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise RuntimeConfigurationError("sandbox preflight command failed") from error
+
+    sandbox_version_text = (
+        sandbox_version.stdout.strip() or sandbox_version.stderr.strip()
+    )
+    if "docker version" not in sandbox_version_text.lower():
+        raise RuntimeConfigurationError("sandbox binary is not Docker")
+    image_id = image.stdout.strip() if image.returncode == 0 else None
+    if image_id is not None and not (
+        image_id.startswith("sha256:")
+        and len(image_id) == 71
+        and all(character in "0123456789abcdef" for character in image_id[7:])
+    ):
+        raise RuntimeConfigurationError("Docker returned an invalid sandbox image ID")
+
+    return SandboxImageInspection(
+        sandbox_binary=resolved_sandbox,
+        sandbox_version=sandbox_version_text,
+        sandbox_image=sandbox_image,
+        sandbox_image_id=image_id,
+        sandbox_image_present=image.returncode == 0,
+    )
+
+
 def materialize_run_configuration(
     template_path: Path,
     destination: Path,
@@ -101,8 +203,10 @@ def materialize_run_configuration(
     sandbox_pids_limit: int = 128,
     sandbox_open_files: int = 1024,
     sandbox_tmpfs_mb: int = 128,
+    sandbox_user: str | None = None,
+    model: str | None = None,
 ) -> Path:
-    """Create a secret-free OpenClaw config bound to one verified worktree.
+    """Create a secret-free OpenClaw config bound to one verified workspace.
 
     The checked-in template owns role permissions. This function changes only
     machine-local runtime values: every Agent's workspace, sandbox scope, and
@@ -122,12 +226,28 @@ def materialize_run_configuration(
         raise RuntimeConfigurationError("sandbox open-file limit is invalid")
     if not 16 <= sandbox_tmpfs_mb <= 8192:
         raise RuntimeConfigurationError("sandbox tmpfs limit is invalid")
+    if model is not None:
+        model = model.strip()
+        if not model:
+            raise RuntimeConfigurationError("run model must not be blank")
     try:
         resolved_workspace = workspace.resolve(strict=True)
     except OSError as error:
         raise RuntimeConfigurationError("run workspace does not exist") from error
     if not resolved_workspace.is_dir() or resolved_workspace.is_symlink():
         raise RuntimeConfigurationError("run workspace must be a real directory")
+    if sandbox_user is None:
+        sandbox_uid = os.getuid()
+        sandbox_gid = os.getgid()
+    else:
+        parts = sandbox_user.split(":")
+        if len(parts) != 2 or not all(part.isdecimal() for part in parts):
+            raise RuntimeConfigurationError("sandbox user must use numeric UID:GID")
+        sandbox_uid, sandbox_gid = (int(part) for part in parts)
+    if sandbox_uid == 0 or sandbox_gid == 0:
+        raise RuntimeConfigurationError(
+            "live Agent sandboxes require an unprivileged host user"
+        )
 
     config = load_openclaw_template(template_path, manifest)
     # Round-trip through JSON so the caller-owned parsed template is not
@@ -137,6 +257,8 @@ def materialize_run_configuration(
     defaults = agents["defaults"]
     defaults["repoRoot"] = str(resolved_workspace)
     defaults["skipBootstrap"] = True
+    if model is not None:
+        defaults["model"] = {"primary": model, "fallbacks": []}
     sandbox = defaults["sandbox"]
     sandbox["scope"] = "session"
     docker = sandbox.setdefault("docker", {})
@@ -146,7 +268,20 @@ def materialize_run_configuration(
             "network": "none",
             "readOnlyRoot": True,
             "capDrop": ["ALL"],
-            "user": f"{os.getuid()}:{os.getgid()}",
+            "user": f"{sandbox_uid}:{sandbox_gid}",
+            "env": {
+                "GIT_CONFIG_GLOBAL": "/dev/null",
+                "GIT_CONFIG_NOSYSTEM": "1",
+                "GIT_TERMINAL_PROMPT": "0",
+                "HOME": "/tmp",
+                "LANG": "C.UTF-8",
+                "PYTHONDONTWRITEBYTECODE": "1",
+                "PYTHONUNBUFFERED": "1",
+                "RUFF_CACHE_DIR": "/tmp/ruff-cache",
+                "TMPDIR": "/tmp",
+                "XDG_CACHE_HOME": "/tmp/cache",
+                "XDG_CONFIG_HOME": "/tmp/config",
+            },
             "pidsLimit": sandbox_pids_limit,
             "memory": f"{sandbox_memory_mb}m",
             "memorySwap": f"{sandbox_memory_mb}m",
@@ -206,6 +341,7 @@ def inspect_runtime_preflight(
     runtime_config: Path,
     sandbox_binary: str,
     sandbox_image: str,
+    expected_sandbox_image_id: str | None = None,
     timeout_seconds: int = 30,
 ) -> RuntimePreflight:
     """Check binaries, config syntax, and sandbox image without model calls."""
@@ -216,12 +352,6 @@ def inspect_runtime_preflight(
         raise RuntimeConfigurationError("OpenClaw binary is unavailable")
     if not runtime_config.is_file() or runtime_config.is_symlink():
         raise RuntimeConfigurationError("runtime configuration is unavailable")
-    resolved_sandbox = shutil.which(sandbox_binary)
-    if resolved_sandbox is None:
-        raise RuntimeConfigurationError(
-            f"sandbox binary is unavailable: {sandbox_binary}"
-        )
-
     environment = {
         **os.environ,
         "OPENCLAW_CONFIG_PATH": str(runtime_config.resolve(strict=True)),
@@ -243,38 +373,31 @@ def inspect_runtime_preflight(
             timeout=timeout_seconds,
             env=environment,
         )
-        sandbox_version = subprocess.run(
-            [resolved_sandbox, "--version"],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=timeout_seconds,
-            env=environment,
-        )
-        image = subprocess.run(
-            [resolved_sandbox, "image", "inspect", sandbox_image],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=timeout_seconds,
-            env=environment,
-        )
     except (OSError, subprocess.SubprocessError) as error:
         raise RuntimeConfigurationError("runtime preflight command failed") from error
 
-    sandbox_version_text = (
-        sandbox_version.stdout.strip() or sandbox_version.stderr.strip()
+    sandbox = inspect_sandbox_image(
+        sandbox_binary=sandbox_binary,
+        sandbox_image=sandbox_image,
+        timeout_seconds=timeout_seconds,
+        environment=environment,
     )
-    if "docker version" not in sandbox_version_text.lower():
-        raise RuntimeConfigurationError("sandbox binary is not Docker")
+    if (
+        expected_sandbox_image_id is not None
+        and sandbox.sandbox_image_id != expected_sandbox_image_id
+    ):
+        raise RuntimeConfigurationError(
+            "sandbox image identity changed after it was frozen"
+        )
 
     return RuntimePreflight(
         openclaw_binary=str(openclaw_binary.resolve(strict=True)),
         openclaw_version=version.stdout.strip() or version.stderr.strip(),
         runtime_config=str(runtime_config.resolve(strict=True)),
-        sandbox_binary=resolved_sandbox,
-        sandbox_version=sandbox_version_text,
-        sandbox_image=sandbox_image,
+        sandbox_binary=sandbox.sandbox_binary,
+        sandbox_version=sandbox.sandbox_version,
+        sandbox_image=sandbox.sandbox_image,
+        sandbox_image_id=sandbox.sandbox_image_id,
         config_valid=config.returncode == 0,
-        sandbox_image_present=image.returncode == 0,
+        sandbox_image_present=sandbox.sandbox_image_present,
     )

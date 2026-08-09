@@ -9,7 +9,12 @@ BUDGET_SCHEMA_VERSION = 1
 
 
 class AgentBudget(BaseModel):
-    """Hard aggregate ceilings for one bounded Agent workflow run."""
+    """Stop thresholds for one bounded Agent workflow run.
+
+    The call count is checked before launch. Token, duration, and cost usage are
+    provider-reported measurements, so crossing those thresholds fails the run
+    after that invocation and prevents another one.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 

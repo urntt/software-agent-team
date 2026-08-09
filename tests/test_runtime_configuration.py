@@ -24,7 +24,7 @@ OPENCLAW_TEMPLATE = REPOSITORY_ROOT / "configs" / "openclaw.example.json5"
 def test_materialized_config_binds_every_role_to_one_run_workspace(
     tmp_path: Path,
 ) -> None:
-    workspace = tmp_path / "worktree"
+    workspace = tmp_path / "workspace"
     workspace.mkdir()
     destination = tmp_path / "run" / "openclaw.runtime.json"
 
@@ -34,19 +34,38 @@ def test_materialized_config_binds_every_role_to_one_run_workspace(
         manifest=load_team_manifest(TEAM_CONFIG),
         workspace=workspace,
         sandbox_image="sat-agent:phase1",
+        sandbox_user="1000:1000",
+        model="provider/model",
     )
 
     payload = json.loads(destination.read_text(encoding="utf-8"))
     defaults = payload["agents"]["defaults"]
     assert defaults["repoRoot"] == str(workspace.resolve())
     assert defaults["skipBootstrap"] is True
+    assert defaults["model"] == {
+        "primary": "provider/model",
+        "fallbacks": [],
+    }
     assert defaults["sandbox"]["scope"] == "session"
     assert defaults["sandbox"]["docker"] == {
         "image": "sat-agent:phase1",
         "network": "none",
         "readOnlyRoot": True,
         "capDrop": ["ALL"],
-        "user": f"{os.getuid()}:{os.getgid()}",
+        "user": "1000:1000",
+        "env": {
+            "GIT_CONFIG_GLOBAL": "/dev/null",
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_TERMINAL_PROMPT": "0",
+            "HOME": "/tmp",
+            "LANG": "C.UTF-8",
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "PYTHONUNBUFFERED": "1",
+            "RUFF_CACHE_DIR": "/tmp/ruff-cache",
+            "TMPDIR": "/tmp",
+            "XDG_CACHE_HOME": "/tmp/cache",
+            "XDG_CONFIG_HOME": "/tmp/config",
+        },
         "pidsLimit": 128,
         "memory": "512m",
         "memorySwap": "512m",
@@ -85,9 +104,10 @@ def test_materialization_is_write_once_and_rejects_missing_workspace(
             manifest=manifest,
             workspace=tmp_path / "missing",
             sandbox_image="sat-agent:phase1",
+            sandbox_user="1000:1000",
         )
 
-    workspace = tmp_path / "worktree"
+    workspace = tmp_path / "workspace"
     workspace.mkdir()
     materialize_run_configuration(
         OPENCLAW_TEMPLATE,
@@ -95,6 +115,7 @@ def test_materialization_is_write_once_and_rejects_missing_workspace(
         manifest=manifest,
         workspace=workspace,
         sandbox_image="sat-agent:phase1",
+        sandbox_user="1000:1000",
     )
     before = destination.read_bytes()
     with pytest.raises(RuntimeConfigurationError, match="already exists"):
@@ -104,8 +125,24 @@ def test_materialization_is_write_once_and_rejects_missing_workspace(
             manifest=manifest,
             workspace=workspace,
             sandbox_image="sat-agent:phase1",
+            sandbox_user="1000:1000",
         )
     assert destination.read_bytes() == before
+
+
+def test_materialization_rejects_root_host_user(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    with pytest.raises(RuntimeConfigurationError, match="unprivileged host user"):
+        materialize_run_configuration(
+            OPENCLAW_TEMPLATE,
+            tmp_path / "runtime.json",
+            manifest=load_team_manifest(TEAM_CONFIG),
+            workspace=workspace,
+            sandbox_image="sat-agent:phase1",
+            sandbox_user="0:0",
+        )
 
 
 def test_preflight_executes_explicit_commands_without_model_call(
@@ -133,6 +170,8 @@ def test_preflight_executes_explicit_commands_without_model_call(
                 "Docker version test" if argv[0] == "/bin/docker" else "OpenClaw test"
             )
             return Result(0, name)
+        if "inspect" in argv:
+            return Result(0, f"sha256:{'a' * 64}")
         return Result(0, "{}")
 
     monkeypatch.setattr(runtime_configuration.shutil, "which", lambda _: "/bin/docker")
@@ -150,15 +189,101 @@ def test_preflight_executes_explicit_commands_without_model_call(
         [str(openclaw), "--version"],
         [str(openclaw), "config", "validate", "--json"],
         ["/bin/docker", "--version"],
-        ["/bin/docker", "image", "inspect", "sat-agent:phase1"],
+        [
+            "/bin/docker",
+            "image",
+            "inspect",
+            "--format",
+            "{{.Id}}",
+            "sat-agent:phase1",
+        ],
     ]
+    assert result.sandbox_image_id == f"sha256:{'a' * 64}"
     assert os.environ.get("OPENCLAW_CONFIG_PATH") is None
 
     evidence = tmp_path / "run" / "runtime-preflight.json"
     persist_runtime_preflight(result, evidence)
-    assert json.loads(evidence.read_text(encoding="utf-8"))["config_valid"] is True
+    persisted = json.loads(evidence.read_text(encoding="utf-8"))
+    assert persisted["config_valid"] is True
+    assert persisted["sandbox_image_id"] == f"sha256:{'a' * 64}"
     with pytest.raises(RuntimeConfigurationError, match="already exists"):
         persist_runtime_preflight(result, evidence)
+
+
+def test_preflight_rejects_invalid_docker_image_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    openclaw = tmp_path / "openclaw"
+    openclaw.write_text("binary", encoding="utf-8")
+    openclaw.chmod(0o755)
+    config = tmp_path / "runtime.json"
+    config.write_text("{}", encoding="utf-8")
+
+    class Result:
+        def __init__(self, stdout: str) -> None:
+            self.returncode = 0
+            self.stdout = stdout
+            self.stderr = ""
+
+    def fake_run(argv: list[str], **kwargs: object) -> Result:
+        if argv[-1] == "--version":
+            return Result(
+                "Docker version test" if argv[0] == "/bin/docker" else "OpenClaw test"
+            )
+        if "inspect" in argv:
+            return Result("mutable-image-tag")
+        return Result("{}")
+
+    monkeypatch.setattr(runtime_configuration.shutil, "which", lambda _: "/bin/docker")
+    monkeypatch.setattr(runtime_configuration.subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeConfigurationError, match="invalid sandbox image ID"):
+        inspect_runtime_preflight(
+            openclaw_binary=openclaw,
+            runtime_config=config,
+            sandbox_binary="docker",
+            sandbox_image="sat-agent:phase1",
+        )
+
+
+def test_preflight_rejects_a_changed_frozen_image_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    openclaw = tmp_path / "openclaw"
+    openclaw.write_text("binary", encoding="utf-8")
+    openclaw.chmod(0o755)
+    config = tmp_path / "runtime.json"
+    config.write_text("{}", encoding="utf-8")
+
+    class Result:
+        returncode = 0
+        stderr = ""
+
+        def __init__(self, stdout: str) -> None:
+            self.stdout = stdout
+
+    def fake_run(argv: list[str], **kwargs: object) -> Result:
+        if argv[-1] == "--version":
+            return Result(
+                "Docker version test" if argv[0] == "/bin/docker" else "OpenClaw test"
+            )
+        if "inspect" in argv:
+            return Result(f"sha256:{'b' * 64}")
+        return Result("{}")
+
+    monkeypatch.setattr(runtime_configuration.shutil, "which", lambda _: "/bin/docker")
+    monkeypatch.setattr(runtime_configuration.subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeConfigurationError, match="identity changed"):
+        inspect_runtime_preflight(
+            openclaw_binary=openclaw,
+            runtime_config=config,
+            sandbox_binary="docker",
+            sandbox_image="sat-agent:phase1",
+            expected_sandbox_image_id=f"sha256:{'a' * 64}",
+        )
 
 
 @pytest.mark.parametrize(
@@ -175,7 +300,7 @@ def test_materialization_rejects_missing_resource_limits(
     tmp_path: Path,
     overrides: dict[str, int | float],
 ) -> None:
-    workspace = tmp_path / "worktree"
+    workspace = tmp_path / "workspace"
     workspace.mkdir()
 
     with pytest.raises(RuntimeConfigurationError, match="limit"):
@@ -185,5 +310,6 @@ def test_materialization_rejects_missing_resource_limits(
             manifest=load_team_manifest(TEAM_CONFIG),
             workspace=workspace,
             sandbox_image="sat-agent:phase1",
+            sandbox_user="1000:1000",
             **overrides,
         )

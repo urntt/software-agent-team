@@ -1,16 +1,13 @@
-FROM python:3.12.13-slim-bookworm
+FROM python:3.12.13-slim-bookworm@sha256:d50fb7611f86d04a3b0471b46d7557818d88983fc3136726336b2a4c657aa30b
 
 RUN apt-get update \
-    && apt-get install --yes --no-install-recommends git=1:2.39.5-0+deb12u2 \
-    && rm -rf /var/lib/apt/lists/* \
-    && python -m pip install --no-cache-dir \
-        fastapi==0.116.1 \
-        httpx==0.28.1 \
-        jinja2==3.1.6 \
-        pytest==8.4.2 \
-        python-multipart==0.0.20 \
-        ruff==0.12.8 \
-        uvicorn==0.35.0
+    && apt-get install --yes --no-install-recommends git=1:2.39.5-0+deb12u3 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.lock /opt/software-agent-team/requirements.lock
+
+RUN python -m pip install --no-cache-dir --requirement \
+    /opt/software-agent-team/requirements.lock
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1

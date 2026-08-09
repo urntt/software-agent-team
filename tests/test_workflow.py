@@ -106,12 +106,18 @@ class DynamicWorkflowExecutor:
         tamper_test_commands: bool = False,
         commit_changes: bool = True,
         verify_barrier: bool = False,
+        allow_single_verifier: bool = False,
+        reported_model: str | None = "offline/test-model",
+        report_usage: bool = True,
     ) -> None:
         self.workspace = workspace
         self.review_verdicts = review_verdicts or {}
         self.invalid_plan_once = invalid_plan_once
         self.tamper_test_commands = tamper_test_commands
         self.commit_changes = commit_changes
+        self.reported_model = reported_model
+        self.report_usage = report_usage
+        self.allow_single_verifier = allow_single_verifier
         self.requests: list[AgentExecutionRequest] = []
         self._counts: dict[AgentRole, int] = {}
         self._lock = threading.Lock()
@@ -130,11 +136,11 @@ class DynamicWorkflowExecutor:
             artifact = self._work(request)
         elif request.role is AgentRole.TESTER:
             if self._barrier is not None:
-                self._barrier.wait(timeout=2)
+                self._wait_for_verifier()
             artifact = self._test_report(request)
         elif request.role is AgentRole.REVIEWER:
             if self._barrier is not None:
-                self._barrier.wait(timeout=2)
+                self._wait_for_verifier()
             artifact = self._review_report(request)
         else:  # pragma: no cover - the Phase 1 team is fixed
             raise AssertionError(f"unexpected role: {request.role}")
@@ -142,6 +148,15 @@ class DynamicWorkflowExecutor:
             request,
             json.dumps(artifact.model_dump(mode="json"), ensure_ascii=False),
         )
+
+    def _wait_for_verifier(self) -> None:
+        if self._barrier is None:  # pragma: no cover - guarded by the caller
+            return
+        try:
+            self._barrier.wait(timeout=0.5)
+        except threading.BrokenBarrierError:
+            if not self.allow_single_verifier:
+                raise
 
     def _plan(self, request: AgentExecutionRequest) -> ImplementationPlan:
         brief = task_brief()
@@ -311,8 +326,8 @@ class DynamicWorkflowExecutor:
             summary=f"Reviewer verdict: {verdict.value}.",
         )
 
-    @staticmethod
     def _result(
+        self,
         request: AgentExecutionRequest,
         response_text: str,
     ) -> AgentExecutionResult:
@@ -333,11 +348,15 @@ class DynamicWorkflowExecutor:
                 openclaw_run_id=f"offline-{request.role.value}",
                 session_id=f"offline-{request.role.value}-{request.iteration}",
                 provider="offline",
-                model="offline/test-model",
-                usage=AgentTokenUsage(
-                    input_tokens=10,
-                    output_tokens=5,
-                    total_tokens=15,
+                model=self.reported_model,
+                usage=(
+                    AgentTokenUsage(
+                        input_tokens=10,
+                        output_tokens=5,
+                        total_tokens=15,
+                    )
+                    if self.report_usage
+                    else None
                 ),
             ),
         )
@@ -396,7 +415,7 @@ def coordinator(
     return WorkflowCoordinator(
         manifest=load_team_manifest(TEAM_CONFIG),
         runs_root=tmp_path / "runs",
-        worktrees_root=tmp_path / "worktrees",
+        workspaces_root=tmp_path / "workspaces",
         executor=executor,
         quality_gate_factory=gate_factory,
         budget=budget or configuration.policy.agent_budget,
@@ -425,7 +444,7 @@ def test_offline_workflow_completes_with_parallel_independent_verification(
     tmp_path: Path,
 ) -> None:
     source = initialize_source(tmp_path)
-    workspace = tmp_path / "worktrees" / task_brief().run_id
+    workspace = tmp_path / "workspaces" / task_brief().run_id
     executor = DynamicWorkflowExecutor(workspace, verify_barrier=True)
 
     outcome = coordinator(tmp_path, executor).execute(
@@ -454,7 +473,7 @@ def test_workflow_performs_exactly_one_evidence_driven_revision(
     tmp_path: Path,
 ) -> None:
     source = initialize_source(tmp_path)
-    workspace = tmp_path / "worktrees" / task_brief().run_id
+    workspace = tmp_path / "workspaces" / task_brief().run_id
     executor = DynamicWorkflowExecutor(
         workspace,
         review_verdicts={1: ReviewVerdict.REVISE},
@@ -492,7 +511,7 @@ def test_workflow_performs_exactly_one_evidence_driven_revision(
 
 def test_workflow_repairs_one_invalid_agent_response(tmp_path: Path) -> None:
     source = initialize_source(tmp_path)
-    workspace = tmp_path / "worktrees" / task_brief().run_id
+    workspace = tmp_path / "workspaces" / task_brief().run_id
     executor = DynamicWorkflowExecutor(workspace, invalid_plan_once=True)
 
     outcome = coordinator(tmp_path, executor).execute(
@@ -520,7 +539,7 @@ def test_workflow_rejects_tester_changes_to_controller_evidence(
     tmp_path: Path,
 ) -> None:
     source = initialize_source(tmp_path)
-    workspace = tmp_path / "worktrees" / task_brief().run_id
+    workspace = tmp_path / "workspaces" / task_brief().run_id
     executor = DynamicWorkflowExecutor(workspace, tamper_test_commands=True)
 
     outcome = coordinator(tmp_path, executor).execute(
@@ -538,7 +557,7 @@ def test_workflow_rejects_tester_changes_to_controller_evidence(
 
 def test_workflow_records_gate_timeout_as_dependency_failure(tmp_path: Path) -> None:
     source = initialize_source(tmp_path)
-    workspace = tmp_path / "worktrees" / task_brief().run_id
+    workspace = tmp_path / "workspaces" / task_brief().run_id
     executor = DynamicWorkflowExecutor(workspace)
 
     outcome = coordinator(
@@ -563,7 +582,7 @@ def test_workflow_records_gate_timeout_as_dependency_failure(tmp_path: Path) -> 
 
 def test_workflow_stops_at_the_phase1_iteration_limit(tmp_path: Path) -> None:
     source = initialize_source(tmp_path)
-    workspace = tmp_path / "worktrees" / task_brief().run_id
+    workspace = tmp_path / "workspaces" / task_brief().run_id
     executor = DynamicWorkflowExecutor(
         workspace,
         review_verdicts={1: ReviewVerdict.REVISE, 2: ReviewVerdict.REVISE},
@@ -586,7 +605,7 @@ def test_workflow_exposes_a_developer_that_produces_no_real_commit(
     tmp_path: Path,
 ) -> None:
     source = initialize_source(tmp_path)
-    workspace = tmp_path / "worktrees" / task_brief().run_id
+    workspace = tmp_path / "workspaces" / task_brief().run_id
     executor = DynamicWorkflowExecutor(workspace, commit_changes=False)
 
     outcome = coordinator(tmp_path, executor).execute(
@@ -599,11 +618,11 @@ def test_workflow_exposes_a_developer_that_produces_no_real_commit(
     assert outcome.record.snapshots == ()
 
 
-def test_workflow_stops_before_exceeding_estimated_cost_budget(
+def test_workflow_fails_after_crossing_estimated_cost_threshold(
     tmp_path: Path,
 ) -> None:
     source = initialize_source(tmp_path)
-    workspace = tmp_path / "worktrees" / task_brief().run_id
+    workspace = tmp_path / "workspaces" / task_brief().run_id
     executor = DynamicWorkflowExecutor(workspace)
     budget = AgentBudget(
         max_calls=14,
@@ -633,3 +652,77 @@ def test_workflow_stops_before_exceeding_estimated_cost_budget(
         ).read_text(encoding="utf-8")
     )
     assert execution["error"] == "Agent estimated-cost budget was exceeded"
+
+
+def test_parallel_verification_never_exceeds_the_agent_call_limit(
+    tmp_path: Path,
+) -> None:
+    source = initialize_source(tmp_path)
+    workspace = tmp_path / "workspaces" / task_brief().run_id
+    executor = DynamicWorkflowExecutor(
+        workspace,
+        review_verdicts={1: ReviewVerdict.REVISE},
+        verify_barrier=True,
+        allow_single_verifier=True,
+    )
+    budget = AgentBudget(
+        max_calls=6,
+        max_input_tokens=1_000_000,
+        max_output_tokens=200_000,
+        max_agent_duration_seconds=7200,
+        max_estimated_cost_usd="25",
+    )
+
+    outcome = coordinator(tmp_path, executor, budget=budget).execute(
+        task_brief(),
+        source_repository=source,
+    )
+
+    assert outcome.record.phase is RunPhase.FAILED
+    assert outcome.record.termination_reason is TerminationReason.RESOURCE_LIMIT_REACHED
+    assert len(outcome.execution_records) == budget.max_calls
+    assert len(executor.requests) == budget.max_calls
+
+
+def test_workflow_rejects_success_without_reported_model(tmp_path: Path) -> None:
+    source = initialize_source(tmp_path)
+    workspace = tmp_path / "workspaces" / task_brief().run_id
+    executor = DynamicWorkflowExecutor(workspace, reported_model=None)
+
+    outcome = coordinator(tmp_path, executor).execute(
+        task_brief(),
+        source_repository=source,
+    )
+
+    assert outcome.record.phase is RunPhase.FAILED
+    assert outcome.record.termination_reason is TerminationReason.ARTIFACT_INVALID
+    assert len(outcome.execution_records) == 2
+    execution = json.loads(
+        (
+            tmp_path / "runs" / task_brief().run_id / outcome.execution_records[0].path
+        ).read_text(encoding="utf-8")
+    )
+    assert execution["model"] is None
+    assert execution["error"] == "successful execution omitted model metadata"
+
+
+def test_workflow_rejects_success_without_token_usage(tmp_path: Path) -> None:
+    source = initialize_source(tmp_path)
+    workspace = tmp_path / "workspaces" / task_brief().run_id
+    executor = DynamicWorkflowExecutor(workspace, report_usage=False)
+
+    outcome = coordinator(tmp_path, executor).execute(
+        task_brief(),
+        source_repository=source,
+    )
+
+    assert outcome.record.phase is RunPhase.FAILED
+    assert outcome.record.termination_reason is TerminationReason.ARTIFACT_INVALID
+    assert len(outcome.execution_records) == 2
+    execution = json.loads(
+        (
+            tmp_path / "runs" / task_brief().run_id / outcome.execution_records[0].path
+        ).read_text(encoding="utf-8")
+    )
+    assert execution["input_tokens"] is None
+    assert execution["error"] == "successful execution omitted token usage"

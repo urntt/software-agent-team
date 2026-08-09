@@ -1,6 +1,6 @@
 # Vision: An Experimental Multi-Agent Software Builder
 
-**Status:** Active
+**Status:** Phase 1 implementation complete; live acceptance pending
 
 **Last updated:** August 9, 2026
 
@@ -51,13 +51,13 @@ A run also receives:
 - A selected team configuration;
 - Allowed tools and sandbox policy;
 - Fixed validation commands;
-- Time, iteration, model-call, token, and cost limits.
+- Time, iteration, Agent-invocation, token, and cost limits.
 
 ### Outputs
 
 A completed or failed run produces:
 
-- Code in an isolated Git worktree;
+- Code in an isolated, self-contained Git clone;
 - Immutable iteration commit references;
 - Structured planning, implementation, test, review, and decision artifacts;
 - Real command output and exit codes from deterministic quality gates;
@@ -65,8 +65,10 @@ A completed or failed run produces:
 - A final machine-readable record and human-readable report;
 - An explicit termination reason.
 
-The harness never merges, pushes, deploys, publishes, or spends beyond an
-approved budget without human authorization.
+The harness never merges, pushes, deploys, publishes, or intentionally starts
+another Agent invocation after its recorded budget is exhausted. Absolute
+monetary authorization also requires a provider-side spending or quota limit
+because final usage is reported only after a call.
 
 ### Primary User
 
@@ -92,8 +94,8 @@ code or experiment evidence justifies a replacement.
 ### Interface and Runtime
 
 - The product interface is a `sat` CLI.
-- The supported core runtime is Linux; macOS and WSL are compatible when the
-  required tools work.
+- The supported core runtime is Linux, including WSL when the required tools
+  work. Native macOS is not part of the Phase 1 acceptance environment.
 - Python 3.12 implements the deterministic control plane.
 - OpenClaw 2026.7.1-2 is the initial Agent runtime.
 - Open-weight or open-source models are preferred when practical, but model
@@ -103,7 +105,8 @@ code or experiment evidence justifies a replacement.
 
 - A deterministic Python controller owns all workflow state.
 - No LLM or OpenClaw Agent owns lifecycle transitions.
-- Every transition is validated, persisted, bounded, and recoverable.
+- Every transition is validated, persisted, and bounded. Persisted recovery is
+  integrity checked; automatic interrupted-run resume from the CLI is deferred.
 - Git owns source history.
 - Persisted artifacts own cross-Agent communication.
 - OpenClaw session history is diagnostic state, not a reproducibility
@@ -121,8 +124,11 @@ code or experiment evidence justifies a replacement.
 
 ### Isolation and Permissions
 
-- Every run uses an isolated Git worktree.
+- Every run uses an isolated, self-contained Git clone with no remote and a
+  detached HEAD.
 - Generated code executes only inside a restricted sandbox.
+- Live Agent containers run as the invoking unprivileged host identity; UID or
+  GID `0` is rejected.
 - Clarifier, Planner, Tester, and Reviewer are read-only roles.
 - Coding and Integration roles may write only inside the assigned workspace.
 - The controller verifies actual commits, diffs, files, commands, and exit
@@ -140,12 +146,19 @@ Each concept has one authoritative owner.
 | Team membership and initial stage order | `configs/teams.json` |
 | Team-manifest validation | `src/software_agent_team/teams.py` |
 | Artifact schemas | `src/software_agent_team/artifacts.py` |
+| Immutable artifact, handoff, and output persistence | `src/software_agent_team/artifact_store.py` |
 | Sanitized Agent runtime boundary | `configs/openclaw.example.json5` |
+| Run-scoped runtime materialization and preflight | `src/software_agent_team/runtime_configuration.py` |
 | Run lifecycle state and persistence | `src/software_agent_team/run_control.py` |
+| Phase 1 orchestration, decisions, and reports | `src/software_agent_team/workflow.py` |
+| Agent-call, token, duration, and cost budgets | `src/software_agent_team/budgets.py` and `configs/run-policy.json` |
+| Fixed benchmark and quality-gate execution | `benchmarks/task_manager/` and `src/software_agent_team/quality_gates.py` |
+| Agent process invocation and telemetry parsing | `src/software_agent_team/execution.py` |
+| Role prompts and response validation | `src/software_agent_team/prompting.py` and `src/software_agent_team/responses.py` |
 | Source history and iteration snapshots | Git |
 | Agent execution and sessions | OpenClaw |
 | Cross-Agent communication | Persisted run artifacts |
-| Worktree isolation and snapshot verification | `src/software_agent_team/git_workspace.py` |
+| Git workspace isolation and snapshot verification | `src/software_agent_team/git_workspace.py` |
 
 Do not maintain parallel role lists, schemas, state machines, or legacy CLI
 entry points. A replacement removes or migrates its predecessor in the same
@@ -178,7 +191,9 @@ The first end-to-end vertical slice uses:
 
 This is the default starting configuration because it separates planning,
 implementation, and quality control without introducing code-integration
-conflicts.
+conflicts. Phase 1 permits one initial implementation and at most one
+evidence-driven revision, even though the reusable team definition allows a
+higher future limit.
 
 ### Configuration B: `implementation_domain_specialized`
 
@@ -215,6 +230,22 @@ Requirement clarification is evaluated after the first topology comparison.
 The topology experiment starts from one frozen confirmed `TaskBrief` so input
 interpretation does not confound the result.
 
+## Phase 1 Decision Record
+
+| Decision | Reason |
+| --- | --- |
+| Use a local-first CLI instead of a Web service | The first users can inspect Git and terminal evidence, while local execution keeps credentials, workspaces, and experimental state under their control. |
+| Keep the Python controller authoritative | Lifecycle, budgets, evidence checks, and termination must be deterministic rather than dependent on an Agent's self-report. |
+| Use OpenClaw as the Agent runtime, not the orchestrator | OpenClaw provides model/provider integration, sessions, tools, and sandboxing; the experiment still needs a model-independent control plane. |
+| Start with `function_specialized` | It introduces independent planning, testing, and review without the merge conflicts that would confound the first vertical slice. |
+| Run Tester and Reviewer in parallel on one commit | They have no dependency on each other's interpretation, so the barrier preserves independence and reduces elapsed time. |
+| Use persisted structured handoffs | Durable, attributable artifacts make context and decisions auditable without treating hidden conversation history as state. |
+| Run fixed Docker quality gates before Agent judgment | Reproducible command evidence is stronger than claimed test results and keeps generated code isolated from the host. |
+| Resolve the sandbox tag to one local image ID per run | Both Agent sandboxes and quality gates execute the same immutable image even if a mutable local tag is later reassigned. |
+| Allow one response repair and one implementation revision | A small bounded loop can correct formatting or implementation defects without hiding non-convergence, time, or cost. |
+| Freeze model identity and prices for each run | Explicit model telemetry and estimated cost are required for comparable experiments; model fallback would change the independent variables. |
+| Treat terminal failure as evidence | Provider, sandbox, artifact, budget, and convergence failures must remain observable instead of being retried or discarded silently. |
+
 ## Planned Workflow
 
 ```text
@@ -222,7 +253,7 @@ REQUEST
 → CLARIFY
 → CONFIRM_REQUIREMENTS
 → SELECT_TEAM
-→ PREPARE_WORKTREE
+→ PREPARE_WORKSPACE
 → PLAN
 → IMPLEMENT
 → SNAPSHOT
@@ -236,9 +267,14 @@ REQUEST
 
 Only the deterministic controller may advance this state machine.
 
-A multi-Agent run performs at most three implementation iterations by default.
-It stops earlier when fixed acceptance checks pass and no blocking review
-finding remains. It stops with a report when:
+Phase 1 starts at `CONFIRM_REQUIREMENTS` with a frozen `TaskBrief`; interactive
+`REQUEST` and `CLARIFY` behavior is Phase 4. The implemented vertical slice
+runs Tester and Reviewer concurrently after deterministic gates and performs at
+most two implementation iterations: the initial pass and one revision. Later
+configurations may use the manifest's higher explicit limit.
+
+The workflow stops earlier when fixed acceptance checks pass and no blocking
+review finding remains. It stops with a report when:
 
 - A resource or iteration limit is reached;
 - A required runtime, model, dependency, or sandbox is unavailable;
@@ -257,6 +293,7 @@ controller. The current implementation defines:
 - `TaskBrief`;
 - `HandoffEnvelope`;
 - `ArtifactReference`;
+- `AgentExecutionRecord`;
 - Versioned Agent roles and team definitions;
 - `ImplementationPlan`;
 - `WorkResult`;
@@ -305,7 +342,7 @@ evidence of a real run until the controller records it from verified inputs.
 ### Efficiency
 
 - Wall-clock duration;
-- Model calls;
+- Controller Agent invocations and provider-internal attempts when available;
 - Input and output tokens;
 - Estimated cost;
 - Coordination overhead.
@@ -321,16 +358,30 @@ presented as a conclusive result.
 ## Safety Boundary
 
 - Generated code has no external network access by default.
-- CPU, memory, disk, process, wall-clock, iteration, and model-call limits are
-  mandatory before live runs.
+- CPU, memory, process, open-file, tmpfs, command-output, wall-clock,
+  iteration, and Agent-invocation limits are mandatory before live runs.
+- Reported aggregate token, Agent-duration, and estimated-cost thresholds are
+  evaluated after each invocation. Crossing one fails the run before another
+  call; provider-side quota is the hard monetary boundary for a live trace.
+- Agent and quality containers drop Linux capabilities, use read-only root
+  filesystems, and receive only the assigned workspace and frozen inputs.
+- Live runs require an unprivileged invoking account. The Agent container uses
+  that numeric UID/GID so its writable Git workspace does not require unsafe
+  host permissions.
+- Workspaces and run artifacts must reside on a disposable or quota-controlled
+  host filesystem. Portable disk quota enforcement for Docker bind mounts is an
+  explicit operator-owned boundary, not a controller claim.
 - Agents never receive provider credentials or unrelated host data.
+- Agent tool containers receive only an explicit non-secret environment; model
+  provider access remains in the trusted OpenClaw host process.
 - Read-only roles cannot obtain an indirect write path through unrestricted
   executable tools.
 - Human approval is required before merge, push, deployment, publication,
   external communication, destructive operations, or additional spending.
 - Retrieved content and generated repository instructions are untrusted input.
-- Model fallback is recorded and disabled during controlled comparisons unless
-  fallback itself is the declared experimental variable.
+- Model fallback is disabled during controlled comparisons. A successful call
+  must report the selected model and input/output token counts; absent or
+  different telemetry fails the run.
 
 ## Core Scope
 
@@ -342,7 +393,7 @@ The core deliverable includes:
 - OpenClaw execution adapter;
 - Three versioned experimental configurations;
 - Structured artifact validation;
-- Isolated worktrees and immutable snapshots;
+- Isolated standalone clones and immutable snapshots;
 - Deterministic tests and independent review;
 - Bounded internal revision;
 - Task-management benchmark;
@@ -364,35 +415,56 @@ The core version does not include:
 
 ## Current Implementation State
 
-Implemented:
+Implemented and offline verified:
 
 - Reproducible toolchain setup and diagnostics;
-- Unified validation CLI;
+- Unified validation, benchmark-preparation, preflight, and `sat run` CLI;
 - Versioned team manifest and validation;
-- Sanitized OpenClaw Agent registry and permission checks;
+- Sanitized OpenClaw Agent registry, permission checks, run-scoped
+  configuration, non-root identity, strict model selection, and offline
+  preflight;
 - Confirmed task-brief and handoff-envelope contracts;
-- Concrete phase-artifact contracts and context validation;
-- Immutable phase-artifact persistence with canonical paths and hashes;
+- Strict role prompts, JSON response parsing, and one controlled response
+  repair;
+- Concrete phase-artifact and Agent-telemetry contracts with contextual
+  validation;
+- Immutable phase artifacts, handoffs, command output, Agent output, canonical
+  paths, and SHA-256 references;
 - Persisted run lifecycle with validated transitions, atomic replacement,
   optimistic concurrency checks, and integrity-checked recovery;
-- Safe detached-worktree creation and chained iteration snapshot verification;
-- Controlled task-management benchmark;
-- Offline tests for the foundation, persisted artifacts, run control, and Git
-  workspaces.
+- Safe detached standalone-clone creation and chained iteration snapshot
+  verification;
+- Frozen task-management TaskBrief, deterministic seed commit, content-pinned
+  base image, Python dependency lock, per-run immutable local image identity,
+  fixed quality-gate manifest, and independent acceptance suite;
+- Docker-only production gates with no network, read-only workspace execution,
+  non-root identity, fixed commands, resource limits, timeouts, and bounded
+  output;
+- The complete function-specialized workflow: Planner, Developer, controller
+  snapshot, deterministic gates, parallel Tester and Reviewer, decision, and at
+  most one evidence-driven revision;
+- Pre-call Agent invocation limits and post-call token, duration, and
+  estimated-cost stop thresholds;
+- Explicit completed and failed terminal outcomes with machine-readable and
+  human-readable reports;
+- Offline end-to-end coverage for success, revision, response repair, timeout,
+  evidence tampering, iteration exhaustion, missing Git changes, missing model
+  or token telemetry, and cost exhaustion.
 
-Not yet implemented:
+Not yet available or executed:
 
 - Interactive clarification;
-- End-to-end workflow execution on top of the persisted run controller;
-- Live OpenClaw adapter;
-- Role prompts and response parsing;
-- Deterministic benchmark runner;
-- Revision synthesis;
-- Metrics and final report generation;
-- Comparative live runs.
+- The one authorized real model/provider trace required for formal Phase 1
+  acceptance;
+- Automatic CLI resume of an interrupted run;
+- Executable `single_agent` and `implementation_domain_specialized` workflow
+  paths;
+- Repeated comparative trials, human rubric scoring, and topology selection;
+- A second product benchmark and product-level clarification flow.
 
-Documentation must describe this distinction accurately. A command or feature
-is not documented as available until it executes a real validated path.
+The live execution path exists, but no real model result is claimed until the
+runbook checklist is completed. Offline scripted executions prove controller
+behavior, not provider quality or live OpenClaw compatibility.
 
 ## Development Route
 
@@ -409,19 +481,20 @@ is not documented as available until it executes a real validated path.
 ### Phase 1: Function-Specialized Vertical Slice
 
 - Add persisted run directories and lifecycle state;
-- Create an isolated worktree from a confirmed `TaskBrief`;
+- Create an isolated standalone clone from a confirmed `TaskBrief`;
 - Invoke Planner, Generalist Developer, Tester, and Reviewer through an adapter;
 - Run deterministic quality gates;
 - Perform at most one revision in the first trace;
 - Produce a final report.
 
-**Exit criterion:** one complete trace reaches a valid terminal state with
-reproducible artifacts.
+**Exit criterion:** one authorized real-model trace reaches `completed` with
+reproducible artifacts and a clean controller-verified Git snapshot.
 
-Persisted lifecycle state, phase-artifact contracts, and worktree snapshot
-management are implemented. Deterministic gates, Agent execution, artifact
-population, and final-report generation remain before the Phase 1 exit
-criterion is met.
+**Current status:** implementation-complete and offline-verified. Formal exit
+remains pending until one authorized real-model trace reaches `completed`,
+exercises all four roles, passes the frozen gates, reports the selected model
+and usage, and satisfies the evidence checklist in
+`docs/phase1-runbook.md`.
 
 ### Phase 2: Baseline and Domain Specialization
 

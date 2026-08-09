@@ -210,7 +210,7 @@ class RunPolicy(BaseModel):
 
 
 class ReadOnlyInputMount(BaseModel):
-    """Trusted benchmark input mounted outside the generated worktree."""
+    """Trusted benchmark input mounted outside the generated workspace."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -962,6 +962,7 @@ class QualityGateRunner:
         *,
         run_directory: Path | str,
         workspace: Path | str,
+        sandbox_image_id: str | None = None,
         backend: SandboxBackend | None = None,
         allow_test_backends: bool = False,
         monotonic: Callable[[], float] = time.monotonic,
@@ -983,8 +984,18 @@ class QualityGateRunner:
                 self.workspace
             ):
                 raise QualityGateConfigurationError(
-                    "trusted benchmark inputs must be outside the generated worktree"
+                    "trusted benchmark inputs must be outside the generated workspace"
                 )
+        if sandbox_image_id is None:
+            self.sandbox = configuration.policy.sandbox
+        else:
+            if re.fullmatch(r"sha256:[0-9a-f]{64}", sandbox_image_id) is None:
+                raise QualityGateConfigurationError(
+                    "sandbox image ID must be an immutable SHA-256 identity"
+                )
+            self.sandbox = configuration.policy.sandbox.model_copy(
+                update={"image": sandbox_image_id}
+            )
 
         selected_backend: SandboxBackend = backend or DockerSandboxBackend()
         if selected_backend.kind != "docker" and (
@@ -1082,10 +1093,8 @@ class QualityGateRunner:
                 working_directory=self._working_directory(gate),
                 workspace=self.workspace,
                 input_mounts=self.configuration.input_mounts,
-                environment=tuple(
-                    self.configuration.policy.sandbox.environment.items()
-                ),
-                sandbox=self.configuration.policy.sandbox,
+                environment=tuple(self.sandbox.environment.items()),
+                sandbox=self.sandbox,
                 limits=limits,
                 timeout_seconds=timeout,
             )

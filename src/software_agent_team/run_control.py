@@ -34,7 +34,7 @@ from software_agent_team.artifacts import (
 from software_agent_team.git_workspace import GitSnapshot, GitWorkspace
 from software_agent_team.teams import TeamManifest
 
-RUN_SCHEMA_VERSION = 3
+RUN_SCHEMA_VERSION = 4
 RUN_STATE_FILENAME = "run.json"
 TASK_BRIEF_FILENAME = "task-brief.json"
 RUN_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
@@ -68,7 +68,7 @@ class RunPhase(StrEnum):
     """Controller-owned lifecycle phases for one software build run."""
 
     CREATED = "created"
-    PREPARING_WORKTREE = "preparing_worktree"
+    PREPARING_WORKSPACE = "preparing_workspace"
     PLANNING = "planning"
     IMPLEMENTING = "implementing"
     SNAPSHOTTING = "snapshotting"
@@ -102,8 +102,8 @@ class TerminationReason(StrEnum):
 
 
 _LEGAL_NEXT_PHASES: dict[RunPhase, frozenset[RunPhase]] = {
-    RunPhase.CREATED: frozenset({RunPhase.PREPARING_WORKTREE}),
-    RunPhase.PREPARING_WORKTREE: frozenset({RunPhase.PLANNING}),
+    RunPhase.CREATED: frozenset({RunPhase.PREPARING_WORKSPACE}),
+    RunPhase.PREPARING_WORKSPACE: frozenset({RunPhase.PLANNING}),
     RunPhase.PLANNING: frozenset({RunPhase.IMPLEMENTING}),
     RunPhase.IMPLEMENTING: frozenset({RunPhase.SNAPSHOTTING}),
     RunPhase.SNAPSHOTTING: frozenset({RunPhase.VERIFYING}),
@@ -305,7 +305,7 @@ class RunRecord(BaseModel):
             raise ValueError("workspace run ID must match the run record")
         phases_before_workspace = {
             RunPhase.CREATED,
-            RunPhase.PREPARING_WORKTREE,
+            RunPhase.PREPARING_WORKSPACE,
         }
         if self.phase in phases_before_workspace and self.workspace is not None:
             raise ValueError("workspace cannot exist before preparation completes")
@@ -354,7 +354,7 @@ class RunRecord(BaseModel):
             if failure_source in phases_before_workspace:
                 if self.workspace is not None or self.snapshots:
                     raise ValueError(
-                        "early worktree failure cannot contain workspace evidence"
+                        "early workspace failure cannot contain workspace evidence"
                     )
             else:
                 if self.workspace is None:
@@ -578,12 +578,12 @@ class RunStore:
             if not (
                 previous.workspace is None
                 and updated.workspace is not None
-                and latest.source is RunPhase.PREPARING_WORKTREE
+                and latest.source is RunPhase.PREPARING_WORKSPACE
                 and latest.target is RunPhase.PLANNING
             ):
                 raise RunIntegrityError("workspace metadata cannot be replaced")
         elif (
-            latest.source is RunPhase.PREPARING_WORKTREE
+            latest.source is RunPhase.PREPARING_WORKSPACE
             and latest.target is RunPhase.PLANNING
         ):
             raise RunIntegrityError("planning transition must attach a workspace")
@@ -679,7 +679,10 @@ class RunController:
                 "use complete() or fail() for terminal transitions"
             )
         current = self._load_expected(run_id, expected_revision)
-        if current.phase is RunPhase.PREPARING_WORKTREE and target is RunPhase.PLANNING:
+        if (
+            current.phase is RunPhase.PREPARING_WORKSPACE
+            and target is RunPhase.PLANNING
+        ):
             raise InvalidRunTransitionError("use attach_workspace() to enter planning")
         if current.phase is RunPhase.SNAPSHOTTING and target is RunPhase.VERIFYING:
             raise InvalidRunTransitionError(
@@ -713,12 +716,12 @@ class RunController:
         *,
         expected_revision: int,
         workspace: GitWorkspace,
-        reason: str = "isolated worktree prepared",
+        reason: str = "isolated workspace prepared",
     ) -> RunRecord:
-        """Attach verified worktree evidence and enter planning."""
+        """Attach verified workspace evidence and enter planning."""
 
         current = self._load_expected(run_id, expected_revision)
-        if current.phase is not RunPhase.PREPARING_WORKTREE:
+        if current.phase is not RunPhase.PREPARING_WORKSPACE:
             raise InvalidRunTransitionError(
                 f"cannot attach a workspace from {current.phase.value}"
             )

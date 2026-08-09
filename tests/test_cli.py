@@ -1,5 +1,6 @@
 """Tests for the unified foundation CLI."""
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -8,7 +9,10 @@ import pytest
 import software_agent_team.cli as cli
 from software_agent_team.cli import main
 from software_agent_team.run_control import RunPhase
-from software_agent_team.runtime_configuration import RuntimePreflight
+from software_agent_team.runtime_configuration import (
+    RuntimePreflight,
+    SandboxImageInspection,
+)
 
 REPOSITORY_ROOT = Path(__file__).parents[1]
 
@@ -47,6 +51,8 @@ def test_cli_validates_the_complete_configuration(
 ) -> None:
     teams = REPOSITORY_ROOT / "configs" / "teams.json"
     openclaw = REPOSITORY_ROOT / "configs" / "openclaw.example.json5"
+    policy = REPOSITORY_ROOT / "configs" / "run-policy.json"
+    benchmark = REPOSITORY_ROOT / "benchmarks" / "task_manager" / "benchmark.json"
 
     assert (
         main(
@@ -56,11 +62,19 @@ def test_cli_validates_the_complete_configuration(
                 str(teams),
                 "--openclaw",
                 str(openclaw),
+                "--policy",
+                str(policy),
+                "--benchmark",
+                str(benchmark),
             ]
         )
         == 0
     )
-    assert "teams=3" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "teams=3" in output
+    assert "policy=phase1_deterministic" in output
+    assert "benchmark=task_manager_phase1" in output
+    assert "gates=4" in output
 
 
 def test_cli_lists_the_default_team(
@@ -122,6 +136,7 @@ def test_cli_preflight_makes_no_model_call(
             sandbox_binary="/usr/bin/docker",
             sandbox_version="Docker version test",
             sandbox_image="sat-task-manager-quality:phase1-v1",
+            sandbox_image_id=f"sha256:{'a' * 64}",
             config_valid=True,
             sandbox_image_present=True,
         )
@@ -152,7 +167,7 @@ def test_cli_run_constructs_the_real_phase1_boundary_without_invoking_it(
             observed["execute"] = kwargs
             record = SimpleNamespace(
                 phase=RunPhase.COMPLETED,
-                run_id="task-manager-phase1",
+                run_id=task_brief.run_id,
                 current_commit="a" * 40,
             )
             return SimpleNamespace(
@@ -160,8 +175,22 @@ def test_cli_run_constructs_the_real_phase1_boundary_without_invoking_it(
                 human_report_path="final-report.md",
             )
 
+    def fake_inspect_sandbox_image(**kwargs: object) -> SandboxImageInspection:
+        return SandboxImageInspection(
+            sandbox_binary="/usr/bin/docker",
+            sandbox_version="Docker version test",
+            sandbox_image=str(kwargs["sandbox_image"]),
+            sandbox_image_id=f"sha256:{'a' * 64}",
+            sandbox_image_present=True,
+        )
+
     monkeypatch.setattr(cli, "WorkflowCoordinator", FakeCoordinator)
-    brief = REPOSITORY_ROOT / "benchmarks" / "task_manager" / "task-brief.json"
+    monkeypatch.setattr(cli, "inspect_sandbox_image", fake_inspect_sandbox_image)
+    frozen_brief = REPOSITORY_ROOT / "benchmarks" / "task_manager" / "task-brief.json"
+    payload = json.loads(frozen_brief.read_text(encoding="utf-8"))
+    payload["run_id"] = "task-manager-trial-2"
+    brief = tmp_path / "trial-task-brief.json"
+    brief.write_text(json.dumps(payload), encoding="utf-8")
 
     result = main(
         [
@@ -170,8 +199,8 @@ def test_cli_run_constructs_the_real_phase1_boundary_without_invoking_it(
             str(source),
             "--runs-root",
             str(tmp_path / "runs"),
-            "--worktrees-root",
-            str(tmp_path / "worktrees"),
+            "--workspaces-root",
+            str(tmp_path / "workspaces"),
             "--model",
             "provider/model",
             "--input-cost-per-million-usd",
@@ -189,4 +218,42 @@ def test_cli_run_constructs_the_real_phase1_boundary_without_invoking_it(
         "source_repository": source,
         "base_ref": "HEAD",
     }
+    assert observed["task_brief"].run_id == "task-manager-trial-2"
+    gate_factory = observed["quality_gate_factory"]
+    assert callable(gate_factory)
+    run_directory = tmp_path / "gate-run"
+    workspace = tmp_path / "gate-workspace"
+    run_directory.mkdir()
+    workspace.mkdir()
+    gate_runner = gate_factory(run_directory, workspace)
+    assert gate_runner.sandbox.image == f"sha256:{'a' * 64}"
     assert "run completed" in capsys.readouterr().out
+
+
+def test_cli_run_rejects_changes_to_frozen_benchmark(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    frozen_brief = REPOSITORY_ROOT / "benchmarks" / "task_manager" / "task-brief.json"
+    payload = json.loads(frozen_brief.read_text(encoding="utf-8"))
+    payload["title"] = "Changed benchmark"
+    changed = tmp_path / "changed-task-brief.json"
+    changed.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert (
+        main(
+            [
+                "run",
+                str(changed),
+                str(tmp_path / "source"),
+                "--model",
+                "provider/model",
+                "--input-cost-per-million-usd",
+                "1",
+                "--output-cost-per-million-usd",
+                "2",
+            ]
+        )
+        == 1
+    )
+    assert "permits only run_id" in capsys.readouterr().out

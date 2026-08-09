@@ -28,6 +28,7 @@ from software_agent_team.run_control import RunPhase
 from software_agent_team.runtime_configuration import (
     RuntimeConfigurationError,
     inspect_runtime_preflight,
+    inspect_sandbox_image,
     materialize_run_configuration,
     persist_runtime_preflight,
 )
@@ -40,7 +41,7 @@ DEFAULT_RUN_POLICY = Path("configs/run-policy.json")
 DEFAULT_BENCHMARK = Path("benchmarks/task_manager/benchmark.json")
 DEFAULT_BENCHMARK_SEED = Path("benchmarks/task_manager/seed")
 DEFAULT_RUNS_ROOT = Path("runs")
-DEFAULT_WORKTREES_ROOT = Path("worktrees")
+DEFAULT_WORKSPACES_ROOT = Path("workspaces")
 DEFAULT_OPENCLAW_BINARY = Path.home() / ".openclaw" / "bin" / "openclaw"
 
 
@@ -92,10 +93,12 @@ def _validate_artifact(args: argparse.Namespace) -> int:
 
 def _validate_config(args: argparse.Namespace) -> int:
     manifest, _ = validate_environment_configuration(args.teams, args.openclaw)
+    quality = load_quality_gate_configuration(args.policy, args.benchmark)
     print(
         "valid configuration: "
         f"teams={len(manifest.teams)} roles={len(manifest.required_roles)} "
-        f"default={manifest.default_team}"
+        f"default={manifest.default_team} policy={quality.policy.id} "
+        f"benchmark={quality.benchmark.id} gates={len(quality.benchmark.gates)}"
     )
     return 0
 
@@ -147,7 +150,8 @@ def _preflight(args: argparse.Namespace) -> int:
     state = "ready" if result.ready else "not-ready"
     print(
         f"runtime preflight: {state} openclaw={result.openclaw_version} "
-        f"config={result.config_valid} image={result.sandbox_image_present}"
+        f"config={result.config_valid} image={result.sandbox_image_present} "
+        f"image_id={result.sandbox_image_id or 'none'}"
     )
     return 0 if result.ready else 2
 
@@ -156,10 +160,22 @@ def _run_workflow(args: argparse.Namespace) -> int:
     task_brief = _load_json_model(args.task_brief, TaskBrief)
     manifest = load_team_manifest(args.teams)
     configuration = load_quality_gate_configuration(args.policy, args.benchmark)
-    if task_brief != configuration.task_brief:
+    expected_brief = configuration.task_brief.model_copy(
+        update={"run_id": task_brief.run_id}
+    )
+    if task_brief != expected_brief:
         raise ValueError(
-            "Phase 1 run requires the frozen benchmark TaskBrief without changes"
+            "Phase 1 run permits only run_id to differ from the frozen TaskBrief"
         )
+    sandbox_inspection = inspect_sandbox_image(
+        sandbox_binary=args.sandbox_binary,
+        sandbox_image=configuration.policy.sandbox.image,
+    )
+    if not sandbox_inspection.ready or sandbox_inspection.sandbox_image_id is None:
+        raise RuntimeConfigurationError(
+            "the configured sandbox image is not present locally"
+        )
+    frozen_sandbox_image = sandbox_inspection.sandbox_image_id
     runtime_path = args.runs_root / task_brief.run_id / "openclaw.runtime.json"
     executor = OpenClawSubprocessExecutor(
         openclaw_binary=args.openclaw_binary,
@@ -168,25 +184,27 @@ def _run_workflow(args: argparse.Namespace) -> int:
     )
 
     def runtime_setup(workspace: GitWorkspace, run_directory: Path) -> None:
-        worktree_path = workspace.worktree_path
+        workspace_path = workspace.workspace_path
         limits = configuration.policy.limits
         materialize_run_configuration(
             args.openclaw,
             runtime_path,
             manifest=manifest,
-            workspace=Path(worktree_path),
-            sandbox_image=configuration.policy.sandbox.image,
+            workspace=Path(workspace_path),
+            sandbox_image=frozen_sandbox_image,
             sandbox_memory_mb=limits.memory_mb,
             sandbox_cpus=limits.cpu_cores,
             sandbox_pids_limit=limits.pids,
             sandbox_open_files=limits.open_files,
             sandbox_tmpfs_mb=limits.writable_tmpfs_mb,
+            model=args.model,
         )
         preflight = inspect_runtime_preflight(
             openclaw_binary=args.openclaw_binary,
             runtime_config=runtime_path,
             sandbox_binary=args.sandbox_binary,
             sandbox_image=configuration.policy.sandbox.image,
+            expected_sandbox_image_id=frozen_sandbox_image,
         )
         persist_runtime_preflight(
             preflight,
@@ -204,13 +222,14 @@ def _run_workflow(args: argparse.Namespace) -> int:
             configuration,
             run_directory=run_directory,
             workspace=workspace,
+            sandbox_image_id=frozen_sandbox_image,
             backend=DockerSandboxBackend(args.sandbox_binary),
         )
 
     coordinator = WorkflowCoordinator(
         manifest=manifest,
         runs_root=args.runs_root,
-        worktrees_root=args.worktrees_root,
+        workspaces_root=args.workspaces_root,
         executor=executor,
         quality_gate_factory=gate_factory,
         budget=configuration.policy.agent_budget,
@@ -269,10 +288,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     config = commands.add_parser(
         "validate-config",
-        help="Validate team and OpenClaw configuration together.",
+        help="Validate all checked-in team, runtime, policy, and benchmark config.",
     )
     config.add_argument("--teams", type=Path, default=DEFAULT_TEAM_CONFIG)
     config.add_argument("--openclaw", type=Path, default=DEFAULT_OPENCLAW_CONFIG)
+    config.add_argument("--policy", type=Path, default=DEFAULT_RUN_POLICY)
+    config.add_argument("--benchmark", type=Path, default=DEFAULT_BENCHMARK)
     config.set_defaults(handler=_validate_config)
 
     teams = commands.add_parser(
@@ -321,7 +342,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--policy", type=Path, default=DEFAULT_RUN_POLICY)
     run.add_argument("--benchmark", type=Path, default=DEFAULT_BENCHMARK)
     run.add_argument("--runs-root", type=Path, default=DEFAULT_RUNS_ROOT)
-    run.add_argument("--worktrees-root", type=Path, default=DEFAULT_WORKTREES_ROOT)
+    run.add_argument("--workspaces-root", type=Path, default=DEFAULT_WORKSPACES_ROOT)
     run.add_argument(
         "--openclaw-binary",
         type=Path,

@@ -1,5 +1,6 @@
 """Tests for safe benchmark seed repository preparation."""
 
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -26,9 +27,14 @@ def git(repository: Path, *arguments: str) -> str:
 
 
 def test_prepare_benchmark_seed_creates_one_clean_base_commit(tmp_path: Path) -> None:
+    seed = tmp_path / "seed"
+    shutil.copytree(SEED, seed)
+    cache = seed / ".ruff_cache" / "test-state"
+    cache.parent.mkdir(exist_ok=True)
+    cache.write_text("ignored", encoding="utf-8")
     destination = tmp_path / "benchmark"
 
-    commit = prepare_benchmark_seed(SEED, destination)
+    commit = prepare_benchmark_seed(seed, destination)
 
     assert len(commit) == 40
     assert git(destination, "rev-parse", "HEAD") == commit
@@ -37,6 +43,8 @@ def test_prepare_benchmark_seed_creates_one_clean_base_commit(tmp_path: Path) ->
     assert git(destination, "log", "-1", "--format=%an <%ae>") == (
         "urntt <urntts@gmail.com>"
     )
+    assert not (destination / ".ruff_cache").exists()
+    assert prepare_benchmark_seed(seed, tmp_path / "second-benchmark") == commit
     with pytest.raises(BenchmarkSeedError, match="already exists"):
         prepare_benchmark_seed(SEED, destination)
 

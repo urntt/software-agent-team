@@ -29,7 +29,7 @@ secrets/
 
 # Generated runs and benchmark workspaces
 runs/
-worktrees/
+workspaces/
 artifacts/generated/
 openclaw/workspaces/*/
 

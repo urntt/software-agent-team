@@ -12,11 +12,26 @@ class BenchmarkSeedError(RuntimeError):
     """Raised when the controlled benchmark seed cannot be prepared safely."""
 
 
+SEED_IGNORE_PATTERNS = (
+    "__pycache__",
+    "*.pyc",
+    "*.pyo",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".venv",
+    "*.db",
+    "*.sqlite",
+    "*.sqlite3",
+)
+
+
 def _git_environment() -> dict[str, str]:
     return {
         **os.environ,
         "GIT_CONFIG_NOSYSTEM": "1",
         "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_AUTHOR_DATE": "2026-08-09T00:00:00Z",
+        "GIT_COMMITTER_DATE": "2026-08-09T00:00:00Z",
     }
 
 
@@ -63,6 +78,8 @@ def prepare_benchmark_seed(
         raise BenchmarkSeedError("benchmark seed does not exist") from error
     if not resolved_seed.is_dir() or resolved_seed.is_symlink():
         raise BenchmarkSeedError("benchmark seed must be a real directory")
+    if (resolved_seed / ".git").exists() or (resolved_seed / ".git").is_symlink():
+        raise BenchmarkSeedError("benchmark seed cannot contain Git metadata")
     if any(path.is_symlink() for path in resolved_seed.rglob("*")):
         raise BenchmarkSeedError("benchmark seed cannot contain symbolic links")
     if destination.exists() or destination.is_symlink():
@@ -76,7 +93,11 @@ def prepare_benchmark_seed(
     ):
         raise BenchmarkSeedError("benchmark destination cannot be inside the seed")
 
-    shutil.copytree(resolved_seed, destination)
+    shutil.copytree(
+        resolved_seed,
+        destination,
+        ignore=shutil.ignore_patterns(*SEED_IGNORE_PATTERNS),
+    )
     _run_git(destination, "init", "-b", "main")
     _run_git(destination, "add", ".")
     _run_git(

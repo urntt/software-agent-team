@@ -44,10 +44,10 @@ def configuration():
 
 @pytest.fixture
 def run_paths(tmp_path: Path) -> tuple[Path, Path]:
-    """Create separate controller and generated-worktree directories."""
+    """Create separate controller and generated-workspace directories."""
 
     run_directory = tmp_path / "runs" / "task-manager-phase1"
-    workspace = tmp_path / "worktrees" / "task-manager-phase1"
+    workspace = tmp_path / "workspaces" / "task-manager-phase1"
     run_directory.mkdir(parents=True)
     workspace.mkdir(parents=True)
     return run_directory, workspace
@@ -383,6 +383,41 @@ def test_runner_defaults_to_docker(configuration, run_paths: tuple[Path, Path]) 
     assert isinstance(runner.backend, DockerSandboxBackend)
 
 
+def test_runner_uses_the_frozen_sandbox_image_identity(
+    configuration, run_paths: tuple[Path, Path]
+) -> None:
+    run_directory, workspace = run_paths
+    fake = FakeSandboxBackend(successful_executions())
+    image_id = f"sha256:{'a' * 64}"
+    runner = QualityGateRunner(
+        configuration,
+        run_directory=run_directory,
+        workspace=workspace,
+        sandbox_image_id=image_id,
+        backend=fake,
+        allow_test_backends=True,
+    )
+
+    runner.run(iteration=1)
+
+    assert fake.invocations
+    assert {invocation.sandbox.image for invocation in fake.invocations} == {image_id}
+
+
+def test_runner_rejects_a_non_digest_image_override(
+    configuration, run_paths: tuple[Path, Path]
+) -> None:
+    run_directory, workspace = run_paths
+
+    with pytest.raises(QualityGateConfigurationError, match="immutable SHA-256"):
+        QualityGateRunner(
+            configuration,
+            run_directory=run_directory,
+            workspace=workspace,
+            sandbox_image_id="mutable:tag",
+        )
+
+
 def test_runner_requires_explicit_test_backend_opt_in(
     configuration, run_paths: tuple[Path, Path]
 ) -> None:
@@ -565,7 +600,7 @@ def test_runner_rejects_working_directory_symlink_escape(
         runner.run(iteration=1)
 
 
-def test_runner_rejects_trusted_input_inside_generated_worktree(
+def test_runner_rejects_trusted_input_inside_generated_workspace(
     configuration, run_paths: tuple[Path, Path]
 ) -> None:
     run_directory, workspace = run_paths

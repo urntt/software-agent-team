@@ -35,6 +35,18 @@ fi
 [[ -f VISION.md ]] || fail "VISION.md is missing"
 [[ -f configs/teams.json ]] || fail "team manifest is missing"
 [[ -f configs/openclaw.example.json5 ]] || fail "OpenClaw template is missing"
+[[ -f configs/run-policy.json ]] || fail "run policy is missing"
+[[ -f benchmarks/task_manager/benchmark.json ]] || \
+  fail "benchmark manifest is missing"
+[[ -f benchmarks/task_manager/task-brief.json ]] || \
+  fail "frozen benchmark TaskBrief is missing"
+[[ -f benchmarks/task_manager/Dockerfile ]] || fail "benchmark Dockerfile is missing"
+[[ -f benchmarks/task_manager/requirements.in ]] || \
+  fail "benchmark dependency input is missing"
+[[ -f benchmarks/task_manager/requirements.lock ]] || \
+  fail "benchmark dependency lock is missing"
+[[ -f benchmarks/task_manager/acceptance/run.py ]] || \
+  fail "benchmark acceptance suite is missing"
 
 task_python_version="$("$task_uv_bin" run --frozen python -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')"
 [[ "$task_python_version" == "3.12" ]] || fail "the project must use Python 3.12"
@@ -50,6 +62,8 @@ fi
 SOFTWARE_AGENT_TEAM_ROOT="$task_root" \
   "$task_uv_bin" run --frozen sat validate-config >/dev/null
 "$task_uv_bin" run --frozen sat validate-task-brief examples/task-brief.json >/dev/null
+"$task_uv_bin" run --frozen sat validate-task-brief \
+  benchmarks/task_manager/task-brief.json >/dev/null
 "$task_uv_bin" run --frozen sat validate-handoff examples/handoff.json >/dev/null
 "$task_uv_bin" run --frozen sat validate-artifact \
   examples/implementation-plan.json >/dev/null

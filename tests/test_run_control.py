@@ -39,7 +39,7 @@ BASE_COMMIT = "1" * 40
 SHA256 = "a" * 64
 
 PHASES_TO_DECISION = [
-    RunPhase.PREPARING_WORKTREE,
+    RunPhase.PREPARING_WORKSPACE,
     RunPhase.PLANNING,
     RunPhase.IMPLEMENTING,
     RunPhase.SNAPSHOTTING,
@@ -48,8 +48,8 @@ PHASES_TO_DECISION = [
     RunPhase.DECIDING,
 ]
 LEGAL_PHASE_TRANSITIONS = {
-    (RunPhase.CREATED, RunPhase.PREPARING_WORKTREE),
-    (RunPhase.PREPARING_WORKTREE, RunPhase.PLANNING),
+    (RunPhase.CREATED, RunPhase.PREPARING_WORKSPACE),
+    (RunPhase.PREPARING_WORKSPACE, RunPhase.PLANNING),
     (RunPhase.PLANNING, RunPhase.IMPLEMENTING),
     (RunPhase.IMPLEMENTING, RunPhase.SNAPSHOTTING),
     (RunPhase.SNAPSHOTTING, RunPhase.VERIFYING),
@@ -106,12 +106,12 @@ def create_run(
 
 
 def workspace(run_id: str) -> GitWorkspace:
-    """Return deterministic worktree evidence for state-controller tests."""
+    """Return deterministic workspace evidence for state-controller tests."""
 
     return GitWorkspace(
         run_id=run_id,
         source_repository="/tmp/source-repository",
-        worktree_path=f"/tmp/worktrees/{run_id}",
+        workspace_path=f"/tmp/workspaces/{run_id}",
         base_commit=BASE_COMMIT,
         created_at=FIXED_TIME,
     )
@@ -140,7 +140,7 @@ def advance(
 ) -> RunRecord:
     """Advance with the current optimistic-concurrency revision."""
 
-    if record.phase is RunPhase.PREPARING_WORKTREE and target is RunPhase.PLANNING:
+    if record.phase is RunPhase.PREPARING_WORKSPACE and target is RunPhase.PLANNING:
         return controller.attach_workspace(
             record.run_id,
             expected_revision=record.revision,
@@ -364,7 +364,7 @@ def test_evidence_transitions_cannot_bypass_specialized_methods(
     tmp_path: Path,
 ) -> None:
     controller = make_controller(tmp_path / "runs")
-    record = advance(controller, create_run(controller), RunPhase.PREPARING_WORKTREE)
+    record = advance(controller, create_run(controller), RunPhase.PREPARING_WORKSPACE)
 
     with pytest.raises(InvalidRunTransitionError, match="attach_workspace"):
         controller.advance(
@@ -388,7 +388,7 @@ def test_evidence_transitions_cannot_bypass_specialized_methods(
 
 def test_workspace_and_snapshot_must_match_the_run(tmp_path: Path) -> None:
     controller = make_controller(tmp_path / "runs")
-    record = advance(controller, create_run(controller), RunPhase.PREPARING_WORKTREE)
+    record = advance(controller, create_run(controller), RunPhase.PREPARING_WORKSPACE)
     wrong_workspace = workspace("different-run")
 
     with pytest.raises(RunIntegrityError, match="different run"):
@@ -483,7 +483,7 @@ def test_duplicate_run_does_not_overwrite_existing_state(tmp_path: Path) -> None
 def test_stale_revision_is_rejected(tmp_path: Path) -> None:
     controller = make_controller(tmp_path / "runs")
     original = create_run(controller)
-    updated = advance(controller, original, RunPhase.PREPARING_WORKTREE)
+    updated = advance(controller, original, RunPhase.PREPARING_WORKSPACE)
 
     with pytest.raises(RunConflictError, match="expected 0, found 1"):
         controller.advance(
@@ -606,7 +606,7 @@ def test_failed_atomic_replace_preserves_previous_record(
 
     monkeypatch.setattr(run_control.os, "replace", fail_replace)
     with pytest.raises(OSError, match="cannot replace"):
-        advance(controller, record, RunPhase.PREPARING_WORKTREE)
+        advance(controller, record, RunPhase.PREPARING_WORKSPACE)
 
     assert state_path.read_bytes() == before
     assert controller.load(record.run_id) == record
@@ -637,4 +637,4 @@ def test_controller_rejects_a_clock_that_moves_backwards(tmp_path: Path) -> None
     record = create_run(controller)
 
     with pytest.raises(RunControlError, match="clock moved backwards"):
-        advance(controller, record, RunPhase.PREPARING_WORKTREE)
+        advance(controller, record, RunPhase.PREPARING_WORKSPACE)

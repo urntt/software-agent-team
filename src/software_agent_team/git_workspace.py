@@ -1,4 +1,4 @@
-"""Safe Git worktree preparation and immutable snapshot verification."""
+"""Safe isolated Git clone preparation and immutable snapshot verification."""
 
 from __future__ import annotations
 
@@ -40,12 +40,12 @@ class UnsafeRepositoryError(RepositoryValidationError):
     """Raised when checkout could execute repository-controlled programs."""
 
 
-class WorktreeAlreadyExistsError(GitWorkspaceError):
-    """Raised when the derived worktree path is already occupied."""
+class WorkspaceAlreadyExistsError(GitWorkspaceError):
+    """Raised when the derived workspace path is already occupied."""
 
 
-class WorktreeIntegrityError(GitWorkspaceError):
-    """Raised when a worktree or snapshot disagrees with verified Git state."""
+class WorkspaceIntegrityError(GitWorkspaceError):
+    """Raised when a workspace or snapshot disagrees with verified Git state."""
 
 
 def _require_utc(value: datetime) -> datetime:
@@ -64,13 +64,13 @@ def _require_safe_repository_path(value: str) -> str:
 
 
 class GitWorkspace(BaseModel):
-    """Immutable identity of one detached run worktree."""
+    """Immutable identity of one detached, self-contained run clone."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     run_id: str = Field(min_length=1, pattern=r"^[a-z0-9][a-z0-9_-]*$")
     source_repository: str = Field(min_length=1)
-    worktree_path: str = Field(min_length=1)
+    workspace_path: str = Field(min_length=1)
     base_commit: str = Field(pattern=COMMIT_PATTERN)
     created_at: datetime
 
@@ -81,7 +81,7 @@ class GitWorkspace(BaseModel):
 
         return _require_utc(value)
 
-    @field_validator("source_repository", "worktree_path")
+    @field_validator("source_repository", "workspace_path")
     @classmethod
     def require_absolute_path(cls, value: str) -> str:
         """Persist explicit machine-local paths for recovery."""
@@ -92,10 +92,10 @@ class GitWorkspace(BaseModel):
 
     @model_validator(mode="after")
     def validate_distinct_paths(self) -> Self:
-        """Never treat the source checkout as its own isolated worktree."""
+        """Never treat the source checkout as its own isolated workspace."""
 
-        if self.source_repository == self.worktree_path:
-            raise ValueError("source repository and worktree paths must differ")
+        if self.source_repository == self.workspace_path:
+            raise ValueError("source repository and workspace paths must differ")
         return self
 
 
@@ -146,16 +146,16 @@ def validate_work_result_snapshot(
     """Require an Agent work result to match controller-verified Git evidence."""
 
     if work_result.run_id != snapshot.run_id:
-        raise WorktreeIntegrityError("work result and snapshot run IDs differ")
+        raise WorkspaceIntegrityError("work result and snapshot run IDs differ")
     if work_result.iteration != snapshot.iteration:
-        raise WorktreeIntegrityError("work result and snapshot iterations differ")
+        raise WorkspaceIntegrityError("work result and snapshot iterations differ")
     if (
         work_result.input_commit != snapshot.input_commit
         or work_result.output_commit != snapshot.output_commit
     ):
-        raise WorktreeIntegrityError("work result and snapshot commits differ")
+        raise WorkspaceIntegrityError("work result and snapshot commits differ")
     if set(work_result.changed_files) != set(snapshot.changed_files):
-        raise WorktreeIntegrityError("work result and snapshot changed files differ")
+        raise WorkspaceIntegrityError("work result and snapshot changed files differ")
 
 
 Clock = Callable[[], datetime]
@@ -166,7 +166,7 @@ def _system_clock() -> datetime:
 
 
 class GitWorkspaceManager:
-    """Prepare detached worktrees and verify Agent-created commits."""
+    """Prepare detached standalone clones and verify Agent-created commits."""
 
     def __init__(
         self,
@@ -190,7 +190,7 @@ class GitWorkspaceManager:
         source_repository: Path,
         base_ref: str = "HEAD",
     ) -> GitWorkspace:
-        """Create one detached worktree from a validated clean repository."""
+        """Create one detached standalone clone from a validated repository."""
 
         if not RUN_ID_PATTERN.fullmatch(run_id):
             raise GitWorkspaceError(f"invalid run ID: {run_id}")
@@ -202,30 +202,42 @@ class GitWorkspaceManager:
         self._validate_working_tree_attributes(source)
         if self._status(source):
             raise RepositoryValidationError("source repository must be clean")
+        author_name, author_email = self._source_commit_identity(source)
 
         candidate_root = self.root.resolve(strict=False)
         if candidate_root == source or candidate_root.is_relative_to(source):
             raise GitWorkspaceError(
-                "worktree root must be outside the source repository"
+                "workspace root must be outside the source repository"
             )
         self.root.mkdir(parents=True, exist_ok=True)
         if self.root.is_symlink() or not self.root.is_dir():
-            raise GitWorkspaceError("worktree root must be a real directory")
+            raise GitWorkspaceError("workspace root must be a real directory")
         root = self.root.resolve(strict=True)
         destination = root / run_id
         if destination.exists() or destination.is_symlink():
-            raise WorktreeAlreadyExistsError(
-                f"worktree path already exists: {destination}"
+            raise WorkspaceAlreadyExistsError(
+                f"workspace path already exists: {destination}"
             )
 
         self._git(
             source,
-            ["worktree", "add", "--detach", str(destination), base_commit],
+            [
+                "clone",
+                "--no-local",
+                "--no-checkout",
+                "--",
+                str(source),
+                str(destination),
+            ],
         )
+        self._git(destination, ["remote", "remove", "origin"])
+        self._git(destination, ["config", "--local", "user.name", author_name])
+        self._git(destination, ["config", "--local", "user.email", author_email])
+        self._git(destination, ["checkout", "--detach", base_commit])
         workspace = GitWorkspace(
             run_id=run_id,
             source_repository=str(source),
-            worktree_path=str(destination),
+            workspace_path=str(destination),
             base_commit=base_commit,
             created_at=_require_utc(self.clock()),
         )
@@ -241,47 +253,78 @@ class GitWorkspaceManager:
         expected_commit: str | None = None,
         require_clean: bool = False,
     ) -> str:
-        """Verify worktree identity, detached state, commit, and cleanliness."""
+        """Verify standalone clone identity, state, commit, and cleanliness."""
 
-        source = Path(workspace.source_repository)
-        worktree = Path(workspace.worktree_path)
-        if not source.is_dir() or not worktree.is_dir():
-            raise WorktreeIntegrityError("source repository or worktree is missing")
+        try:
+            source = self._validate_source(Path(workspace.source_repository))
+        except GitWorkspaceError as error:
+            raise WorkspaceIntegrityError("source repository is missing") from error
+        run_workspace = Path(workspace.workspace_path)
+        if not run_workspace.is_dir() or run_workspace.is_symlink():
+            raise WorkspaceIntegrityError("isolated workspace is missing")
 
         top_level = Path(
-            self._git_text(worktree, ["rev-parse", "--show-toplevel"])
+            self._git_text(run_workspace, ["rev-parse", "--show-toplevel"])
         ).resolve(strict=True)
-        if top_level != worktree.resolve(strict=True):
-            raise WorktreeIntegrityError("worktree top level does not match metadata")
+        resolved_workspace = run_workspace.resolve(strict=True)
+        if top_level != resolved_workspace:
+            raise WorkspaceIntegrityError("workspace top level does not match metadata")
 
-        source_common = self._resolved_git_path(
-            source,
-            self._git_text(source, ["rev-parse", "--git-common-dir"]),
+        git_directory = run_workspace / ".git"
+        if not git_directory.is_dir() or git_directory.is_symlink():
+            raise WorkspaceIntegrityError(
+                "workspace Git metadata must be a self-contained directory"
+            )
+        resolved_git_directory = git_directory.resolve(strict=True)
+        reported_git_directory = self._resolved_git_path(
+            run_workspace,
+            self._git_text(run_workspace, ["rev-parse", "--absolute-git-dir"]),
         )
-        worktree_common = self._resolved_git_path(
-            worktree,
-            self._git_text(worktree, ["rev-parse", "--git-common-dir"]),
+        common_directory = self._resolved_git_path(
+            run_workspace,
+            self._git_text(run_workspace, ["rev-parse", "--git-common-dir"]),
         )
-        if source_common != worktree_common:
-            raise WorktreeIntegrityError("worktree belongs to a different repository")
+        if (
+            reported_git_directory != resolved_git_directory
+            or common_directory != resolved_git_directory
+        ):
+            raise WorkspaceIntegrityError(
+                "workspace Git metadata is not self-contained"
+            )
+        if (git_directory / "objects" / "info" / "alternates").exists():
+            raise WorkspaceIntegrityError(
+                "workspace object database cannot use an external alternate"
+            )
+        if self._git_text(run_workspace, ["remote"]):
+            raise WorkspaceIntegrityError("isolated workspace cannot retain a remote")
+        try:
+            source_base = self._resolve_commit(source, workspace.base_commit)
+        except GitWorkspaceError as error:
+            raise WorkspaceIntegrityError(
+                "workspace base commit is absent from the recorded source"
+            ) from error
+        if source_base != workspace.base_commit:
+            raise WorkspaceIntegrityError(
+                "workspace belongs to a different source history"
+            )
 
         symbolic = self._git(
-            worktree,
+            run_workspace,
             ["symbolic-ref", "-q", "HEAD"],
             allowed_returncodes={0, 1},
         )
         if symbolic.returncode == 0:
-            raise WorktreeIntegrityError("run worktree must remain detached")
+            raise WorkspaceIntegrityError("run workspace must remain detached")
 
-        head = self._resolve_commit(worktree, "HEAD")
+        head = self._resolve_commit(run_workspace, "HEAD")
         if expected_commit is not None and head != expected_commit:
-            raise WorktreeIntegrityError(
-                f"worktree HEAD does not match expected commit {expected_commit}"
+            raise WorkspaceIntegrityError(
+                f"workspace HEAD does not match expected commit {expected_commit}"
             )
-        self._validate_checkout_safety(worktree, head)
-        self._validate_working_tree_attributes(worktree)
-        if require_clean and self._status(worktree):
-            raise WorktreeIntegrityError("worktree contains uncommitted changes")
+        self._validate_checkout_safety(run_workspace, head)
+        self._validate_working_tree_attributes(run_workspace)
+        if require_clean and self._status(run_workspace):
+            raise WorkspaceIntegrityError("workspace contains uncommitted changes")
         return head
 
     def recover_prepared(
@@ -291,7 +334,7 @@ class GitWorkspaceManager:
         source_repository: Path,
         base_ref: str = "HEAD",
     ) -> GitWorkspace:
-        """Explicitly recover a matching worktree created before state attachment."""
+        """Explicitly recover a matching clone created before state attachment."""
 
         if not RUN_ID_PATTERN.fullmatch(run_id):
             raise GitWorkspaceError(f"invalid run ID: {run_id}")
@@ -305,16 +348,16 @@ class GitWorkspaceManager:
             raise RepositoryValidationError("source repository must be clean")
 
         if self.root.is_symlink() or not self.root.is_dir():
-            raise WorktreeIntegrityError("worktree root is unavailable for recovery")
+            raise WorkspaceIntegrityError("workspace root is unavailable for recovery")
         root = self.root.resolve(strict=True)
         if root == source or root.is_relative_to(source):
-            raise WorktreeIntegrityError(
-                "worktree root must be outside the source repository"
+            raise WorkspaceIntegrityError(
+                "workspace root must be outside the source repository"
             )
         workspace = GitWorkspace(
             run_id=run_id,
             source_repository=str(source),
-            worktree_path=str(root / run_id),
+            workspace_path=str(root / run_id),
             base_commit=base_commit,
             created_at=_require_utc(self.clock()),
         )
@@ -325,8 +368,8 @@ class GitWorkspaceManager:
                 require_clean=True,
             )
         except GitWorkspaceError as error:
-            raise WorktreeIntegrityError(
-                "existing worktree cannot be recovered safely"
+            raise WorkspaceIntegrityError(
+                "existing workspace cannot be recovered safely"
             ) from error
         return workspace
 
@@ -340,39 +383,39 @@ class GitWorkspaceManager:
         """Verify and describe one clean descendant commit range."""
 
         if not 1 <= iteration <= 3:
-            raise WorktreeIntegrityError("snapshot iteration must be between 1 and 3")
+            raise WorkspaceIntegrityError("snapshot iteration must be between 1 and 3")
         if not re.fullmatch(COMMIT_PATTERN, input_commit):
-            raise WorktreeIntegrityError("snapshot input commit is invalid")
-        worktree = Path(workspace.worktree_path)
+            raise WorkspaceIntegrityError("snapshot input commit is invalid")
+        run_workspace = Path(workspace.workspace_path)
         output_commit = self.verify_workspace(workspace, require_clean=True)
         if output_commit == input_commit:
-            raise WorktreeIntegrityError("snapshot contains no new commit")
+            raise WorkspaceIntegrityError("snapshot contains no new commit")
         try:
-            resolved_input = self._resolve_commit(worktree, input_commit)
+            resolved_input = self._resolve_commit(run_workspace, input_commit)
         except (GitCommandError, RepositoryValidationError) as error:
-            raise WorktreeIntegrityError(
-                "snapshot input commit is not available in the worktree"
+            raise WorkspaceIntegrityError(
+                "snapshot input commit is not available in the workspace"
             ) from error
         if resolved_input != input_commit:
-            raise WorktreeIntegrityError("snapshot input commit is ambiguous")
+            raise WorkspaceIntegrityError("snapshot input commit is ambiguous")
 
         ancestor = self._git(
-            worktree,
+            run_workspace,
             ["merge-base", "--is-ancestor", input_commit, output_commit],
             allowed_returncodes={0, 1},
         )
         if ancestor.returncode != 0:
-            raise WorktreeIntegrityError(
+            raise WorkspaceIntegrityError(
                 "snapshot output commit is not a descendant of its input"
             )
         commit_count = int(
             self._git_text(
-                worktree,
+                run_workspace,
                 ["rev-list", "--count", f"{input_commit}..{output_commit}"],
             )
         )
         changed_output = self._git(
-            worktree,
+            run_workspace,
             ["diff", "--name-only", "-z", input_commit, output_commit, "--"],
         ).stdout
         try:
@@ -382,11 +425,11 @@ class GitWorkspaceManager:
                 if item
             )
         except UnicodeDecodeError as error:
-            raise WorktreeIntegrityError(
+            raise WorkspaceIntegrityError(
                 "snapshot contains a non-UTF-8 repository path"
             ) from error
         if not changed_files:
-            raise WorktreeIntegrityError("snapshot contains no changed files")
+            raise WorkspaceIntegrityError("snapshot contains no changed files")
         return GitSnapshot(
             run_id=workspace.run_id,
             iteration=iteration,
@@ -396,6 +439,25 @@ class GitWorkspaceManager:
             changed_files=changed_files,
             recorded_at=_require_utc(self.clock()),
         )
+
+    def _source_commit_identity(self, source: Path) -> tuple[str, str]:
+        """Read the explicit local identity copied into the isolated clone."""
+
+        try:
+            name = self._git_text(source, ["config", "--local", "--get", "user.name"])
+            email = self._git_text(
+                source,
+                ["config", "--local", "--get", "user.email"],
+            )
+        except GitCommandError as error:
+            raise RepositoryValidationError(
+                "source repository requires local user.name and user.email"
+            ) from error
+        if not name or not email:
+            raise RepositoryValidationError(
+                "source repository requires local user.name and user.email"
+            )
+        return name, email
 
     def _validate_source(self, source_repository: Path) -> Path:
         try:

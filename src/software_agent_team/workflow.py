@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
+from threading import Lock
 from typing import Protocol, cast
 
 from pydantic import ValidationError
@@ -46,7 +47,7 @@ from software_agent_team.git_workspace import (
     GitWorkspace,
     GitWorkspaceError,
     GitWorkspaceManager,
-    WorktreeIntegrityError,
+    WorkspaceIntegrityError,
     validate_work_result_snapshot,
 )
 from software_agent_team.prompting import (
@@ -144,6 +145,8 @@ class _WorkflowContext:
     last_test: TestReport | None = None
     last_review: ReviewReport | None = None
     last_iteration: IterationRecord | None = None
+    execution_lock: Lock = field(default_factory=Lock, repr=False)
+    calls_started: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
     agent_duration_ms: int = 0
@@ -158,7 +161,7 @@ class WorkflowCoordinator:
         *,
         manifest: TeamManifest,
         runs_root: Path,
-        worktrees_root: Path,
+        workspaces_root: Path,
         executor: AgentExecutor,
         quality_gate_factory: QualityGateFactory,
         budget: AgentBudget,
@@ -177,7 +180,7 @@ class WorkflowCoordinator:
             raise WorkflowError("Phase 1 team is missing the generalist developer")
         self.manifest = manifest
         self.runs_root = runs_root
-        self.worktrees_root = worktrees_root
+        self.workspaces_root = workspaces_root
         self.executor = executor
         self.quality_gate_factory = quality_gate_factory
         self.budget = budget
@@ -225,11 +228,11 @@ class WorkflowCoordinator:
             record = controller.advance(
                 record.run_id,
                 expected_revision=record.revision,
-                target=RunPhase.PREPARING_WORKTREE,
-                reason="prepare isolated Git worktree",
+                target=RunPhase.PREPARING_WORKSPACE,
+                reason="prepare isolated Git workspace",
             )
             workspace_manager = GitWorkspaceManager(
-                self.worktrees_root,
+                self.workspaces_root,
                 clock=self.clock,
             )
             workspace = workspace_manager.prepare(
@@ -246,7 +249,7 @@ class WorkflowCoordinator:
                 self.runtime_setup(workspace, run_directory)
             quality_gate = self.quality_gate_factory(
                 run_directory,
-                Path(workspace.worktree_path),
+                Path(workspace.workspace_path),
             )
             return self._execute_planned_run(
                 context,
@@ -567,11 +570,13 @@ class WorkflowCoordinator:
         )
         last_error = "Agent did not return an artifact"
         for attempt in range(1, self.artifact_repair_limit + 2):
-            if len(context.execution_records) >= self.budget.max_calls:
-                raise AgentInvocationError(
-                    "Agent call budget is exhausted",
-                    TerminationReason.RESOURCE_LIMIT_REACHED,
-                )
+            with context.execution_lock:
+                if context.calls_started >= self.budget.max_calls:
+                    raise AgentInvocationError(
+                        "Agent call budget is exhausted",
+                        TerminationReason.RESOURCE_LIMIT_REACHED,
+                    )
+                context.calls_started += 1
             request = self._repair_request(base_request, last_error, attempt)
             result = self.executor.execute(request)
             response: PhaseArtifact | None = None
@@ -579,7 +584,7 @@ class WorkflowCoordinator:
             record_error: str | None = None
             repairable = False
             if result.status is AgentExecutionStatus.COMPLETED:
-                reported_model = result.telemetry.model or request.model
+                reported_model = result.telemetry.model
                 if reported_model is None:
                     record_error = "successful execution omitted model metadata"
                     repairable = True
@@ -672,8 +677,7 @@ class WorkflowCoordinator:
         estimated_cost = None
         budget_error = None
         if (
-            result.status is AgentExecutionStatus.COMPLETED
-            and usage is not None
+            usage is not None
             and usage.input_tokens is not None
             and usage.output_tokens is not None
         ):
@@ -681,10 +685,19 @@ class WorkflowCoordinator:
                 input_tokens=usage.input_tokens,
                 output_tokens=usage.output_tokens,
             )
-            prospective_input = context.input_tokens + usage.input_tokens
-            prospective_output = context.output_tokens + usage.output_tokens
+        with context.execution_lock:
+            prospective_input = context.input_tokens + (
+                0 if usage is None or usage.input_tokens is None else usage.input_tokens
+            )
+            prospective_output = context.output_tokens + (
+                0
+                if usage is None or usage.output_tokens is None
+                else usage.output_tokens
+            )
             prospective_duration = context.agent_duration_ms + telemetry.duration_ms
-            prospective_cost = context.estimated_cost_usd + estimated_cost
+            prospective_cost = context.estimated_cost_usd + (
+                estimated_cost or Decimal(0)
+            )
             if prospective_input > self.budget.max_input_tokens:
                 budget_error = "Agent input-token budget was exceeded"
             elif prospective_output > self.budget.max_output_tokens:
@@ -715,7 +728,7 @@ class WorkflowCoordinator:
             role=request.role,
             session_key=request.session_key,
             session_id=telemetry.session_id,
-            model=telemetry.model or request.model,
+            model=telemetry.model,
             provider=telemetry.provider,
             started_at=telemetry.started_at,
             finished_at=telemetry.finished_at,
@@ -736,7 +749,8 @@ class WorkflowCoordinator:
             record,
             description=f"Agent execution telemetry for {request.role.value}.",
         )
-        context.execution_records.append(reference)
+        with context.execution_lock:
+            context.execution_records.append(reference)
         if budget_error is not None:
             raise AgentInvocationError(
                 budget_error,
@@ -1063,9 +1077,9 @@ class WorkflowCoordinator:
                 "",
                 (
                     "The isolated result remains at "
-                    f"`{record.workspace.worktree_path}`."
+                    f"`{record.workspace.workspace_path}`."
                     if record.workspace is not None
-                    else "No isolated worktree was attached."
+                    else "No isolated workspace was attached."
                 ),
                 "",
                 "This report is derived from the immutable JSON artifacts in this run.",
@@ -1096,7 +1110,7 @@ class WorkflowCoordinator:
             return TerminationReason.RESOURCE_LIMIT_REACHED
         if isinstance(error, (SandboxUnavailableError, RuntimeConfigurationError)):
             return TerminationReason.DEPENDENCY_UNAVAILABLE
-        if isinstance(error, WorktreeIntegrityError):
+        if isinstance(error, WorkspaceIntegrityError):
             if "no new commit" in str(error) or "no changed files" in str(error):
                 return TerminationReason.NO_RELEVANT_CHANGE
             return TerminationReason.SAFETY_BOUNDARY_CROSSED

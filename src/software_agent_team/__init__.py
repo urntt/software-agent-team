@@ -61,8 +61,8 @@ from software_agent_team.git_workspace import (
     GitWorkspaceManager,
     RepositoryValidationError,
     UnsafeRepositoryError,
-    WorktreeAlreadyExistsError,
-    WorktreeIntegrityError,
+    WorkspaceAlreadyExistsError,
+    WorkspaceIntegrityError,
     validate_work_result_snapshot,
 )
 from software_agent_team.prompting import (
@@ -105,7 +105,9 @@ from software_agent_team.run_control import (
 from software_agent_team.runtime_configuration import (
     RuntimeConfigurationError,
     RuntimePreflight,
+    SandboxImageInspection,
     inspect_runtime_preflight,
+    inspect_sandbox_image,
     materialize_run_configuration,
     persist_runtime_preflight,
 )
@@ -197,6 +199,7 @@ __all__ = [
     "RunTransition",
     "RuntimeConfigurationError",
     "RuntimePreflight",
+    "SandboxImageInspection",
     "SandboxUnavailableError",
     "ScriptedAgentExecutor",
     "ScriptedAgentResponse",
@@ -215,10 +218,11 @@ __all__ = [
     "WorkflowError",
     "WorkflowEvidenceError",
     "WorkflowOutcome",
-    "WorktreeAlreadyExistsError",
-    "WorktreeIntegrityError",
+    "WorkspaceAlreadyExistsError",
+    "WorkspaceIntegrityError",
     "build_agent_execution_request",
     "inspect_runtime_preflight",
+    "inspect_sandbox_image",
     "load_quality_gate_configuration",
     "materialize_run_configuration",
     "parse_agent_artifact",
