@@ -22,10 +22,11 @@ foundation plus the first deterministic control-plane slice. It includes:
 - Immutable phase-artifact storage with canonical paths and content hashes;
 - A persisted run lifecycle with validated transitions, atomic updates, and
   integrity-checked recovery;
+- Detached Git worktrees with verified, chained iteration commit snapshots;
 - A sanitized OpenClaw role and permission template;
 - A controlled task-management Web application benchmark;
-- Offline tests for configuration, contracts, run control, CLI behavior, and
-  repository boundaries.
+- Offline tests for configuration, contracts, run control, Git workspaces, CLI
+  behavior, and repository boundaries.
 
 It does **not** yet execute a complete live Agent workflow. The next milestone
 is the function-specialized vertical slice described in [`VISION.md`](VISION.md).
@@ -164,9 +165,38 @@ loads the last complete record, verifies hashes for the frozen task brief and
 exact selected team definition, and resumes from the persisted phase. It does
 not infer that an unrecorded external action succeeded.
 
+Run schema version 2 requires workspace and snapshot evidence at the relevant
+phases. Schema version 1 was never exposed through a live workflow and is not
+migrated; any local foundation-only run record must be recreated.
+
 The first function-specialized trace will use an explicit iteration limit of
 two: one initial implementation and at most one revision. This remains below
 the team manifest's general maximum of three iterations.
+
+## Git Worktree Boundary
+
+`GitWorkspaceManager` prepares `worktrees/<run_id>/` from a clean existing Git
+repository and a resolved base commit. The run worktree remains detached, so
+Agent commits do not move the source branch. Existing destinations are never
+deleted or reused automatically.
+
+If a process stops after Git creates the worktree but before `run.json` records
+it, `recover_prepared()` provides an explicit recovery path. Recovery succeeds
+only when the expected source repository, base commit, detached state, and
+clean worktree all match; arbitrary existing directories remain untouched.
+
+Before checkout, the manager rejects submodules, executable repository hooks,
+external clean/smudge/process filters, and fsmonitor configuration. Git is
+invoked without a shell, with global and system configuration disabled and
+hooks disabled for controller operations.
+
+After implementation, the manager accepts a snapshot only when the Agent has
+committed all changes, the worktree is clean, the output is a descendant of
+the expected input commit, and the commit range changes at least one file. The
+controller persists the workspace and chained snapshots in `run.json`.
+Uncommitted changes are failure evidence; the controller does not silently
+stage or commit them. Generated code is still not executed until the sandboxed
+quality-gate runner is implemented.
 
 ## Development Commands
 
@@ -204,6 +234,7 @@ src/software_agent_team/
 ├── artifacts.py              # Persisted artifact schema source of truth
 ├── cli.py                    # Implemented foundation CLI
 ├── configuration.py          # Cross-configuration validation
+├── git_workspace.py          # Detached worktrees and snapshot verification
 ├── run_control.py            # Persisted lifecycle and recovery boundary
 └── teams.py                  # Team manifest models and validation
 tests/                        # Offline contract and configuration tests
@@ -242,6 +273,8 @@ workflow coordinator.
 - `src/software_agent_team/artifacts.py` owns persisted artifact schemas.
 - `src/software_agent_team/artifact_store.py` owns canonical artifact paths,
   immutable writes, content hashes, and contextual loading.
+- `src/software_agent_team/git_workspace.py` owns source-repository checks,
+  detached worktree creation, and commit snapshot verification.
 - `src/software_agent_team/run_control.py` owns lifecycle state, transition
   validation, persistence, and recovery.
 - `configs/openclaw.example.json5` records the sanitized Agent runtime boundary.

@@ -145,6 +145,7 @@ Each concept has one authoritative owner.
 | Source history and iteration snapshots | Git |
 | Agent execution and sessions | OpenClaw |
 | Cross-Agent communication | Persisted run artifacts |
+| Worktree isolation and snapshot verification | `src/software_agent_team/git_workspace.py` |
 
 Do not maintain parallel role lists, schemas, state machines, or legacy CLI
 entry points. A replacement removes or migrates its predecessor in the same
@@ -374,13 +375,14 @@ Implemented:
 - Immutable phase-artifact persistence with canonical paths and hashes;
 - Persisted run lifecycle with validated transitions, atomic replacement,
   optimistic concurrency checks, and integrity-checked recovery;
+- Safe detached-worktree creation and chained iteration snapshot verification;
 - Controlled task-management benchmark;
-- Offline tests for the foundation and persisted run control.
+- Offline tests for the foundation, persisted artifacts, run control, and Git
+  workspaces.
 
 Not yet implemented:
 
 - Interactive clarification;
-- Git worktree manager;
 - End-to-end workflow execution on top of the persisted run controller;
 - Live OpenClaw adapter;
 - Role prompts and response parsing;
@@ -416,8 +418,8 @@ is not documented as available until it executes a real validated path.
 **Exit criterion:** one complete trace reaches a valid terminal state with
 reproducible artifacts.
 
-Persisted lifecycle state and phase-artifact contracts are implemented.
-Worktree management, deterministic gates, Agent execution, artifact
+Persisted lifecycle state, phase-artifact contracts, and worktree snapshot
+management are implemented. Deterministic gates, Agent execution, artifact
 population, and final-report generation remain before the Phase 1 exit
 criterion is met.
 

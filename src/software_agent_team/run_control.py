@@ -7,7 +7,7 @@ import json
 import os
 import re
 import shutil
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -26,9 +26,10 @@ from pydantic import (
 )
 
 from software_agent_team.artifacts import TaskBrief
+from software_agent_team.git_workspace import GitSnapshot, GitWorkspace
 from software_agent_team.teams import TeamManifest
 
-RUN_SCHEMA_VERSION = 1
+RUN_SCHEMA_VERSION = 2
 RUN_STATE_FILENAME = "run.json"
 TASK_BRIEF_FILENAME = "task-brief.json"
 RUN_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
@@ -191,6 +192,8 @@ class RunRecord(BaseModel):
     updated_at: datetime
     termination_reason: TerminationReason | None = None
     termination_detail: str | None = None
+    workspace: GitWorkspace | None = None
+    snapshots: tuple[GitSnapshot, ...] = ()
     transitions: tuple[RunTransition, ...] = ()
 
     @field_validator("created_at", "updated_at")
@@ -246,6 +249,74 @@ class RunRecord(BaseModel):
         if self.current_iteration != expected_iteration:
             raise ValueError("current iteration must match the transition history")
 
+        if self.workspace is not None and self.workspace.run_id != self.run_id:
+            raise ValueError("workspace run ID must match the run record")
+        phases_before_workspace = {
+            RunPhase.CREATED,
+            RunPhase.PREPARING_WORKTREE,
+        }
+        if self.phase in phases_before_workspace and self.workspace is not None:
+            raise ValueError("workspace cannot exist before preparation completes")
+        if (
+            self.phase not in phases_before_workspace | {RunPhase.FAILED}
+            and self.workspace is None
+        ):
+            raise ValueError("run phase requires attached workspace evidence")
+        if self.snapshots and self.workspace is None:
+            raise ValueError("snapshots require attached workspace evidence")
+
+        expected_commit = None if self.workspace is None else self.workspace.base_commit
+        for iteration, snapshot in enumerate(self.snapshots, start=1):
+            if snapshot.run_id != self.run_id:
+                raise ValueError("snapshot run ID must match the run record")
+            if snapshot.iteration != iteration:
+                raise ValueError("snapshot iterations must be contiguous")
+            if snapshot.input_commit != expected_commit:
+                raise ValueError("snapshot commits must form one chain")
+            expected_commit = snapshot.output_commit
+        if len(self.snapshots) > self.current_iteration:
+            raise ValueError("snapshot count exceeds the current iteration")
+
+        phases_before_current_snapshot = {
+            RunPhase.PLANNING,
+            RunPhase.IMPLEMENTING,
+            RunPhase.SNAPSHOTTING,
+        }
+        phases_after_current_snapshot = {
+            RunPhase.VERIFYING,
+            RunPhase.REVIEWING,
+            RunPhase.DECIDING,
+            RunPhase.DELIVERING,
+            RunPhase.COMPLETED,
+        }
+        if self.phase in phases_before_current_snapshot and (
+            len(self.snapshots) != self.current_iteration - 1
+        ):
+            raise ValueError("current iteration cannot already have a snapshot")
+        if self.phase in phases_after_current_snapshot and (
+            len(self.snapshots) != self.current_iteration
+        ):
+            raise ValueError("run phase requires a snapshot for the current iteration")
+        if self.phase is RunPhase.FAILED:
+            failure_source = self.transitions[-1].source
+            if failure_source in phases_before_workspace:
+                if self.workspace is not None or self.snapshots:
+                    raise ValueError(
+                        "early worktree failure cannot contain workspace evidence"
+                    )
+            else:
+                if self.workspace is None:
+                    raise ValueError("failed run is missing prior workspace evidence")
+                expected_snapshots = (
+                    self.current_iteration
+                    if failure_source in phases_after_current_snapshot
+                    else self.current_iteration - 1
+                )
+                if len(self.snapshots) != expected_snapshots:
+                    raise ValueError(
+                        "failed run snapshot history does not match its source phase"
+                    )
+
         if self.phase is RunPhase.COMPLETED:
             if self.termination_reason is not TerminationReason.SUCCEEDED:
                 raise ValueError("completed runs require the succeeded reason")
@@ -258,6 +329,14 @@ class RunRecord(BaseModel):
         if self.phase.is_terminal and self.termination_detail is None:
             raise ValueError("terminal runs require termination detail")
         return self
+
+    @property
+    def current_commit(self) -> str | None:
+        """Return the latest verified commit, or the workspace base commit."""
+
+        if self.snapshots:
+            return self.snapshots[-1].output_commit
+        return None if self.workspace is None else self.workspace.base_commit
 
 
 def _serialized_model(model: BaseModel) -> bytes:
@@ -433,6 +512,34 @@ class RunStore:
                 "new transition must start at the persisted iteration"
             )
 
+        if previous.workspace != updated.workspace:
+            if not (
+                previous.workspace is None
+                and updated.workspace is not None
+                and latest.source is RunPhase.PREPARING_WORKTREE
+                and latest.target is RunPhase.PLANNING
+            ):
+                raise RunIntegrityError("workspace metadata cannot be replaced")
+        elif (
+            latest.source is RunPhase.PREPARING_WORKTREE
+            and latest.target is RunPhase.PLANNING
+        ):
+            raise RunIntegrityError("planning transition must attach a workspace")
+
+        if previous.snapshots != updated.snapshots:
+            if not (
+                len(updated.snapshots) == len(previous.snapshots) + 1
+                and updated.snapshots[:-1] == previous.snapshots
+                and latest.source is RunPhase.SNAPSHOTTING
+                and latest.target is RunPhase.VERIFYING
+            ):
+                raise RunIntegrityError("snapshot history must append exactly once")
+        elif (
+            latest.source is RunPhase.SNAPSHOTTING
+            and latest.target is RunPhase.VERIFYING
+        ):
+            raise RunIntegrityError("verification transition must attach a snapshot")
+
 
 Clock = Callable[[], datetime]
 
@@ -508,6 +615,12 @@ class RunController:
                 "use complete() or fail() for terminal transitions"
             )
         current = self._load_expected(run_id, expected_revision)
+        if current.phase is RunPhase.PREPARING_WORKTREE and target is RunPhase.PLANNING:
+            raise InvalidRunTransitionError("use attach_workspace() to enter planning")
+        if current.phase is RunPhase.SNAPSHOTTING and target is RunPhase.VERIFYING:
+            raise InvalidRunTransitionError(
+                "use record_snapshot() to enter verification"
+            )
         if not _is_legal_transition(current.phase, target):
             raise InvalidRunTransitionError(
                 f"illegal run transition: {current.phase.value} -> {target.value}"
@@ -526,6 +639,60 @@ class RunController:
             target=target,
             iteration_after=iteration_after,
             reason=reason,
+        )
+
+    def attach_workspace(
+        self,
+        run_id: str,
+        *,
+        expected_revision: int,
+        workspace: GitWorkspace,
+        reason: str = "isolated worktree prepared",
+    ) -> RunRecord:
+        """Attach verified worktree evidence and enter planning."""
+
+        current = self._load_expected(run_id, expected_revision)
+        if current.phase is not RunPhase.PREPARING_WORKTREE:
+            raise InvalidRunTransitionError(
+                f"cannot attach a workspace from {current.phase.value}"
+            )
+        if workspace.run_id != current.run_id:
+            raise RunIntegrityError("workspace belongs to a different run")
+        return self._transition(
+            current,
+            target=RunPhase.PLANNING,
+            iteration_after=current.current_iteration,
+            reason=reason,
+            record_updates={"workspace": workspace},
+        )
+
+    def record_snapshot(
+        self,
+        run_id: str,
+        *,
+        expected_revision: int,
+        snapshot: GitSnapshot,
+        reason: str = "iteration commit snapshot verified",
+    ) -> RunRecord:
+        """Append verified commit evidence and enter deterministic verification."""
+
+        current = self._load_expected(run_id, expected_revision)
+        if current.phase is not RunPhase.SNAPSHOTTING:
+            raise InvalidRunTransitionError(
+                f"cannot record a snapshot from {current.phase.value}"
+            )
+        if snapshot.run_id != current.run_id:
+            raise RunIntegrityError("snapshot belongs to a different run")
+        if snapshot.iteration != current.current_iteration:
+            raise RunIntegrityError("snapshot iteration does not match the run")
+        if snapshot.input_commit != current.current_commit:
+            raise RunIntegrityError("snapshot input does not match the current commit")
+        return self._transition(
+            current,
+            target=RunPhase.VERIFYING,
+            iteration_after=current.current_iteration,
+            reason=reason,
+            record_updates={"snapshots": (*current.snapshots, snapshot)},
         )
 
     def complete(
@@ -595,6 +762,7 @@ class RunController:
         reason: str,
         termination_reason: TerminationReason | None = None,
         termination_detail: str | None = None,
+        record_updates: Mapping[str, object] | None = None,
     ) -> RunRecord:
         now = _require_utc(self.clock())
         if now < current.updated_at:
@@ -608,17 +776,24 @@ class RunController:
             occurred_at=now,
             reason=reason,
         )
-        updated = current.model_copy(
-            update={
-                "phase": target,
-                "current_iteration": iteration_after,
-                "revision": current.revision + 1,
-                "updated_at": now,
-                "termination_reason": termination_reason,
-                "termination_detail": termination_detail,
-                "transitions": (*current.transitions, transition),
-            }
-        )
+        updates: dict[str, object] = {
+            "phase": target,
+            "current_iteration": iteration_after,
+            "revision": current.revision + 1,
+            "updated_at": now,
+            "termination_reason": termination_reason,
+            "termination_detail": termination_detail,
+            "transitions": (*current.transitions, transition),
+        }
+        if record_updates:
+            reserved = set(updates) & set(record_updates)
+            if reserved:
+                raise RunIntegrityError(
+                    f"record update cannot replace controller fields: "
+                    f"{', '.join(sorted(reserved))}"
+                )
+            updates.update(record_updates)
+        updated = current.model_copy(update=updates)
         updated = RunRecord.model_validate(updated.model_dump())
         return self.store.replace(current, updated)
 

@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 import software_agent_team.run_control as run_control
 from software_agent_team.artifacts import TaskBrief
+from software_agent_team.git_workspace import GitSnapshot, GitWorkspace
 from software_agent_team.run_control import (
     InvalidRunTransitionError,
     RunAlreadyExistsError,
@@ -29,6 +30,7 @@ from software_agent_team.teams import TeamManifest, load_team_manifest
 REPOSITORY_ROOT = Path(__file__).parents[1]
 TEAM_CONFIG = REPOSITORY_ROOT / "configs" / "teams.json"
 FIXED_TIME = datetime(2026, 8, 9, 12, 0, tzinfo=UTC)
+BASE_COMMIT = "1" * 40
 
 PHASES_TO_DECISION = [
     RunPhase.PREPARING_WORKTREE,
@@ -97,6 +99,34 @@ def create_run(
     )
 
 
+def workspace(run_id: str) -> GitWorkspace:
+    """Return deterministic worktree evidence for state-controller tests."""
+
+    return GitWorkspace(
+        run_id=run_id,
+        source_repository="/tmp/source-repository",
+        worktree_path=f"/tmp/worktrees/{run_id}",
+        base_commit=BASE_COMMIT,
+        created_at=FIXED_TIME,
+    )
+
+
+def snapshot(record: RunRecord) -> GitSnapshot:
+    """Return the next deterministic snapshot in a run's commit chain."""
+
+    assert record.current_commit is not None
+    output_commit = str(record.current_iteration + 1) * 40
+    return GitSnapshot(
+        run_id=record.run_id,
+        iteration=record.current_iteration,
+        input_commit=record.current_commit,
+        output_commit=output_commit,
+        commit_count=1,
+        changed_files=(f"iteration-{record.current_iteration}.txt",),
+        recorded_at=FIXED_TIME,
+    )
+
+
 def advance(
     controller: RunController,
     record: RunRecord,
@@ -104,6 +134,18 @@ def advance(
 ) -> RunRecord:
     """Advance with the current optimistic-concurrency revision."""
 
+    if record.phase is RunPhase.PREPARING_WORKTREE and target is RunPhase.PLANNING:
+        return controller.attach_workspace(
+            record.run_id,
+            expected_revision=record.revision,
+            workspace=workspace(record.run_id),
+        )
+    if record.phase is RunPhase.SNAPSHOTTING and target is RunPhase.VERIFYING:
+        return controller.record_snapshot(
+            record.run_id,
+            expected_revision=record.revision,
+            snapshot=snapshot(record),
+        )
     return controller.advance(
         record.run_id,
         expected_revision=record.revision,
@@ -188,6 +230,9 @@ def test_successful_lifecycle_persists_auditable_history(tmp_path: Path) -> None
 
     assert record.phase is RunPhase.COMPLETED
     assert record.termination_reason is TerminationReason.SUCCEEDED
+    assert record.workspace == workspace(record.run_id)
+    assert len(record.snapshots) == 1
+    assert record.current_commit == "2" * 40
     assert record.revision == len(record.transitions) == 9
     assert [item.sequence for item in record.transitions] == list(range(1, 10))
     assert controller.load(record.run_id) == record
@@ -220,6 +265,10 @@ def test_revision_increments_iteration_once(tmp_path: Path) -> None:
         detail="The bounded revision resolved the blocking findings.",
     )
     assert completed.current_iteration == 2
+    assert [item.output_commit for item in completed.snapshots] == [
+        "2" * 40,
+        "3" * 40,
+    ]
     assert completed.phase is RunPhase.COMPLETED
 
 
@@ -250,6 +299,56 @@ def test_illegal_transition_does_not_modify_persisted_state(tmp_path: Path) -> N
 
     assert state_path.read_bytes() == before
     assert controller.load(record.run_id) == record
+
+
+def test_evidence_transitions_cannot_bypass_specialized_methods(
+    tmp_path: Path,
+) -> None:
+    controller = make_controller(tmp_path / "runs")
+    record = advance(controller, create_run(controller), RunPhase.PREPARING_WORKTREE)
+
+    with pytest.raises(InvalidRunTransitionError, match="attach_workspace"):
+        controller.advance(
+            record.run_id,
+            expected_revision=record.revision,
+            target=RunPhase.PLANNING,
+            reason="skip workspace evidence",
+        )
+
+    record = advance(controller, record, RunPhase.PLANNING)
+    record = advance(controller, record, RunPhase.IMPLEMENTING)
+    record = advance(controller, record, RunPhase.SNAPSHOTTING)
+    with pytest.raises(InvalidRunTransitionError, match="record_snapshot"):
+        controller.advance(
+            record.run_id,
+            expected_revision=record.revision,
+            target=RunPhase.VERIFYING,
+            reason="skip snapshot evidence",
+        )
+
+
+def test_workspace_and_snapshot_must_match_the_run(tmp_path: Path) -> None:
+    controller = make_controller(tmp_path / "runs")
+    record = advance(controller, create_run(controller), RunPhase.PREPARING_WORKTREE)
+    wrong_workspace = workspace("different-run")
+
+    with pytest.raises(RunIntegrityError, match="different run"):
+        controller.attach_workspace(
+            record.run_id,
+            expected_revision=record.revision,
+            workspace=wrong_workspace,
+        )
+
+    record = advance(controller, record, RunPhase.PLANNING)
+    record = advance(controller, record, RunPhase.IMPLEMENTING)
+    record = advance(controller, record, RunPhase.SNAPSHOTTING)
+    wrong_snapshot = snapshot(record).model_copy(update={"input_commit": "f" * 40})
+    with pytest.raises(RunIntegrityError, match="current commit"):
+        controller.record_snapshot(
+            record.run_id,
+            expected_revision=record.revision,
+            snapshot=wrong_snapshot,
+        )
 
 
 def test_transition_contract_rejects_every_illegal_phase_pair() -> None:
@@ -351,6 +450,7 @@ def test_task_brief_tampering_is_detected(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     "mutation",
     [
+        lambda payload: payload.update(schema_version=1),
         lambda payload: payload.update(schema_version=99),
         lambda payload: payload.update(run_id="different-run"),
         lambda payload: payload.update(phase="planning"),
