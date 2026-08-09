@@ -1,6 +1,5 @@
 """Tests for concrete phase artifacts and immutable artifact persistence."""
 
-import hashlib
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -224,15 +223,16 @@ def execution_record(
 ) -> AgentExecutionRecord:
     """Create captured output and return matching Agent telemetry."""
 
-    stem = f"{role.value}-attempt-{attempt:02d}"
-    output_directory = store.root / "iterations" / "01" / "executions" / stage
-    output_directory.mkdir(parents=True, exist_ok=True)
-    stdout_path = output_directory / f"{stem}.stdout.txt"
-    stderr_path = output_directory / f"{stem}.stderr.txt"
-    stdout = b'{"status":"completed"}\n'
-    stderr = b""
-    stdout_path.write_bytes(stdout)
-    stderr_path.write_bytes(stderr)
+    stdout = '{"status":"completed"}\n'
+    stderr = ""
+    outputs = store.write_execution_outputs(
+        iteration=1,
+        stage=stage,
+        role=role,
+        attempt=attempt,
+        stdout=stdout,
+        stderr=stderr,
+    )
     started_at = CREATED_AT
     finished_at = started_at + timedelta(milliseconds=1250)
     return AgentExecutionRecord(
@@ -253,10 +253,10 @@ def execution_record(
         input_tokens=120,
         output_tokens=80,
         estimated_cost_usd="0.001",
-        stdout_path=stdout_path.relative_to(store.root).as_posix(),
-        stderr_path=stderr_path.relative_to(store.root).as_posix(),
-        stdout_sha256=hashlib.sha256(stdout).hexdigest(),
-        stderr_sha256=hashlib.sha256(stderr).hexdigest(),
+        stdout_path=outputs.stdout_path,
+        stderr_path=outputs.stderr_path,
+        stdout_sha256=outputs.stdout_sha256,
+        stderr_sha256=outputs.stderr_sha256,
         response_artifact=response,
     )
 
@@ -384,6 +384,34 @@ def test_store_round_trips_agent_execution_telemetry(tmp_path: Path) -> None:
         "iterations/01/executions/implement/generalist_developer-attempt-01.json"
     )
     assert store.load(record_ref) == record
+
+
+def test_execution_outputs_are_write_once_and_stage_bound(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    arguments = {
+        "iteration": 1,
+        "stage": "implement",
+        "role": AgentRole.GENERALIST_DEVELOPER,
+        "attempt": 1,
+        "stdout": "result",
+        "stderr": "diagnostic",
+    }
+
+    evidence = store.write_execution_outputs(**arguments)
+
+    assert (store.root / evidence.stdout_path).read_text(encoding="utf-8") == "result"
+    assert (store.root / evidence.stderr_path).read_text(encoding="utf-8") == (
+        "diagnostic"
+    )
+    with pytest.raises(ArtifactAlreadyExistsError, match="already exists"):
+        store.write_execution_outputs(**arguments)
+    with pytest.raises(ArtifactStoreError, match="declared stage"):
+        store.write_execution_outputs(
+            **{
+                **arguments,
+                "stage": "plan",
+            }
+        )
 
 
 def test_store_detects_agent_output_tampering(tmp_path: Path) -> None:

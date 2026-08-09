@@ -5,6 +5,7 @@ from software_agent_team.artifact_store import (
     ArtifactIntegrityError,
     ArtifactStore,
     ArtifactStoreError,
+    ExecutionOutputEvidence,
 )
 from software_agent_team.artifacts import (
     AcceptanceCriterion,
@@ -120,6 +121,7 @@ __all__ = [
     "CheckStatus",
     "CommandEvidence",
     "CriterionResult",
+    "ExecutionOutputEvidence",
     "FinalReport",
     "FinalStatus",
     "GitCommandError",

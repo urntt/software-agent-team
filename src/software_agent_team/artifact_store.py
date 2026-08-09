@@ -6,6 +6,7 @@ import os
 from contextlib import suppress
 from itertools import pairwise
 from pathlib import Path, PurePosixPath
+from typing import NamedTuple
 from uuid import uuid4
 
 from pydantic import ValidationError
@@ -13,6 +14,7 @@ from pydantic import ValidationError
 from software_agent_team.artifacts import (
     ARTIFACT_MODELS,
     AgentExecutionRecord,
+    AgentRole,
     ArtifactReference,
     CheckStatus,
     FinalReport,
@@ -45,6 +47,15 @@ class ArtifactAlreadyExistsError(ArtifactStoreError):
 
 class ArtifactIntegrityError(ArtifactStoreError):
     """Raised when an artifact is missing, altered, or contextually invalid."""
+
+
+class ExecutionOutputEvidence(NamedTuple):
+    """Canonical paths and digests for one captured Agent process."""
+
+    stdout_path: str
+    stderr_path: str
+    stdout_sha256: str
+    stderr_sha256: str
 
 
 def _artifact_path(artifact: PersistedArtifact) -> PurePosixPath:
@@ -92,8 +103,23 @@ def _execution_stem(record: AgentExecutionRecord) -> str:
 def _execution_output_paths(
     record: AgentExecutionRecord,
 ) -> tuple[PurePosixPath, PurePosixPath]:
-    directory = _execution_directory(record)
-    stem = _execution_stem(record)
+    return _execution_output_paths_for(
+        iteration=record.iteration,
+        stage=record.stage,
+        role=record.role,
+        attempt=record.attempt,
+    )
+
+
+def _execution_output_paths_for(
+    *,
+    iteration: int,
+    stage: str,
+    role: AgentRole,
+    attempt: int,
+) -> tuple[PurePosixPath, PurePosixPath]:
+    directory = PurePosixPath("iterations") / f"{iteration:02d}" / "executions" / stage
+    stem = f"{role.value}-attempt-{attempt:02d}"
     return directory / f"{stem}.stdout.txt", directory / f"{stem}.stderr.txt"
 
 
@@ -178,6 +204,58 @@ class ArtifactStore:
             path=relative_path.as_posix(),
             sha256=digest,
             description=description,
+        )
+
+    def write_execution_outputs(
+        self,
+        *,
+        iteration: int,
+        stage: str,
+        role: AgentRole,
+        attempt: int,
+        stdout: str,
+        stderr: str,
+    ) -> ExecutionOutputEvidence:
+        """Persist one write-once stdout/stderr pair before its telemetry record."""
+
+        if not 1 <= iteration <= self.iteration_limit:
+            raise ArtifactStoreError("execution iteration is outside the run limit")
+        if not 1 <= attempt <= 99:
+            raise ArtifactStoreError("execution attempt must be between 1 and 99")
+        stage_definition = next(
+            (candidate for candidate in self.team.stages if candidate.id == stage),
+            None,
+        )
+        if stage_definition is None or role not in stage_definition.roles:
+            raise ArtifactStoreError("execution role is outside the declared stage")
+
+        stdout_relative, stderr_relative = _execution_output_paths_for(
+            iteration=iteration,
+            stage=stage,
+            role=role,
+            attempt=attempt,
+        )
+        self._prepare_parent(stdout_relative.parent)
+        stdout_content = stdout.encode("utf-8")
+        stderr_content = stderr.encode("utf-8")
+        stdout_destination = self.root.joinpath(*stdout_relative.parts)
+        stderr_destination = self.root.joinpath(*stderr_relative.parts)
+        stdout_created = False
+        try:
+            self._write_immutable_file(stdout_destination, stdout_content)
+            stdout_created = True
+            self._write_immutable_file(stderr_destination, stderr_content)
+        except Exception:
+            if stdout_created:
+                stdout_destination.unlink(missing_ok=True)
+                _fsync_directory(stdout_destination.parent)
+            raise
+
+        return ExecutionOutputEvidence(
+            stdout_path=stdout_relative.as_posix(),
+            stderr_path=stderr_relative.as_posix(),
+            stdout_sha256=hashlib.sha256(stdout_content).hexdigest(),
+            stderr_sha256=hashlib.sha256(stderr_content).hexdigest(),
         )
 
     def load(self, reference: ArtifactReference) -> PersistedArtifact:
@@ -428,3 +506,26 @@ class ArtifactStore:
                     "artifact parent must be a real directory inside the run"
                 )
             self._require_inside_root(current, must_exist=True)
+
+    @staticmethod
+    def _write_immutable_file(destination: Path, content: bytes) -> None:
+        temporary = destination.parent / f".{destination.name}.{uuid4().hex}.tmp"
+        try:
+            descriptor = os.open(
+                temporary,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600,
+            )
+            with os.fdopen(descriptor, "wb") as output:
+                output.write(content)
+                output.flush()
+                os.fsync(output.fileno())
+            try:
+                os.link(temporary, destination)
+            except FileExistsError as error:
+                raise ArtifactAlreadyExistsError(
+                    f"artifact already exists: {destination.name}"
+                ) from error
+            _fsync_directory(destination.parent)
+        finally:
+            temporary.unlink(missing_ok=True)
