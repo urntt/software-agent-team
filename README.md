@@ -12,16 +12,18 @@ one runnable delivery with reproducible evidence.
 ## Current Status
 
 This repository currently implements the development and configuration
-foundation. It includes:
+foundation plus the first deterministic control-plane slice. It includes:
 
 - A reproducible Python 3.12 and OpenClaw toolchain;
 - A unified `sat` validation CLI;
 - A versioned manifest for three experimental team configurations;
 - Validated task-brief and cross-Agent handoff contracts;
+- A persisted run lifecycle with validated transitions, atomic updates, and
+  integrity-checked recovery;
 - A sanitized OpenClaw role and permission template;
 - A controlled task-management Web application benchmark;
-- Offline tests for configuration, contracts, CLI behavior, and repository
-  boundaries.
+- Offline tests for configuration, contracts, run control, CLI behavior, and
+  repository boundaries.
 
 It does **not** yet execute a complete live Agent workflow. The next milestone
 is the function-specialized vertical slice described in [`VISION.md`](VISION.md).
@@ -126,6 +128,30 @@ The `sat run` workflow is intentionally absent until the deterministic
 controller and OpenClaw adapter execute a real end-to-end trace. The repository
 does not expose placeholder commands that imply unimplemented behavior.
 
+## Persisted Run State
+
+The Python `RunController` is the only authority that advances a run. It
+validates every phase transition, enforces the selected team's iteration
+limit, records structured termination reasons, and rejects updates based on an
+obsolete state revision.
+
+Local state is stored under the ignored `runs/` directory:
+
+```text
+runs/<run_id>/
+├── task-brief.json    # Frozen confirmed input
+└── run.json           # Current state and complete transition history
+```
+
+Run creation and state replacement use atomic filesystem operations. Recovery
+loads the last complete record, verifies hashes for the frozen task brief and
+exact selected team definition, and resumes from the persisted phase. It does
+not infer that an unrecorded external action succeeded.
+
+The first function-specialized trace will use an explicit iteration limit of
+two: one initial implementation and at most one revision. This remains below
+the team manifest's general maximum of three iterations.
+
 ## Development Commands
 
 ```bash
@@ -160,6 +186,7 @@ src/software_agent_team/
 ├── artifacts.py              # Persisted artifact schema source of truth
 ├── cli.py                    # Implemented foundation CLI
 ├── configuration.py          # Cross-configuration validation
+├── run_control.py            # Persisted lifecycle and recovery boundary
 └── teams.py                  # Team manifest models and validation
 tests/                        # Offline contract and configuration tests
 VISION.md                     # Product, architecture, and development decisions
@@ -167,7 +194,8 @@ VISION.md                     # Product, architecture, and development decisions
 
 ## Architecture Boundary
 
-The deterministic Python control plane will own:
+The deterministic Python control plane owns persisted lifecycle state and will
+also own:
 
 - Run lifecycle and state transitions;
 - Team selection and stage ordering;
@@ -194,6 +222,8 @@ workflow coordinator.
 - `configs/teams.json` owns team membership and initial stage ordering.
 - `src/software_agent_team/teams.py` owns manifest validation rules.
 - `src/software_agent_team/artifacts.py` owns persisted artifact schemas.
+- `src/software_agent_team/run_control.py` owns lifecycle state, transition
+  validation, persistence, and recovery.
 - `configs/openclaw.example.json5` records the sanitized Agent runtime boundary.
 - `VISION.md` owns product and architecture decisions.
 

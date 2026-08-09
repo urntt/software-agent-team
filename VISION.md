@@ -141,7 +141,7 @@ Each concept has one authoritative owner.
 | Team-manifest validation | `src/software_agent_team/teams.py` |
 | Artifact schemas | `src/software_agent_team/artifacts.py` |
 | Sanitized Agent runtime boundary | `configs/openclaw.example.json5` |
-| Run lifecycle state | Deterministic controller |
+| Run lifecycle state and persistence | `src/software_agent_team/run_control.py` |
 | Source history and iteration snapshots | Git |
 | Agent execution and sessions | OpenClaw |
 | Cross-Agent communication | Persisted run artifacts |
@@ -369,14 +369,16 @@ Implemented:
 - Versioned team manifest and validation;
 - Sanitized OpenClaw Agent registry and permission checks;
 - Confirmed task-brief and handoff-envelope contracts;
+- Persisted run lifecycle with validated transitions, atomic replacement,
+  optimistic concurrency checks, and integrity-checked recovery;
 - Controlled task-management benchmark;
-- Offline tests for the foundation.
+- Offline tests for the foundation and persisted run control.
 
 Not yet implemented:
 
 - Interactive clarification;
-- Run controller and persisted state machine;
 - Git worktree manager;
+- End-to-end workflow execution on top of the persisted run controller;
 - Live OpenClaw adapter;
 - Role prompts and response parsing;
 - Concrete phase artifact payloads;
@@ -411,6 +413,10 @@ is not documented as available until it executes a real validated path.
 
 **Exit criterion:** one complete trace reaches a valid terminal state with
 reproducible artifacts.
+
+The persisted lifecycle-state portion is implemented. Worktree management,
+phase artifacts, deterministic gates, Agent execution, and final reporting
+remain before the Phase 1 exit criterion is met.
 
 ### Phase 2: Baseline and Domain Specialization
 
