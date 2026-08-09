@@ -33,6 +33,20 @@ from software_agent_team.artifacts import (
     parse_phase_artifact,
     validate_artifact_context,
 )
+from software_agent_team.execution import (
+    AgentExecutionError,
+    AgentExecutionRequest,
+    AgentExecutionResult,
+    AgentExecutionStatus,
+    AgentExecutionTelemetry,
+    AgentExecutor,
+    AgentTokenUsage,
+    OpenClawSubprocessExecutor,
+    ScriptedAgentExecutor,
+    ScriptedAgentResponse,
+    ScriptedResponseExhaustedError,
+    stable_session_key,
+)
 from software_agent_team.git_workspace import (
     GitCommandError,
     GitSnapshot,
@@ -44,6 +58,16 @@ from software_agent_team.git_workspace import (
     WorktreeAlreadyExistsError,
     WorktreeIntegrityError,
     validate_work_result_snapshot,
+)
+from software_agent_team.prompting import (
+    AgentPromptError,
+    AgentPromptInputs,
+    build_agent_execution_request,
+    render_agent_prompt,
+)
+from software_agent_team.responses import (
+    AgentArtifactResponseError,
+    parse_agent_artifact,
 )
 from software_agent_team.run_control import (
     InvalidRunTransitionError,
@@ -69,8 +93,18 @@ from software_agent_team.teams import (
 
 __all__ = [
     "AcceptanceCriterion",
+    "AgentArtifactResponseError",
+    "AgentExecutionError",
     "AgentExecutionRecord",
+    "AgentExecutionRequest",
+    "AgentExecutionResult",
+    "AgentExecutionStatus",
+    "AgentExecutionTelemetry",
+    "AgentExecutor",
+    "AgentPromptError",
+    "AgentPromptInputs",
     "AgentRole",
+    "AgentTokenUsage",
     "ArtifactAlreadyExistsError",
     "ArtifactIntegrityError",
     "ArtifactKind",
@@ -93,6 +127,7 @@ __all__ = [
     "InvalidRunTransitionError",
     "IterationDecision",
     "IterationRecord",
+    "OpenClawSubprocessExecutor",
     "PlanTask",
     "RepositoryValidationError",
     "ReviewFinding",
@@ -109,6 +144,9 @@ __all__ = [
     "RunRecord",
     "RunStore",
     "RunTransition",
+    "ScriptedAgentExecutor",
+    "ScriptedAgentResponse",
+    "ScriptedResponseExhaustedError",
     "StageMode",
     "TaskBrief",
     "TeamDefinition",
@@ -121,7 +159,11 @@ __all__ = [
     "WorkResult",
     "WorktreeAlreadyExistsError",
     "WorktreeIntegrityError",
+    "build_agent_execution_request",
+    "parse_agent_artifact",
     "parse_phase_artifact",
+    "render_agent_prompt",
+    "stable_session_key",
     "validate_artifact_context",
     "validate_work_result_snapshot",
 ]
