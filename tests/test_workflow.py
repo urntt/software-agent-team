@@ -1,0 +1,589 @@
+"""Offline end-to-end tests for the Phase 1 workflow coordinator."""
+
+from __future__ import annotations
+
+import json
+import shutil
+import subprocess
+import threading
+from datetime import UTC, datetime
+from pathlib import Path
+
+from software_agent_team.artifacts import (
+    AgentRole,
+    CheckStatus,
+    CommandEvidence,
+    CriterionResult,
+    ImplementationPlan,
+    PlanTask,
+    ReviewFinding,
+    ReviewReport,
+    ReviewSeverity,
+    ReviewVerdict,
+    TaskBrief,
+    WorkResult,
+)
+from software_agent_team.artifacts import (
+    TestReport as PhaseTestReport,
+)
+from software_agent_team.execution import (
+    AgentExecutionRequest,
+    AgentExecutionResult,
+    AgentExecutionStatus,
+    AgentExecutionTelemetry,
+    AgentTokenUsage,
+)
+from software_agent_team.quality_gates import (
+    FakeSandboxBackend,
+    QualityGateRunner,
+    SandboxExecution,
+    load_quality_gate_configuration,
+)
+from software_agent_team.run_control import RunPhase, TerminationReason
+from software_agent_team.teams import load_team_manifest
+from software_agent_team.workflow import WorkflowCoordinator
+
+REPOSITORY_ROOT = Path(__file__).parents[1]
+TEAM_CONFIG = REPOSITORY_ROOT / "configs" / "teams.json"
+POLICY = REPOSITORY_ROOT / "configs" / "run-policy.json"
+BENCHMARK = REPOSITORY_ROOT / "benchmarks" / "task_manager" / "benchmark.json"
+SEED = REPOSITORY_ROOT / "benchmarks" / "task_manager" / "seed"
+FIXED_TIME = datetime(2026, 8, 10, 12, 0, tzinfo=UTC)
+
+
+def git(repository: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    """Run Git without a shell in a test-owned repository."""
+
+    return subprocess.run(
+        ["git", "-C", str(repository), *args],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def initialize_source(tmp_path: Path) -> Path:
+    """Create the frozen benchmark seed as a clean Git repository."""
+
+    source = tmp_path / "source"
+    shutil.copytree(SEED, source)
+    git(source, "init", "-b", "main")
+    git(source, "config", "user.name", "urntt")
+    git(source, "config", "user.email", "urntts@gmail.com")
+    git(source, "add", ".")
+    git(source, "commit", "-m", "chore: initialize benchmark seed")
+    return source
+
+
+def task_brief() -> TaskBrief:
+    """Load the frozen confirmed Phase 1 task."""
+
+    return TaskBrief.model_validate_json(
+        (BENCHMARK.parent / "task-brief.json").read_text(encoding="utf-8")
+    )
+
+
+def prompt_context(request: AgentExecutionRequest) -> dict[str, object]:
+    """Extract controller-authored JSON context from a rendered test prompt."""
+
+    body = request.prompt.split("RUN_CONTEXT_JSON\n", 1)[1]
+    payload = body.split("\n\nRESPONSE_SCHEMA_JSON\n", 1)[0]
+    parsed = json.loads(payload)
+    assert isinstance(parsed, dict)
+    return parsed
+
+
+class DynamicWorkflowExecutor:
+    """Generate attributable artifacts and real Developer commits offline."""
+
+    def __init__(
+        self,
+        workspace: Path,
+        *,
+        review_verdicts: dict[int, ReviewVerdict] | None = None,
+        invalid_plan_once: bool = False,
+        tamper_test_commands: bool = False,
+        commit_changes: bool = True,
+        verify_barrier: bool = False,
+    ) -> None:
+        self.workspace = workspace
+        self.review_verdicts = review_verdicts or {}
+        self.invalid_plan_once = invalid_plan_once
+        self.tamper_test_commands = tamper_test_commands
+        self.commit_changes = commit_changes
+        self.requests: list[AgentExecutionRequest] = []
+        self._counts: dict[AgentRole, int] = {}
+        self._lock = threading.Lock()
+        self._barrier = threading.Barrier(2) if verify_barrier else None
+
+    def execute(self, request: AgentExecutionRequest) -> AgentExecutionResult:
+        with self._lock:
+            self.requests.append(request)
+            count = self._counts.get(request.role, 0) + 1
+            self._counts[request.role] = count
+        if request.role is AgentRole.PLANNER and self.invalid_plan_once and count == 1:
+            return self._result(request, "not valid JSON")
+        if request.role is AgentRole.PLANNER:
+            artifact = self._plan(request)
+        elif request.role is AgentRole.GENERALIST_DEVELOPER:
+            artifact = self._work(request)
+        elif request.role is AgentRole.TESTER:
+            if self._barrier is not None:
+                self._barrier.wait(timeout=2)
+            artifact = self._test_report(request)
+        elif request.role is AgentRole.REVIEWER:
+            if self._barrier is not None:
+                self._barrier.wait(timeout=2)
+            artifact = self._review_report(request)
+        else:  # pragma: no cover - the Phase 1 team is fixed
+            raise AssertionError(f"unexpected role: {request.role}")
+        return self._result(
+            request,
+            json.dumps(artifact.model_dump(mode="json"), ensure_ascii=False),
+        )
+
+    def _plan(self, request: AgentExecutionRequest) -> ImplementationPlan:
+        brief = task_brief()
+        return ImplementationPlan(
+            run_id=request.run_id,
+            team_id=request.team_id,
+            created_at=FIXED_TIME,
+            objective="Build the frozen task-management benchmark.",
+            approach=(
+                "Implement the complete local Web application.",
+                "Add tests and user documentation.",
+            ),
+            tasks=(
+                PlanTask(
+                    id="TASK_BUILD",
+                    owner=AgentRole.GENERALIST_DEVELOPER,
+                    description="Implement and document the complete benchmark.",
+                    acceptance_criteria=tuple(
+                        criterion.id for criterion in brief.acceptance_criteria
+                    ),
+                    expected_paths=("app/", "tests/", "README.md"),
+                ),
+            ),
+        )
+
+    def _work(self, request: AgentExecutionRequest) -> WorkResult:
+        context = prompt_context(request)
+        run = context["run"]
+        assert isinstance(run, dict)
+        input_commit = run["input_commit"]
+        assert isinstance(input_commit, str)
+        if self.commit_changes:
+            application = self.workspace / "app" / "main.py"
+            application.parent.mkdir(parents=True, exist_ok=True)
+            application.write_text(
+                f'"""Offline iteration {request.iteration}."""\n',
+                encoding="utf-8",
+            )
+            git(self.workspace, "add", "app/main.py")
+            git(
+                self.workspace,
+                "commit",
+                "--no-verify",
+                "-m",
+                f"feat(app): implement iteration {request.iteration}",
+            )
+            output_commit = git(self.workspace, "rev-parse", "HEAD").stdout.strip()
+            changed_files = tuple(
+                git(
+                    self.workspace,
+                    "diff",
+                    "--name-only",
+                    input_commit,
+                    output_commit,
+                    "--",
+                ).stdout.splitlines()
+            )
+        else:
+            output_commit = "f" * 40
+            changed_files = ("app/main.py",)
+        return WorkResult(
+            run_id=request.run_id,
+            team_id=request.team_id,
+            producer=AgentRole.GENERALIST_DEVELOPER,
+            created_at=FIXED_TIME,
+            iteration=request.iteration,
+            input_commit=input_commit,
+            output_commit=output_commit,
+            summary=f"Implemented iteration {request.iteration}.",
+            completed_tasks=("TASK_BUILD",),
+            changed_files=changed_files,
+        )
+
+    def _test_report(self, request: AgentExecutionRequest) -> PhaseTestReport:
+        context = prompt_context(request)
+        commands_payload = context["deterministic_command_evidence"]
+        assert isinstance(commands_payload, list)
+        commands = tuple(
+            CommandEvidence.model_validate(command) for command in commands_payload
+        )
+        timed_out = any(command.timed_out for command in commands)
+        failed = any(command.exit_code != 0 for command in commands)
+        if timed_out:
+            status = CheckStatus.BLOCKED
+            detail = "A deterministic gate timed out."
+            blockers = (detail,)
+            findings: tuple[str, ...] = ()
+        elif failed:
+            status = CheckStatus.FAILED
+            detail = "A deterministic gate failed."
+            blockers = ()
+            findings = (detail,)
+        else:
+            status = CheckStatus.PASSED
+            detail = "The fixed offline gate evidence passed."
+            blockers = ()
+            findings = ()
+        brief = task_brief()
+        criteria = tuple(
+            CriterionResult(
+                criterion_id=criterion.id,
+                status=status,
+                command_ids=tuple(command.id for command in commands),
+                detail=detail,
+            )
+            for criterion in brief.acceptance_criteria
+        )
+        if self.tamper_test_commands:
+            commands = (
+                commands[0].model_copy(update={"summary": "Agent-altered summary"}),
+                *commands[1:],
+            )
+        run = context["run"]
+        assert isinstance(run, dict)
+        input_commit = run["input_commit"]
+        assert isinstance(input_commit, str)
+        return PhaseTestReport(
+            run_id=request.run_id,
+            team_id=request.team_id,
+            created_at=FIXED_TIME,
+            iteration=request.iteration,
+            input_commit=input_commit,
+            status=status,
+            commands=commands,
+            criteria=criteria,
+            findings=findings,
+            blockers=blockers,
+            summary=detail,
+        )
+
+    def _review_report(self, request: AgentExecutionRequest) -> ReviewReport:
+        context = prompt_context(request)
+        run = context["run"]
+        assert isinstance(run, dict)
+        input_commit = run["input_commit"]
+        assert isinstance(input_commit, str)
+        verdict = self.review_verdicts.get(
+            request.iteration,
+            ReviewVerdict.ACCEPT,
+        )
+        findings: tuple[ReviewFinding, ...] = ()
+        if verdict is not ReviewVerdict.ACCEPT:
+            severity = (
+                ReviewSeverity.CRITICAL
+                if verdict is ReviewVerdict.FAIL
+                else ReviewSeverity.HIGH
+            )
+            findings = (
+                ReviewFinding(
+                    id=f"FINDING_ITERATION_{request.iteration}",
+                    severity=severity,
+                    blocking=True,
+                    category="correctness",
+                    description=f"Iteration {request.iteration} needs correction.",
+                    recommendation="Address the attributable issue.",
+                    criterion_ids=("AC_QUALITY",),
+                ),
+            )
+        return ReviewReport(
+            run_id=request.run_id,
+            team_id=request.team_id,
+            created_at=FIXED_TIME,
+            iteration=request.iteration,
+            input_commit=input_commit,
+            verdict=verdict,
+            findings=findings,
+            summary=f"Reviewer verdict: {verdict.value}.",
+        )
+
+    @staticmethod
+    def _result(
+        request: AgentExecutionRequest,
+        response_text: str,
+    ) -> AgentExecutionResult:
+        return AgentExecutionResult(
+            status=AgentExecutionStatus.COMPLETED,
+            response_text=response_text,
+            telemetry=AgentExecutionTelemetry(
+                role=request.role,
+                session_key=request.session_key,
+                command=("offline-agent", request.role.value),
+                started_at=FIXED_TIME,
+                finished_at=FIXED_TIME,
+                duration_ms=5,
+                openclaw_duration_ms=5,
+                exit_code=0,
+                stdout=response_text,
+                stderr="",
+                openclaw_run_id=f"offline-{request.role.value}",
+                session_id=f"offline-{request.role.value}-{request.iteration}",
+                provider="offline",
+                model="offline/test-model",
+                usage=AgentTokenUsage(
+                    input_tokens=10,
+                    output_tokens=5,
+                    total_tokens=15,
+                ),
+            ),
+        )
+
+
+def sandbox_executions(
+    *,
+    count: int = 8,
+    timeout_first: bool = False,
+) -> list[SandboxExecution]:
+    """Return enough fake Docker-boundary results for two iterations."""
+
+    results = [
+        SandboxExecution(
+            exit_code=0,
+            timed_out=False,
+            duration_ms=index + 1,
+            stdout=f"gate {index} passed\n".encode(),
+            stderr=b"",
+        )
+        for index in range(count)
+    ]
+    if timeout_first:
+        results[0] = SandboxExecution(
+            exit_code=None,
+            timed_out=True,
+            duration_ms=120_000,
+            stdout=b"",
+            stderr=b"gate timed out",
+        )
+    return results
+
+
+def coordinator(
+    tmp_path: Path,
+    executor: DynamicWorkflowExecutor,
+    *,
+    executions: list[SandboxExecution] | None = None,
+) -> WorkflowCoordinator:
+    """Build a coordinator with the real gate runner and fake sandbox backend."""
+
+    configuration = load_quality_gate_configuration(POLICY, BENCHMARK)
+    backend = FakeSandboxBackend(executions or sandbox_executions())
+
+    def gate_factory(run_directory: Path, workspace: Path) -> QualityGateRunner:
+        return QualityGateRunner(
+            configuration,
+            run_directory=run_directory,
+            workspace=workspace,
+            backend=backend,
+            allow_test_backends=True,
+        )
+
+    return WorkflowCoordinator(
+        manifest=load_team_manifest(TEAM_CONFIG),
+        runs_root=tmp_path / "runs",
+        worktrees_root=tmp_path / "worktrees",
+        executor=executor,
+        quality_gate_factory=gate_factory,
+        clock=lambda: FIXED_TIME,
+        agent_timeout_seconds=30,
+    )
+
+
+def load_run_json(tmp_path: Path) -> dict[str, object]:
+    """Load the terminal state written by one test run."""
+
+    return json.loads(
+        (tmp_path / "runs" / task_brief().run_id / "run.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+
+def test_offline_workflow_completes_with_parallel_independent_verification(
+    tmp_path: Path,
+) -> None:
+    source = initialize_source(tmp_path)
+    workspace = tmp_path / "worktrees" / task_brief().run_id
+    executor = DynamicWorkflowExecutor(workspace, verify_barrier=True)
+
+    outcome = coordinator(tmp_path, executor).execute(
+        task_brief(),
+        source_repository=source,
+    )
+
+    assert outcome.record.phase is RunPhase.COMPLETED
+    assert outcome.record.termination_reason is TerminationReason.SUCCEEDED
+    assert len(outcome.execution_records) == 4
+    assert len(outcome.handoffs) == 5
+    assert (workspace / "app" / "main.py").is_file()
+    run_directory = tmp_path / "runs" / task_brief().run_id
+    assert (run_directory / "final-report.json").is_file()
+    markdown = (run_directory / outcome.human_report_path).read_text(encoding="utf-8")
+    assert "Status: `completed`" in markdown
+    assert "Agent calls: 4" in markdown
+    assert len(list((run_directory / "iterations/01/commands").glob("*.txt"))) == 8
+    state = load_run_json(tmp_path)
+    transitions = state["transitions"]
+    assert isinstance(transitions, list)
+    assert transitions[-1]["artifacts"][0]["path"] == "final-report.json"
+
+
+def test_workflow_performs_exactly_one_evidence_driven_revision(
+    tmp_path: Path,
+) -> None:
+    source = initialize_source(tmp_path)
+    workspace = tmp_path / "worktrees" / task_brief().run_id
+    executor = DynamicWorkflowExecutor(
+        workspace,
+        review_verdicts={1: ReviewVerdict.REVISE},
+    )
+
+    outcome = coordinator(tmp_path, executor).execute(
+        task_brief(),
+        source_repository=source,
+    )
+
+    assert outcome.record.phase is RunPhase.COMPLETED
+    assert outcome.record.current_iteration == 2
+    assert len(outcome.record.snapshots) == 2
+    assert len(outcome.execution_records) == 7
+    first = json.loads(
+        (
+            tmp_path
+            / "runs"
+            / task_brief().run_id
+            / "iterations/01/iteration-record.json"
+        ).read_text(encoding="utf-8")
+    )
+    second = json.loads(
+        (
+            tmp_path
+            / "runs"
+            / task_brief().run_id
+            / "iterations/02/iteration-record.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert first["decision"] == "revise"
+    assert second["decision"] == "accept"
+    assert second["resolved_finding_ids"] == ["FINDING_ITERATION_1"]
+
+
+def test_workflow_repairs_one_invalid_agent_response(tmp_path: Path) -> None:
+    source = initialize_source(tmp_path)
+    workspace = tmp_path / "worktrees" / task_brief().run_id
+    executor = DynamicWorkflowExecutor(workspace, invalid_plan_once=True)
+
+    outcome = coordinator(tmp_path, executor).execute(
+        task_brief(),
+        source_repository=source,
+    )
+
+    assert outcome.record.phase is RunPhase.COMPLETED
+    plan_records = [
+        reference
+        for reference in outcome.execution_records
+        if "/plan/" in reference.path
+    ]
+    assert len(plan_records) == 2
+    first = json.loads(
+        (tmp_path / "runs" / task_brief().run_id / plan_records[0].path).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert first["attempt"] == 1
+    assert first["error"] is not None
+
+
+def test_workflow_rejects_tester_changes_to_controller_evidence(
+    tmp_path: Path,
+) -> None:
+    source = initialize_source(tmp_path)
+    workspace = tmp_path / "worktrees" / task_brief().run_id
+    executor = DynamicWorkflowExecutor(workspace, tamper_test_commands=True)
+
+    outcome = coordinator(tmp_path, executor).execute(
+        task_brief(),
+        source_repository=source,
+    )
+
+    assert outcome.record.phase is RunPhase.FAILED
+    assert outcome.record.termination_reason is TerminationReason.ARTIFACT_INVALID
+    assert "differs from controller evidence" in (
+        outcome.record.termination_detail or ""
+    )
+    assert outcome.record.snapshots
+
+
+def test_workflow_records_gate_timeout_as_dependency_failure(tmp_path: Path) -> None:
+    source = initialize_source(tmp_path)
+    workspace = tmp_path / "worktrees" / task_brief().run_id
+    executor = DynamicWorkflowExecutor(workspace)
+
+    outcome = coordinator(
+        tmp_path,
+        executor,
+        executions=sandbox_executions(timeout_first=True),
+    ).execute(task_brief(), source_repository=source)
+
+    assert outcome.record.phase is RunPhase.FAILED
+    assert outcome.record.termination_reason is TerminationReason.DEPENDENCY_UNAVAILABLE
+    iteration = json.loads(
+        (
+            tmp_path
+            / "runs"
+            / task_brief().run_id
+            / "iterations/01/iteration-record.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert iteration["decision"] == "fail"
+    assert iteration["blocking_reasons"] == ["A deterministic gate timed out."]
+
+
+def test_workflow_stops_at_the_phase1_iteration_limit(tmp_path: Path) -> None:
+    source = initialize_source(tmp_path)
+    workspace = tmp_path / "worktrees" / task_brief().run_id
+    executor = DynamicWorkflowExecutor(
+        workspace,
+        review_verdicts={1: ReviewVerdict.REVISE, 2: ReviewVerdict.REVISE},
+    )
+
+    outcome = coordinator(tmp_path, executor).execute(
+        task_brief(),
+        source_repository=source,
+    )
+
+    assert outcome.record.phase is RunPhase.FAILED
+    assert (
+        outcome.record.termination_reason is TerminationReason.ITERATION_LIMIT_REACHED
+    )
+    assert outcome.record.current_iteration == 2
+    assert len(outcome.record.snapshots) == 2
+
+
+def test_workflow_exposes_a_developer_that_produces_no_real_commit(
+    tmp_path: Path,
+) -> None:
+    source = initialize_source(tmp_path)
+    workspace = tmp_path / "worktrees" / task_brief().run_id
+    executor = DynamicWorkflowExecutor(workspace, commit_changes=False)
+
+    outcome = coordinator(tmp_path, executor).execute(
+        task_brief(),
+        source_repository=source,
+    )
+
+    assert outcome.record.phase is RunPhase.FAILED
+    assert outcome.record.termination_reason is TerminationReason.NO_RELEVANT_CHANGE
+    assert outcome.record.snapshots == ()

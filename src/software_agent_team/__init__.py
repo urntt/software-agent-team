@@ -110,8 +110,19 @@ from software_agent_team.teams import (
     TeamManifest,
     TeamStage,
 )
+from software_agent_team.workflow import (
+    PHASE1_ITERATION_LIMIT,
+    PHASE1_TEAM_ID,
+    AgentInvocationError,
+    WorkflowCoordinator,
+    WorkflowError,
+    WorkflowEvidenceError,
+    WorkflowOutcome,
+)
 
 __all__ = [
+    "PHASE1_ITERATION_LIMIT",
+    "PHASE1_TEAM_ID",
     "AcceptanceCriterion",
     "AgentArtifactResponseError",
     "AgentExecutionError",
@@ -121,6 +132,7 @@ __all__ = [
     "AgentExecutionStatus",
     "AgentExecutionTelemetry",
     "AgentExecutor",
+    "AgentInvocationError",
     "AgentPromptError",
     "AgentPromptInputs",
     "AgentRole",
@@ -190,6 +202,10 @@ __all__ = [
     "TestReport",
     "UnsafeRepositoryError",
     "WorkResult",
+    "WorkflowCoordinator",
+    "WorkflowError",
+    "WorkflowEvidenceError",
+    "WorkflowOutcome",
     "WorktreeAlreadyExistsError",
     "WorktreeIntegrityError",
     "build_agent_execution_request",
