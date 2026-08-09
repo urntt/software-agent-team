@@ -6,7 +6,13 @@ from pathlib import Path
 
 import pytest
 
-from software_agent_team.artifacts import AgentRole, TaskBrief, WorkResult
+from software_agent_team.artifacts import (
+    AgentRole,
+    ArtifactKind,
+    ArtifactReference,
+    TaskBrief,
+    WorkResult,
+)
 from software_agent_team.git_workspace import (
     GitWorkspaceError,
     GitWorkspaceManager,
@@ -23,6 +29,7 @@ REPOSITORY_ROOT = Path(__file__).parents[1]
 TEAM_CONFIG = REPOSITORY_ROOT / "configs" / "teams.json"
 TASK_BRIEF = REPOSITORY_ROOT / "examples" / "task-brief.json"
 FIXED_TIME = datetime(2026, 8, 9, 12, 0, tzinfo=UTC)
+SHA256 = "a" * 64
 
 
 def git(
@@ -482,6 +489,13 @@ def test_controller_persists_real_workspace_and_snapshot_evidence(
         expected_revision=record.revision,
         target=RunPhase.IMPLEMENTING,
         reason="begin implementation",
+        artifacts=(
+            ArtifactReference(
+                kind=ArtifactKind.IMPLEMENTATION_PLAN,
+                path="implementation-plan.json",
+                sha256=SHA256,
+            ),
+        ),
     )
     commit_change(Path(workspace.worktree_path))
     record = controller.advance(
@@ -489,6 +503,13 @@ def test_controller_persists_real_workspace_and_snapshot_evidence(
         expected_revision=record.revision,
         target=RunPhase.SNAPSHOTTING,
         reason="verify implementation commit",
+        artifacts=(
+            ArtifactReference(
+                kind=ArtifactKind.WORK_RESULT,
+                path="iterations/01/work-result.json",
+                sha256=SHA256,
+            ),
+        ),
     )
     snapshot = workspace_manager.verify_snapshot(
         workspace,

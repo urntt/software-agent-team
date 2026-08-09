@@ -25,11 +25,16 @@ from pydantic import (
     model_validator,
 )
 
-from software_agent_team.artifacts import TaskBrief
+from software_agent_team.artifacts import (
+    ArtifactKind,
+    ArtifactReference,
+    IterationDecision,
+    TaskBrief,
+)
 from software_agent_team.git_workspace import GitSnapshot, GitWorkspace
 from software_agent_team.teams import TeamManifest
 
-RUN_SCHEMA_VERSION = 2
+RUN_SCHEMA_VERSION = 3
 RUN_STATE_FILENAME = "run.json"
 TASK_BRIEF_FILENAME = "task-brief.json"
 RUN_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
@@ -135,6 +140,8 @@ class RunTransition(BaseModel):
     iteration_after: int = Field(ge=1, le=3)
     occurred_at: datetime
     reason: str = Field(min_length=1)
+    artifacts: tuple[ArtifactReference, ...] = ()
+    decision: IterationDecision | None = None
 
     @field_validator("occurred_at")
     @classmethod
@@ -155,7 +162,7 @@ class RunTransition(BaseModel):
 
     @model_validator(mode="after")
     def validate_transition(self) -> Self:
-        """Reject illegal phase and iteration changes."""
+        """Reject illegal phase, iteration, decision, and evidence changes."""
 
         if not _is_legal_transition(self.source, self.target):
             raise ValueError(
@@ -170,6 +177,46 @@ class RunTransition(BaseModel):
         )
         if self.iteration_after != expected_iteration:
             raise ValueError("only a revision transition may increment iteration")
+
+        paths = [reference.path for reference in self.artifacts]
+        if len(paths) != len(set(paths)):
+            raise ValueError("transition artifact references must be unique")
+        kinds = {reference.kind for reference in self.artifacts}
+        required: set[ArtifactKind] = set()
+        if self.target is RunPhase.FAILED:
+            required = {ArtifactKind.FINAL_REPORT}
+        else:
+            required = {
+                (RunPhase.PLANNING, RunPhase.IMPLEMENTING): {
+                    ArtifactKind.IMPLEMENTATION_PLAN
+                },
+                (RunPhase.IMPLEMENTING, RunPhase.SNAPSHOTTING): {
+                    ArtifactKind.WORK_RESULT
+                },
+                (RunPhase.VERIFYING, RunPhase.REVIEWING): {ArtifactKind.TEST_REPORT},
+                (RunPhase.REVIEWING, RunPhase.DECIDING): {
+                    ArtifactKind.REVIEW_REPORT,
+                    ArtifactKind.ITERATION_RECORD,
+                },
+                (RunPhase.DELIVERING, RunPhase.COMPLETED): {ArtifactKind.FINAL_REPORT},
+            }.get((self.source, self.target), set())
+        if not required.issubset(kinds):
+            missing = ", ".join(sorted(kind.value for kind in required - kinds))
+            raise ValueError(f"transition is missing required artifacts: {missing}")
+
+        if self.source is RunPhase.DECIDING and self.target is not RunPhase.FAILED:
+            expected_decision = (
+                IterationDecision.REVISE
+                if self.target is RunPhase.IMPLEMENTING
+                else IterationDecision.ACCEPT
+            )
+            if self.decision is not expected_decision:
+                raise ValueError(
+                    f"{self.target.value} transition requires "
+                    f"the {expected_decision.value} decision"
+                )
+        elif self.decision is not None:
+            raise ValueError("only decision transitions may record a decision")
         return self
 
 
@@ -229,6 +276,7 @@ class RunRecord(BaseModel):
         expected_source = RunPhase.CREATED
         expected_iteration = 1
         previous_time = self.created_at
+        artifact_paths: set[str] = set()
         for sequence, transition in enumerate(self.transitions, start=1):
             if transition.sequence != sequence:
                 raise ValueError("transition sequences must be contiguous")
@@ -243,6 +291,10 @@ class RunRecord(BaseModel):
             expected_source = transition.target
             expected_iteration = transition.iteration_after
             previous_time = transition.occurred_at
+            transition_paths = {reference.path for reference in transition.artifacts}
+            if artifact_paths.intersection(transition_paths):
+                raise ValueError("run history cannot reference an artifact twice")
+            artifact_paths.update(transition_paths)
 
         if self.phase is not expected_source:
             raise ValueError("current phase must match the transition history")
@@ -337,6 +389,16 @@ class RunRecord(BaseModel):
         if self.snapshots:
             return self.snapshots[-1].output_commit
         return None if self.workspace is None else self.workspace.base_commit
+
+    @property
+    def artifact_references(self) -> tuple[ArtifactReference, ...]:
+        """Return every immutable artifact referenced by transition history."""
+
+        return tuple(
+            reference
+            for transition in self.transitions
+            for reference in transition.artifacts
+        )
 
 
 def _serialized_model(model: BaseModel) -> bytes:
@@ -607,6 +669,8 @@ class RunController:
         expected_revision: int,
         target: RunPhase,
         reason: str,
+        artifacts: tuple[ArtifactReference, ...] = (),
+        decision: IterationDecision | None = None,
     ) -> RunRecord:
         """Apply one non-terminal lifecycle transition."""
 
@@ -639,6 +703,8 @@ class RunController:
             target=target,
             iteration_after=iteration_after,
             reason=reason,
+            artifacts=artifacts,
+            decision=decision,
         )
 
     def attach_workspace(
@@ -701,6 +767,7 @@ class RunController:
         *,
         expected_revision: int,
         detail: str,
+        final_report: ArtifactReference,
     ) -> RunRecord:
         """Complete a delivering run with an explicit success record."""
 
@@ -714,6 +781,7 @@ class RunController:
             target=RunPhase.COMPLETED,
             iteration_after=current.current_iteration,
             reason="delivery completed",
+            artifacts=(final_report,),
             termination_reason=TerminationReason.SUCCEEDED,
             termination_detail=detail,
         )
@@ -725,6 +793,7 @@ class RunController:
         expected_revision: int,
         reason: TerminationReason,
         detail: str,
+        final_report: ArtifactReference,
     ) -> RunRecord:
         """Persist an explicit failure from any non-terminal run phase."""
 
@@ -738,6 +807,7 @@ class RunController:
             target=RunPhase.FAILED,
             iteration_after=current.current_iteration,
             reason=detail,
+            artifacts=(final_report,),
             termination_reason=reason,
             termination_detail=detail,
         )
@@ -760,6 +830,8 @@ class RunController:
         target: RunPhase,
         iteration_after: int,
         reason: str,
+        artifacts: tuple[ArtifactReference, ...] = (),
+        decision: IterationDecision | None = None,
         termination_reason: TerminationReason | None = None,
         termination_detail: str | None = None,
         record_updates: Mapping[str, object] | None = None,
@@ -775,6 +847,8 @@ class RunController:
             iteration_after=iteration_after,
             occurred_at=now,
             reason=reason,
+            artifacts=artifacts,
+            decision=decision,
         )
         updates: dict[str, object] = {
             "phase": target,

@@ -9,7 +9,12 @@ import pytest
 from pydantic import ValidationError
 
 import software_agent_team.run_control as run_control
-from software_agent_team.artifacts import TaskBrief
+from software_agent_team.artifacts import (
+    ArtifactKind,
+    ArtifactReference,
+    IterationDecision,
+    TaskBrief,
+)
 from software_agent_team.git_workspace import GitSnapshot, GitWorkspace
 from software_agent_team.run_control import (
     InvalidRunTransitionError,
@@ -31,6 +36,7 @@ REPOSITORY_ROOT = Path(__file__).parents[1]
 TEAM_CONFIG = REPOSITORY_ROOT / "configs" / "teams.json"
 FIXED_TIME = datetime(2026, 8, 9, 12, 0, tzinfo=UTC)
 BASE_COMMIT = "1" * 40
+SHA256 = "a" * 64
 
 PHASES_TO_DECISION = [
     RunPhase.PREPARING_WORKTREE,
@@ -146,11 +152,62 @@ def advance(
             expected_revision=record.revision,
             snapshot=snapshot(record),
         )
+    evidence: tuple[ArtifactReference, ...] = ()
+    required = {
+        (RunPhase.PLANNING, RunPhase.IMPLEMENTING): (
+            (ArtifactKind.IMPLEMENTATION_PLAN, "implementation-plan.json"),
+        ),
+        (RunPhase.IMPLEMENTING, RunPhase.SNAPSHOTTING): (
+            (
+                ArtifactKind.WORK_RESULT,
+                f"iterations/{record.current_iteration:02d}/work-result.json",
+            ),
+        ),
+        (RunPhase.VERIFYING, RunPhase.REVIEWING): (
+            (
+                ArtifactKind.TEST_REPORT,
+                f"iterations/{record.current_iteration:02d}/test-report.json",
+            ),
+        ),
+        (RunPhase.REVIEWING, RunPhase.DECIDING): (
+            (
+                ArtifactKind.REVIEW_REPORT,
+                f"iterations/{record.current_iteration:02d}/review-report.json",
+            ),
+            (
+                ArtifactKind.ITERATION_RECORD,
+                f"iterations/{record.current_iteration:02d}/iteration-record.json",
+            ),
+        ),
+    }.get((record.phase, target), ())
+    evidence = tuple(
+        ArtifactReference(kind=kind, path=path, sha256=SHA256)
+        for kind, path in required
+    )
+    decision = None
+    if record.phase is RunPhase.DECIDING:
+        decision = (
+            IterationDecision.REVISE
+            if target is RunPhase.IMPLEMENTING
+            else IterationDecision.ACCEPT
+        )
     return controller.advance(
         record.run_id,
         expected_revision=record.revision,
         target=target,
         reason=f"enter {target.value}",
+        artifacts=evidence,
+        decision=decision,
+    )
+
+
+def final_report_reference() -> ArtifactReference:
+    """Return a deterministic terminal-report reference."""
+
+    return ArtifactReference(
+        kind=ArtifactKind.FINAL_REPORT,
+        path="final-report.json",
+        sha256=SHA256,
     )
 
 
@@ -226,6 +283,7 @@ def test_successful_lifecycle_persists_auditable_history(tmp_path: Path) -> None
         record.run_id,
         expected_revision=record.revision,
         detail="Runnable product and evidence are ready.",
+        final_report=final_report_reference(),
     )
 
     assert record.phase is RunPhase.COMPLETED
@@ -263,6 +321,7 @@ def test_revision_increments_iteration_once(tmp_path: Path) -> None:
         revised.run_id,
         expected_revision=revised.revision,
         detail="The bounded revision resolved the blocking findings.",
+        final_report=final_report_reference(),
     )
     assert completed.current_iteration == 2
     assert [item.output_commit for item in completed.snapshots] == [
@@ -383,6 +442,7 @@ def test_failure_is_recorded_from_every_non_terminal_phase(
         expected_revision=record.revision,
         reason=TerminationReason.EXECUTION_FAILED,
         detail="The assigned execution failed.",
+        final_report=final_report_reference(),
     )
 
     assert failed.phase is RunPhase.FAILED
@@ -397,6 +457,7 @@ def test_terminal_run_cannot_transition_again(tmp_path: Path) -> None:
         expected_revision=0,
         reason=TerminationReason.DEPENDENCY_UNAVAILABLE,
         detail="The required runtime is unavailable.",
+        final_report=final_report_reference(),
     )
 
     with pytest.raises(InvalidRunTransitionError, match="terminal"):
@@ -405,6 +466,7 @@ def test_terminal_run_cannot_transition_again(tmp_path: Path) -> None:
             expected_revision=record.revision,
             reason=TerminationReason.CONTROLLER_ERROR,
             detail="A second terminal result must not be written.",
+            final_report=final_report_reference(),
         )
 
 
