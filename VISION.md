@@ -251,17 +251,12 @@ Failure and non-convergence are valid outcomes and must remain visible.
 ## Artifact Boundary
 
 The artifact layer is the reproducible interface between Agents and the
-controller.
-
-The current foundation defines:
+controller. The current implementation defines:
 
 - `TaskBrief`;
 - `HandoffEnvelope`;
 - `ArtifactReference`;
-- Versioned Agent roles and team definitions.
-
-The vertical slice will add concrete payload schemas for:
-
+- Versioned Agent roles and team definitions;
 - `ImplementationPlan`;
 - `WorkResult`;
 - `TestReport`;
@@ -272,6 +267,12 @@ The vertical slice will add concrete payload schemas for:
 `src/software_agent_team/artifacts.py` remains the schema source of truth.
 Generated JSON Schema, documentation tables, or transport objects must be
 derived from those models.
+
+Phase artifacts use canonical run-relative paths, write-once persistence, and
+SHA-256 references. Structural schema validation is followed by contextual
+validation against the frozen task brief and selected team before persistence.
+The schemas exist independently of live Agent execution; an artifact is not
+evidence of a real run until the controller records it from verified inputs.
 
 ## Evaluation
 
@@ -369,6 +370,8 @@ Implemented:
 - Versioned team manifest and validation;
 - Sanitized OpenClaw Agent registry and permission checks;
 - Confirmed task-brief and handoff-envelope contracts;
+- Concrete phase-artifact contracts and context validation;
+- Immutable phase-artifact persistence with canonical paths and hashes;
 - Persisted run lifecycle with validated transitions, atomic replacement,
   optimistic concurrency checks, and integrity-checked recovery;
 - Controlled task-management benchmark;
@@ -381,7 +384,6 @@ Not yet implemented:
 - End-to-end workflow execution on top of the persisted run controller;
 - Live OpenClaw adapter;
 - Role prompts and response parsing;
-- Concrete phase artifact payloads;
 - Deterministic benchmark runner;
 - Revision synthesis;
 - Metrics and final report generation;
@@ -414,9 +416,10 @@ is not documented as available until it executes a real validated path.
 **Exit criterion:** one complete trace reaches a valid terminal state with
 reproducible artifacts.
 
-The persisted lifecycle-state portion is implemented. Worktree management,
-phase artifacts, deterministic gates, Agent execution, and final reporting
-remain before the Phase 1 exit criterion is met.
+Persisted lifecycle state and phase-artifact contracts are implemented.
+Worktree management, deterministic gates, Agent execution, artifact
+population, and final-report generation remain before the Phase 1 exit
+criterion is met.
 
 ### Phase 2: Baseline and Domain Specialization
 

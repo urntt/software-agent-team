@@ -18,6 +18,8 @@ foundation plus the first deterministic control-plane slice. It includes:
 - A unified `sat` validation CLI;
 - A versioned manifest for three experimental team configurations;
 - Validated task-brief and cross-Agent handoff contracts;
+- Concrete plan, work, test, review, iteration, and final-report contracts;
+- Immutable phase-artifact storage with canonical paths and content hashes;
 - A persisted run lifecycle with validated transitions, atomic updates, and
   integrity-checked recovery;
 - A sanitized OpenClaw role and permission template;
@@ -118,6 +120,17 @@ Validate a confirmed task brief:
 uv run sat validate-task-brief examples/task-brief.json
 ```
 
+Validate the structure of a persisted phase artifact:
+
+```bash
+uv run sat validate-artifact examples/implementation-plan.json
+```
+
+Structural CLI validation does not replace run-context validation. Before an
+artifact is persisted, the artifact store also checks its run, team,
+iteration, producer, and acceptance-criterion references against the frozen
+task brief and selected team.
+
 Validate a cross-Agent handoff against its selected team configuration:
 
 ```bash
@@ -139,8 +152,11 @@ Local state is stored under the ignored `runs/` directory:
 
 ```text
 runs/<run_id>/
-├── task-brief.json    # Frozen confirmed input
-└── run.json           # Current state and complete transition history
+├── task-brief.json                  # Frozen confirmed input
+├── run.json                         # State and transition history
+├── implementation-plan.json         # Write-once planning artifact
+├── iterations/<nn>/                  # Write-once iteration artifacts
+└── final-report.json                 # Write-once terminal report
 ```
 
 Run creation and state replacement use atomic filesystem operations. Recovery
@@ -176,6 +192,7 @@ configs/
 └── teams.json                # Versioned experiment configurations
 examples/
 ├── handoff.json              # Valid HandoffEnvelope example
+├── implementation-plan.json # Valid phase-artifact example
 └── task-brief.json           # Valid confirmed TaskBrief example
 openclaw/
 └── workspaces/               # Ignored local role workspaces
@@ -183,6 +200,7 @@ scripts/
 ├── doctor.sh                 # Non-mutating environment diagnostics
 └── setup.sh                  # Idempotent toolchain setup
 src/software_agent_team/
+├── artifact_store.py         # Immutable artifact persistence and integrity
 ├── artifacts.py              # Persisted artifact schema source of truth
 ├── cli.py                    # Implemented foundation CLI
 ├── configuration.py          # Cross-configuration validation
@@ -222,6 +240,8 @@ workflow coordinator.
 - `configs/teams.json` owns team membership and initial stage ordering.
 - `src/software_agent_team/teams.py` owns manifest validation rules.
 - `src/software_agent_team/artifacts.py` owns persisted artifact schemas.
+- `src/software_agent_team/artifact_store.py` owns canonical artifact paths,
+  immutable writes, content hashes, and contextual loading.
 - `src/software_agent_team/run_control.py` owns lifecycle state, transition
   validation, persistence, and recovery.
 - `configs/openclaw.example.json5` records the sanitized Agent runtime boundary.

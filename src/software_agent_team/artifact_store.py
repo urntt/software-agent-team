@@ -1,0 +1,308 @@
+"""Immutable, integrity-checked persistence for phase artifacts."""
+
+import hashlib
+import json
+import os
+from contextlib import suppress
+from itertools import pairwise
+from pathlib import Path, PurePosixPath
+from uuid import uuid4
+
+from pydantic import ValidationError
+
+from software_agent_team.artifacts import (
+    ARTIFACT_MODELS,
+    ArtifactReference,
+    CheckStatus,
+    FinalReport,
+    FinalStatus,
+    ImplementationPlan,
+    IterationArtifact,
+    IterationDecision,
+    IterationRecord,
+    PersistedArtifact,
+    ReviewReport,
+    ReviewVerdict,
+    TaskBrief,
+    TestReport,
+    WorkResult,
+    validate_artifact_context,
+)
+from software_agent_team.teams import TeamDefinition
+
+
+class ArtifactStoreError(ValueError):
+    """Base error for persisted phase artifacts."""
+
+
+class ArtifactAlreadyExistsError(ArtifactStoreError):
+    """Raised when a caller attempts to replace immutable evidence."""
+
+
+class ArtifactIntegrityError(ArtifactStoreError):
+    """Raised when an artifact is missing, altered, or contextually invalid."""
+
+
+def _artifact_path(artifact: PersistedArtifact) -> PurePosixPath:
+    if isinstance(artifact, ImplementationPlan):
+        return PurePosixPath("implementation-plan.json")
+    if isinstance(artifact, FinalReport):
+        return PurePosixPath("final-report.json")
+    if not isinstance(artifact, IterationArtifact):
+        raise ArtifactStoreError(f"unsupported artifact model: {type(artifact)!r}")
+    filename = f"{artifact.kind.value.replace('_', '-')}.json"
+    return PurePosixPath("iterations") / f"{artifact.iteration:02d}" / filename
+
+
+def _serialize(artifact: PersistedArtifact) -> bytes:
+    payload = json.dumps(
+        artifact.model_dump(mode="json"),
+        ensure_ascii=False,
+        indent=2,
+    )
+    return f"{payload}\n".encode()
+
+
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+class ArtifactStore:
+    """Write-once store rooted in one persisted run directory."""
+
+    def __init__(
+        self,
+        root: Path,
+        *,
+        task_brief: TaskBrief,
+        team: TeamDefinition,
+        iteration_limit: int,
+    ) -> None:
+        if root.is_symlink() or not root.is_dir():
+            raise ArtifactStoreError(
+                "artifact store requires an existing run directory"
+            )
+        if not task_brief.confirmed:
+            raise ArtifactStoreError("artifact store requires a confirmed task brief")
+        if not 1 <= iteration_limit <= team.max_iterations:
+            raise ArtifactStoreError("artifact store iteration limit is invalid")
+        self.root = root
+        self.task_brief = task_brief
+        self.team = team
+        self.iteration_limit = iteration_limit
+
+    def write(
+        self,
+        artifact: PersistedArtifact,
+        *,
+        description: str = "",
+    ) -> ArtifactReference:
+        """Atomically create one canonical artifact and return its digest reference."""
+
+        try:
+            self._validate_context(artifact)
+        except ValueError as error:
+            raise ArtifactStoreError("artifact context is invalid") from error
+        self._validate_references(artifact)
+        relative_path = _artifact_path(artifact)
+        destination = self.root.joinpath(*relative_path.parts)
+        self._prepare_parent(relative_path.parent)
+
+        content = _serialize(artifact)
+        digest = hashlib.sha256(content).hexdigest()
+        temporary = destination.parent / f".{destination.name}.{uuid4().hex}.tmp"
+        try:
+            with temporary.open("xb") as output:
+                output.write(content)
+                output.flush()
+                os.fsync(output.fileno())
+            try:
+                os.link(temporary, destination)
+            except FileExistsError as error:
+                raise ArtifactAlreadyExistsError(
+                    f"artifact already exists: {relative_path.as_posix()}"
+                ) from error
+            _fsync_directory(destination.parent)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+        return ArtifactReference(
+            kind=artifact.kind,
+            path=relative_path.as_posix(),
+            sha256=digest,
+            description=description,
+        )
+
+    def load(self, reference: ArtifactReference) -> PersistedArtifact:
+        """Load one referenced artifact after path, digest, type, and context checks."""
+
+        model = ARTIFACT_MODELS.get(reference.kind)
+        if model is None:
+            raise ArtifactIntegrityError(
+                f"unsupported persisted artifact kind: {reference.kind.value}"
+            )
+
+        relative_path = PurePosixPath(reference.path)
+        destination = self.root.joinpath(*relative_path.parts)
+        self._require_inside_root(destination, must_exist=True)
+        if destination.is_symlink() or not destination.is_file():
+            raise ArtifactIntegrityError("artifact reference is not a regular file")
+        try:
+            content = destination.read_bytes()
+        except OSError as error:
+            raise ArtifactIntegrityError(
+                f"cannot read artifact: {reference.path}"
+            ) from error
+        if hashlib.sha256(content).hexdigest() != reference.sha256:
+            raise ArtifactIntegrityError(
+                f"artifact digest does not match: {reference.path}"
+            )
+        try:
+            artifact = model.model_validate_json(content)
+        except ValidationError as error:
+            raise ArtifactIntegrityError(
+                f"artifact content is invalid: {reference.path}"
+            ) from error
+        if _artifact_path(artifact) != relative_path:
+            raise ArtifactIntegrityError(
+                f"artifact is not stored at its canonical path: {reference.path}"
+            )
+        try:
+            self._validate_context(artifact)
+            self._validate_references(artifact)
+        except ValueError as error:
+            raise ArtifactIntegrityError(
+                f"artifact context is invalid: {reference.path}"
+            ) from error
+        return artifact
+
+    def _validate_context(self, artifact: PersistedArtifact) -> None:
+        validate_artifact_context(
+            artifact,
+            task_brief=self.task_brief,
+            team_id=self.team.id,
+            team_roles=set(self.team.roles),
+            iteration_limit=self.iteration_limit,
+        )
+
+    def _validate_references(self, artifact: PersistedArtifact) -> None:
+        if isinstance(artifact, IterationRecord):
+            plan = self.load(artifact.implementation_plan)
+            work = self.load(artifact.work_result)
+            test = self.load(artifact.test_report)
+            review = self.load(artifact.review_report)
+            if not isinstance(plan, ImplementationPlan):
+                raise ArtifactStoreError("iteration plan reference has the wrong type")
+            if not isinstance(work, WorkResult):
+                raise ArtifactStoreError("iteration work reference has the wrong type")
+            if not isinstance(test, TestReport):
+                raise ArtifactStoreError("iteration test reference has the wrong type")
+            if not isinstance(review, ReviewReport):
+                raise ArtifactStoreError(
+                    "iteration review reference has the wrong type"
+                )
+            if any(
+                item.iteration != artifact.iteration for item in (work, test, review)
+            ):
+                raise ArtifactStoreError(
+                    "iteration references must use the record's iteration"
+                )
+            if (
+                work.input_commit != artifact.input_commit
+                or work.output_commit != artifact.output_commit
+                or test.input_commit != artifact.output_commit
+                or review.input_commit != artifact.output_commit
+            ):
+                raise ArtifactStoreError(
+                    "iteration commits do not match referenced evidence"
+                )
+
+            blocking_ids = {
+                finding.id for finding in review.findings if finding.blocking
+            }
+            if set(artifact.blocking_finding_ids) != blocking_ids:
+                raise ArtifactStoreError(
+                    "iteration blocking findings must match the review report"
+                )
+            if artifact.decision is IterationDecision.ACCEPT:
+                if (
+                    test.status is not CheckStatus.PASSED
+                    or review.verdict is not ReviewVerdict.ACCEPT
+                ):
+                    raise ArtifactStoreError(
+                        "accepted iteration requires passing test and review evidence"
+                    )
+            elif artifact.decision is IterationDecision.REVISE:
+                if review.verdict is ReviewVerdict.FAIL or (
+                    test.status is CheckStatus.PASSED
+                    and review.verdict is ReviewVerdict.ACCEPT
+                ):
+                    raise ArtifactStoreError(
+                        "revision decision does not match test and review evidence"
+                    )
+            elif (
+                review.verdict is not ReviewVerdict.FAIL
+                and test.status is not CheckStatus.BLOCKED
+            ):
+                raise ArtifactStoreError(
+                    "failure decision requires failed review or blocked test evidence"
+                )
+
+        elif isinstance(artifact, FinalReport) and artifact.iterations:
+            records = [self.load(reference) for reference in artifact.iterations]
+            if not all(isinstance(record, IterationRecord) for record in records):
+                raise ArtifactStoreError(
+                    "final report must reference iteration records"
+                )
+            iteration_records = [
+                record for record in records if isinstance(record, IterationRecord)
+            ]
+            if [record.iteration for record in iteration_records] != list(
+                range(1, len(iteration_records) + 1)
+            ):
+                raise ArtifactStoreError(
+                    "final report iterations must be contiguous and ordered"
+                )
+            for previous, current in pairwise(iteration_records):
+                if current.input_commit != previous.output_commit:
+                    raise ArtifactStoreError(
+                        "final report iteration commits must form one chain"
+                    )
+
+            last_record = iteration_records[-1]
+            last_test = self.load(last_record.test_report)
+            if not isinstance(last_test, TestReport):
+                raise ArtifactStoreError("final iteration test reference is invalid")
+            if artifact.status is FinalStatus.COMPLETED and (
+                last_record.decision is not IterationDecision.ACCEPT
+                or artifact.final_commit != last_record.output_commit
+                or artifact.acceptance_results != last_test.criteria
+            ):
+                raise ArtifactStoreError(
+                    "completed final report does not match final iteration evidence"
+                )
+
+    def _require_inside_root(self, path: Path, *, must_exist: bool) -> None:
+        try:
+            resolved_root = self.root.resolve(strict=True)
+            resolved_path = path.resolve(strict=must_exist)
+        except OSError as error:
+            raise ArtifactIntegrityError("artifact path does not exist") from error
+        if not resolved_path.is_relative_to(resolved_root):
+            raise ArtifactIntegrityError("artifact path escapes the run directory")
+
+    def _prepare_parent(self, relative_parent: PurePosixPath) -> None:
+        current = self.root
+        for part in relative_parent.parts:
+            current = current / part
+            with suppress(FileExistsError):
+                current.mkdir()
+            if current.is_symlink() or not current.is_dir():
+                raise ArtifactIntegrityError(
+                    "artifact parent must be a real directory inside the run"
+                )
+            self._require_inside_root(current, must_exist=True)

@@ -7,7 +7,11 @@ from pathlib import Path
 
 from pydantic import BaseModel, ValidationError
 
-from software_agent_team.artifacts import HandoffEnvelope, TaskBrief
+from software_agent_team.artifacts import (
+    HandoffEnvelope,
+    TaskBrief,
+    parse_phase_artifact,
+)
 from software_agent_team.configuration import validate_environment_configuration
 from software_agent_team.teams import load_team_manifest
 
@@ -45,6 +49,18 @@ def _validate_task_brief(args: argparse.Namespace) -> int:
     print(
         f"valid task brief: run={task_brief.run_id} "
         f"criteria={len(task_brief.acceptance_criteria)} state={state}"
+    )
+    return 0
+
+
+def _validate_artifact(args: argparse.Namespace) -> int:
+    payload = json.loads(args.path.read_text(encoding="utf-8"))
+    artifact = parse_phase_artifact(payload)
+    iteration = getattr(artifact, "iteration", None)
+    suffix = "" if iteration is None else f" iteration={iteration}"
+    print(
+        f"valid artifact: kind={artifact.kind.value} run={artifact.run_id}"
+        f" team={artifact.team_id}{suffix}"
     )
     return 0
 
@@ -91,6 +107,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     task_brief.add_argument("path", type=Path)
     task_brief.set_defaults(handler=_validate_task_brief)
+
+    artifact = commands.add_parser(
+        "validate-artifact",
+        help="Validate the structure of a persisted phase artifact.",
+    )
+    artifact.add_argument("path", type=Path)
+    artifact.set_defaults(handler=_validate_artifact)
 
     config = commands.add_parser(
         "validate-config",

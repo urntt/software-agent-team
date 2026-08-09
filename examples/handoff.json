@@ -11,6 +11,7 @@
     {
       "kind": "work_result",
       "path": "iterations/01/work-result.json",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "description": "Implementation result for the first iteration"
     }
   ],

@@ -27,6 +27,17 @@ def test_cli_accepts_the_checked_in_task_brief(
     assert "state=confirmed" in capsys.readouterr().out
 
 
+def test_cli_accepts_the_checked_in_phase_artifact(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    example = REPOSITORY_ROOT / "examples" / "implementation-plan.json"
+
+    assert main(["validate-artifact", str(example)]) == 0
+    output = capsys.readouterr().out
+    assert "kind=implementation_plan" in output
+    assert "iteration=1" in output
+
+
 def test_cli_validates_the_complete_configuration(
     capsys: pytest.CaptureFixture[str],
 ) -> None:

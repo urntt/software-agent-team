@@ -51,5 +51,7 @@ SOFTWARE_AGENT_TEAM_ROOT="$task_root" \
   "$task_uv_bin" run --frozen sat validate-config >/dev/null
 "$task_uv_bin" run --frozen sat validate-task-brief examples/task-brief.json >/dev/null
 "$task_uv_bin" run --frozen sat validate-handoff examples/handoff.json >/dev/null
+"$task_uv_bin" run --frozen sat validate-artifact \
+  examples/implementation-plan.json >/dev/null
 
 echo "doctor: environment, configuration, and repository boundaries are valid"

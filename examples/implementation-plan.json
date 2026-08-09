@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "kind": "implementation_plan",
+  "run_id": "task-manager-001",
+  "team_id": "function_specialized",
+  "producer": "planner",
+  "created_at": "2026-08-09T12:00:00Z",
+  "iteration": 1,
+  "objective": "Build the confirmed task-management Web application.",
+  "approach": [
+    "Implement the FastAPI, Jinja2, and SQLite application as one cohesive vertical slice.",
+    "Add acceptance tests and usage documentation before independent verification."
+  ],
+  "tasks": [
+    {
+      "id": "TASK_APPLICATION",
+      "owner": "generalist_developer",
+      "description": "Implement task persistence and the complete server-rendered workflow.",
+      "dependencies": [],
+      "acceptance_criteria": [
+        "AC_CREATE",
+        "AC_PERSIST"
+      ],
+      "expected_paths": [
+        "app/",
+        "templates/"
+      ]
+    },
+    {
+      "id": "TASK_QUALITY",
+      "owner": "generalist_developer",
+      "description": "Add automated checks and complete the application README.",
+      "dependencies": [
+        "TASK_APPLICATION"
+      ],
+      "acceptance_criteria": [
+        "AC_QUALITY"
+      ],
+      "expected_paths": [
+        "tests/",
+        "README.md"
+      ]
+    }
+  ],
+  "risks": [
+    "Form validation must preserve valid submitted values."
+  ],
+  "assumptions": [
+    "The benchmark remains a local single-user application."
+  ]
+}

@@ -28,6 +28,9 @@ def valid_handoff_payload() -> dict[str, object]:
             {
                 "kind": "work_result",
                 "path": "iterations/01/work-result.json",
+                "sha256": (
+                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                ),
             }
         ],
         "blockers": [],
