@@ -55,6 +55,11 @@ def materialize_run_configuration(
     manifest: TeamManifest,
     workspace: Path,
     sandbox_image: str,
+    sandbox_memory_mb: int = 512,
+    sandbox_cpus: float = 1.0,
+    sandbox_pids_limit: int = 128,
+    sandbox_open_files: int = 1024,
+    sandbox_tmpfs_mb: int = 128,
 ) -> Path:
     """Create a secret-free OpenClaw config bound to one verified worktree.
 
@@ -66,6 +71,16 @@ def materialize_run_configuration(
 
     if not sandbox_image.strip():
         raise RuntimeConfigurationError("sandbox image must not be blank")
+    if not 64 <= sandbox_memory_mb <= 32_768:
+        raise RuntimeConfigurationError("sandbox memory limit is invalid")
+    if not 0 < sandbox_cpus <= 8:
+        raise RuntimeConfigurationError("sandbox CPU limit is invalid")
+    if not 8 <= sandbox_pids_limit <= 4096:
+        raise RuntimeConfigurationError("sandbox process limit is invalid")
+    if not 32 <= sandbox_open_files <= 65_536:
+        raise RuntimeConfigurationError("sandbox open-file limit is invalid")
+    if not 16 <= sandbox_tmpfs_mb <= 8192:
+        raise RuntimeConfigurationError("sandbox tmpfs limit is invalid")
     try:
         resolved_workspace = workspace.resolve(strict=True)
     except OSError as error:
@@ -91,6 +106,22 @@ def materialize_run_configuration(
             "readOnlyRoot": True,
             "capDrop": ["ALL"],
             "user": f"{os.getuid()}:{os.getgid()}",
+            "pidsLimit": sandbox_pids_limit,
+            "memory": f"{sandbox_memory_mb}m",
+            "memorySwap": f"{sandbox_memory_mb}m",
+            "cpus": sandbox_cpus,
+            "tmpfs": [
+                f"/tmp:rw,nosuid,nodev,size={sandbox_tmpfs_mb}m",
+                "/var/tmp:rw,nosuid,nodev,size=32m",
+                "/run:rw,nosuid,nodev,size=16m",
+            ],
+            "ulimits": {
+                "nofile": {
+                    "soft": sandbox_open_files,
+                    "hard": sandbox_open_files,
+                },
+                "nproc": sandbox_pids_limit,
+            },
         }
     )
     for agent in agents["list"]:

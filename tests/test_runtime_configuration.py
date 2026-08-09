@@ -46,6 +46,19 @@ def test_materialized_config_binds_every_role_to_one_run_workspace(
         "readOnlyRoot": True,
         "capDrop": ["ALL"],
         "user": f"{os.getuid()}:{os.getgid()}",
+        "pidsLimit": 128,
+        "memory": "512m",
+        "memorySwap": "512m",
+        "cpus": 1.0,
+        "tmpfs": [
+            "/tmp:rw,nosuid,nodev,size=128m",
+            "/var/tmp:rw,nosuid,nodev,size=32m",
+            "/run:rw,nosuid,nodev,size=16m",
+        ],
+        "ulimits": {
+            "nofile": {"soft": 1024, "hard": 1024},
+            "nproc": 128,
+        },
     }
     agents = {item["id"]: item for item in payload["agents"]["list"]}
     assert {item["workspace"] for item in agents.values()} == {str(workspace.resolve())}
@@ -135,3 +148,31 @@ def test_preflight_executes_explicit_commands_without_model_call(
         ["/bin/docker", "image", "inspect", "sat-agent:phase1"],
     ]
     assert os.environ.get("OPENCLAW_CONFIG_PATH") is None
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"sandbox_memory_mb": 0},
+        {"sandbox_cpus": 0},
+        {"sandbox_pids_limit": 0},
+        {"sandbox_open_files": 0},
+        {"sandbox_tmpfs_mb": 0},
+    ],
+)
+def test_materialization_rejects_missing_resource_limits(
+    tmp_path: Path,
+    overrides: dict[str, int | float],
+) -> None:
+    workspace = tmp_path / "worktree"
+    workspace.mkdir()
+
+    with pytest.raises(RuntimeConfigurationError, match="limit"):
+        materialize_run_configuration(
+            OPENCLAW_TEMPLATE,
+            tmp_path / "runtime.json",
+            manifest=load_team_manifest(TEAM_CONFIG),
+            workspace=workspace,
+            sandbox_image="sat-agent:phase1",
+            **overrides,
+        )
