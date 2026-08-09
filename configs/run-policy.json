@@ -1,6 +1,14 @@
 {
   "schema_version": 1,
   "id": "phase1_deterministic",
+  "agent_budget": {
+    "schema_version": 1,
+    "max_calls": 14,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 200000,
+    "max_agent_duration_seconds": 7200,
+    "max_estimated_cost_usd": "25.00"
+  },
   "sandbox": {
     "backend": "docker",
     "image": "sat-task-manager-quality:phase1-v1",

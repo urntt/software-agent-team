@@ -26,6 +26,7 @@ from software_agent_team.artifacts import (
 from software_agent_team.artifacts import (
     TestReport as PhaseTestReport,
 )
+from software_agent_team.budgets import AgentBudget, ModelPricing
 from software_agent_team.execution import (
     AgentExecutionRequest,
     AgentExecutionResult,
@@ -375,6 +376,8 @@ def coordinator(
     executor: DynamicWorkflowExecutor,
     *,
     executions: list[SandboxExecution] | None = None,
+    budget: AgentBudget | None = None,
+    pricing: ModelPricing | None = None,
 ) -> WorkflowCoordinator:
     """Build a coordinator with the real gate runner and fake sandbox backend."""
 
@@ -396,6 +399,13 @@ def coordinator(
         worktrees_root=tmp_path / "worktrees",
         executor=executor,
         quality_gate_factory=gate_factory,
+        budget=budget or configuration.policy.agent_budget,
+        pricing=pricing
+        or ModelPricing(
+            model="offline/test-model",
+            input_cost_per_million_usd="0",
+            output_cost_per_million_usd="0",
+        ),
         clock=lambda: FIXED_TIME,
         agent_timeout_seconds=30,
     )
@@ -587,3 +597,39 @@ def test_workflow_exposes_a_developer_that_produces_no_real_commit(
     assert outcome.record.phase is RunPhase.FAILED
     assert outcome.record.termination_reason is TerminationReason.NO_RELEVANT_CHANGE
     assert outcome.record.snapshots == ()
+
+
+def test_workflow_stops_before_exceeding_estimated_cost_budget(
+    tmp_path: Path,
+) -> None:
+    source = initialize_source(tmp_path)
+    workspace = tmp_path / "worktrees" / task_brief().run_id
+    executor = DynamicWorkflowExecutor(workspace)
+    budget = AgentBudget(
+        max_calls=14,
+        max_input_tokens=1_000_000,
+        max_output_tokens=200_000,
+        max_agent_duration_seconds=7200,
+        max_estimated_cost_usd="0.000001",
+    )
+    pricing = ModelPricing(
+        model="offline/test-model",
+        input_cost_per_million_usd="1000",
+        output_cost_per_million_usd="1000",
+    )
+
+    outcome = coordinator(
+        tmp_path,
+        executor,
+        budget=budget,
+        pricing=pricing,
+    ).execute(task_brief(), source_repository=source)
+
+    assert outcome.record.phase is RunPhase.FAILED
+    assert outcome.record.termination_reason is TerminationReason.RESOURCE_LIMIT_REACHED
+    execution = json.loads(
+        (
+            tmp_path / "runs" / task_brief().run_id / outcome.execution_records[0].path
+        ).read_text(encoding="utf-8")
+    )
+    assert execution["error"] == "Agent estimated-cost budget was exceeded"

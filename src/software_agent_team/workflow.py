@@ -7,6 +7,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Protocol, cast
 
@@ -34,6 +35,7 @@ from software_agent_team.artifacts import (
     TestReport,
     WorkResult,
 )
+from software_agent_team.budgets import AgentBudget, ModelPricing
 from software_agent_team.execution import (
     AgentExecutionRequest,
     AgentExecutionResult,
@@ -142,6 +144,10 @@ class _WorkflowContext:
     last_test: TestReport | None = None
     last_review: ReviewReport | None = None
     last_iteration: IterationRecord | None = None
+    input_tokens: int = 0
+    output_tokens: int = 0
+    agent_duration_ms: int = 0
+    estimated_cost_usd: Decimal = Decimal(0)
 
 
 class WorkflowCoordinator:
@@ -155,8 +161,9 @@ class WorkflowCoordinator:
         worktrees_root: Path,
         executor: AgentExecutor,
         quality_gate_factory: QualityGateFactory,
+        budget: AgentBudget,
+        pricing: ModelPricing,
         runtime_setup: RuntimeSetup | None = None,
-        model: str | None = None,
         agent_timeout_seconds: int = 600,
         artifact_repair_limit: int = 1,
         clock: Clock = _system_clock,
@@ -173,8 +180,9 @@ class WorkflowCoordinator:
         self.worktrees_root = worktrees_root
         self.executor = executor
         self.quality_gate_factory = quality_gate_factory
+        self.budget = budget
+        self.pricing = pricing
         self.runtime_setup = runtime_setup
-        self.model = model
         self.agent_timeout_seconds = agent_timeout_seconds
         self.artifact_repair_limit = artifact_repair_limit
         self.clock = clock
@@ -555,10 +563,15 @@ class WorkflowCoordinator:
         base_request = build_agent_execution_request(
             inputs,
             timeout_seconds=self.agent_timeout_seconds,
-            model=self.model,
+            model=self.pricing.model,
         )
         last_error = "Agent did not return an artifact"
         for attempt in range(1, self.artifact_repair_limit + 2):
+            if len(context.execution_records) >= self.budget.max_calls:
+                raise AgentInvocationError(
+                    "Agent call budget is exhausted",
+                    TerminationReason.RESOURCE_LIMIT_REACHED,
+                )
             request = self._repair_request(base_request, last_error, attempt)
             result = self.executor.execute(request)
             response: PhaseArtifact | None = None
@@ -566,8 +579,23 @@ class WorkflowCoordinator:
             record_error: str | None = None
             repairable = False
             if result.status is AgentExecutionStatus.COMPLETED:
-                if result.telemetry.model is None and request.model is None:
+                reported_model = result.telemetry.model or request.model
+                if reported_model is None:
                     record_error = "successful execution omitted model metadata"
+                    repairable = True
+                elif reported_model != self.pricing.model:
+                    record_error = (
+                        "Agent model differs from the frozen run model: "
+                        f"{reported_model}"
+                    )
+                    repairable = True
+                elif (
+                    result.telemetry.usage is None
+                    or result.telemetry.usage.input_tokens is None
+                    or result.telemetry.usage.output_tokens is None
+                ):
+                    record_error = "successful execution omitted token usage"
+                    repairable = True
                 else:
                     try:
                         response = parse_agent_artifact(
@@ -640,6 +668,36 @@ class WorkflowCoordinator:
         error: str | None,
     ) -> ArtifactReference:
         telemetry = result.telemetry
+        usage = telemetry.usage
+        estimated_cost = None
+        budget_error = None
+        if (
+            result.status is AgentExecutionStatus.COMPLETED
+            and usage is not None
+            and usage.input_tokens is not None
+            and usage.output_tokens is not None
+        ):
+            estimated_cost = self.pricing.estimate_cost(
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+            )
+            prospective_input = context.input_tokens + usage.input_tokens
+            prospective_output = context.output_tokens + usage.output_tokens
+            prospective_duration = context.agent_duration_ms + telemetry.duration_ms
+            prospective_cost = context.estimated_cost_usd + estimated_cost
+            if prospective_input > self.budget.max_input_tokens:
+                budget_error = "Agent input-token budget was exceeded"
+            elif prospective_output > self.budget.max_output_tokens:
+                budget_error = "Agent output-token budget was exceeded"
+            elif prospective_duration > self.budget.max_agent_duration_seconds * 1000:
+                budget_error = "Agent duration budget was exceeded"
+            elif prospective_cost > self.budget.max_estimated_cost_usd:
+                budget_error = "Agent estimated-cost budget was exceeded"
+            context.input_tokens = prospective_input
+            context.output_tokens = prospective_output
+            context.agent_duration_ms = prospective_duration
+            context.estimated_cost_usd = prospective_cost
+        effective_error = error or budget_error
         outputs = context.artifact_store.write_execution_outputs(
             iteration=request.iteration,
             stage=stage,
@@ -648,7 +706,6 @@ class WorkflowCoordinator:
             stdout=telemetry.stdout,
             stderr=telemetry.stderr,
         )
-        usage = telemetry.usage
         record = AgentExecutionRecord(
             run_id=request.run_id,
             team_id=request.team_id,
@@ -667,18 +724,24 @@ class WorkflowCoordinator:
             timed_out=telemetry.timed_out,
             input_tokens=None if usage is None else usage.input_tokens,
             output_tokens=None if usage is None else usage.output_tokens,
+            estimated_cost_usd=estimated_cost,
             stdout_path=outputs.stdout_path,
             stderr_path=outputs.stderr_path,
             stdout_sha256=outputs.stdout_sha256,
             stderr_sha256=outputs.stderr_sha256,
             response_artifact=response_reference,
-            error=error,
+            error=effective_error,
         )
         reference = context.artifact_store.write(
             record,
             description=f"Agent execution telemetry for {request.role.value}.",
         )
         context.execution_records.append(reference)
+        if budget_error is not None:
+            raise AgentInvocationError(
+                budget_error,
+                TerminationReason.RESOURCE_LIMIT_REACHED,
+            )
         return reference
 
     def _handoff(
@@ -905,6 +968,14 @@ class WorkflowCoordinator:
         gate_duration_ms = sum(
             command.duration_ms for command in context.command_evidence
         )
+        estimated_cost = sum(
+            (
+                item.estimated_cost_usd
+                for item in execution_records
+                if item.estimated_cost_usd is not None
+            ),
+            Decimal(0),
+        )
         token_text = (
             f"{sum(input_tokens)} input / {sum(output_tokens)} output"
             if input_tokens or output_tokens
@@ -949,6 +1020,7 @@ class WorkflowCoordinator:
                 f"- Agent duration: {duration_ms} ms",
                 f"- Deterministic-gate duration: {gate_duration_ms} ms",
                 f"- Reported tokens: {token_text}",
+                f"- Estimated model cost: ${estimated_cost:.6f}",
                 "",
                 "## Evidence index",
                 "",

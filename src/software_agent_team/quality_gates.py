@@ -26,6 +26,7 @@ from typing import Literal, Protocol, Self
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from software_agent_team.artifacts import CommandEvidence, TaskBrief
+from software_agent_team.budgets import AgentBudget
 
 QUALITY_GATE_SCHEMA_VERSION = 1
 _MAX_MANIFEST_BYTES = 1_048_576
@@ -203,6 +204,7 @@ class RunPolicy(BaseModel):
 
     schema_version: Literal[QUALITY_GATE_SCHEMA_VERSION]
     id: str = Field(pattern=r"^[a-z][a-z0-9_-]*$")
+    agent_budget: AgentBudget
     sandbox: DockerSandboxPolicy
     limits: SandboxLimits
 
