@@ -12,6 +12,7 @@ from software_agent_team.runtime_configuration import (
     RuntimeConfigurationError,
     inspect_runtime_preflight,
     materialize_run_configuration,
+    persist_runtime_preflight,
 )
 from software_agent_team.teams import load_team_manifest
 
@@ -128,7 +129,10 @@ def test_preflight_executes_explicit_commands_without_model_call(
         assert "shell" not in kwargs
         calls.append(argv)
         if argv[-1] == "--version":
-            return Result(0, "OpenClaw test")
+            name = (
+                "Docker version test" if argv[0] == "/bin/docker" else "OpenClaw test"
+            )
+            return Result(0, name)
         return Result(0, "{}")
 
     monkeypatch.setattr(runtime_configuration.shutil, "which", lambda _: "/bin/docker")
@@ -145,9 +149,16 @@ def test_preflight_executes_explicit_commands_without_model_call(
     assert calls == [
         [str(openclaw), "--version"],
         [str(openclaw), "config", "validate", "--json"],
+        ["/bin/docker", "--version"],
         ["/bin/docker", "image", "inspect", "sat-agent:phase1"],
     ]
     assert os.environ.get("OPENCLAW_CONFIG_PATH") is None
+
+    evidence = tmp_path / "run" / "runtime-preflight.json"
+    persist_runtime_preflight(result, evidence)
+    assert json.loads(evidence.read_text(encoding="utf-8"))["config_valid"] is True
+    with pytest.raises(RuntimeConfigurationError, match="already exists"):
+        persist_runtime_preflight(result, evidence)
 
 
 @pytest.mark.parametrize(

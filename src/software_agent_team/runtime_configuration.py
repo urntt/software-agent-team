@@ -29,6 +29,7 @@ class RuntimePreflight(BaseModel):
     openclaw_version: str = Field(min_length=1)
     runtime_config: str = Field(min_length=1)
     sandbox_binary: str = Field(min_length=1)
+    sandbox_version: str = Field(min_length=1)
     sandbox_image: str = Field(min_length=1)
     config_valid: bool
     sandbox_image_present: bool
@@ -38,6 +39,46 @@ class RuntimePreflight(BaseModel):
         """Return whether every offline prerequisite is available."""
 
         return self.config_valid and self.sandbox_image_present
+
+
+def persist_runtime_preflight(
+    preflight: RuntimePreflight,
+    destination: Path,
+) -> Path:
+    """Persist write-once, non-secret runtime readiness evidence."""
+
+    destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if destination.parent.is_symlink() or not destination.parent.is_dir():
+        raise RuntimeConfigurationError("preflight parent must be a real directory")
+    if destination.exists() or destination.is_symlink():
+        raise RuntimeConfigurationError(
+            f"runtime preflight already exists: {destination}"
+        )
+    content = (
+        json.dumps(
+            preflight.model_dump(mode="json"),
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n"
+    ).encode()
+    temporary = destination.parent / f".{destination.name}.{uuid4().hex}.tmp"
+    try:
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "wb") as output:
+            output.write(content)
+            output.flush()
+            os.fsync(output.fileno())
+        try:
+            os.link(temporary, destination)
+        except FileExistsError as error:
+            raise RuntimeConfigurationError(
+                f"runtime preflight already exists: {destination}"
+            ) from error
+        _fsync_directory(destination.parent)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return destination
 
 
 def _fsync_directory(path: Path) -> None:
@@ -202,6 +243,14 @@ def inspect_runtime_preflight(
             timeout=timeout_seconds,
             env=environment,
         )
+        sandbox_version = subprocess.run(
+            [resolved_sandbox, "--version"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            env=environment,
+        )
         image = subprocess.run(
             [resolved_sandbox, "image", "inspect", sandbox_image],
             check=False,
@@ -213,11 +262,18 @@ def inspect_runtime_preflight(
     except (OSError, subprocess.SubprocessError) as error:
         raise RuntimeConfigurationError("runtime preflight command failed") from error
 
+    sandbox_version_text = (
+        sandbox_version.stdout.strip() or sandbox_version.stderr.strip()
+    )
+    if "docker version" not in sandbox_version_text.lower():
+        raise RuntimeConfigurationError("sandbox binary is not Docker")
+
     return RuntimePreflight(
         openclaw_binary=str(openclaw_binary.resolve(strict=True)),
         openclaw_version=version.stdout.strip() or version.stderr.strip(),
         runtime_config=str(runtime_config.resolve(strict=True)),
         sandbox_binary=resolved_sandbox,
+        sandbox_version=sandbox_version_text,
         sandbox_image=sandbox_image,
         config_valid=config.returncode == 0,
         sandbox_image_present=image.returncode == 0,

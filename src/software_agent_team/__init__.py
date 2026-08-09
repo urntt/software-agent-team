@@ -34,6 +34,10 @@ from software_agent_team.artifacts import (
     parse_phase_artifact,
     validate_artifact_context,
 )
+from software_agent_team.benchmark_seed import (
+    BenchmarkSeedError,
+    prepare_benchmark_seed,
+)
 from software_agent_team.budgets import AgentBudget, ModelPricing
 from software_agent_team.execution import (
     AgentExecutionError,
@@ -103,6 +107,7 @@ from software_agent_team.runtime_configuration import (
     RuntimePreflight,
     inspect_runtime_preflight,
     materialize_run_configuration,
+    persist_runtime_preflight,
 )
 from software_agent_team.teams import (
     StageMode,
@@ -146,6 +151,7 @@ __all__ = [
     "ArtifactStore",
     "ArtifactStoreError",
     "BenchmarkManifest",
+    "BenchmarkSeedError",
     "CheckStatus",
     "CommandEvidence",
     "CriterionResult",
@@ -217,6 +223,8 @@ __all__ = [
     "materialize_run_configuration",
     "parse_agent_artifact",
     "parse_phase_artifact",
+    "persist_runtime_preflight",
+    "prepare_benchmark_seed",
     "render_agent_prompt",
     "stable_session_key",
     "validate_artifact_context",
