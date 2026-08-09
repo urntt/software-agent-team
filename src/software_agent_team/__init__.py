@@ -83,6 +83,12 @@ from software_agent_team.run_control import (
     RunTransition,
     TerminationReason,
 )
+from software_agent_team.runtime_configuration import (
+    RuntimeConfigurationError,
+    RuntimePreflight,
+    inspect_runtime_preflight,
+    materialize_run_configuration,
+)
 from software_agent_team.teams import (
     StageMode,
     TeamDefinition,
@@ -144,6 +150,8 @@ __all__ = [
     "RunRecord",
     "RunStore",
     "RunTransition",
+    "RuntimeConfigurationError",
+    "RuntimePreflight",
     "ScriptedAgentExecutor",
     "ScriptedAgentResponse",
     "ScriptedResponseExhaustedError",
@@ -160,6 +168,8 @@ __all__ = [
     "WorktreeAlreadyExistsError",
     "WorktreeIntegrityError",
     "build_agent_execution_request",
+    "inspect_runtime_preflight",
+    "materialize_run_configuration",
     "parse_agent_artifact",
     "parse_phase_artifact",
     "render_agent_prompt",
