@@ -40,29 +40,25 @@ def request(**updates: object) -> AgentExecutionRequest:
     return AgentExecutionRequest.model_validate(payload)
 
 
-def openclaw_envelope(
+def openclaw_result(
     text: str = '{"kind":"implementation_plan"}',
 ) -> str:
     return json.dumps(
         {
-            "runId": "openclaw-run-123",
-            "status": "ok",
-            "result": {
-                "payloads": [{"text": text}],
-                "meta": {
-                    "durationMs": 912,
-                    "agentMeta": {
-                        "sessionId": "session-123",
-                        "provider": "test-provider",
-                        "model": "test-model",
-                        "usage": {
-                            "input": 101,
-                            "output": 37,
-                            "cacheRead": 11,
-                            "cacheWrite": 3,
-                            "reasoningTokens": 7,
-                            "total": 159,
-                        },
+            "payloads": [{"text": text}],
+            "meta": {
+                "durationMs": 912,
+                "agentMeta": {
+                    "sessionId": "session-123",
+                    "provider": "test-provider",
+                    "model": "test-model",
+                    "usage": {
+                        "input": 101,
+                        "output": 37,
+                        "cacheRead": 11,
+                        "cacheWrite": 3,
+                        "reasoningTokens": 7,
+                        "total": 159,
                     },
                 },
             },
@@ -99,7 +95,7 @@ def test_openclaw_adapter_uses_message_file_and_no_shell() -> None:
         return subprocess.CompletedProcess(
             command,
             0,
-            stdout=openclaw_envelope(),
+            stdout=openclaw_result(),
             stderr="gateway diagnostic\n",
         )
 
@@ -137,7 +133,7 @@ def test_openclaw_adapter_captures_runtime_telemetry() -> None:
         return subprocess.CompletedProcess(
             command,
             0,
-            stdout=openclaw_envelope(),
+            stdout=openclaw_result(),
             stderr="",
         )
 
@@ -148,10 +144,10 @@ def test_openclaw_adapter_captures_runtime_telemetry() -> None:
     assert telemetry.finished_at == STARTED + timedelta(milliseconds=125)
     assert telemetry.duration_ms == 125
     assert telemetry.openclaw_duration_ms == 912
-    assert telemetry.openclaw_run_id == "openclaw-run-123"
+    assert telemetry.openclaw_run_id is None
     assert telemetry.session_id == "session-123"
     assert telemetry.provider == "test-provider"
-    assert telemetry.model == "test-model"
+    assert telemetry.model == "test-provider/test-model"
     assert telemetry.usage == AgentTokenUsage(
         input_tokens=101,
         output_tokens=37,
@@ -163,8 +159,8 @@ def test_openclaw_adapter_captures_runtime_telemetry() -> None:
 
 
 def test_openclaw_adapter_ignores_reasoning_payload_for_artifact_text() -> None:
-    envelope = json.loads(openclaw_envelope("final"))
-    envelope["result"]["payloads"] = [
+    envelope = json.loads(openclaw_result("final"))
+    envelope["payloads"] = [
         {"text": "thinking", "isReasoning": True},
         {"text": "comment", "isCommentary": True},
         {"text": '{"kind":"implementation_plan"}'},
@@ -184,6 +180,64 @@ def test_openclaw_adapter_ignores_reasoning_payload_for_artifact_text() -> None:
     assert result.response_text == '{"kind":"implementation_plan"}'
 
 
+def test_openclaw_adapter_parses_gateway_result_envelope() -> None:
+    gateway_response = {
+        "runId": "openclaw-run-123",
+        "status": "ok",
+        "result": json.loads(openclaw_result()),
+    }
+
+    def runner(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=json.dumps(gateway_response),
+            stderr="",
+        )
+
+    result = executor_with_clocks(runner).execute(request())
+
+    assert result.status is AgentExecutionStatus.COMPLETED
+    assert result.telemetry.openclaw_run_id == "openclaw-run-123"
+    assert result.telemetry.model == "test-provider/test-model"
+
+
+def test_openclaw_adapter_preserves_qualified_model_reference() -> None:
+    response = json.loads(openclaw_result())
+    response["meta"]["agentMeta"]["model"] = "test-provider/test-model"
+
+    def runner(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=json.dumps(response),
+            stderr="",
+        )
+
+    result = executor_with_clocks(runner).execute(request())
+
+    assert result.status is AgentExecutionStatus.COMPLETED
+    assert result.telemetry.model == "test-provider/test-model"
+
+
+def test_openclaw_adapter_qualifies_nested_provider_model_id() -> None:
+    response = json.loads(openclaw_result())
+    response["meta"]["agentMeta"]["model"] = "upstream/test-model"
+
+    def runner(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=json.dumps(response),
+            stderr="",
+        )
+
+    result = executor_with_clocks(runner).execute(request())
+
+    assert result.status is AgentExecutionStatus.COMPLETED
+    assert result.telemetry.model == "test-provider/upstream/test-model"
+
+
 @pytest.mark.parametrize(
     ("stdout", "error"),
     [
@@ -192,8 +246,7 @@ def test_openclaw_adapter_ignores_reasoning_payload_for_artifact_text() -> None:
         (
             json.dumps(
                 {
-                    "status": "ok",
-                    "result": {"payloads": [{"text": "one"}, {"text": "two"}]},
+                    "payloads": [{"text": "one"}, {"text": "two"}],
                 }
             ),
             "exactly one visible",
@@ -201,8 +254,7 @@ def test_openclaw_adapter_ignores_reasoning_payload_for_artifact_text() -> None:
         (
             json.dumps(
                 {
-                    "status": "ok",
-                    "result": {"payloads": [{"text": "failure", "isError": True}]},
+                    "payloads": [{"text": "failure", "isError": True}],
                 }
             ),
             "error reply",

@@ -2,7 +2,7 @@
 
 **Status:** Phase 1 implementation complete; live acceptance pending
 
-**Last updated:** August 9, 2026
+**Last updated:** August 10, 2026
 
 ## Purpose
 
@@ -98,6 +98,9 @@ code or experiment evidence justifies a replacement.
   work. Native macOS is not part of the Phase 1 acceptance environment.
 - Python 3.12 implements the deterministic control plane.
 - OpenClaw 2026.7.1-2 is the initial Agent runtime.
+- The execution boundary normalizes OpenClaw's local and Gateway JSON response
+  shapes and records split provider/model metadata as one canonical
+  `provider/model` identity.
 - Open-weight or open-source models are preferred when practical, but model
   providers do not define artifact or team contracts.
 

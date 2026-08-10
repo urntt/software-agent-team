@@ -168,6 +168,9 @@ Confirm all of the following before marking Phase 1 accepted:
   Tester and Reviewer evaluated the same immutable commit.
 - Every successful execution reports exactly the selected model and integer
   input/output token counts. No fallback or missing telemetry was accepted.
+  The adapter normalizes the pinned OpenClaw local and Gateway JSON forms and
+  compares their provider/model metadata using the canonical `provider/model`
+  identity.
 - Every handoff points to immutable artifact references with matching SHA-256
   digests.
 - All fixed quality gates passed, every acceptance criterion has a result, and

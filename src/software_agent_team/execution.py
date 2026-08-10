@@ -305,8 +305,20 @@ def _parse_usage(value: object) -> AgentTokenUsage | None:
     return AgentTokenUsage(**fields)
 
 
+def _canonical_model_reference(
+    *,
+    provider: str | None,
+    model: str | None,
+) -> str | None:
+    """Normalize OpenClaw's split provider/model metadata for run comparison."""
+
+    if model is None or provider is None or model.startswith(f"{provider}/"):
+        return model
+    return f"{provider}/{model}"
+
+
 def _parse_openclaw_payload(stdout: str) -> _OpenClawPayload:
-    """Parse the strict JSON emitted by ``openclaw agent --json``."""
+    """Parse local or Gateway JSON emitted by ``openclaw agent --json``."""
 
     try:
         envelope = json.loads(stdout)
@@ -314,13 +326,21 @@ def _parse_openclaw_payload(stdout: str) -> _OpenClawPayload:
         raise ValueError("OpenClaw stdout is not one JSON object") from error
     if not isinstance(envelope, dict):
         raise ValueError("OpenClaw response must be a JSON object")
-    if envelope.get("status") != "ok":
-        status = envelope.get("status")
-        raise ValueError(f"OpenClaw response did not complete successfully: {status!r}")
 
-    result = envelope.get("result")
-    if not isinstance(result, dict):
-        raise ValueError("OpenClaw response is missing result metadata")
+    openclaw_run_id: str | None = None
+    if "payloads" in envelope:
+        result = envelope
+    else:
+        status = envelope.get("status")
+        if status != "ok":
+            raise ValueError(
+                f"OpenClaw response did not complete successfully: {status!r}"
+            )
+        result = envelope.get("result")
+        if not isinstance(result, dict):
+            raise ValueError("OpenClaw response is missing result metadata")
+        openclaw_run_id = _optional_nonblank(envelope.get("runId"))
+
     payloads = result.get("payloads")
     if not isinstance(payloads, list):
         raise ValueError("OpenClaw response is missing reply payloads")
@@ -350,12 +370,15 @@ def _parse_openclaw_payload(stdout: str) -> _OpenClawPayload:
     if not isinstance(agent_meta, dict):
         raise ValueError("OpenClaw Agent metadata must be an object")
 
+    provider = _optional_nonblank(agent_meta.get("provider"))
+    model = _optional_nonblank(agent_meta.get("model"))
+
     return _OpenClawPayload(
         text=visible[0],
-        openclaw_run_id=_optional_nonblank(envelope.get("runId")),
+        openclaw_run_id=openclaw_run_id,
         session_id=_optional_nonblank(agent_meta.get("sessionId")),
-        provider=_optional_nonblank(agent_meta.get("provider")),
-        model=_optional_nonblank(agent_meta.get("model")),
+        provider=provider,
+        model=_canonical_model_reference(provider=provider, model=model),
         duration_ms=_optional_nonnegative_int(meta.get("durationMs")),
         usage=_parse_usage(agent_meta.get("usage")),
     )

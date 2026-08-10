@@ -26,7 +26,8 @@ The Phase 1 implementation is complete and covered by offline end-to-end
 tests. The code now includes:
 
 - A real `sat run` entry point for the `function_specialized` team;
-- A replaceable OpenClaw subprocess adapter with stable role sessions;
+- A replaceable OpenClaw subprocess adapter with stable role sessions,
+  version-pinned local/Gateway JSON parsing, and canonical model telemetry;
 - Role-specific minimum-context prompts and strict JSON response parsing;
 - A persisted lifecycle whose phase transitions require artifact evidence;
 - Write-once phase artifacts, handoffs, execution logs, and SHA-256 references;
