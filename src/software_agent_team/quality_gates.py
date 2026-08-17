@@ -50,6 +50,7 @@ _INLINE_CODE_FLAGS = {
 }
 _CONTAINER_INPUT_ROOT = PurePosixPath("/opt/software-agent-team/inputs")
 _OUTPUT_LIMIT_MARKER = b"\n[software-agent-team: output limit exceeded]\n"
+_EVIDENCE_TAIL_BYTES = 4096
 
 
 class QualityGateError(RuntimeError):
@@ -590,6 +591,14 @@ def _append_bounded(buffer: bytearray, chunk: bytes, limit: int) -> bool:
         buffer.extend(chunk[: payload_limit - len(buffer)])
     buffer.extend(marker)
     return True
+
+
+def _evidence_tail(value: bytes) -> tuple[str, bool]:
+    """Return a bounded diagnostic tail suitable for an Agent prompt."""
+
+    truncated = len(value) > _EVIDENCE_TAIL_BYTES
+    retained = value[-_EVIDENCE_TAIL_BYTES:]
+    return retained.decode("utf-8", errors="replace"), truncated
 
 
 def _run_bounded_process(
@@ -1153,6 +1162,8 @@ class QualityGateRunner:
                 summary = "Deterministic quality gate passed."
             else:
                 summary = f"Deterministic quality gate exited with code {exit_code}."
+            stdout_tail, stdout_truncated = _evidence_tail(stdout)
+            stderr_tail, stderr_truncated = _evidence_tail(stderr)
             evidence.append(
                 CommandEvidence(
                     id=gate.id,
@@ -1162,6 +1173,10 @@ class QualityGateRunner:
                     duration_ms=result.duration_ms,
                     stdout_path=stdout_relative,
                     stderr_path=stderr_relative,
+                    stdout_tail=stdout_tail,
+                    stderr_tail=stderr_tail,
+                    stdout_truncated=stdout_truncated,
+                    stderr_truncated=stderr_truncated,
                     summary=summary,
                 )
             )

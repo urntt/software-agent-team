@@ -349,6 +349,48 @@ def test_openclaw_adapter_classifies_internal_timeout_and_preserves_usage() -> N
     assert result.telemetry.usage.input_tokens == 101
 
 
+def test_openclaw_adapter_classifies_a_declared_provider_failure() -> None:
+    envelope = json.loads(openclaw_result())
+    envelope["payloads"] = [{"text": "LLM request failed."}]
+    envelope["meta"]["agentMeta"].pop("usage")
+
+    def runner(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=json.dumps(envelope),
+            stderr="provider returned status 409",
+        )
+
+    result = executor_with_clocks(runner).execute(request())
+
+    assert result.status is AgentExecutionStatus.PROVIDER_FAILED
+    assert "provider failure" in (result.error or "")
+    assert result.telemetry.exit_code == 0
+    assert result.telemetry.provider == "test-provider"
+
+
+def test_openclaw_adapter_ignores_a_recovered_provider_diagnostic() -> None:
+    envelope = json.loads(openclaw_result())
+    envelope["payloads"] = [
+        {"text": "LLM request failed."},
+        {"text": '{"kind":"implementation_plan"}'},
+    ]
+
+    def runner(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=json.dumps(envelope),
+            stderr="provider recovered",
+        )
+
+    result = executor_with_clocks(runner).execute(request())
+
+    assert result.status is AgentExecutionStatus.COMPLETED
+    assert result.response_text == '{"kind":"implementation_plan"}'
+
+
 def test_openclaw_adapter_preserves_nonzero_exit_evidence() -> None:
     def runner(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(

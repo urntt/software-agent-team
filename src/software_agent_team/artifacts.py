@@ -518,6 +518,10 @@ class CommandEvidence(BaseModel):
     duration_ms: int = Field(ge=0)
     stdout_path: str = Field(min_length=1)
     stderr_path: str = Field(min_length=1)
+    stdout_tail: str = Field(default="", max_length=4096)
+    stderr_tail: str = Field(default="", max_length=4096)
+    stdout_truncated: bool = False
+    stderr_truncated: bool = False
     summary: str = ""
 
     @field_validator("argv")
@@ -544,6 +548,10 @@ class CommandEvidence(BaseModel):
             raise ValueError("timed-out commands cannot report an exit code")
         if not self.timed_out and self.exit_code is None:
             raise ValueError("completed commands require an exit code")
+        if self.stdout_truncated and not self.stdout_tail:
+            raise ValueError("truncated stdout requires a retained tail")
+        if self.stderr_truncated and not self.stderr_tail:
+            raise ValueError("truncated stderr requires a retained tail")
         return self
 
 
@@ -616,6 +624,14 @@ class TestReport(IterationArtifact):
         elif self.status is CheckStatus.BLOCKED:
             if not self.blockers:
                 raise ValueError("blocked test reports must identify a blocker")
+            if not any(
+                criterion.status is CheckStatus.BLOCKED for criterion in self.criteria
+            ):
+                raise ValueError("blocked test reports require a blocked criterion")
+        elif not any(
+            criterion.status is CheckStatus.FAILED for criterion in self.criteria
+        ):
+            raise ValueError("failed test reports require a failed criterion")
         elif commands_passed and criteria_passed:
             raise ValueError("failed test reports require failing evidence")
         return self

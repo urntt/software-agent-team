@@ -398,6 +398,7 @@ def coordinator(
     executions: list[SandboxExecution] | None = None,
     budget: AgentBudget | None = None,
     pricing: ModelPricing | None = None,
+    verification_concurrency: int = 2,
 ) -> WorkflowCoordinator:
     """Build a coordinator with the real gate runner and fake sandbox backend."""
 
@@ -428,6 +429,7 @@ def coordinator(
         ),
         clock=lambda: FIXED_TIME,
         agent_timeout_seconds=30,
+        verification_concurrency=verification_concurrency,
     )
 
 
@@ -468,6 +470,32 @@ def test_offline_workflow_completes_with_parallel_independent_verification(
     transitions = state["transitions"]
     assert isinstance(transitions, list)
     assert transitions[-1]["artifacts"][0]["path"] == "final-report.json"
+
+
+def test_offline_workflow_can_serialize_independent_verification(
+    tmp_path: Path,
+) -> None:
+    source = initialize_source(tmp_path)
+    workspace = tmp_path / "workspaces" / task_brief().run_id
+    executor = DynamicWorkflowExecutor(
+        workspace,
+        verify_barrier=True,
+        allow_single_verifier=True,
+    )
+
+    outcome = coordinator(
+        tmp_path,
+        executor,
+        verification_concurrency=1,
+    ).execute(task_brief(), source_repository=source)
+
+    assert outcome.record.phase is RunPhase.COMPLETED
+    verifier_roles = [
+        request.role
+        for request in executor.requests
+        if request.role in {AgentRole.TESTER, AgentRole.REVIEWER}
+    ]
+    assert verifier_roles == [AgentRole.TESTER, AgentRole.REVIEWER]
 
 
 def test_workflow_performs_exactly_one_evidence_driven_revision(
@@ -752,8 +780,8 @@ def test_workflow_rejects_success_without_reported_model(tmp_path: Path) -> None
     )
 
     assert outcome.record.phase is RunPhase.FAILED
-    assert outcome.record.termination_reason is TerminationReason.ARTIFACT_INVALID
-    assert len(outcome.execution_records) == 2
+    assert outcome.record.termination_reason is TerminationReason.DEPENDENCY_UNAVAILABLE
+    assert len(outcome.execution_records) == 1
     execution = json.loads(
         (
             tmp_path / "runs" / task_brief().run_id / outcome.execution_records[0].path
@@ -774,8 +802,8 @@ def test_workflow_rejects_success_without_token_usage(tmp_path: Path) -> None:
     )
 
     assert outcome.record.phase is RunPhase.FAILED
-    assert outcome.record.termination_reason is TerminationReason.ARTIFACT_INVALID
-    assert len(outcome.execution_records) == 2
+    assert outcome.record.termination_reason is TerminationReason.DEPENDENCY_UNAVAILABLE
+    assert len(outcome.execution_records) == 1
     execution = json.loads(
         (
             tmp_path / "runs" / task_brief().run_id / outcome.execution_records[0].path

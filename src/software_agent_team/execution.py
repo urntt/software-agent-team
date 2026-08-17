@@ -47,6 +47,7 @@ class AgentExecutionStatus(StrEnum):
 
     COMPLETED = "completed"
     PROCESS_FAILED = "process_failed"
+    PROVIDER_FAILED = "provider_failed"
     TIMED_OUT = "timed_out"
     INVALID_RESPONSE = "invalid_response"
     LAUNCH_FAILED = "launch_failed"
@@ -272,6 +273,7 @@ class _OpenClawResponse(BaseModel):
 
     visible_texts: tuple[str, ...]
     has_error_payload: bool = False
+    provider_failed: bool = False
     declared_timeout: bool = False
     openclaw_run_id: str | None = None
     session_id: str | None = None
@@ -323,6 +325,7 @@ def _canonical_model_reference(
 
 
 _OPENCLAW_TIMEOUT_PREFIX = "Request timed out before a response was generated."
+_OPENCLAW_PROVIDER_FAILURE_TEXT = "LLM request failed."
 _OPENCLAW_DIAGNOSTIC_PREFIXES = ("⚠️ 🛠️ Exec failed:",)
 
 
@@ -356,6 +359,7 @@ def _parse_openclaw_payload(stdout: str) -> _OpenClawResponse:
 
     visible: list[str] = []
     has_error_payload = False
+    saw_provider_failure = False
     for payload in payloads:
         if not isinstance(payload, dict):
             raise ValueError("OpenClaw reply payload must be an object")
@@ -366,6 +370,9 @@ def _parse_openclaw_payload(stdout: str) -> _OpenClawResponse:
         text = payload.get("text")
         if isinstance(text, str) and text.strip():
             cleaned = text.strip()
+            if cleaned == _OPENCLAW_PROVIDER_FAILURE_TEXT:
+                saw_provider_failure = True
+                continue
             if cleaned.startswith(_OPENCLAW_DIAGNOSTIC_PREFIXES):
                 continue
             visible.append(cleaned)
@@ -387,6 +394,7 @@ def _parse_openclaw_payload(stdout: str) -> _OpenClawResponse:
     return _OpenClawResponse(
         visible_texts=tuple(visible),
         has_error_payload=has_error_payload,
+        provider_failed=saw_provider_failure and not visible,
         declared_timeout=any(
             text.startswith(_OPENCLAW_TIMEOUT_PREFIX) for text in visible
         ),
@@ -534,6 +542,12 @@ class OpenClawSubprocessExecutor:
             return AgentExecutionResult(
                 status=AgentExecutionStatus.TIMED_OUT,
                 error="OpenClaw reported an Agent timeout",
+                telemetry=telemetry,
+            )
+        if payload.provider_failed:
+            return AgentExecutionResult(
+                status=AgentExecutionStatus.PROVIDER_FAILED,
+                error="OpenClaw reported an upstream model-provider failure",
                 telemetry=telemetry,
             )
         if payload.has_error_payload:

@@ -133,6 +133,7 @@ def commands() -> tuple[CommandEvidence, ...]:
             duration_ms=25,
             stdout_path="iterations/01/check-test.stdout",
             stderr_path="iterations/01/check-test.stderr",
+            stdout_tail="1 passed\n",
             summary="All tests passed.",
         ),
     )
@@ -164,6 +165,15 @@ def make_test_report(*, iteration: int = 1) -> PhaseTestReport:
         ),
         summary="All deterministic checks passed.",
     )
+
+
+def test_failed_test_report_requires_a_failed_criterion() -> None:
+    payload = make_test_report().model_dump(mode="json")
+    payload["status"] = "failed"
+    payload["commands"][0]["exit_code"] = 1
+
+    with pytest.raises(ValidationError, match="failed criterion"):
+        PhaseTestReport.model_validate(payload)
 
 
 def review_report(*, iteration: int = 1) -> ReviewReport:
@@ -274,6 +284,9 @@ def test_tester_prompt_receives_work_and_deterministic_commands_only() -> None:
     assert '"work_result": {' in rendered
     assert '"deterministic_command_evidence": [' in rendered
     assert '"id": "CHECK_TEST"' in rendered
+    assert '"stdout_tail": "1 passed\\n"' in rendered
+    assert '"root": "/agent"' in rendered
+    assert "untrusted diagnostic evidence" in rendered
     assert '"implementation_plan": {' not in rendered
     assert '"review_report": {' not in rendered
 
@@ -291,6 +304,8 @@ def test_reviewer_prompt_receives_work_and_command_evidence_in_parallel() -> Non
 
     assert '"work_result": {' in rendered
     assert '"deterministic_command_evidence": [' in rendered
+    assert '"root": "/agent"' in rendered
+    assert "read-only at\n`/agent`" in rendered
     assert '"implementation_plan": {' not in rendered
 
 

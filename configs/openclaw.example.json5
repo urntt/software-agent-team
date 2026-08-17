@@ -18,7 +18,7 @@
         name: "Requirements Clarifier",
         workspace: "${SOFTWARE_AGENT_TEAM_ROOT}/openclaw/workspaces/clarifier",
         tools: {
-          deny: ["write", "edit", "apply_patch", "exec", "process"],
+          deny: ["write", "edit", "apply_patch", "exec", "process", "sessions_spawn", "sessions_yield", "subagents", "llm_task"],
         },
       },
       {
@@ -28,13 +28,16 @@
         sandbox: {
           workspaceAccess: "rw",
         },
+        tools: {
+          deny: ["sessions_spawn", "sessions_yield", "subagents", "llm_task"],
+        },
       },
       {
         id: "planner",
         name: "Planner",
         workspace: "${SOFTWARE_AGENT_TEAM_ROOT}/openclaw/workspaces/planner",
         tools: {
-          deny: ["write", "edit", "apply_patch", "exec", "process"],
+          deny: ["write", "edit", "apply_patch", "exec", "process", "sessions_spawn", "sessions_yield", "subagents", "llm_task"],
         },
       },
       {
@@ -44,6 +47,9 @@
         sandbox: {
           workspaceAccess: "rw",
         },
+        tools: {
+          deny: ["sessions_spawn", "sessions_yield", "subagents", "llm_task"],
+        },
       },
       {
         id: "frontend_developer",
@@ -51,6 +57,9 @@
         workspace: "${SOFTWARE_AGENT_TEAM_ROOT}/openclaw/workspaces/frontend_developer",
         sandbox: {
           workspaceAccess: "rw",
+        },
+        tools: {
+          deny: ["sessions_spawn", "sessions_yield", "subagents", "llm_task"],
         },
       },
       {
@@ -60,6 +69,9 @@
         sandbox: {
           workspaceAccess: "rw",
         },
+        tools: {
+          deny: ["sessions_spawn", "sessions_yield", "subagents", "llm_task"],
+        },
       },
       {
         id: "integrator",
@@ -68,13 +80,16 @@
         sandbox: {
           workspaceAccess: "rw",
         },
+        tools: {
+          deny: ["sessions_spawn", "sessions_yield", "subagents", "llm_task"],
+        },
       },
       {
         id: "tester",
         name: "Tester",
         workspace: "${SOFTWARE_AGENT_TEAM_ROOT}/openclaw/workspaces/tester",
         tools: {
-          deny: ["write", "edit", "apply_patch", "exec", "process"],
+          deny: ["write", "edit", "apply_patch", "exec", "process", "sessions_spawn", "sessions_yield", "subagents", "llm_task"],
         },
       },
       {
@@ -82,7 +97,7 @@
         name: "Reviewer",
         workspace: "${SOFTWARE_AGENT_TEAM_ROOT}/openclaw/workspaces/reviewer",
         tools: {
-          deny: ["write", "edit", "apply_patch", "exec", "process"],
+          deny: ["write", "edit", "apply_patch", "exec", "process", "sessions_spawn", "sessions_yield", "subagents", "llm_task"],
         },
       },
     ],

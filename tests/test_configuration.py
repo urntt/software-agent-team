@@ -5,6 +5,7 @@ from pathlib import Path
 from software_agent_team.artifacts import AgentRole
 from software_agent_team.configuration import (
     READ_ONLY_ROLES,
+    UNTRACKED_AGENT_TOOLS,
     WRITE_ROLES,
     validate_environment_configuration,
 )
@@ -36,6 +37,9 @@ def test_openclaw_permissions_match_role_responsibilities() -> None:
 
     for role in WRITE_ROLES:
         assert agents[role.value]["sandbox"]["workspaceAccess"] == "rw"
+
+    for role in AgentRole:
+        assert UNTRACKED_AGENT_TOOLS.issubset(agents[role.value]["tools"]["deny"])
 
 
 def test_deterministic_controller_is_not_an_openclaw_agent() -> None:

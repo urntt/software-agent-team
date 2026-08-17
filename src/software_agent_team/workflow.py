@@ -170,12 +170,15 @@ class WorkflowCoordinator:
         runtime_setup: RuntimeSetup | None = None,
         agent_timeout_seconds: int = 600,
         artifact_repair_limit: int = 1,
+        verification_concurrency: int = 2,
         clock: Clock = _system_clock,
     ) -> None:
         if agent_timeout_seconds < 1:
             raise WorkflowError("Agent timeout must be positive")
         if artifact_repair_limit not in {0, 1}:
             raise WorkflowError("Phase 1 permits zero or one artifact repair")
+        if verification_concurrency not in {1, 2}:
+            raise WorkflowError("verification concurrency must be one or two")
         team = manifest.get_team(PHASE1_TEAM_ID)
         if AgentRole.GENERALIST_DEVELOPER not in team.roles:
             raise WorkflowError("Phase 1 team is missing the generalist developer")
@@ -189,6 +192,7 @@ class WorkflowCoordinator:
         self.runtime_setup = runtime_setup
         self.agent_timeout_seconds = agent_timeout_seconds
         self.artifact_repair_limit = artifact_repair_limit
+        self.verification_concurrency = verification_concurrency
         self.clock = clock
 
     def execute(
@@ -374,7 +378,7 @@ class WorkflowCoordinator:
             if not commands:
                 raise WorkflowEvidenceError("quality gate returned no command evidence")
             context.command_evidence.extend(commands)
-            tester_result, reviewer_result = self._verify_in_parallel(
+            tester_result, reviewer_result = self._verify(
                 context,
                 record=record,
                 work=work,
@@ -500,7 +504,7 @@ class WorkflowCoordinator:
             feedback = (test, review, iteration_record)
             previous_blocking_ids = blocking_ids
 
-    def _verify_in_parallel(
+    def _verify(
         self,
         context: _WorkflowContext,
         *,
@@ -536,22 +540,26 @@ class WorkflowCoordinator:
                 stage="verify",
             )
 
-        with ThreadPoolExecutor(
-            max_workers=2,
-            thread_name_prefix="sat-verify",
-        ) as pool:
-            tester_future = pool.submit(
-                invoke,
-                AgentRole.TESTER,
-                ArtifactKind.TEST_REPORT,
-            )
-            reviewer_future = pool.submit(
-                invoke,
-                AgentRole.REVIEWER,
-                ArtifactKind.REVIEW_REPORT,
-            )
-            tester = tester_future.result()
-            reviewer = reviewer_future.result()
+        if self.verification_concurrency == 1:
+            tester = invoke(AgentRole.TESTER, ArtifactKind.TEST_REPORT)
+            reviewer = invoke(AgentRole.REVIEWER, ArtifactKind.REVIEW_REPORT)
+        else:
+            with ThreadPoolExecutor(
+                max_workers=2,
+                thread_name_prefix="sat-verify",
+            ) as pool:
+                tester_future = pool.submit(
+                    invoke,
+                    AgentRole.TESTER,
+                    ArtifactKind.TEST_REPORT,
+                )
+                reviewer_future = pool.submit(
+                    invoke,
+                    AgentRole.REVIEWER,
+                    ArtifactKind.REVIEW_REPORT,
+                )
+                tester = tester_future.result()
+                reviewer = reviewer_future.result()
         return (
             (cast(TestReport, tester[0]), tester[1], tester[2]),
             (cast(ReviewReport, reviewer[0]), reviewer[1], reviewer[2]),
@@ -584,24 +592,25 @@ class WorkflowCoordinator:
             response_reference: ArtifactReference | None = None
             record_error: str | None = None
             repairable = False
+            failure_reason: TerminationReason | None = None
             if result.status is AgentExecutionStatus.COMPLETED:
                 reported_model = result.telemetry.model
                 if reported_model is None:
                     record_error = "successful execution omitted model metadata"
-                    repairable = True
+                    failure_reason = TerminationReason.DEPENDENCY_UNAVAILABLE
                 elif reported_model != self.pricing.model:
                     record_error = (
                         "Agent model differs from the frozen run model: "
                         f"{reported_model}"
                     )
-                    repairable = True
+                    failure_reason = TerminationReason.SAFETY_BOUNDARY_CROSSED
                 elif (
                     result.telemetry.usage is None
                     or result.telemetry.usage.input_tokens is None
                     or result.telemetry.usage.output_tokens is None
                 ):
                     record_error = "successful execution omitted token usage"
-                    repairable = True
+                    failure_reason = TerminationReason.DEPENDENCY_UNAVAILABLE
                 else:
                     try:
                         response = parse_agent_artifact(
@@ -625,6 +634,8 @@ class WorkflowCoordinator:
                     f"Agent execution ended as {result.status.value}"
                 )
                 repairable = result.status is AgentExecutionStatus.INVALID_RESPONSE
+                if result.status is AgentExecutionStatus.PROVIDER_FAILED:
+                    failure_reason = TerminationReason.DEPENDENCY_UNAVAILABLE
 
             execution_reference = self._record_execution(
                 context,
@@ -642,7 +653,8 @@ class WorkflowCoordinator:
                 continue
             raise AgentInvocationError(
                 f"{request.role.value} failed: {last_error}",
-                self._agent_termination_reason(result, repairable=repairable),
+                failure_reason
+                or self._agent_termination_reason(result, repairable=repairable),
             )
         raise AssertionError("unreachable Agent repair state")
 
@@ -1130,6 +1142,8 @@ class WorkflowCoordinator:
         if result.status is AgentExecutionStatus.TIMED_OUT:
             return TerminationReason.RESOURCE_LIMIT_REACHED
         if result.status is AgentExecutionStatus.LAUNCH_FAILED:
+            return TerminationReason.DEPENDENCY_UNAVAILABLE
+        if result.status is AgentExecutionStatus.PROVIDER_FAILED:
             return TerminationReason.DEPENDENCY_UNAVAILABLE
         return TerminationReason.EXECUTION_FAILED
 

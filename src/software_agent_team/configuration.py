@@ -22,6 +22,12 @@ WRITE_ROLES = {
     AgentRole.INTEGRATOR,
 }
 MUTATING_TOOLS = {"write", "edit", "apply_patch", "exec", "process"}
+UNTRACKED_AGENT_TOOLS = {
+    "sessions_spawn",
+    "sessions_yield",
+    "subagents",
+    "llm_task",
+}
 
 
 def load_openclaw_template(
@@ -77,6 +83,10 @@ def load_openclaw_template(
 
         access = agent.get("sandbox", {}).get("workspaceAccess", default_access)
         denied_tools = set(agent.get("tools", {}).get("deny", []))
+        if not UNTRACKED_AGENT_TOOLS.issubset(denied_tools):
+            raise ValueError(
+                f"{role.value} must deny Agent calls outside controller accounting"
+            )
 
         if role in READ_ONLY_ROLES:
             if access != "ro":

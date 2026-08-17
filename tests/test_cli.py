@@ -213,6 +213,8 @@ def test_cli_run_constructs_the_real_phase1_boundary_without_invoking_it(
             "2.50",
             "--output-cost-per-million-usd",
             "10.00",
+            "--verification-concurrency",
+            "1",
         ]
     )
 
@@ -220,6 +222,7 @@ def test_cli_run_constructs_the_real_phase1_boundary_without_invoking_it(
     pricing = observed["pricing"]
     assert pricing.model == "provider/model"
     assert observed["budget"].max_calls == 14
+    assert observed["verification_concurrency"] == 1
     assert observed["execute"] == {
         "source_repository": source,
         "base_ref": "HEAD",

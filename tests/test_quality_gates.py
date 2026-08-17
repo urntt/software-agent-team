@@ -507,6 +507,10 @@ def test_runner_generates_command_evidence_and_persists_outputs(
     )
     assert (run_directory / evidence[0].stdout_path).read_bytes() == b"gate 0 passed\n"
     assert (run_directory / evidence[0].stderr_path).read_bytes() == b""
+    assert evidence[0].stdout_tail == "gate 0 passed\n"
+    assert evidence[0].stderr_tail == ""
+    assert evidence[0].stdout_truncated is False
+    assert evidence[0].stderr_truncated is False
     assert len(fake.invocations) == 4
     assert all(call.workspace == workspace for call in fake.invocations)
     assert all(
@@ -619,6 +623,38 @@ def test_runner_bounds_backend_output_and_records_failure(
     assert "output exceeded" in evidence[0].summary
     assert len(persisted) == limit
     assert b"output limit exceeded" in persisted
+    assert len(evidence[0].stdout_tail) <= 4096
+    assert evidence[0].stdout_truncated is True
+    assert "output limit exceeded" in evidence[0].stdout_tail
+
+
+def test_runner_embeds_bounded_failure_diagnostics(
+    configuration, run_paths: tuple[Path, Path]
+) -> None:
+    run_directory, workspace = run_paths
+    executions = successful_executions()
+    executions[0] = SandboxExecution(
+        exit_code=1,
+        timed_out=False,
+        duration_ms=10,
+        stdout=b"before\n" + b"x" * 5000,
+        stderr=b"Traceback\nAssertionError: canonical URL missing\n",
+    )
+    runner = QualityGateRunner(
+        configuration,
+        run_directory=run_directory,
+        workspace=workspace,
+        backend=FakeSandboxBackend(executions),
+        allow_test_backends=True,
+    )
+
+    evidence = runner.run(iteration=1)[0]
+
+    assert evidence.exit_code == 1
+    assert len(evidence.stdout_tail) == 4096
+    assert evidence.stdout_truncated is True
+    assert evidence.stderr_tail.endswith("canonical URL missing\n")
+    assert evidence.stderr_truncated is False
 
 
 def test_runner_rejects_working_directory_symlink_escape(

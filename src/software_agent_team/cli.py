@@ -249,6 +249,7 @@ def _run_workflow(args: argparse.Namespace) -> int:
         runtime_setup=runtime_setup,
         agent_timeout_seconds=args.agent_timeout_seconds,
         artifact_repair_limit=args.artifact_repair_limit,
+        verification_concurrency=args.verification_concurrency,
     )
     outcome = coordinator.execute(
         task_brief,
@@ -374,6 +375,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run.add_argument("--agent-timeout-seconds", type=int, default=600)
     run.add_argument("--artifact-repair-limit", type=int, choices=(0, 1), default=1)
+    run.add_argument(
+        "--verification-concurrency",
+        type=int,
+        choices=(1, 2),
+        default=2,
+        help=(
+            "Maximum concurrent Tester/Reviewer calls; use 1 for providers "
+            "that serve only one generation at a time."
+        ),
+    )
     run.set_defaults(handler=_run_workflow)
 
     return parser
