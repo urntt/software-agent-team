@@ -159,7 +159,7 @@ class DockerSandboxPolicy(BaseModel):
     workspace_access: Literal["read_only"] = "read_only"
     workspace_target: Literal["/workspace"] = "/workspace"
     tmpfs_target: Literal["/tmp"] = "/tmp"
-    user: str = Field(pattern=r"^[1-9][0-9]*:[1-9][0-9]*$")
+    user: str = Field(pattern=r"^(?:host|[1-9][0-9]*:[1-9][0-9]*)$")
     environment: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("image")
@@ -702,6 +702,10 @@ class DockerSandboxBackend:
         """Build the exact list argv passed to Docker for audit and testing."""
 
         _validate_argv(invocation.argv)
+        if invocation.sandbox.user == "host":
+            raise QualityGateConfigurationError(
+                "Docker sandbox host user must be resolved before execution"
+            )
         workspace = invocation.workspace.resolve(strict=True)
         if not workspace.is_dir() or "," in str(workspace):
             raise QualityGateConfigurationError("workspace must be a safe directory")
@@ -1012,6 +1016,19 @@ class QualityGateRunner:
         self.backend = selected_backend
         self.monotonic = monotonic
 
+    def _runtime_sandbox(self) -> DockerSandboxPolicy:
+        """Resolve the portable host-user policy for the Docker boundary."""
+
+        if self.backend.kind != "docker" or self.sandbox.user != "host":
+            return self.sandbox
+        uid = os.getuid()
+        gid = os.getgid()
+        if uid == 0 or gid == 0:
+            raise QualityGateConfigurationError(
+                "live quality gates require an unprivileged host user"
+            )
+        return self.sandbox.model_copy(update={"user": f"{uid}:{gid}"})
+
     def _working_directory(self, gate: QualityGateDefinition) -> PurePosixPath:
         relative = PurePosixPath(gate.working_directory)
         candidate = (self.workspace / relative).resolve(strict=True)
@@ -1062,6 +1079,7 @@ class QualityGateRunner:
         if not 1 <= iteration <= 3:
             raise QualityGateConfigurationError("iteration must be between 1 and 3")
         limits = self.configuration.policy.limits
+        runtime_sandbox = self._runtime_sandbox()
         started = self.monotonic()
         evidence: list[CommandEvidence] = []
         output_paths = {
@@ -1093,8 +1111,8 @@ class QualityGateRunner:
                 working_directory=self._working_directory(gate),
                 workspace=self.workspace,
                 input_mounts=self.configuration.input_mounts,
-                environment=tuple(self.sandbox.environment.items()),
-                sandbox=self.sandbox,
+                environment=tuple(runtime_sandbox.environment.items()),
+                sandbox=runtime_sandbox,
                 limits=limits,
                 timeout_seconds=timeout,
             )

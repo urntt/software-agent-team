@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 import software_agent_team.cli as cli
+from software_agent_team.benchmark_seed import prepare_benchmark_seed
 from software_agent_team.cli import main
 from software_agent_team.run_control import RunPhase
 from software_agent_team.runtime_configuration import (
@@ -117,7 +118,10 @@ def test_cli_preflight_makes_no_model_call(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     workspace = tmp_path / "workspace"
-    workspace.mkdir()
+    prepare_benchmark_seed(
+        REPOSITORY_ROOT / "benchmarks" / "task_manager" / "seed",
+        workspace,
+    )
     calls: list[str] = []
 
     def fake_materialize(*args: object, **kwargs: object) -> Path:
@@ -146,7 +150,9 @@ def test_cli_preflight_makes_no_model_call(
 
     assert main(["preflight", str(workspace)]) == 0
     assert calls == ["materialize", "inspect"]
-    assert "runtime preflight: ready" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "runtime preflight: ready" in output
+    assert "source_commit=" in output
 
 
 def test_cli_run_constructs_the_real_phase1_boundary_without_invoking_it(

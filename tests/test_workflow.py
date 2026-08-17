@@ -32,6 +32,7 @@ from software_agent_team.execution import (
     AgentExecutionResult,
     AgentExecutionStatus,
     AgentExecutionTelemetry,
+    AgentExecutor,
     AgentTokenUsage,
 )
 from software_agent_team.quality_gates import (
@@ -392,7 +393,7 @@ def sandbox_executions(
 
 def coordinator(
     tmp_path: Path,
-    executor: DynamicWorkflowExecutor,
+    executor: AgentExecutor,
     *,
     executions: list[SandboxExecution] | None = None,
     budget: AgentBudget | None = None,
@@ -578,6 +579,58 @@ def test_workflow_records_gate_timeout_as_dependency_failure(tmp_path: Path) -> 
     )
     assert iteration["decision"] == "fail"
     assert iteration["blocking_reasons"] == ["A deterministic gate timed out."]
+
+
+def test_workflow_records_openclaw_declared_timeout_as_resource_limit(
+    tmp_path: Path,
+) -> None:
+    source = initialize_source(tmp_path)
+
+    class TimedOutExecutor:
+        def execute(self, request: AgentExecutionRequest) -> AgentExecutionResult:
+            return AgentExecutionResult(
+                status=AgentExecutionStatus.TIMED_OUT,
+                error="OpenClaw reported an Agent timeout",
+                telemetry=AgentExecutionTelemetry(
+                    role=request.role,
+                    session_key=request.session_key,
+                    command=("openclaw", "agent"),
+                    started_at=FIXED_TIME,
+                    finished_at=FIXED_TIME,
+                    duration_ms=30_000,
+                    openclaw_duration_ms=30_000,
+                    exit_code=0,
+                    timed_out=True,
+                    stdout='{"payloads": []}',
+                    stderr="embedded run timeout",
+                    session_id="timeout-session",
+                    provider="offline",
+                    model="offline/test-model",
+                    usage=AgentTokenUsage(
+                        input_tokens=123,
+                        output_tokens=7,
+                        total_tokens=130,
+                    ),
+                ),
+            )
+
+    outcome = coordinator(tmp_path, TimedOutExecutor()).execute(
+        task_brief(),
+        source_repository=source,
+    )
+
+    assert outcome.record.phase is RunPhase.FAILED
+    assert outcome.record.termination_reason is TerminationReason.RESOURCE_LIMIT_REACHED
+    execution = json.loads(
+        (
+            tmp_path / "runs" / task_brief().run_id / outcome.execution_records[0].path
+        ).read_text(encoding="utf-8")
+    )
+    assert execution["timed_out"] is True
+    assert execution["exit_code"] == 0
+    assert execution["provider"] == "offline"
+    assert execution["model"] == "offline/test-model"
+    assert execution["input_tokens"] == 123
 
 
 def test_workflow_stops_at_the_phase1_iteration_limit(tmp_path: Path) -> None:

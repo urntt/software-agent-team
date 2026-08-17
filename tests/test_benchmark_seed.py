@@ -43,6 +43,11 @@ def test_prepare_benchmark_seed_creates_one_clean_base_commit(tmp_path: Path) ->
     assert git(destination, "log", "-1", "--format=%an <%ae>") == (
         "urntt <urntts@gmail.com>"
     )
+    assert git(destination, "config", "--local", "--get", "user.name") == "urntt"
+    assert (
+        git(destination, "config", "--local", "--get", "user.email")
+        == "urntts@gmail.com"
+    )
     assert not (destination / ".ruff_cache").exists()
     assert prepare_benchmark_seed(seed, tmp_path / "second-benchmark") == commit
     with pytest.raises(BenchmarkSeedError, match="already exists"):

@@ -18,7 +18,7 @@ from software_agent_team.benchmark_seed import prepare_benchmark_seed
 from software_agent_team.budgets import ModelPricing
 from software_agent_team.configuration import validate_environment_configuration
 from software_agent_team.execution import OpenClawSubprocessExecutor
-from software_agent_team.git_workspace import GitWorkspace
+from software_agent_team.git_workspace import GitWorkspace, GitWorkspaceManager
 from software_agent_team.quality_gates import (
     DockerSandboxBackend,
     QualityGateRunner,
@@ -127,13 +127,20 @@ def _preflight(args: argparse.Namespace) -> int:
     manifest = load_team_manifest(args.teams)
     configuration = load_quality_gate_configuration(args.policy, args.benchmark)
     with tempfile.TemporaryDirectory(prefix="sat-preflight-") as temporary:
-        runtime_config = Path(temporary) / "openclaw.runtime.json"
+        temporary_root = Path(temporary)
+        source_commit = GitWorkspaceManager(
+            temporary_root / "workspaces"
+        ).validate_source_repository(
+            args.source_repository,
+            base_ref=args.base_ref,
+        )
+        runtime_config = temporary_root / "openclaw.runtime.json"
         limits = configuration.policy.limits
         materialize_run_configuration(
             args.openclaw,
             runtime_config,
             manifest=manifest,
-            workspace=args.workspace,
+            workspace=args.source_repository,
             sandbox_image=configuration.policy.sandbox.image,
             sandbox_memory_mb=limits.memory_mb,
             sandbox_cpus=limits.cpu_cores,
@@ -151,7 +158,8 @@ def _preflight(args: argparse.Namespace) -> int:
     print(
         f"runtime preflight: {state} openclaw={result.openclaw_version} "
         f"config={result.config_valid} image={result.sandbox_image_present} "
-        f"image_id={result.sandbox_image_id or 'none'}"
+        f"image_id={result.sandbox_image_id or 'none'} "
+        f"source_commit={source_commit}"
     )
     return 0 if result.ready else 2
 
@@ -315,9 +323,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     preflight = commands.add_parser(
         "preflight",
-        help="Check OpenClaw configuration and the sandbox image without a model call.",
+        help=(
+            "Check the source repository, OpenClaw configuration, and sandbox image "
+            "without a model call."
+        ),
     )
-    preflight.add_argument("workspace", type=Path)
+    preflight.add_argument("source_repository", type=Path)
+    preflight.add_argument("--base-ref", default="HEAD")
     preflight.add_argument("--teams", type=Path, default=DEFAULT_TEAM_CONFIG)
     preflight.add_argument("--openclaw", type=Path, default=DEFAULT_OPENCLAW_CONFIG)
     preflight.add_argument("--policy", type=Path, default=DEFAULT_RUN_POLICY)

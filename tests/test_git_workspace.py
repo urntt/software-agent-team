@@ -223,6 +223,34 @@ def test_source_repository_requires_local_commit_identity(tmp_path: Path) -> Non
         )
 
 
+def test_source_preflight_validates_without_creating_a_workspace(
+    tmp_path: Path,
+) -> None:
+    source = initialize_repository(tmp_path)
+    workspace_root = tmp_path / "workspaces"
+    workspace_manager = manager(workspace_root)
+
+    commit = workspace_manager.validate_source_repository(source)
+
+    assert commit == git(source, "rev-parse", "HEAD").stdout.strip()
+    assert not workspace_root.exists()
+
+
+def test_source_preflight_rejects_missing_local_commit_identity(
+    tmp_path: Path,
+) -> None:
+    source = initialize_repository(tmp_path)
+    git(source, "config", "--local", "--unset", "user.name")
+
+    with pytest.raises(
+        RepositoryValidationError,
+        match=r"user\.name and user\.email",
+    ):
+        manager(tmp_path / "workspaces").validate_source_repository(source)
+
+    assert not (tmp_path / "workspaces").exists()
+
+
 def test_nested_source_path_is_rejected(tmp_path: Path) -> None:
     source = initialize_repository(tmp_path)
 

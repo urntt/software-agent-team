@@ -356,8 +356,11 @@ class AgentExecutionRecord(BaseModel):
         if self.finished_at < self.started_at:
             raise ValueError("execution finish time cannot precede start time")
         if self.timed_out:
-            if self.exit_code is not None:
-                raise ValueError("timed-out executions cannot report an exit code")
+            if self.exit_code not in {None, 0}:
+                raise ValueError(
+                    "timed-out executions require no exit code or a zero "
+                    "OpenClaw wrapper exit"
+                )
             if self.error is None:
                 raise ValueError("timed-out executions must record an error")
             if self.response_artifact is not None:

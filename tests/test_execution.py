@@ -276,6 +276,58 @@ def test_openclaw_adapter_rejects_invalid_protocol_response(
     assert result.telemetry.exit_code == 0
 
 
+def test_openclaw_adapter_preserves_metadata_for_an_invalid_reply_count() -> None:
+    envelope = json.loads(openclaw_result())
+    envelope["payloads"] = [{"text": "one"}, {"text": "two"}]
+
+    def runner(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=json.dumps(envelope),
+            stderr="",
+        )
+
+    result = executor_with_clocks(runner).execute(request())
+
+    assert result.status is AgentExecutionStatus.INVALID_RESPONSE
+    assert result.telemetry.provider == "test-provider"
+    assert result.telemetry.model == "test-provider/test-model"
+    assert result.telemetry.usage is not None
+    assert result.telemetry.usage.total_tokens == 159
+
+
+def test_openclaw_adapter_classifies_internal_timeout_and_preserves_usage() -> None:
+    envelope = json.loads(openclaw_result())
+    envelope["payloads"] = [
+        {"text": "LLM request failed."},
+        {
+            "text": (
+                "Request timed out before a response was generated. Please try again."
+            )
+        },
+    ]
+
+    def runner(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=json.dumps(envelope),
+            stderr="embedded run timeout",
+        )
+
+    result = executor_with_clocks(runner).execute(request())
+
+    assert result.status is AgentExecutionStatus.TIMED_OUT
+    assert result.error == "OpenClaw reported an Agent timeout"
+    assert result.telemetry.timed_out is True
+    assert result.telemetry.exit_code == 0
+    assert result.telemetry.provider == "test-provider"
+    assert result.telemetry.model == "test-provider/test-model"
+    assert result.telemetry.usage is not None
+    assert result.telemetry.usage.input_tokens == 101
+
+
 def test_openclaw_adapter_preserves_nonzero_exit_evidence() -> None:
     def runner(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(

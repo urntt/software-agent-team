@@ -85,7 +85,7 @@ def make_invocation(
         workspace=workspace,
         input_mounts=configuration.input_mounts if mounts is None else mounts,
         environment=tuple(configuration.policy.sandbox.environment.items()),
-        sandbox=configuration.policy.sandbox,
+        sandbox=configuration.policy.sandbox.model_copy(update={"user": "1000:1000"}),
         limits=configuration.policy.limits,
         timeout_seconds=timeout_seconds,
     )
@@ -103,6 +103,10 @@ def test_checked_in_manifests_are_complete_and_hashed(configuration) -> None:
     assert configuration.input_mounts[0].source.is_dir()
     assert configuration.input_mounts[0].target == PurePosixPath(
         "/opt/software-agent-team/inputs/task-manager-acceptance"
+    )
+    assert configuration.policy.sandbox.user == "host"
+    assert configuration.policy.sandbox.environment["PYTHONPYCACHEPREFIX"] == (
+        "/tmp/pycache"
     )
 
 
@@ -381,6 +385,51 @@ def test_runner_defaults_to_docker(configuration, run_paths: tuple[Path, Path]) 
     )
 
     assert isinstance(runner.backend, DockerSandboxBackend)
+
+
+def test_runner_resolves_the_quality_gate_user_to_the_host_identity(
+    configuration,
+    run_paths: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_directory, workspace = run_paths
+    backend = FakeSandboxBackend(successful_executions())
+    backend.kind = "docker"
+    monkeypatch.setattr(os, "getuid", lambda: 1234)
+    monkeypatch.setattr(os, "getgid", lambda: 5678)
+    runner = QualityGateRunner(
+        configuration,
+        run_directory=run_directory,
+        workspace=workspace,
+        backend=backend,
+    )
+
+    runner.run(iteration=1)
+
+    assert {call.sandbox.user for call in backend.invocations} == {"1234:5678"}
+
+
+def test_runner_rejects_root_for_live_quality_gates(
+    configuration,
+    run_paths: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_directory, workspace = run_paths
+    backend = FakeSandboxBackend(successful_executions())
+    backend.kind = "docker"
+    monkeypatch.setattr(os, "getuid", lambda: 0)
+    monkeypatch.setattr(os, "getgid", lambda: 0)
+    runner = QualityGateRunner(
+        configuration,
+        run_directory=run_directory,
+        workspace=workspace,
+        backend=backend,
+    )
+
+    with pytest.raises(QualityGateConfigurationError, match="unprivileged"):
+        runner.run(iteration=1)
+
+    assert backend.invocations == []
 
 
 def test_runner_uses_the_frozen_sandbox_image_identity(

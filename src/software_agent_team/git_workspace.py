@@ -194,15 +194,9 @@ class GitWorkspaceManager:
 
         if not RUN_ID_PATTERN.fullmatch(run_id):
             raise GitWorkspaceError(f"invalid run ID: {run_id}")
-        source = self._validate_source(source_repository)
-        if not base_ref:
-            raise RepositoryValidationError("base ref must not be empty")
-        base_commit = self._resolve_commit(source, base_ref)
-        self._validate_checkout_safety(source, base_commit)
-        self._validate_working_tree_attributes(source)
-        if self._status(source):
-            raise RepositoryValidationError("source repository must be clean")
-        author_name, author_email = self._source_commit_identity(source)
+        source, base_commit, author_name, author_email = (
+            self._validated_source_repository(source_repository, base_ref=base_ref)
+        )
 
         candidate_root = self.root.resolve(strict=False)
         if candidate_root == source or candidate_root.is_relative_to(source):
@@ -245,6 +239,20 @@ class GitWorkspaceManager:
             workspace, expected_commit=base_commit, require_clean=True
         )
         return workspace
+
+    def validate_source_repository(
+        self,
+        source_repository: Path,
+        *,
+        base_ref: str = "HEAD",
+    ) -> str:
+        """Validate every source precondition without creating a workspace."""
+
+        _, base_commit, _, _ = self._validated_source_repository(
+            source_repository,
+            base_ref=base_ref,
+        )
+        return base_commit
 
     def verify_workspace(
         self,
@@ -338,14 +346,10 @@ class GitWorkspaceManager:
 
         if not RUN_ID_PATTERN.fullmatch(run_id):
             raise GitWorkspaceError(f"invalid run ID: {run_id}")
-        source = self._validate_source(source_repository)
-        if not base_ref:
-            raise RepositoryValidationError("base ref must not be empty")
-        base_commit = self._resolve_commit(source, base_ref)
-        self._validate_checkout_safety(source, base_commit)
-        self._validate_working_tree_attributes(source)
-        if self._status(source):
-            raise RepositoryValidationError("source repository must be clean")
+        source, base_commit, _, _ = self._validated_source_repository(
+            source_repository,
+            base_ref=base_ref,
+        )
 
         if self.root.is_symlink() or not self.root.is_dir():
             raise WorkspaceIntegrityError("workspace root is unavailable for recovery")
@@ -372,6 +376,25 @@ class GitWorkspaceManager:
                 "existing workspace cannot be recovered safely"
             ) from error
         return workspace
+
+    def _validated_source_repository(
+        self,
+        source_repository: Path,
+        *,
+        base_ref: str,
+    ) -> tuple[Path, str, str, str]:
+        """Return one source snapshot after all preparation checks pass."""
+
+        source = self._validate_source(source_repository)
+        if not base_ref:
+            raise RepositoryValidationError("base ref must not be empty")
+        base_commit = self._resolve_commit(source, base_ref)
+        self._validate_checkout_safety(source, base_commit)
+        self._validate_working_tree_attributes(source)
+        if self._status(source):
+            raise RepositoryValidationError("source repository must be clean")
+        author_name, author_email = self._source_commit_identity(source)
+        return source, base_commit, author_name, author_email
 
     def verify_snapshot(
         self,

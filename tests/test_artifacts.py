@@ -200,6 +200,19 @@ def test_timed_out_execution_requires_error_without_exit_or_response() -> None:
         AgentExecutionRecord.model_validate(payload)
 
 
+def test_openclaw_declared_timeout_can_preserve_zero_wrapper_exit() -> None:
+    payload = valid_execution_payload()
+    payload["timed_out"] = True
+    payload["exit_code"] = 0
+    payload["response_artifact"] = None
+    payload["error"] = "OpenClaw reported an Agent timeout"
+
+    record = AgentExecutionRecord.model_validate(payload)
+
+    assert record.timed_out is True
+    assert record.exit_code == 0
+
+
 def test_launch_failure_can_lack_session_model_and_exit_code() -> None:
     payload = valid_execution_payload()
     payload["session_id"] = None

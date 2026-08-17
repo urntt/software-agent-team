@@ -99,13 +99,11 @@ def prepare_benchmark_seed(
         ignore=shutil.ignore_patterns(*SEED_IGNORE_PATTERNS),
     )
     _run_git(destination, "init", "-b", "main")
+    _run_git(destination, "config", "--local", "user.name", author_name.strip())
+    _run_git(destination, "config", "--local", "user.email", author_email.strip())
     _run_git(destination, "add", ".")
     _run_git(
         destination,
-        "-c",
-        f"user.name={author_name.strip()}",
-        "-c",
-        f"user.email={author_email.strip()}",
         "commit",
         "--no-verify",
         "-m",

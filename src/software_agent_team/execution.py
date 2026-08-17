@@ -197,12 +197,15 @@ class AgentExecutionTelemetry(BaseModel):
 
     @model_validator(mode="after")
     def validate_process_outcome(self) -> Self:
-        """Distinguish a timeout from a process that returned an exit code."""
+        """Represent either an external process or OpenClaw-declared timeout."""
 
         if self.finished_at < self.started_at:
             raise ValueError("execution cannot finish before it starts")
-        if self.timed_out and self.exit_code is not None:
-            raise ValueError("timed-out Agent executions cannot report an exit code")
+        if self.timed_out and self.exit_code not in {None, 0}:
+            raise ValueError(
+                "timed-out Agent executions require no exit code or a zero "
+                "OpenClaw wrapper exit"
+            )
         return self
 
 
@@ -262,12 +265,14 @@ class AgentExecutor(Protocol):
         """Execute one bounded Agent turn without advancing workflow state."""
 
 
-class _OpenClawPayload(BaseModel):
-    """Normalized subset of the versioned OpenClaw JSON response."""
+class _OpenClawResponse(BaseModel):
+    """Normalized reply payloads and metadata from one OpenClaw response."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    text: str
+    visible_texts: tuple[str, ...]
+    has_error_payload: bool = False
+    declared_timeout: bool = False
     openclaw_run_id: str | None = None
     session_id: str | None = None
     provider: str | None = None
@@ -317,7 +322,10 @@ def _canonical_model_reference(
     return f"{provider}/{model}"
 
 
-def _parse_openclaw_payload(stdout: str) -> _OpenClawPayload:
+_OPENCLAW_TIMEOUT_PREFIX = "Request timed out before a response was generated."
+
+
+def _parse_openclaw_payload(stdout: str) -> _OpenClawResponse:
     """Parse local or Gateway JSON emitted by ``openclaw agent --json``."""
 
     try:
@@ -346,18 +354,17 @@ def _parse_openclaw_payload(stdout: str) -> _OpenClawPayload:
         raise ValueError("OpenClaw response is missing reply payloads")
 
     visible: list[str] = []
+    has_error_payload = False
     for payload in payloads:
         if not isinstance(payload, dict):
             raise ValueError("OpenClaw reply payload must be an object")
         if payload.get("isError") is True:
-            raise ValueError("OpenClaw returned an error reply payload")
+            has_error_payload = True
         if payload.get("isReasoning") is True or payload.get("isCommentary") is True:
             continue
         text = payload.get("text")
         if isinstance(text, str) and text.strip():
             visible.append(text.strip())
-    if len(visible) != 1:
-        raise ValueError("OpenClaw must return exactly one visible text payload")
 
     meta = result.get("meta")
     if meta is None:
@@ -373,8 +380,12 @@ def _parse_openclaw_payload(stdout: str) -> _OpenClawPayload:
     provider = _optional_nonblank(agent_meta.get("provider"))
     model = _optional_nonblank(agent_meta.get("model"))
 
-    return _OpenClawPayload(
-        text=visible[0],
+    return _OpenClawResponse(
+        visible_texts=tuple(visible),
+        has_error_payload=has_error_payload,
+        declared_timeout=any(
+            text.startswith(_OPENCLAW_TIMEOUT_PREFIX) for text in visible
+        ),
         openclaw_run_id=openclaw_run_id,
         session_id=_optional_nonblank(agent_meta.get("sessionId")),
         provider=provider,
@@ -513,10 +524,29 @@ class OpenClawSubprocessExecutor:
             stdout=stdout,
             stderr=stderr,
             payload=payload,
+            timed_out=payload.declared_timeout,
         )
+        if payload.declared_timeout:
+            return AgentExecutionResult(
+                status=AgentExecutionStatus.TIMED_OUT,
+                error="OpenClaw reported an Agent timeout",
+                telemetry=telemetry,
+            )
+        if payload.has_error_payload:
+            return AgentExecutionResult(
+                status=AgentExecutionStatus.INVALID_RESPONSE,
+                error="OpenClaw returned an error reply payload",
+                telemetry=telemetry,
+            )
+        if len(payload.visible_texts) != 1:
+            return AgentExecutionResult(
+                status=AgentExecutionStatus.INVALID_RESPONSE,
+                error="OpenClaw must return exactly one visible text payload",
+                telemetry=telemetry,
+            )
         return AgentExecutionResult(
             status=AgentExecutionStatus.COMPLETED,
-            response_text=payload.text,
+            response_text=payload.visible_texts[0],
             telemetry=telemetry,
         )
 
@@ -560,7 +590,7 @@ class OpenClawSubprocessExecutor:
         stdout: str,
         stderr: str,
         timed_out: bool = False,
-        payload: _OpenClawPayload | None = None,
+        payload: _OpenClawResponse | None = None,
     ) -> AgentExecutionTelemetry:
         finished_at = self.clock()
         elapsed = max(0, round((self.monotonic() - started_monotonic) * 1000))
