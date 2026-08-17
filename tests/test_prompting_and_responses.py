@@ -429,14 +429,35 @@ def test_strict_parser_normalizes_one_outer_json_fence() -> None:
     assert parsed == artifact
 
 
-def test_strict_parser_rejects_prose_around_a_json_fence() -> None:
+def test_strict_parser_normalizes_presentation_prose_around_one_json_fence() -> None:
     fenced = (
         "Here is the result:\n```json\n"
         f"{json.dumps(plan().model_dump(mode='json'))}\n"
-        "```"
+        "```\nThis is the requested artifact."
     )
 
-    with pytest.raises(AgentArtifactResponseError, match="prose or other fences"):
+    parsed = parse_scripted(
+        fenced,
+        execution_request(AgentRole.PLANNER, ArtifactKind.IMPLEMENTATION_PLAN),
+    )
+
+    assert parsed == plan()
+
+
+@pytest.mark.parametrize(
+    "outside",
+    [
+        "A competing object follows: {}",
+        "A competing array follows: []",
+        "A second fence follows:\n```text\nnot json\n```",
+    ],
+)
+def test_strict_parser_rejects_structured_content_outside_json_fence(
+    outside: str,
+) -> None:
+    fenced = f"```json\n{json.dumps(plan().model_dump(mode='json'))}\n```\n{outside}"
+
+    with pytest.raises(AgentArtifactResponseError, match="multiple fences or JSON"):
         parse_scripted(
             fenced,
             execution_request(AgentRole.PLANNER, ArtifactKind.IMPLEMENTATION_PLAN),

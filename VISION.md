@@ -324,6 +324,13 @@ validation against the frozen task brief and selected team before persistence.
 The schemas exist independently of live Agent execution; an artifact is not
 evidence of a real run until the controller records it from verified inputs.
 
+Transport normalization must remain deterministic. The controller accepts a
+raw JSON object or one `json` fence, and may discard only presentation prose
+outside that fence when the discarded text contains no JSON structures or
+additional fences. It does not guess between multiple candidates. Duplicate
+keys, multiple objects, non-standard constants, and any structural or
+contextual schema violation remain invalid.
+
 ## Evaluation
 
 ### Output Quality

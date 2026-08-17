@@ -55,17 +55,28 @@ def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]
     return payload
 
 
-def _unwrap_outer_json_fence(value: str) -> str:
-    """Normalize one whole-response ``json`` fence and no other Markdown."""
+def _unwrap_single_json_fence(value: str) -> str:
+    """Normalize one unambiguous ``json`` fence and presentation-only prose."""
 
     lines = value.strip().splitlines()
-    if (
-        len(lines) >= 3
-        and lines[0].strip().casefold() == "```json"
-        and lines[-1].strip() == "```"
-    ):
-        return "\n".join(lines[1:-1])
-    return value
+    openings = [
+        index
+        for index, line in enumerate(lines)
+        if line.strip().casefold() == "```json"
+    ]
+    closings = [index for index, line in enumerate(lines) if line.strip() == "```"]
+    if len(openings) != 1 or len(closings) != 1:
+        return value
+
+    opening = openings[0]
+    closing = closings[0]
+    if opening >= closing or closing - opening < 2:
+        return value
+
+    outside = "\n".join(lines[:opening] + lines[closing + 1 :]).strip()
+    if "```" in outside or any(character in outside for character in "{}[]"):
+        return value
+    return "\n".join(lines[opening + 1 : closing])
 
 
 def parse_agent_artifact(
@@ -103,14 +114,15 @@ def parse_agent_artifact(
 
     try:
         payload = json.loads(
-            _unwrap_outer_json_fence(result.response_text),
+            _unwrap_single_json_fence(result.response_text),
             object_pairs_hook=_reject_duplicate_keys,
             parse_constant=_reject_nonstandard_constant,
         )
     except (TypeError, ValueError) as error:
         raise AgentArtifactResponseError(
-            "Agent response must contain exactly one JSON object; only one outer "
-            "json fence is normalized, and prose or other fences are forbidden"
+            "Agent response must contain exactly one JSON object; one json fence "
+            "with presentation-only prose is normalized, but multiple fences or "
+            "JSON structures outside that fence are forbidden"
         ) from error
     if not isinstance(payload, dict):
         raise AgentArtifactResponseError("Agent response must be a JSON object")
