@@ -26,6 +26,22 @@ class AgentArtifactResponseError(ValueError):
     """Raised when an Agent response cannot become attributable run evidence."""
 
 
+def _safe_validation_detail(error: ValueError) -> str:
+    """Return bounded schema diagnostics without reflecting raw response values."""
+
+    if isinstance(error, ValidationError):
+        issues = []
+        for issue in error.errors(
+            include_url=False,
+            include_context=False,
+            include_input=False,
+        ):
+            location = ".".join(str(item) for item in issue["loc"]) or "artifact"
+            issues.append(f"{location}: {issue['msg']}")
+        return "; ".join(issues)[:1000]
+    return str(error)[:1000]
+
+
 def _reject_nonstandard_constant(value: str) -> None:
     raise ValueError(f"non-standard JSON constant: {value}")
 
@@ -90,7 +106,7 @@ def parse_agent_artifact(
         artifact = parse_phase_artifact(payload)
     except (ValueError, ValidationError) as error:
         raise AgentArtifactResponseError(
-            "Agent response artifact is invalid"
+            f"Agent response artifact is invalid: {_safe_validation_detail(error)}"
         ) from error
     if not isinstance(artifact, PhaseArtifact):
         raise AgentArtifactResponseError("Agent returned a non-phase runtime artifact")

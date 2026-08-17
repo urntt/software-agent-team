@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 
 import pytest
@@ -406,6 +407,20 @@ def test_strict_parser_rejects_the_wrong_artifact_kind() -> None:
     ):
         parse_scripted(
             work_result(),
+            execution_request(AgentRole.PLANNER, ArtifactKind.IMPLEMENTATION_PLAN),
+        )
+
+
+def test_strict_parser_reports_a_missing_artifact_kind() -> None:
+    payload = plan().model_dump(mode="json")
+    del payload["kind"]
+
+    with pytest.raises(
+        AgentArtifactResponseError,
+        match="requires a supported kind",
+    ):
+        parse_scripted(
+            json.dumps(payload),
             execution_request(AgentRole.PLANNER, ArtifactKind.IMPLEMENTATION_PLAN),
         )
 

@@ -180,6 +180,27 @@ def test_openclaw_adapter_ignores_reasoning_payload_for_artifact_text() -> None:
     assert result.response_text == '{"kind":"implementation_plan"}'
 
 
+def test_openclaw_adapter_ignores_pinned_tool_diagnostic_payload() -> None:
+    envelope = json.loads(openclaw_result("final"))
+    envelope["payloads"] = [
+        {"text": '{"kind":"implementation_plan"}'},
+        {"text": "⚠️ 🛠️ Exec failed: `ruff check .` (workspace)"},
+    ]
+
+    def runner(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=json.dumps(envelope),
+            stderr="",
+        )
+
+    result = executor_with_clocks(runner).execute(request())
+
+    assert result.status is AgentExecutionStatus.COMPLETED
+    assert result.response_text == '{"kind":"implementation_plan"}'
+
+
 def test_openclaw_adapter_parses_gateway_result_envelope() -> None:
     gateway_response = {
         "runId": "openclaw-run-123",

@@ -323,6 +323,7 @@ def _canonical_model_reference(
 
 
 _OPENCLAW_TIMEOUT_PREFIX = "Request timed out before a response was generated."
+_OPENCLAW_DIAGNOSTIC_PREFIXES = ("⚠️ 🛠️ Exec failed:",)
 
 
 def _parse_openclaw_payload(stdout: str) -> _OpenClawResponse:
@@ -364,7 +365,10 @@ def _parse_openclaw_payload(stdout: str) -> _OpenClawResponse:
             continue
         text = payload.get("text")
         if isinstance(text, str) and text.strip():
-            visible.append(text.strip())
+            cleaned = text.strip()
+            if cleaned.startswith(_OPENCLAW_DIAGNOSTIC_PREFIXES):
+                continue
+            visible.append(cleaned)
 
     meta = result.get("meta")
     if meta is None:

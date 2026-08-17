@@ -16,6 +16,7 @@ from pydantic import ValidationError
 
 from software_agent_team.artifact_store import ArtifactStore, ArtifactStoreError
 from software_agent_team.artifacts import (
+    IMPLEMENTATION_ROLES,
     AgentExecutionRecord,
     AgentRole,
     ArtifactKind,
@@ -653,10 +654,40 @@ class WorkflowCoordinator:
     ) -> AgentExecutionRequest:
         if attempt == 1:
             return request
+        if request.role is AgentRole.PLANNER:
+            role_check = (
+                "Recompute the union of tasks[].acceptance_criteria and make it "
+                "equal every criterion ID in the TaskBrief; verify every task "
+                "dependency names a task in the same response."
+            )
+        elif request.role in IMPLEMENTATION_ROLES:
+            role_check = (
+                "Before responding, run git status --short, git rev-parse HEAD, "
+                "and git diff --name-only <input_commit> HEAD --. Require a clean "
+                "status and copy the exact full commit and changed paths from "
+                "those commands, replacing <input_commit> with run.input_commit "
+                "from RUN_CONTEXT_JSON; never reuse or invent a hash."
+            )
+        elif request.role is AgentRole.TESTER:
+            role_check = (
+                "Recheck that every TaskBrief criterion appears exactly once and "
+                "that every command field exactly reproduces controller evidence."
+            )
+        elif request.role is AgentRole.REVIEWER:
+            role_check = (
+                "Recheck that the verdict, findings, criterion IDs, and input "
+                "commit agree with the supplied immutable evidence."
+            )
+        else:  # pragma: no cover - executable roles are exhaustively mapped
+            role_check = "Recheck every field against the supplied run evidence."
         repair = (
             "\n\nCONTROLLED_RESPONSE_REPAIR\n"
             "Your previous response was rejected for this reason: "
             f"{previous_error}\n"
+            "Revalidate the entire response rather than only the reported error. "
+            "Include every required schema field, including schema_version, kind, "
+            "run_id, team_id, producer, created_at, and iteration. "
+            f"{role_check} "
             "Return one corrected JSON object only. Do not repeat the invalid form."
         )
         return request.model_copy(update={"prompt": f"{request.prompt}{repair}"})
