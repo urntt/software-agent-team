@@ -248,6 +248,7 @@ def test_planner_prompt_contains_only_confirmed_inputs_and_plan_schema() -> None
     assert "Return exactly one JSON object" in rendered
     assert "FINAL_RESPONSE_CONTRACT" in rendered
     assert "task_brief.acceptance_criteria" in rendered
+    assert "^TASK_[A-Z0-9_]+$" in rendered
     assert rendered.rfind("FINAL_RESPONSE_CONTRACT") > rendered.rfind(
         "RESPONSE_SCHEMA_JSON"
     )

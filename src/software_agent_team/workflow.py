@@ -669,8 +669,10 @@ class WorkflowCoordinator:
         if request.role is AgentRole.PLANNER:
             role_check = (
                 "Recompute the union of tasks[].acceptance_criteria and make it "
-                "equal every criterion ID in the TaskBrief; verify every task "
-                "dependency names a task in the same response."
+                "equal every criterion ID in the TaskBrief; require every "
+                "tasks[].id to begin with TASK_ and match "
+                "^TASK_[A-Z0-9_]+$; verify every task dependency exactly names "
+                "one of those task IDs in the same response."
             )
         elif request.role in IMPLEMENTATION_ROLES:
             role_check = (

@@ -559,6 +559,7 @@ def test_workflow_repairs_one_invalid_agent_response(tmp_path: Path) -> None:
     assert "Revalidate the entire response" in repair_prompt
     assert "every required schema field" in repair_prompt
     assert "union of tasks[].acceptance_criteria" in repair_prompt
+    assert "tasks[].id to begin with TASK_" in repair_prompt
     first = json.loads(
         (tmp_path / "runs" / task_brief().run_id / plan_records[0].path).read_text(
             encoding="utf-8"
