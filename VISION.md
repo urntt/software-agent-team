@@ -1,8 +1,8 @@
 # Vision: An Experimental Multi-Agent Software Builder
 
-**Status:** Phase 1 implementation complete; live acceptance pending
+**Status:** Phase 1 implementation complete; qualifying live trace pending
 
-**Last updated:** August 10, 2026
+**Last updated:** August 17, 2026
 
 ## Purpose
 
@@ -114,6 +114,8 @@ code or experiment evidence justifies a replacement.
 - Persisted artifacts own cross-Agent communication.
 - OpenClaw session history is diagnostic state, not a reproducibility
   dependency.
+- Role Agents cannot spawn additional model calls. The controller is the sole
+  authority for Agent invocation, accounting, and ordering.
 
 ### Communication
 
@@ -134,6 +136,8 @@ code or experiment evidence justifies a replacement.
   GID `0` is rejected.
 - Clarifier, Planner, Tester, and Reviewer are read-only roles.
 - Coding and Integration roles may write only inside the assigned workspace.
+- A read-only OpenClaw workspace is mounted at `/agent`; a writable workspace
+  is mounted at `/workspace`.
 - The controller verifies actual commits, diffs, files, commands, and exit
   codes instead of trusting Agent claims.
 - Credentials, active runtime state, generated workspaces, and raw runs remain
@@ -189,7 +193,8 @@ The first end-to-end vertical slice uses:
 
 1. Planner;
 2. Generalist Developer;
-3. Tester and Reviewer in parallel;
+3. Tester and Reviewer independently, parallel by default or serial when the
+   provider capacity is one generation;
 4. Generalist Developer revision when evidence requires it.
 
 This is the default starting configuration because it separates planning,
@@ -241,7 +246,9 @@ interpretation does not confound the result.
 | Keep the Python controller authoritative | Lifecycle, budgets, evidence checks, and termination must be deterministic rather than dependent on an Agent's self-report. |
 | Use OpenClaw as the Agent runtime, not the orchestrator | OpenClaw provides model/provider integration, sessions, tools, and sandboxing; the experiment still needs a model-independent control plane. |
 | Start with `function_specialized` | It introduces independent planning, testing, and review without the merge conflicts that would confound the first vertical slice. |
-| Run Tester and Reviewer in parallel on one commit | They have no dependency on each other's interpretation, so the barrier preserves independence and reduces elapsed time. |
+| Keep Tester and Reviewer independent, with configurable dispatch concurrency | They inspect the same immutable evidence and never consume each other's interpretation. Parallel dispatch reduces elapsed time when provider capacity permits; serial dispatch prevents overload without changing the semantic experiment. |
+| Deny Agent-spawning tools to every role | Untracked sub-Agent calls bypass controller budgets, attribution, and scheduling, so only the deterministic controller may authorize model invocations. |
+| Include bounded command-output tails in verifier context | Exit codes and generic summaries identify failure but not its cause. Bounded untrusted excerpts make diagnosis possible while full write-once output remains authoritative. |
 | Use persisted structured handoffs | Durable, attributable artifacts make context and decisions auditable without treating hidden conversation history as state. |
 | Run fixed Docker quality gates before Agent judgment | Reproducible command evidence is stronger than claimed test results and keeps generated code isolated from the host. |
 | Resolve the sandbox tag to one local image ID per run | Both Agent sandboxes and quality gates execute the same immutable image even if a mutable local tag is later reassigned. |
@@ -272,9 +279,11 @@ Only the deterministic controller may advance this state machine.
 
 Phase 1 starts at `CONFIRM_REQUIREMENTS` with a frozen `TaskBrief`; interactive
 `REQUEST` and `CLARIFY` behavior is Phase 4. The implemented vertical slice
-runs Tester and Reviewer concurrently after deterministic gates and performs at
-most two implementation iterations: the initial pass and one revision. Later
-configurations may use the manifest's higher explicit limit.
+runs Tester and Reviewer independently after deterministic gates. Dispatch is
+concurrent by default and may be serialized for a provider with one generation
+slot. It performs at most two implementation iterations: the initial pass and
+one revision. Later configurations may use the manifest's higher explicit
+limit.
 
 The workflow stops earlier when fixed acceptance checks pass and no blocking
 review finding remains. It stops with a report when:
@@ -368,6 +377,8 @@ presented as a conclusive result.
   call; provider-side quota is the hard monetary boundary for a live trace.
 - Agent and quality containers drop Linux capabilities, use read-only root
   filesystems, and receive only the assigned workspace and frozen inputs.
+- Read-only role tools inspect the verified source through `/agent`; command
+  evidence includes bounded output tails while full output remains write-once.
 - Live runs require an unprivileged invoking account. The Agent container uses
   that numeric UID/GID so its writable Git workspace does not require unsafe
   host permissions.
@@ -379,6 +390,8 @@ presented as a conclusive result.
   provider access remains in the trusted OpenClaw host process.
 - Read-only roles cannot obtain an indirect write path through unrestricted
   executable tools.
+- No role may use session-spawn or one-shot model tools to create unbudgeted
+  Agent calls outside the controller.
 - Human approval is required before merge, push, deployment, publication,
   external communication, destructive operations, or additional spending.
 - Retrieved content and generated repository instructions are untrusted input.
@@ -444,8 +457,11 @@ Implemented and offline verified:
   non-root identity, fixed commands, resource limits, timeouts, and bounded
   output;
 - The complete function-specialized workflow: Planner, Developer, controller
-  snapshot, deterministic gates, parallel Tester and Reviewer, decision, and at
-  most one evidence-driven revision;
+  snapshot, deterministic gates, independent Tester and Reviewer with
+  configurable dispatch concurrency, decision, and at most one evidence-driven
+  revision;
+- Bounded command-output diagnostics for verification, correct read-only
+  source visibility, and controller-only Agent invocation policy;
 - Pre-call Agent invocation limits and post-call token, duration, and
   estimated-cost stop thresholds;
 - Explicit completed and failed terminal outcomes with machine-readable and
@@ -454,20 +470,24 @@ Implemented and offline verified:
   evidence tampering, iteration exhaustion, missing Git changes, missing model
   or token telemetry, and cost exhaustion.
 
-Not yet available or executed:
+Not yet available or completed:
 
 - Interactive clarification;
-- The one authorized real model/provider trace required for formal Phase 1
-  acceptance;
+- A real model/provider trace that reaches `completed` and satisfies formal
+  Phase 1 acceptance;
 - Automatic CLI resume of an interrupted run;
 - Executable `single_agent` and `implementation_domain_specialized` workflow
   paths;
 - Repeated comparative trials, human rubric scoring, and topology selection;
 - A second product benchmark and product-level clarification flow.
 
-The live execution path exists, but no real model result is claimed until the
-runbook checklist is completed. Offline scripted executions prove controller
-behavior, not provider quality or live OpenClaw compatibility.
+Authorized exploratory live traces have exercised all four roles, real
+OpenClaw/provider calls, controller-verified Git snapshots, and Docker quality
+gates. The furthest trace reached verification with compilation, lint, and
+project tests passing; the frozen acceptance suite found a canonical-detail-URL
+defect before a qualifying completion. These traces demonstrate substantial
+runtime compatibility but do not satisfy the Phase 1 exit criterion. Offline
+scripted executions continue to prove controller behavior, not model quality.
 
 ## Development Route
 
@@ -493,8 +513,9 @@ behavior, not provider quality or live OpenClaw compatibility.
 **Exit criterion:** one authorized real-model trace reaches `completed` with
 reproducible artifacts and a clean controller-verified Git snapshot.
 
-**Current status:** implementation-complete and offline-verified. Formal exit
-remains pending until one authorized real-model trace reaches `completed`,
+**Current status:** implementation-complete, offline-verified, and exercised by
+exploratory live traces. Formal exit remains pending until one authorized
+real-model trace reaches `completed`,
 exercises all four roles, passes the frozen gates, reports the selected model
 and usage, and satisfies the evidence checklist in
 `docs/phase1-runbook.md`.

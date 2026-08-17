@@ -1,9 +1,10 @@
 # Phase 1 Live-Trace Runbook
 
-This runbook is the operating procedure for the one real model/provider trace
-that remains before the Phase 1 exit criterion can be evaluated. Repository
-development and offline tests do not make a model call. Following the `sat run`
-step below does.
+This runbook is the operating procedure for the next qualifying real
+model/provider trace. Exploratory traces have already exercised the live path
+and exposed implementation, protocol, and provider-capacity defects; none has
+yet satisfied the Phase 1 exit criterion. Repository development and offline
+tests do not make a model call. Following the `sat run` step below does.
 
 ## Acceptance Objective
 
@@ -49,6 +50,10 @@ actual model and token telemetry, and leave a reproducible Git snapshot.
 - Treat `agent_calls` as controller invocations. OpenClaw or a provider SDK may
   make internal same-model attempts; retain provider usage records when that
   distinction matters to the experiment.
+- Determine whether the provider supports two simultaneous generations. Keep
+  the default verification concurrency of two only when it does; otherwise use
+  `--verification-concurrency 1`. Role Agents are forbidden from spawning
+  additional Agent calls outside controller accounting.
 
 ## 1. Verify the Checkout
 
@@ -99,7 +104,7 @@ uv run sat preflight ./task-manager-source
 Expected result:
 
 ```text
-runtime preflight: ready ... config=True image=True
+runtime preflight: ready ... config=True image=True ... source_commit=<commit>
 ```
 
 Preflight validates the run-scoped, secret-free OpenClaw configuration, checks
@@ -122,6 +127,17 @@ uv run sat run \
   --input-cost-per-million-usd 0.00 \
   --output-cost-per-million-usd 0.00
 ```
+
+For a provider with one generation slot, append
+`--verification-concurrency 1` to that command. Serial dispatch preserves
+independent verification: Tester and Reviewer still receive the same immutable
+commit and controller evidence, and neither sees the other role's report.
+
+The default per-Agent timeout is 600 seconds. If a measured provider cannot
+finish the Developer role inside that bound, choose a larger explicit
+`--agent-timeout-seconds` value before the trial and record it as an
+experimental variable. Do not change the timeout after a run starts or omit it
+from comparisons.
 
 Use zero prices only when the selected model is genuinely free. The command
 creates a fresh run and detached standalone clone; it never merges, pushes,
@@ -166,6 +182,11 @@ Confirm all of the following before marking Phase 1 accepted:
   `iteration-record.json`.
 - Planner, Generalist Developer, Tester, and Reviewer execution records exist;
   Tester and Reviewer evaluated the same immutable commit.
+- Tester and Reviewer received bounded stdout/stderr tails for every fixed
+  command. Full command output remains authoritative in
+  `iterations/<nn>/commands/`. Reviewer source reads resolve through the
+  read-only `/agent` mount.
+- No role execution spawned an untracked child Agent or one-shot model call.
 - Every successful execution reports exactly the selected model and integer
   input/output token counts. No fallback or missing telemetry was accepted.
   The adapter normalizes the pinned OpenClaw local and Gateway JSON forms and

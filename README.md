@@ -14,7 +14,7 @@ Planner
   → Generalist Developer
   → controller-verified Git snapshot
   → fixed sandboxed quality gates
-  → Tester + Reviewer in parallel
+  → independent Tester + Reviewer (parallel or provider-limited serial dispatch)
   → deterministic ACCEPT / REVISE / FAIL decision
   → at most one Developer revision
   → machine-readable and human-readable final reports
@@ -36,7 +36,12 @@ tests. The code now includes:
   suite, image recipe, and policy;
 - Docker quality gates with no network, read-only source mounts, non-root
   execution, resource limits, bounded output, and fixed commands;
-- Tester and Reviewer execution in parallel against the same immutable commit;
+- Independent Tester and Reviewer execution against the same immutable commit,
+  parallel by default or serialized for a single-generation provider;
+- Bounded command-output tails in verification prompts and a correct read-only
+  source mount for independent review;
+- Tool-policy enforcement that prevents role Agents from spawning untracked
+  model calls outside controller accounting;
 - One controlled response repair and at most one implementation revision;
 - A pre-call Agent invocation cap and post-call token, duration, and
   estimated-cost stop thresholds;
@@ -44,10 +49,14 @@ tests. The code now includes:
 - Offline success, revision, timeout, evidence-tampering, non-convergence,
   no-change, invalid-response, and budget-failure tests.
 
-Phase 1 has **not yet met its formal exit criterion** because no real model and
-provider trace has been run. The remaining acceptance activity is operational:
-build the pinned sandbox image, configure provider access outside this
-repository, run preflight, execute one live trace, and inspect the result. See
+Phase 1 has **not yet met its formal exit criterion**. Authorized exploratory
+live traces have exercised Planner, Developer, deterministic gates, Tester, and
+Reviewer and have produced controller-verified commits. The furthest trace
+reached verification with compilation, lint, and project tests passing, while
+the independent acceptance suite exposed a canonical-detail-URL defect. Those
+traces also revealed and drove fixes for response contracts, provider-capacity
+handling, verification evidence visibility, and untracked sub-Agent calls. A
+new trace must still reach `completed` and satisfy the evidence checklist. See
 [`docs/phase1-runbook.md`](docs/phase1-runbook.md).
 
 Interactive clarification, the single-Agent baseline path, domain-specialized
@@ -76,9 +85,9 @@ The controller accepts an iteration only when all of the following agree:
    no blocking finding.
 
 A failed run is a valid, auditable result. Provider failures, invalid
-artifacts, timeouts, missing dependencies, budget exhaustion, unsafe Git state,
-and iteration-limit exhaustion remain visible in `run.json` and the final
-reports.
+artifacts, timeouts, missing runtime telemetry, missing dependencies, budget
+exhaustion, unsafe Git state, and iteration-limit exhaustion remain visible in
+`run.json` and the final reports.
 
 ## Requirements
 
@@ -164,6 +173,12 @@ uv run sat run \
   --output-cost-per-million-usd 0.00
 ```
 
+The default runs Tester and Reviewer concurrently. If the selected provider
+can serve only one generation at a time, add
+`--verification-concurrency 1`. This changes scheduling, not role inputs:
+both roles still inspect the same immutable commit and neither receives the
+other's interpretation.
+
 Use real provider prices for paid models. Zero is appropriate only for a model
 that is genuinely free to run. `sat run` returns `0` for a completed run, `2`
 for an auditable failed run, and `1` for invalid CLI input or setup errors.
@@ -240,6 +255,8 @@ succeeded.
   configuration are rejected before checkout.
 - Agent sandboxes and quality gates use no external network by default.
 - Read-only roles deny mutation and process tools.
+- Every role denies Agent-spawning tools; only the controller may authorize and
+  account for a model invocation.
 - Runtime configuration is run-scoped, secret-free, mode `0600`, and ignored.
 - Agent containers receive an explicit non-secret environment instead of the
   host process environment or provider credentials.
@@ -268,7 +285,7 @@ succeeded.
 | Configuration | Purpose | Implementation status |
 | --- | --- | --- |
 | `single_agent` | One-pass baseline | Phase 2 |
-| `function_specialized` | Planner, generalist implementation, parallel testing/review | Phase 1 implemented |
+| `function_specialized` | Planner, generalist implementation, independent testing/review | Phase 1 implemented |
 | `implementation_domain_specialized` | Parallel frontend/backend work plus integration | Phase 2 |
 
 The configuration file owns membership and initial stage ordering. The Python
