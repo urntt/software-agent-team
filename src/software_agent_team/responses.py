@@ -55,6 +55,19 @@ def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]
     return payload
 
 
+def _unwrap_outer_json_fence(value: str) -> str:
+    """Normalize one whole-response ``json`` fence and no other Markdown."""
+
+    lines = value.strip().splitlines()
+    if (
+        len(lines) >= 3
+        and lines[0].strip().casefold() == "```json"
+        and lines[-1].strip() == "```"
+    ):
+        return "\n".join(lines[1:-1])
+    return value
+
+
 def parse_agent_artifact(
     result: AgentExecutionResult,
     request: AgentExecutionRequest,
@@ -90,14 +103,14 @@ def parse_agent_artifact(
 
     try:
         payload = json.loads(
-            result.response_text,
+            _unwrap_outer_json_fence(result.response_text),
             object_pairs_hook=_reject_duplicate_keys,
             parse_constant=_reject_nonstandard_constant,
         )
     except (TypeError, ValueError) as error:
         raise AgentArtifactResponseError(
-            "Agent response must contain exactly one JSON object "
-            "without prose or fences"
+            "Agent response must contain exactly one JSON object; only one outer "
+            "json fence is normalized, and prose or other fences are forbidden"
         ) from error
     if not isinstance(payload, dict):
         raise AgentArtifactResponseError("Agent response must be a JSON object")

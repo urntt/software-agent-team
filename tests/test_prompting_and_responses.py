@@ -387,7 +387,7 @@ def test_strict_parser_accepts_each_phase_role_output(
     "text",
     [
         "Here is the result: {}",
-        "```json\n{}\n```",
+        "```\n{}\n```",
         "{} trailing prose",
         "[]",
         '{"kind":"implementation_plan","kind":"work_result"}',
@@ -398,6 +398,32 @@ def test_strict_parser_rejects_prose_fences_and_non_objects(text: str) -> None:
     with pytest.raises(AgentArtifactResponseError, match="JSON"):
         parse_scripted(
             text, execution_request(AgentRole.PLANNER, ArtifactKind.IMPLEMENTATION_PLAN)
+        )
+
+
+def test_strict_parser_normalizes_one_outer_json_fence() -> None:
+    artifact = plan()
+    fenced = f"```json\n{json.dumps(artifact.model_dump(mode='json'))}\n```"
+
+    parsed = parse_scripted(
+        fenced,
+        execution_request(AgentRole.PLANNER, ArtifactKind.IMPLEMENTATION_PLAN),
+    )
+
+    assert parsed == artifact
+
+
+def test_strict_parser_rejects_prose_around_a_json_fence() -> None:
+    fenced = (
+        "Here is the result:\n```json\n"
+        f"{json.dumps(plan().model_dump(mode='json'))}\n"
+        "```"
+    )
+
+    with pytest.raises(AgentArtifactResponseError, match="prose or other fences"):
+        parse_scripted(
+            fenced,
+            execution_request(AgentRole.PLANNER, ArtifactKind.IMPLEMENTATION_PLAN),
         )
 
 
