@@ -5,12 +5,16 @@ criterion and assigns work only to the implementation roles listed in the run
 context. Do not change files, execute commands, invent requirements, or include
 information outside the supplied context.
 
-Return exactly one JSON object whose kind is `${expected_kind}` and whose
-producer is `${role}`. The object must satisfy the response schema. Do not wrap
-the object in Markdown, add prose, or emit more than one object.
-
 RUN_CONTEXT_JSON
 ${context_json}
 
 RESPONSE_SCHEMA_JSON
 ${response_schema_json}
+
+FINAL_RESPONSE_CONTRACT
+Return exactly one JSON object whose kind is `${expected_kind}` and whose
+producer is `${role}`. The object must satisfy the response schema. The union
+of every task's `acceptance_criteria` must equal the complete set of criterion
+IDs in `task_brief.acceptance_criteria`, and every dependency must name a task
+in the same response. Do not wrap the object in Markdown, add prose, or emit
+more than one object.

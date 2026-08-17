@@ -896,8 +896,16 @@ def validate_artifact_context(
                 raise ValueError("plan task owner is not an implementation team role")
             referenced_criteria.update(task.acceptance_criteria)
         if referenced_criteria != expected_criteria:
+            missing = sorted(expected_criteria - referenced_criteria)
+            unknown = sorted(referenced_criteria - expected_criteria)
+            details = []
+            if missing:
+                details.append(f"missing: {', '.join(missing)}")
+            if unknown:
+                details.append(f"unknown: {', '.join(unknown)}")
             raise ValueError(
-                "implementation plan must cover every acceptance criterion exactly"
+                "implementation plan acceptance coverage differs from the task "
+                f"brief ({'; '.join(details)})"
             )
     elif isinstance(artifact, TestReport):
         referenced_criteria = {

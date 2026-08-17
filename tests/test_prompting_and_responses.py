@@ -235,6 +235,11 @@ def test_planner_prompt_contains_only_confirmed_inputs_and_plan_schema() -> None
     assert "deterministic_command_evidence" not in rendered
     assert '"const": "implementation_plan"' in rendered
     assert "Return exactly one JSON object" in rendered
+    assert "FINAL_RESPONSE_CONTRACT" in rendered
+    assert "task_brief.acceptance_criteria" in rendered
+    assert rendered.rfind("FINAL_RESPONSE_CONTRACT") > rendered.rfind(
+        "RESPONSE_SCHEMA_JSON"
+    )
 
 
 def test_developer_prompt_receives_plan_but_not_quality_evidence() -> None:
@@ -441,7 +446,10 @@ def test_strict_parser_rejects_the_wrong_iteration() -> None:
 def test_strict_parser_rejects_incomplete_acceptance_coverage() -> None:
     incomplete = plan().model_copy(update={"tasks": plan().tasks[:1]})
 
-    with pytest.raises(AgentArtifactResponseError, match="frozen run context"):
+    with pytest.raises(
+        AgentArtifactResponseError,
+        match=r"frozen run context: .*missing:",
+    ):
         parse_scripted(
             incomplete,
             execution_request(AgentRole.PLANNER, ArtifactKind.IMPLEMENTATION_PLAN),

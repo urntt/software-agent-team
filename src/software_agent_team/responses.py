@@ -124,6 +124,6 @@ def parse_agent_artifact(
         )
     except ValueError as error:
         raise AgentArtifactResponseError(
-            "Agent response is invalid in the frozen run context"
+            f"Agent response is invalid in the frozen run context: {error}"
         ) from error
     return artifact
