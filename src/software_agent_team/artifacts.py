@@ -76,6 +76,13 @@ class ReviewVerdict(StrEnum):
     FAIL = "fail"
 
 
+class ReviewTerminationReason(StrEnum):
+    """Terminal review conditions that make another revision unsafe."""
+
+    SAFETY_BOUNDARY_CROSSED = "safety_boundary_crossed"
+    EVIDENCE_INTEGRITY_COMPROMISED = "evidence_integrity_compromised"
+
+
 class IterationDecision(StrEnum):
     """Controller decision after test and review evidence is available."""
 
@@ -692,7 +699,12 @@ class ReviewFinding(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     id: str = Field(min_length=1, pattern=r"^FINDING_[A-Z0-9_]+$")
-    severity: ReviewSeverity
+    severity: ReviewSeverity = Field(
+        description=(
+            "Product impact. Critical severity alone does not make a finding "
+            "terminal when a Developer revision can correct it."
+        )
+    )
     blocking: bool
     category: str = Field(min_length=1)
     description: str = Field(min_length=1)
@@ -732,7 +744,20 @@ class ReviewReport(IterationArtifact):
     kind: Literal[ArtifactKind.REVIEW_REPORT] = ArtifactKind.REVIEW_REPORT
     producer: Literal[AgentRole.REVIEWER] = AgentRole.REVIEWER
     input_commit: str = Field(pattern=COMMIT_PATTERN)
-    verdict: ReviewVerdict
+    verdict: ReviewVerdict = Field(
+        description=(
+            "Use revise for every correctable implementation defect, including "
+            "failed acceptance gates; fail is reserved for a terminal safety or "
+            "evidence-integrity boundary."
+        )
+    )
+    termination_reason: ReviewTerminationReason | None = Field(
+        default=None,
+        description=(
+            "Required only with fail. It records the terminal boundary that makes "
+            "another implementation revision unsafe."
+        ),
+    )
     reviewed_criteria: tuple[str, ...] = ()
     findings: tuple[ReviewFinding, ...] = ()
     summary: str = Field(min_length=1)
@@ -766,6 +791,11 @@ class ReviewReport(IterationArtifact):
             raise ValueError("revision requires a blocking review finding")
         if self.verdict is ReviewVerdict.FAIL and not critical:
             raise ValueError("failed reviews require a critical finding")
+        if (
+            self.verdict is not ReviewVerdict.FAIL
+            and self.termination_reason is not None
+        ):
+            raise ValueError("only failed reviews may declare a terminal reason")
         return self
 
 

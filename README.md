@@ -91,6 +91,13 @@ The controller accepts an iteration only when all of the following agree:
 5. The controller, not either Agent, resolves those pending criteria to
    `passed` in the final report.
 
+Reviewer severity and controller termination are separate concepts. Any
+correctable implementation defect, including a failed acceptance gate or a
+critical-impact product bug, produces `revise` while the iteration budget
+allows it. Reviewer `fail` requires an explicit terminal reason proving that a
+run safety or evidence-integrity boundary makes another Developer revision
+unsafe.
+
 A failed run is a valid, auditable result. Provider failures, invalid
 artifacts, timeouts, missing runtime telemetry, missing dependencies, budget
 exhaustion, unsafe Git state, and iteration-limit exhaustion remain visible in

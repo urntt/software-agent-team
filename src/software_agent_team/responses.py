@@ -11,6 +11,8 @@ from software_agent_team.artifacts import (
     AgentRole,
     IterationArtifact,
     PhaseArtifact,
+    ReviewReport,
+    ReviewVerdict,
     TaskBrief,
     parse_phase_artifact,
     validate_artifact_context,
@@ -167,4 +169,13 @@ def parse_agent_artifact(
         raise AgentArtifactResponseError(
             f"Agent response is invalid in the frozen run context: {error}"
         ) from error
+    if (
+        isinstance(artifact, ReviewReport)
+        and artifact.verdict is ReviewVerdict.FAIL
+        and artifact.termination_reason is None
+    ):
+        raise AgentArtifactResponseError(
+            "Agent response is invalid in the frozen run context: failed reviews "
+            "require a terminal review reason"
+        )
     return artifact

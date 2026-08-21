@@ -194,6 +194,10 @@ Confirm all of the following before marking Phase 1 accepted:
   the immutable commit, and returned no blocking finding. The final report,
   rather than the Tester report, contains the controller-resolved `passed`
   results for those criteria.
+- A correctable implementation or acceptance-gate defect produced `revise`,
+  regardless of product-impact severity. Any Reviewer `fail` record includes a
+  terminal safety or evidence-integrity reason showing why another revision
+  would be unsafe.
 - No role execution spawned an untracked child Agent or one-shot model call.
 - Every successful execution reports exactly the selected model and integer
   input/output token counts. No fallback or missing telemetry was accepted.

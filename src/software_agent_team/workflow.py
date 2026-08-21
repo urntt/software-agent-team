@@ -32,6 +32,7 @@ from software_agent_team.artifacts import (
     IterationRecord,
     PhaseArtifact,
     ReviewReport,
+    ReviewTerminationReason,
     ReviewVerdict,
     TaskBrief,
     TestReport,
@@ -735,7 +736,10 @@ class WorkflowCoordinator:
         elif request.role is AgentRole.REVIEWER:
             role_check = (
                 "Recheck that the verdict, findings, criterion IDs, and input "
-                "commit agree with the supplied immutable evidence."
+                "commit agree with the supplied immutable evidence. Use revise, "
+                "not fail, for a correctable implementation or acceptance-gate "
+                "defect; fail requires a terminal safety or evidence-integrity "
+                "reason that makes another revision unsafe."
             )
         else:  # pragma: no cover - executable roles are exhaustively mapped
             role_check = "Recheck every field against the supplied run evidence."
@@ -929,6 +933,11 @@ class WorkflowCoordinator:
         if test.status is CheckStatus.BLOCKED:
             return TerminationReason.DEPENDENCY_UNAVAILABLE
         if review.verdict is ReviewVerdict.FAIL:
+            if (
+                review.termination_reason
+                is ReviewTerminationReason.EVIDENCE_INTEGRITY_COMPROMISED
+            ):
+                return TerminationReason.ARTIFACT_INVALID
             return TerminationReason.SAFETY_BOUNDARY_CROSSED
         if iteration >= iteration_limit:
             return TerminationReason.ITERATION_LIMIT_REACHED

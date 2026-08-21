@@ -17,7 +17,10 @@ from software_agent_team.artifacts import (
     CriterionResult,
     ImplementationPlan,
     PlanTask,
+    ReviewFinding,
     ReviewReport,
+    ReviewSeverity,
+    ReviewTerminationReason,
     ReviewVerdict,
     TaskBrief,
     WorkResult,
@@ -209,6 +212,87 @@ def review_report(*, iteration: int = 1) -> ReviewReport:
     )
 
 
+def test_live_failed_review_requires_an_explicit_terminal_reason() -> None:
+    payload = review_report().model_dump(mode="json")
+    payload["verdict"] = "fail"
+    payload["findings"] = [
+        ReviewFinding(
+            id="FINDING_BOUNDARY",
+            severity=ReviewSeverity.CRITICAL,
+            blocking=True,
+            category="safety_boundary",
+            description="The immutable evidence records a boundary violation.",
+            recommendation="Stop the run for operator review.",
+        ).model_dump(mode="json")
+    ]
+
+    legacy_compatible_report = ReviewReport.model_validate(payload)
+
+    assert legacy_compatible_report.termination_reason is None
+    with pytest.raises(AgentArtifactResponseError, match="terminal review reason"):
+        parse_scripted(
+            legacy_compatible_report,
+            execution_request(AgentRole.REVIEWER, ArtifactKind.REVIEW_REPORT),
+        )
+
+
+def test_correctable_critical_finding_still_allows_revision() -> None:
+    report = ReviewReport(
+        run_id="task-manager-001",
+        team_id="function_specialized",
+        created_at=CREATED_AT,
+        iteration=1,
+        input_commit=OUTPUT_COMMIT,
+        verdict=ReviewVerdict.REVISE,
+        findings=(
+            ReviewFinding(
+                id="FINDING_ACCEPTANCE",
+                severity=ReviewSeverity.CRITICAL,
+                blocking=True,
+                category="correctness",
+                description="A required endpoint rejects a valid request.",
+                recommendation="Correct the endpoint contract and rerun the gate.",
+            ),
+        ),
+        summary="The correctable implementation defect requires revision.",
+    )
+
+    assert report.termination_reason is None
+
+
+def test_failed_review_accepts_a_terminal_boundary_reason() -> None:
+    report = ReviewReport(
+        run_id="task-manager-001",
+        team_id="function_specialized",
+        created_at=CREATED_AT,
+        iteration=1,
+        input_commit=OUTPUT_COMMIT,
+        verdict=ReviewVerdict.FAIL,
+        termination_reason=ReviewTerminationReason.SAFETY_BOUNDARY_CROSSED,
+        findings=(
+            ReviewFinding(
+                id="FINDING_BOUNDARY",
+                severity=ReviewSeverity.CRITICAL,
+                blocking=True,
+                category="safety_boundary",
+                description="The immutable evidence records a boundary violation.",
+                recommendation="Stop the run for operator review.",
+            ),
+        ),
+        summary="Continuing would cross the recorded safety boundary.",
+    )
+
+    assert report.termination_reason is ReviewTerminationReason.SAFETY_BOUNDARY_CROSSED
+
+
+def test_nonfailed_review_rejects_a_terminal_reason() -> None:
+    payload = review_report().model_dump(mode="json")
+    payload["termination_reason"] = "safety_boundary_crossed"
+
+    with pytest.raises(ValidationError, match="only failed reviews"):
+        ReviewReport.model_validate(payload)
+
+
 def prompt_inputs(**updates: object) -> AgentPromptInputs:
     payload: dict[str, object] = {
         "task_brief": task_brief(),
@@ -331,6 +415,9 @@ def test_reviewer_prompt_receives_work_and_command_evidence_in_parallel() -> Non
     assert '"deterministic_command_evidence": [' in rendered
     assert '"root": "/agent"' in rendered
     assert "read-only at\n`/agent`" in rendered
+    assert "Use `revise` for\nevery correctable implementation defect" in rendered
+    assert "Never\nuse `fail` merely because a deterministic command failed" in rendered
+    assert '"termination_reason"' in rendered
     assert '"implementation_plan": {' not in rendered
 
 

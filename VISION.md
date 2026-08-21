@@ -2,7 +2,7 @@
 
 **Status:** Phase 1 implementation complete; qualifying live trace pending
 
-**Last updated:** August 17, 2026
+**Last updated:** August 21, 2026
 
 ## Purpose
 
@@ -260,6 +260,7 @@ interpretation does not confound the result.
 | Run fixed Docker quality gates before Agent judgment | Reproducible command evidence is stronger than claimed test results and keeps generated code isolated from the host. |
 | Resolve the sandbox tag to one local image ID per run | Both Agent sandboxes and quality gates execute the same immutable image even if a mutable local tag is later reassigned. |
 | Allow one response repair and one implementation revision | A small bounded loop can correct formatting or implementation defects without hiding non-convergence, time, or cost. |
+| Separate review severity from terminal failure | Even a critical-impact product defect may be correctable. Reviewer `fail` therefore requires an explicit safety or evidence-integrity termination reason; ordinary gate failures and implementation defects request `revise`. |
 | Freeze model identity and prices for each run | Explicit model telemetry and estimated cost are required for comparable experiments; model fallback would change the independent variables. |
 | Treat terminal failure as evidence | Provider, sandbox, artifact, budget, and convergence failures must remain observable instead of being retried or discarded silently. |
 
@@ -291,6 +292,14 @@ concurrent by default and may be serialized for a provider with one generation
 slot. It performs at most two implementation iterations: the initial pass and
 one revision. Later configurations may use the manifest's higher explicit
 limit.
+
+The Reviewer recommends `revise` for every correctable product defect,
+including failed deterministic acceptance and security defects in generated
+source. Finding severity records product impact and does not independently
+authorize terminal failure. A Reviewer `fail` verdict is valid only with an
+explicit terminal reason showing that another implementation attempt would
+cross a run safety boundary or rely on compromised evidence; the deterministic
+controller maps that reason to the final termination category.
 
 The workflow stops earlier when fixed acceptance checks pass, every configured
 manual criterion receives independent review, and no blocking review finding

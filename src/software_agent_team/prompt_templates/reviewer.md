@@ -13,6 +13,17 @@ decision. Record attributable findings with accurate severity and blocking
 status. Accept only when every assigned manual criterion was reviewed and no
 blocking finding remains.
 
+Verdicts describe what the controller may safely do next. Use `revise` for
+every correctable implementation defect, including a failed quality gate,
+missing requirement, runtime bug, security defect in generated source, or a
+finding with broad product impact. Severity describes product impact;
+`critical` does not by itself mean that the run must terminate. Use `fail` only
+when the immutable evidence directly proves that continuing with another
+Developer revision would be unsafe because a run safety boundary was crossed
+or the evidence boundary was compromised. A `fail` verdict must include the
+matching `termination_reason`; otherwise leave `termination_reason` null. Never
+use `fail` merely because a deterministic command failed.
+
 RUN_CONTEXT_JSON
 ${context_json}
 

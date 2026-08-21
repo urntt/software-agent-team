@@ -19,6 +19,7 @@ from software_agent_team.artifacts import (
     ReviewFinding,
     ReviewReport,
     ReviewSeverity,
+    ReviewTerminationReason,
     ReviewVerdict,
     TaskBrief,
     WorkResult,
@@ -329,7 +330,11 @@ class DynamicWorkflowExecutor:
                     id=f"FINDING_ITERATION_{request.iteration}",
                     severity=severity,
                     blocking=True,
-                    category="correctness",
+                    category=(
+                        "safety_boundary"
+                        if verdict is ReviewVerdict.FAIL
+                        else "correctness"
+                    ),
                     description=f"Iteration {request.iteration} needs correction.",
                     recommendation="Address the attributable issue.",
                     criterion_ids=("AC_QUALITY",),
@@ -342,6 +347,11 @@ class DynamicWorkflowExecutor:
             iteration=request.iteration,
             input_commit=input_commit,
             verdict=verdict,
+            termination_reason=(
+                ReviewTerminationReason.SAFETY_BOUNDARY_CROSSED
+                if verdict is ReviewVerdict.FAIL
+                else None
+            ),
             reviewed_criteria=tuple(str(item) for item in reviewed_payload),
             findings=findings,
             summary=f"Reviewer verdict: {verdict.value}.",
@@ -575,6 +585,26 @@ def test_workflow_performs_exactly_one_evidence_driven_revision(
     assert first["decision"] == "revise"
     assert second["decision"] == "accept"
     assert second["resolved_finding_ids"] == ["FINDING_ITERATION_1"]
+
+
+def test_workflow_stops_on_a_terminal_reviewer_boundary(tmp_path: Path) -> None:
+    source = initialize_source(tmp_path)
+    workspace = tmp_path / "workspaces" / task_brief().run_id
+    executor = DynamicWorkflowExecutor(
+        workspace,
+        review_verdicts={1: ReviewVerdict.FAIL},
+    )
+
+    outcome = coordinator(tmp_path, executor).execute(
+        task_brief(),
+        source_repository=source,
+    )
+
+    assert outcome.record.phase is RunPhase.FAILED
+    assert (
+        outcome.record.termination_reason is TerminationReason.SAFETY_BOUNDARY_CROSSED
+    )
+    assert outcome.record.current_iteration == 1
 
 
 def test_workflow_repairs_one_invalid_agent_response(tmp_path: Path) -> None:
