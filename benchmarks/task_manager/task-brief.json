@@ -4,8 +4,9 @@
   "source_request": "Build a small local Web application for managing personal tasks.",
   "requirements": [
     "Expose an ASGI application as app.main:app and use TASK_MANAGER_DATABASE_PATH when it is set.",
-    "Serve the task list at GET / and create tasks with POST /tasks.",
-    "Serve task details at GET /tasks/{id}, edit forms at GET /tasks/{id}/edit, and updates at POST /tasks/{id}/edit.",
+    "Treat title as required and description, due_date, status, and priority as optional task fields. Accept todo, in_progress, and done statuses and low, medium, and high priorities; default omitted status and priority to todo and medium.",
+    "Serve the task list at GET /, accept standard HTML form submissions at POST /tasks, and expose the created task's canonical /tasks/{id} detail URL through a redirect or response link.",
+    "Serve task details at GET /tasks/{id}, edit forms at GET /tasks/{id}/edit, and standard HTML form updates at POST /tasks/{id}/edit.",
     "Serve an explicit deletion confirmation at GET /tasks/{id}/delete and delete only after POST /tasks/{id}/delete.",
     "Support status and priority filters on GET / with the status and priority query parameters.",
     "Persist tasks in SQLite across application process restarts.",

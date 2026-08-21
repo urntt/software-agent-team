@@ -21,6 +21,7 @@ HOST = "127.0.0.1"
 PORT = 8765
 BASE_URL = f"http://{HOST}:{PORT}"
 TASK_LOCATION = re.compile(r"^/tasks/(?P<task_id>[1-9][0-9]*)$")
+INVALID_FORM_STATUSES = frozenset({200, 400, 422})
 
 
 class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -125,6 +126,14 @@ def require_text(body: str, *values: str) -> None:
             raise AssertionError(f"response does not contain {value!r}")
 
 
+def require_any_text(body: str, *values: str) -> None:
+    """Require at least one equivalent case-insensitive value in HTML."""
+
+    lowered = body.lower()
+    if not any(value.lower() in lowered for value in values):
+        raise AssertionError(f"response does not contain any of {values!r}")
+
+
 def create_task(title: str, *, description: str = "persisted") -> str:
     """Create a complete task and return its canonical detail location."""
 
@@ -158,7 +167,8 @@ def run_acceptance(repository: Path) -> None:
 
             location = create_task("Phase One Task", description="Keep this value")
             _, detail_html, _ = request(location)
-            require_text(detail_html, "Phase One Task", "Keep this value", "todo")
+            require_text(detail_html, "Phase One Task", "Keep this value")
+            require_any_text(detail_html, "todo", "to do")
 
             _, _, _ = request(
                 f"{location}/edit",
@@ -192,7 +202,7 @@ def run_acceptance(repository: Path) -> None:
                     "status": "todo",
                     "priority": "medium",
                 },
-                expected={400, 422},
+                expected=INVALID_FORM_STATUSES,
             )
             require_text(invalid_html, "title", "Preserve this description")
             request("/tasks/999999999", expected={404})

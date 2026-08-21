@@ -7,6 +7,10 @@ backend behavior, persistence, server-rendered user interface work, automated
 testing, independent review, and revision. The benchmark evaluates the agent
 workflow; it is not a prebuilt application template.
 
+The confirmed [`task-brief.json`](task-brief.json) is the authoritative input
+given to Agents. This document summarizes that contract and must not introduce
+additional implementation requirements.
+
 ## Required Technology
 
 - Python 3.12

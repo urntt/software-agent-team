@@ -54,12 +54,15 @@ tests. The code now includes:
 
 Phase 1 has **not yet met its formal exit criterion**. Authorized exploratory
 live traces have exercised Planner, Developer, deterministic gates, Tester, and
-Reviewer and have produced controller-verified commits. The furthest trace
-reached verification with compilation, lint, and project tests passing, while
-the independent acceptance suite exposed a canonical-detail-URL defect. Those
-traces also revealed and drove fixes for response contracts, provider-capacity
-handling, verification evidence visibility, and untracked sub-Agent calls. A
-new trace must still reach `completed` and satisfy the evidence checklist. See
+Reviewer, produced controller-verified commits, and completed an evidence-driven
+revision. The latest trace passed compilation, lint, and 18 generated tests in
+both iterations, then exposed that the version-one acceptance suite constrained
+HTTP status and presentation details not present in the confirmed TaskBrief.
+The benchmark is now versioned as `task_manager_phase1_v2`; its black-box checks
+match the observable product contract, and its confirmed brief exposes the
+fixed form, field, enum, and canonical-URL requirements. Earlier traces remain
+exploratory evidence rather than comparable version-two results. A new trace
+must still reach `completed` and satisfy the evidence checklist. See
 [`docs/phase1-runbook.md`](docs/phase1-runbook.md).
 
 Interactive clarification, the single-Agent baseline path, domain-specialized

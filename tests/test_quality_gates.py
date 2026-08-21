@@ -94,7 +94,7 @@ def make_invocation(
 def test_checked_in_manifests_are_complete_and_hashed(configuration) -> None:
     assert configuration.policy.id == "phase1_deterministic"
     assert configuration.policy.agent_budget.max_calls == 14
-    assert configuration.benchmark.id == "task_manager_phase1"
+    assert configuration.benchmark.id == "task_manager_phase1_v2"
     assert configuration.task_brief.confirmed is True
     assert len(configuration.benchmark.gates) == 4
     assert len(configuration.policy_sha256) == 64

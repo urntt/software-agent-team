@@ -9,7 +9,7 @@ tests do not make a model call. Following the `sat run` step below does.
 ## Acceptance Objective
 
 Exercise the complete `function_specialized` path against the frozen
-task-management benchmark:
+`task_manager_phase1_v2` benchmark:
 
 ```text
 Planner
@@ -23,6 +23,9 @@ Planner
 A useful failed run remains valid experimental evidence, but the Phase 1
 acceptance trace should reach `completed`, exercise every role, preserve the
 actual model and token telemetry, and leave a reproducible Git snapshot.
+Do not combine earlier benchmark-version results with version-two comparisons.
+Record the harness Git commit with every trace so the acceptance input is
+attributable to its checked-in version.
 
 ## Preconditions
 

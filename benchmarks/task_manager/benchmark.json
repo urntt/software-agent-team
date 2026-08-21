@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "id": "task_manager_phase1",
+  "id": "task_manager_phase1_v2",
   "policy_id": "phase1_deterministic",
   "task_brief": "task-brief.json",
   "input_mounts": [

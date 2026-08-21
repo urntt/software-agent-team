@@ -261,6 +261,7 @@ interpretation does not confound the result.
 | Resolve the sandbox tag to one local image ID per run | Both Agent sandboxes and quality gates execute the same immutable image even if a mutable local tag is later reassigned. |
 | Allow one response repair and one implementation revision | A small bounded loop can correct formatting or implementation defects without hiding non-convergence, time, or cost. |
 | Separate review severity from terminal failure | Even a critical-impact product defect may be correctable. Reviewer `fail` therefore requires an explicit safety or evidence-integrity termination reason; ordinary gate failures and implementation defects request `revise`. |
+| Version requirement or acceptance corrections | A hidden or over-specified acceptance condition confounds model evaluation. The confirmed TaskBrief must expose the product contract, black-box checks must accept equivalent compliant presentations, and a correction starts a new benchmark version. |
 | Freeze model identity and prices for each run | Explicit model telemetry and estimated cost are required for comparable experiments; model fallback would change the independent variables. |
 | Treat terminal failure as evidence | Provider, sandbox, artifact, budget, and convergence failures must remain observable instead of being retried or discarded silently. |
 
@@ -509,11 +510,14 @@ Not yet available or completed:
 
 Authorized exploratory live traces have exercised all four roles, real
 OpenClaw/provider calls, controller-verified Git snapshots, and Docker quality
-gates. The furthest trace reached verification with compilation, lint, and
-project tests passing; the frozen acceptance suite found a canonical-detail-URL
-defect before a qualifying completion. These traces demonstrate substantial
-runtime compatibility but do not satisfy the Phase 1 exit criterion. Offline
-scripted executions continue to prove controller behavior, not model quality.
+gates. The latest trace exercised the internal revision loop and passed
+compilation, lint, and 18 generated tests in both iterations. It also showed
+that the version-one acceptance suite required response details absent from the
+confirmed TaskBrief. That benchmark defect was corrected and explicitly
+versioned as `task_manager_phase1_v2`; version-one traces remain exploratory and
+must not be mixed with version-two comparisons. No real trace has yet satisfied
+the Phase 1 exit criterion. Offline scripted executions continue to prove
+controller behavior, not model quality.
 
 ## Development Route
 
