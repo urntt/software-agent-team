@@ -496,6 +496,9 @@ Implemented and offline verified:
   estimated-cost stop thresholds;
 - Explicit completed and failed terminal outcomes with machine-readable and
   human-readable reports;
+- One-command Linux/WSL installation for the pinned toolchain, locked project
+  environment, checkout-bound CLI launcher, fixed Docker image, and offline
+  validation, without taking ownership of OS-level Docker or provider secrets;
 - Offline end-to-end coverage for success, revision, response repair, timeout,
   evidence tampering, iteration exhaustion, missing Git changes, missing model
   or token telemetry, and cost exhaustion.
@@ -503,7 +506,6 @@ Implemented and offline verified:
 Not yet available or completed:
 
 - Interactive clarification;
-- Consecutive successful live replays and one-command installation validation;
 - Automatic CLI resume of an interrupted run;
 - Executable `single_agent` and `implementation_domain_specialized` workflow
   paths;
@@ -517,8 +519,10 @@ acceptance criteria passed, independent review accepted, complete model and
 token telemetry, verified artifact hashes, and clean isolated Git boundaries.
 The earlier benchmark defect was corrected and explicitly versioned as
 `task_manager_phase1_v2`; version-one traces remain exploratory and must not be
-mixed with version-two comparisons. Repeated replay stability remains an active
-goal. Offline scripted executions prove controller behavior, not model quality.
+mixed with version-two comparisons. Two consecutive replays of the current
+harness commit have now completed through the bounded revision loop. Broader
+comparative repetition remains later work. Offline scripted executions prove
+controller behavior, not model quality.
 
 ## Development Route
 

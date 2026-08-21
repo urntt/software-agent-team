@@ -1,10 +1,11 @@
 # Phase 1 Live-Trace Runbook
 
-This runbook is the operating procedure for the next qualifying real
-model/provider trace. Exploratory traces have already exercised the live path
-and exposed implementation, protocol, and provider-capacity defects; none has
-yet satisfied the Phase 1 exit criterion. Repository development and offline
-tests do not make a model call. Following the `sat run` step below does.
+This runbook is the operating procedure for a qualifying real model/provider
+trace. A version-two trace has satisfied the Phase 1 exit checklist, and two
+consecutive replays of the current harness commit have reached `completed`
+through the bounded revision loop. New traces still require fresh run IDs and
+the complete evidence checks below. Repository development and offline tests do
+not make a model call. Following the `sat run` step below does.
 
 ## Acceptance Objective
 
@@ -58,6 +59,21 @@ attributable to its checked-in version.
   `--verification-concurrency 1`. Role Agents are forbidden from spawning
   additional Agent calls outside controller accounting.
 
+## 0. Install the Harness
+
+From a clean checkout, run:
+
+```bash
+./scripts/install.sh
+```
+
+The installer prepares the pinned user-local toolchain, locked Python
+environment, checkout-bound `sat` launcher, fixed benchmark image, and offline
+checks. It requires Git, curl, and a running Docker daemon that the unprivileged
+user can access. It does not install Docker at the operating-system level or
+create provider credentials and active OpenClaw configuration; configure those
+outside the checkout before a paid live trace.
+
 ## 1. Verify the Checkout
 
 From the repository root:
@@ -71,9 +87,11 @@ make check
 configuration and offline behavior without requiring Docker or provider
 credentials.
 
-## 2. Build the Frozen Sandbox Image
+## 2. Verify or Rebuild the Frozen Sandbox Image
 
-Build the exact local tag named by `configs/run-policy.json`:
+The one-command installer builds the exact local tag named by
+`configs/run-policy.json`. Rebuild it after an intentional benchmark lock or
+Dockerfile change:
 
 ```bash
 docker build \
@@ -191,8 +209,9 @@ Confirm all of the following before marking Phase 1 accepted:
   read-only `/agent` mount.
 - Every command record preserves its benchmark-owned `criterion_ids`. The
   Tester copied the configured `manual_review_criteria`, marked those criteria
-  `pending_review` after their deterministic portions passed, and did not
-  classify expected semantic review as a dependency blocker.
+  `pending_review` after their deterministic portions passed, set its overall
+  status to `passed`, and did not classify expected semantic review as a
+  dependency blocker.
 - The Reviewer copied the same IDs into `reviewed_criteria`, inspected them on
   the immutable commit, and returned no blocking finding. The final report,
   rather than the Tester report, contains the controller-resolved `passed`

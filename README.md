@@ -49,6 +49,8 @@ tests. The code now includes:
 - A pre-call Agent invocation cap and post-call token, duration, and
   estimated-cost stop thresholds;
 - Explicit completed and failed terminal states with JSON and Markdown reports;
+- A one-command Linux/WSL installer that prepares the pinned toolchain, locked
+  project environment, `sat` launcher, frozen Docker image, and offline checks;
 - Offline success, revision, timeout, evidence-tampering, non-convergence,
   no-change, invalid-response, and budget-failure tests.
 
@@ -56,9 +58,11 @@ Phase 1 has produced a live version-two trace that reached `completed`: one
 controller-verified implementation commit passed every deterministic gate, all
 ten acceptance criteria, and independent review, with complete model, token,
 hash, and Git-boundary evidence. Earlier version-one traces remain exploratory
-evidence and are not comparable with version-two results. Repeated live
-stability trials and one-command installation remain active engineering work.
-See [`docs/phase1-runbook.md`](docs/phase1-runbook.md).
+evidence and are not comparable with version-two results. Two consecutive live
+replays of the current harness commit have also reached `completed`, each using
+the bounded evidence-driven revision loop. One-command installation is
+implemented; provider onboarding and repeated comparative experiments remain
+operator-owned work. See [`docs/phase1-runbook.md`](docs/phase1-runbook.md).
 
 Interactive clarification, the single-Agent baseline path, domain-specialized
 implementation, repeated comparisons, and automatic interrupted-run resume are
@@ -124,6 +128,32 @@ provider output.
 
 The checked-in setup pins Python 3.12, OpenClaw 2026.7.1-2, OpenClaw's local
 Node.js 24.15.0 runtime, and Python dependencies through `uv.lock`.
+
+## Installation
+
+From a clean checkout on Linux or WSL, run:
+
+```bash
+./scripts/install.sh
+```
+
+The installer must run as an unprivileged user with Git, curl, and access to a
+running Docker daemon already available. It installs the pinned uv, Python, and
+OpenClaw toolchain when needed; synchronizes the locked project environment;
+builds the benchmark image named by `configs/run-policy.json`; runs
+configuration, formatting, lint, and test checks; and creates
+`$HOME/.local/bin/sat` as a checkout-bound launcher. It is idempotent for the
+same checkout and refuses to overwrite an unrelated `sat` command. Use
+`SAT_BIN_DIR`, `UV_BIN`, or `OPENCLAW_PREFIX` only when the corresponding
+user-local location must be changed.
+
+The installer neither installs an OS-level Docker daemon nor creates provider
+credentials or an active OpenClaw provider configuration. Keep those values
+outside the checkout, then verify the installed launcher with:
+
+```bash
+sat --help
+```
 
 ## Development Setup
 
