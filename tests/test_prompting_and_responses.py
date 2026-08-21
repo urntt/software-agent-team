@@ -539,7 +539,7 @@ def test_strict_parser_accepts_each_phase_role_output(
     ],
 )
 def test_strict_parser_rejects_prose_fences_and_non_objects(text: str) -> None:
-    with pytest.raises(AgentArtifactResponseError, match="JSON"):
+    with pytest.raises(AgentArtifactResponseError, match=r"JSON|artifact"):
         parse_scripted(
             text, execution_request(AgentRole.PLANNER, ArtifactKind.IMPLEMENTATION_PLAN)
         )
@@ -572,6 +572,41 @@ def test_strict_parser_normalizes_presentation_prose_around_one_json_fence() -> 
     assert parsed == plan()
 
 
+def test_strict_parser_normalizes_presentation_prose_around_one_object() -> None:
+    response = (
+        "I verified the commit and changed paths.\n"
+        f"{json.dumps(plan().model_dump(mode='json'))}\n"
+        "This is the requested artifact."
+    )
+
+    parsed = parse_scripted(
+        response,
+        execution_request(AgentRole.PLANNER, ArtifactKind.IMPLEMENTATION_PLAN),
+    )
+
+    assert parsed == plan()
+
+
+@pytest.mark.parametrize(
+    "outside",
+    [
+        "A competing object follows: {}",
+        "A competing array follows: []",
+        "A fence follows: ```text not json ```",
+    ],
+)
+def test_strict_parser_rejects_structured_content_outside_unfenced_object(
+    outside: str,
+) -> None:
+    response = f"{json.dumps(plan().model_dump(mode='json'))}\n{outside}"
+
+    with pytest.raises(AgentArtifactResponseError, match="outside JSON structures"):
+        parse_scripted(
+            response,
+            execution_request(AgentRole.PLANNER, ArtifactKind.IMPLEMENTATION_PLAN),
+        )
+
+
 @pytest.mark.parametrize(
     "outside",
     [
@@ -585,7 +620,7 @@ def test_strict_parser_rejects_structured_content_outside_json_fence(
 ) -> None:
     fenced = f"```json\n{json.dumps(plan().model_dump(mode='json'))}\n```\n{outside}"
 
-    with pytest.raises(AgentArtifactResponseError, match="multiple fences or JSON"):
+    with pytest.raises(AgentArtifactResponseError, match="outside JSON structures"):
         parse_scripted(
             fenced,
             execution_request(AgentRole.PLANNER, ArtifactKind.IMPLEMENTATION_PLAN),

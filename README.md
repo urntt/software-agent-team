@@ -106,11 +106,11 @@ artifacts, timeouts, missing runtime telemetry, missing dependencies, budget
 exhaustion, unsafe Git state, and iteration-limit exhaustion remain visible in
 `run.json` and the final reports.
 
-The response boundary accepts a raw JSON object or one unambiguous `json` code
-fence. Presentation-only text around that single fence is discarded only when
-it contains no JSON structure or additional fence; duplicate keys, multiple
-objects, multiple fences, non-standard constants, and schema violations remain
-invalid and consume the one bounded repair attempt.
+The response boundary accepts one unambiguous JSON object, either raw, inside
+one `json` code fence, or surrounded by presentation-only prose. Surrounding
+text is discarded only when it contains no other JSON structure or fence;
+duplicate keys, multiple objects, multiple fences, non-standard constants, and
+schema violations remain invalid and consume the one bounded repair attempt.
 
 ## Requirements
 

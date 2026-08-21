@@ -81,6 +81,27 @@ def _unwrap_single_json_fence(value: str) -> str:
     return "\n".join(lines[opening + 1 : closing])
 
 
+def _unwrap_single_json_object(value: str) -> str:
+    """Extract one unambiguous object surrounded only by presentation prose."""
+
+    stripped = value.strip()
+    opening = stripped.find("{")
+    if opening < 0:
+        return value
+    prefix = stripped[:opening].strip()
+    try:
+        parsed, closing = json.JSONDecoder().raw_decode(stripped, idx=opening)
+    except ValueError:
+        return value
+    if not isinstance(parsed, dict):
+        return value
+    suffix = stripped[closing:].strip()
+    outside = "\n".join(part for part in (prefix, suffix) if part)
+    if "```" in outside or any(character in outside for character in "{}[]"):
+        return value
+    return stripped[opening:closing]
+
+
 def parse_agent_artifact(
     result: AgentExecutionResult,
     request: AgentExecutionRequest,
@@ -115,16 +136,20 @@ def parse_agent_artifact(
         raise AgentArtifactResponseError("request exceeds the run iteration limit")
 
     try:
+        normalized = _unwrap_single_json_object(
+            _unwrap_single_json_fence(result.response_text)
+        )
         payload = json.loads(
-            _unwrap_single_json_fence(result.response_text),
+            normalized,
             object_pairs_hook=_reject_duplicate_keys,
             parse_constant=_reject_nonstandard_constant,
         )
     except (TypeError, ValueError) as error:
         raise AgentArtifactResponseError(
-            "Agent response must contain exactly one JSON object; one json fence "
-            "with presentation-only prose is normalized, but multiple fences or "
-            "JSON structures outside that fence are forbidden"
+            "Agent response must contain exactly one unambiguous JSON object; a "
+            "single json fence or presentation-only surrounding prose is "
+            "normalized, but multiple fences or outside JSON structures are "
+            "forbidden"
         ) from error
     if not isinstance(payload, dict):
         raise AgentArtifactResponseError("Agent response must be a JSON object")
