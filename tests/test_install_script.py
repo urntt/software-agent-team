@@ -166,6 +166,7 @@ def test_installer_prepares_cli_image_and_checks_idempotently(tmp_path: Path) ->
     launcher = install_bin / "sat"
     assert launcher.is_symlink()
     assert launcher.readlink() == checkout / ".venv/bin/sat"
+    assert (checkout / "openclaw/workspaces").is_dir()
     assert "install: Software Agent Team is ready" in first.stdout
     assert "image_id=sha256:" + "a" * 64 in first.stdout
     credential_notice = (

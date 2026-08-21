@@ -26,6 +26,7 @@ fi
 cd "$task_root"
 "$task_uv_bin" python install 3.12
 "$task_uv_bin" sync --locked
+mkdir -p openclaw/workspaces
 
 SOFTWARE_AGENT_TEAM_ROOT="$task_root" \
   "$task_uv_bin" run --frozen python - <<'PY'
