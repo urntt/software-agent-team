@@ -502,6 +502,7 @@ def test_runner_generates_command_evidence_and_persists_outputs(
     ]
     assert all(item.exit_code == 0 and not item.timed_out for item in evidence)
     assert evidence[0].argv == configuration.benchmark.gates[0].argv
+    assert evidence[0].criterion_ids == (configuration.benchmark.gates[0].criterion_ids)
     assert evidence[0].stdout_path == (
         "iterations/01/commands/check_compile.stdout.txt"
     )

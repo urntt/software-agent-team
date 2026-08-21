@@ -1168,6 +1168,7 @@ class QualityGateRunner:
                 CommandEvidence(
                     id=gate.id,
                     argv=gate.argv,
+                    criterion_ids=gate.criterion_ids,
                     exit_code=exit_code,
                     timed_out=timed_out,
                     duration_ms=result.duration_ms,

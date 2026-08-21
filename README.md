@@ -38,6 +38,9 @@ tests. The code now includes:
   execution, resource limits, bounded output, and fixed commands;
 - Independent Tester and Reviewer execution against the same immutable commit,
   parallel by default or serialized for a single-generation provider;
+- Explicit command-to-criterion coverage, manual-review scope, and
+  controller-resolved acceptance results instead of treating semantic review
+  as a missing dependency;
 - Bounded command-output tails in verification prompts and a correct read-only
   source mount for independent review;
 - Tool-policy enforcement that prevents role Agents from spawning untracked
@@ -79,10 +82,14 @@ The controller accepts an iteration only when all of the following agree:
 
 1. The Developer's `WorkResult` matches a clean descendant Git commit and its
    exact changed-file set.
-2. The Tester reproduces the controller-recorded command evidence exactly.
-3. Every acceptance criterion has a result.
-4. The fixed commands pass and the independent Reviewer returns `accept` with
-   no blocking finding.
+2. The Tester reproduces the controller-recorded command evidence and its
+   command-to-criterion coverage exactly.
+3. Every deterministic criterion passes; criteria assigned to independent
+   review remain explicitly `pending_review` in the Tester's report.
+4. The Reviewer confirms the exact manual-review scope on the same immutable
+   commit and returns `accept` with no blocking finding.
+5. The controller, not either Agent, resolves those pending criteria to
+   `passed` in the final report.
 
 A failed run is a valid, auditable result. Provider failures, invalid
 artifacts, timeouts, missing runtime telemetry, missing dependencies, budget

@@ -36,6 +36,7 @@ from software_agent_team.artifacts import (
     TaskBrief,
     TestReport,
     WorkResult,
+    resolve_acceptance_results,
 )
 from software_agent_team.budgets import AgentBudget, ModelPricing
 from software_agent_team.execution import (
@@ -168,6 +169,7 @@ class WorkflowCoordinator:
         budget: AgentBudget,
         pricing: ModelPricing,
         runtime_setup: RuntimeSetup | None = None,
+        manual_review_criteria: tuple[str, ...] = (),
         agent_timeout_seconds: int = 600,
         artifact_repair_limit: int = 1,
         verification_concurrency: int = 2,
@@ -179,6 +181,11 @@ class WorkflowCoordinator:
             raise WorkflowError("Phase 1 permits zero or one artifact repair")
         if verification_concurrency not in {1, 2}:
             raise WorkflowError("verification concurrency must be one or two")
+        cleaned_manual_criteria = _unique(manual_review_criteria)
+        if len(cleaned_manual_criteria) != len(manual_review_criteria):
+            raise WorkflowError(
+                "manual-review criterion IDs must be non-empty and unique"
+            )
         team = manifest.get_team(PHASE1_TEAM_ID)
         if AgentRole.GENERALIST_DEVELOPER not in team.roles:
             raise WorkflowError("Phase 1 team is missing the generalist developer")
@@ -190,6 +197,7 @@ class WorkflowCoordinator:
         self.budget = budget
         self.pricing = pricing
         self.runtime_setup = runtime_setup
+        self.manual_review_criteria = cleaned_manual_criteria
         self.agent_timeout_seconds = agent_timeout_seconds
         self.artifact_repair_limit = artifact_repair_limit
         self.verification_concurrency = verification_concurrency
@@ -204,6 +212,9 @@ class WorkflowCoordinator:
     ) -> WorkflowOutcome:
         """Start a fresh run and return a valid completed or failed outcome."""
 
+        known_criteria = {criterion.id for criterion in task_brief.acceptance_criteria}
+        if not set(self.manual_review_criteria).issubset(known_criteria):
+            raise WorkflowError("manual-review scope references an unknown criterion")
         team = self.manifest.get_team(PHASE1_TEAM_ID)
         controller = RunController(
             RunStore(self.runs_root),
@@ -377,6 +388,7 @@ class WorkflowCoordinator:
             commands = quality_gate.run(iteration=record.current_iteration)
             if not commands:
                 raise WorkflowEvidenceError("quality gate returned no command evidence")
+            self._validate_verification_assignment(context.brief, commands)
             context.command_evidence.extend(commands)
             tester_result, reviewer_result = self._verify(
                 context,
@@ -394,6 +406,14 @@ class WorkflowCoordinator:
                 raise WorkflowEvidenceError("Tester reviewed the wrong commit")
             if review.input_commit != snapshot.output_commit:
                 raise WorkflowEvidenceError("Reviewer reviewed the wrong commit")
+            if test.manual_review_criteria != self.manual_review_criteria:
+                raise WorkflowEvidenceError(
+                    "Tester changed the controller manual-review scope"
+                )
+            if review.reviewed_criteria != self.manual_review_criteria:
+                raise WorkflowEvidenceError(
+                    "Reviewer changed the controller manual-review scope"
+                )
             context.last_test = test
             context.last_review = review
 
@@ -536,6 +556,7 @@ class WorkflowCoordinator:
                     input_commit=input_commit,
                     upstream_artifacts=(work,),
                     command_evidence=commands,
+                    manual_review_criteria=self.manual_review_criteria,
                 ),
                 stage="verify",
             )
@@ -564,6 +585,30 @@ class WorkflowCoordinator:
             (cast(TestReport, tester[0]), tester[1], tester[2]),
             (cast(ReviewReport, reviewer[0]), reviewer[1], reviewer[2]),
         )
+
+    def _validate_verification_assignment(
+        self,
+        brief: TaskBrief,
+        commands: tuple[CommandEvidence, ...],
+    ) -> None:
+        expected = {criterion.id for criterion in brief.acceptance_criteria}
+        if any(not command.criterion_ids for command in commands):
+            raise WorkflowEvidenceError(
+                "quality-gate evidence is missing criterion coverage"
+            )
+        deterministic = {
+            criterion_id
+            for command in commands
+            for criterion_id in command.criterion_ids
+        }
+        if not deterministic.issubset(expected):
+            raise WorkflowEvidenceError(
+                "quality-gate evidence references an unknown criterion"
+            )
+        if deterministic | set(self.manual_review_criteria) != expected:
+            raise WorkflowEvidenceError(
+                "verification assignment does not cover every criterion"
+            )
 
     def _invoke(
         self,
@@ -904,7 +949,7 @@ class WorkflowCoordinator:
             termination_reason=TerminationReason.SUCCEEDED.value,
             final_commit=record.current_commit,
             iterations=tuple(context.iteration_records),
-            acceptance_results=test.criteria,
+            acceptance_results=resolve_acceptance_results(test, review),
             unresolved_findings=tuple(
                 finding.description
                 for finding in review.findings

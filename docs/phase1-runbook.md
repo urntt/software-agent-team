@@ -186,6 +186,14 @@ Confirm all of the following before marking Phase 1 accepted:
   command. Full command output remains authoritative in
   `iterations/<nn>/commands/`. Reviewer source reads resolve through the
   read-only `/agent` mount.
+- Every command record preserves its benchmark-owned `criterion_ids`. The
+  Tester copied the configured `manual_review_criteria`, marked those criteria
+  `pending_review` after their deterministic portions passed, and did not
+  classify expected semantic review as a dependency blocker.
+- The Reviewer copied the same IDs into `reviewed_criteria`, inspected them on
+  the immutable commit, and returned no blocking finding. The final report,
+  rather than the Tester report, contains the controller-resolved `passed`
+  results for those criteria.
 - No role execution spawned an untracked child Agent or one-shot model call.
 - Every successful execution reports exactly the selected model and integer
   input/output token counts. No fallback or missing telemetry was accepted.

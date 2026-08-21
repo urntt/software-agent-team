@@ -238,6 +238,12 @@ class DynamicWorkflowExecutor:
         commands = tuple(
             CommandEvidence.model_validate(command) for command in commands_payload
         )
+        verification_scope = context["verification_scope"]
+        assert isinstance(verification_scope, dict)
+        manual_payload = verification_scope["manual_review_criteria"]
+        assert isinstance(manual_payload, list)
+        manual_review_criteria = tuple(str(item) for item in manual_payload)
+        manual = set(manual_review_criteria)
         timed_out = any(command.timed_out for command in commands)
         failed = any(command.exit_code != 0 for command in commands)
         if timed_out:
@@ -259,8 +265,16 @@ class DynamicWorkflowExecutor:
         criteria = tuple(
             CriterionResult(
                 criterion_id=criterion.id,
-                status=status,
-                command_ids=tuple(command.id for command in commands),
+                status=(
+                    CheckStatus.PENDING_REVIEW
+                    if status is CheckStatus.PASSED and criterion.id in manual
+                    else status
+                ),
+                command_ids=tuple(
+                    command.id
+                    for command in commands
+                    if criterion.id in command.criterion_ids
+                ),
                 detail=detail,
             )
             for criterion in brief.acceptance_criteria
@@ -283,6 +297,7 @@ class DynamicWorkflowExecutor:
             status=status,
             commands=commands,
             criteria=criteria,
+            manual_review_criteria=manual_review_criteria,
             findings=findings,
             blockers=blockers,
             summary=detail,
@@ -294,6 +309,10 @@ class DynamicWorkflowExecutor:
         assert isinstance(run, dict)
         input_commit = run["input_commit"]
         assert isinstance(input_commit, str)
+        verification_scope = context["verification_scope"]
+        assert isinstance(verification_scope, dict)
+        reviewed_payload = verification_scope["manual_review_criteria"]
+        assert isinstance(reviewed_payload, list)
         verdict = self.review_verdicts.get(
             request.iteration,
             ReviewVerdict.ACCEPT,
@@ -323,6 +342,7 @@ class DynamicWorkflowExecutor:
             iteration=request.iteration,
             input_commit=input_commit,
             verdict=verdict,
+            reviewed_criteria=tuple(str(item) for item in reviewed_payload),
             findings=findings,
             summary=f"Reviewer verdict: {verdict.value}.",
         )
@@ -427,6 +447,7 @@ def coordinator(
             input_cost_per_million_usd="0",
             output_cost_per_million_usd="0",
         ),
+        manual_review_criteria=configuration.benchmark.manual_review_criteria,
         clock=lambda: FIXED_TIME,
         agent_timeout_seconds=30,
         verification_concurrency=verification_concurrency,
@@ -466,6 +487,24 @@ def test_offline_workflow_completes_with_parallel_independent_verification(
     assert "Status: `completed`" in markdown
     assert "Agent calls: 4" in markdown
     assert len(list((run_directory / "iterations/01/commands").glob("*.txt"))) == 8
+    test_report = json.loads(
+        (run_directory / "iterations/01/test-report.json").read_text(encoding="utf-8")
+    )
+    review_report = json.loads(
+        (run_directory / "iterations/01/review-report.json").read_text(encoding="utf-8")
+    )
+    final_report = json.loads(
+        (run_directory / "final-report.json").read_text(encoding="utf-8")
+    )
+    expected_manual = ["AC_DOCUMENTATION", "AC_ACCESSIBILITY"]
+    assert test_report["manual_review_criteria"] == expected_manual
+    assert review_report["reviewed_criteria"] == expected_manual
+    tester_statuses = {
+        item["criterion_id"]: item["status"] for item in test_report["criteria"]
+    }
+    assert tester_statuses["AC_DOCUMENTATION"] == "pending_review"
+    assert tester_statuses["AC_ACCESSIBILITY"] == "pending_review"
+    assert {item["status"] for item in final_report["acceptance_results"]} == {"passed"}
     state = load_run_json(tmp_path)
     transitions = state["transitions"]
     assert isinstance(transitions, list)

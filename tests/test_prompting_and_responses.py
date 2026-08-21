@@ -129,6 +129,7 @@ def commands() -> tuple[CommandEvidence, ...]:
         CommandEvidence(
             id="CHECK_TEST",
             argv=("pytest",),
+            criterion_ids=("AC_CREATE", "AC_QUALITY"),
             exit_code=0,
             duration_ms=25,
             stdout_path="iterations/01/check-test.stdout",
@@ -173,6 +174,25 @@ def test_failed_test_report_requires_a_failed_criterion() -> None:
     payload["commands"][0]["exit_code"] = 1
 
     with pytest.raises(ValidationError, match="failed criterion"):
+        PhaseTestReport.model_validate(payload)
+
+
+def test_passing_test_report_defers_manual_criteria_to_review() -> None:
+    payload = make_test_report().model_dump(mode="json")
+    payload["manual_review_criteria"] = ["AC_CREATE"]
+    payload["criteria"][0]["status"] = "pending_review"
+
+    report = PhaseTestReport.model_validate(payload)
+
+    assert report.status is CheckStatus.PASSED
+    assert report.criteria[0].status is CheckStatus.PENDING_REVIEW
+
+
+def test_tester_cannot_pass_a_manual_review_criterion() -> None:
+    payload = make_test_report().model_dump(mode="json")
+    payload["manual_review_criteria"] = ["AC_CREATE"]
+
+    with pytest.raises(ValidationError, match="cannot pass"):
         PhaseTestReport.model_validate(payload)
 
 
@@ -285,8 +305,12 @@ def test_tester_prompt_receives_work_and_deterministic_commands_only() -> None:
     assert '"work_result": {' in rendered
     assert '"deterministic_command_evidence": [' in rendered
     assert '"id": "CHECK_TEST"' in rendered
+    assert '"criterion_ids": [' in rendered
     assert '"stdout_tail": "1 passed\\n"' in rendered
+    assert '"verification_scope": {' in rendered
+    assert '"manual_review_criteria": []' in rendered
     assert '"root": "/agent"' in rendered
+    assert '"verification_scope": {' in rendered
     assert "untrusted diagnostic evidence" in rendered
     assert '"implementation_plan": {' not in rendered
     assert '"review_report": {' not in rendered
@@ -308,6 +332,23 @@ def test_reviewer_prompt_receives_work_and_command_evidence_in_parallel() -> Non
     assert '"root": "/agent"' in rendered
     assert "read-only at\n`/agent`" in rendered
     assert '"implementation_plan": {' not in rendered
+
+
+def test_verifier_prompts_receive_the_frozen_manual_review_scope() -> None:
+    rendered = render_agent_prompt(
+        prompt_inputs(
+            role=AgentRole.TESTER,
+            expected_kind=ArtifactKind.TEST_REPORT,
+            input_commit=OUTPUT_COMMIT,
+            upstream_artifacts=(work_result(),),
+            command_evidence=commands(),
+            manual_review_criteria=("AC_CREATE",),
+        )
+    )
+
+    assert '"manual_review_criteria": [' in rendered
+    assert '"AC_CREATE"' in rendered
+    assert "mark that criterion\n`pending_review`" in rendered
 
 
 def test_prompt_builder_binds_the_same_role_and_response_contract() -> None:

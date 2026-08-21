@@ -120,6 +120,9 @@ def make_test_report() -> PhaseTestReport:
     command = CommandEvidence(
         id="CHECK_PYTEST",
         argv=("pytest", "-q"),
+        criterion_ids=tuple(
+            criterion.id for criterion in task_brief().acceptance_criteria
+        ),
         exit_code=0,
         duration_ms=250,
         stdout_path="iterations/01/commands/pytest.stdout.txt",

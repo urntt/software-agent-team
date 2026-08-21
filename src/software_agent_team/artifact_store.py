@@ -33,6 +33,7 @@ from software_agent_team.artifacts import (
     TaskBrief,
     TestReport,
     WorkResult,
+    resolve_acceptance_results,
     validate_artifact_context,
 )
 from software_agent_team.teams import TeamDefinition
@@ -435,6 +436,8 @@ class ArtifactStore:
                 raise ArtifactStoreError(
                     "iteration blocking findings must match the review report"
                 )
+            if test.manual_review_criteria != review.reviewed_criteria:
+                raise ArtifactStoreError("iteration manual-review scopes must match")
             if artifact.decision is IterationDecision.ACCEPT:
                 if (
                     test.status is not CheckStatus.PASSED
@@ -443,6 +446,12 @@ class ArtifactStore:
                     raise ArtifactStoreError(
                         "accepted iteration requires passing test and review evidence"
                     )
+                try:
+                    resolve_acceptance_results(test, review)
+                except ValueError as error:
+                    raise ArtifactStoreError(
+                        "accepted iteration has unresolved manual criteria"
+                    ) from error
             elif artifact.decision is IterationDecision.REVISE:
                 if review.verdict is ReviewVerdict.FAIL or (
                     test.status is CheckStatus.PASSED
@@ -482,16 +491,29 @@ class ArtifactStore:
 
             last_record = iteration_records[-1]
             last_test = self.load(last_record.test_report)
+            last_review = self.load(last_record.review_report)
             if not isinstance(last_test, TestReport):
                 raise ArtifactStoreError("final iteration test reference is invalid")
-            if artifact.status is FinalStatus.COMPLETED and (
-                last_record.decision is not IterationDecision.ACCEPT
-                or artifact.final_commit != last_record.output_commit
-                or artifact.acceptance_results != last_test.criteria
-            ):
-                raise ArtifactStoreError(
-                    "completed final report does not match final iteration evidence"
-                )
+            if not isinstance(last_review, ReviewReport):
+                raise ArtifactStoreError("final iteration review reference is invalid")
+            if artifact.status is FinalStatus.COMPLETED:
+                try:
+                    expected_results = resolve_acceptance_results(
+                        last_test,
+                        last_review,
+                    )
+                except ValueError as error:
+                    raise ArtifactStoreError(
+                        "completed final report has unresolved manual criteria"
+                    ) from error
+                if (
+                    last_record.decision is not IterationDecision.ACCEPT
+                    or artifact.final_commit != last_record.output_commit
+                    or artifact.acceptance_results != expected_results
+                ):
+                    raise ArtifactStoreError(
+                        "completed final report does not match final iteration evidence"
+                    )
 
     def _validate_file_digest(self, path: str, digest: str, *, label: str) -> None:
         relative_path = PurePosixPath(path)

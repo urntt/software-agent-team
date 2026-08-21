@@ -203,6 +203,13 @@ conflicts. Phase 1 permits one initial implementation and at most one
 evidence-driven revision, even though the reusable team definition allows a
 higher future limit.
 
+The Tester owns deterministic command evidence and preserves the benchmark's
+command-to-criterion assignment. Criteria with a manual component remain
+`pending_review` in the Tester's artifact. The Reviewer owns that explicit
+manual-review scope on the same immutable commit. Only the controller may merge
+a passing deterministic report and an accepted independent review into final
+passed acceptance results.
+
 ### Configuration B: `implementation_domain_specialized`
 
 The alternative keeps planning and quality-control policy stable while
@@ -285,8 +292,9 @@ slot. It performs at most two implementation iterations: the initial pass and
 one revision. Later configurations may use the manifest's higher explicit
 limit.
 
-The workflow stops earlier when fixed acceptance checks pass and no blocking
-review finding remains. It stops with a report when:
+The workflow stops earlier when fixed acceptance checks pass, every configured
+manual criterion receives independent review, and no blocking review finding
+remains. It stops with a report when:
 
 - A resource or iteration limit is reached;
 - A required runtime, model, dependency, or sandbox is unavailable;
@@ -469,6 +477,8 @@ Implemented and offline verified:
   revision;
 - Bounded command-output diagnostics for verification, correct read-only
   source visibility, and controller-only Agent invocation policy;
+- Explicit deterministic command coverage, `pending_review` manual criteria,
+  Reviewer scope attestation, and controller-owned evidence resolution;
 - Pre-call Agent invocation limits and post-call token, duration, and
   estimated-cost stop thresholds;
 - Explicit completed and failed terminal outcomes with machine-readable and

@@ -56,6 +56,7 @@ class CheckStatus(StrEnum):
     PASSED = "passed"
     FAILED = "failed"
     BLOCKED = "blocked"
+    PENDING_REVIEW = "pending_review"
 
 
 class ReviewSeverity(StrEnum):
@@ -513,6 +514,7 @@ class CommandEvidence(BaseModel):
 
     id: str = Field(min_length=1, pattern=r"^CHECK_[A-Z0-9_]+$")
     argv: tuple[str, ...] = Field(min_length=1)
+    criterion_ids: tuple[str, ...] = ()
     exit_code: int | None = None
     timed_out: bool = False
     duration_ms: int = Field(ge=0)
@@ -532,6 +534,13 @@ class CommandEvidence(BaseModel):
         if any(not value for value in values):
             raise ValueError("command arguments must not be empty")
         return values
+
+    @field_validator("criterion_ids")
+    @classmethod
+    def require_clean_criterion_ids(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        """Keep deterministic criterion coverage explicit and unambiguous."""
+
+        return _require_clean_unique_items(values)
 
     @field_validator("stdout_path", "stderr_path")
     @classmethod
@@ -582,11 +591,12 @@ class TestReport(IterationArtifact):
     status: CheckStatus
     commands: tuple[CommandEvidence, ...] = Field(min_length=1)
     criteria: tuple[CriterionResult, ...] = Field(min_length=1)
+    manual_review_criteria: tuple[str, ...] = ()
     findings: tuple[str, ...] = ()
     blockers: tuple[str, ...] = ()
     summary: str = Field(min_length=1)
 
-    @field_validator("findings", "blockers")
+    @field_validator("findings", "blockers", "manual_review_criteria")
     @classmethod
     def require_clean_unique_text(cls, values: tuple[str, ...]) -> tuple[str, ...]:
         """Reject blank and duplicate verification findings."""
@@ -604,22 +614,59 @@ class TestReport(IterationArtifact):
         if len(criterion_ids) != len(set(criterion_ids)):
             raise ValueError("test criterion IDs must be unique")
         known_commands = set(command_ids)
+        command_coverage = {
+            command.id: set(command.criterion_ids) for command in self.commands
+        }
+        coverage_available = all(command.criterion_ids for command in self.commands)
         for criterion in self.criteria:
             unknown = set(criterion.command_ids) - known_commands
             if unknown:
                 raise ValueError(
                     f"criterion {criterion.criterion_id} references unknown commands"
                 )
+            if coverage_available:
+                mismatched = [
+                    command_id
+                    for command_id in criterion.command_ids
+                    if criterion.criterion_id not in command_coverage[command_id]
+                ]
+                if mismatched:
+                    raise ValueError(
+                        f"criterion {criterion.criterion_id} references commands "
+                        "without declared coverage"
+                    )
+
+        known_criteria = set(criterion_ids)
+        manual_criteria = set(self.manual_review_criteria)
+        unknown_manual = manual_criteria - known_criteria
+        if unknown_manual:
+            raise ValueError("manual-review criteria must exist in the test report")
+        for criterion in self.criteria:
+            pending = criterion.status is CheckStatus.PENDING_REVIEW
+            if pending and criterion.criterion_id not in manual_criteria:
+                raise ValueError("only manual-review criteria may be pending review")
+            if (
+                criterion.criterion_id in manual_criteria
+                and criterion.status is CheckStatus.PASSED
+            ):
+                raise ValueError(
+                    "Tester cannot pass criteria assigned to independent review"
+                )
 
         commands_passed = all(
             not command.timed_out and command.exit_code == 0
             for command in self.commands
         )
-        criteria_passed = all(
-            criterion.status is CheckStatus.PASSED for criterion in self.criteria
+        tester_scope_passed = all(
+            criterion.status is CheckStatus.PASSED
+            or (
+                criterion.criterion_id in manual_criteria
+                and criterion.status is CheckStatus.PENDING_REVIEW
+            )
+            for criterion in self.criteria
         )
         if self.status is CheckStatus.PASSED:
-            if not commands_passed or not criteria_passed or self.blockers:
+            if not commands_passed or not tester_scope_passed or self.blockers:
                 raise ValueError("passed test reports require all evidence to pass")
         elif self.status is CheckStatus.BLOCKED:
             if not self.blockers:
@@ -628,11 +675,13 @@ class TestReport(IterationArtifact):
                 criterion.status is CheckStatus.BLOCKED for criterion in self.criteria
             ):
                 raise ValueError("blocked test reports require a blocked criterion")
+        elif self.status is CheckStatus.PENDING_REVIEW:
+            raise ValueError("test report status cannot be pending review")
         elif not any(
             criterion.status is CheckStatus.FAILED for criterion in self.criteria
         ):
             raise ValueError("failed test reports require a failed criterion")
-        elif commands_passed and criteria_passed:
+        elif commands_passed and tester_scope_passed:
             raise ValueError("failed test reports require failing evidence")
         return self
 
@@ -684,8 +733,19 @@ class ReviewReport(IterationArtifact):
     producer: Literal[AgentRole.REVIEWER] = AgentRole.REVIEWER
     input_commit: str = Field(pattern=COMMIT_PATTERN)
     verdict: ReviewVerdict
+    reviewed_criteria: tuple[str, ...] = ()
     findings: tuple[ReviewFinding, ...] = ()
     summary: str = Field(min_length=1)
+
+    @field_validator("reviewed_criteria")
+    @classmethod
+    def require_clean_reviewed_criteria(
+        cls,
+        values: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        """Keep the independent review scope explicit and attributable."""
+
+        return _require_clean_unique_items(values)
 
     @model_validator(mode="after")
     def validate_verdict(self) -> Self:
@@ -707,6 +767,38 @@ class ReviewReport(IterationArtifact):
         if self.verdict is ReviewVerdict.FAIL and not critical:
             raise ValueError("failed reviews require a critical finding")
         return self
+
+
+def resolve_acceptance_results(
+    test: TestReport,
+    review: ReviewReport,
+) -> tuple[CriterionResult, ...]:
+    """Resolve manual criteria only when independent review covers them."""
+
+    if test.manual_review_criteria != review.reviewed_criteria:
+        raise ValueError("test and review manual criterion scopes differ")
+    if review.verdict is not ReviewVerdict.ACCEPT:
+        raise ValueError("manual acceptance requires an accepted review")
+    manual = set(test.manual_review_criteria)
+    results: list[CriterionResult] = []
+    for criterion in test.criteria:
+        if criterion.criterion_id not in manual:
+            results.append(criterion)
+            continue
+        if criterion.status is not CheckStatus.PENDING_REVIEW:
+            raise ValueError("manual criterion is not pending independent review")
+        results.append(
+            criterion.model_copy(
+                update={
+                    "status": CheckStatus.PASSED,
+                    "detail": (
+                        f"{criterion.detail} Independent review accepted the "
+                        "assigned manual criterion on the same immutable commit."
+                    ),
+                }
+            )
+        )
+    return tuple(results)
 
 
 class IterationRecord(IterationArtifact):
@@ -931,12 +1023,15 @@ def validate_artifact_context(
             raise ValueError(
                 "test report must cover every confirmed acceptance criterion"
             )
+        if not set(artifact.manual_review_criteria).issubset(expected_criteria):
+            raise ValueError("test report references an unknown manual criterion")
     elif isinstance(artifact, ReviewReport):
         referenced_criteria = {
             criterion_id
             for finding in artifact.findings
             for criterion_id in finding.criterion_ids
         }
+        referenced_criteria.update(artifact.reviewed_criteria)
         if not referenced_criteria.issubset(expected_criteria):
             raise ValueError("review report references an unknown criterion")
     elif isinstance(artifact, FinalReport):

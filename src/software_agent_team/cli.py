@@ -247,6 +247,7 @@ def _run_workflow(args: argparse.Namespace) -> int:
             output_cost_per_million_usd=args.output_cost_per_million_usd,
         ),
         runtime_setup=runtime_setup,
+        manual_review_criteria=configuration.benchmark.manual_review_criteria,
         agent_timeout_seconds=args.agent_timeout_seconds,
         artifact_repair_limit=args.artifact_repair_limit,
         verification_concurrency=args.verification_concurrency,
