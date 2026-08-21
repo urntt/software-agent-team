@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from software_agent_team.artifacts import AgentRole
 from software_agent_team.configuration import (
     READ_ONLY_ROLES,
@@ -29,6 +31,8 @@ def test_openclaw_permissions_match_role_responsibilities() -> None:
     _, config = validate_environment_configuration(TEAM_CONFIG, OPENCLAW_CONFIG)
     agents = {agent["id"]: agent for agent in config["agents"]["list"]}
 
+    assert config["agents"]["defaults"]["skills"] == []
+
     for role in READ_ONLY_ROLES:
         assert "sandbox" not in agents[role.value]
         assert {"write", "edit", "apply_patch", "exec", "process"}.issubset(
@@ -40,6 +44,24 @@ def test_openclaw_permissions_match_role_responsibilities() -> None:
 
     for role in AgentRole:
         assert UNTRACKED_AGENT_TOOLS.issubset(agents[role.value]["tools"]["deny"])
+
+
+def test_openclaw_template_rejects_ambient_runtime_skills(tmp_path: Path) -> None:
+    unsafe_config = tmp_path / "openclaw.json5"
+    unsafe_config.write_text(
+        OPENCLAW_CONFIG.read_text(encoding="utf-8").replace(
+            "      skills: [],\n",
+            "",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="must disable ambient runtime skills",
+    ):
+        validate_environment_configuration(TEAM_CONFIG, unsafe_config)
 
 
 def test_deterministic_controller_is_not_an_openclaw_agent() -> None:

@@ -4,6 +4,7 @@
   agents: {
     defaults: {
       repoRoot: "${SOFTWARE_AGENT_TEAM_ROOT}",
+      skills: [],
       sandbox: {
         mode: "all",
         backend: "docker",

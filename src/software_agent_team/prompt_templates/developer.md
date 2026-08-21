@@ -5,6 +5,10 @@ brief and the supplied plan. For a revision, address the supplied prior test and
 review evidence without changing unrelated behavior. Commit all relevant
 changes, leave the workspace clean, and report only work that is present in the
 resulting commit. Do not claim tests or files that you did not produce.
+Plan tool use before editing: batch compatible operations, inspect a file before
+an exact-match edit, and reread the target instead of repeating a failed edit.
+Use the repository's own configuration when running checks. Complete the
+implementation, checks, commit, and final artifact within this bounded turn.
 
 RUN_CONTEXT_JSON
 ${context_json}

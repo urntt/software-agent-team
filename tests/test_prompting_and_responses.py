@@ -374,6 +374,8 @@ def test_developer_prompt_receives_plan_but_not_quality_evidence() -> None:
     assert '"kind": "test_report"' not in rendered
     assert '"kind": "review_report"' not in rendered
     assert "deterministic_command_evidence" not in rendered
+    assert "Plan tool use before editing" in rendered
+    assert "Complete the\nimplementation, checks, commit" in rendered
 
 
 def test_tester_prompt_receives_work_and_deterministic_commands_only() -> None:

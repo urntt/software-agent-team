@@ -69,6 +69,8 @@ def load_openclaw_template(
     default_access = defaults.get("sandbox", {}).get("workspaceAccess")
     if default_access != "ro":
         raise ValueError("OpenClaw Agent workspaces must be read-only by default")
+    if defaults.get("skills") != []:
+        raise ValueError("OpenClaw Agents must disable ambient runtime skills")
 
     for agent in agents:
         role = AgentRole(agent["id"])

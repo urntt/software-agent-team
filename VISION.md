@@ -138,6 +138,8 @@ code or experiment evidence justifies a replacement.
 - Coding and Integration roles may write only inside the assigned workspace.
 - A read-only OpenClaw workspace is mounted at `/agent`; a writable workspace
   is mounted at `/workspace`.
+- Controlled roles load no ambient runtime skills, so unrelated skill prompts
+  and files cannot enter the benchmark workspace or its quality checks.
 - The controller verifies actual commits, diffs, files, commands, and exit
   codes instead of trusting Agent claims.
 - Credentials, active runtime state, generated workspaces, and raw runs remain

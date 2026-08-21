@@ -280,6 +280,8 @@ succeeded.
 - Submodules, executable hooks, external Git filters, and unsafe fsmonitor
   configuration are rejected before checkout.
 - Agent sandboxes and quality gates use no external network by default.
+- Controlled roles receive no ambient OpenClaw skills; their explicit prompt,
+  tool policy, and run-scoped repository are the complete execution boundary.
 - Read-only roles deny mutation and process tools.
 - Every role denies Agent-spawning tools; only the controller may authorize and
   account for a model invocation.

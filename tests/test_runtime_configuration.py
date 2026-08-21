@@ -42,6 +42,7 @@ def test_materialized_config_binds_every_role_to_one_run_workspace(
     defaults = payload["agents"]["defaults"]
     assert defaults["repoRoot"] == str(workspace.resolve())
     assert defaults["skipBootstrap"] is True
+    assert defaults["skills"] == []
     assert defaults["model"] == {
         "primary": "provider/model",
         "fallbacks": [],
