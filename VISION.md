@@ -207,10 +207,11 @@ higher future limit.
 
 The Tester owns deterministic command evidence and preserves the benchmark's
 command-to-criterion assignment. Criteria with a manual component remain
-`pending_review` in the Tester's artifact. The Reviewer owns that explicit
-manual-review scope on the same immutable commit. Only the controller may merge
-a passing deterministic report and an accepted independent review into final
-passed acceptance results.
+`pending_review` in the Tester's criterion results, but the overall Tester
+status is `passed` when all deterministic evidence passes and no blocker exists.
+The Reviewer owns that explicit manual-review scope on the same immutable
+commit. Only the controller may merge a passing deterministic report and an
+accepted independent review into final passed acceptance results.
 
 ### Configuration B: `implementation_domain_specialized`
 
@@ -502,24 +503,22 @@ Implemented and offline verified:
 Not yet available or completed:
 
 - Interactive clarification;
-- A real model/provider trace that reaches `completed` and satisfies formal
-  Phase 1 acceptance;
+- Consecutive successful live replays and one-command installation validation;
 - Automatic CLI resume of an interrupted run;
 - Executable `single_agent` and `implementation_domain_specialized` workflow
   paths;
 - Repeated comparative trials, human rubric scoring, and topology selection;
 - A second product benchmark and product-level clarification flow.
 
-Authorized exploratory live traces have exercised all four roles, real
-OpenClaw/provider calls, controller-verified Git snapshots, and Docker quality
-gates. The latest trace exercised the internal revision loop and passed
-compilation, lint, and 18 generated tests in both iterations. It also showed
-that the version-one acceptance suite required response details absent from the
-confirmed TaskBrief. That benchmark defect was corrected and explicitly
-versioned as `task_manager_phase1_v2`; version-one traces remain exploratory and
-must not be mixed with version-two comparisons. No real trace has yet satisfied
-the Phase 1 exit criterion. Offline scripted executions continue to prove
-controller behavior, not model quality.
+Authorized live traces have exercised all four roles, real OpenClaw/provider
+calls, controller-verified Git snapshots, Docker quality gates, and the bounded
+revision loop. A version-two trace has reached `completed` with all ten
+acceptance criteria passed, independent review accepted, complete model and
+token telemetry, verified artifact hashes, and clean isolated Git boundaries.
+The earlier benchmark defect was corrected and explicitly versioned as
+`task_manager_phase1_v2`; version-one traces remain exploratory and must not be
+mixed with version-two comparisons. Repeated replay stability remains an active
+goal. Offline scripted executions prove controller behavior, not model quality.
 
 ## Development Route
 

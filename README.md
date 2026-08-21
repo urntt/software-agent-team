@@ -52,18 +52,13 @@ tests. The code now includes:
 - Offline success, revision, timeout, evidence-tampering, non-convergence,
   no-change, invalid-response, and budget-failure tests.
 
-Phase 1 has **not yet met its formal exit criterion**. Authorized exploratory
-live traces have exercised Planner, Developer, deterministic gates, Tester, and
-Reviewer, produced controller-verified commits, and completed an evidence-driven
-revision. The latest trace passed compilation, lint, and 18 generated tests in
-both iterations, then exposed that the version-one acceptance suite constrained
-HTTP status and presentation details not present in the confirmed TaskBrief.
-The benchmark is now versioned as `task_manager_phase1_v2`; its black-box checks
-match the observable product contract, and its confirmed brief exposes the
-fixed form, field, enum, and canonical-URL requirements. Earlier traces remain
-exploratory evidence rather than comparable version-two results. A new trace
-must still reach `completed` and satisfy the evidence checklist. See
-[`docs/phase1-runbook.md`](docs/phase1-runbook.md).
+Phase 1 has produced a live version-two trace that reached `completed`: one
+controller-verified implementation commit passed every deterministic gate, all
+ten acceptance criteria, and independent review, with complete model, token,
+hash, and Git-boundary evidence. Earlier version-one traces remain exploratory
+evidence and are not comparable with version-two results. Repeated live
+stability trials and one-command installation remain active engineering work.
+See [`docs/phase1-runbook.md`](docs/phase1-runbook.md).
 
 Interactive clarification, the single-Agent baseline path, domain-specialized
 implementation, repeated comparisons, and automatic interrupted-run resume are
@@ -88,7 +83,9 @@ The controller accepts an iteration only when all of the following agree:
 2. The Tester reproduces the controller-recorded command evidence and its
    command-to-criterion coverage exactly.
 3. Every deterministic criterion passes; criteria assigned to independent
-   review remain explicitly `pending_review` in the Tester's report.
+   review remain explicitly `pending_review` in the Tester's criterion results,
+   while the overall Tester status is `passed` when no deterministic failure or
+   blocker exists.
 4. The Reviewer confirms the exact manual-review scope on the same immutable
    commit and returns `accept` with no blocking finding.
 5. The controller, not either Agent, resolves those pending criteria to

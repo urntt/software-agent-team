@@ -731,7 +731,13 @@ class WorkflowCoordinator:
         elif request.role is AgentRole.TESTER:
             role_check = (
                 "Recheck that every TaskBrief criterion appears exactly once and "
-                "that every command field exactly reproduces controller evidence."
+                "that every command field exactly reproduces controller evidence. "
+                "The top-level status accepts only passed, failed, or blocked, "
+                "never pending_review. Set the top-level status to passed when all "
+                "commands and deterministic-only criteria pass, manual-review "
+                "criteria alone are pending_review, and blockers is empty; use "
+                "pending_review only in criteria[].status for IDs copied into "
+                "manual_review_criteria."
             )
         elif request.role is AgentRole.REVIEWER:
             role_check = (

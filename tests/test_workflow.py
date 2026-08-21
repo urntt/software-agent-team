@@ -105,6 +105,7 @@ class DynamicWorkflowExecutor:
         *,
         review_verdicts: dict[int, ReviewVerdict] | None = None,
         invalid_plan_once: bool = False,
+        invalid_tester_status_once: bool = False,
         tamper_test_commands: bool = False,
         commit_changes: bool = True,
         verify_barrier: bool = False,
@@ -115,6 +116,7 @@ class DynamicWorkflowExecutor:
         self.workspace = workspace
         self.review_verdicts = review_verdicts or {}
         self.invalid_plan_once = invalid_plan_once
+        self.invalid_tester_status_once = invalid_tester_status_once
         self.tamper_test_commands = tamper_test_commands
         self.commit_changes = commit_changes
         self.reported_model = reported_model
@@ -140,6 +142,13 @@ class DynamicWorkflowExecutor:
             if self._barrier is not None:
                 self._wait_for_verifier()
             artifact = self._test_report(request)
+            if self.invalid_tester_status_once and count == 1:
+                invalid = artifact.model_dump(mode="json")
+                invalid["status"] = "pending_review"
+                return self._result(
+                    request,
+                    json.dumps(invalid, ensure_ascii=False),
+                )
         elif request.role is AgentRole.REVIEWER:
             if self._barrier is not None:
                 self._wait_for_verifier()
@@ -637,6 +646,30 @@ def test_workflow_repairs_one_invalid_agent_response(tmp_path: Path) -> None:
     )
     assert first["attempt"] == 1
     assert first["error"] is not None
+
+
+def test_workflow_repairs_invalid_overall_tester_status(tmp_path: Path) -> None:
+    source = initialize_source(tmp_path)
+    workspace = tmp_path / "workspaces" / task_brief().run_id
+    executor = DynamicWorkflowExecutor(
+        workspace,
+        invalid_tester_status_once=True,
+    )
+
+    outcome = coordinator(tmp_path, executor).execute(
+        task_brief(),
+        source_repository=source,
+    )
+
+    assert outcome.record.phase is RunPhase.COMPLETED
+    tester_requests = [
+        request for request in executor.requests if request.role is AgentRole.TESTER
+    ]
+    assert len(tester_requests) == 2
+    repair_prompt = tester_requests[1].prompt
+    assert "top-level status accepts only passed, failed, or blocked" in repair_prompt
+    assert "never pending_review" in repair_prompt
+    assert "manual-review criteria alone are pending_review" in repair_prompt
 
 
 def test_workflow_rejects_tester_changes_to_controller_evidence(

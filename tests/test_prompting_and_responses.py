@@ -191,6 +191,17 @@ def test_passing_test_report_defers_manual_criteria_to_review() -> None:
     assert report.criteria[0].status is CheckStatus.PENDING_REVIEW
 
 
+def test_test_report_top_level_status_excludes_pending_review() -> None:
+    status_schema = PhaseTestReport.model_json_schema()["properties"]["status"]
+    payload = make_test_report().model_dump(mode="json")
+    payload["status"] = "pending_review"
+
+    assert status_schema["enum"] == ["passed", "failed", "blocked"]
+    assert "never for this field" in status_schema["description"]
+    with pytest.raises(ValidationError, match="Input should be"):
+        PhaseTestReport.model_validate(payload)
+
+
 def test_tester_cannot_pass_a_manual_review_criterion() -> None:
     payload = make_test_report().model_dump(mode="json")
     payload["manual_review_criteria"] = ["AC_CREATE"]
@@ -439,6 +450,8 @@ def test_verifier_prompts_receive_the_frozen_manual_review_scope() -> None:
     assert '"manual_review_criteria": [' in rendered
     assert '"AC_CREATE"' in rendered
     assert "mark that criterion\n`pending_review`" in rendered
+    assert "top-level `status` must be `passed`" in rendered
+    assert "only `passed`, `failed`, or `blocked`" in rendered
 
 
 def test_prompt_builder_binds_the_same_role_and_response_contract() -> None:

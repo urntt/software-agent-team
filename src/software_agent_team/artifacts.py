@@ -595,7 +595,18 @@ class TestReport(IterationArtifact):
     kind: Literal[ArtifactKind.TEST_REPORT] = ArtifactKind.TEST_REPORT
     producer: Literal[AgentRole.TESTER] = AgentRole.TESTER
     input_commit: str = Field(pattern=COMMIT_PATTERN)
-    status: CheckStatus
+    status: Literal[
+        CheckStatus.PASSED,
+        CheckStatus.FAILED,
+        CheckStatus.BLOCKED,
+    ] = Field(
+        description=(
+            "Overall deterministic Tester result. Use passed when every command "
+            "and deterministic-only criterion passes, manual-review criteria are "
+            "pending_review, and no blocker exists. pending_review is valid only "
+            "for individual manual-review criteria, never for this field."
+        )
+    )
     commands: tuple[CommandEvidence, ...] = Field(min_length=1)
     criteria: tuple[CriterionResult, ...] = Field(min_length=1)
     manual_review_criteria: tuple[str, ...] = ()
@@ -682,14 +693,13 @@ class TestReport(IterationArtifact):
                 criterion.status is CheckStatus.BLOCKED for criterion in self.criteria
             ):
                 raise ValueError("blocked test reports require a blocked criterion")
-        elif self.status is CheckStatus.PENDING_REVIEW:
-            raise ValueError("test report status cannot be pending review")
-        elif not any(
-            criterion.status is CheckStatus.FAILED for criterion in self.criteria
-        ):
-            raise ValueError("failed test reports require a failed criterion")
-        elif commands_passed and tester_scope_passed:
-            raise ValueError("failed test reports require failing evidence")
+        else:
+            if not any(
+                criterion.status is CheckStatus.FAILED for criterion in self.criteria
+            ):
+                raise ValueError("failed test reports require a failed criterion")
+            if commands_passed and tester_scope_passed:
+                raise ValueError("failed test reports require failing evidence")
         return self
 
 
