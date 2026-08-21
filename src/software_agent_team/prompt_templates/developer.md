@@ -16,5 +16,6 @@ FINAL_RESPONSE_CONTRACT
 After verifying the workspace is clean and the reported commit and changed
 paths match the work present, return exactly one JSON object whose kind is
 `${expected_kind}` and whose producer is `${role}`. The object must satisfy the
-response schema. Do not wrap the object in Markdown, add prose, or emit more
-than one object.
+response schema. The JSON object and every nested object must use each key
+exactly once. Do not wrap the object in Markdown, add prose, or emit more than
+one object.

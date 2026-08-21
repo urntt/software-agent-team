@@ -57,6 +57,17 @@ def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]
     return payload
 
 
+def _safe_json_detail(error: TypeError | ValueError) -> str:
+    """Describe JSON structure failures without reflecting response values."""
+
+    if isinstance(error, json.JSONDecodeError):
+        return f"{error.msg} at line {error.lineno} column {error.colno}"
+    detail = str(error)
+    if detail.startswith(("duplicate JSON object key:", "non-standard JSON constant:")):
+        return detail[:200]
+    return "response could not be decoded as one JSON object"
+
+
 def _unwrap_single_json_fence(value: str) -> str:
     """Normalize one unambiguous ``json`` fence and presentation-only prose."""
 
@@ -146,10 +157,11 @@ def parse_agent_artifact(
         )
     except (TypeError, ValueError) as error:
         raise AgentArtifactResponseError(
-            "Agent response must contain exactly one unambiguous JSON object; a "
-            "single json fence or presentation-only surrounding prose is "
-            "normalized, but multiple fences or outside JSON structures are "
-            "forbidden"
+            "Agent response JSON is invalid: "
+            f"{_safe_json_detail(error)}. The response must contain exactly one "
+            "unambiguous JSON object; a single json fence or presentation-only "
+            "surrounding prose is normalized, but multiple fences or outside "
+            "JSON structures are forbidden"
         ) from error
     if not isinstance(payload, dict):
         raise AgentArtifactResponseError("Agent response must be a JSON object")

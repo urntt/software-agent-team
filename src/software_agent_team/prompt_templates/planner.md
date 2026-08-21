@@ -17,5 +17,6 @@ producer is `${role}`. The object must satisfy the response schema. The union
 of every task's `acceptance_criteria` must equal the complete set of criterion
 IDs in `task_brief.acceptance_criteria`. Every task `id` must begin with
 `TASK_` and match `^TASK_[A-Z0-9_]+$$`; every dependency must exactly name one
-of those task IDs in the same response. Do not wrap the object in Markdown,
-add prose, or emit more than one object.
+of those task IDs in the same response. The JSON object and every nested object
+must use each key exactly once. Do not wrap the object in Markdown, add prose,
+or emit more than one object.

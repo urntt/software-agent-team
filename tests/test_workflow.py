@@ -626,6 +626,7 @@ def test_workflow_repairs_one_invalid_agent_response(tmp_path: Path) -> None:
     assert len(plan_records) == 2
     repair_prompt = executor.requests[1].prompt
     assert "Revalidate the entire response" in repair_prompt
+    assert "Use each key exactly once in every JSON object" in repair_prompt
     assert "every required schema field" in repair_prompt
     assert "union of tasks[].acceptance_criteria" in repair_prompt
     assert "tasks[].id to begin with TASK_" in repair_prompt

@@ -27,5 +27,6 @@ FINAL_RESPONSE_CONTRACT
 After verifying that every confirmed acceptance criterion has exactly one
 result and all command evidence is reproduced without alteration, return
 exactly one JSON object whose kind is `${expected_kind}` and whose producer is
-`${role}`. The object must satisfy the response schema. Do not wrap the object
-in Markdown, add prose, or emit more than one object.
+`${role}`. The object must satisfy the response schema. The JSON object and
+every nested object must use each key exactly once. Do not wrap the object in
+Markdown, add prose, or emit more than one object.

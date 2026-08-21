@@ -111,6 +111,9 @@ one `json` code fence, or surrounded by presentation-only prose. Surrounding
 text is discarded only when it contains no other JSON structure or fence;
 duplicate keys, multiple objects, multiple fences, non-standard constants, and
 schema violations remain invalid and consume the one bounded repair attempt.
+That repair receives a bounded, value-free structural diagnostic, such as the
+duplicate key name, while the immutable execution record retains the raw
+provider output.
 
 ## Requirements
 

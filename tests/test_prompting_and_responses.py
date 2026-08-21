@@ -350,6 +350,7 @@ def test_planner_prompt_contains_only_confirmed_inputs_and_plan_schema() -> None
     assert "deterministic_command_evidence" not in rendered
     assert '"const": "implementation_plan"' in rendered
     assert "Return exactly one JSON object" in rendered
+    assert "every nested object\nmust use each key exactly once" in rendered
     assert "FINAL_RESPONSE_CONTRACT" in rendered
     assert "task_brief.acceptance_criteria" in rendered
     assert "^TASK_[A-Z0-9_]+$" in rendered
@@ -555,6 +556,21 @@ def test_strict_parser_normalizes_one_outer_json_fence() -> None:
     )
 
     assert parsed == artifact
+
+
+def test_strict_parser_reports_a_duplicate_key_without_response_values() -> None:
+    response = '{"kind":"implementation_plan","kind":"work_result"}'
+
+    with pytest.raises(
+        AgentArtifactResponseError,
+        match="duplicate JSON object key: kind",
+    ) as captured:
+        parse_scripted(
+            response,
+            execution_request(AgentRole.PLANNER, ArtifactKind.IMPLEMENTATION_PLAN),
+        )
+
+    assert "work_result" not in str(captured.value)
 
 
 def test_strict_parser_normalizes_presentation_prose_around_one_json_fence() -> None:

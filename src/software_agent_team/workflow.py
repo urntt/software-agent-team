@@ -748,8 +748,9 @@ class WorkflowCoordinator:
             "Your previous response was rejected for this reason: "
             f"{previous_error}\n"
             "Revalidate the entire response rather than only the reported error. "
-            "Include every required schema field, including schema_version, kind, "
-            "run_id, team_id, producer, created_at, and iteration. "
+            "Use each key exactly once in every JSON object. Include every "
+            "required schema field, including schema_version, kind, run_id, "
+            "team_id, producer, created_at, and iteration. "
             f"{role_check} "
             "Return one corrected JSON object only. Do not repeat the invalid form."
         )
