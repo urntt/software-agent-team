@@ -68,11 +68,25 @@ From a clean checkout, run:
 ```
 
 The installer prepares the pinned user-local toolchain, locked Python
-environment, checkout-bound `sat` launcher, fixed benchmark image, and offline
-checks. It requires Git, curl, and a running Docker daemon that the unprivileged
-user can access. It does not install Docker at the operating-system level or
-create provider credentials and active OpenClaw configuration; configure those
-outside the checkout before a paid live trace.
+environment, checkout-bound `sat` and `sat-uninstall` launchers, fixed benchmark
+image, and offline checks. It requires Git, curl, and a running Docker daemon
+that the unprivileged user can access. It does not install Docker at the
+operating-system level or create provider credentials and active OpenClaw
+configuration; configure those outside the checkout before a paid live trace.
+
+Start the first-launch guide, then save the exact non-secret run defaults for
+the planned trace:
+
+```bash
+sat
+sat configure
+sat configure --show
+```
+
+The configuration records model, current token prices, verification
+concurrency, and timeout. It never records an API key. For tightly controlled
+experiments, the equivalent explicit `sat run` flags below remain useful
+because the complete invocation can be copied into the trace notes.
 
 ## 1. Verify the Checkout
 
@@ -249,3 +263,21 @@ through a normal reviewed change, assign a new run ID, and run a new trace.
 
 Generated runs and workspaces are ignored local evidence. Archive any evidence
 needed for the experiment before manually removing disposable run state.
+
+## 8. Export Evidence Before Uninstalling
+
+The guided uninstaller preserves SAT configuration and default `runs/` and
+`workspaces/` by default. Before removing the installed launchers and project
+environment, create one explicit export when the local evidence is still
+needed:
+
+```bash
+sat-uninstall --export-to "$HOME/sat-phase1-backup" --yes
+```
+
+The destination must not already exist. Inspect `EXPORT.txt`, the copied SAT
+configuration, and both copied data roots before using `--purge-config` or
+`--purge-data`. Provider credentials, shared OpenClaw/uv/Docker installations,
+the benchmark image, the source checkout, and custom run roots are deliberately
+outside the export and uninstall ownership boundary. Review
+`sat-uninstall --help` before selecting either purge option.

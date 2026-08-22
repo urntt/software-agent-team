@@ -1,8 +1,8 @@
 # Vision: An Experimental Multi-Agent Software Builder
 
-**Status:** Phase 1 implementation complete; qualifying live trace pending
+**Status:** Phase 1 complete; Phase 2 comparison paths pending
 
-**Last updated:** August 21, 2026
+**Last updated:** August 22, 2026
 
 ## Purpose
 
@@ -267,6 +267,8 @@ interpretation does not confound the result.
 | Version requirement or acceptance corrections | A hidden or over-specified acceptance condition confounds model evaluation. The confirmed TaskBrief must expose the product contract, black-box checks must accept equivalent compliant presentations, and a correction starts a new benchmark version. |
 | Freeze model identity and prices for each run | Explicit model telemetry and estimated cost are required for comparable experiments; model fallback would change the independent variables. |
 | Treat terminal failure as evidence | Provider, sandbox, artifact, budget, and convergence failures must remain observable instead of being retried or discarded silently. |
+| Keep saved user defaults secret-free | Model, pricing, concurrency, and timeout improve repeatability, but provider credentials remain in OpenClaw's trusted user state and never enter SAT configuration or exports. |
+| Make uninstall preservation-first | Removing the CLI must not silently destroy run evidence, generated workspaces, provider state, shared tools, or a source checkout; export and purge therefore require explicit user choices. |
 
 ## Planned Workflow
 
@@ -497,8 +499,12 @@ Implemented and offline verified:
 - Explicit completed and failed terminal outcomes with machine-readable and
   human-readable reports;
 - One-command Linux/WSL installation for the pinned toolchain, locked project
-  environment, checkout-bound CLI launcher, fixed Docker image, and offline
+  environment, checkout-bound CLI launchers, fixed Docker image, and offline
   validation, without taking ownership of OS-level Docker or provider secrets;
+- First-launch and repeatable configuration guidance with private, atomic,
+  secret-free defaults, plus explicit per-run CLI overrides;
+- Guided one-command uninstall with preservation defaults, pre-removal export,
+  explicit purge choices, and clear shared-resource boundaries;
 - Offline end-to-end coverage for success, revision, response repair, timeout,
   evidence tampering, iteration exhaustion, missing Git changes, missing model
   or token telemetry, and cost exhaustion.
@@ -548,12 +554,10 @@ controller behavior, not model quality.
 **Exit criterion:** one authorized real-model trace reaches `completed` with
 reproducible artifacts and a clean controller-verified Git snapshot.
 
-**Current status:** implementation-complete, offline-verified, and exercised by
-exploratory live traces. Formal exit remains pending until one authorized
-real-model trace reaches `completed`,
-exercises all four roles, passes the frozen gates, reports the selected model
-and usage, and satisfies the evidence checklist in
-`docs/phase1-runbook.md`.
+**Current status:** complete. A version-two authorized real-model trace and two
+consecutive replays reached `completed`, exercised all four roles, passed the
+frozen gates, preserved model and usage telemetry, and satisfied the evidence
+boundary in `docs/phase1-runbook.md`.
 
 ### Phase 2: Baseline and Domain Specialization
 

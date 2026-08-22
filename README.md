@@ -50,7 +50,12 @@ tests. The code now includes:
   estimated-cost stop thresholds;
 - Explicit completed and failed terminal states with JSON and Markdown reports;
 - A one-command Linux/WSL installer that prepares the pinned toolchain, locked
-  project environment, `sat` launcher, frozen Docker image, and offline checks;
+  project environment, `sat` and `sat-uninstall` launchers, frozen Docker image,
+  and offline checks;
+- First-launch and repeatable `sat configure` guidance with private,
+  secret-free run defaults and explicit CLI override precedence;
+- A safe uninstaller that preserves configuration and generated evidence by
+  default, can export both first, and purges them only by explicit request;
 - Offline success, revision, timeout, evidence-tampering, non-convergence,
   no-change, invalid-response, and budget-failure tests.
 
@@ -60,9 +65,10 @@ ten acceptance criteria, and independent review, with complete model, token,
 hash, and Git-boundary evidence. Earlier version-one traces remain exploratory
 evidence and are not comparable with version-two results. Two consecutive live
 replays of the current harness commit have also reached `completed`, each using
-the bounded evidence-driven revision loop. One-command installation is
-implemented; provider onboarding and repeated comparative experiments remain
-operator-owned work. See [`docs/phase1-runbook.md`](docs/phase1-runbook.md).
+the bounded evidence-driven revision loop. Installation, run-default onboarding,
+and safe uninstallation are implemented. Provider credential creation remains
+an OpenClaw/operator responsibility, and repeated comparative experiments
+remain pending. See [`docs/phase1-runbook.md`](docs/phase1-runbook.md).
 
 Interactive clarification, the single-Agent baseline path, domain-specialized
 implementation, repeated comparisons, and automatic interrupted-run resume are
@@ -141,19 +147,97 @@ The installer must run as an unprivileged user with Git, curl, and access to a
 running Docker daemon already available. It installs the pinned uv, Python, and
 OpenClaw toolchain when needed; synchronizes the locked project environment;
 builds the benchmark image named by `configs/run-policy.json`; runs
-configuration, formatting, lint, and test checks; and creates
-`$HOME/.local/bin/sat` as a checkout-bound launcher. It is idempotent for the
-same checkout and refuses to overwrite an unrelated `sat` command. Use
-`SAT_BIN_DIR`, `UV_BIN`, or `OPENCLAW_PREFIX` only when the corresponding
+configuration, formatting, lint, and test checks; and creates checkout-bound
+`$HOME/.local/bin/sat` and `$HOME/.local/bin/sat-uninstall` launchers. It is
+idempotent for the same checkout and refuses to overwrite unrelated commands.
+Use `SAT_BIN_DIR`, `UV_BIN`, or `OPENCLAW_PREFIX` only when the corresponding
 user-local location must be changed.
 
 The installer neither installs an OS-level Docker daemon nor creates provider
 credentials or an active OpenClaw provider configuration. Keep those values
-outside the checkout, then verify the installed launcher with:
+outside the checkout. Start the installed command without arguments to enter
+the first-launch guide:
 
 ```bash
-sat --help
+sat
 ```
+
+## First Launch and Configuration
+
+`sat` reports whether user defaults exist and always prints the provider,
+benchmark-preparation, preflight, run, reconfiguration, and uninstall path.
+Create or replace the defaults interactively with:
+
+```bash
+sat configure
+```
+
+The saved values are the exact OpenClaw model reference, current input and
+output prices per million tokens, Tester/Reviewer concurrency, and per-Agent
+timeout. They are stored with mode `0600` in
+`${XDG_CONFIG_HOME:-$HOME/.config}/software-agent-team/config.json`. Set an
+absolute `SAT_CONFIG_PATH` only when this location must be overridden, and keep
+the same override set for later `sat` and `sat-uninstall` invocations.
+
+Provider credentials are deliberately not accepted or stored. Configure them
+through OpenClaw's credential store or the trusted caller environment, then
+inspect both provider and SAT state with:
+
+```bash
+$HOME/.openclaw/bin/openclaw configure --section model
+$HOME/.openclaw/bin/openclaw models status --check
+sat configure --show
+```
+
+For scripted setup, supply every required first-time value explicitly:
+
+```bash
+sat configure --non-interactive \
+  --model provider/model \
+  --input-cost-per-million-usd 0.00 \
+  --output-cost-per-million-usd 0.00 \
+  --verification-concurrency 1 \
+  --agent-timeout-seconds 600
+```
+
+Use real prices for a paid model. A later `sat configure` run replaces the
+saved defaults atomically; run-specific `sat run` flags take precedence without
+modifying the saved file.
+
+## Uninstallation
+
+Run the guided uninstaller from any directory:
+
+```bash
+sat-uninstall
+```
+
+The default removes the two launchers and this checkout's `.venv` while
+preserving the SAT configuration, `runs/`, `workspaces/`, source checkout,
+OpenClaw and its credentials, uv, Docker, and the benchmark image. Export the
+SAT configuration and default generated data before uninstalling with:
+
+```bash
+sat-uninstall --export-to "$HOME/sat-backup" --yes
+```
+
+The destination must be absolute and must not already exist. The export
+contains `configuration/config.json`, available default `data/runs/` and
+`data/workspaces/`, and `EXPORT.txt`. It intentionally excludes provider
+credentials and any custom `--runs-root` or `--workspaces-root` locations.
+
+Deletion requires explicit purge flags and can be combined with export:
+
+```bash
+sat-uninstall \
+  --export-to "$HOME/sat-backup" \
+  --purge-config \
+  --purge-data \
+  --yes
+```
+
+Use `sat-uninstall --help` to review all keep, purge, export, and confirmation
+options. `make uninstall` runs the same guided script from the checkout.
 
 ## Development Setup
 
@@ -214,8 +298,17 @@ uv run sat preflight ./task-manager-source
 Run preflight and the live workflow as a non-root user. Writable Agent
 containers inherit that user's numeric UID/GID; root identities are rejected.
 
-Run the vertical slice after choosing one fixed model and recording its current
-per-million-token prices:
+After `sat configure`, run the vertical slice using the saved model, prices,
+concurrency, and timeout:
+
+```bash
+sat run \
+  benchmarks/task_manager/task-brief.json \
+  ./task-manager-source
+```
+
+For a controlled one-off override, supply the exact model and prices on the
+command line:
 
 ```bash
 uv run sat run \
@@ -364,7 +457,10 @@ src/software_agent_team/
   responses.py                 Strict Agent response parser
   run_control.py               Lifecycle state and atomic persistence
   runtime_configuration.py     Run-scoped OpenClaw config and preflight
+  user_configuration.py        User-local secret-free live-run defaults
   workflow.py                  Phase 1 orchestration and final reporting
+scripts/install.sh             One-command Linux/WSL installation
+scripts/uninstall.sh           Guided preservation, export, and uninstall
 tests/                         Offline unit, integration, and end-to-end tests
 docs/phase1-runbook.md         Live-trace operating procedure
 VISION.md                      Product and architecture decisions

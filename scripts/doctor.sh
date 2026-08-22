@@ -47,6 +47,7 @@ fi
   fail "benchmark dependency lock is missing"
 [[ -f benchmarks/task_manager/acceptance/run.py ]] || \
   fail "benchmark acceptance suite is missing"
+[[ -x scripts/uninstall.sh ]] || fail "uninstall script is missing or not executable"
 
 task_python_version="$("$task_uv_bin" run --frozen python -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')"
 [[ "$task_python_version" == "3.12" ]] || fail "the project must use Python 3.12"

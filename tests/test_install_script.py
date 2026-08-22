@@ -26,6 +26,7 @@ def prepare_checkout(tmp_path: Path) -> Path:
     checkout = tmp_path / "checkout"
     for relative in (
         "scripts/install.sh",
+        "scripts/uninstall.sh",
         "scripts/setup.sh",
         "configs/run-policy.json",
         "benchmarks/task_manager/Dockerfile",
@@ -164,8 +165,11 @@ def test_installer_prepares_cli_image_and_checks_idempotently(tmp_path: Path) ->
     assert first.returncode == 0, first.stderr
     assert second.returncode == 0, second.stderr
     launcher = install_bin / "sat"
+    uninstaller = install_bin / "sat-uninstall"
     assert launcher.is_symlink()
     assert launcher.readlink() == checkout / ".venv/bin/sat"
+    assert uninstaller.is_symlink()
+    assert uninstaller.readlink() == checkout / "scripts/uninstall.sh"
     assert (checkout / "openclaw/workspaces").is_dir()
     assert "install: Software Agent Team is ready" in first.stdout
     assert "image_id=sha256:" + "a" * 64 in first.stdout
@@ -173,6 +177,8 @@ def test_installer_prepares_cli_image_and_checks_idempotently(tmp_path: Path) ->
         "provider credentials and active OpenClaw configuration were not created"
     )
     assert credential_notice in first.stdout
+    assert "install: next=sat" in first.stdout
+    assert "install: uninstall=sat-uninstall" in first.stdout
     docker_calls = docker_log.read_text(encoding="utf-8")
     assert "info" in docker_calls
     assert "build --pull=false --tag sat-task-manager-quality:phase1-v1" in (

@@ -1,10 +1,13 @@
-.PHONY: install setup doctor validate lock lock-benchmark format format-check lint test check
+.PHONY: install uninstall setup doctor validate lock lock-benchmark format format-check lint test check
 
 UV ?= $(HOME)/.local/bin/uv
 BENCHMARK_EXCLUDE_NEWER ?= 2026-08-09
 
 install:
 	./scripts/install.sh
+
+uninstall:
+	./scripts/uninstall.sh
 
 setup:
 	./scripts/setup.sh

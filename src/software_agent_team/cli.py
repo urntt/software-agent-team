@@ -1,7 +1,8 @@
-"""Command-line entry point for validation and the Phase 1 vertical slice."""
+"""Command-line entry point for configuration and the Agent-team harness."""
 
 import argparse
 import json
+import sys
 import tempfile
 from collections.abc import Sequence
 from decimal import Decimal
@@ -33,16 +34,206 @@ from software_agent_team.runtime_configuration import (
     persist_runtime_preflight,
 )
 from software_agent_team.teams import load_team_manifest
+from software_agent_team.user_configuration import (
+    UserConfiguration,
+    load_user_configuration,
+    save_user_configuration,
+    user_configuration_path,
+)
 from software_agent_team.workflow import WorkflowCoordinator
 
-DEFAULT_TEAM_CONFIG = Path("configs/teams.json")
-DEFAULT_OPENCLAW_CONFIG = Path("configs/openclaw.example.json5")
-DEFAULT_RUN_POLICY = Path("configs/run-policy.json")
-DEFAULT_BENCHMARK = Path("benchmarks/task_manager/benchmark.json")
-DEFAULT_BENCHMARK_SEED = Path("benchmarks/task_manager/seed")
-DEFAULT_RUNS_ROOT = Path("runs")
-DEFAULT_WORKSPACES_ROOT = Path("workspaces")
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_TEAM_CONFIG = PROJECT_ROOT / "configs/teams.json"
+DEFAULT_OPENCLAW_CONFIG = PROJECT_ROOT / "configs/openclaw.example.json5"
+DEFAULT_RUN_POLICY = PROJECT_ROOT / "configs/run-policy.json"
+DEFAULT_BENCHMARK = PROJECT_ROOT / "benchmarks/task_manager/benchmark.json"
+DEFAULT_BENCHMARK_SEED = PROJECT_ROOT / "benchmarks/task_manager/seed"
+DEFAULT_TASK_BRIEF = PROJECT_ROOT / "benchmarks/task_manager/task-brief.json"
+DEFAULT_RUNS_ROOT = PROJECT_ROOT / "runs"
+DEFAULT_WORKSPACES_ROOT = PROJECT_ROOT / "workspaces"
 DEFAULT_OPENCLAW_BINARY = Path.home() / ".openclaw" / "bin" / "openclaw"
+
+
+def _print_run_guide(*, configured: bool) -> None:
+    """Print the shortest safe path from installation to one live run."""
+
+    print("\nConfigure and verify the provider (credentials stay in OpenClaw):")
+    print(f"  {DEFAULT_OPENCLAW_BINARY} configure --section model")
+    print(f"  {DEFAULT_OPENCLAW_BINARY} models status --check")
+    if not configured:
+        print("\nSave non-secret run defaults:")
+        print("  sat configure")
+    print("\nPrepare and check the frozen benchmark:")
+    print(f"  cd {PROJECT_ROOT}")
+    print("  sat prepare-benchmark ./task-manager-source")
+    print("  sat preflight ./task-manager-source")
+    print("\nStart the live Agent workflow (this can incur provider usage):")
+    print(f"  sat run {DEFAULT_TASK_BRIEF} ./task-manager-source")
+    print("\nReview saved settings at any time with: sat configure --show")
+    print("Reconfigure at any time with: sat configure")
+    print("Uninstall with preservation/export choices: sat-uninstall --help")
+
+
+def _show_welcome() -> int:
+    """Show first-launch onboarding or the next-run guide."""
+
+    path = user_configuration_path()
+    configuration = load_user_configuration(path)
+    if configuration is None:
+        print("Software Agent Team is installed but not configured yet.")
+        print(f"Configuration will be saved to: {path}")
+        print("SAT never stores provider API keys in this file.")
+        _print_run_guide(configured=False)
+    else:
+        print("Software Agent Team is configured and ready for preflight.")
+        _print_configuration(configuration, path)
+        _print_run_guide(configured=True)
+    return 0
+
+
+def _print_configuration(configuration: UserConfiguration, path: Path) -> None:
+    print(f"configuration: {path}")
+    print(f"model: {configuration.model}")
+    print(
+        "input cost per million tokens (USD): "
+        f"{configuration.input_cost_per_million_usd}"
+    )
+    print(
+        "output cost per million tokens (USD): "
+        f"{configuration.output_cost_per_million_usd}"
+    )
+    print(f"verification concurrency: {configuration.verification_concurrency}")
+    print(f"Agent timeout (seconds): {configuration.agent_timeout_seconds}")
+
+
+def _prompt_value(label: str, current: object | None = None) -> str:
+    suffix = "" if current is None else f" [{current}]"
+    response = input(f"{label}{suffix}: ").strip()
+    if response:
+        return response
+    if current is None:
+        raise ValueError(f"{label} is required")
+    return str(current)
+
+
+def _configure(args: argparse.Namespace) -> int:
+    """Create or replace non-secret user run defaults."""
+
+    path = user_configuration_path()
+    current = load_user_configuration(path)
+    supplied = any(
+        value is not None
+        for value in (
+            args.model,
+            args.input_cost_per_million_usd,
+            args.output_cost_per_million_usd,
+            args.verification_concurrency,
+            args.agent_timeout_seconds,
+        )
+    )
+    if args.show:
+        if supplied:
+            raise ValueError("--show cannot be combined with configuration values")
+        if current is None:
+            print(f"configuration: not configured ({path})")
+            _print_run_guide(configured=False)
+        else:
+            _print_configuration(current, path)
+            _print_run_guide(configured=True)
+        return 0
+
+    interactive = not args.non_interactive and sys.stdin.isatty() and not supplied
+    if interactive:
+        print("SAT configuration stores run defaults only, never provider credentials.")
+        print("Press Enter to keep a value shown in brackets.")
+        model = _prompt_value(
+            "OpenClaw model reference", current.model if current else None
+        )
+        input_cost = _prompt_value(
+            "Input cost per million tokens in USD",
+            current.input_cost_per_million_usd if current else None,
+        )
+        output_cost = _prompt_value(
+            "Output cost per million tokens in USD",
+            current.output_cost_per_million_usd if current else None,
+        )
+        concurrency = int(
+            _prompt_value(
+                "Concurrent Tester/Reviewer calls (1 or 2)",
+                current.verification_concurrency if current else 2,
+            )
+        )
+        timeout = int(
+            _prompt_value(
+                "Per-Agent timeout in seconds",
+                current.agent_timeout_seconds if current else 600,
+            )
+        )
+    else:
+        if not supplied:
+            raise ValueError(
+                "interactive configuration requires a terminal; supply configuration "
+                "flags or use --show"
+            )
+        model = (
+            args.model if args.model is not None else current.model if current else None
+        )
+        input_cost = (
+            args.input_cost_per_million_usd
+            if args.input_cost_per_million_usd is not None
+            else current.input_cost_per_million_usd
+            if current
+            else None
+        )
+        output_cost = (
+            args.output_cost_per_million_usd
+            if args.output_cost_per_million_usd is not None
+            else current.output_cost_per_million_usd
+            if current
+            else None
+        )
+        concurrency = (
+            args.verification_concurrency
+            if args.verification_concurrency is not None
+            else current.verification_concurrency
+            if current
+            else 2
+        )
+        timeout = (
+            args.agent_timeout_seconds
+            if args.agent_timeout_seconds is not None
+            else current.agent_timeout_seconds
+            if current
+            else 600
+        )
+        missing = [
+            name
+            for name, value in (
+                ("--model", model),
+                ("--input-cost-per-million-usd", input_cost),
+                ("--output-cost-per-million-usd", output_cost),
+            )
+            if value is None
+        ]
+        if missing:
+            raise ValueError(
+                "first-time non-interactive configuration requires "
+                + ", ".join(missing)
+            )
+
+    configuration = UserConfiguration(
+        model=model,
+        input_cost_per_million_usd=input_cost,
+        output_cost_per_million_usd=output_cost,
+        verification_concurrency=concurrency,
+        agent_timeout_seconds=timeout,
+    )
+    save_user_configuration(configuration, path)
+    print("configuration saved")
+    _print_configuration(configuration, path)
+    print("provider credentials: not stored by SAT")
+    _print_run_guide(configured=True)
+    return 0
 
 
 def _load_json_model[ModelT: BaseModel](path: Path, model: type[ModelT]) -> ModelT:
@@ -165,6 +356,70 @@ def _preflight(args: argparse.Namespace) -> int:
 
 
 def _run_workflow(args: argparse.Namespace) -> int:
+    user_configuration = None
+    if any(
+        value is None
+        for value in (
+            args.model,
+            args.input_cost_per_million_usd,
+            args.output_cost_per_million_usd,
+            args.agent_timeout_seconds,
+            args.verification_concurrency,
+        )
+    ):
+        user_configuration = load_user_configuration()
+
+    model = (
+        args.model
+        if args.model is not None
+        else user_configuration.model
+        if user_configuration is not None
+        else None
+    )
+    input_cost = (
+        args.input_cost_per_million_usd
+        if args.input_cost_per_million_usd is not None
+        else user_configuration.input_cost_per_million_usd
+        if user_configuration is not None
+        else None
+    )
+    output_cost = (
+        args.output_cost_per_million_usd
+        if args.output_cost_per_million_usd is not None
+        else user_configuration.output_cost_per_million_usd
+        if user_configuration is not None
+        else None
+    )
+    timeout = (
+        args.agent_timeout_seconds
+        if args.agent_timeout_seconds is not None
+        else user_configuration.agent_timeout_seconds
+        if user_configuration is not None
+        else 600
+    )
+    concurrency = (
+        args.verification_concurrency
+        if args.verification_concurrency is not None
+        else user_configuration.verification_concurrency
+        if user_configuration is not None
+        else 2
+    )
+    missing = [
+        name
+        for name, value in (
+            ("model", model),
+            ("input token price", input_cost),
+            ("output token price", output_cost),
+        )
+        if value is None
+    ]
+    if missing:
+        raise ValueError(
+            "run defaults are not configured for "
+            + ", ".join(missing)
+            + "; run 'sat configure' or supply the equivalent flags"
+        )
+
     task_brief = _load_json_model(args.task_brief, TaskBrief)
     manifest = load_team_manifest(args.teams)
     configuration = load_quality_gate_configuration(args.policy, args.benchmark)
@@ -205,7 +460,7 @@ def _run_workflow(args: argparse.Namespace) -> int:
             sandbox_pids_limit=limits.pids,
             sandbox_open_files=limits.open_files,
             sandbox_tmpfs_mb=limits.writable_tmpfs_mb,
-            model=args.model,
+            model=model,
         )
         preflight = inspect_runtime_preflight(
             openclaw_binary=args.openclaw_binary,
@@ -242,15 +497,15 @@ def _run_workflow(args: argparse.Namespace) -> int:
         quality_gate_factory=gate_factory,
         budget=configuration.policy.agent_budget,
         pricing=ModelPricing(
-            model=args.model,
-            input_cost_per_million_usd=args.input_cost_per_million_usd,
-            output_cost_per_million_usd=args.output_cost_per_million_usd,
+            model=model,
+            input_cost_per_million_usd=input_cost,
+            output_cost_per_million_usd=output_cost,
         ),
         runtime_setup=runtime_setup,
         manual_review_criteria=configuration.benchmark.manual_review_criteria,
-        agent_timeout_seconds=args.agent_timeout_seconds,
+        agent_timeout_seconds=timeout,
         artifact_repair_limit=args.artifact_repair_limit,
-        verification_concurrency=args.verification_concurrency,
+        verification_concurrency=concurrency,
     )
     outcome = coordinator.execute(
         task_brief,
@@ -270,9 +525,37 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser = argparse.ArgumentParser(
         prog="sat",
-        description="Run and validate the software Agent team harness.",
+        description=(
+            "Configure, run, and validate the software Agent team harness. "
+            "Run without a command for onboarding."
+        ),
     )
-    commands = parser.add_subparsers(dest="command", required=True)
+    commands = parser.add_subparsers(dest="command")
+
+    configure = commands.add_parser(
+        "configure",
+        help="Interactively create or replace secret-free live-run defaults.",
+    )
+    configure.add_argument(
+        "--show",
+        action="store_true",
+        help="Show saved defaults and the run guide without changing anything.",
+    )
+    configure.add_argument(
+        "--non-interactive",
+        action="store_true",
+        help="Never prompt; useful when supplying configuration flags in scripts.",
+    )
+    configure.add_argument("--model")
+    configure.add_argument("--input-cost-per-million-usd", type=Decimal)
+    configure.add_argument("--output-cost-per-million-usd", type=Decimal)
+    configure.add_argument(
+        "--verification-concurrency",
+        type=int,
+        choices=(1, 2),
+    )
+    configure.add_argument("--agent-timeout-seconds", type=int)
+    configure.set_defaults(handler=_configure)
 
     handoff = commands.add_parser(
         "validate-handoff",
@@ -363,27 +646,33 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_OPENCLAW_BINARY,
     )
     run.add_argument("--sandbox-binary", default="docker")
-    run.add_argument("--model", required=True)
+    run.add_argument(
+        "--model",
+        help="Exact OpenClaw model reference; defaults to 'sat configure' value.",
+    )
     run.add_argument(
         "--input-cost-per-million-usd",
         type=Decimal,
-        required=True,
+        help="Exact input price; defaults to 'sat configure' value.",
     )
     run.add_argument(
         "--output-cost-per-million-usd",
         type=Decimal,
-        required=True,
+        help="Exact output price; defaults to 'sat configure' value.",
     )
-    run.add_argument("--agent-timeout-seconds", type=int, default=600)
+    run.add_argument(
+        "--agent-timeout-seconds",
+        type=int,
+        help="Per-Agent timeout; defaults to configured value or 600 seconds.",
+    )
     run.add_argument("--artifact-repair-limit", type=int, choices=(0, 1), default=1)
     run.add_argument(
         "--verification-concurrency",
         type=int,
         choices=(1, 2),
-        default=2,
         help=(
-            "Maximum concurrent Tester/Reviewer calls; use 1 for providers "
-            "that serve only one generation at a time."
+            "Maximum concurrent Tester/Reviewer calls; defaults to the configured "
+            "value or 2. Use 1 for providers with one generation slot."
         ),
     )
     run.set_defaults(handler=_run_workflow)
@@ -396,6 +685,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     args = build_parser().parse_args(argv)
     try:
+        if args.command is None:
+            return _show_welcome()
         return args.handler(args)
     except (
         OSError,
