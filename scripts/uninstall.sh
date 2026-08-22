@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-task_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+task_script_path="$(readlink -f -- "${BASH_SOURCE[0]}")" || {
+  echo "uninstall: cannot resolve the uninstall script path" >&2
+  exit 1
+}
+task_root="$(cd "$(dirname "$task_script_path")/.." && pwd)"
 task_bin_dir="${SAT_BIN_DIR:-$HOME/.local/bin}"
 task_sat_target="$task_root/.venv/bin/sat"
 task_sat_link="$task_bin_dir/sat"

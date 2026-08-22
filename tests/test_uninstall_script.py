@@ -83,10 +83,10 @@ def run_uninstaller(
     environment: dict[str, str],
     *arguments: str,
 ) -> subprocess.CompletedProcess[str]:
-    """Run the copied uninstaller without an interactive terminal."""
+    """Run the installed symlink without an interactive terminal."""
 
     return subprocess.run(
-        [str(checkout / "scripts/uninstall.sh"), *arguments],
+        [str(Path(environment["SAT_BIN_DIR"]) / "sat-uninstall"), *arguments],
         cwd=checkout,
         env=environment,
         check=False,
