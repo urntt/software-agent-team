@@ -10,6 +10,7 @@ from pathlib import Path, PurePosixPath
 import pytest
 from pydantic import ValidationError
 
+from software_agent_team.artifacts import AgentRole
 from software_agent_team.quality_gates import (
     BenchmarkManifest,
     DockerSandboxBackend,
@@ -94,6 +95,17 @@ def make_invocation(
 def test_checked_in_manifests_are_complete_and_hashed(configuration) -> None:
     assert configuration.policy.id == "phase1_deterministic"
     assert configuration.policy.agent_budget.max_calls == 14
+    assert configuration.policy.agent_stage_timeouts_seconds == {
+        AgentRole.CLARIFIER: 120,
+        AgentRole.SINGLE_AGENT: 900,
+        AgentRole.PLANNER: 120,
+        AgentRole.GENERALIST_DEVELOPER: 900,
+        AgentRole.FRONTEND_DEVELOPER: 900,
+        AgentRole.BACKEND_DEVELOPER: 900,
+        AgentRole.INTEGRATOR: 900,
+        AgentRole.TESTER: 300,
+        AgentRole.REVIEWER: 300,
+    }
     assert configuration.benchmark.id == "task_manager_phase1_v2"
     assert configuration.task_brief.confirmed is True
     assert len(configuration.benchmark.gates) == 4
@@ -197,6 +209,19 @@ def test_policy_rejects_incoherent_or_unbounded_limits() -> None:
         SandboxLimits.model_validate({**limits, "writable_tmpfs_mb": 100_000})
     with pytest.raises(ValidationError):
         SandboxLimits.model_validate({**limits, "stdout_max_bytes": 1})
+
+
+def test_policy_requires_a_bounded_timeout_for_every_agent_role() -> None:
+    payload = json.loads(POLICY_PATH.read_text(encoding="utf-8"))
+    payload["agent_stage_timeouts_seconds"].pop("reviewer")
+
+    with pytest.raises(ValidationError, match="missing roles: reviewer"):
+        RunPolicy.model_validate(payload)
+
+    payload = json.loads(POLICY_PATH.read_text(encoding="utf-8"))
+    payload["agent_stage_timeouts_seconds"]["planner"] = 3601
+    with pytest.raises(ValidationError):
+        RunPolicy.model_validate(payload)
 
 
 def test_mount_targets_must_be_read_only_and_isolated() -> None:

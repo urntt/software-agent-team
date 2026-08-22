@@ -110,6 +110,9 @@ code or experiment evidence justifies a replacement.
 - No LLM or OpenClaw Agent owns lifecycle transitions.
 - Every transition is validated, persisted, and bounded. Persisted recovery is
   integrity checked; automatic interrupted-run resume from the CLI is deferred.
+- The controller assembles persisted artifacts. Agents supply semantic content;
+  the controller supplies artifact identity, run context, verified Git facts,
+  deterministic command evidence, and fixed review scope.
 - Git owns source history.
 - Persisted artifacts own cross-Agent communication.
 - OpenClaw session history is diagnostic state, not a reproducibility
@@ -160,7 +163,7 @@ Each concept has one authoritative owner.
 | Run-scoped runtime materialization and preflight | `src/software_agent_team/runtime_configuration.py` |
 | Run lifecycle state and persistence | `src/software_agent_team/run_control.py` |
 | Phase 1 orchestration, decisions, and reports | `src/software_agent_team/workflow.py` |
-| Agent-call, token, duration, and cost budgets | `src/software_agent_team/budgets.py` and `configs/run-policy.json` |
+| Agent-call, token, duration, cost, and per-role stage budgets | `src/software_agent_team/budgets.py`, `src/software_agent_team/workflow.py`, and `configs/run-policy.json` |
 | Fixed benchmark and quality-gate execution | `benchmarks/task_manager/` and `src/software_agent_team/quality_gates.py` |
 | Agent process invocation and telemetry parsing | `src/software_agent_team/execution.py` |
 | Role prompts and response validation | `src/software_agent_team/prompting.py` and `src/software_agent_team/responses.py` |
@@ -205,13 +208,15 @@ conflicts. Phase 1 permits one initial implementation and at most one
 evidence-driven revision, even though the reusable team definition allows a
 higher future limit.
 
-The Tester owns deterministic command evidence and preserves the benchmark's
-command-to-criterion assignment. Criteria with a manual component remain
-`pending_review` in the Tester's criterion results, but the overall Tester
+The controller owns deterministic command evidence, command-to-criterion
+assignment, exit-derived status, and blocker state. The Tester owns analysis of
+that evidence and semantic findings. Criteria with a manual component remain
+`pending_review` in the controller-assembled `TestReport`, but its overall
 status is `passed` when all deterministic evidence passes and no blocker exists.
-The Reviewer owns that explicit manual-review scope on the same immutable
-commit. Only the controller may merge a passing deterministic report and an
-accepted independent review into final passed acceptance results.
+The Reviewer owns semantic evaluation of the explicit manual-review scope; the
+controller binds that scope and immutable commit into the `ReviewReport`. Only
+the controller may merge a passing deterministic report and an accepted
+independent review into final passed acceptance results.
 
 ### Configuration B: `implementation_domain_specialized`
 
@@ -262,12 +267,14 @@ interpretation does not confound the result.
 | Use persisted structured handoffs | Durable, attributable artifacts make context and decisions auditable without treating hidden conversation history as state. |
 | Run fixed Docker quality gates before Agent judgment | Reproducible command evidence is stronger than claimed test results and keeps generated code isolated from the host. |
 | Resolve the sandbox tag to one local image ID per run | Both Agent sandboxes and quality gates execute the same immutable image even if a mutable local tag is later reassigned. |
-| Allow one response repair and one implementation revision | A small bounded loop can correct formatting or implementation defects without hiding non-convergence, time, or cost. |
+| Assemble persisted artifacts in the controller | Models should produce planning, implementation summaries, evidence analysis, and review judgment. Known identity, Git, command, status, criterion, and scope facts must come from authoritative controller state instead of requiring an exact model echo. |
+| Allow one semantic-response repair and one implementation revision | A small bounded loop can correct genuinely invalid semantic content or implementation defects without hiding non-convergence, time, or cost. Controller-owned fields are ignored and audited rather than repaired. |
+| Use per-role stage budgets with a shared repair deadline | Planning, implementation, and verification have different measured workloads. Checked-in defaults are 120 seconds for Clarifier/Planner, 900 for coding/integration roles, and 300 for Tester/Reviewer. The initial response and optional repair share one deadline so repair cannot double the authorized time. |
 | Separate review severity from terminal failure | Even a critical-impact product defect may be correctable. Reviewer `fail` therefore requires an explicit safety or evidence-integrity termination reason; ordinary gate failures and implementation defects request `revise`. |
 | Version requirement or acceptance corrections | A hidden or over-specified acceptance condition confounds model evaluation. The confirmed TaskBrief must expose the product contract, black-box checks must accept equivalent compliant presentations, and a correction starts a new benchmark version. |
 | Freeze model identity and prices for each run | Explicit model telemetry and estimated cost are required for comparable experiments; model fallback would change the independent variables. |
 | Treat terminal failure as evidence | Provider, sandbox, artifact, budget, and convergence failures must remain observable instead of being retried or discarded silently. |
-| Keep saved user defaults secret-free | Model, pricing, concurrency, and timeout improve repeatability, but provider credentials remain in OpenClaw's trusted user state and never enter SAT configuration or exports. |
+| Keep saved user defaults secret-free | Model, pricing, concurrency, and an optional global stage-timeout override improve repeatability, but provider credentials remain in OpenClaw's trusted user state and never enter SAT configuration or exports. Checked-in role defaults remain the normal timeout policy. |
 | Make uninstall preservation-first | Removing the CLI must not silently destroy run evidence, generated workspaces, provider state, shared tools, or a source checkout; export and purge therefore require explicit user choices. |
 
 ## Planned Workflow
@@ -313,7 +320,8 @@ remains. It stops with a report when:
 
 - A resource or iteration limit is reached;
 - A required runtime, model, dependency, or sandbox is unavailable;
-- An artifact remains invalid after one controlled repair attempt;
+- An Agent's semantic response remains invalid after one controlled repair
+  attempt within the original role-stage deadline;
 - A safety boundary is crossed;
 - A revision produces no relevant change;
 - The same blocker repeats without measurable progress.
@@ -337,22 +345,36 @@ controller. The current implementation defines:
 - `IterationRecord`;
 - `FinalReport`.
 
-`src/software_agent_team/artifacts.py` remains the schema source of truth.
-Generated JSON Schema, documentation tables, or transport objects must be
-derived from those models.
+`src/software_agent_team/artifacts.py` remains the schema source of truth for
+persisted artifacts. `src/software_agent_team/responses.py` owns the smaller
+role-response bodies and the explicit mapping of controller-owned fields for
+each artifact kind. These are different boundaries, not duplicate persisted
+schemas.
 
 Phase artifacts use canonical run-relative paths, write-once persistence, and
 SHA-256 references. Structural schema validation is followed by contextual
 validation against the frozen task brief and selected team before persistence.
 The schemas exist independently of live Agent execution; an artifact is not
-evidence of a real run until the controller records it from verified inputs.
+evidence of a real run until the controller assembles it from a validated
+semantic response and verified controller inputs.
+
+Agents do not author the persisted envelope. Artifact kind and schema version,
+run/team/role/iteration context, timestamps, Git commits and changed files,
+fixed commands and their exit-derived results, criterion coverage, blockers,
+and review scope come from controller state. A model may redundantly return
+these fields for compatibility, but the parser strips them, records which ones
+were ignored, and never lets them override authoritative values. Missing or
+incorrect controller-owned fields are therefore neither model-quality failures
+nor reasons to spend a repair call.
 
 Transport normalization must remain deterministic. The controller accepts one
 unambiguous JSON object, either raw, inside one `json` fence, or surrounded by
 presentation prose. It may discard only text containing no other JSON
 structures or fences and never guesses between multiple candidates. Duplicate
-keys, multiple objects, non-standard constants, and any structural or
-contextual schema violation remain invalid.
+keys, multiple objects, non-standard constants, unknown semantic fields, and
+invalid semantic content remain invalid. A controlled repair addresses only
+that semantic contract and uses the time remaining on the same role-stage
+deadline.
 
 ## Evaluation
 
@@ -402,6 +424,9 @@ presented as a conclusive result.
 - Generated code has no external network access by default.
 - CPU, memory, process, open-file, tmpfs, command-output, wall-clock,
   iteration, and Agent-invocation limits are mandatory before live runs.
+- Checked-in per-role stage deadlines reflect different role workloads. A
+  global CLI or saved override is an explicit experimental variable, and a
+  repair never resets the stage clock.
 - Reported aggregate token, Agent-duration, and estimated-cost thresholds are
   evaluated after each invocation. Crossing one fails the run before another
   call; provider-side quota is the hard monetary boundary for a live trace.
@@ -470,8 +495,9 @@ Implemented and offline verified:
   configuration, non-root identity, strict model selection, and offline
   preflight;
 - Confirmed task-brief and handoff-envelope contracts;
-- Strict role prompts, JSON response parsing, and one controlled response
-  repair;
+- Strict role prompts, semantic JSON response parsing, controller assembly of
+  persisted envelope/Git/test/scope facts, and one deadline-sharing semantic
+  response repair;
 - Concrete phase-artifact and Agent-telemetry contracts with contextual
   validation;
 - Immutable phase artifacts, handoffs, command output, Agent output, canonical
@@ -496,6 +522,9 @@ Implemented and offline verified:
   Reviewer scope attestation, and controller-owned evidence resolution;
 - Pre-call Agent invocation limits and post-call token, duration, and
   estimated-cost stop thresholds;
+- Checked-in per-role stage budgets, optional global override, frozen resolved
+  run policy, and configuration-schema migration from the former scalar
+  timeout;
 - Explicit completed and failed terminal outcomes with machine-readable and
   human-readable reports;
 - One-command Linux/WSL installation for the pinned toolchain, locked project

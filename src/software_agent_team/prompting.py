@@ -10,7 +10,6 @@ from typing import Self
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from software_agent_team.artifacts import (
-    ARTIFACT_MODELS,
     COMMIT_PATTERN,
     IMPLEMENTATION_ROLES,
     AgentRole,
@@ -28,6 +27,7 @@ from software_agent_team.execution import (
     AgentExecutionRequest,
     validate_role_artifact_kind,
 )
+from software_agent_team.responses import RESPONSE_BODY_MODELS
 
 TEMPLATE_ROOT = Path(__file__).with_name("prompt_templates")
 
@@ -330,7 +330,7 @@ def render_agent_prompt(
         raise AgentPromptError(
             f"cannot load prompt template: {template_name}"
         ) from error
-    model = ARTIFACT_MODELS.get(inputs.expected_kind)
+    model = RESPONSE_BODY_MODELS.get(inputs.expected_kind)
     if model is None:
         raise AgentPromptError(
             f"no response model exists for {inputs.expected_kind.value}"
@@ -363,7 +363,7 @@ def render_agent_prompt(
 def build_agent_execution_request(
     inputs: AgentPromptInputs,
     *,
-    timeout_seconds: int = 600,
+    timeout_seconds: int,
     model: str | None = None,
     template_root: Path = TEMPLATE_ROOT,
 ) -> AgentExecutionRequest:

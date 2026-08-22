@@ -21,11 +21,11 @@ import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import Literal, Protocol, Self
+from typing import Annotated, Literal, Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from software_agent_team.artifacts import CommandEvidence, TaskBrief
+from software_agent_team.artifacts import AgentRole, CommandEvidence, TaskBrief
 from software_agent_team.budgets import AgentBudget
 
 QUALITY_GATE_SCHEMA_VERSION = 1
@@ -206,8 +206,26 @@ class RunPolicy(BaseModel):
     schema_version: Literal[QUALITY_GATE_SCHEMA_VERSION]
     id: str = Field(pattern=r"^[a-z][a-z0-9_-]*$")
     agent_budget: AgentBudget
+    agent_stage_timeouts_seconds: dict[
+        AgentRole,
+        Annotated[int, Field(ge=1, le=3600)],
+    ]
     sandbox: DockerSandboxPolicy
     limits: SandboxLimits
+
+    @field_validator("agent_stage_timeouts_seconds")
+    @classmethod
+    def require_every_role_timeout(
+        cls,
+        values: dict[AgentRole, int],
+    ) -> dict[AgentRole, int]:
+        """Freeze one explicit stage budget for every versioned Agent role."""
+
+        missing = set(AgentRole) - set(values)
+        if missing:
+            names = ", ".join(sorted(role.value for role in missing))
+            raise ValueError(f"Agent stage timeouts are missing roles: {names}")
+        return dict(sorted(values.items(), key=lambda item: item[0].value))
 
 
 class ReadOnlyInputMount(BaseModel):

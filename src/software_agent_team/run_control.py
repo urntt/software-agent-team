@@ -26,6 +26,7 @@ from pydantic import (
 )
 
 from software_agent_team.artifacts import (
+    AgentRole,
     ArtifactKind,
     ArtifactReference,
     IterationDecision,
@@ -230,6 +231,7 @@ class RunRecord(BaseModel):
     team_id: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9_]*$")
     team_manifest_version: int = Field(ge=1)
     team_definition_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    agent_stage_timeouts_seconds: dict[AgentRole, int] = Field(default_factory=dict)
     phase: RunPhase = RunPhase.CREATED
     current_iteration: int = Field(default=1, ge=1, le=3)
     iteration_limit: int = Field(ge=1, le=3)
@@ -261,6 +263,21 @@ class RunRecord(BaseModel):
         if not cleaned:
             raise ValueError("termination detail must not be blank")
         return cleaned
+
+    @field_validator("agent_stage_timeouts_seconds")
+    @classmethod
+    def require_bounded_stage_timeouts(
+        cls,
+        values: dict[AgentRole, int],
+    ) -> dict[AgentRole, int]:
+        """Persist the resolved per-role stage budgets used by this run."""
+
+        if any(
+            isinstance(seconds, bool) or not 1 <= seconds <= 3600
+            for seconds in values.values()
+        ):
+            raise ValueError("Agent stage timeouts must be between 1 and 3600")
+        return dict(sorted(values.items(), key=lambda item: item[0].value))
 
     @model_validator(mode="after")
     def validate_record(self) -> Self:
@@ -551,6 +568,7 @@ class RunStore:
             "team_id",
             "team_manifest_version",
             "team_definition_sha256",
+            "agent_stage_timeouts_seconds",
             "iteration_limit",
             "task_brief_sha256",
             "created_at",
@@ -630,6 +648,7 @@ class RunController:
         *,
         team_id: str,
         iteration_limit: int,
+        agent_stage_timeouts_seconds: Mapping[AgentRole, int] | None = None,
     ) -> RunRecord:
         """Create the initial recoverable record for a confirmed task brief."""
 
@@ -648,6 +667,7 @@ class RunController:
             team_id=team_id,
             team_manifest_version=self.manifest.schema_version,
             team_definition_sha256=_model_digest(team),
+            agent_stage_timeouts_seconds=dict(agent_stage_timeouts_seconds or {}),
             iteration_limit=iteration_limit,
             task_brief_sha256=_model_digest(task_brief),
             created_at=now,

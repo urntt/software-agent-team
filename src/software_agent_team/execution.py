@@ -92,7 +92,7 @@ class AgentExecutionRequest(BaseModel):
     role: AgentRole
     expected_kind: ArtifactKind
     prompt: str = Field(min_length=1)
-    timeout_seconds: int = Field(default=600, ge=1, le=3600)
+    timeout_seconds: int = Field(ge=1, le=3600)
     model: str | None = None
 
     @field_validator("prompt")

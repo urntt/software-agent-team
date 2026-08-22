@@ -78,7 +78,7 @@ def _show_welcome() -> int:
     """Show first-launch onboarding or the next-run guide."""
 
     path = user_configuration_path()
-    configuration = load_user_configuration(path)
+    configuration = _load_user_configuration(path)
     if configuration is None:
         print("Software Agent Team is installed but not configured yet.")
         print(f"Configuration will be saved to: {path}")
@@ -103,7 +103,37 @@ def _print_configuration(configuration: UserConfiguration, path: Path) -> None:
         f"{configuration.output_cost_per_million_usd}"
     )
     print(f"verification concurrency: {configuration.verification_concurrency}")
-    print(f"Agent timeout (seconds): {configuration.agent_timeout_seconds}")
+    timeout = configuration.stage_timeout_seconds
+    print(
+        "global Agent stage timeout override (seconds): "
+        f"{timeout if timeout is not None else 'role defaults'}"
+    )
+
+
+def _load_user_configuration(path: Path | None = None) -> UserConfiguration | None:
+    """Load defaults while making one-way configuration migration visible."""
+
+    return load_user_configuration(
+        path,
+        on_migration=lambda message: print(f"configuration migration: {message}"),
+    )
+
+
+def _timeout_flag(args: argparse.Namespace) -> tuple[bool, int | None]:
+    """Resolve new and deprecated timeout flags without parallel semantics."""
+
+    if args.use_role_timeouts:
+        return True, None
+    if args.stage_timeout_seconds is not None:
+        return True, args.stage_timeout_seconds
+    if args.deprecated_agent_timeout_seconds is not None:
+        print(
+            "warning: --agent-timeout-seconds is deprecated; it now means one "
+            "shared stage budget including response repair. Use "
+            "--stage-timeout-seconds instead."
+        )
+        return True, args.deprecated_agent_timeout_seconds
+    return False, None
 
 
 def _prompt_value(label: str, current: object | None = None) -> str:
@@ -116,20 +146,36 @@ def _prompt_value(label: str, current: object | None = None) -> str:
     return str(current)
 
 
+def _prompt_stage_timeout(current: int | None) -> int | None:
+    current_text: object = current if current is not None else "role defaults"
+    response = input(
+        f"Global Agent stage timeout in seconds, or 'role-defaults' [{current_text}]: "
+    ).strip()
+    if not response:
+        return current
+    if response.casefold() in {"role-defaults", "defaults", "default"}:
+        return None
+    return int(response)
+
+
 def _configure(args: argparse.Namespace) -> int:
     """Create or replace non-secret user run defaults."""
 
     path = user_configuration_path()
-    current = load_user_configuration(path)
-    supplied = any(
-        value is not None
-        for value in (
-            args.model,
-            args.input_cost_per_million_usd,
-            args.output_cost_per_million_usd,
-            args.verification_concurrency,
-            args.agent_timeout_seconds,
+    current = _load_user_configuration(path)
+    timeout_supplied, supplied_timeout = _timeout_flag(args)
+    supplied = (
+        any(
+            value is not None
+            for value in (
+                args.model,
+                args.input_cost_per_million_usd,
+                args.output_cost_per_million_usd,
+                args.verification_concurrency,
+                supplied_timeout,
+            )
         )
+        or timeout_supplied
     )
     if args.show:
         if supplied:
@@ -163,11 +209,8 @@ def _configure(args: argparse.Namespace) -> int:
                 current.verification_concurrency if current else 2,
             )
         )
-        timeout = int(
-            _prompt_value(
-                "Per-Agent timeout in seconds",
-                current.agent_timeout_seconds if current else 600,
-            )
+        timeout = _prompt_stage_timeout(
+            current.stage_timeout_seconds if current else None
         )
     else:
         if not supplied:
@@ -200,11 +243,11 @@ def _configure(args: argparse.Namespace) -> int:
             else 2
         )
         timeout = (
-            args.agent_timeout_seconds
-            if args.agent_timeout_seconds is not None
-            else current.agent_timeout_seconds
+            supplied_timeout
+            if timeout_supplied
+            else current.stage_timeout_seconds
             if current
-            else 600
+            else None
         )
         missing = [
             name
@@ -226,7 +269,7 @@ def _configure(args: argparse.Namespace) -> int:
         input_cost_per_million_usd=input_cost,
         output_cost_per_million_usd=output_cost,
         verification_concurrency=concurrency,
-        agent_timeout_seconds=timeout,
+        stage_timeout_seconds=timeout,
     )
     save_user_configuration(configuration, path)
     print("configuration saved")
@@ -356,18 +399,21 @@ def _preflight(args: argparse.Namespace) -> int:
 
 
 def _run_workflow(args: argparse.Namespace) -> int:
+    timeout_supplied, supplied_timeout = _timeout_flag(args)
     user_configuration = None
-    if any(
-        value is None
-        for value in (
-            args.model,
-            args.input_cost_per_million_usd,
-            args.output_cost_per_million_usd,
-            args.agent_timeout_seconds,
-            args.verification_concurrency,
+    if (
+        any(
+            value is None
+            for value in (
+                args.model,
+                args.input_cost_per_million_usd,
+                args.output_cost_per_million_usd,
+                args.verification_concurrency,
+            )
         )
+        or not timeout_supplied
     ):
-        user_configuration = load_user_configuration()
+        user_configuration = _load_user_configuration()
 
     model = (
         args.model
@@ -391,11 +437,11 @@ def _run_workflow(args: argparse.Namespace) -> int:
         else None
     )
     timeout = (
-        args.agent_timeout_seconds
-        if args.agent_timeout_seconds is not None
-        else user_configuration.agent_timeout_seconds
+        supplied_timeout
+        if timeout_supplied
+        else user_configuration.stage_timeout_seconds
         if user_configuration is not None
-        else 600
+        else None
     )
     concurrency = (
         args.verification_concurrency
@@ -503,7 +549,8 @@ def _run_workflow(args: argparse.Namespace) -> int:
         ),
         runtime_setup=runtime_setup,
         manual_review_criteria=configuration.benchmark.manual_review_criteria,
-        agent_timeout_seconds=timeout,
+        role_timeout_seconds=configuration.policy.agent_stage_timeouts_seconds,
+        stage_timeout_seconds=timeout,
         artifact_repair_limit=args.artifact_repair_limit,
         verification_concurrency=concurrency,
     )
@@ -554,7 +601,26 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         choices=(1, 2),
     )
-    configure.add_argument("--agent-timeout-seconds", type=int)
+    configure_timeout = configure.add_mutually_exclusive_group()
+    configure_timeout.add_argument(
+        "--stage-timeout-seconds",
+        type=int,
+        help=(
+            "Optional global budget for one role stage, including response repair; "
+            "otherwise use checked-in role defaults."
+        ),
+    )
+    configure_timeout.add_argument(
+        "--agent-timeout-seconds",
+        dest="deprecated_agent_timeout_seconds",
+        type=int,
+        help=argparse.SUPPRESS,
+    )
+    configure_timeout.add_argument(
+        "--use-role-timeouts",
+        action="store_true",
+        help="Clear the global override and use checked-in per-role stage budgets.",
+    )
     configure.set_defaults(handler=_configure)
 
     handoff = commands.add_parser(
@@ -660,10 +726,25 @@ def build_parser() -> argparse.ArgumentParser:
         type=Decimal,
         help="Exact output price; defaults to 'sat configure' value.",
     )
-    run.add_argument(
-        "--agent-timeout-seconds",
+    run_timeout = run.add_mutually_exclusive_group()
+    run_timeout.add_argument(
+        "--stage-timeout-seconds",
         type=int,
-        help="Per-Agent timeout; defaults to configured value or 600 seconds.",
+        help=(
+            "Global budget for each role stage, including response repair; "
+            "defaults to the saved override or checked-in per-role budgets."
+        ),
+    )
+    run_timeout.add_argument(
+        "--agent-timeout-seconds",
+        dest="deprecated_agent_timeout_seconds",
+        type=int,
+        help=argparse.SUPPRESS,
+    )
+    run_timeout.add_argument(
+        "--use-role-timeouts",
+        action="store_true",
+        help="Ignore a saved global override for this run and use role defaults.",
     )
     run.add_argument("--artifact-repair-limit", type=int, choices=(0, 1), default=1)
     run.add_argument(

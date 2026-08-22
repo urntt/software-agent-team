@@ -1,20 +1,23 @@
-"""Strict conversion of untrusted Agent text into existing artifact contracts."""
+"""Strict conversion of untrusted Agent text into semantic response bodies."""
 
 from __future__ import annotations
 
 import json
 from collections.abc import Collection
+from dataclasses import dataclass
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from software_agent_team.artifacts import (
     AgentRole,
-    IterationArtifact,
-    PhaseArtifact,
+    ArtifactKind,
+    ImplementationPlan,
+    PlanTask,
+    ReviewFinding,
     ReviewReport,
+    ReviewTerminationReason,
     ReviewVerdict,
     TaskBrief,
-    parse_phase_artifact,
     validate_artifact_context,
 )
 from software_agent_team.execution import (
@@ -28,6 +31,175 @@ class AgentArtifactResponseError(ValueError):
     """Raised when an Agent response cannot become attributable run evidence."""
 
 
+def _clean_unique_text(values: tuple[str, ...]) -> tuple[str, ...]:
+    cleaned = tuple(value.strip() for value in values)
+    if any(not value for value in cleaned):
+        raise ValueError("response text values must not be blank")
+    if len(cleaned) != len(set(cleaned)):
+        raise ValueError("response text values must be unique")
+    return cleaned
+
+
+class ImplementationPlanResponse(BaseModel):
+    """Planner reasoning; the controller supplies the artifact envelope."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    objective: str = Field(min_length=1)
+    approach: tuple[str, ...] = Field(min_length=1)
+    tasks: tuple[PlanTask, ...] = Field(min_length=1)
+    risks: tuple[str, ...] = ()
+    assumptions: tuple[str, ...] = ()
+
+    @field_validator("objective")
+    @classmethod
+    def require_clean_objective(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("objective must not be blank")
+        return cleaned
+
+    @field_validator("approach", "risks", "assumptions")
+    @classmethod
+    def require_clean_unique_text(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        return _clean_unique_text(values)
+
+
+class WorkResultResponse(BaseModel):
+    """Developer-authored semantic result; Git facts remain controller-owned."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    summary: str = Field(min_length=1)
+    completed_tasks: tuple[str, ...] = Field(min_length=1)
+    unresolved_issues: tuple[str, ...] = ()
+
+    @field_validator("summary")
+    @classmethod
+    def require_clean_summary(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("summary must not be blank")
+        return cleaned
+
+    @field_validator("completed_tasks", "unresolved_issues")
+    @classmethod
+    def require_clean_unique_text(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        return _clean_unique_text(values)
+
+
+class TestReportResponse(BaseModel):
+    """Tester analysis; deterministic statuses and evidence are controller-owned."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    findings: tuple[str, ...] = ()
+    summary: str = Field(min_length=1)
+
+    @field_validator("findings")
+    @classmethod
+    def require_clean_unique_findings(
+        cls,
+        values: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        return _clean_unique_text(values)
+
+    @field_validator("summary")
+    @classmethod
+    def require_clean_summary(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("summary must not be blank")
+        return cleaned
+
+
+class ReviewReportResponse(BaseModel):
+    """Reviewer's semantic verdict; immutable commit and scope are controller-owned."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    verdict: ReviewVerdict = Field(
+        description=(
+            "Use revise for correctable defects. Use fail only when continuing "
+            "would cross a safety or evidence-integrity boundary."
+        )
+    )
+    termination_reason: ReviewTerminationReason | None = None
+    findings: tuple[ReviewFinding, ...] = ()
+    summary: str = Field(min_length=1)
+
+    @field_validator("summary")
+    @classmethod
+    def require_clean_summary(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("summary must not be blank")
+        return cleaned
+
+
+type AgentResponseBody = (
+    ImplementationPlanResponse
+    | WorkResultResponse
+    | TestReportResponse
+    | ReviewReportResponse
+)
+
+
+RESPONSE_BODY_MODELS: dict[ArtifactKind, type[AgentResponseBody]] = {
+    ArtifactKind.IMPLEMENTATION_PLAN: ImplementationPlanResponse,
+    ArtifactKind.WORK_RESULT: WorkResultResponse,
+    ArtifactKind.TEST_REPORT: TestReportResponse,
+    ArtifactKind.REVIEW_REPORT: ReviewReportResponse,
+}
+
+_COMMON_CONTROLLER_FIELDS = {
+    "schema_version",
+    "kind",
+    "run_id",
+    "team_id",
+    "producer",
+    "created_at",
+    "iteration",
+}
+_CONTROLLER_FIELDS: dict[ArtifactKind, frozenset[str]] = {
+    ArtifactKind.IMPLEMENTATION_PLAN: frozenset(_COMMON_CONTROLLER_FIELDS),
+    ArtifactKind.WORK_RESULT: frozenset(
+        _COMMON_CONTROLLER_FIELDS | {"input_commit", "output_commit", "changed_files"}
+    ),
+    ArtifactKind.TEST_REPORT: frozenset(
+        _COMMON_CONTROLLER_FIELDS
+        | {
+            "input_commit",
+            "status",
+            "commands",
+            "criteria",
+            "manual_review_criteria",
+            "blockers",
+        }
+    ),
+    ArtifactKind.REVIEW_REPORT: frozenset(
+        _COMMON_CONTROLLER_FIELDS | {"input_commit", "reviewed_criteria"}
+    ),
+}
+
+
+def controller_fields_for(kind: ArtifactKind) -> tuple[str, ...]:
+    """Return fields that the controller binds for one response contract."""
+
+    fields = _CONTROLLER_FIELDS.get(kind)
+    if fields is None:
+        raise ValueError(f"no Agent response contract exists for {kind.value}")
+    return tuple(sorted(fields))
+
+
+@dataclass(frozen=True)
+class ParsedAgentResponse:
+    """Validated semantic body plus ignored controller-owned response fields."""
+
+    body: AgentResponseBody
+    ignored_controller_fields: tuple[str, ...]
+
+
 def _safe_validation_detail(error: ValueError) -> str:
     """Return bounded schema diagnostics without reflecting raw response values."""
 
@@ -38,7 +210,7 @@ def _safe_validation_detail(error: ValueError) -> str:
             include_context=False,
             include_input=False,
         ):
-            location = ".".join(str(item) for item in issue["loc"]) or "artifact"
+            location = ".".join(str(item) for item in issue["loc"]) or "response"
             issues.append(f"{location}: {issue['msg']}")
         return "; ".join(issues)[:1000]
     return str(error)[:1000]
@@ -113,15 +285,64 @@ def _unwrap_single_json_object(value: str) -> str:
     return stripped[opening:closing]
 
 
-def parse_agent_artifact(
+def _validate_response_context(
+    body: AgentResponseBody,
+    request: AgentExecutionRequest,
+    result: AgentExecutionResult,
+    *,
+    task_brief: TaskBrief,
+    team_roles: Collection[AgentRole],
+    iteration_limit: int,
+) -> None:
+    """Apply semantic checks that depend on the frozen controller context."""
+
+    artifact: ImplementationPlan | ReviewReport | None = None
+    if isinstance(body, ImplementationPlanResponse):
+        artifact = ImplementationPlan(
+            run_id=request.run_id,
+            team_id=request.team_id,
+            created_at=result.telemetry.finished_at,
+            objective=body.objective,
+            approach=body.approach,
+            tasks=body.tasks,
+            risks=body.risks,
+            assumptions=body.assumptions,
+        )
+    elif isinstance(body, ReviewReportResponse):
+        if body.verdict is ReviewVerdict.FAIL and body.termination_reason is None:
+            raise ValueError("failed reviews require a terminal review reason")
+        artifact = ReviewReport(
+            run_id=request.run_id,
+            team_id=request.team_id,
+            created_at=result.telemetry.finished_at,
+            iteration=request.iteration,
+            input_commit="0" * 40,
+            verdict=body.verdict,
+            termination_reason=body.termination_reason,
+            reviewed_criteria=(),
+            findings=body.findings,
+            summary=body.summary,
+        )
+    if artifact is None:
+        return
+    validate_artifact_context(
+        artifact,
+        task_brief=task_brief,
+        team_id=request.team_id,
+        team_roles=set(team_roles),
+        iteration_limit=iteration_limit,
+    )
+
+
+def parse_agent_response(
     result: AgentExecutionResult,
     request: AgentExecutionRequest,
     *,
     task_brief: TaskBrief,
     team_roles: Collection[AgentRole],
     iteration_limit: int,
-) -> PhaseArtifact:
-    """Validate one pure-JSON Agent response against its complete run context."""
+) -> ParsedAgentResponse:
+    """Validate one Agent semantic body and bind it to its execution context."""
 
     if result.status is not AgentExecutionStatus.COMPLETED:
         raise AgentArtifactResponseError(
@@ -166,53 +387,31 @@ def parse_agent_artifact(
     if not isinstance(payload, dict):
         raise AgentArtifactResponseError("Agent response must be a JSON object")
 
+    model = RESPONSE_BODY_MODELS.get(request.expected_kind)
+    controller_fields = _CONTROLLER_FIELDS.get(request.expected_kind)
+    if model is None or controller_fields is None:
+        raise AgentArtifactResponseError(
+            f"no response body contract exists for {request.expected_kind.value}"
+        )
+    ignored = tuple(sorted(controller_fields.intersection(payload)))
+    semantic_payload = {
+        key: value for key, value in payload.items() if key not in controller_fields
+    }
     try:
-        artifact = parse_phase_artifact(payload)
-    except (ValueError, ValidationError) as error:
-        raise AgentArtifactResponseError(
-            f"Agent response artifact is invalid: {_safe_validation_detail(error)}"
-        ) from error
-    if not isinstance(artifact, PhaseArtifact):
-        raise AgentArtifactResponseError("Agent returned a non-phase runtime artifact")
-    if artifact.kind is not request.expected_kind:
-        raise AgentArtifactResponseError(
-            f"Agent returned {artifact.kind.value}; "
-            f"expected {request.expected_kind.value}"
-        )
-    if artifact.producer is not request.role:
-        raise AgentArtifactResponseError(
-            "Agent response producer does not match the invoked role"
-        )
-    if artifact.run_id != request.run_id or artifact.team_id != request.team_id:
-        raise AgentArtifactResponseError(
-            "Agent response does not match the requested run context"
-        )
-    if (
-        isinstance(artifact, IterationArtifact)
-        and artifact.iteration != request.iteration
-    ):
-        raise AgentArtifactResponseError(
-            "Agent response iteration does not match the request"
-        )
-    try:
-        validate_artifact_context(
-            artifact,
+        body = model.model_validate(semantic_payload)
+        _validate_response_context(
+            body,
+            request,
+            result,
             task_brief=task_brief,
-            team_id=request.team_id,
-            team_roles=set(team_roles),
+            team_roles=team_roles,
             iteration_limit=iteration_limit,
         )
-    except ValueError as error:
+    except (ValueError, ValidationError) as error:
         raise AgentArtifactResponseError(
-            f"Agent response is invalid in the frozen run context: {error}"
+            f"Agent semantic response is invalid: {_safe_validation_detail(error)}"
         ) from error
-    if (
-        isinstance(artifact, ReviewReport)
-        and artifact.verdict is ReviewVerdict.FAIL
-        and artifact.termination_reason is None
-    ):
-        raise AgentArtifactResponseError(
-            "Agent response is invalid in the frozen run context: failed reviews "
-            "require a terminal review reason"
-        )
-    return artifact
+    return ParsedAgentResponse(
+        body=body,
+        ignored_controller_fields=ignored,
+    )

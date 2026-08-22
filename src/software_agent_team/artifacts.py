@@ -328,6 +328,11 @@ class AgentExecutionRecord(BaseModel):
     stderr_path: str = Field(min_length=1)
     stdout_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     stderr_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    response_contract: Literal["semantic_body_v1"] | None = None
+    controller_supplied_fields: tuple[str, ...] = ()
+    ignored_controller_fields: tuple[str, ...] = ()
+    stage_timeout_seconds: int | None = Field(default=None, ge=1, le=3600)
+    remaining_timeout_seconds: int | None = Field(default=None, ge=1, le=3600)
     response_artifact: ArtifactReference | None = None
     error: str | None = Field(default=None, min_length=1)
 
@@ -357,12 +362,43 @@ class AgentExecutionRecord(BaseModel):
             raise ValueError("execution text fields must not be blank")
         return cleaned
 
+    @field_validator("controller_supplied_fields", "ignored_controller_fields")
+    @classmethod
+    def require_unique_field_names(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        """Keep response-binding provenance compact and unambiguous."""
+
+        if len(values) != len(set(values)) or any(
+            re.fullmatch(r"[a-z][a-z0-9_]*", value) is None for value in values
+        ):
+            raise ValueError("response binding fields must be valid and unique")
+        return values
+
     @model_validator(mode="after")
     def validate_execution(self) -> Self:
         """Keep timing, exit, timeout, and response evidence coherent."""
 
         if self.finished_at < self.started_at:
             raise ValueError("execution finish time cannot precede start time")
+        if (self.stage_timeout_seconds is None) != (
+            self.remaining_timeout_seconds is None
+        ):
+            raise ValueError(
+                "stage and remaining timeout evidence must appear together"
+            )
+        if (
+            self.stage_timeout_seconds is not None
+            and self.remaining_timeout_seconds is not None
+            and self.remaining_timeout_seconds > self.stage_timeout_seconds
+        ):
+            raise ValueError("remaining timeout cannot exceed the stage budget")
+        if not set(self.ignored_controller_fields).issubset(
+            self.controller_supplied_fields
+        ):
+            raise ValueError("ignored response fields must be controller-owned")
+        if self.response_contract is None and (
+            self.controller_supplied_fields or self.ignored_controller_fields
+        ):
+            raise ValueError("response binding fields require a response contract")
         if self.timed_out:
             if self.exit_code not in {None, 0}:
                 raise ValueError(

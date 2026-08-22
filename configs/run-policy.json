@@ -9,6 +9,17 @@
     "max_agent_duration_seconds": 7200,
     "max_estimated_cost_usd": "25.00"
   },
+  "agent_stage_timeouts_seconds": {
+    "clarifier": 120,
+    "single_agent": 900,
+    "planner": 120,
+    "generalist_developer": 900,
+    "frontend_developer": 900,
+    "backend_developer": 900,
+    "integrator": 900,
+    "tester": 300,
+    "reviewer": 300
+  },
   "sandbox": {
     "backend": "docker",
     "image": "sat-task-manager-quality:phase1-v1",

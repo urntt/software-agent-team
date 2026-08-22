@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import Mapping
+import warnings
+from collections.abc import Callable, Mapping
 from decimal import Decimal
 from pathlib import Path
 from typing import Literal
@@ -12,7 +13,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-USER_CONFIGURATION_SCHEMA_VERSION = 1
+USER_CONFIGURATION_SCHEMA_VERSION = 2
 USER_CONFIGURATION_ENVIRONMENT_VARIABLE = "SAT_CONFIG_PATH"
 
 
@@ -32,7 +33,7 @@ class UserConfiguration(BaseModel):
     input_cost_per_million_usd: Decimal = Field(ge=0, le=10_000)
     output_cost_per_million_usd: Decimal = Field(ge=0, le=10_000)
     verification_concurrency: Literal[1, 2] = 2
-    agent_timeout_seconds: int = Field(default=600, ge=1, le=86_400)
+    stage_timeout_seconds: int | None = Field(default=None, ge=1, le=3600)
 
     @field_validator("model")
     @classmethod
@@ -45,6 +46,24 @@ class UserConfiguration(BaseModel):
         if any(character.isspace() for character in cleaned):
             raise ValueError("model must be one reference without whitespace")
         return cleaned
+
+
+class _UserConfigurationV1(BaseModel):
+    """Validated legacy shape used only for an explicit one-way migration."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[1]
+    model: str = Field(min_length=1)
+    input_cost_per_million_usd: Decimal = Field(ge=0, le=10_000)
+    output_cost_per_million_usd: Decimal = Field(ge=0, le=10_000)
+    verification_concurrency: Literal[1, 2] = 2
+    agent_timeout_seconds: int = Field(ge=1, le=86_400)
+
+    @field_validator("model")
+    @classmethod
+    def require_clean_model(cls, value: str) -> str:
+        return UserConfiguration.require_clean_model(value)
 
 
 def user_configuration_path(
@@ -79,6 +98,8 @@ def user_configuration_path(
 
 def load_user_configuration(
     path: Path | None = None,
+    *,
+    on_migration: Callable[[str], None] | None = None,
 ) -> UserConfiguration | None:
     """Load saved defaults, returning ``None`` before first-time setup."""
 
@@ -99,6 +120,26 @@ def load_user_configuration(
         raise UserConfigurationError(
             f"cannot read user configuration: {destination}"
         ) from error
+    if not isinstance(payload, dict):
+        raise UserConfigurationError("user configuration must be a JSON object")
+    if payload.get("schema_version") == 1:
+        legacy = _UserConfigurationV1.model_validate(payload)
+        notice = (
+            "configuration schema v1 was loaded without its legacy "
+            "agent_timeout_seconds value; runs now use measured per-role stage "
+            "budgets unless a new global stage override is configured"
+        )
+        if on_migration is None:
+            warnings.warn(notice, UserWarning, stacklevel=2)
+        else:
+            on_migration(notice)
+        return UserConfiguration(
+            model=legacy.model,
+            input_cost_per_million_usd=legacy.input_cost_per_million_usd,
+            output_cost_per_million_usd=legacy.output_cost_per_million_usd,
+            verification_concurrency=legacy.verification_concurrency,
+            stage_timeout_seconds=None,
+        )
     return UserConfiguration.model_validate(payload)
 
 

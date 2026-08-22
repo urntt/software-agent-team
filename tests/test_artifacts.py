@@ -182,6 +182,46 @@ def test_valid_agent_execution_record_is_accepted() -> None:
     assert record.duration_ms == 2000
 
 
+def test_execution_record_preserves_response_binding_and_stage_budget() -> None:
+    payload = valid_execution_payload()
+    payload.update(
+        {
+            "response_contract": "semantic_body_v1",
+            "controller_supplied_fields": [
+                "kind",
+                "run_id",
+                "input_commit",
+                "changed_files",
+            ],
+            "ignored_controller_fields": ["kind", "input_commit"],
+            "stage_timeout_seconds": 900,
+            "remaining_timeout_seconds": 275,
+        }
+    )
+
+    record = AgentExecutionRecord.model_validate(payload)
+
+    assert record.response_contract == "semantic_body_v1"
+    assert record.ignored_controller_fields == ("kind", "input_commit")
+    assert record.remaining_timeout_seconds == 275
+
+
+def test_execution_record_rejects_incoherent_response_binding_or_timeout() -> None:
+    payload = valid_execution_payload()
+    payload.update(
+        {
+            "response_contract": "semantic_body_v1",
+            "controller_supplied_fields": ["kind"],
+            "ignored_controller_fields": ["input_commit"],
+            "stage_timeout_seconds": 120,
+            "remaining_timeout_seconds": 121,
+        }
+    )
+
+    with pytest.raises(ValidationError):
+        AgentExecutionRecord.model_validate(payload)
+
+
 def test_execution_finish_cannot_precede_start() -> None:
     payload = valid_execution_payload()
     payload["finished_at"] = payload["started_at"] - timedelta(milliseconds=1)

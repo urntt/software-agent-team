@@ -84,9 +84,11 @@ sat configure --show
 ```
 
 The configuration records model, current token prices, verification
-concurrency, and timeout. It never records an API key. For tightly controlled
-experiments, the equivalent explicit `sat run` flags below remain useful
-because the complete invocation can be copied into the trace notes.
+concurrency, and an optional global role-stage timeout override. It never
+records an API key. With no override, the checked-in per-role budgets apply.
+For tightly controlled experiments, the equivalent explicit `sat run` flags
+below remain useful because the complete invocation can be copied into the
+trace notes.
 
 ## 1. Verify the Checkout
 
@@ -152,7 +154,8 @@ environment problem before authorizing a paid call.
 
 ## 5. Execute One Live Trace
 
-Replace the model and prices with the exact approved values:
+Replace the model and prices with the exact operator-approved values. Do not
+substitute or add another model trial without separate authorization:
 
 ```bash
 uv run sat run \
@@ -168,11 +171,28 @@ For a provider with one generation slot, append
 independent verification: Tester and Reviewer still receive the same immutable
 commit and controller evidence, and neither sees the other role's report.
 
-The default per-Agent timeout is 600 seconds. If a measured provider cannot
-finish the Developer role inside that bound, choose a larger explicit
-`--agent-timeout-seconds` value before the trial and record it as an
-experimental variable. Do not change the timeout after a run starts or omit it
-from comparisons.
+The normal policy uses role-specific stage budgets from
+`configs/run-policy.json`:
+
+| Roles | Stage budget |
+| --- | ---: |
+| Clarifier and Planner | 120 seconds |
+| Single Agent, Developers, and Integrator | 900 seconds |
+| Tester and Reviewer | 300 seconds |
+
+A stage budget covers the initial response and its optional semantic repair
+together. The controller starts one monotonic deadline before the initial
+prompt, gives a repair only the remaining time, and records both the resolved
+stage budget and remaining attempt budget. It does not reset the clock for a
+repair.
+
+If a measured provider requires an intentionally uniform budget, add
+`--stage-timeout-seconds N` and record that override as an experimental
+variable. `--use-role-timeouts` ignores a saved global override for one run.
+The deprecated `--agent-timeout-seconds` spelling has the same shared-stage
+meaning and will be removed in the next major release; it no longer represents
+a separate per-attempt or per-process allowance. Do not change timeout policy
+after a run starts or omit it from comparisons.
 
 Use zero prices only when the selected model is genuinely free. The command
 creates a fresh run and detached standalone clone; it never merges, pushes,
@@ -212,7 +232,8 @@ Confirm all of the following before marking Phase 1 accepted:
 - `run.json` ends in `completed` with termination reason `succeeded` and
   references every material transition artifact.
 - `implementation-plan.json` exists.
-- Each iteration contains a controller-verified `work-result.json`, command
+- Each iteration contains a controller-assembled and verified
+  `work-result.json`, command
   stdout/stderr, `test-report.json`, `review-report.json`, and
   `iteration-record.json`.
 - Planner, Generalist Developer, Tester, and Reviewer execution records exist;
@@ -222,14 +243,15 @@ Confirm all of the following before marking Phase 1 accepted:
   `iterations/<nn>/commands/`. Reviewer source reads resolve through the
   read-only `/agent` mount.
 - Every command record preserves its benchmark-owned `criterion_ids`. The
-  Tester copied the configured `manual_review_criteria`, marked those criteria
-  `pending_review` after their deterministic portions passed, set its overall
-  status to `passed`, and did not classify expected semantic review as a
-  dependency blocker.
-- The Reviewer copied the same IDs into `reviewed_criteria`, inspected them on
-  the immutable commit, and returned no blocking finding. The final report,
-  rather than the Tester report, contains the controller-resolved `passed`
-  results for those criteria.
+  controller copied the configured `manual_review_criteria`, marked those
+  criteria `pending_review` after their deterministic portions passed, derived
+  the overall Tester status from command results, and did not classify expected
+  semantic review as a dependency blocker. The Tester supplied analysis and
+  findings, not authoritative command or status echoes.
+- The controller bound the same IDs into `reviewed_criteria`; the Reviewer
+  inspected them on the immutable commit and returned no blocking finding. The
+  final report, rather than the Tester report, contains the
+  controller-resolved `passed` results for those criteria.
 - A correctable implementation or acceptance-gate defect produced `revise`,
   regardless of product-impact severity. Any Reviewer `fail` record includes a
   terminal safety or evidence-integrity reason showing why another revision
@@ -240,6 +262,12 @@ Confirm all of the following before marking Phase 1 accepted:
   The adapter normalizes the pinned OpenClaw local and Gateway JSON forms and
   compares their provider/model metadata using the canonical `provider/model`
   identity.
+- Every semantic execution record identifies `semantic_body_v1`, lists the
+  controller-supplied persisted fields, records any redundant model-returned
+  controller fields that were ignored, and records the resolved stage and
+  remaining attempt timeouts. Missing or incorrect echoes of `kind`, Git facts,
+  command evidence, status, criteria, or scope are not treated as semantic
+  response failures.
 - Every handoff points to immutable artifact references with matching SHA-256
   digests.
 - All fixed quality gates passed, every acceptance criterion has a result, and

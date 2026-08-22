@@ -21,7 +21,7 @@ def sample_configuration(**updates: object) -> UserConfiguration:
         "input_cost_per_million_usd": "0.50",
         "output_cost_per_million_usd": "1.50",
         "verification_concurrency": 1,
-        "agent_timeout_seconds": 900,
+        "stage_timeout_seconds": 900,
     }
     payload.update(updates)
     return UserConfiguration.model_validate(payload)
@@ -67,12 +67,12 @@ def test_user_configuration_rejects_unknown_or_malformed_values(
     path.write_text(
         json.dumps(
             {
-                "schema_version": 1,
+                "schema_version": 2,
                 "model": "provider/model",
                 "input_cost_per_million_usd": "1",
                 "output_cost_per_million_usd": "2",
                 "verification_concurrency": 3,
-                "agent_timeout_seconds": 600,
+                "stage_timeout_seconds": 600,
                 "api_key": "must-not-be-supported",
             }
         ),
@@ -81,6 +81,35 @@ def test_user_configuration_rejects_unknown_or_malformed_values(
 
     with pytest.raises(ValueError):
         load_user_configuration(path)
+
+
+def test_v1_configuration_drops_the_legacy_timeout_with_a_notice(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "model": "provider/model",
+                "input_cost_per_million_usd": "1",
+                "output_cost_per_million_usd": "2",
+                "verification_concurrency": 1,
+                "agent_timeout_seconds": 2400,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.warns(UserWarning, match="without its legacy"):
+        migrated = load_user_configuration(path)
+
+    assert migrated is not None
+    assert migrated.schema_version == 2
+    assert migrated.model == "provider/model"
+    assert migrated.verification_concurrency == 1
+    assert migrated.stage_timeout_seconds is None
+    assert json.loads(path.read_text(encoding="utf-8"))["schema_version"] == 1
 
 
 def test_user_configuration_refuses_a_symbolic_link(tmp_path: Path) -> None:

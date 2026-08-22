@@ -40,7 +40,13 @@ from software_agent_team.prompting import (
 )
 from software_agent_team.responses import (
     AgentArtifactResponseError,
-    parse_agent_artifact,
+    ImplementationPlanResponse,
+    ReviewReportResponse,
+    WorkResultResponse,
+    parse_agent_response,
+)
+from software_agent_team.responses import (
+    TestReportResponse as SemanticTestReport,
 )
 
 CREATED_AT = datetime(2026, 8, 10, 12, 0, tzinfo=UTC)
@@ -342,12 +348,42 @@ def parse_scripted(
     result = ScriptedAgentExecutor([artifact], clock=lambda: CREATED_AT).execute(
         request
     )
-    return parse_agent_artifact(
+    return parse_agent_response(
         result,
         request,
         task_brief=task_brief(),
         team_roles=TEAM_ROLES,
         iteration_limit=2,
+    )
+
+
+def semantic_body(
+    artifact: ImplementationPlan | WorkResult | PhaseTestReport | ReviewReport,
+):
+    if isinstance(artifact, ImplementationPlan):
+        return ImplementationPlanResponse(
+            objective=artifact.objective,
+            approach=artifact.approach,
+            tasks=artifact.tasks,
+            risks=artifact.risks,
+            assumptions=artifact.assumptions,
+        )
+    if isinstance(artifact, WorkResult):
+        return WorkResultResponse(
+            summary=artifact.summary,
+            completed_tasks=artifact.completed_tasks,
+            unresolved_issues=artifact.unresolved_issues,
+        )
+    if isinstance(artifact, PhaseTestReport):
+        return SemanticTestReport(
+            findings=artifact.findings,
+            summary=artifact.summary,
+        )
+    return ReviewReportResponse(
+        verdict=artifact.verdict,
+        termination_reason=artifact.termination_reason,
+        findings=artifact.findings,
+        summary=artifact.summary,
     )
 
 
@@ -359,9 +395,14 @@ def test_planner_prompt_contains_only_confirmed_inputs_and_plan_schema() -> None
     assert '"generalist_developer"' in rendered
     assert "upstream_artifacts" not in rendered
     assert "deterministic_command_evidence" not in rendered
-    assert '"const": "implementation_plan"' in rendered
+    response_schema = rendered.split("RESPONSE_SCHEMA_JSON\n", 1)[1].split(
+        "\n\nFINAL_RESPONSE_CONTRACT",
+        1,
+    )[0]
+    assert '"kind"' not in response_schema
+    assert '"run_id"' not in response_schema
     assert "Return exactly one JSON object" in rendered
-    assert "every nested object\nmust use each key exactly once" in rendered
+    assert "every nested object must use each\nkey exactly once" in rendered
     assert "FINAL_RESPONSE_CONTRACT" in rendered
     assert "task_brief.acceptance_criteria" in rendered
     assert "^TASK_[A-Z0-9_]+$" in rendered
@@ -387,6 +428,7 @@ def test_developer_prompt_receives_plan_but_not_quality_evidence() -> None:
     assert "deterministic_command_evidence" not in rendered
     assert "Plan tool use before editing" in rendered
     assert "Complete the\nimplementation, checks, commit" in rendered
+    assert "controller independently derives" in rendered
 
 
 def test_tester_prompt_receives_work_and_deterministic_commands_only() -> None:
@@ -410,6 +452,7 @@ def test_tester_prompt_receives_work_and_deterministic_commands_only() -> None:
     assert '"root": "/agent"' in rendered
     assert '"verification_scope": {' in rendered
     assert "untrusted diagnostic evidence" in rendered
+    assert "controller derives\nthe command list" in rendered
     assert '"implementation_plan": {' not in rendered
     assert '"review_report": {' not in rendered
 
@@ -432,6 +475,7 @@ def test_reviewer_prompt_receives_work_and_command_evidence_in_parallel() -> Non
     assert "Use `revise` for\nevery correctable implementation defect" in rendered
     assert "Never\nuse `fail` merely because a deterministic command failed" in rendered
     assert '"termination_reason"' in rendered
+    assert "controller binds that frozen scope" in rendered
     assert '"implementation_plan": {' not in rendered
 
 
@@ -449,9 +493,8 @@ def test_verifier_prompts_receive_the_frozen_manual_review_scope() -> None:
 
     assert '"manual_review_criteria": [' in rendered
     assert '"AC_CREATE"' in rendered
-    assert "mark that criterion\n`pending_review`" in rendered
-    assert "top-level `status` must be `passed`" in rendered
-    assert "only `passed`, `failed`, or `blocked`" in rendered
+    assert "criterion statuses, overall status" in rendered
+    assert "deterministic blockers" in rendered
 
 
 def test_prompt_builder_binds_the_same_role_and_response_contract() -> None:
@@ -540,7 +583,8 @@ def test_strict_parser_accepts_each_phase_role_output(
 ) -> None:
     parsed = parse_scripted(artifact, execution_request(role, kind))
 
-    assert parsed == artifact
+    assert parsed.body == semantic_body(artifact)
+    assert "kind" in parsed.ignored_controller_fields
 
 
 @pytest.mark.parametrize(
@@ -555,7 +599,7 @@ def test_strict_parser_accepts_each_phase_role_output(
     ],
 )
 def test_strict_parser_rejects_prose_fences_and_non_objects(text: str) -> None:
-    with pytest.raises(AgentArtifactResponseError, match=r"JSON|artifact"):
+    with pytest.raises(AgentArtifactResponseError, match=r"JSON|semantic"):
         parse_scripted(
             text, execution_request(AgentRole.PLANNER, ArtifactKind.IMPLEMENTATION_PLAN)
         )
@@ -570,7 +614,7 @@ def test_strict_parser_normalizes_one_outer_json_fence() -> None:
         execution_request(AgentRole.PLANNER, ArtifactKind.IMPLEMENTATION_PLAN),
     )
 
-    assert parsed == artifact
+    assert parsed.body == semantic_body(artifact)
 
 
 def test_strict_parser_reports_a_duplicate_key_without_response_values() -> None:
@@ -600,7 +644,7 @@ def test_strict_parser_normalizes_presentation_prose_around_one_json_fence() -> 
         execution_request(AgentRole.PLANNER, ArtifactKind.IMPLEMENTATION_PLAN),
     )
 
-    assert parsed == plan()
+    assert parsed.body == semantic_body(plan())
 
 
 def test_strict_parser_normalizes_presentation_prose_around_one_object() -> None:
@@ -615,7 +659,7 @@ def test_strict_parser_normalizes_presentation_prose_around_one_object() -> None
         execution_request(AgentRole.PLANNER, ArtifactKind.IMPLEMENTATION_PLAN),
     )
 
-    assert parsed == plan()
+    assert parsed.body == semantic_body(plan())
 
 
 @pytest.mark.parametrize(
@@ -660,7 +704,7 @@ def test_strict_parser_rejects_structured_content_outside_json_fence(
 
 def test_strict_parser_rejects_the_wrong_artifact_kind() -> None:
     with pytest.raises(
-        AgentArtifactResponseError, match="expected implementation_plan"
+        AgentArtifactResponseError, match="semantic response is invalid"
     ):
         parse_scripted(
             work_result(),
@@ -668,51 +712,90 @@ def test_strict_parser_rejects_the_wrong_artifact_kind() -> None:
         )
 
 
-def test_strict_parser_reports_a_missing_artifact_kind() -> None:
+def test_parser_does_not_require_an_artifact_kind_from_the_agent() -> None:
     payload = plan().model_dump(mode="json")
     del payload["kind"]
 
-    with pytest.raises(
-        AgentArtifactResponseError,
-        match="requires a supported kind",
-    ):
+    parsed = parse_scripted(
+        json.dumps(payload),
+        execution_request(AgentRole.PLANNER, ArtifactKind.IMPLEMENTATION_PLAN),
+    )
+
+    assert parsed.body == semantic_body(plan())
+    assert "kind" not in parsed.ignored_controller_fields
+
+
+def test_parser_ignores_conflicting_controller_owned_fields() -> None:
+    payload = plan().model_dump(mode="json")
+    payload.update(
+        {
+            "kind": "work_result",
+            "producer": "reviewer",
+            "run_id": "another-run",
+            "team_id": "single_agent",
+            "iteration": 3,
+        }
+    )
+
+    parsed = parse_scripted(
+        json.dumps(payload),
+        execution_request(AgentRole.PLANNER, ArtifactKind.IMPLEMENTATION_PLAN),
+    )
+
+    assert parsed.body == semantic_body(plan())
+    assert set(parsed.ignored_controller_fields).issuperset(
+        {"kind", "producer", "run_id", "team_id", "iteration"}
+    )
+
+
+def test_parser_rejects_an_unknown_semantic_field() -> None:
+    payload = semantic_body(plan()).model_dump(mode="json")
+    payload["unsupported_claim"] = True
+
+    with pytest.raises(AgentArtifactResponseError, match="Extra inputs"):
         parse_scripted(
             json.dumps(payload),
             execution_request(AgentRole.PLANNER, ArtifactKind.IMPLEMENTATION_PLAN),
         )
 
 
-def test_strict_parser_rejects_the_wrong_producer() -> None:
-    with pytest.raises(AgentArtifactResponseError, match="producer"):
-        parse_scripted(
-            work_result(producer=AgentRole.BACKEND_DEVELOPER),
-            execution_request(
-                AgentRole.GENERALIST_DEVELOPER,
-                ArtifactKind.WORK_RESULT,
-            ),
-        )
+def test_parser_ignores_a_model_supplied_producer() -> None:
+    parsed = parse_scripted(
+        work_result(producer=AgentRole.BACKEND_DEVELOPER),
+        execution_request(
+            AgentRole.GENERALIST_DEVELOPER,
+            ArtifactKind.WORK_RESULT,
+        ),
+    )
+
+    assert parsed.body == semantic_body(work_result())
+    assert "producer" in parsed.ignored_controller_fields
 
 
-def test_strict_parser_rejects_the_wrong_run_context() -> None:
-    with pytest.raises(AgentArtifactResponseError, match="run context"):
-        parse_scripted(
-            work_result(run_id="another-run"),
-            execution_request(
-                AgentRole.GENERALIST_DEVELOPER,
-                ArtifactKind.WORK_RESULT,
-            ),
-        )
+def test_parser_ignores_model_supplied_run_context() -> None:
+    parsed = parse_scripted(
+        work_result(run_id="another-run"),
+        execution_request(
+            AgentRole.GENERALIST_DEVELOPER,
+            ArtifactKind.WORK_RESULT,
+        ),
+    )
+
+    assert parsed.body == semantic_body(work_result())
+    assert "run_id" in parsed.ignored_controller_fields
 
 
-def test_strict_parser_rejects_the_wrong_iteration() -> None:
-    with pytest.raises(AgentArtifactResponseError, match="iteration"):
-        parse_scripted(
-            work_result(iteration=2),
-            execution_request(
-                AgentRole.GENERALIST_DEVELOPER,
-                ArtifactKind.WORK_RESULT,
-            ),
-        )
+def test_parser_ignores_a_model_supplied_iteration() -> None:
+    parsed = parse_scripted(
+        work_result(iteration=2),
+        execution_request(
+            AgentRole.GENERALIST_DEVELOPER,
+            ArtifactKind.WORK_RESULT,
+        ),
+    )
+
+    assert parsed.body.summary == "Implemented the planned task workflow."
+    assert "iteration" in parsed.ignored_controller_fields
 
 
 def test_strict_parser_rejects_incomplete_acceptance_coverage() -> None:
@@ -720,7 +803,7 @@ def test_strict_parser_rejects_incomplete_acceptance_coverage() -> None:
 
     with pytest.raises(
         AgentArtifactResponseError,
-        match=r"frozen run context: .*missing:",
+        match=r"semantic response is invalid: .*missing:",
     ):
         parse_scripted(
             incomplete,
@@ -734,7 +817,7 @@ def test_strict_parser_rejects_failed_execution_before_reading_text() -> None:
     failed = result.model_copy(update={"status": AgentExecutionStatus.PROCESS_FAILED})
 
     with pytest.raises(AgentArtifactResponseError, match="did not complete"):
-        parse_agent_artifact(
+        parse_agent_response(
             failed,
             request,
             task_brief=task_brief(),
@@ -750,7 +833,7 @@ def test_strict_parser_rejects_a_mismatched_session() -> None:
     mismatched = result.model_copy(update={"telemetry": telemetry})
 
     with pytest.raises(AgentArtifactResponseError, match="session"):
-        parse_agent_artifact(
+        parse_agent_response(
             mismatched,
             request,
             task_brief=task_brief(),

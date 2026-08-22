@@ -6,26 +6,18 @@ import json
 import shutil
 import subprocess
 import threading
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
 from software_agent_team.artifacts import (
     AgentRole,
-    CheckStatus,
-    CommandEvidence,
-    CriterionResult,
-    ImplementationPlan,
     PlanTask,
     ReviewFinding,
-    ReviewReport,
     ReviewSeverity,
     ReviewTerminationReason,
     ReviewVerdict,
     TaskBrief,
-    WorkResult,
-)
-from software_agent_team.artifacts import (
-    TestReport as PhaseTestReport,
 )
 from software_agent_team.budgets import AgentBudget, ModelPricing
 from software_agent_team.execution import (
@@ -42,6 +34,14 @@ from software_agent_team.quality_gates import (
     SandboxExecution,
     load_quality_gate_configuration,
 )
+from software_agent_team.responses import (
+    ImplementationPlanResponse,
+    ReviewReportResponse,
+    WorkResultResponse,
+)
+from software_agent_team.responses import (
+    TestReportResponse as SemanticTestReport,
+)
 from software_agent_team.run_control import RunPhase, TerminationReason
 from software_agent_team.teams import load_team_manifest
 from software_agent_team.workflow import WorkflowCoordinator
@@ -52,6 +52,10 @@ POLICY = REPOSITORY_ROOT / "configs" / "run-policy.json"
 BENCHMARK = REPOSITORY_ROOT / "benchmarks" / "task_manager" / "benchmark.json"
 SEED = REPOSITORY_ROOT / "benchmarks" / "task_manager" / "seed"
 FIXED_TIME = datetime(2026, 8, 10, 12, 0, tzinfo=UTC)
+
+
+def fixed_monotonic() -> float:
+    return 0.0
 
 
 def git(repository: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -107,6 +111,7 @@ class DynamicWorkflowExecutor:
         invalid_plan_once: bool = False,
         invalid_tester_status_once: bool = False,
         tamper_test_commands: bool = False,
+        inject_fake_git_fields: bool = False,
         commit_changes: bool = True,
         verify_barrier: bool = False,
         allow_single_verifier: bool = False,
@@ -118,6 +123,7 @@ class DynamicWorkflowExecutor:
         self.invalid_plan_once = invalid_plan_once
         self.invalid_tester_status_once = invalid_tester_status_once
         self.tamper_test_commands = tamper_test_commands
+        self.inject_fake_git_fields = inject_fake_git_fields
         self.commit_changes = commit_changes
         self.reported_model = reported_model
         self.report_usage = report_usage
@@ -155,9 +161,28 @@ class DynamicWorkflowExecutor:
             artifact = self._review_report(request)
         else:  # pragma: no cover - the Phase 1 team is fixed
             raise AssertionError(f"unexpected role: {request.role}")
+        payload = artifact.model_dump(mode="json")
+        if (
+            request.role is AgentRole.GENERALIST_DEVELOPER
+            and self.inject_fake_git_fields
+        ):
+            payload.update(
+                {
+                    "kind": "review_report",
+                    "input_commit": "e" * 40,
+                    "output_commit": "f" * 40,
+                    "changed_files": ["invented.py"],
+                }
+            )
+        if request.role is AgentRole.TESTER and self.tamper_test_commands:
+            context = prompt_context(request)
+            commands = context["deterministic_command_evidence"]
+            assert isinstance(commands, list)
+            payload["commands"] = commands
+            payload["commands"][0]["summary"] = "Agent-altered summary"
         return self._result(
             request,
-            json.dumps(artifact.model_dump(mode="json"), ensure_ascii=False),
+            json.dumps(payload, ensure_ascii=False),
         )
 
     def _wait_for_verifier(self) -> None:
@@ -169,12 +194,9 @@ class DynamicWorkflowExecutor:
             if not self.allow_single_verifier:
                 raise
 
-    def _plan(self, request: AgentExecutionRequest) -> ImplementationPlan:
+    def _plan(self, request: AgentExecutionRequest) -> ImplementationPlanResponse:
         brief = task_brief()
-        return ImplementationPlan(
-            run_id=request.run_id,
-            team_id=request.team_id,
-            created_at=FIXED_TIME,
+        return ImplementationPlanResponse(
             objective="Build the frozen task-management benchmark.",
             approach=(
                 "Implement the complete local Web application.",
@@ -193,12 +215,7 @@ class DynamicWorkflowExecutor:
             ),
         )
 
-    def _work(self, request: AgentExecutionRequest) -> WorkResult:
-        context = prompt_context(request)
-        run = context["run"]
-        assert isinstance(run, dict)
-        input_commit = run["input_commit"]
-        assert isinstance(input_commit, str)
+    def _work(self, request: AgentExecutionRequest) -> WorkResultResponse:
         if self.commit_changes:
             application = self.workspace / "app" / "main.py"
             application.parent.mkdir(parents=True, exist_ok=True)
@@ -214,115 +231,17 @@ class DynamicWorkflowExecutor:
                 "-m",
                 f"feat(app): implement iteration {request.iteration}",
             )
-            output_commit = git(self.workspace, "rev-parse", "HEAD").stdout.strip()
-            changed_files = tuple(
-                git(
-                    self.workspace,
-                    "diff",
-                    "--name-only",
-                    input_commit,
-                    output_commit,
-                    "--",
-                ).stdout.splitlines()
-            )
-        else:
-            output_commit = "f" * 40
-            changed_files = ("app/main.py",)
-        return WorkResult(
-            run_id=request.run_id,
-            team_id=request.team_id,
-            producer=AgentRole.GENERALIST_DEVELOPER,
-            created_at=FIXED_TIME,
-            iteration=request.iteration,
-            input_commit=input_commit,
-            output_commit=output_commit,
+        return WorkResultResponse(
             summary=f"Implemented iteration {request.iteration}.",
             completed_tasks=("TASK_BUILD",),
-            changed_files=changed_files,
         )
 
-    def _test_report(self, request: AgentExecutionRequest) -> PhaseTestReport:
-        context = prompt_context(request)
-        commands_payload = context["deterministic_command_evidence"]
-        assert isinstance(commands_payload, list)
-        commands = tuple(
-            CommandEvidence.model_validate(command) for command in commands_payload
-        )
-        verification_scope = context["verification_scope"]
-        assert isinstance(verification_scope, dict)
-        manual_payload = verification_scope["manual_review_criteria"]
-        assert isinstance(manual_payload, list)
-        manual_review_criteria = tuple(str(item) for item in manual_payload)
-        manual = set(manual_review_criteria)
-        timed_out = any(command.timed_out for command in commands)
-        failed = any(command.exit_code != 0 for command in commands)
-        if timed_out:
-            status = CheckStatus.BLOCKED
-            detail = "A deterministic gate timed out."
-            blockers = (detail,)
-            findings: tuple[str, ...] = ()
-        elif failed:
-            status = CheckStatus.FAILED
-            detail = "A deterministic gate failed."
-            blockers = ()
-            findings = (detail,)
-        else:
-            status = CheckStatus.PASSED
-            detail = "The fixed offline gate evidence passed."
-            blockers = ()
-            findings = ()
-        brief = task_brief()
-        criteria = tuple(
-            CriterionResult(
-                criterion_id=criterion.id,
-                status=(
-                    CheckStatus.PENDING_REVIEW
-                    if status is CheckStatus.PASSED and criterion.id in manual
-                    else status
-                ),
-                command_ids=tuple(
-                    command.id
-                    for command in commands
-                    if criterion.id in command.criterion_ids
-                ),
-                detail=detail,
-            )
-            for criterion in brief.acceptance_criteria
-        )
-        if self.tamper_test_commands:
-            commands = (
-                commands[0].model_copy(update={"summary": "Agent-altered summary"}),
-                *commands[1:],
-            )
-        run = context["run"]
-        assert isinstance(run, dict)
-        input_commit = run["input_commit"]
-        assert isinstance(input_commit, str)
-        return PhaseTestReport(
-            run_id=request.run_id,
-            team_id=request.team_id,
-            created_at=FIXED_TIME,
-            iteration=request.iteration,
-            input_commit=input_commit,
-            status=status,
-            commands=commands,
-            criteria=criteria,
-            manual_review_criteria=manual_review_criteria,
-            findings=findings,
-            blockers=blockers,
-            summary=detail,
+    def _test_report(self, request: AgentExecutionRequest) -> SemanticTestReport:
+        return SemanticTestReport(
+            summary="Analyzed the fixed offline gate evidence.",
         )
 
-    def _review_report(self, request: AgentExecutionRequest) -> ReviewReport:
-        context = prompt_context(request)
-        run = context["run"]
-        assert isinstance(run, dict)
-        input_commit = run["input_commit"]
-        assert isinstance(input_commit, str)
-        verification_scope = context["verification_scope"]
-        assert isinstance(verification_scope, dict)
-        reviewed_payload = verification_scope["manual_review_criteria"]
-        assert isinstance(reviewed_payload, list)
+    def _review_report(self, request: AgentExecutionRequest) -> ReviewReportResponse:
         verdict = self.review_verdicts.get(
             request.iteration,
             ReviewVerdict.ACCEPT,
@@ -349,19 +268,13 @@ class DynamicWorkflowExecutor:
                     criterion_ids=("AC_QUALITY",),
                 ),
             )
-        return ReviewReport(
-            run_id=request.run_id,
-            team_id=request.team_id,
-            created_at=FIXED_TIME,
-            iteration=request.iteration,
-            input_commit=input_commit,
+        return ReviewReportResponse(
             verdict=verdict,
             termination_reason=(
                 ReviewTerminationReason.SAFETY_BOUNDARY_CROSSED
                 if verdict is ReviewVerdict.FAIL
                 else None
             ),
-            reviewed_criteria=tuple(str(item) for item in reviewed_payload),
             findings=findings,
             summary=f"Reviewer verdict: {verdict.value}.",
         )
@@ -438,6 +351,8 @@ def coordinator(
     budget: AgentBudget | None = None,
     pricing: ModelPricing | None = None,
     verification_concurrency: int = 2,
+    stage_timeout_seconds: int | None = 30,
+    monotonic: Callable[[], float] = fixed_monotonic,
 ) -> WorkflowCoordinator:
     """Build a coordinator with the real gate runner and fake sandbox backend."""
 
@@ -468,8 +383,10 @@ def coordinator(
         ),
         manual_review_criteria=configuration.benchmark.manual_review_criteria,
         clock=lambda: FIXED_TIME,
-        agent_timeout_seconds=30,
+        role_timeout_seconds=configuration.policy.agent_stage_timeouts_seconds,
+        stage_timeout_seconds=stage_timeout_seconds,
         verification_concurrency=verification_concurrency,
+        monotonic=monotonic,
     )
 
 
@@ -528,6 +445,41 @@ def test_offline_workflow_completes_with_parallel_independent_verification(
     transitions = state["transitions"]
     assert isinstance(transitions, list)
     assert transitions[-1]["artifacts"][0]["path"] == "final-report.json"
+
+
+def test_workflow_uses_verified_git_facts_instead_of_model_claims(
+    tmp_path: Path,
+) -> None:
+    source = initialize_source(tmp_path)
+    workspace = tmp_path / "workspaces" / task_brief().run_id
+    executor = DynamicWorkflowExecutor(workspace, inject_fake_git_fields=True)
+
+    outcome = coordinator(tmp_path, executor).execute(
+        task_brief(),
+        source_repository=source,
+    )
+
+    assert outcome.record.phase is RunPhase.COMPLETED
+    work = json.loads(
+        (
+            tmp_path / "runs" / task_brief().run_id / "iterations/01/work-result.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert work["input_commit"] != "e" * 40
+    assert work["output_commit"] != "f" * 40
+    assert work["changed_files"] == ["app/main.py"]
+    developer_record = next(
+        json.loads(
+            (tmp_path / "runs" / task_brief().run_id / reference.path).read_text(
+                encoding="utf-8"
+            )
+        )
+        for reference in outcome.execution_records
+        if "/generalist_developer-attempt-" in reference.path
+    )
+    assert set(developer_record["ignored_controller_fields"]).issuperset(
+        {"kind", "input_commit", "output_commit", "changed_files"}
+    )
 
 
 def test_offline_workflow_can_serialize_independent_verification(
@@ -635,8 +587,9 @@ def test_workflow_repairs_one_invalid_agent_response(tmp_path: Path) -> None:
     assert len(plan_records) == 2
     repair_prompt = executor.requests[1].prompt
     assert "Revalidate the entire response" in repair_prompt
-    assert "Use each key exactly once in every JSON object" in repair_prompt
-    assert "every required schema field" in repair_prompt
+    assert "Use each key exactly once" in repair_prompt
+    assert "every semantic field required" in repair_prompt
+    assert "Do not return controller-owned" in repair_prompt
     assert "union of tasks[].acceptance_criteria" in repair_prompt
     assert "tasks[].id to begin with TASK_" in repair_prompt
     first = json.loads(
@@ -648,7 +601,107 @@ def test_workflow_repairs_one_invalid_agent_response(tmp_path: Path) -> None:
     assert first["error"] is not None
 
 
-def test_workflow_repairs_invalid_overall_tester_status(tmp_path: Path) -> None:
+def test_response_repair_receives_only_the_remaining_stage_budget(
+    tmp_path: Path,
+) -> None:
+    source = initialize_source(tmp_path)
+    workspace = tmp_path / "workspaces" / task_brief().run_id
+    elapsed = [0.0]
+
+    class SlowFirstPlan(DynamicWorkflowExecutor):
+        def execute(self, request: AgentExecutionRequest) -> AgentExecutionResult:
+            result = super().execute(request)
+            if request.role is AgentRole.PLANNER and len(self.requests) == 1:
+                elapsed[0] = 20.2
+            return result
+
+    executor = SlowFirstPlan(workspace, invalid_plan_once=True)
+    outcome = coordinator(
+        tmp_path,
+        executor,
+        stage_timeout_seconds=30,
+        monotonic=lambda: elapsed[0],
+    ).execute(task_brief(), source_repository=source)
+
+    assert outcome.record.phase is RunPhase.COMPLETED
+    planner_requests = [
+        request for request in executor.requests if request.role is AgentRole.PLANNER
+    ]
+    assert [request.timeout_seconds for request in planner_requests] == [30, 10]
+    plan_records = [
+        json.loads(
+            (tmp_path / "runs" / task_brief().run_id / reference.path).read_text(
+                encoding="utf-8"
+            )
+        )
+        for reference in outcome.execution_records
+        if "/plan/" in reference.path
+    ]
+    assert [record["stage_timeout_seconds"] for record in plan_records] == [30, 30]
+    assert [record["remaining_timeout_seconds"] for record in plan_records] == [
+        30,
+        10,
+    ]
+
+
+def test_workflow_does_not_start_repair_after_the_stage_deadline(
+    tmp_path: Path,
+) -> None:
+    source = initialize_source(tmp_path)
+    workspace = tmp_path / "workspaces" / task_brief().run_id
+    elapsed = [0.0]
+
+    class ExpiredFirstPlan(DynamicWorkflowExecutor):
+        def execute(self, request: AgentExecutionRequest) -> AgentExecutionResult:
+            result = super().execute(request)
+            elapsed[0] = 31.0
+            return result
+
+    executor = ExpiredFirstPlan(workspace, invalid_plan_once=True)
+    outcome = coordinator(
+        tmp_path,
+        executor,
+        stage_timeout_seconds=30,
+        monotonic=lambda: elapsed[0],
+    ).execute(task_brief(), source_repository=source)
+
+    assert outcome.record.phase is RunPhase.FAILED
+    assert outcome.record.termination_reason is TerminationReason.RESOURCE_LIMIT_REACHED
+    assert len(executor.requests) == 1
+    assert "exceeded its 30-second stage timeout" in (
+        outcome.record.termination_detail or ""
+    )
+
+
+def test_checked_in_role_stage_budgets_are_frozen_into_the_run(
+    tmp_path: Path,
+) -> None:
+    source = initialize_source(tmp_path)
+    workspace = tmp_path / "workspaces" / task_brief().run_id
+    executor = DynamicWorkflowExecutor(workspace)
+
+    outcome = coordinator(
+        tmp_path,
+        executor,
+        stage_timeout_seconds=None,
+    ).execute(task_brief(), source_repository=source)
+
+    assert outcome.record.phase is RunPhase.COMPLETED
+    assert outcome.record.agent_stage_timeouts_seconds[AgentRole.PLANNER] == 120
+    assert (
+        outcome.record.agent_stage_timeouts_seconds[AgentRole.GENERALIST_DEVELOPER]
+        == 900
+    )
+    assert outcome.record.agent_stage_timeouts_seconds[AgentRole.TESTER] == 300
+    assert outcome.record.agent_stage_timeouts_seconds[AgentRole.REVIEWER] == 300
+    requested = {request.role: request.timeout_seconds for request in executor.requests}
+    assert requested[AgentRole.PLANNER] == 120
+    assert requested[AgentRole.GENERALIST_DEVELOPER] == 900
+    assert requested[AgentRole.TESTER] == 300
+    assert requested[AgentRole.REVIEWER] == 300
+
+
+def test_workflow_ignores_a_model_supplied_tester_status(tmp_path: Path) -> None:
     source = initialize_source(tmp_path)
     workspace = tmp_path / "workspaces" / task_brief().run_id
     executor = DynamicWorkflowExecutor(
@@ -665,14 +718,26 @@ def test_workflow_repairs_invalid_overall_tester_status(tmp_path: Path) -> None:
     tester_requests = [
         request for request in executor.requests if request.role is AgentRole.TESTER
     ]
-    assert len(tester_requests) == 2
-    repair_prompt = tester_requests[1].prompt
-    assert "top-level status accepts only passed, failed, or blocked" in repair_prompt
-    assert "never pending_review" in repair_prompt
-    assert "manual-review criteria alone are pending_review" in repair_prompt
+    assert len(tester_requests) == 1
+    test_report = json.loads(
+        (
+            tmp_path / "runs" / task_brief().run_id / "iterations/01/test-report.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert test_report["status"] == "passed"
+    tester_record = next(
+        json.loads(
+            (tmp_path / "runs" / task_brief().run_id / reference.path).read_text(
+                encoding="utf-8"
+            )
+        )
+        for reference in outcome.execution_records
+        if "/tester-attempt-" in reference.path
+    )
+    assert "status" in tester_record["ignored_controller_fields"]
 
 
-def test_workflow_rejects_tester_changes_to_controller_evidence(
+def test_workflow_ignores_tester_changes_to_controller_evidence(
     tmp_path: Path,
 ) -> None:
     source = initialize_source(tmp_path)
@@ -684,12 +749,23 @@ def test_workflow_rejects_tester_changes_to_controller_evidence(
         source_repository=source,
     )
 
-    assert outcome.record.phase is RunPhase.FAILED
-    assert outcome.record.termination_reason is TerminationReason.ARTIFACT_INVALID
-    assert "differs from controller evidence" in (
-        outcome.record.termination_detail or ""
+    assert outcome.record.phase is RunPhase.COMPLETED
+    test_report = json.loads(
+        (
+            tmp_path / "runs" / task_brief().run_id / "iterations/01/test-report.json"
+        ).read_text(encoding="utf-8")
     )
-    assert outcome.record.snapshots
+    assert test_report["commands"][0]["summary"] != "Agent-altered summary"
+    tester_record = next(
+        json.loads(
+            (tmp_path / "runs" / task_brief().run_id / reference.path).read_text(
+                encoding="utf-8"
+            )
+        )
+        for reference in outcome.execution_records
+        if "/tester-attempt-" in reference.path
+    )
+    assert "commands" in tester_record["ignored_controller_fields"]
 
 
 def test_workflow_records_gate_timeout_as_dependency_failure(tmp_path: Path) -> None:
@@ -714,7 +790,9 @@ def test_workflow_records_gate_timeout_as_dependency_failure(tmp_path: Path) -> 
         ).read_text(encoding="utf-8")
     )
     assert iteration["decision"] == "fail"
-    assert iteration["blocking_reasons"] == ["A deterministic gate timed out."]
+    assert iteration["blocking_reasons"] == [
+        "Deterministic command CHECK_COMPILE timed out."
+    ]
 
 
 def test_workflow_records_openclaw_declared_timeout_as_resource_limit(
@@ -767,6 +845,8 @@ def test_workflow_records_openclaw_declared_timeout_as_resource_limit(
     assert execution["provider"] == "offline"
     assert execution["model"] == "offline/test-model"
     assert execution["input_tokens"] == 123
+    assert execution["stage_timeout_seconds"] == 30
+    assert execution["remaining_timeout_seconds"] == 30
 
 
 def test_workflow_stops_at_the_phase1_iteration_limit(tmp_path: Path) -> None:

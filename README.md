@@ -28,7 +28,8 @@ tests. The code now includes:
 - A real `sat run` entry point for the `function_specialized` team;
 - A replaceable OpenClaw subprocess adapter with stable role sessions,
   version-pinned local/Gateway JSON parsing, and canonical model telemetry;
-- Role-specific minimum-context prompts and strict JSON response parsing;
+- Role-specific minimum-context prompts, strict semantic-response parsing, and
+  controller assembly of persisted artifact facts;
 - A persisted lifecycle whose phase transitions require artifact evidence;
 - Write-once phase artifacts, handoffs, execution logs, and SHA-256 references;
 - Detached standalone Git clones and controller-verified commit snapshots;
@@ -45,7 +46,8 @@ tests. The code now includes:
   source mount for independent review;
 - Tool-policy enforcement that prevents role Agents from spawning untracked
   model calls outside controller accounting;
-- One controlled response repair and at most one implementation revision;
+- One controlled semantic-response repair within the original role-stage
+  deadline, and at most one implementation revision;
 - A pre-call Agent invocation cap and post-call token, duration, and
   estimated-cost stop thresholds;
 - Explicit completed and failed terminal states with JSON and Markdown reports;
@@ -86,18 +88,27 @@ Agent sandbox. Agents own semantic work: planning, coding, evidence analysis,
 and review. Persisted artifacts, rather than hidden chat history, are the
 authoritative handoff boundary.
 
+The controller assembles every persisted phase artifact from two distinct
+sources: the Agent's validated semantic response body and controller-owned
+facts. Artifact identity and envelope fields, run/team/role context, Git
+snapshots and changed files, fixed commands and their results, acceptance
+coverage, and manual-review scope never depend on a model echoing known values.
+
 The controller accepts an iteration only when all of the following agree:
 
-1. The Developer's `WorkResult` matches a clean descendant Git commit and its
-   exact changed-file set.
-2. The Tester reproduces the controller-recorded command evidence and its
-   command-to-criterion coverage exactly.
+1. The Developer returns a semantic work summary, then the controller verifies
+   a clean descendant Git commit and binds its exact changed-file set into the
+   `WorkResult`.
+2. The Tester analyzes the supplied evidence, while the controller binds the
+   actual commands, exit-derived status, command-to-criterion coverage, and
+   blocker state into the `TestReport`.
 3. Every deterministic criterion passes; criteria assigned to independent
    review remain explicitly `pending_review` in the Tester's criterion results,
    while the overall Tester status is `passed` when no deterministic failure or
    blocker exists.
-4. The Reviewer confirms the exact manual-review scope on the same immutable
-   commit and returns `accept` with no blocking finding.
+4. The Reviewer evaluates the controller-supplied manual-review scope on the
+   same immutable commit and returns `accept` with no blocking finding; the
+   controller binds that commit and scope into the `ReviewReport`.
 5. The controller, not either Agent, resolves those pending criteria to
    `passed` in the final report.
 
@@ -113,14 +124,17 @@ artifacts, timeouts, missing runtime telemetry, missing dependencies, budget
 exhaustion, unsafe Git state, and iteration-limit exhaustion remain visible in
 `run.json` and the final reports.
 
-The response boundary accepts one unambiguous JSON object, either raw, inside
-one `json` code fence, or surrounded by presentation-only prose. Surrounding
-text is discarded only when it contains no other JSON structure or fence;
-duplicate keys, multiple objects, multiple fences, non-standard constants, and
-schema violations remain invalid and consume the one bounded repair attempt.
-That repair receives a bounded, value-free structural diagnostic, such as the
-duplicate key name, while the immutable execution record retains the raw
-provider output.
+The response boundary accepts one unambiguous semantic JSON object, either raw,
+inside one `json` code fence, or surrounded by presentation-only prose.
+Surrounding text is discarded only when it contains no other JSON structure or
+fence. If a model also returns controller-owned fields, they are ignored and
+recorded in the immutable execution record; missing or incorrect echoes such as
+`kind`, commit hashes, test status, or command lists do not trigger repair.
+Duplicate keys, multiple objects, multiple fences, non-standard constants,
+unknown semantic fields, and invalid semantic content remain invalid and may
+consume the one bounded repair attempt. That repair receives a bounded,
+value-free structural diagnostic, such as the duplicate key name, while the
+execution record retains the raw provider output.
 
 ## Requirements
 
@@ -173,11 +187,17 @@ sat configure
 ```
 
 The saved values are the exact OpenClaw model reference, current input and
-output prices per million tokens, Tester/Reviewer concurrency, and per-Agent
-timeout. They are stored with mode `0600` in
+output prices per million tokens, Tester/Reviewer concurrency, and an optional
+global role-stage timeout override. They are stored with mode `0600` in
 `${XDG_CONFIG_HOME:-$HOME/.config}/software-agent-team/config.json`. Set an
 absolute `SAT_CONFIG_PATH` only when this location must be overridden, and keep
 the same override set for later `sat` and `sat-uninstall` invocations.
+
+Without a global override, `configs/run-policy.json` supplies measured
+role-specific stage budgets: 120 seconds for Clarifier and Planner, 900 seconds
+for implementation roles, and 300 seconds for Tester and Reviewer. One stage
+budget covers the initial response and its optional repair together; repair
+does not restart the clock. The resolved values are frozen in `run.json`.
 
 Provider credentials are deliberately not accepted or stored. Configure them
 through OpenClaw's credential store or the trusted caller environment, then
@@ -197,12 +217,17 @@ sat configure --non-interactive \
   --input-cost-per-million-usd 0.00 \
   --output-cost-per-million-usd 0.00 \
   --verification-concurrency 1 \
-  --agent-timeout-seconds 600
+  --use-role-timeouts
 ```
 
 Use real prices for a paid model. A later `sat configure` run replaces the
 saved defaults atomically; run-specific `sat run` flags take precedence without
-modifying the saved file.
+modifying the saved file. Use `--stage-timeout-seconds N` only when an
+experiment deliberately gives every role the same stage budget. Use
+`--use-role-timeouts` to clear a saved override or ignore it for one run. The
+old `--agent-timeout-seconds` spelling is accepted only as a deprecated alias
+for the same shared-stage semantics and is scheduled for removal in the next
+major release.
 
 ## Uninstallation
 
@@ -299,7 +324,8 @@ Run preflight and the live workflow as a non-root user. Writable Agent
 containers inherit that user's numeric UID/GID; root identities are rejected.
 
 After `sat configure`, run the vertical slice using the saved model, prices,
-concurrency, and timeout:
+concurrency, and either the saved global stage override or checked-in per-role
+stage budgets:
 
 ```bash
 sat run \
@@ -410,9 +436,10 @@ succeeded.
   host process environment or provider credentials.
 - Model identity is frozen for a run, runtime fallback is disabled, and missing
   or different model telemetry is rejected.
-- Agent invocation count, iterations, per-process time, command time, CPU,
+- Agent invocation count, iterations, per-role stage time, command time, CPU,
   memory, processes, open files, tmpfs, and captured output bytes are hard
-  limited.
+  limited. An initial response and its optional semantic repair share one
+  monotonic stage deadline.
 - Reported aggregate input/output tokens, Agent duration, and estimated cost
   are checked after every invocation; crossing a threshold fails the run and
   prevents another invocation. An absolute monetary cap must also be enforced
@@ -444,7 +471,7 @@ controller owns dynamic revision and termination decisions.
 ```text
 benchmarks/task_manager/       Frozen brief, seed, acceptance suite, Dockerfile
 configs/teams.json             Team topology source of truth
-configs/run-policy.json        Sandbox and aggregate Agent budgets
+configs/run-policy.json        Sandbox, aggregate, and per-role stage budgets
 configs/openclaw.example.json5 Sanitized role and tool policy template
 src/software_agent_team/
   artifacts.py                 Persisted schemas

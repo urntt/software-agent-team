@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 import software_agent_team.cli as cli
+from software_agent_team.artifacts import AgentRole
 from software_agent_team.benchmark_seed import prepare_benchmark_seed
 from software_agent_team.cli import main
 from software_agent_team.run_control import RunPhase
@@ -64,7 +65,7 @@ def test_cli_noninteractive_configuration_is_private_and_reconfigurable(
                 "1.75",
                 "--verification-concurrency",
                 "1",
-                "--agent-timeout-seconds",
+                "--stage-timeout-seconds",
                 "1200",
             ]
         )
@@ -92,7 +93,7 @@ def test_cli_noninteractive_configuration_is_private_and_reconfigurable(
     assert second.input_cost_per_million_usd == first.input_cost_per_million_usd
     assert second.output_cost_per_million_usd == first.output_cost_per_million_usd
     assert second.verification_concurrency == first.verification_concurrency
-    assert second.agent_timeout_seconds == first.agent_timeout_seconds
+    assert second.stage_timeout_seconds == first.stage_timeout_seconds
     output = capsys.readouterr().out
     assert "provider credentials: not stored by SAT" in output
 
@@ -114,7 +115,73 @@ def test_cli_interactive_configuration_prompts_for_first_run_defaults(
     assert configuration.model == "provider/model"
     assert str(configuration.input_cost_per_million_usd) == "0.10"
     assert configuration.verification_concurrency == 1
-    assert configuration.agent_timeout_seconds == 1500
+    assert configuration.stage_timeout_seconds == 1500
+
+
+def test_cli_deprecates_the_old_timeout_flag_and_can_restore_role_defaults(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    path = tmp_path / "config.json"
+    monkeypatch.setenv("SAT_CONFIG_PATH", str(path))
+
+    assert (
+        main(
+            [
+                "configure",
+                "--non-interactive",
+                "--model",
+                "provider/model",
+                "--input-cost-per-million-usd",
+                "1",
+                "--output-cost-per-million-usd",
+                "2",
+                "--agent-timeout-seconds",
+                "75",
+            ]
+        )
+        == 0
+    )
+    configured = load_user_configuration(path)
+    assert configured is not None
+    assert configured.stage_timeout_seconds == 75
+    assert "is deprecated" in capsys.readouterr().out
+
+    assert main(["configure", "--non-interactive", "--use-role-timeouts"]) == 0
+    configured = load_user_configuration(path)
+    assert configured is not None
+    assert configured.stage_timeout_seconds is None
+    assert "role defaults" in capsys.readouterr().out
+
+
+def test_cli_reports_v1_timeout_migration_without_reusing_the_old_value(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "model": "provider/model",
+                "input_cost_per_million_usd": "1",
+                "output_cost_per_million_usd": "2",
+                "verification_concurrency": 2,
+                "agent_timeout_seconds": 2400,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SAT_CONFIG_PATH", str(path))
+
+    assert main(["configure", "--show"]) == 0
+
+    output = capsys.readouterr().out
+    assert "configuration migration:" in output
+    assert "without its legacy" in output
+    assert "role defaults" in output
 
 
 def test_cli_accepts_the_checked_in_handoff(
@@ -353,7 +420,7 @@ def test_cli_run_uses_saved_defaults_when_flags_are_omitted(
             input_cost_per_million_usd="0.75",
             output_cost_per_million_usd="2.25",
             verification_concurrency=1,
-            agent_timeout_seconds=1800,
+            stage_timeout_seconds=1800,
         ),
         configuration_path,
     )
@@ -401,7 +468,8 @@ def test_cli_run_uses_saved_defaults_when_flags_are_omitted(
     assert pricing.model == "provider/saved-model"
     assert str(pricing.input_cost_per_million_usd) == "0.75"
     assert observed["verification_concurrency"] == 1
-    assert observed["agent_timeout_seconds"] == 1800
+    assert observed["stage_timeout_seconds"] == 1800
+    assert observed["role_timeout_seconds"][AgentRole.PLANNER] == 120
 
 
 def test_cli_run_rejects_changes_to_frozen_benchmark(

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import math
+import time
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -23,6 +25,7 @@ from software_agent_team.artifacts import (
     ArtifactReference,
     CheckStatus,
     CommandEvidence,
+    CriterionResult,
     FinalReport,
     FinalStatus,
     HandoffEnvelope,
@@ -47,6 +50,7 @@ from software_agent_team.execution import (
     AgentExecutor,
 )
 from software_agent_team.git_workspace import (
+    GitSnapshot,
     GitWorkspace,
     GitWorkspaceError,
     GitWorkspaceManager,
@@ -64,7 +68,13 @@ from software_agent_team.quality_gates import (
 )
 from software_agent_team.responses import (
     AgentArtifactResponseError,
-    parse_agent_artifact,
+    AgentResponseBody,
+    ImplementationPlanResponse,
+    ReviewReportResponse,
+    TestReportResponse,
+    WorkResultResponse,
+    controller_fields_for,
+    parse_agent_response,
 )
 from software_agent_team.run_control import (
     RunController,
@@ -106,6 +116,8 @@ class QualityGate(Protocol):
 type QualityGateFactory = Callable[[Path, Path], QualityGate]
 type RuntimeSetup = Callable[[GitWorkspace, Path], None]
 type Clock = Callable[[], datetime]
+type MonotonicClock = Callable[[], float]
+type ArtifactAssembler = Callable[[AgentResponseBody], PhaseArtifact]
 
 
 def _system_clock() -> datetime:
@@ -171,13 +183,24 @@ class WorkflowCoordinator:
         pricing: ModelPricing,
         runtime_setup: RuntimeSetup | None = None,
         manual_review_criteria: tuple[str, ...] = (),
-        agent_timeout_seconds: int = 600,
+        role_timeout_seconds: Mapping[AgentRole, int],
+        stage_timeout_seconds: int | None = None,
         artifact_repair_limit: int = 1,
         verification_concurrency: int = 2,
         clock: Clock = _system_clock,
+        monotonic: MonotonicClock = time.monotonic,
     ) -> None:
-        if agent_timeout_seconds < 1:
-            raise WorkflowError("Agent timeout must be positive")
+        missing_timeouts = set(AgentRole) - set(role_timeout_seconds)
+        if missing_timeouts:
+            names = ", ".join(sorted(role.value for role in missing_timeouts))
+            raise WorkflowError(f"Agent stage timeouts are missing roles: {names}")
+        if any(
+            isinstance(seconds, bool) or not 1 <= seconds <= 3600
+            for seconds in role_timeout_seconds.values()
+        ):
+            raise WorkflowError("Agent stage timeouts must be between 1 and 3600")
+        if stage_timeout_seconds is not None and not 1 <= stage_timeout_seconds <= 3600:
+            raise WorkflowError("global Agent stage timeout must be 1 to 3600 seconds")
         if artifact_repair_limit not in {0, 1}:
             raise WorkflowError("Phase 1 permits zero or one artifact repair")
         if verification_concurrency not in {1, 2}:
@@ -199,10 +222,18 @@ class WorkflowCoordinator:
         self.pricing = pricing
         self.runtime_setup = runtime_setup
         self.manual_review_criteria = cleaned_manual_criteria
-        self.agent_timeout_seconds = agent_timeout_seconds
+        self.agent_stage_timeouts_seconds = {
+            role: (
+                stage_timeout_seconds
+                if stage_timeout_seconds is not None
+                else role_timeout_seconds[role]
+            )
+            for role in AgentRole
+        }
         self.artifact_repair_limit = artifact_repair_limit
         self.verification_concurrency = verification_concurrency
         self.clock = clock
+        self.monotonic = monotonic
 
     def execute(
         self,
@@ -226,6 +257,7 @@ class WorkflowCoordinator:
             task_brief,
             team_id=team.id,
             iteration_limit=PHASE1_ITERATION_LIMIT,
+            agent_stage_timeouts_seconds=self.agent_stage_timeouts_seconds,
         )
         run_directory = self.runs_root / task_brief.run_id
         context = _WorkflowContext(
@@ -306,6 +338,7 @@ class WorkflowCoordinator:
                 expected_kind=ArtifactKind.IMPLEMENTATION_PLAN,
             ),
             stage="plan",
+            assembler=lambda body: self._assemble_plan(context, body),
         )
         plan = cast(ImplementationPlan, plan_artifact)
         self._handoff(
@@ -336,6 +369,22 @@ class WorkflowCoordinator:
                 ImplementationPlan | TestReport | ReviewReport | IterationRecord,
                 ...,
             ] = (plan, *feedback)
+            verified_snapshot: list[GitSnapshot] = []
+
+            def assemble_work(
+                body: AgentResponseBody,
+                current_record: RunRecord = record,
+                current_input_commit: str = input_commit,
+                snapshots: list[GitSnapshot] = verified_snapshot,
+            ) -> PhaseArtifact:
+                snapshot = workspace_manager.verify_snapshot(
+                    workspace,
+                    iteration=current_record.current_iteration,
+                    input_commit=current_input_commit,
+                )
+                snapshots.append(snapshot)
+                return self._assemble_work_result(context, body, snapshot=snapshot)
+
             work_artifact, work_reference, work_execution = self._invoke(
                 context,
                 AgentPromptInputs(
@@ -350,23 +399,18 @@ class WorkflowCoordinator:
                     upstream_artifacts=upstream,
                 ),
                 stage="implement",
+                assembler=assemble_work,
             )
             work = cast(WorkResult, work_artifact)
-            if work.input_commit != input_commit:
-                raise WorkflowEvidenceError(
-                    "Developer work result uses the wrong input commit"
-                )
+            if len(verified_snapshot) != 1:
+                raise WorkflowEvidenceError("Developer snapshot was not assembled once")
+            snapshot = verified_snapshot[0]
             record = context.controller.advance(
                 record.run_id,
                 expected_revision=record.revision,
                 target=RunPhase.SNAPSHOTTING,
                 reason="Developer reported a committed implementation",
                 artifacts=(work_reference,),
-            )
-            snapshot = workspace_manager.verify_snapshot(
-                workspace,
-                iteration=record.current_iteration,
-                input_commit=input_commit,
             )
             validate_work_result_snapshot(work, snapshot)
             record = context.controller.record_snapshot(
@@ -560,6 +604,24 @@ class WorkflowCoordinator:
                     manual_review_criteria=self.manual_review_criteria,
                 ),
                 stage="verify",
+                assembler=(
+                    lambda body: (
+                        self._assemble_test_report(
+                            context,
+                            body,
+                            iteration=record.current_iteration,
+                            input_commit=input_commit,
+                            commands=commands,
+                        )
+                        if role is AgentRole.TESTER
+                        else self._assemble_review_report(
+                            context,
+                            body,
+                            iteration=record.current_iteration,
+                            input_commit=input_commit,
+                        )
+                    )
+                ),
             )
 
         if self.verification_concurrency == 1:
@@ -611,20 +673,171 @@ class WorkflowCoordinator:
                 "verification assignment does not cover every criterion"
             )
 
+    def _assemble_plan(
+        self,
+        context: _WorkflowContext,
+        body: AgentResponseBody,
+    ) -> ImplementationPlan:
+        if not isinstance(body, ImplementationPlanResponse):
+            raise WorkflowEvidenceError("Planner returned the wrong semantic body")
+        return ImplementationPlan(
+            run_id=context.brief.run_id,
+            team_id=context.team.id,
+            created_at=_utc(self.clock),
+            objective=body.objective,
+            approach=body.approach,
+            tasks=body.tasks,
+            risks=body.risks,
+            assumptions=body.assumptions,
+        )
+
+    def _assemble_work_result(
+        self,
+        context: _WorkflowContext,
+        body: AgentResponseBody,
+        *,
+        snapshot: GitSnapshot,
+    ) -> WorkResult:
+        if not isinstance(body, WorkResultResponse):
+            raise WorkflowEvidenceError("Developer returned the wrong semantic body")
+        return WorkResult(
+            run_id=context.brief.run_id,
+            team_id=context.team.id,
+            producer=AgentRole.GENERALIST_DEVELOPER,
+            created_at=_utc(self.clock),
+            iteration=snapshot.iteration,
+            input_commit=snapshot.input_commit,
+            output_commit=snapshot.output_commit,
+            changed_files=snapshot.changed_files,
+            summary=body.summary,
+            completed_tasks=body.completed_tasks,
+            unresolved_issues=body.unresolved_issues,
+        )
+
+    def _assemble_test_report(
+        self,
+        context: _WorkflowContext,
+        body: AgentResponseBody,
+        *,
+        iteration: int,
+        input_commit: str,
+        commands: tuple[CommandEvidence, ...],
+    ) -> TestReport:
+        if not isinstance(body, TestReportResponse):
+            raise WorkflowEvidenceError("Tester returned the wrong semantic body")
+
+        if any(command.timed_out for command in commands):
+            status = CheckStatus.BLOCKED
+        elif any(command.exit_code != 0 for command in commands):
+            status = CheckStatus.FAILED
+        else:
+            status = CheckStatus.PASSED
+
+        manual = set(self.manual_review_criteria)
+        criteria: list[CriterionResult] = []
+        for criterion in context.brief.acceptance_criteria:
+            evidence = tuple(
+                command for command in commands if criterion.id in command.criterion_ids
+            )
+            command_ids = tuple(command.id for command in evidence)
+            timed_out = tuple(command.id for command in evidence if command.timed_out)
+            failed = tuple(
+                command.id
+                for command in evidence
+                if not command.timed_out and command.exit_code != 0
+            )
+            if timed_out:
+                criterion_status = CheckStatus.BLOCKED
+                detail = (
+                    f"Controller-recorded commands timed out: {', '.join(timed_out)}."
+                )
+            elif failed:
+                criterion_status = CheckStatus.FAILED
+                detail = f"Controller-recorded commands failed: {', '.join(failed)}."
+            elif criterion.id in manual:
+                criterion_status = CheckStatus.PENDING_REVIEW
+                detail = "Deterministic evidence passed; independent review is pending."
+            else:
+                criterion_status = CheckStatus.PASSED
+                detail = (
+                    f"Controller-recorded commands passed: {', '.join(command_ids)}."
+                )
+            criteria.append(
+                CriterionResult(
+                    criterion_id=criterion.id,
+                    status=criterion_status,
+                    command_ids=command_ids,
+                    detail=detail,
+                )
+            )
+
+        blockers = tuple(
+            f"Deterministic command {command.id} timed out."
+            for command in commands
+            if command.timed_out
+        )
+        return TestReport(
+            run_id=context.brief.run_id,
+            team_id=context.team.id,
+            created_at=_utc(self.clock),
+            iteration=iteration,
+            input_commit=input_commit,
+            status=status,
+            commands=commands,
+            criteria=tuple(criteria),
+            manual_review_criteria=self.manual_review_criteria,
+            findings=body.findings,
+            blockers=blockers,
+            summary=body.summary,
+        )
+
+    def _assemble_review_report(
+        self,
+        context: _WorkflowContext,
+        body: AgentResponseBody,
+        *,
+        iteration: int,
+        input_commit: str,
+    ) -> ReviewReport:
+        if not isinstance(body, ReviewReportResponse):
+            raise WorkflowEvidenceError("Reviewer returned the wrong semantic body")
+        return ReviewReport(
+            run_id=context.brief.run_id,
+            team_id=context.team.id,
+            created_at=_utc(self.clock),
+            iteration=iteration,
+            input_commit=input_commit,
+            verdict=body.verdict,
+            termination_reason=body.termination_reason,
+            reviewed_criteria=self.manual_review_criteria,
+            findings=body.findings,
+            summary=body.summary,
+        )
+
     def _invoke(
         self,
         context: _WorkflowContext,
         inputs: AgentPromptInputs,
         *,
         stage: str,
+        assembler: ArtifactAssembler,
     ) -> tuple[PhaseArtifact, ArtifactReference, ArtifactReference]:
+        stage_timeout = self.agent_stage_timeouts_seconds[inputs.role]
+        deadline = self.monotonic() + stage_timeout
         base_request = build_agent_execution_request(
             inputs,
-            timeout_seconds=self.agent_timeout_seconds,
+            timeout_seconds=stage_timeout,
             model=self.pricing.model,
         )
-        last_error = "Agent did not return an artifact"
+        last_error = "Agent did not return a semantic response"
         for attempt in range(1, self.artifact_repair_limit + 2):
+            remaining = deadline - self.monotonic()
+            if remaining <= 0:
+                raise AgentInvocationError(
+                    f"{inputs.role.value} stage timeout was exhausted",
+                    TerminationReason.RESOURCE_LIMIT_REACHED,
+                )
+            remaining_seconds = min(stage_timeout, max(1, math.ceil(remaining)))
             with context.execution_lock:
                 if context.calls_started >= self.budget.max_calls:
                     raise AgentInvocationError(
@@ -632,14 +845,26 @@ class WorkflowCoordinator:
                         TerminationReason.RESOURCE_LIMIT_REACHED,
                     )
                 context.calls_started += 1
-            request = self._repair_request(base_request, last_error, attempt)
+            request = self._repair_request(
+                base_request,
+                last_error,
+                attempt,
+            ).model_copy(update={"timeout_seconds": remaining_seconds})
             result = self.executor.execute(request)
             response: PhaseArtifact | None = None
             response_reference: ArtifactReference | None = None
             record_error: str | None = None
             repairable = False
             failure_reason: TerminationReason | None = None
-            if result.status is AgentExecutionStatus.COMPLETED:
+            ignored_controller_fields: tuple[str, ...] = ()
+            assembly_error: Exception | None = None
+            if self.monotonic() > deadline:
+                record_error = (
+                    f"{request.role.value} exceeded its {stage_timeout}-second "
+                    "stage timeout"
+                )
+                failure_reason = TerminationReason.RESOURCE_LIMIT_REACHED
+            elif result.status is AgentExecutionStatus.COMPLETED:
                 reported_model = result.telemetry.model
                 if reported_model is None:
                     record_error = "successful execution omitted model metadata"
@@ -659,22 +884,30 @@ class WorkflowCoordinator:
                     failure_reason = TerminationReason.DEPENDENCY_UNAVAILABLE
                 else:
                     try:
-                        response = parse_agent_artifact(
+                        parsed = parse_agent_response(
                             result,
                             request,
                             task_brief=context.brief,
                             team_roles=context.team.roles,
                             iteration_limit=PHASE1_ITERATION_LIMIT,
                         )
-                        response_reference = context.artifact_store.write(
-                            response,
-                            description=(
-                                f"Validated response from {request.role.value}."
-                            ),
-                        )
-                    except (AgentArtifactResponseError, ArtifactStoreError) as error:
+                    except AgentArtifactResponseError as error:
                         record_error = self._error_detail(error)
                         repairable = True
+                    else:
+                        ignored_controller_fields = parsed.ignored_controller_fields
+                        try:
+                            response = assembler(parsed.body)
+                            response_reference = context.artifact_store.write(
+                                response,
+                                description=(
+                                    "Controller-assembled response from "
+                                    f"{request.role.value}."
+                                ),
+                            )
+                        except Exception as error:
+                            assembly_error = error
+                            record_error = self._error_detail(error)
             else:
                 record_error = result.error or (
                     f"Agent execution ended as {result.status.value}"
@@ -691,11 +924,23 @@ class WorkflowCoordinator:
                 attempt=attempt,
                 response_reference=response_reference,
                 error=record_error,
+                controller_supplied_fields=controller_fields_for(request.expected_kind),
+                ignored_controller_fields=ignored_controller_fields,
+                stage_timeout_seconds=stage_timeout,
+                remaining_timeout_seconds=remaining_seconds,
             )
+            if assembly_error is not None:
+                raise assembly_error
             if response is not None and response_reference is not None:
                 return response, response_reference, execution_reference
             last_error = record_error or last_error
             if repairable and attempt <= self.artifact_repair_limit:
+                if self.monotonic() >= deadline:
+                    raise AgentInvocationError(
+                        f"{request.role.value} stage timeout was exhausted before "
+                        "response repair",
+                        TerminationReason.RESOURCE_LIMIT_REACHED,
+                    )
                 continue
             raise AgentInvocationError(
                 f"{request.role.value} failed: {last_error}",
@@ -722,30 +967,22 @@ class WorkflowCoordinator:
             )
         elif request.role in IMPLEMENTATION_ROLES:
             role_check = (
-                "Before responding, run git status --short, git rev-parse HEAD, "
-                "and git diff --name-only <input_commit> HEAD --. Require a clean "
-                "status and copy the exact full commit and changed paths from "
-                "those commands, replacing <input_commit> with run.input_commit "
-                "from RUN_CONTEXT_JSON; never reuse or invent a hash."
+                "Recheck that summary, completed_tasks, and unresolved_issues "
+                "describe only work committed in the clean workspace. Do not "
+                "return commit IDs or changed paths; the controller derives them."
             )
         elif request.role is AgentRole.TESTER:
             role_check = (
-                "Recheck that every TaskBrief criterion appears exactly once and "
-                "that every command field exactly reproduces controller evidence. "
-                "The top-level status accepts only passed, failed, or blocked, "
-                "never pending_review. Set the top-level status to passed when all "
-                "commands and deterministic-only criteria pass, manual-review "
-                "criteria alone are pending_review, and blockers is empty; use "
-                "pending_review only in criteria[].status for IDs copied into "
-                "manual_review_criteria."
+                "Return only evidence-grounded findings and a summary. Do not "
+                "return commands, criteria, statuses, scope, or blockers; the "
+                "controller derives those fields from deterministic evidence."
             )
         elif request.role is AgentRole.REVIEWER:
             role_check = (
-                "Recheck that the verdict, findings, criterion IDs, and input "
-                "commit agree with the supplied immutable evidence. Use revise, "
-                "not fail, for a correctable implementation or acceptance-gate "
-                "defect; fail requires a terminal safety or evidence-integrity "
-                "reason that makes another revision unsafe."
+                "Recheck that the verdict, findings, and criterion IDs agree with "
+                "the supplied immutable evidence. Do not return input_commit or "
+                "reviewed_criteria. Use revise, not fail, for a correctable defect; "
+                "fail requires a terminal safety or evidence-integrity reason."
             )
         else:  # pragma: no cover - executable roles are exhaustively mapped
             role_check = "Recheck every field against the supplied run evidence."
@@ -754,11 +991,11 @@ class WorkflowCoordinator:
             "Your previous response was rejected for this reason: "
             f"{previous_error}\n"
             "Revalidate the entire response rather than only the reported error. "
-            "Use each key exactly once in every JSON object. Include every "
-            "required schema field, including schema_version, kind, run_id, "
-            "team_id, producer, created_at, and iteration. "
+            "Use each key exactly once and include every semantic field required "
+            "by RESPONSE_SCHEMA_JSON. Do not return controller-owned envelope, "
+            "Git, or deterministic-evidence fields. "
             f"{role_check} "
-            "Return one corrected JSON object only. Do not repeat the invalid form."
+            "Return one corrected semantic JSON object only."
         )
         return request.model_copy(update={"prompt": f"{request.prompt}{repair}"})
 
@@ -772,6 +1009,10 @@ class WorkflowCoordinator:
         attempt: int,
         response_reference: ArtifactReference | None,
         error: str | None,
+        controller_supplied_fields: tuple[str, ...],
+        ignored_controller_fields: tuple[str, ...],
+        stage_timeout_seconds: int,
+        remaining_timeout_seconds: int,
     ) -> ArtifactReference:
         telemetry = result.telemetry
         usage = telemetry.usage
@@ -843,6 +1084,11 @@ class WorkflowCoordinator:
             stderr_path=outputs.stderr_path,
             stdout_sha256=outputs.stdout_sha256,
             stderr_sha256=outputs.stderr_sha256,
+            response_contract="semantic_body_v1",
+            controller_supplied_fields=controller_supplied_fields,
+            ignored_controller_fields=ignored_controller_fields,
+            stage_timeout_seconds=stage_timeout_seconds,
+            remaining_timeout_seconds=remaining_timeout_seconds,
             response_artifact=response_reference,
             error=effective_error,
         )
