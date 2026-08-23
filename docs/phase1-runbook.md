@@ -7,6 +7,12 @@ through the bounded revision loop. New traces still require fresh run IDs and
 the complete evidence checks below. Repository development and offline tests do
 not make a model call. Following the `sat run` step below does.
 
+Use [`installation.md`](installation.md) for the normal install, configuration,
+export, and uninstall lifecycle. Use
+[`runtime-evidence.md`](runtime-evidence.md) for the underlying runtime,
+artifact, response, integrity, and safety model. This runbook owns only the
+ordered live-trace procedure and its acceptance checklist.
+
 ## Acceptance Objective
 
 Exercise the complete `function_specialized` path against the frozen
@@ -206,8 +212,8 @@ Exit codes are:
   normal workflow result.
 
 Do not retry using the same run ID. For another trial, copy the frozen
-TaskBrief, change only `run_id`, and use a new source checkout at the same base
-commit. The CLI rejects every other benchmark change.
+TaskBrief, change only `TaskBrief.run_id`, and use a new source checkout at the
+same base commit. The CLI rejects every other benchmark change.
 
 ## 6. Inspect the Evidence
 

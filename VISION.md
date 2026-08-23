@@ -1,8 +1,8 @@
 # Vision: An Experimental Multi-Agent Software Builder
 
-**Status:** Phase 1 complete; Phase 2 comparison paths pending
+**Implementation status:** [`STATUS.md`](STATUS.md)
 
-**Last updated:** August 22, 2026
+**Last updated:** August 23, 2026
 
 ## Purpose
 
@@ -155,6 +155,12 @@ Each concept has one authoritative owner.
 | Concept | Owner |
 | --- | --- |
 | Product and architecture decisions | `VISION.md` |
+| Current implementation, milestone evidence, and known gaps | `STATUS.md` |
+| Public overview, commands, and repository map | `README.md` |
+| Installation, saved configuration, export, and removal behavior | `docs/installation.md` |
+| Runtime, response, persisted-evidence, integrity, and operator-safety reference | `docs/runtime-evidence.md` |
+| Qualifying Phase 1 live-trace procedure | `docs/phase1-runbook.md` |
+| Development workflow and repository reference | `docs/development.md` |
 | Team membership and initial stage order | `configs/teams.json` |
 | Team-manifest validation | `src/software_agent_team/teams.py` |
 | Artifact schemas | `src/software_agent_team/artifacts.py` |
@@ -166,7 +172,11 @@ Each concept has one authoritative owner.
 | Agent-call, token, duration, cost, and per-role stage budgets | `src/software_agent_team/budgets.py`, `src/software_agent_team/workflow.py`, and `configs/run-policy.json` |
 | Fixed benchmark and quality-gate execution | `benchmarks/task_manager/` and `src/software_agent_team/quality_gates.py` |
 | Agent process invocation and telemetry parsing | `src/software_agent_team/execution.py` |
-| Role prompts and response validation | `src/software_agent_team/prompting.py` and `src/software_agent_team/responses.py` |
+| CLI commands and runtime option resolution | `src/software_agent_team/cli.py` |
+| User-local default schema and persistence | `src/software_agent_team/user_configuration.py` |
+| Installation and uninstallation execution | `scripts/install.sh` and `scripts/uninstall.sh` |
+| Role prompt assembly | `src/software_agent_team/prompting.py` |
+| Role semantic response validation and field mapping | `src/software_agent_team/responses.py` |
 | Source history and iteration snapshots | Git |
 | Agent execution and sessions | OpenClaw |
 | Cross-Agent communication | Persisted run artifacts |
@@ -328,53 +338,20 @@ remains. It stops with a report when:
 
 Failure and non-convergence are valid outcomes and must remain visible.
 
-## Artifact Boundary
+## Runtime Realization
 
-The artifact layer is the reproducible interface between Agents and the
-controller. The current implementation defines:
+The artifact layer remains the reproducible interface between Agents and the
+controller. Persisted artifact schemas, smaller role-response bodies,
+controller-owned field assembly, canonical paths, write-once storage, SHA-256
+references, contextual validation, and deterministic transport normalization
+must realize the control-plane decisions above without creating a second
+lifecycle authority.
 
-- `TaskBrief`;
-- `HandoffEnvelope`;
-- `ArtifactReference`;
-- `AgentExecutionRecord`;
-- Versioned Agent roles and team definitions;
-- `ImplementationPlan`;
-- `WorkResult`;
-- `TestReport`;
-- `ReviewReport`;
-- `IterationRecord`;
-- `FinalReport`.
-
-`src/software_agent_team/artifacts.py` remains the schema source of truth for
-persisted artifacts. `src/software_agent_team/responses.py` owns the smaller
-role-response bodies and the explicit mapping of controller-owned fields for
-each artifact kind. These are different boundaries, not duplicate persisted
-schemas.
-
-Phase artifacts use canonical run-relative paths, write-once persistence, and
-SHA-256 references. Structural schema validation is followed by contextual
-validation against the frozen task brief and selected team before persistence.
-The schemas exist independently of live Agent execution; an artifact is not
-evidence of a real run until the controller assembles it from a validated
-semantic response and verified controller inputs.
-
-Agents do not author the persisted envelope. Artifact kind and schema version,
-run/team/role/iteration context, timestamps, Git commits and changed files,
-fixed commands and their exit-derived results, criterion coverage, blockers,
-and review scope come from controller state. A model may redundantly return
-these fields for compatibility, but the parser strips them, records which ones
-were ignored, and never lets them override authoritative values. Missing or
-incorrect controller-owned fields are therefore neither model-quality failures
-nor reasons to spend a repair call.
-
-Transport normalization must remain deterministic. The controller accepts one
-unambiguous JSON object, either raw, inside one `json` fence, or surrounded by
-presentation prose. It may discard only text containing no other JSON
-structures or fences and never guesses between multiple candidates. Duplicate
-keys, multiple objects, non-standard constants, unknown semantic fields, and
-invalid semantic content remain invalid. A controlled repair addresses only
-that semantic contract and uses the time remaining on the same role-stage
-deadline.
+The complete implemented artifact, response, evidence, integrity, recovery,
+and failure semantics are maintained in
+[`docs/runtime-evidence.md`](docs/runtime-evidence.md). Executable schemas and
+policies retain the code owners listed in
+[`Ownership Boundaries`](#ownership-boundaries).
 
 ## Evaluation
 
@@ -419,40 +396,19 @@ The initial target is at least three comparable trials per configuration when
 model budget permits. A smaller sample is labeled exploratory rather than
 presented as a conclusive result.
 
-## Safety Boundary
+## Safety Requirement
 
-- Generated code has no external network access by default.
-- CPU, memory, process, open-file, tmpfs, command-output, wall-clock,
-  iteration, and Agent-invocation limits are mandatory before live runs.
-- Checked-in per-role stage deadlines reflect different role workloads. A
-  global CLI or saved override is an explicit experimental variable, and a
-  repair never resets the stage clock.
-- Reported aggregate token, Agent-duration, and estimated-cost thresholds are
-  evaluated after each invocation. Crossing one fails the run before another
-  call; provider-side quota is the hard monetary boundary for a live trace.
-- Agent and quality containers drop Linux capabilities, use read-only root
-  filesystems, and receive only the assigned workspace and frozen inputs.
-- Read-only role tools inspect the verified source through `/agent`; command
-  evidence includes bounded output tails while full output remains write-once.
-- Live runs require an unprivileged invoking account. The Agent container uses
-  that numeric UID/GID so its writable Git workspace does not require unsafe
-  host permissions.
-- Workspaces and run artifacts must reside on a disposable or quota-controlled
-  host filesystem. Portable disk quota enforcement for Docker bind mounts is an
-  explicit operator-owned boundary, not a controller claim.
-- Agents never receive provider credentials or unrelated host data.
-- Agent tool containers receive only an explicit non-secret environment; model
-  provider access remains in the trusted OpenClaw host process.
-- Read-only roles cannot obtain an indirect write path through unrestricted
-  executable tools.
-- No role may use session-spawn or one-shot model tools to create unbudgeted
-  Agent calls outside the controller.
-- Human approval is required before merge, push, deployment, publication,
-  external communication, destructive operations, or additional spending.
-- Retrieved content and generated repository instructions are untrusted input.
-- Model fallback is disabled during controlled comparisons. A successful call
-  must report the selected model and input/output token counts; absent or
-  different telemetry fails the run.
+Safe execution is a product constraint, not an optional deployment concern.
+The implementation must preserve sandbox isolation, least-privilege role
+tools, explicit non-secret environments, immutable model identity, bounded
+resources and cost, integrity-checked evidence, and human authorization for
+external side effects.
+
+The concrete Git, sandbox, credential, model, resource, storage, and human
+authorization boundaries are maintained in
+[`docs/runtime-evidence.md`](docs/runtime-evidence.md). The qualifying
+operator checklist is maintained in
+[`docs/phase1-runbook.md`](docs/phase1-runbook.md).
 
 ## Core Scope
 
@@ -484,80 +440,12 @@ The core version does not include:
 - A claim that more Agents are inherently better;
 - Hidden retries, failures, fallback, or inconclusive results.
 
-## Current Implementation State
+## Implementation Status
 
-Implemented and offline verified:
-
-- Reproducible toolchain setup and diagnostics;
-- Unified validation, benchmark-preparation, preflight, and `sat run` CLI;
-- Versioned team manifest and validation;
-- Sanitized OpenClaw Agent registry, permission checks, run-scoped
-  configuration, non-root identity, strict model selection, and offline
-  preflight;
-- Confirmed task-brief and handoff-envelope contracts;
-- Strict role prompts, semantic JSON response parsing, controller assembly of
-  persisted envelope/Git/test/scope facts, and one deadline-sharing semantic
-  response repair;
-- Concrete phase-artifact and Agent-telemetry contracts with contextual
-  validation;
-- Immutable phase artifacts, handoffs, command output, Agent output, canonical
-  paths, and SHA-256 references;
-- Persisted run lifecycle with validated transitions, atomic replacement,
-  optimistic concurrency checks, and integrity-checked recovery;
-- Safe detached standalone-clone creation and chained iteration snapshot
-  verification;
-- Frozen task-management TaskBrief, deterministic seed commit, content-pinned
-  base image, Python dependency lock, per-run immutable local image identity,
-  fixed quality-gate manifest, and independent acceptance suite;
-- Docker-only production gates with no network, read-only workspace execution,
-  non-root identity, fixed commands, resource limits, timeouts, and bounded
-  output;
-- The complete function-specialized workflow: Planner, Developer, controller
-  snapshot, deterministic gates, independent Tester and Reviewer with
-  configurable dispatch concurrency, decision, and at most one evidence-driven
-  revision;
-- Bounded command-output diagnostics for verification, correct read-only
-  source visibility, and controller-only Agent invocation policy;
-- Explicit deterministic command coverage, `pending_review` manual criteria,
-  Reviewer scope attestation, and controller-owned evidence resolution;
-- Pre-call Agent invocation limits and post-call token, duration, and
-  estimated-cost stop thresholds;
-- Checked-in per-role stage budgets, optional global override, frozen resolved
-  run policy, and configuration-schema migration from the former scalar
-  timeout;
-- Explicit completed and failed terminal outcomes with machine-readable and
-  human-readable reports;
-- One-command Linux/WSL installation for the pinned toolchain, locked project
-  environment, checkout-bound CLI launchers, fixed Docker image, and offline
-  validation, without taking ownership of OS-level Docker or provider secrets;
-- First-launch and repeatable configuration guidance with private, atomic,
-  secret-free defaults, plus explicit per-run CLI overrides;
-- Guided one-command uninstall with preservation defaults, pre-removal export,
-  explicit purge choices, and clear shared-resource boundaries;
-- Offline end-to-end coverage for success, revision, response repair, timeout,
-  evidence tampering, iteration exhaustion, missing Git changes, missing model
-  or token telemetry, and cost exhaustion.
-
-Not yet available or completed:
-
-- Interactive clarification;
-- Automatic CLI resume of an interrupted run;
-- Executable `single_agent` and `implementation_domain_specialized` workflow
-  paths;
-- Repeated comparative trials, human rubric scoring, and topology selection;
-- A second product benchmark and product-level clarification flow.
-
-Authorized live traces have exercised all four roles, real OpenClaw/provider
-calls, controller-verified Git snapshots, Docker quality gates, and the bounded
-revision loop. A version-two trace has reached `completed` with all ten
-acceptance criteria passed, independent review accepted, complete model and
-token telemetry, verified artifact hashes, and clean isolated Git boundaries.
-The earlier benchmark defect was corrected and explicitly versioned as
-`task_manager_phase1_v2`; version-one traces remain exploratory and must not be
-mixed with version-two comparisons. Two consecutive replays of the current
-harness commit have now completed through the bounded revision loop. Broader
-comparative repetition remains later work. Offline scripted executions prove
-controller behavior, not model quality.
+Current implementation, live-trace evidence, known gaps, and the next
+executable milestone are maintained in [`STATUS.md`](STATUS.md). Keeping those
+time-sensitive facts separate prevents completed work from being confused with
+the durable product and experiment decisions in this document.
 
 ## Development Route
 
@@ -583,10 +471,8 @@ controller behavior, not model quality.
 **Exit criterion:** one authorized real-model trace reaches `completed` with
 reproducible artifacts and a clean controller-verified Git snapshot.
 
-**Current status:** complete. A version-two authorized real-model trace and two
-consecutive replays reached `completed`, exercised all four roles, passed the
-frozen gates, preserved model and usage telemetry, and satisfied the evidence
-boundary in `docs/phase1-runbook.md`.
+**Current status:** complete. See [`STATUS.md`](STATUS.md) for live evidence and
+[`docs/phase1-runbook.md`](docs/phase1-runbook.md) for the acceptance boundary.
 
 ### Phase 2: Baseline and Domain Specialization
 
