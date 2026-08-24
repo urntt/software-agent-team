@@ -157,8 +157,9 @@ workspaces/<run_id>/
 
 `runtime-preflight.json` records the private OpenClaw and Docker identities,
 configuration validity, image presence and immutable ID, restricted-container
-liveness, and any non-secret container probe error. A run is ready only when
-the configuration, image identity, and container lifecycle checks all pass.
+tool execution and liveness, and any non-secret container probe error. A run is
+ready only when the configuration, image identity, and container execution
+checks all pass.
 
 Phase artifacts and captured process output are write-once. `run.json` is
 atomically replaced under an optimistic revision check and records the
@@ -202,10 +203,14 @@ when investigating it rather than editing artifacts in place.
 - Generated code has no external network access by default.
 - Agent sandboxes and production quality gates run through Docker with external
   network access disabled.
-- OpenClaw role tools execute into long-lived scope-owned containers. The
-  pinned runtime image therefore owns a non-terminating default command, and
-  installation plus run preflight prove container liveness under restricted
+- OpenClaw role tools execute into long-lived scope-owned containers and
+  explicitly supplies their supervisor command. The pinned runtime image uses
+  the same standalone default, while installation plus run preflight prove an
+  actual helper can execute and the container remains alive under restricted
   settings instead of treating image presence as readiness.
+- A cgroup PID limit bounds each container. SAT intentionally omits
+  `RLIMIT_NPROC`, whose numeric-UID-wide accounting can include processes
+  outside the container and reject PID 1 on some Docker hosts.
 - If trusted OpenClaw tool-runtime stderr later reports that Docker became
   unavailable or the scope container stopped, the controller records a
   dependency failure. Agent-authored prose cannot assign that classification.

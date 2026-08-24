@@ -169,10 +169,15 @@ code or experiment evidence justifies a replacement.
 - Every run uses an isolated, self-contained Git clone with no remote and a
   detached HEAD.
 - Generated code executes only inside a restricted sandbox.
-- Each Docker sandbox image supplies a long-lived default process because
-  OpenClaw executes role tools into a scope-owned container. Installation and
-  run preflight start and remove a restricted probe container; image presence
-  alone is not readiness evidence.
+- OpenClaw supplies an explicit long-lived supervisor command when it creates a
+  scope-owned role container; the image uses the same command as its standalone
+  diagnostic default. Installation and run preflight must both execute a real
+  helper inside a restricted probe container. Image presence or a momentary
+  running state alone is not readiness evidence.
+- The per-container cgroup PID limit is the authoritative process-count
+  boundary. SAT does not also set `RLIMIT_NPROC`: that limit can count every
+  process sharing the numeric UID outside the container and can prevent PID 1
+  from starting on otherwise healthy Docker hosts.
 - Live Agent containers run as the invoking unprivileged host identity; UID or
   GID `0` is rejected.
 - Clarifier, Planner, Tester, and Reviewer are read-only roles.

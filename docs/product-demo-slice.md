@@ -146,6 +146,11 @@ The user may answer in ordinary language. SAT then:
 4. Shows a concise structured summary in user language;
 5. Requires explicit confirmation before a model-backed build begins.
 
+Each interactive answer must be valid terminal Unicode. An undecodable answer
+is rejected at its prompt and collected again; it must never reach TaskBrief
+validation or start a run. At the optional-constraints prompt, `none` and `n/a`
+mean that no additional constraint was supplied.
+
 The runtime-profile boundary must be stated honestly. A request that requires
 another language, platform, hosted dependency, credential, or unsupported
 runtime is rejected or narrowed explicitly. It is never converted into an

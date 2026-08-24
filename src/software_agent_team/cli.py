@@ -168,6 +168,34 @@ def _prompt_value(label: str, current: object | None = None) -> str:
     return str(current)
 
 
+def _prompt_product_text(
+    prompt: str,
+    *,
+    label: str,
+    required: bool = False,
+    maximum_length: int | None = None,
+) -> str:
+    """Read one product answer without accepting undecodable terminal bytes."""
+
+    while True:
+        response = input(prompt).strip()
+        try:
+            response.encode("utf-8", errors="strict")
+        except UnicodeEncodeError:
+            print(f"Invalid terminal text in {label}; please type it again.")
+            continue
+        if required and not response:
+            print(f"{label.capitalize()} must not be blank; please type it again.")
+            continue
+        if maximum_length is not None and len(response) > maximum_length:
+            print(
+                f"{label.capitalize()} must be at most {maximum_length} "
+                "characters; please shorten it."
+            )
+            continue
+        return response
+
+
 def _configure(args: argparse.Namespace) -> int:
     """Create or replace non-secret user run defaults."""
 
@@ -892,11 +920,12 @@ def _collect_product_request(
     """Collect and confirm one user-owned request for the current runtime profile."""
 
     print("\nWhat would you like to build?")
-    source_request = input("> ").strip()
-    if not source_request:
-        raise ValueError("the software request must not be blank")
-    if len(source_request) > 2000:
-        raise ValueError("the software request must be at most 2000 characters")
+    source_request = _prompt_product_text(
+        "> ",
+        label="software request",
+        required=True,
+        maximum_length=2000,
+    )
 
     print("\nCurrent execution profile")
     print("  A small greenfield Python 3.12 project.")
@@ -911,13 +940,17 @@ def _collect_product_request(
         )
         return None
 
-    success_text = input(
+    success_text = _prompt_product_text(
         "Success conditions (separate multiple items with semicolons) "
-        "[use the request as written]: "
-    ).strip()
-    constraint_text = input(
-        "Additional constraints (separate multiple items with semicolons) [none]: "
-    ).strip()
+        "[use the request as written]: ",
+        label="success conditions",
+    )
+    constraint_text = _prompt_product_text(
+        "Additional constraints (separate multiple items with semicolons) [none]: ",
+        label="additional constraints",
+    )
+    if constraint_text.casefold() in {"none", "n/a"}:
+        constraint_text = ""
     success_conditions = tuple(
         item.strip() for item in success_text.split(";") if item.strip()
     )
@@ -925,12 +958,21 @@ def _collect_product_request(
         item.strip() for item in constraint_text.split(";") if item.strip()
     )
 
-    project_name = input("Project directory [software-project]: ").strip()
-    project_name = project_name or "software-project"
-    destination = validate_project_destination(
-        working_directory,
-        project_name,
-    )
+    while True:
+        project_name = _prompt_product_text(
+            "Project directory [software-project]: ",
+            label="project directory",
+        )
+        project_name = project_name or "software-project"
+        try:
+            destination = validate_project_destination(
+                working_directory,
+                project_name,
+            )
+        except ProductFlowError as error:
+            print(f"That project directory cannot be used: {error}")
+            continue
+        break
     task_brief = build_product_task_brief(
         run_id=run_id,
         project_name=project_name,

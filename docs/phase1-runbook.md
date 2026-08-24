@@ -173,9 +173,10 @@ runtime preflight: ready ... config=True image=True container=True ... source_co
 Preflight validates the run-scoped, secret-free OpenClaw configuration, checks
 SAT's pinned private OpenClaw binary and state boundary, confirms that the
 sandbox executable is Docker, inspects the required image, and starts and
-removes a restricted container to prove that the image stays alive for
-OpenClaw tool execution. It does not contact a model provider or validate
-provider quota.
+removes a restricted container after executing a Python tool helper inside it.
+This proves both process startup and the operation OpenClaw needs before the
+first Agent call. It does not contact a model provider or validate provider
+quota.
 
 Stop if preflight returns `not-ready` or exit code `1`/`2`. Correct the reported
 environment problem before authorizing a paid call.

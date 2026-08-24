@@ -509,6 +509,17 @@ def build_product_task_brief(
 ) -> TaskBrief:
     """Build a confirmed brief directly from the user's product request."""
 
+    def require_valid_unicode(value: str, *, label: str) -> str:
+        try:
+            value.encode("utf-8", errors="strict")
+        except UnicodeEncodeError as error:
+            raise ProductFlowError(
+                f"{label} contains invalid terminal text; enter it again"
+            ) from error
+        return value
+
+    require_valid_unicode(project_name, label="project name")
+    require_valid_unicode(source_request, label="software request")
     request = " ".join(source_request.split())
     if not request:
         raise ProductFlowError("the software request must not be blank")
@@ -516,7 +527,8 @@ def build_product_task_brief(
         raise ProductFlowError("the software request must be at most 2000 characters")
 
     def clean_items(values: Sequence[str], *, label: str) -> tuple[str, ...]:
-        cleaned = tuple(" ".join(value.split()) for value in values if value.strip())
+        checked = tuple(require_valid_unicode(value, label=label) for value in values)
+        cleaned = tuple(" ".join(value.split()) for value in checked if value.strip())
         if len(cleaned) > _MAX_REQUEST_ITEMS:
             raise ProductFlowError(
                 f"{label} must contain at most {_MAX_REQUEST_ITEMS} items"

@@ -42,8 +42,8 @@ curl -fsSL \
 
 The installer validates the device, installs SAT's pinned private runtime,
 prepares its Python environment and Docker image, proves that the restricted
-sandbox container stays runnable, runs offline checks, and adds `sat` and
-`sat-uninstall` to the user-local command path.
+sandbox container stays runnable and can execute a tool helper, runs offline
+checks, and adds `sat` and `sat-uninstall` to the user-local command path.
 
 ## Build a Project
 

@@ -71,8 +71,9 @@ The installation then:
 - Installs the pinned uv and Python toolchain plus a marked SAT-private
   OpenClaw runtime when needed;
 - Synchronizes the locked SAT environment;
-- Builds and resolves the pinned sandbox image, then starts and removes a
-  restricted probe container to prove that its default process stays alive;
+- Builds and resolves the pinned sandbox image, then starts a restricted probe,
+  executes a Python tool helper inside it, verifies that it remains alive, and
+  removes it;
 - Runs focused offline configuration and CLI installation checks;
 - Creates `$HOME/.local/bin/sat` and `$HOME/.local/bin/sat-uninstall` without
   overwriting unrelated commands;
@@ -125,9 +126,9 @@ toolchain or image during normal startup; a missing installed component points
 back to the installer.
 
 After the user confirms a build and before the first Agent call, the run
-preflight repeats the restricted container lifecycle probe against the exact
-immutable image ID recorded for that run. This catches a stale or unusable
-runtime without spending provider tokens.
+preflight repeats the restricted container and tool-execution probe against the
+exact immutable image ID recorded for that run. This catches a stale or
+unusable runtime without spending provider tokens.
 
 On the first configured run, SAT then:
 
@@ -146,6 +147,12 @@ On the first configured run, SAT then:
 10. Generates and shows the request, acceptance, destination, and verification
    summary;
 11. Requires explicit confirmation before any build Agent call.
+
+Interactive text is validated before it enters a TaskBrief. If the terminal
+supplies an invalid Unicode byte sequence, SAT explains the affected field and
+asks for that answer again instead of exposing a schema-validation traceback.
+Entering `none` or `n/a` at the optional-constraints prompt is treated the same
+as leaving it blank.
 
 Declining either the profile or build confirmation exits without starting a
 build.

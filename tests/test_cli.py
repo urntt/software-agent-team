@@ -130,6 +130,37 @@ def test_cli_no_command_runs_the_guided_product_journey(
     assert str(tmp_path / "link-checker") in output
 
 
+def test_guided_request_reprompts_invalid_unicode_and_treats_none_as_empty(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    answers = iter(
+        (
+            "\udce5broken request",
+            "Build a local timer",
+            "yes",
+            "Start and stop the timer",
+            "none",
+            "timer",
+            "yes",
+        )
+    )
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+
+    collected = cli._collect_product_request(
+        working_directory=tmp_path,
+        run_id="sat-guided-unicode",
+    )
+
+    assert collected is not None
+    brief, destination = collected
+    assert brief.source_request == "Build a local timer"
+    assert "none" not in brief.constraints
+    assert destination == tmp_path / "timer"
+    assert "Invalid terminal text in software request" in capsys.readouterr().out
+
+
 def test_cli_noninteractive_configuration_is_private_and_reconfigurable(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

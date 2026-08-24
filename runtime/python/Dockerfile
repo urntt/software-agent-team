@@ -14,7 +14,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /workspace
 
-# OpenClaw creates one long-lived sandbox container per configured scope and
-# executes tools into it. The Python base image would otherwise start
-# `python3`, receive EOF, and exit before the first tool call.
+# Keep direct image runs useful for lifecycle diagnostics. OpenClaw supplies
+# this same supervisor command explicitly when it creates a role sandbox.
 CMD ["sleep", "infinity"]

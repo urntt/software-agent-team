@@ -44,18 +44,20 @@ probe_runtime_image() {
       --network none \
       --read-only \
       --cap-drop ALL \
+      --security-opt no-new-privileges \
       --user "$(id -u):$(id -g)" \
       --env HOME=/tmp \
-      --tmpfs /tmp:rw,nosuid,nodev,size=16m \
-      --tmpfs /var/tmp:rw,nosuid,nodev,size=8m \
-      --tmpfs /run:rw,nosuid,nodev,size=8m \
-      --pids-limit 32 \
-      --memory 64m \
-      --memory-swap 64m \
-      --cpus 0.25 \
-      --ulimit nofile=128:128 \
+      --tmpfs /tmp:rw,nosuid,nodev,size=128m \
+      --tmpfs /var/tmp:rw,nosuid,nodev,size=32m \
+      --tmpfs /run:rw,nosuid,nodev,size=16m \
+      --pids-limit 128 \
+      --memory 512m \
+      --memory-swap 512m \
+      --cpus 1 \
+      --ulimit nofile=1024:1024 \
+      --workdir /workspace \
       --label software-agent-team.runtime-probe=true \
-      "$task_image_id" >/dev/null; then
+      "$task_image_id" sleep infinity >/dev/null; then
     fail "sandbox image could not start a restricted runtime container"
   fi
   sleep 0.2
@@ -70,6 +72,12 @@ probe_runtime_image() {
     task_probe_exit_code task_probe_oom_killed <<<"$task_probe_state"
   if [[ "$task_probe_running" != "true" ]]; then
     fail "sandbox image exited during startup (status=$task_probe_status, exit_code=$task_probe_exit_code, oom_killed=$task_probe_oom_killed)"
+  fi
+  if ! docker exec \
+      --workdir /workspace \
+      "$task_probe_name" \
+      python -c "from pathlib import Path; assert Path('.').is_dir()"; then
+    fail "sandbox runtime could not execute its Python tool helper"
   fi
   if ! docker container rm --force "$task_probe_name" >/dev/null; then
     fail "sandbox runtime probe container could not be removed"

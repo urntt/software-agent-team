@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** WSL rehearsal defect fixed; provider-backed rerun next
+**Current milestone:** WSL sandbox process-limit defect fixed; rerun next
 
 **Last updated:** August 24, 2026
 
@@ -44,25 +44,35 @@ generates a request-specific run ID, TaskBrief, trusted source, workspace, and
 evidence roots, shows controller-derived progress, and delivers only an
 accepted clean Git result with project-specific commands.
 
-This is not yet release-stable evidence. The first WSL rehearsal completed the
-managed installation, an idempotent update, startup diagnostics, isolated
-provider setup, an authorized smoke check, request confirmation, internal run
-materialization, and the Planner stage. It then exposed a runtime-image defect:
-the Python base image's default `python3` process exited immediately, so
-OpenClaw's Developer container was stopped before any file or process tool
-could run. No project was delivered.
+This is not yet release-stable evidence. Two WSL rehearsals completed managed
+installation or update, startup diagnostics, isolated provider setup, request
+confirmation, internal run materialization, and the Planner stage. Both then
+reached a stopped Developer sandbox before any workspace tool could run, so no
+project was delivered. The second run was correctly classified as
+`dependency_unavailable` instead of a source-code failure.
 
-The version-two runtime image now provides the long-lived default process that
-OpenClaw's container lifecycle requires. Installation and every live-run
-preflight start and remove a restricted probe container, and trusted OpenClaw
-Docker-unavailable errors are classified as `dependency_unavailable` instead
-of `no_relevant_change`. The complete 369-test offline suite passes; a real
-Docker probe accepts the version-two image and rejects the terminating base
-image. The full provider-backed WSL journey still needs to be rerun through
-accepted delivery. The current product supports small greenfield Python 3.12
-projects; its bounded clarification records explicit user input and is not yet
-an adaptive requirements Agent. The task-manager contract remains isolated to
-the advanced evaluation surface.
+The exported execution record identified the stopped container, and a
+read-only Docker postmortem established the root cause: PID 1 exited in 72 ms
+with status 255 and `exec /usr/bin/sleep: resource temporarily unavailable`.
+OpenClaw had explicitly supplied `sleep infinity`; the image command was not
+the cause. The duplicate `RLIMIT_NPROC=128` counted processes by numeric UID
+beyond the container on this Docker Desktop host and rejected the initial
+process. SAT now retains the per-container cgroup PID limit and omits
+`RLIMIT_NPROC`. Installation and live-run probes also supply OpenClaw's command,
+execute a Python helper, inspect liveness, and remove the probe. Invalid
+terminal Unicode is now rejected and recollected at the affected prompt rather
+than reaching Pydantic as a raw validation failure.
+
+The complete 376-test offline suite passes, and a real Docker probe accepts
+the corrected restricted runtime with successful in-container Python tool
+execution. This is regression evidence for the diagnosed failure, not a
+substitute for the pending end-to-end WSL rerun.
+
+The full provider-backed WSL journey still needs to be rerun through accepted
+delivery. The current product supports small greenfield Python 3.12 projects;
+its bounded clarification records explicit user input and is not yet an
+adaptive requirements Agent. The task-manager contract remains isolated to the
+advanced evaluation surface.
 
 The advanced `prepare-benchmark`, `preflight`, and `run` commands remain a
 separate evaluation surface and are not part of the expected product demo.
@@ -120,9 +130,9 @@ The acceptance contract is
 - Remote one-command Linux/WSL bootstrap into an owned user-local application
   directory, plus the pinned toolchain, locked environment, fixed Docker image,
   stable launchers, update validation, and a checkout-based contributor path;
-- A versioned, long-lived OpenClaw sandbox image plus install-time and run-time
-  restricted-container lifecycle probes that reject an image which merely
-  exists but exits before tool execution;
+- A versioned OpenClaw sandbox image plus install-time and run-time restricted
+  probes that require a real tool helper to execute and reject a container that
+  merely exists or starts momentarily;
 - Automatic startup checks for platform, architecture, unprivileged identity,
   project-parent writability, required commands, SAT's pinned private
   OpenClaw, Docker daemon, Linux-container image, storage, and launcher
@@ -165,8 +175,8 @@ controller owns dynamic revision and termination decisions.
 
 ## Not Yet Available or Completed
 
-- A provider-backed rerun of the complete product journey after the first WSL
-  rehearsal exposed and drove the runtime-image lifecycle fix;
+- A provider-backed rerun of the complete product journey after two WSL
+  rehearsals exposed and isolated the sandbox process-limit defect;
 - Adaptive follow-up clarification beyond the current bounded request, success
   condition, and constraint prompts;
 - Generated-project execution profiles beyond the current local Python 3.12

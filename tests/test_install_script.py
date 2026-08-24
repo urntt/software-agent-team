@@ -131,6 +131,9 @@ case "${1:-}" in
     printf 'b%.0s' {1..64}
     printf '\n'
     ;;
+  exec)
+    [[ "${FAKE_DOCKER_PROBE_EXEC_FAIL:-0}" != "1" ]] || exit 1
+    ;;
   container)
     case "${2:-}" in
       inspect)
@@ -251,6 +254,10 @@ def test_installer_prepares_cli_image_and_checks_idempotently(tmp_path: Path) ->
     )
     assert "image inspect --format {{.Id}}" in docker_calls
     assert "run --detach --name sat-install-probe-" in docker_calls
+    assert "sleep infinity" in docker_calls
+    assert "--security-opt no-new-privileges" in docker_calls
+    assert "--ulimit nproc" not in docker_calls
+    assert "exec --workdir /workspace sat-install-probe-" in docker_calls
     assert "container inspect --format {{.State.Running}}" in docker_calls
     assert "container rm --force sat-install-probe-" in docker_calls
     uv_calls = uv_log.read_text(encoding="utf-8")
@@ -311,6 +318,24 @@ def test_installer_rejects_an_image_that_exits_before_tool_use(
 
     assert completed.returncode == 1
     assert "sandbox image exited during startup" in completed.stderr
+    assert not (install_bin / "sat").exists()
+    assert "container rm --force sat-install-probe-" in docker_log.read_text(
+        encoding="utf-8"
+    )
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="installer supports Linux/WSL")
+def test_installer_rejects_a_container_that_cannot_execute_tool_helpers(
+    tmp_path: Path,
+) -> None:
+    checkout = prepare_checkout(tmp_path)
+    environment, install_bin, _, docker_log = fake_environment(tmp_path, checkout)
+    environment["FAKE_DOCKER_PROBE_EXEC_FAIL"] = "1"
+
+    completed = run_installer(checkout, environment)
+
+    assert completed.returncode == 1
+    assert "could not execute its Python tool helper" in completed.stderr
     assert not (install_bin / "sat").exists()
     assert "container rm --force sat-install-probe-" in docker_log.read_text(
         encoding="utf-8"

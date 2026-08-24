@@ -98,17 +98,23 @@ docker build \
   runtime/python
 ```
 
-The image default command must remain alive so OpenClaw can execute role tools
-inside its scope-owned container. `scripts/install.sh` and live-run preflight
-both start a no-network, read-only-root probe container and remove it after
-checking the running state. A successful `docker build` or image lookup alone
-is not sufficient runtime evidence.
+OpenClaw explicitly supplies `sleep infinity` when it creates a scope-owned
+role container; the image uses the same command as a convenient standalone
+diagnostic default. `scripts/install.sh` and live-run preflight both start a
+no-network, read-only-root probe, execute a Python helper inside it, inspect its
+state, and remove it. A successful `docker build`, image lookup, or momentary
+container start alone is not sufficient runtime evidence.
+
+Use the Docker cgroup `--pids-limit` for the per-container process boundary.
+Do not add an `nproc` ulimit as a duplicate control: `RLIMIT_NPROC` can count
+processes sharing the numeric UID outside the container, which can make Docker
+fail to execute even the container's initial process with `EAGAIN`.
 
 At run start, the controller resolves the configured image tag to its local
 `sha256:...` image ID. The run-scoped Agent configuration and every quality
 gate use that immutable ID; preflight fails if the configured tag changes
-between resolution and workspace setup or if the restricted probe container
-does not stay running.
+between resolution and workspace setup or if the restricted probe cannot run
+its tool helper and remain alive.
 
 The product profile and evaluation fixture share this dependency image, not a
 TaskBrief, seed, acceptance suite, environment contract, or delivery command.

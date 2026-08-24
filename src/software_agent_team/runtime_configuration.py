@@ -224,13 +224,14 @@ def probe_sandbox_runtime(
     settle_seconds: float = 0.2,
     environment: Mapping[str, str] | None = None,
 ) -> SandboxRuntimeProbe:
-    """Verify that an image keeps a restricted sandbox container alive.
+    """Verify that a restricted sandbox can start and execute a tool helper.
 
-    OpenClaw executes tools into a long-lived container. Merely resolving an
-    image is therefore insufficient: an image whose default command exits can
-    pass image inspection while every Agent file or process tool fails. This
-    probe starts the immutable image ID without network access, waits briefly,
-    inspects its state, and removes the test container. It never calls a model.
+    OpenClaw starts a long-lived container and then executes file and process
+    helpers inside it. Merely resolving an image or observing a successful
+    ``docker run`` is insufficient. This probe supplies OpenClaw's explicit
+    supervisor command, applies the same process and resource boundaries, runs
+    one Python helper, inspects the resulting state, and removes the container.
+    It never calls a model.
     """
 
     if timeout_seconds < 1:
@@ -270,29 +271,35 @@ def probe_sandbox_runtime(
                 "--read-only",
                 "--cap-drop",
                 "ALL",
+                "--security-opt",
+                "no-new-privileges",
                 "--user",
                 f"{os.getuid()}:{os.getgid()}",
                 "--env",
                 "HOME=/tmp",
                 "--tmpfs",
-                "/tmp:rw,nosuid,nodev,size=16m",
+                "/tmp:rw,nosuid,nodev,size=128m",
                 "--tmpfs",
-                "/var/tmp:rw,nosuid,nodev,size=8m",
+                "/var/tmp:rw,nosuid,nodev,size=32m",
                 "--tmpfs",
-                "/run:rw,nosuid,nodev,size=8m",
+                "/run:rw,nosuid,nodev,size=16m",
                 "--pids-limit",
-                "32",
+                "128",
                 "--memory",
-                "64m",
+                "512m",
                 "--memory-swap",
-                "64m",
+                "512m",
                 "--cpus",
-                "0.25",
+                "1",
                 "--ulimit",
-                "nofile=128:128",
+                "nofile=1024:1024",
+                "--workdir",
+                "/workspace",
                 "--label",
                 "software-agent-team.runtime-probe=true",
                 sandbox_image_id,
+                "sleep",
+                "infinity",
             ],
             check=False,
             capture_output=True,
@@ -308,6 +315,23 @@ def probe_sandbox_runtime(
             )
         else:
             time.sleep(settle_seconds)
+            tool_check = subprocess.run(
+                [
+                    resolved_sandbox,
+                    "exec",
+                    "--workdir",
+                    "/workspace",
+                    container_name,
+                    "python",
+                    "-c",
+                    "from pathlib import Path; assert Path('.').is_dir()",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=timeout_seconds,
+                env=environment,
+            )
             inspected = subprocess.run(
                 [
                     resolved_sandbox,
@@ -337,13 +361,19 @@ def probe_sandbox_runtime(
                     if not isinstance(state, dict):
                         error_detail = "Docker returned invalid sandbox probe state"
                     elif state.get("Running") is True:
-                        ready = True
+                        if tool_check.returncode == 0:
+                            ready = True
+                        else:
+                            error_detail = (
+                                "sandbox probe could not execute its Python tool "
+                                f"helper (exit_code={tool_check.returncode})"
+                            )
                     else:
                         status = str(state.get("Status") or "unknown")
                         exit_code = state.get("ExitCode")
                         oom_killed = state.get("OOMKilled") is True
                         error_detail = (
-                            "sandbox probe exited during startup "
+                            "sandbox probe exited before tool execution "
                             f"(status={status}, exit_code={exit_code}, "
                             f"oom_killed={str(oom_killed).lower()})"
                         )
@@ -501,8 +531,7 @@ def materialize_run_configuration(
                 "nofile": {
                     "soft": sandbox_open_files,
                     "hard": sandbox_open_files,
-                },
-                "nproc": sandbox_pids_limit,
+                }
             },
         }
     )

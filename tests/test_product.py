@@ -183,6 +183,30 @@ def test_run_id_and_task_brief_are_independent_of_the_evaluation_fixture() -> No
     assert brief.confirmed
 
 
+@pytest.mark.parametrize(
+    ("field", "overrides"),
+    [
+        ("software request", {"source_request": "\udce5broken"}),
+        ("project name", {"project_name": "\udce5broken"}),
+        ("success condition", {"success_conditions": ("\udce5broken",)}),
+        ("constraint", {"user_constraints": ("\udce5broken",)}),
+    ],
+)
+def test_product_task_brief_rejects_invalid_terminal_unicode(
+    field: str,
+    overrides: dict[str, object],
+) -> None:
+    arguments: dict[str, object] = {
+        "run_id": "sat-unicode-test",
+        "project_name": "unicode-test",
+        "source_request": "Build a Unicode-safe CLI",
+    }
+    arguments.update(overrides)
+
+    with pytest.raises(ProductFlowError, match=field):
+        build_product_task_brief(**arguments)  # type: ignore[arg-type]
+
+
 def test_project_commands_are_loaded_from_the_generated_project(tmp_path: Path) -> None:
     (tmp_path / "sat-project.json").write_text(
         """{

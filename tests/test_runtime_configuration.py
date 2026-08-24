@@ -79,7 +79,6 @@ def test_materialized_config_binds_every_role_to_one_run_workspace(
         ],
         "ulimits": {
             "nofile": {"soft": 1024, "hard": 1024},
-            "nproc": 128,
         },
     }
     agents = {item["id"]: item for item in payload["agents"]["list"]}
@@ -186,6 +185,8 @@ def test_preflight_executes_explicit_commands_without_model_call(
             return Result(0, f"sha256:{'a' * 64}")
         if argv[1] == "run":
             return Result(0, "b" * 64)
+        if argv[1] == "exec":
+            return Result(0)
         if argv[1:3] == ["container", "inspect"]:
             return Result(
                 0,
@@ -237,8 +238,15 @@ def test_preflight_executes_explicit_commands_without_model_call(
     ]
     probe_name = calls[4][4]
     assert probe_name.startswith("sat-runtime-probe-")
-    assert calls[4][-1] == f"sha256:{'a' * 64}"
-    assert calls[5] == [
+    assert calls[4][-3:] == [f"sha256:{'a' * 64}", "sleep", "infinity"]
+    assert "nproc" not in " ".join(calls[4])
+    assert calls[5][0:4] == [
+        "/bin/docker",
+        "exec",
+        "--workdir",
+        "/workspace",
+    ]
+    assert calls[6] == [
         "/bin/docker",
         "container",
         "inspect",
@@ -246,7 +254,7 @@ def test_preflight_executes_explicit_commands_without_model_call(
         "{{json .State}}",
         probe_name,
     ]
-    assert calls[6] == [
+    assert calls[7] == [
         "/bin/docker",
         "container",
         "rm",
@@ -388,6 +396,8 @@ def test_preflight_rejects_an_image_whose_container_exits(
             return Result(stdout=f"sha256:{'a' * 64}")
         if argv[1] == "run":
             return Result(stdout="b" * 64)
+        if argv[1] == "exec":
+            return Result()
         if argv[1:3] == ["container", "inspect"]:
             return Result(
                 stdout=json.dumps(
@@ -418,7 +428,7 @@ def test_preflight_rejects_an_image_whose_container_exits(
     assert result.sandbox_image_present is True
     assert result.sandbox_container_ready is False
     assert result.sandbox_container_error == (
-        "sandbox probe exited during startup "
+        "sandbox probe exited before tool execution "
         "(status=exited, exit_code=0, oom_killed=false)"
     )
 
@@ -452,6 +462,53 @@ def test_runtime_probe_attempts_cleanup_after_docker_start_failure(
     assert probe.error == "Docker could not start the sandbox probe (exit code 125)"
     assert calls[0][1] == "run"
     assert calls[1][1:4] == ["container", "rm", "--force"]
+
+
+def test_runtime_probe_rejects_a_running_container_without_tool_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[str]] = []
+
+    class Result:
+        stderr = ""
+
+        def __init__(self, returncode: int = 0, stdout: str = "") -> None:
+            self.returncode = returncode
+            self.stdout = stdout
+
+    def fake_run(argv: list[str], **_kwargs: object) -> Result:
+        calls.append(argv)
+        if argv[1] == "run":
+            return Result(stdout="b" * 64)
+        if argv[1] == "exec":
+            return Result(returncode=126)
+        if argv[1:3] == ["container", "inspect"]:
+            return Result(
+                stdout=json.dumps(
+                    {
+                        "Status": "running",
+                        "Running": True,
+                        "ExitCode": 0,
+                        "OOMKilled": False,
+                    }
+                )
+            )
+        return Result()
+
+    monkeypatch.setattr(runtime_configuration.shutil, "which", lambda _: "/bin/docker")
+    monkeypatch.setattr(runtime_configuration.subprocess, "run", fake_run)
+
+    probe = probe_sandbox_runtime(
+        sandbox_binary="docker",
+        sandbox_image_id=f"sha256:{'a' * 64}",
+        settle_seconds=0,
+    )
+
+    assert not probe.ready
+    assert probe.error == (
+        "sandbox probe could not execute its Python tool helper (exit_code=126)"
+    )
+    assert calls[-1][1:4] == ["container", "rm", "--force"]
 
 
 @pytest.mark.parametrize(
