@@ -66,7 +66,10 @@ esac
     write_executable(
         fake_bin / "uname",
         """#!/usr/bin/env bash
-echo Linux
+case "${1:-}" in
+  -m) echo x86_64 ;;
+  *) echo Linux ;;
+esac
 """,
     )
     for command in ("curl", "git"):
@@ -83,7 +86,10 @@ set -euo pipefail
 printf '%s\n' "$*" >> "${FAKE_DOCKER_LOG:?}"
 case "${1:-}" in
   info)
-    [[ "${FAKE_DOCKER_INFO_FAIL:-0}" != "1" ]]
+    [[ "${FAKE_DOCKER_INFO_FAIL:-0}" != "1" ]] || exit 1
+    if [[ "${2:-}" == "--format" ]]; then
+      echo linux
+    fi
     ;;
   build)
     ;;
@@ -126,7 +132,7 @@ echo 'OpenClaw 2026.7.1-2 (test)'
 
     environment = {
         **os.environ,
-        "PATH": f"{fake_bin}:/usr/bin:/bin",
+        "PATH": f"{fake_bin}:{install_bin}:/usr/bin:/bin",
         "HOME": str(home),
         "UV_BIN": str(fake_bin / "uv"),
         "OPENCLAW_PREFIX": str(openclaw_prefix),
@@ -189,6 +195,25 @@ def test_installer_prepares_cli_image_and_checks_idempotently(tmp_path: Path) ->
     assert "python install 3.12" in uv_calls
     assert "sync --locked" in uv_calls
     assert "run --frozen pytest" in uv_calls
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="installer supports Linux/WSL")
+def test_managed_installer_leaves_the_next_action_to_the_bootstrap(
+    tmp_path: Path,
+) -> None:
+    checkout = prepare_checkout(tmp_path)
+    (checkout / ".sat-managed-install").write_text(
+        "software-agent-team-managed-v1\n",
+        encoding="utf-8",
+    )
+    environment, _, _, _ = fake_environment(tmp_path)
+    environment["SAT_MANAGED_INSTALL"] = "1"
+
+    completed = run_installer(checkout, environment)
+
+    assert completed.returncode == 0, completed.stderr
+    assert "install: next=" not in completed.stdout
+    assert "install: uninstall=" not in completed.stdout
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="installer supports Linux/WSL")

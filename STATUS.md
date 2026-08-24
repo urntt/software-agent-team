@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** Phase 1 engine complete; Product Demo Slice next
+**Current milestone:** Product Demo Slice implemented offline; acceptance rehearsal next
 
 **Last updated:** August 24, 2026
 
@@ -23,10 +23,12 @@ The earlier benchmark defect was corrected and versioned as
 `task_manager_phase1_v2`; version-one evaluation records remain exploratory
 evidence and must not be mixed with version-two comparisons.
 
-Installation, secret-free run-default onboarding, and safe uninstallation are
-implemented. Provider credential creation remains an OpenClaw/operator
-responsibility. Repeated comparative experiments and human rubric scoring
-remain pending.
+Managed installation, startup diagnostics, secret-free first-run model setup,
+supported-scope request confirmation, automatic run preparation,
+controller-backed progress, accepted-result delivery, and safe uninstallation
+are implemented and covered offline. Provider credential creation remains in
+OpenClaw's trusted boundary. Repeated comparative experiments and human rubric
+scoring remain pending.
 
 The exact acceptance procedure is in
 [`docs/phase1-runbook.md`](docs/phase1-runbook.md). Offline scripted executions
@@ -34,23 +36,25 @@ prove controller behavior, not model quality.
 
 ## Product Readiness Boundary
 
-Phase 1 validates the engine, not the complete user journey. The current public
-CLI still exposes a contributor/operator workflow:
+The primary CLI now implements the Product Demo Slice in code. A normal user
+runs `sat`; SAT checks the device, guides model configuration, asks what to
+build, states and confirms the exact supported scope, chooses a new project
+destination, generates the run ID, TaskBrief, trusted source, workspace, and
+evidence roots, shows controller-derived progress, and delivers only an
+accepted clean Git result.
 
-- Installation starts from a source checkout and creates checkout-bound
-  launchers;
-- `sat` prints a guide instead of running an integrated diagnostic and
-  first-run wizard;
-- Configuration exposes model price, verification concurrency, and timeout
-  controls intended for evaluation;
-- A build requires an existing TaskBrief and source path;
-- Request collection, clarification, confirmation, automatic internal
-  materialization, continuous progress, and the final delivery view are not yet
-  implemented.
+This is not yet release-stable evidence. The complete 349-test offline suite,
+including interaction, installer, workflow, failure, and delivery paths,
+passes, but the journey has not yet passed the required rehearsal from a fresh
+supported Linux/WSL
+user environment with an explicitly authorized provider. The current product
+also supports only the frozen local task-management application contract; its
+bounded clarification is an explicit scope-confirmation step, not a general
+requirements Agent.
 
-The repository must not present `sat prepare-benchmark`, explicit TaskBrief
-editing, or a provider-backed evaluation trial as the expected product demo.
-The approved next acceptance contract is
+The advanced `prepare-benchmark`, `preflight`, and `run` commands remain a
+separate evaluation surface and are not part of the expected product demo.
+The acceptance contract is
 [`docs/product-demo-slice.md`](docs/product-demo-slice.md).
 
 ## Implemented and Offline Verified
@@ -97,13 +101,29 @@ The approved next acceptance contract is
   timeout;
 - Explicit completed and failed terminal outcomes with machine-readable and
   human-readable reports;
-- One-command Linux/WSL installation for the pinned toolchain, locked project
-  environment, checkout-bound CLI launchers, fixed Docker image, and offline
-  validation, without taking ownership of OS-level Docker or provider secrets;
-- First-launch and repeatable configuration guidance with private, atomic,
-  secret-free defaults, plus explicit per-run CLI overrides;
+- Remote one-command Linux/WSL bootstrap into an owned user-local application
+  directory, plus the pinned toolchain, locked environment, fixed Docker image,
+  stable launchers, update validation, and a checkout-based contributor path;
+- Automatic startup checks for platform, architecture, unprivileged identity,
+  project-parent writability, required commands, OpenClaw, Docker daemon,
+  Linux-container image, storage, and launcher visibility;
+- Integrated first-run and repeatable model configuration with private,
+  atomic, schema-versioned secret-free defaults, optional authorized provider
+  smoke checking, and no invented zero-cost estimate when prices are unknown;
+- Natural-language request capture, explicit current-scope narrowing, concise
+  requirements and destination confirmation, and authorization before model
+  calls;
+- Automatic private user-state roots, collision-resistant run IDs, confirmed
+  TaskBrief materialization, trusted source creation, isolated workspaces, and
+  write-once evidence;
+- Controller-backed role, elapsed-waiting, Git-snapshot, quality-gate,
+  independent-review, decision, revision, completion, and failure progress;
+- Accepted-result-only delivery through a same-parent staging directory into a
+  new non-overwriting project child, followed by exact setup, start, and test
+  commands;
 - Guided one-command uninstall with preservation defaults, pre-removal export,
-  explicit purge choices, and clear shared-resource boundaries;
+  explicit configuration/data purge choices, managed-application removal, and
+  clear shared-resource boundaries;
 - Offline end-to-end coverage for success, revision, response repair,
   invalid-response failure, timeout, evidence tampering, non-convergence,
   iteration exhaustion, no-change failure, missing model or token telemetry,
@@ -123,12 +143,13 @@ controller owns dynamic revision and termination decisions.
 
 ## Not Yet Available or Completed
 
-- Managed end-user installation and complete automatic environment diagnosis;
-- An integrated no-subcommand `sat` startup and first-run configuration flow;
-- Natural-language request collection, bounded clarification, and requirements
-  confirmation;
-- Automatic run ID, TaskBrief, source, workspace, and delivery preparation;
-- Controller-backed progress summaries and a concise final delivery view;
+- A fresh-device, provider-backed acceptance rehearsal of the complete product
+  journey and any fixes that rehearsal exposes;
+- General request clarification or support beyond the current verified local
+  task-management Web application;
+- Automatic discovery and semantic validation of arbitrary existing OpenClaw
+  provider profiles beyond OpenClaw's detected default model and SAT's optional
+  smoke check;
 - Automatic CLI resume of an interrupted run;
 - Executable `single_agent` and `implementation_domain_specialized` workflow
   paths;
@@ -141,14 +162,15 @@ action succeeded after interruption.
 
 ## Next Milestone
 
-Phase 2 implements the Product Demo Slice: one managed installation command,
-automatic diagnostics, guided provider setup, a natural-language request and
-bounded clarification flow, automatic internal preparation, visible progress,
-and a runnable delivery with exact next commands. Normal users must not operate
-the evaluation CLI or edit internal JSON.
+Complete the Phase 2 acceptance rehearsal from a fresh supported Linux/WSL
+account: run the public managed-install command, configure one authorized
+provider through the guided flow, request the supported product, observe every
+progress stage, run the delivered project's exact commands, inspect failure
+guidance, and record the result. Fix any root causes found by that rehearsal
+before calling the Product Demo Slice complete.
 
-Topology implementation and comparison resume in Phase 3 after this product
-journey is executable. The Phase 2 acceptance criteria are defined in
+Topology implementation and comparison resume in Phase 3 after this gate. The
+Phase 2 acceptance criteria are defined in
 [`docs/product-demo-slice.md`](docs/product-demo-slice.md).
 
 The development route and evaluation policy are defined in

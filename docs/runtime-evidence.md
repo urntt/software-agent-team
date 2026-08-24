@@ -121,7 +121,10 @@ not trigger repair.
 
 ## Persisted Run Evidence
 
-Local generated state is ignored by Git and follows this default layout:
+Local generated state is ignored by Git. Product runs use
+`${XDG_STATE_HOME:-$HOME/.local/state}/software-agent-team/` as the parent;
+controlled evaluations may select explicit roots. Beneath the selected roots,
+the evidence follows this layout:
 
 ```text
 runs/<run_id>/
@@ -236,6 +239,9 @@ when investigating it rather than editing artifacts in place.
 - Reported aggregate input/output tokens, Agent duration, and estimated cost
   are checked after every invocation. Crossing a threshold fails the run and
   prevents another invocation.
+- A product run without a trustworthy configured price records estimated cost
+  as unavailable rather than zero. Controlled comparisons require an explicit
+  paired price table.
 - Usage is not known before a provider call completes. A provider-side spending
   or quota limit is therefore the hard monetary authorization boundary; the
   controller cannot reverse the cost of the call that crosses a post-call

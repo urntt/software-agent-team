@@ -14,10 +14,21 @@ def test_model_pricing_estimates_token_cost() -> None:
         input_cost_per_million_usd="2.50",
         output_cost_per_million_usd="10.00",
     )
-
     assert pricing.estimate_cost(input_tokens=100_000, output_tokens=20_000) == (
         Decimal("0.45")
     )
+
+
+def test_model_pricing_reports_unknown_cost_without_inventing_zero() -> None:
+    pricing = ModelPricing(model="provider/model")
+
+    assert pricing.estimate_cost(input_tokens=100, output_tokens=20) is None
+
+    with pytest.raises(ValidationError, match="configured together"):
+        ModelPricing(
+            model="provider/model",
+            input_cost_per_million_usd="1",
+        )
 
 
 def test_agent_budget_requires_every_aggregate_ceiling() -> None:

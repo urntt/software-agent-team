@@ -11,9 +11,9 @@ from pathlib import Path
 from typing import Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-USER_CONFIGURATION_SCHEMA_VERSION = 2
+USER_CONFIGURATION_SCHEMA_VERSION = 3
 USER_CONFIGURATION_ENVIRONMENT_VARIABLE = "SAT_CONFIG_PATH"
 
 
@@ -30,9 +30,17 @@ class UserConfiguration(BaseModel):
         USER_CONFIGURATION_SCHEMA_VERSION
     )
     model: str = Field(min_length=1)
-    input_cost_per_million_usd: Decimal = Field(ge=0, le=10_000)
-    output_cost_per_million_usd: Decimal = Field(ge=0, le=10_000)
-    verification_concurrency: Literal[1, 2] = 2
+    input_cost_per_million_usd: Decimal | None = Field(
+        default=None,
+        ge=0,
+        le=10_000,
+    )
+    output_cost_per_million_usd: Decimal | None = Field(
+        default=None,
+        ge=0,
+        le=10_000,
+    )
+    verification_concurrency: Literal[1, 2] = 1
     stage_timeout_seconds: int | None = Field(default=None, ge=1, le=3600)
 
     @field_validator("model")
@@ -46,6 +54,32 @@ class UserConfiguration(BaseModel):
         if any(character.isspace() for character in cleaned):
             raise ValueError("model must be one reference without whitespace")
         return cleaned
+
+    @model_validator(mode="after")
+    def require_complete_price_pair(self) -> UserConfiguration:
+        if (self.input_cost_per_million_usd is None) != (
+            self.output_cost_per_million_usd is None
+        ):
+            raise ValueError("input and output prices must be configured together")
+        return self
+
+
+class _UserConfigurationV2(BaseModel):
+    """Validated evaluation-oriented defaults from the previous schema."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[2]
+    model: str = Field(min_length=1)
+    input_cost_per_million_usd: Decimal = Field(ge=0, le=10_000)
+    output_cost_per_million_usd: Decimal = Field(ge=0, le=10_000)
+    verification_concurrency: Literal[1, 2] = 2
+    stage_timeout_seconds: int | None = Field(default=None, ge=1, le=3600)
+
+    @field_validator("model")
+    @classmethod
+    def require_clean_model(cls, value: str) -> str:
+        return UserConfiguration.require_clean_model(value)
 
 
 class _UserConfigurationV1(BaseModel):
@@ -139,6 +173,24 @@ def load_user_configuration(
             output_cost_per_million_usd=legacy.output_cost_per_million_usd,
             verification_concurrency=legacy.verification_concurrency,
             stage_timeout_seconds=None,
+        )
+    if payload.get("schema_version") == 2:
+        legacy = _UserConfigurationV2.model_validate(payload)
+        notice = (
+            "configuration schema v2 was loaded with its existing evaluation "
+            "prices and runtime overrides; schema v3 also permits product setup "
+            "without a local price estimate"
+        )
+        if on_migration is None:
+            warnings.warn(notice, UserWarning, stacklevel=2)
+        else:
+            on_migration(notice)
+        return UserConfiguration(
+            model=legacy.model,
+            input_cost_per_million_usd=legacy.input_cost_per_million_usd,
+            output_cost_per_million_usd=legacy.output_cost_per_million_usd,
+            verification_concurrency=legacy.verification_concurrency,
+            stage_timeout_seconds=legacy.stage_timeout_seconds,
         )
     return UserConfiguration.model_validate(payload)
 

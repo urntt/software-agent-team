@@ -57,6 +57,11 @@ from software_agent_team.git_workspace import (
     WorkspaceIntegrityError,
     validate_work_result_snapshot,
 )
+from software_agent_team.progress import (
+    ProgressEvent,
+    ProgressEventKind,
+    ProgressHandler,
+)
 from software_agent_team.prompting import (
     AgentPromptInputs,
     build_agent_execution_request,
@@ -187,6 +192,7 @@ class WorkflowCoordinator:
         stage_timeout_seconds: int | None = None,
         artifact_repair_limit: int = 1,
         verification_concurrency: int = 2,
+        progress_handler: ProgressHandler | None = None,
         clock: Clock = _system_clock,
         monotonic: MonotonicClock = time.monotonic,
     ) -> None:
@@ -232,8 +238,15 @@ class WorkflowCoordinator:
         }
         self.artifact_repair_limit = artifact_repair_limit
         self.verification_concurrency = verification_concurrency
+        self.progress_handler = progress_handler
         self.clock = clock
         self.monotonic = monotonic
+
+    def _emit(self, event: ProgressEvent) -> None:
+        """Notify the user interface without transferring workflow authority."""
+
+        if self.progress_handler is not None:
+            self.progress_handler(event)
 
     def execute(
         self,
@@ -272,6 +285,14 @@ class WorkflowCoordinator:
             ),
             run_directory=run_directory,
         )
+        self._emit(
+            ProgressEvent(
+                kind=ProgressEventKind.RUN_STARTED,
+                message=f"Build started (run {record.run_id})",
+                phase=RunPhase.CREATED,
+                iteration=1,
+            )
+        )
 
         try:
             record = controller.advance(
@@ -296,6 +317,14 @@ class WorkflowCoordinator:
             )
             if self.runtime_setup is not None:
                 self.runtime_setup(workspace, run_directory)
+            self._emit(
+                ProgressEvent(
+                    kind=ProgressEventKind.WORKSPACE_READY,
+                    message="Isolated workspace and runtime verified",
+                    phase=RunPhase.PLANNING,
+                    iteration=record.current_iteration,
+                )
+            )
             quality_gate = self.quality_gate_factory(
                 run_directory,
                 Path(workspace.workspace_path),
@@ -405,6 +434,18 @@ class WorkflowCoordinator:
             if len(verified_snapshot) != 1:
                 raise WorkflowEvidenceError("Developer snapshot was not assembled once")
             snapshot = verified_snapshot[0]
+            self._emit(
+                ProgressEvent(
+                    kind=ProgressEventKind.SNAPSHOT_VERIFIED,
+                    message=(
+                        "Git snapshot verified: "
+                        f"{len(snapshot.changed_files)} files changed"
+                    ),
+                    phase=RunPhase.SNAPSHOTTING,
+                    iteration=record.current_iteration,
+                    changed_files=snapshot.changed_files,
+                )
+            )
             record = context.controller.advance(
                 record.run_id,
                 expected_revision=record.revision,
@@ -430,6 +471,14 @@ class WorkflowCoordinator:
                     summary=("Developer supplied controller-verified commit evidence."),
                 )
 
+            self._emit(
+                ProgressEvent(
+                    kind=ProgressEventKind.QUALITY_GATES_STARTED,
+                    message="Running deterministic quality gates",
+                    phase=RunPhase.VERIFYING,
+                    iteration=record.current_iteration,
+                )
+            )
             commands = quality_gate.run(iteration=record.current_iteration)
             if not commands:
                 raise WorkflowEvidenceError("quality gate returned no command evidence")
@@ -534,6 +583,18 @@ class WorkflowCoordinator:
                 target=RunPhase.DECIDING,
                 reason="independent review and controller decision are recorded",
                 artifacts=(review_reference, iteration_reference),
+            )
+            self._emit(
+                ProgressEvent(
+                    kind=ProgressEventKind.DECISION_RECORDED,
+                    message=(
+                        f"Iteration {record.current_iteration} decision: "
+                        f"{decision.value}"
+                    ),
+                    phase=RunPhase.DECIDING,
+                    iteration=record.current_iteration,
+                    decision=decision,
+                )
             )
 
             if decision is IterationDecision.ACCEPT:
@@ -850,6 +911,16 @@ class WorkflowCoordinator:
                 last_error,
                 attempt,
             ).model_copy(update={"timeout_seconds": remaining_seconds})
+            role_name = request.role.value.replace("_", " ").title()
+            self._emit(
+                ProgressEvent(
+                    kind=ProgressEventKind.AGENT_STARTED,
+                    message=f"{role_name} is working",
+                    role=request.role,
+                    iteration=request.iteration,
+                    attempt=attempt,
+                )
+            )
             result = self.executor.execute(request)
             response: PhaseArtifact | None = None
             response_reference: ArtifactReference | None = None
@@ -929,6 +1000,19 @@ class WorkflowCoordinator:
                 stage_timeout_seconds=stage_timeout,
                 remaining_timeout_seconds=remaining_seconds,
             )
+            self._emit(
+                ProgressEvent(
+                    kind=ProgressEventKind.AGENT_COMPLETED,
+                    message=(
+                        f"{role_name} response recorded "
+                        f"({result.telemetry.duration_ms / 1000:.1f}s)"
+                    ),
+                    role=request.role,
+                    iteration=request.iteration,
+                    attempt=attempt,
+                    duration_ms=result.telemetry.duration_ms,
+                )
+            )
             if assembly_error is not None:
                 raise assembly_error
             if response is not None and response_reference is not None:
@@ -941,6 +1025,15 @@ class WorkflowCoordinator:
                         "response repair",
                         TerminationReason.RESOURCE_LIMIT_REACHED,
                     )
+                self._emit(
+                    ProgressEvent(
+                        kind=ProgressEventKind.AGENT_RETRY,
+                        message=f"{role_name} response needs one bounded repair",
+                        role=request.role,
+                        iteration=request.iteration,
+                        attempt=attempt,
+                    )
+                )
                 continue
             raise AgentInvocationError(
                 f"{request.role.value} failed: {last_error}",
@@ -1233,6 +1326,14 @@ class WorkflowCoordinator:
             detail=final_report.summary,
             final_report=final_reference,
         )
+        self._emit(
+            ProgressEvent(
+                kind=ProgressEventKind.RUN_COMPLETED,
+                message="Build accepted; preparing the verified delivery",
+                phase=RunPhase.COMPLETED,
+                iteration=record.current_iteration,
+            )
+        )
         return self._outcome(context, record, final_reference, markdown_path)
 
     def _fail(
@@ -1281,6 +1382,17 @@ class WorkflowCoordinator:
             reason=reason,
             detail=detail,
             final_report=final_reference,
+        )
+        self._emit(
+            ProgressEvent(
+                kind=ProgressEventKind.RUN_FAILED,
+                message=(
+                    "Build stopped during "
+                    f"{record.transitions[-1].source.value}; see the final report"
+                ),
+                phase=RunPhase.FAILED,
+                iteration=record.current_iteration,
+            )
         )
         return self._outcome(context, record, final_reference, markdown_path)
 
@@ -1334,13 +1446,15 @@ class WorkflowCoordinator:
         gate_duration_ms = sum(
             command.duration_ms for command in context.command_evidence
         )
-        estimated_cost = sum(
-            (
-                item.estimated_cost_usd
-                for item in execution_records
-                if item.estimated_cost_usd is not None
-            ),
-            Decimal(0),
+        estimated_cost_values = tuple(
+            item.estimated_cost_usd
+            for item in execution_records
+            if item.estimated_cost_usd is not None
+        )
+        estimated_cost_text = (
+            f"${sum(estimated_cost_values, Decimal(0)):.6f}"
+            if estimated_cost_values
+            else "not configured"
         )
         token_text = (
             f"{sum(input_tokens)} input / {sum(output_tokens)} output"
@@ -1386,7 +1500,7 @@ class WorkflowCoordinator:
                 f"- Agent duration: {duration_ms} ms",
                 f"- Deterministic-gate duration: {gate_duration_ms} ms",
                 f"- Reported tokens: {token_text}",
-                f"- Estimated model cost: ${estimated_cost:.6f}",
+                f"- Estimated model cost: {estimated_cost_text}",
                 "",
                 "## Evidence index",
                 "",

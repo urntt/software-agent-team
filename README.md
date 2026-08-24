@@ -22,20 +22,24 @@ Planner
 
 ## Status
 
-Phase 1 is complete as an engine milestone. The current harness has passed its
+Phase 1 is complete as an engine milestone. The harness has passed its
 offline end-to-end suite and produced a qualifying provider-backed evaluation
 plus two consecutive replays that reached `completed` through the bounded
 evidence-driven revision loop. Each completed evaluation preserved
 controller-verified Git, quality-gate, acceptance, independent-review, model,
 token, duration, and artifact-integrity evidence.
 
-The intended first-run product journey is not implemented yet. The current
-`sat` entry point prints an operator guide, while an actual build still starts
-from an existing TaskBrief and source path. The next milestone is the
-[`Product Demo Slice`](docs/product-demo-slice.md): managed installation,
-automatic diagnostics, guided configuration, a natural-language request and
-bounded clarification flow, automatic internal preparation, visible progress,
-and a direct runnable delivery.
+The [`Product Demo Slice`](docs/product-demo-slice.md) is now implemented and
+offline tested. A managed installation can launch `sat`, diagnose the local
+runtime, guide secret-free model setup, collect and confirm a request, generate
+all internal run inputs, show controller-backed progress, and atomically
+deliver an accepted Git result. The current product scope is deliberately
+limited to the verified local task-management Web application contract.
+
+This product journey has not yet completed its fresh-device, provider-backed
+acceptance rehearsal. Until that evidence exists, the repository does not
+claim the demo path is release-stable. See [`STATUS.md`](STATUS.md) for that
+exact boundary.
 
 The executable single-Agent baseline, implementation-domain-specialized path,
 repeated comparative evaluation, and automatic CLI resume also remain future
@@ -92,13 +96,40 @@ runtime, evidence, response, and safety boundaries.
 The checked-in setup pins Python 3.12, OpenClaw 2026.7.1-2, OpenClaw's local
 Node.js 24.15.0 runtime, and Python dependencies through `uv.lock`.
 
-## Current Evaluation Quick Start
+## Product Quick Start
+
+On Linux or WSL with Docker installed and running, use the managed installer:
+
+```bash
+curl -fsSL \
+  https://raw.githubusercontent.com/urntt/software-agent-team/main/scripts/bootstrap.sh \
+  | bash && exec "${SHELL:-/bin/bash}" -l
+```
+
+Then enter a directory that may receive a new project child and run:
+
+```bash
+sat
+```
+
+SAT performs local diagnostics before asking for a model or making a provider
+request. On first launch it delegates credential entry to OpenClaw, stores only
+the selected `provider/model` reference, and offers an explicitly authorized
+minimal smoke check. It then asks what to build, shows the current supported
+scope, asks for a new project-directory name, and requires confirmation before
+the model-backed workflow begins.
+
+The current release accepts only the frozen local task-management Web
+application scope. It refuses or asks the user to narrow other requests rather
+than silently treating them as that benchmark.
+
+## Advanced Evaluation Quick Start
 
 The commands below document the implemented Phase 1 contributor/operator
 surface. They are useful for controlled evaluation and regression work, but
 they are not the target first-run product experience described above.
 
-Install from a clean checkout on Linux or WSL:
+Contributors may install from a clean checkout on Linux or WSL:
 
 ```bash
 ./scripts/install.sh
@@ -109,10 +140,9 @@ environment, benchmark image, offline checks, and checkout-bound `sat` and
 `sat-uninstall` launchers. It does not install an OS-level Docker daemon or
 create provider credentials.
 
-Start the current operator guide and save secret-free evaluation defaults:
+Save or inspect secret-free advanced evaluation defaults:
 
 ```bash
-sat
 sat configure
 sat configure --show
 ```
@@ -147,8 +177,8 @@ treating a run as qualifying experimental evidence.
 
 | Command | Purpose | Detailed reference |
 | --- | --- | --- |
-| `sat` | Currently show operator onboarding; Phase 2 turns it into the guided product entry point | [`docs/product-demo-slice.md`](docs/product-demo-slice.md) |
-| `sat configure` | Create or replace secret-free model, pricing, concurrency, and timeout defaults | [`docs/installation.md`](docs/installation.md) |
+| `sat` | Run diagnostics, first-use setup, request confirmation, progress, and safe delivery | [`docs/product-demo-slice.md`](docs/product-demo-slice.md) |
+| `sat configure` | Reconfigure the secret-free model reference; advanced flags can also set evaluation defaults | [`docs/installation.md`](docs/installation.md) |
 | `sat prepare-benchmark PATH` | Advanced: materialize a deterministic evaluation source repository | [`docs/phase1-runbook.md`](docs/phase1-runbook.md) |
 | `sat preflight PATH` | Advanced: validate evaluation runtime, image, and source without a model call | [`docs/phase1-runbook.md`](docs/phase1-runbook.md) |
 | `sat run BRIEF PATH` | Advanced: execute a controlled workflow from explicit inputs | [`docs/phase1-runbook.md`](docs/phase1-runbook.md) |
@@ -171,7 +201,7 @@ documents have deliberately separate responsibilities:
 | [`README.md`](README.md) | Public overview, command map, and repository map |
 | [`VISION.md`](VISION.md) | Product contract, architecture decisions, experiment design, scope, and roadmap |
 | [`STATUS.md`](STATUS.md) | Current implementation, evaluation evidence, known gaps, and next milestone |
-| [`docs/product-demo-slice.md`](docs/product-demo-slice.md) | Next user-facing installation, onboarding, request, progress, and delivery acceptance contract |
+| [`docs/product-demo-slice.md`](docs/product-demo-slice.md) | User-facing installation, onboarding, request, progress, and delivery acceptance contract |
 | [`docs/installation.md`](docs/installation.md) | Installation, first-launch configuration, saved defaults, export, and uninstallation |
 | [`docs/runtime-evidence.md`](docs/runtime-evidence.md) | Runtime authority, response boundary, persisted evidence, integrity, and operator safety |
 | [`docs/phase1-runbook.md`](docs/phase1-runbook.md) | Contributor/operator procedure for a controlled Phase 1 provider-backed evaluation |
@@ -187,15 +217,16 @@ docs/                          Installation, operations, and development guides
 examples/                      Example validated artifacts and handoffs
 openclaw/                      Stable role workspace boundaries
 scripts/                       Setup, installation, uninstall, and diagnostics
-src/software_agent_team/       Controller, contracts, adapters, and CLI
+src/software_agent_team/       Product flow, controller, contracts, adapters, and CLI
 tests/                         Offline unit, integration, and end-to-end tests
 STATUS.md                      Current implementation and evidence boundary
 VISION.md                      Product and architecture decisions
 ```
 
-Generated `runs/` and `workspaces/` are local, ignored state. The harness does
-not merge, push, deploy, or publish generated results, and human authorization
-remains required for those actions.
+Product runs, workspaces, and trusted source baselines live beneath
+`${XDG_STATE_HOME:-$HOME/.local/state}/software-agent-team/` and never enter
+Git. The harness does not merge, push, deploy, or publish generated results,
+and human authorization remains required for those actions.
 
 ## Contributing
 

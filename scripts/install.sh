@@ -20,6 +20,11 @@ require_command() {
 }
 
 [[ "$(uname -s)" == "Linux" ]] || fail "only Linux and WSL are supported"
+task_architecture="$(uname -m)"
+case "$task_architecture" in
+  x86_64|amd64|aarch64|arm64) ;;
+  *) fail "unsupported architecture: $task_architecture" ;;
+esac
 [[ "$(id -u)" != "0" && "$(id -g)" != "0" ]] || \
   fail "run the installer as an unprivileged user"
 
@@ -34,6 +39,11 @@ done
 [[ -f "$task_root/benchmarks/task_manager/Dockerfile" ]] || \
   fail "benchmark Dockerfile is missing"
 [[ -x "$task_uninstall_target" ]] || fail "uninstall script is missing or not executable"
+if [[ "${SAT_MANAGED_INSTALL:-0}" == "1" ]]; then
+  [[ -f "$task_root/.sat-managed-install" && \
+    ! -L "$task_root/.sat-managed-install" ]] || \
+    fail "managed installation marker is missing"
+fi
 [[ "$task_bin_dir" == /* && "$task_bin_dir" != "/" ]] || \
   fail "SAT_BIN_DIR must be a specific absolute directory"
 
@@ -55,8 +65,13 @@ validate_link_destination \
 
 docker info >/dev/null 2>&1 || \
   fail "Docker daemon is unavailable to this user; start Docker and grant access"
+task_docker_os="$(docker info --format '{{.OSType}}' 2>/dev/null || true)"
+[[ "$task_docker_os" == "linux" ]] || \
+  fail "Docker must be running Linux containers"
 
-"$task_root/scripts/setup.sh"
+if ! "$task_root/scripts/setup.sh"; then
+  fail "pinned toolchain setup failed; check download connectivity and retry"
+fi
 
 cd "$task_root"
 task_image="$(
@@ -66,10 +81,12 @@ task_image="$(
 [[ -n "$task_image" && "$task_image" != -* && "$task_image" != *[$'\t\r\n ']* ]] || \
   fail "run policy contains an invalid Docker image reference"
 
-docker build \
-  --pull=false \
-  --tag "$task_image" \
-  benchmarks/task_manager
+if ! docker build \
+    --pull=false \
+    --tag "$task_image" \
+    benchmarks/task_manager; then
+  fail "sandbox image build failed; inspect Docker output and retry"
+fi
 task_image_id="$(docker image inspect --format '{{.Id}}' "$task_image")"
 [[ "$task_image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || \
   fail "Docker returned an invalid benchmark image ID"
@@ -95,5 +112,14 @@ echo "install: openclaw=$task_openclaw_prefix/bin/openclaw"
 echo "install: image=$task_image"
 echo "install: image_id=$task_image_id"
 echo "install: provider credentials and active OpenClaw configuration were not created"
-echo "install: next=sat"
-echo "install: uninstall=sat-uninstall"
+if [[ "${SAT_MANAGED_INSTALL:-0}" != "1" ]]; then
+  echo "install: uninstall=sat-uninstall"
+  case ":$PATH:" in
+    *":$task_bin_dir:"*) echo "install: next=sat" ;;
+    *)
+      echo "install: launcher directory is not active in this shell: $task_bin_dir"
+      echo "install: open a new login shell, then run sat"
+      echo "install: next=$task_sat_link"
+      ;;
+  esac
+fi

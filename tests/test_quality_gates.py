@@ -573,6 +573,30 @@ def test_runner_refuses_to_overwrite_or_reexecute_evidence(
     assert second.invocations == []
 
 
+def test_runner_reports_each_persisted_gate_result(
+    configuration, run_paths: tuple[Path, Path]
+) -> None:
+    run_directory, workspace = run_paths
+    observed: list[tuple[str, int, int, int]] = []
+    runner = QualityGateRunner(
+        configuration,
+        run_directory=run_directory,
+        workspace=workspace,
+        backend=FakeSandboxBackend(successful_executions()),
+        allow_test_backends=True,
+        result_handler=lambda command, iteration, completed, total: observed.append(
+            (command.id, iteration, completed, total)
+        ),
+    )
+
+    runner.run(iteration=2)
+
+    assert observed == [
+        (gate.id, 2, index, len(configuration.benchmark.gates))
+        for index, gate in enumerate(configuration.benchmark.gates, start=1)
+    ]
+
+
 def test_runner_represents_timeout_as_command_evidence(
     configuration, run_paths: tuple[Path, Path]
 ) -> None:

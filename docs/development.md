@@ -104,7 +104,7 @@ configs/
   openclaw.example.json5       Sanitized role and tool policy template
 docs/
   README.md                    Documentation index
-  product-demo-slice.md        Next user-facing acceptance contract
+  product-demo-slice.md        User-facing acceptance contract and status
   installation.md             Install, configure, export, and uninstall
   runtime-evidence.md          Runtime, artifact, evidence, and safety model
   phase1-runbook.md            Controlled provider-backed evaluation procedure
@@ -116,6 +116,9 @@ src/software_agent_team/
   cli.py                       Unified command-line interface
   execution.py                 OpenClaw and offline execution adapters
   git_workspace.py             Standalone clones and snapshot verification
+  paths.py                     User-local product state resolution
+  product.py                   Diagnostics, request materialization, and delivery
+  progress.py                  Controller-backed terminal progress rendering
   prompting.py                 Minimum-context role prompts
   quality_gates.py             Fixed sandboxed command runner
   responses.py                 Strict Agent semantic response parser
@@ -124,7 +127,8 @@ src/software_agent_team/
   user_configuration.py        User-local secret-free live-run defaults
   workflow.py                  Phase 1 orchestration and final reporting
 scripts/
-  install.sh                   One-command Linux/WSL installation
+  bootstrap.sh                 Remote managed-install entry point
+  install.sh                   Locked Linux/WSL application installation
   uninstall.sh                 Guided preservation, export, and removal
   setup.sh                     Development environment setup
   doctor.sh                    Environment and boundary diagnostics
@@ -135,8 +139,9 @@ VISION.md                      Product, architecture, experiment, and roadmap
 ```
 
 `openclaw/workspaces/` contains stable ignored role workspace boundaries.
-Generated `runs/` and `workspaces/`, provider credentials, active OpenClaw
-state, and runtime configuration never enter Git.
+Product `runs/`, `workspaces/`, and `sources/` live under the private
+user-state root. Provider credentials, active OpenClaw state, generated state,
+and runtime configuration never enter Git.
 
 ## Documentation Workflow
 

@@ -1,6 +1,6 @@
 # Product Demo Slice
 
-**Status:** Next implementation milestone
+**Status:** Implemented and offline tested; fresh-device provider rehearsal pending
 
 This document defines the user-visible acceptance contract that must be
 implemented before the harness is presented as a usable product. It derives
@@ -62,6 +62,25 @@ write-once evidence, but they are not the first-run product journey.
 The phrase "live trace" may describe historical provider-backed evaluation
 evidence in contributor records. It is not a user-facing action or concept.
 
+## Current Implementation Boundary
+
+The primary flow now exists behind `sat` with no subcommand. The managed
+bootstrap, startup diagnostics, first-run model setup, optional provider smoke
+check, request capture, explicit supported-scope confirmation, automatic run
+materialization, progress renderer, terminal result, and non-overwriting
+delivery all have offline behavior coverage.
+
+The currently implemented clarification boundary is deliberately narrow. SAT
+states that this release can build one local task-management Web application,
+summarizes its fixed capabilities and constraints, and asks whether that scope
+satisfies the request. It does not pretend to derive a new acceptance suite for
+an arbitrary application. Declining the scope ends without a model call.
+
+One acceptance gate remains open: the complete flow must be rehearsed from a
+fresh supported Linux/WSL user account with an explicitly authorized provider,
+and the delivered start and test commands must be run there. Offline tests do
+not substitute for that evidence.
+
 ## Installation Experience
 
 The product installation command must:
@@ -111,9 +130,11 @@ provide:
 - Authorization for an optional minimal provider smoke check;
 - Any provider cost or quota warning that requires confirmation.
 
-The wizard detects an existing valid provider configuration and offers to use
-it. Secrets never enter SAT's configuration, repository, generated project,
-run artifacts, logs, or terminal echo.
+The wizard offers OpenClaw's trusted setup, detects its locally configured
+default model without probing the provider, and offers to use it. The optional
+authorized smoke check is the current semantic provider/auth validation step.
+Secrets never enter SAT's configuration, repository, generated project, run
+artifacts, logs, or terminal echo.
 
 Pricing overrides, verification concurrency, role-stage timeouts, repair
 limits, policy files, and team selection remain advanced evaluation options.
@@ -152,7 +173,8 @@ After confirmation, the controller automatically and atomically:
 - Persists the confirmed TaskBrief;
 - Selects the supported default team and policy;
 - Creates a fresh isolated source baseline and run workspace;
-- Verifies that no existing evidence or user file will be overwritten;
+- Verifies that no existing evidence or user file will be overwritten,
+  including when a destination appears while the build is running;
 - Records the exact model, policy, source, and environment identity.
 
 Write-once evidence and fresh source isolation remain mandatory. The UX change
@@ -268,6 +290,7 @@ The Product Demo Slice is complete only when all of the following are true:
 8. Add interaction tests, installation tests, documentation, and a fresh-device
    rehearsal.
 
-Topology comparison resumes after this user journey is executable. The
-comparison engine and its historical evidence remain valid inputs to that later
-work.
+Steps 1 through 8 are implemented and offline tested. The remaining Phase 2
+work is the fresh-device provider-backed rehearsal and any root-cause fixes it
+exposes. Topology comparison resumes after that acceptance gate. The comparison
+engine and its historical evidence remain valid inputs to that later work.

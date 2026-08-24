@@ -12,6 +12,7 @@ build/
 
 # Local agent instructions
 AGENTS.md
+.sat-managed-install
 
 # Node and OpenClaw runtime state
 node_modules/

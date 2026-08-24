@@ -24,7 +24,7 @@ from software_agent_team.user_configuration import (
 REPOSITORY_ROOT = Path(__file__).parents[1]
 
 
-def test_cli_first_launch_explains_configuration_and_run_flow(
+def test_cli_no_command_requires_an_interactive_terminal(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -32,16 +32,85 @@ def test_cli_first_launch_explains_configuration_and_run_flow(
     configuration = tmp_path / "config.json"
     monkeypatch.setenv("SAT_CONFIG_PATH", str(configuration))
 
-    assert main([]) == 0
+    assert main([]) == 1
 
     output = capsys.readouterr().out
-    assert "installed but not configured yet" in output
-    assert "sat configure" in output
-    assert "sat prepare-benchmark" in output
-    assert "sat preflight" in output
-    assert "sat run" in output
-    assert "sat-uninstall --help" in output
+    assert "guided product flow requires an interactive terminal" in output
     assert not configuration.exists()
+
+
+def test_cli_no_command_runs_the_guided_product_journey(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("SAT_STATE_ROOT", str(tmp_path / "state"))
+    monkeypatch.setattr(cli.sys, "stdin", SimpleNamespace(isatty=lambda: True))
+    answers = iter(
+        (
+            "Build a task manager for my work.",
+            "yes",
+            "work-tasks",
+            "yes",
+        )
+    )
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+    monkeypatch.setattr(
+        cli,
+        "inspect_startup_environment",
+        lambda **_kwargs: SimpleNamespace(ready=True, checks=()),
+    )
+    monkeypatch.setattr(cli, "render_startup_diagnostics", lambda _report: None)
+    monkeypatch.setattr(
+        cli,
+        "_ensure_product_configuration",
+        lambda: UserConfiguration(model="provider/model"),
+    )
+    source = tmp_path / "prepared-source"
+    source.mkdir()
+    monkeypatch.setattr(cli, "prepare_product_source", lambda **_kwargs: source)
+    observed: dict[str, object] = {}
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    def fake_execute(task_brief: object, options: object) -> SimpleNamespace:
+        observed["task_brief"] = task_brief
+        observed["options"] = options
+        return SimpleNamespace(
+            final_report=SimpleNamespace(path="final-report.json", sha256="a" * 64),
+            record=SimpleNamespace(
+                phase=RunPhase.COMPLETED,
+                workspace=SimpleNamespace(workspace_path=str(workspace)),
+                current_commit="a" * 40,
+            ),
+        )
+
+    monkeypatch.setattr(cli, "_execute_workflow", fake_execute)
+    monkeypatch.setattr(
+        cli,
+        "_load_final_report",
+        lambda _path, **_kwargs: object(),
+    )
+    monkeypatch.setattr(cli, "_render_product_outcome", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        cli,
+        "deliver_product_workspace",
+        lambda _source, destination, **_kwargs: destination,
+    )
+
+    assert main([]) == 0
+
+    brief = observed["task_brief"]
+    options = observed["options"]
+    assert brief.source_request == "Build a task manager for my work."
+    assert options.source_repository == source
+    assert options.model == "provider/model"
+    output = capsys.readouterr().out
+    assert "What would you like to build?" in output
+    assert "Requirements summary" in output
+    assert "Next commands" in output
+    assert str(tmp_path / "work-tasks") in output
 
 
 def test_cli_noninteractive_configuration_is_private_and_reconfigurable(
@@ -90,8 +159,8 @@ def test_cli_noninteractive_configuration_is_private_and_reconfigurable(
     second = load_user_configuration(path)
     assert second is not None
     assert second.model == "provider/model-b"
-    assert second.input_cost_per_million_usd == first.input_cost_per_million_usd
-    assert second.output_cost_per_million_usd == first.output_cost_per_million_usd
+    assert second.input_cost_per_million_usd is None
+    assert second.output_cost_per_million_usd is None
     assert second.verification_concurrency == first.verification_concurrency
     assert second.stage_timeout_seconds == first.stage_timeout_seconds
     output = capsys.readouterr().out
@@ -103,7 +172,7 @@ def test_cli_interactive_configuration_prompts_for_first_run_defaults(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     path = tmp_path / "config.json"
-    answers = iter(("provider/model", "0.10", "0.20", "1", "1500"))
+    answers = iter(("provider/model",))
     monkeypatch.setenv("SAT_CONFIG_PATH", str(path))
     monkeypatch.setattr(cli.sys, "stdin", SimpleNamespace(isatty=lambda: True))
     monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
@@ -113,9 +182,150 @@ def test_cli_interactive_configuration_prompts_for_first_run_defaults(
     configuration = load_user_configuration(path)
     assert configuration is not None
     assert configuration.model == "provider/model"
-    assert str(configuration.input_cost_per_million_usd) == "0.10"
+    assert configuration.input_cost_per_million_usd is None
+    assert configuration.output_cost_per_million_usd is None
     assert configuration.verification_concurrency == 1
-    assert configuration.stage_timeout_seconds == 1500
+    assert configuration.stage_timeout_seconds is None
+
+
+def test_cli_requires_a_complete_price_pair(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("SAT_CONFIG_PATH", str(tmp_path / "config.json"))
+
+    assert (
+        main(
+            [
+                "configure",
+                "--non-interactive",
+                "--model",
+                "provider/model",
+                "--input-cost-per-million-usd",
+                "1",
+            ]
+        )
+        == 1
+    )
+    assert "price flags must be supplied together" in capsys.readouterr().out
+
+
+def test_first_run_model_setup_keeps_credentials_and_prices_outside_sat(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "config.json"
+    answers = iter(("no", "provider/model", "no"))
+    monkeypatch.setenv("SAT_CONFIG_PATH", str(path))
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+    monkeypatch.setattr(
+        cli,
+        "_run_openclaw_configuration",
+        lambda _binary: pytest.fail("OpenClaw setup should have been declined"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_provider_smoke",
+        lambda _binary, _model: pytest.fail("provider smoke should have been declined"),
+    )
+    monkeypatch.setattr(cli, "_discover_openclaw_default_model", lambda _binary: None)
+
+    configured = cli._ensure_product_configuration()
+
+    assert configured.model == "provider/model"
+    assert configured.input_cost_per_million_usd is None
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["schema_version"] == 3
+    assert "api_key" not in payload
+
+
+def test_provider_smoke_uses_the_selected_model_without_exposing_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, object] = {}
+
+    def fake_run(argv: list[str], **kwargs: object) -> SimpleNamespace:
+        observed["argv"] = argv
+        observed["kwargs"] = kwargs
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({"ok": True, "outputs": [{"text": '{"status":"ok"}'}]}),
+        )
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+
+    cli._run_provider_smoke(Path("/opt/openclaw"), "provider/model")
+
+    argv = observed["argv"]
+    assert argv[0] == "/opt/openclaw"
+    assert argv[argv.index("--model") + 1] == "provider/model"
+    assert observed["kwargs"]["shell"] is False
+    assert observed["kwargs"]["capture_output"] is True
+
+
+def test_openclaw_configuration_has_no_hidden_setup_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, object] = {}
+
+    def fake_run(argv: list[str], **kwargs: object) -> SimpleNamespace:
+        observed["argv"] = argv
+        observed["kwargs"] = kwargs
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+
+    cli._run_openclaw_configuration(Path("/opt/openclaw"))
+
+    assert observed["argv"] == [
+        "/opt/openclaw",
+        "configure",
+        "--section",
+        "model",
+    ]
+    assert "timeout" not in observed["kwargs"]
+
+
+def test_openclaw_default_model_is_discovered_without_a_provider_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, object] = {}
+
+    def fake_run(argv: list[str], **kwargs: object) -> SimpleNamespace:
+        observed["argv"] = argv
+        observed["kwargs"] = kwargs
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "resolvedDefault": "provider/detected-model",
+                    "auth": {"private": "ignored"},
+                }
+            ),
+        )
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+
+    model = cli._discover_openclaw_default_model(Path("/opt/openclaw"))
+
+    assert model == "provider/detected-model"
+    assert observed["argv"] == [
+        "/opt/openclaw",
+        "models",
+        "status",
+        "--json",
+    ]
+    assert "--probe" not in observed["argv"]
+    assert observed["kwargs"]["capture_output"] is True
+
+
+def test_product_delivery_refuses_a_changed_final_report(tmp_path: Path) -> None:
+    report = tmp_path / "final-report.json"
+    report.write_text("{}\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="digest changed"):
+        cli._load_final_report(report, expected_sha256="0" * 64)
 
 
 def test_cli_deprecates_the_old_timeout_flag_and_can_restore_role_defaults(

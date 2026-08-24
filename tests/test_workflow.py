@@ -28,6 +28,7 @@ from software_agent_team.execution import (
     AgentExecutor,
     AgentTokenUsage,
 )
+from software_agent_team.progress import ProgressEvent, ProgressEventKind
 from software_agent_team.quality_gates import (
     FakeSandboxBackend,
     QualityGateRunner,
@@ -353,6 +354,7 @@ def coordinator(
     verification_concurrency: int = 2,
     stage_timeout_seconds: int | None = 30,
     monotonic: Callable[[], float] = fixed_monotonic,
+    progress_handler: Callable[[ProgressEvent], None] | None = None,
 ) -> WorkflowCoordinator:
     """Build a coordinator with the real gate runner and fake sandbox backend."""
 
@@ -386,6 +388,7 @@ def coordinator(
         role_timeout_seconds=configuration.policy.agent_stage_timeouts_seconds,
         stage_timeout_seconds=stage_timeout_seconds,
         verification_concurrency=verification_concurrency,
+        progress_handler=progress_handler,
         monotonic=monotonic,
     )
 
@@ -445,6 +448,60 @@ def test_offline_workflow_completes_with_parallel_independent_verification(
     transitions = state["transitions"]
     assert isinstance(transitions, list)
     assert transitions[-1]["artifacts"][0]["path"] == "final-report.json"
+
+
+def test_workflow_emits_only_controller_backed_progress_events(tmp_path: Path) -> None:
+    source = initialize_source(tmp_path)
+    workspace = tmp_path / "workspaces" / task_brief().run_id
+    executor = DynamicWorkflowExecutor(workspace)
+    events: list[ProgressEvent] = []
+
+    outcome = coordinator(
+        tmp_path,
+        executor,
+        progress_handler=events.append,
+    ).execute(task_brief(), source_repository=source)
+
+    assert outcome.record.phase is RunPhase.COMPLETED
+    kinds = [event.kind for event in events]
+    assert kinds[0] is ProgressEventKind.RUN_STARTED
+    assert ProgressEventKind.WORKSPACE_READY in kinds
+    assert ProgressEventKind.SNAPSHOT_VERIFIED in kinds
+    assert ProgressEventKind.QUALITY_GATES_STARTED in kinds
+    assert ProgressEventKind.DECISION_RECORDED in kinds
+    assert kinds[-1] is ProgressEventKind.RUN_COMPLETED
+    started_roles = {
+        event.role for event in events if event.kind is ProgressEventKind.AGENT_STARTED
+    }
+    assert started_roles == {
+        AgentRole.PLANNER,
+        AgentRole.GENERALIST_DEVELOPER,
+        AgentRole.TESTER,
+        AgentRole.REVIEWER,
+    }
+    rendered_messages = "\n".join(event.message for event in events)
+    assert "RUN_CONTEXT_JSON" not in rendered_messages
+    assert "response_text" not in rendered_messages
+
+
+def test_workflow_reports_unconfigured_cost_without_inventing_zero(
+    tmp_path: Path,
+) -> None:
+    source = initialize_source(tmp_path)
+    workspace = tmp_path / "workspaces" / task_brief().run_id
+    executor = DynamicWorkflowExecutor(workspace)
+
+    outcome = coordinator(
+        tmp_path,
+        executor,
+        pricing=ModelPricing(model="offline/test-model"),
+    ).execute(task_brief(), source_repository=source)
+
+    markdown = (
+        tmp_path / "runs" / task_brief().run_id / outcome.human_report_path
+    ).read_text(encoding="utf-8")
+    assert "Estimated model cost: not configured" in markdown
+    assert "Estimated model cost: $0.000000" not in markdown
 
 
 def test_workflow_uses_verified_git_facts_instead_of_model_claims(

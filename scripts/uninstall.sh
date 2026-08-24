@@ -11,10 +11,16 @@ task_sat_target="$task_root/.venv/bin/sat"
 task_sat_link="$task_bin_dir/sat"
 task_uninstall_target="$task_root/scripts/uninstall.sh"
 task_uninstall_link="$task_bin_dir/sat-uninstall"
-task_runs_root="$task_root/runs"
-task_workspaces_root="$task_root/workspaces"
 task_xdg_config_root="${XDG_CONFIG_HOME:-$HOME/.config}"
 task_config_path="${SAT_CONFIG_PATH:-$task_xdg_config_root/software-agent-team/config.json}"
+task_xdg_state_root="${XDG_STATE_HOME:-$HOME/.local/state}"
+task_state_root="${SAT_STATE_ROOT:-$task_xdg_state_root/software-agent-team}"
+task_runs_root="$task_state_root/runs"
+task_workspaces_root="$task_state_root/workspaces"
+task_sources_root="$task_state_root/sources"
+task_state_marker="$task_state_root/.sat-state-v1"
+task_managed_marker="$task_root/.sat-managed-install"
+task_managed_install=0
 
 task_export_to=""
 task_config_policy="keep"
@@ -32,22 +38,23 @@ show_help() {
   cat <<'EOF'
 Usage: sat-uninstall [options]
 
-Remove the checkout-bound SAT launcher and Python environment. By default,
-saved SAT configuration and generated runs/workspaces are preserved.
+Remove SAT launchers and its application environment. By default, saved SAT
+configuration and generated runs/workspaces/sources are preserved.
 
 Options:
   --export-to PATH  Export SAT configuration and default generated data first.
                     PATH must be an absolute path that does not already exist.
   --keep-config     Preserve saved SAT configuration (default).
   --purge-config    Delete saved SAT configuration after an optional export.
-  --keep-data       Preserve default runs/ and workspaces/ data (default).
-  --purge-data      Delete default runs/ and workspaces/ after an optional export.
+  --keep-data       Preserve generated runs, workspaces, and sources (default).
+  --purge-data      Delete generated data after an optional export.
   --yes             Accept the selected policies without interactive prompts.
   -h, --help        Show this help.
 
 The export intentionally excludes provider credentials. OpenClaw, uv, Docker,
-the benchmark image, this source checkout, and any custom run roots are shared
-or operator-owned and are never removed by this command.
+the benchmark image, development checkouts, and custom state roots not selected
+through SAT_STATE_ROOT are never removed by this command. A managed application
+directory is removed; a development checkout is preserved.
 EOF
 }
 
@@ -109,6 +116,18 @@ done
   fail "SAT_BIN_DIR must be a specific absolute directory"
 [[ "$task_config_path" == /* && "$task_config_path" != "/" ]] || \
   fail "SAT_CONFIG_PATH and XDG_CONFIG_HOME must resolve to a specific absolute path"
+[[ "$task_state_root" == /* && "$task_state_root" != "/" ]] || \
+  fail "SAT_STATE_ROOT and XDG_STATE_HOME must resolve to a specific absolute path"
+if [[ -e "$task_managed_marker" || -L "$task_managed_marker" ]]; then
+  [[ -f "$task_managed_marker" && ! -L "$task_managed_marker" ]] || \
+    fail "managed installation marker must be a regular file"
+  [[ "$(sed -n '1p' "$task_managed_marker")" == \
+    "software-agent-team-managed-v1" ]] || \
+    fail "managed installation marker is invalid"
+  [[ "$(sed -n '2p' "$task_managed_marker")" == "root=$task_root" ]] || \
+    fail "managed installation marker belongs to a different path"
+  task_managed_install=1
+fi
 
 ask_yes_no() {
   local task_prompt="$1"
@@ -123,9 +142,27 @@ ask_yes_no() {
   done
 }
 
+validate_state_ownership() {
+  if [[ ! -e "$task_state_root" && ! -L "$task_state_root" ]]; then
+    return
+  fi
+  [[ -d "$task_state_root" && ! -L "$task_state_root" ]] || \
+    fail "SAT state root must be a real directory"
+  [[ -f "$task_state_marker" && ! -L "$task_state_marker" ]] || \
+    fail "SAT state root is missing its ownership marker"
+  local task_resolved_state
+  task_resolved_state="$(cd "$task_state_root" && pwd -P)"
+  [[ "$(sed -n '1p' "$task_state_marker")" == \
+    "software-agent-team-state-v1" ]] || \
+    fail "SAT state ownership marker is invalid"
+  [[ "$(sed -n '2p' "$task_state_marker")" == \
+    "root=$task_resolved_state" ]] || \
+    fail "SAT state ownership marker belongs to a different path"
+}
+
 if [[ "$task_assume_yes" == "0" ]]; then
   [[ -t 0 && -t 1 ]] || fail "interactive confirmation is unavailable; use --yes"
-  echo "SAT will remove its launchers and checkout-specific Python environment."
+  echo "SAT will remove its launchers and application Python environment."
   echo "OpenClaw, provider credentials, uv, Docker, the image, and source stay intact."
 
   if [[ -z "$task_export_to" ]] && \
@@ -137,7 +174,7 @@ if [[ "$task_assume_yes" == "0" ]]; then
     task_config_policy="purge"
   fi
   if [[ "$task_data_policy_explicit" == "0" ]] && \
-    ask_yes_no "Delete default runs and workspaces after export?"; then
+    ask_yes_no "Delete generated runs, workspaces, and sources after export?"; then
     task_data_policy="purge"
   fi
 
@@ -167,6 +204,7 @@ validate_export_destination() {
   task_export_to="$task_export_parent/$task_export_name"
   case "$task_export_to/" in
     "$task_root/"*) fail "export destination must be outside the source checkout" ;;
+    "$task_state_root/"*) fail "export destination must be outside SAT state" ;;
   esac
 }
 
@@ -176,6 +214,7 @@ export_user_state() {
   local task_config_exported="no"
   local task_runs_exported="no"
   local task_workspaces_exported="no"
+  local task_sources_exported="no"
   if [[ -f "$task_config_path" ]]; then
     mkdir -m 700 -- "$task_export_to/configuration"
     cp -p -- "$task_config_path" "$task_export_to/configuration/config.json"
@@ -191,12 +230,18 @@ export_user_state() {
     cp -a -- "$task_workspaces_root" "$task_export_to/data/workspaces"
     task_workspaces_exported="yes"
   fi
+  if [[ -d "$task_sources_root" ]]; then
+    mkdir -p -m 700 -- "$task_export_to/data"
+    cp -a -- "$task_sources_root" "$task_export_to/data/sources"
+    task_sources_exported="yes"
+  fi
   {
     echo "Software Agent Team uninstall export"
     echo "created_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     echo "configuration=$task_config_exported"
     echo "runs=$task_runs_exported"
     echo "workspaces=$task_workspaces_exported"
+    echo "sources=$task_sources_exported"
     echo "provider_credentials=excluded"
     echo "custom_run_roots=excluded"
   } > "$task_export_to/EXPORT.txt"
@@ -211,7 +256,9 @@ if [[ -n "$task_export_to" || "$task_config_policy" == "purge" ]]; then
     fail "refusing to export or delete a symbolic-link configuration"
 fi
 if [[ -n "$task_export_to" || "$task_data_policy" == "purge" ]]; then
-  [[ ! -L "$task_runs_root" && ! -L "$task_workspaces_root" ]] || \
+  validate_state_ownership
+  [[ ! -L "$task_state_root" && ! -L "$task_runs_root" && \
+    ! -L "$task_workspaces_root" && ! -L "$task_sources_root" ]] || \
     fail "refusing to export or delete symbolic-link generated-data directories"
 fi
 
@@ -227,10 +274,12 @@ else
 fi
 
 if [[ "$task_data_policy" == "purge" ]]; then
-  rm -rf -- "$task_runs_root" "$task_workspaces_root"
-  echo "uninstall: deleted default runs and workspaces"
+  rm -rf -- "$task_runs_root" "$task_workspaces_root" "$task_sources_root"
+  rm -f -- "$task_state_marker"
+  rmdir -- "$task_state_root" 2>/dev/null || true
+  echo "uninstall: deleted generated runs, workspaces, and sources"
 else
-  echo "uninstall: preserved default runs and workspaces"
+  echo "uninstall: preserved generated runs, workspaces, and sources"
 fi
 
 remove_owned_link() {
@@ -252,10 +301,17 @@ remove_owned_link() {
 remove_owned_link "$task_sat_link" "$task_sat_target" "launcher"
 if [[ -d "$task_root/.venv" ]]; then
   rm -rf -- "$task_root/.venv"
-  echo "uninstall: removed checkout-specific Python environment"
+  echo "uninstall: removed SAT Python environment"
 fi
 remove_owned_link "$task_uninstall_link" "$task_uninstall_target" \
   "uninstall launcher"
 
 echo "uninstall: shared OpenClaw, provider credentials, uv, Docker, and image preserved"
-echo "uninstall: source checkout preserved; remove it separately only after review"
+if [[ "$task_managed_install" == "1" ]]; then
+  [[ "$task_root" != "$HOME" && "$task_root" != "$(dirname "$HOME")" ]] || \
+    fail "refusing to remove an unsafe managed installation root"
+  rm -rf -- "$task_root"
+  echo "uninstall: removed managed SAT application $task_root"
+else
+  echo "uninstall: development checkout preserved"
+fi

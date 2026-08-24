@@ -997,6 +997,7 @@ class QualityGateRunner:
         backend: SandboxBackend | None = None,
         allow_test_backends: bool = False,
         monotonic: Callable[[], float] = time.monotonic,
+        result_handler: Callable[[CommandEvidence, int, int, int], None] | None = None,
     ) -> None:
         self.configuration = configuration
         try:
@@ -1042,6 +1043,7 @@ class QualityGateRunner:
             )
         self.backend = selected_backend
         self.monotonic = monotonic
+        self.result_handler = result_handler
 
     def _runtime_sandbox(self) -> DockerSandboxPolicy:
         """Resolve the portable host-user policy for the Docker boundary."""
@@ -1123,7 +1125,8 @@ class QualityGateRunner:
             raise QualityGateEvidenceError(
                 f"quality-gate evidence already exists: {existing[0].name}"
             )
-        for gate in self.configuration.benchmark.gates:
+        gates = self.configuration.benchmark.gates
+        for index, gate in enumerate(gates, start=1):
             elapsed = self.monotonic() - started
             remaining = limits.total_timeout_seconds - elapsed
             if remaining < 1:
@@ -1182,21 +1185,22 @@ class QualityGateRunner:
                 summary = f"Deterministic quality gate exited with code {exit_code}."
             stdout_tail, stdout_truncated = _evidence_tail(stdout)
             stderr_tail, stderr_truncated = _evidence_tail(stderr)
-            evidence.append(
-                CommandEvidence(
-                    id=gate.id,
-                    argv=gate.argv,
-                    criterion_ids=gate.criterion_ids,
-                    exit_code=exit_code,
-                    timed_out=timed_out,
-                    duration_ms=result.duration_ms,
-                    stdout_path=stdout_relative,
-                    stderr_path=stderr_relative,
-                    stdout_tail=stdout_tail,
-                    stderr_tail=stderr_tail,
-                    stdout_truncated=stdout_truncated,
-                    stderr_truncated=stderr_truncated,
-                    summary=summary,
-                )
+            command = CommandEvidence(
+                id=gate.id,
+                argv=gate.argv,
+                criterion_ids=gate.criterion_ids,
+                exit_code=exit_code,
+                timed_out=timed_out,
+                duration_ms=result.duration_ms,
+                stdout_path=stdout_relative,
+                stderr_path=stderr_relative,
+                stdout_tail=stdout_tail,
+                stderr_tail=stderr_tail,
+                stdout_truncated=stdout_truncated,
+                stderr_truncated=stderr_truncated,
+                summary=summary,
             )
+            evidence.append(command)
+            if self.result_handler is not None:
+                self.result_handler(command, iteration, index, len(gates))
         return tuple(evidence)

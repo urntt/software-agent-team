@@ -198,8 +198,11 @@ Each concept has one authoritative owner.
 | Fixed benchmark and quality-gate execution | `benchmarks/task_manager/` and `src/software_agent_team/quality_gates.py` |
 | Agent process invocation and telemetry parsing | `src/software_agent_team/execution.py` |
 | CLI commands and runtime option resolution | `src/software_agent_team/cli.py` |
+| Product diagnostics, supported request materialization, and safe delivery | `src/software_agent_team/product.py` |
+| Controller-backed progress event rendering | `src/software_agent_team/progress.py` |
+| User-local product state path | `src/software_agent_team/paths.py` |
 | User-local default schema and persistence | `src/software_agent_team/user_configuration.py` |
-| Installation and uninstallation execution | `scripts/install.sh` and `scripts/uninstall.sh` |
+| Managed bootstrap, installation, and uninstallation execution | `scripts/bootstrap.sh`, `scripts/install.sh`, and `scripts/uninstall.sh` |
 | Role prompt assembly | `src/software_agent_team/prompting.py` |
 | Role semantic response validation and field mapping | `src/software_agent_team/responses.py` |
 | Source history and iteration snapshots | Git |
@@ -309,13 +312,15 @@ the result. Clarification quality is evaluated separately.
 | Use per-role stage budgets with a shared repair deadline | Planning, implementation, and verification have different measured workloads. Checked-in defaults are 120 seconds for Clarifier/Planner, 900 for coding/integration roles, and 300 for Tester/Reviewer. The initial response and optional repair share one deadline so repair cannot double the authorized time. |
 | Separate review severity from terminal failure | Even a critical-impact product defect may be correctable. Reviewer `fail` therefore requires an explicit safety or evidence-integrity termination reason; ordinary gate failures and implementation defects request `revise`. |
 | Version requirement or acceptance corrections | A hidden or over-specified acceptance condition confounds model evaluation. The confirmed TaskBrief must expose the product contract, black-box checks must accept equivalent compliant presentations, and a correction starts a new benchmark version. |
-| Freeze model identity and prices for each run | Explicit model telemetry and estimated cost are required for comparable experiments; model fallback would change the independent variables. |
+| Freeze model identity and evaluation prices for each run | Explicit model telemetry and a fixed price table are required for comparable experiments; model fallback would change the independent variables. A product run may record cost as unavailable when the user has not supplied a trustworthy price instead of inventing a zero estimate. |
 | Treat terminal failure as evidence | Provider, sandbox, artifact, budget, and convergence failures must remain observable instead of being retried or discarded silently. |
-| Keep saved user defaults secret-free | Model, pricing, concurrency, and an optional global stage-timeout override improve repeatability, but provider credentials remain in OpenClaw's trusted user state and never enter SAT configuration or exports. Checked-in role defaults remain the normal timeout policy. |
+| Keep saved user defaults secret-free | The product wizard stores the model reference only. Optional pricing, concurrency, and a global stage-timeout override remain advanced evaluation settings; provider credentials remain in OpenClaw's trusted user state and never enter SAT configuration or exports. Checked-in role defaults remain the normal timeout policy. |
 | Make uninstall preservation-first | Removing the CLI must not silently destroy run evidence, generated workspaces, provider state, shared tools, or a source checkout; export and purge therefore require explicit user choices. |
 | Implement the Product Demo Slice before topology comparison | A reproducible engine is not yet a usable product. The core promise starts from a short request, so installation, onboarding, clarification, progress, and delivery must be executable before the project presents an internal evaluation workflow as its demo. |
 | Keep product and evaluation CLI surfaces distinct | Normal users run `sat` and receive guided defaults. Explicit TaskBrief files, benchmark preparation, team IDs, policy paths, timeouts, concurrency, and repair controls remain available to contributors without becoming first-run questions. |
 | Show controller-backed progress rather than hidden reasoning | Users need attributable phase summaries, elapsed waiting time, Git snapshots, gates, review, and revision status. Hidden chain-of-thought, secrets, and unverifiable percentages are neither required nor appropriate. |
+| Keep product state outside the application checkout | Managed runs, workspaces, and trusted source baselines live under the user-local state root. Installation updates cannot overwrite evidence, and uninstallation can preserve, export, or explicitly purge state independently of the application files. |
+| Deliver only an accepted result to a new child directory | The model works in an isolated detached clone. After acceptance, SAT copies the exact accepted commit through a same-parent staging directory and publishes it with Linux atomic no-replace semantics, so a failed run, late destination, or conflict never overwrites user files. |
 
 ## Planned Workflow
 
@@ -338,9 +343,10 @@ REQUEST
 
 Only the deterministic controller may advance this state machine.
 
-Phase 1 starts at `CONFIRM_REQUIREMENTS` with a frozen `TaskBrief`. Phase 2
-connects `REQUEST`, `CLARIFY`, first-run onboarding, automatic internal
-materialization, progress, and delivery to that verified engine. The
+Phase 1 starts at `CONFIRM_REQUIREMENTS` with a frozen `TaskBrief`. The Product
+Demo Slice connects `REQUEST`, bounded scope clarification, first-run
+onboarding, automatic internal materialization, progress, and delivery to that
+verified engine. The
 implemented vertical slice runs Tester and Reviewer independently after
 deterministic gates. Dispatch is concurrent by default and may be serialized
 for a provider with one generation slot. It performs at most two implementation
@@ -529,6 +535,9 @@ acceptance boundary.
 [`docs/product-demo-slice.md`](docs/product-demo-slice.md) passes its offline
 interaction tests and one fresh supported-device rehearsal without requiring
 the user to operate the evaluation CLI.
+
+**Current status:** implemented and offline tested; the fresh-device,
+provider-backed rehearsal remains required before Phase 2 is complete.
 
 ### Phase 3: Baseline and Domain Specialization
 

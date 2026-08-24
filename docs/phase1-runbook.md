@@ -47,7 +47,8 @@ attributable to its checked-in version.
 - Make Git, Bash, Docker, and the pinned local toolchain available.
 - Give the unprivileged account access to the Docker daemon without changing
   the repository files to world-writable mode.
-- Place the repository, `runs/`, and `workspaces/` on a disposable or
+- Place the repository and the explicitly selected `runs/` and `workspaces/`
+  roots on a disposable or
   quota-controlled filesystem. Docker bind mounts do not provide a portable
   per-workspace disk quota, so host storage capacity is an operator-owned safety
   boundary.
@@ -85,12 +86,16 @@ that the unprivileged user can access. It does not install Docker at the
 operating-system level or create provider credentials and active OpenClaw
 configuration; configure those outside the checkout before a paid evaluation.
 
-Start the first-launch guide, then save the exact non-secret run defaults for
-the planned trial:
+Save or inspect the exact non-secret advanced defaults for the planned trial.
+Do not run bare `sat`; that is the separate interactive product surface.
 
 ```bash
-sat
-sat configure
+sat configure --non-interactive \
+  --model provider/model \
+  --input-cost-per-million-usd 0.00 \
+  --output-cost-per-million-usd 0.00 \
+  --verification-concurrency 1 \
+  --use-role-timeouts
 sat configure --show
 ```
 
@@ -172,6 +177,8 @@ substitute or add another model trial without separate authorization:
 uv run sat run \
   benchmarks/task_manager/task-brief.json \
   ./task-manager-source \
+  --runs-root ./runs \
+  --workspaces-root ./workspaces \
   --model provider/model \
   --input-cost-per-million-usd 0.00 \
   --output-cost-per-million-usd 0.00
@@ -305,18 +312,19 @@ needed for the experiment before manually removing disposable run state.
 
 ## 8. Export Evidence Before Uninstalling
 
-The guided uninstaller preserves SAT configuration and default `runs/` and
-`workspaces/` by default. Before removing the installed launchers and project
-environment, create one explicit export when the local evidence is still
-needed:
+The guided uninstaller preserves product state by default. This runbook uses
+explicit checkout-local `./runs` and `./workspaces` roots so trial evidence
+stays adjacent to the recorded harness revision; those custom roots are not
+owned by the uninstaller. Archive them separately before removal. The command
+below exports SAT configuration and default product state only:
 
 ```bash
 sat-uninstall --export-to "$HOME/sat-phase1-backup" --yes
 ```
 
-The destination must not already exist. Inspect `EXPORT.txt`, the copied SAT
-configuration, and both copied data roots before using `--purge-config` or
+The destination must not already exist. Inspect `EXPORT.txt` and any copied
+configuration or default product-state roots before using `--purge-config` or
 `--purge-data`. Provider credentials, shared OpenClaw/uv/Docker installations,
-the benchmark image, the source checkout, and custom run roots are deliberately
-outside the export and uninstall ownership boundary. Review
+the benchmark image, the source checkout, and the checkout-local trial roots
+remain outside the export and uninstall ownership boundary. Review
 `sat-uninstall --help` before selecting either purge option.
