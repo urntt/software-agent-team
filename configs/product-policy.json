@@ -12,7 +12,7 @@
   "agent_stage_timeouts_seconds": {
     "clarifier": 120,
     "single_agent": 900,
-    "planner": 120,
+    "planner": 180,
     "generalist_developer": 900,
     "frontend_developer": 900,
     "backend_developer": 900,

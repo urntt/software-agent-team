@@ -207,7 +207,8 @@ The normal policy uses role-specific stage budgets from
 
 | Roles | Stage budget |
 | --- | ---: |
-| Clarifier and Planner | 120 seconds |
+| Clarifier | 120 seconds |
+| Planner | 180 seconds |
 | Single Agent, Developers, and Integrator | 900 seconds |
 | Tester and Reviewer | 300 seconds |
 

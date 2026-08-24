@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** Exact vision model route fixed; WSL delivery rerun next
+**Current milestone:** First clean product run diagnosed; accepted-delivery rerun next
 
 **Last updated:** August 24, 2026
 
@@ -82,16 +82,36 @@ An available shell key is represented only by `${DEEPSEEK_API_KEY}`; otherwise
 the isolated OpenClaw auth profile remains authoritative. The generated config
 passes the pinned OpenClaw validator, the exact model is reported locally as
 available, and an authorized minimal inference request returned HTTP 200 with
-the exact provider/model and expected response. This is catalog and
-provider-route evidence, not a completed role or product run. The complete
-385-test offline suite passes, and the corrected restricted Docker helper probe
-remains successful.
+the exact provider/model and expected response.
 
-The full provider-backed WSL journey still needs to be rerun through accepted
-delivery. The current product supports small greenfield Python 3.12 projects;
-its bounded clarification records explicit user input and is not yet an
-adaptive requirements Agent. The task-manager contract remains isolated to the
-advanced evaluation surface.
+A subsequent clean non-root rehearsal started from the public one-command
+installer and then used only the normal `sat` entry point. Managed installation,
+automatic device checks, first-run configuration, the optional provider smoke
+check, natural-language request capture, confirmation, and run preflight all
+passed with `deepseek/deepseek-v4-flash-vision-exp`. Run
+`sat-20260824-225204-176978a8` reached the Planner through the same product flow
+an end user sees. Its first response arrived after 72.1 seconds and contained a
+short redundant closing-delimiter suffix as well as real semantic defects: an
+unknown field and incomplete acceptance-criterion coverage. The bounded repair
+was therefore required and produced a valid plan after another 67.0 seconds,
+but the shared 120-second Planner deadline had already expired. SAT correctly
+stopped without delivering an unaccepted project.
+
+The parser now normalizes only a complete object followed by at most four
+unmatched closing delimiters; it continues to reject additional values,
+structures, unknown semantic fields, and incomplete plans. Raw provider output
+remains unchanged in execution evidence. The Planner budget is now 180 seconds,
+which covers the observed 139-second initial-plus-repair path with bounded
+margin. A repair still shares the original deadline and cannot reset or double
+the authorized time. The complete 392-test offline suite passes, and the
+corrected restricted Docker helper probe remains successful.
+
+The full provider-backed product journey still needs to reach accepted delivery
+and pass the delivered project's own setup, start, and test commands. The
+current product supports small greenfield Python 3.12 projects; its bounded
+clarification records explicit user input and is not yet an adaptive
+requirements Agent. The task-manager contract remains isolated to the advanced
+evaluation surface.
 
 The advanced `prepare-benchmark`, `preflight`, and `run` commands remain a
 separate evaluation surface and are not part of the expected product demo.
@@ -194,9 +214,8 @@ controller owns dynamic revision and termination decisions.
 
 ## Not Yet Available or Completed
 
-- A provider-backed rerun of the complete product journey after the third WSL
-  rehearsal confirmed the sandbox fix and exposed the missing exact-model
-  catalog entry;
+- A clean provider-backed rerun through accepted delivery after the first normal
+  product run exposed and bounded the Planner response and timing edge case;
 - Adaptive follow-up clarification beyond the current bounded request, success
   condition, and constraint prompts;
 - Generated-project execution profiles beyond the current local Python 3.12
@@ -216,13 +235,15 @@ action succeeded after interruption.
 
 ## Next Milestone
 
-Rerun the Phase 2 acceptance rehearsal on the supported WSL account: update
-through the public managed-install command, retain or confirm the saved
-`deepseek/deepseek-v4-flash-vision-exp` selection through the guided flow,
-request a representative project within the Python profile, observe every
-progress stage, run the delivered project's exact commands, inspect failure
-guidance, and record the result. Fix any further root causes before calling the
-Product Demo Slice complete.
+Start from a new non-root home and project parent, install through the public
+managed-install command, configure
+`deepseek/deepseek-v4-flash-vision-exp` through the guided `sat` flow, request a
+representative project within the Python profile, and observe every progress
+stage. If SAT reaches accepted delivery, execute the exact generated setup,
+start, and test commands and verify the running product as a user. Preserve and
+diagnose any failure, then fix, test, commit, and publish it before starting
+another clean rehearsal. Do not call the Product Demo Slice complete until the
+whole journey succeeds.
 
 Topology implementation and comparison resume in Phase 3 after this gate. The
 Phase 2 acceptance criteria are defined in

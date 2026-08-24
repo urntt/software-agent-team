@@ -265,7 +265,7 @@ def _unwrap_single_json_fence(value: str) -> str:
 
 
 def _unwrap_single_json_object(value: str) -> str:
-    """Extract one unambiguous object surrounded only by presentation prose."""
+    """Extract one unambiguous object with presentation-only transport noise."""
 
     stripped = value.strip()
     opening = stripped.find("{")
@@ -279,6 +279,12 @@ def _unwrap_single_json_object(value: str) -> str:
     if not isinstance(parsed, dict):
         return value
     suffix = stripped[closing:].strip()
+    if 1 <= len(suffix) <= 4 and all(character in "]}" for character in suffix):
+        # Some providers close an already-complete top-level object again. A
+        # short suffix containing only unmatched closing delimiters cannot
+        # introduce another value, so discarding it is deterministic. Raw
+        # transport output remains in the execution evidence.
+        suffix = ""
     outside = "\n".join(part for part in (prefix, suffix) if part)
     if "```" in outside or any(character in outside for character in "{}[]"):
         return value
@@ -381,8 +387,9 @@ def parse_agent_response(
             "Agent response JSON is invalid: "
             f"{_safe_json_detail(error)}. The response must contain exactly one "
             "unambiguous JSON object; a single json fence or presentation-only "
-            "surrounding prose is normalized, but multiple fences or outside "
-            "JSON structures are forbidden"
+            "surrounding prose and a bounded redundant closing-delimiter suffix "
+            "are normalized, but multiple fences or outside JSON structures are "
+            "forbidden"
         ) from error
     if not isinstance(payload, dict):
         raise AgentArtifactResponseError("Agent response must be a JSON object")

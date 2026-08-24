@@ -662,6 +662,40 @@ def test_strict_parser_normalizes_presentation_prose_around_one_object() -> None
     assert parsed.body == semantic_body(plan())
 
 
+@pytest.mark.parametrize("suffix", ["}", "]", "]}", "}}]]"])
+def test_strict_parser_normalizes_bounded_redundant_closing_delimiters(
+    suffix: str,
+) -> None:
+    response = f"{json.dumps(plan().model_dump(mode='json'))}{suffix}"
+
+    parsed = parse_scripted(
+        response,
+        execution_request(AgentRole.PLANNER, ArtifactKind.IMPLEMENTATION_PLAN),
+    )
+
+    assert parsed.body == semantic_body(plan())
+
+
+@pytest.mark.parametrize(
+    "suffix",
+    [
+        "}}]]}",
+        "] another value",
+        ']{"objective":"competing"}',
+    ],
+)
+def test_strict_parser_rejects_unbounded_or_structured_closing_suffixes(
+    suffix: str,
+) -> None:
+    response = f"{json.dumps(plan().model_dump(mode='json'))}{suffix}"
+
+    with pytest.raises(AgentArtifactResponseError, match="outside JSON structures"):
+        parse_scripted(
+            response,
+            execution_request(AgentRole.PLANNER, ArtifactKind.IMPLEMENTATION_PLAN),
+        )
+
+
 @pytest.mark.parametrize(
     "outside",
     [

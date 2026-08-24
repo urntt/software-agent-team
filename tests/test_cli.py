@@ -928,7 +928,7 @@ def test_cli_run_uses_saved_defaults_when_flags_are_omitted(
     assert str(pricing.input_cost_per_million_usd) == "0.75"
     assert observed["verification_concurrency"] == 1
     assert observed["stage_timeout_seconds"] == 1800
-    assert observed["role_timeout_seconds"][AgentRole.PLANNER] == 120
+    assert observed["role_timeout_seconds"][AgentRole.PLANNER] == 180
 
 
 def test_cli_run_rejects_changes_to_frozen_benchmark(

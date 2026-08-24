@@ -101,12 +101,17 @@ unambiguous semantic JSON object in any of these forms:
 
 - Raw JSON;
 - One `json` code fence;
-- JSON surrounded by presentation-only prose.
+- JSON surrounded by presentation-only prose;
+- One complete object followed by at most four redundant unmatched closing
+  delimiters.
 
 Surrounding text is discarded only when it contains no other JSON structure or
-fence. The parser never guesses between multiple candidates. Duplicate keys,
-multiple objects, multiple fences, non-standard constants, unknown semantic
-fields, and invalid semantic content remain invalid.
+fence. A closing-delimiter suffix is discarded only after the decoder has
+already recovered exactly one complete top-level object; raw transport output
+remains immutable evidence. The parser never guesses between multiple
+candidates. Duplicate keys, multiple objects, multiple fences, non-standard
+constants, unknown semantic fields, and invalid semantic content remain
+invalid.
 
 One controlled repair may address only the semantic contract. It receives a
 bounded, value-free structural diagnostic, such as the duplicate key name,

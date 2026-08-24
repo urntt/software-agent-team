@@ -98,7 +98,7 @@ def test_checked_in_manifests_are_complete_and_hashed(configuration) -> None:
     assert configuration.policy.agent_stage_timeouts_seconds == {
         AgentRole.CLARIFIER: 120,
         AgentRole.SINGLE_AGENT: 900,
-        AgentRole.PLANNER: 120,
+        AgentRole.PLANNER: 180,
         AgentRole.GENERALIST_DEVELOPER: 900,
         AgentRole.FRONTEND_DEVELOPER: 900,
         AgentRole.BACKEND_DEVELOPER: 900,
