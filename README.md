@@ -1,108 +1,38 @@
 # Software Agent Team
 
-Software Agent Team is an experimental, local-first CLI harness that uses a
-deterministic Python control plane to coordinate AI Agent teams through
-OpenClaw. A confirmed software request becomes an isolated Git result with
-planning, implementation, quality-gate, review, revision, telemetry, and final
-report evidence.
+Software Agent Team (`sat`) is an experimental, local-first command-line tool
+that turns a short software request into a runnable project. It clarifies what
+you want, coordinates a team of AI Agents, checks their work in isolated
+containers, and delivers the accepted result with exact setup, start, and test
+commands.
 
-The first product profile builds small greenfield Python 3.12 projects, such as
-Web applications, CLI tools, and local automation, with a
-function-specialized team:
-
-```text
-Planner
-  → Generalist Developer
-  → controller-verified Git snapshot
-  → fixed sandboxed quality gates
-  → independent Tester + Reviewer
-  → deterministic ACCEPT / REVISE / FAIL decision
-  → at most one Developer revision
-  → machine-readable and human-readable final reports
-```
-
-## Status
-
-Phase 1 is complete as an engine milestone. The harness has passed its
-offline end-to-end suite and produced a qualifying provider-backed evaluation
-plus two consecutive replays that reached `completed` through the bounded
-evidence-driven revision loop. Each completed evaluation preserved
-controller-verified Git, quality-gate, acceptance, independent-review, model,
-token, duration, and artifact-integrity evidence.
-
-The [`Product Demo Slice`](docs/product-demo-slice.md) is now implemented and
-offline tested. A managed installation can launch `sat`, diagnose the local
-runtime, guide secret-free model setup, collect and confirm a request, generate
-all internal run inputs, show controller-backed progress, and atomically
-deliver an accepted Git result. The current product scope is deliberately
-bounded by the checked-in Python execution profile, but the request,
-requirements, success conditions, project commands, and delivered behavior are
-created from the user's confirmed intent rather than from an evaluation
-benchmark.
-
-This product journey has not yet completed its fresh-device, provider-backed
-acceptance rehearsal. Until that evidence exists, the repository does not
-claim the demo path is release-stable. See [`STATUS.md`](STATUS.md) for that
-exact boundary.
-
-The executable single-Agent baseline, implementation-domain-specialized path,
-repeated comparative evaluation, and automatic CLI resume also remain future
-work. See [`STATUS.md`](STATUS.md) for the exact implementation boundary and
-[`VISION.md`](VISION.md) for the product direction and roadmap.
-
-## Intended Product Experience
-
-```text
-one installation command
-→ enter or create a project folder
-→ run `sat`
-→ automatic diagnostics and first-run configuration
-→ "What would you like to build?"
-→ bounded clarification and requirements confirmation
-→ controller-backed summaries and progress
-→ runnable project, verification result, and exact next commands
-```
-
-Normal users must not prepare run IDs, TaskBrief JSON, benchmark repositories,
-team IDs, policy paths, concurrency, timeouts, repair limits, or evidence roots.
-Those remain internal or advanced evaluation concepts. See
-[`docs/product-demo-slice.md`](docs/product-demo-slice.md) for the complete
-acceptance contract.
-
-## Architecture at a Glance
-
-The deterministic controller is the only workflow authority. It owns phase
-ordering, budgets, artifact validation, Git snapshots, quality-gate evidence,
-decisions, and terminal reports. OpenClaw owns provider integration, role
-sessions, tool exposure, and Agent sandboxing. Agents own semantic work such as
-planning, implementation, evidence analysis, and review.
-
-Persisted artifacts, rather than hidden chat history, are the authoritative
-handoff boundary. The controller assembles each persisted artifact from a
-validated Agent semantic response and controller-owned facts; models never
-need to echo known identity, Git, command, status, criterion, or scope fields.
-A failed run remains a valid auditable result.
-
-Read [`VISION.md`](VISION.md) for decisions and experimental design, and
-[`docs/runtime-evidence.md`](docs/runtime-evidence.md) for the implemented
-runtime, evidence, response, and safety boundaries.
+SAT currently creates new, small Python 3.12 projects, including Web
+applications, CLI tools, and local automation. Each build is delivered into a
+new project directory; SAT does not overwrite an existing project, push code,
+or deploy it.
 
 ## Requirements
 
-- Linux, or Windows through WSL;
+Before installing SAT, you need:
+
+- Linux, or Windows with WSL;
 - Git, Bash, and curl;
-- Docker for live Agent sandboxes and generated-code quality gates;
-- An unprivileged host account with access to the Docker daemon;
-- Network access for initial setup and the selected model provider;
-- Provider credentials configured through SAT's isolated OpenClaw boundary or
-  a trusted caller environment, never in this repository.
+- Docker running Linux containers and available to your normal user account;
+- Network access and credentials for a supported model provider; and
+- Permission to send your request and relevant generated-project context to
+  that provider.
 
-The checked-in setup pins Python 3.12, OpenClaw 2026.7.1-2, OpenClaw's local
-Node.js 24.15.0 runtime, and Python dependencies through `uv.lock`.
+SAT checks the local technical requirements during installation and every time
+it starts. It installs and uses its own private OpenClaw runtime and provider
+state. Any other OpenClaw installation, configuration, credentials, session,
+or running Gateway on the device remains untouched.
 
-## Product Quick Start
+See the [installation guide](docs/installation.md#external-prerequisites) for
+the complete prerequisite and isolation boundaries.
 
-On Linux or WSL with Docker installed and running, use the managed installer:
+## Install
+
+Run the following command as a normal Linux or WSL user:
 
 ```bash
 curl -fsSL \
@@ -110,143 +40,91 @@ curl -fsSL \
   | bash && exec "${SHELL:-/bin/bash}" -l
 ```
 
-Then enter a directory that may receive a new project child and run:
+The installer validates the device, installs SAT's pinned private runtime,
+prepares its Python environment and Docker image, runs offline checks, and
+adds `sat` and `sat-uninstall` to the user-local command path.
+
+## Build a Project
+
+Enter a directory that may receive a new project folder, then run `sat`:
 
 ```bash
+mkdir -p "$HOME/projects"
+cd "$HOME/projects"
 sat
 ```
 
-SAT performs local diagnostics before asking for a model or making a provider
-request. On first launch it delegates credential entry to its own isolated
-OpenClaw state, stores only the selected `provider/model` reference in SAT
-configuration, and offers an explicitly authorized minimal smoke check. It
-never reads, changes, stops, or reuses another OpenClaw installation or its
-configuration. SAT then asks what to build, explains the current Python
-execution profile, collects success conditions and optional constraints, asks
-for a new project-directory name, shows the resulting requirements summary,
-and requires confirmation before the model-backed workflow begins.
+On first use, SAT guides you through:
 
-The product path never substitutes the task-manager evaluation fixture for a
-user request. Requests that cannot use the current local Python profile are
-declined explicitly; expanding the set of execution profiles is roadmap work.
+1. Local environment diagnostics;
+2. Isolated model-provider configuration;
+3. A plain-language description of what you want to build;
+4. Success conditions and optional constraints;
+5. A new project-directory name; and
+6. A final summary and confirmation before any build starts.
 
-## Advanced Evaluation Quick Start
+During the build, SAT displays the active stage, elapsed time, verified Git
+snapshots, quality checks, independent review, revisions, and the final
+decision. On success, it reports the delivered directory and the exact
+commands needed to set up, run, and test the project. On failure, it preserves
+an auditable report instead of presenting unfinished work as successful.
 
-The commands below document the implemented Phase 1 contributor/operator
-surface. They are useful for controlled evaluation and regression work, but
-they are not the target first-run product experience described above.
+## Configure a Model
 
-Contributors may install from a clean checkout on Linux or WSL:
-
-```bash
-./scripts/install.sh
-```
-
-The installer prepares a pinned SAT-owned OpenClaw runtime inside the
-application, the locked project environment, shared Python quality image,
-offline checks, and checkout-bound `sat` and `sat-uninstall` launchers. It does
-not install an OS-level Docker daemon, create provider credentials, or inspect
-another OpenClaw installation.
-
-Configure SAT's isolated provider state and save or inspect secret-free
-advanced evaluation defaults:
+The first `sat` launch includes guided setup. You can repeat setup or inspect
+SAT's non-secret settings later:
 
 ```bash
 sat configure
 sat configure --show
 ```
 
-Then prepare and check a deterministic benchmark source repository:
+SAT stores only the selected `provider/model` reference in its own
+configuration. Provider credentials remain in SAT's isolated OpenClaw state
+or in an explicitly trusted caller environment; they are not written to the
+repository, generated project, run evidence, or SAT exports.
+
+See the [installation and configuration guide](docs/installation.md) for
+configuration paths, provider setup, saved defaults, and recovery boundaries.
+
+## Update or Uninstall
+
+Rerun the installation command to update a managed installation. SAT verifies
+that it owns the installation and that the tracked application is clean before
+updating it.
+
+Run the guided uninstaller from any directory:
 
 ```bash
-sat prepare-benchmark ./task-manager-source
-sat preflight ./task-manager-source
+sat-uninstall
 ```
 
-Run the Phase 1 evaluation workflow with the saved model, prices, verification
-concurrency, and timeout policy:
+Uninstallation preserves configuration, generated work, and SAT's isolated
+provider state by default. It can export configuration and generated data
+before removal, and it requires explicit choices before purging preserved
+state. Other OpenClaw installations are never uninstall targets.
 
-```bash
-sat run \
-  benchmarks/task_manager/task-brief.json \
-  ./task-manager-source
-```
+See [guided uninstallation](docs/installation.md#guided-uninstallation) for
+the export and purge options.
 
-`sat run` returns `0` for an accepted completed run, `2` for an auditable
-failed run, and `1` when invalid input or local setup prevents a normal
-workflow result. Follow the complete
-[`Phase 1 provider-backed evaluation runbook`](docs/phase1-runbook.md) before
-treating a run as qualifying experimental evidence.
+## Current Scope and Maturity
 
-## Command Map
+SAT is experimental software. The supported build path is currently limited
+to new, small Python 3.12 projects; existing-codebase modification, additional
+runtime profiles, interrupted-run resume, deployment, and publication are not
+yet supported. The workflow has comprehensive automated offline coverage, but
+the complete installation-to-result experience has not yet passed its final
+real-provider trial on a newly prepared device.
 
-| Command | Purpose | Detailed reference |
-| --- | --- | --- |
-| `sat` | Run diagnostics, first-use setup, request confirmation, progress, and safe delivery | [`docs/product-demo-slice.md`](docs/product-demo-slice.md) |
-| `sat configure` | Reconfigure the secret-free model reference; advanced flags can also set evaluation defaults | [`docs/installation.md`](docs/installation.md) |
-| `sat prepare-benchmark PATH` | Advanced: materialize a deterministic evaluation source repository | [`docs/phase1-runbook.md`](docs/phase1-runbook.md) |
-| `sat preflight PATH` | Advanced: validate evaluation runtime, image, and source without a model call | [`docs/phase1-runbook.md`](docs/phase1-runbook.md) |
-| `sat run BRIEF PATH` | Advanced: execute a controlled workflow from explicit inputs | [`docs/phase1-runbook.md`](docs/phase1-runbook.md) |
-| `sat validate-*` and `sat list-teams` | Validate checked-in contracts or inspect team definitions | [`docs/development.md`](docs/development.md) |
-| `sat-uninstall` | Preserve by default, optionally export, and explicitly purge installed SAT state | [`docs/installation.md`](docs/installation.md) |
-| `make setup` / `make check` | Prepare and validate a development checkout offline | [`docs/development.md`](docs/development.md) |
-
-Run-specific `sat run` flags override saved defaults without modifying the
-configuration file. Use `--verification-concurrency 1` for a provider that can
-serve only one generation at a time. Use real token prices for paid models;
-zero is appropriate only for a genuinely free model.
+Read [`STATUS.md`](STATUS.md) for current evidence and known gaps, and
+[`VISION.md`](VISION.md) for product direction, architecture, scope, and the
+roadmap.
 
 ## Documentation
 
-[`docs/README.md`](docs/README.md) is the documentation index. The primary
-documents have deliberately separate responsibilities:
-
-| Document | Responsibility |
-| --- | --- |
-| [`README.md`](README.md) | Public overview, command map, and repository map |
-| [`VISION.md`](VISION.md) | Product contract, architecture decisions, experiment design, scope, and roadmap |
-| [`STATUS.md`](STATUS.md) | Current implementation, evaluation evidence, known gaps, and next milestone |
-| [`docs/product-demo-slice.md`](docs/product-demo-slice.md) | User-facing installation, onboarding, request, progress, and delivery acceptance contract |
-| [`docs/installation.md`](docs/installation.md) | Installation, first-launch configuration, saved defaults, export, and uninstallation |
-| [`docs/runtime-evidence.md`](docs/runtime-evidence.md) | Runtime authority, response boundary, persisted evidence, integrity, and operator safety |
-| [`docs/phase1-runbook.md`](docs/phase1-runbook.md) | Contributor/operator procedure for a controlled Phase 1 provider-backed evaluation |
-| [`docs/development.md`](docs/development.md) | Local setup, checks, validation commands, layout, and contribution workflow |
-| [`profiles/python/README.md`](profiles/python/README.md) | First generated-project execution profile and command/evidence contract |
-| [`benchmarks/task_manager/requirements.md`](benchmarks/task_manager/requirements.md) | Human-readable summary of the frozen evaluation fixture; it is not the product request contract |
-
-## Repository Layout
-
-```text
-benchmarks/task_manager/       Frozen evaluation brief, seed, and acceptance suite
-configs/                       Team, product/evaluation policy, and runtime inputs
-docs/                          Installation, operations, and development guides
-examples/                      Example validated artifacts and handoffs
-openclaw/                      Stable role workspace boundaries
-profiles/python/               Product seed, quality contract, and validator
-runtime/python/                Shared content-pinned quality image and dependency lock
-scripts/                       Setup, installation, uninstall, and diagnostics
-src/software_agent_team/       Product flow, controller, contracts, adapters, and CLI
-tests/                         Offline unit, integration, and end-to-end tests
-STATUS.md                      Current implementation and evidence boundary
-VISION.md                      Product and architecture decisions
-```
-
-Product runs, workspaces, trusted source baselines, and SAT's isolated OpenClaw
-provider state live beneath
-`${XDG_STATE_HOME:-$HOME/.local/state}/software-agent-team/` and never enter
-Git. The harness does not merge, push, deploy, or publish generated results,
-and human authorization remains required for those actions.
-
-## Contributing
-
-Read [`VISION.md`](VISION.md) before changing architecture, scope, or
-experimental design. Keep variables and budgets explicit, add or update tests
-with behavior changes, update the owning document in the same change, and run:
-
-```bash
-make check
-```
-
-Negative and inconclusive outcomes are acceptable when their evidence and
-limits are reported honestly. See
-[`docs/development.md`](docs/development.md) for the full workflow.
+- [Installation, configuration, updating, and uninstallation](docs/installation.md)
+- [Current implementation status and evidence](STATUS.md)
+- [Product direction and architecture](VISION.md)
+- [Complete documentation index](docs/README.md)
+- [Contributor setup and checks](docs/development.md)
+- [Controlled evaluation runbook](docs/phase1-runbook.md)

@@ -1,9 +1,9 @@
 # Documentation Index
 
-Start with the repository [`README.md`](../README.md) for the product overview,
-requirements, command map, and repository layout. The documents below separate
-decisions, current facts, operating procedures, and development references so
-that each fact has one clear owner.
+Start with the repository [`README.md`](../README.md) for the user-facing
+overview, requirements, installation, and first build. The documents below
+separate decisions, current facts, operating procedures, and development
+references so that each fact has one clear owner.
 
 ## Choose a Document
 
@@ -22,7 +22,7 @@ that each fact has one clear owner.
 
 ## Document Roles
 
-- `README.md` is the public entry point and command map.
+- `README.md` is the user-facing public entry point and quick start.
 - `VISION.md` owns durable product, architecture, experiment, scope, and
   roadmap decisions.
 - `STATUS.md` owns time-sensitive implementation and evidence facts.
