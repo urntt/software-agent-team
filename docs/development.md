@@ -38,6 +38,26 @@ make lock-runtime
 Use `make format` when source formatting changes are required. Always run
 `make check` before committing.
 
+## Checkout Installation
+
+Contributors who need checkout-bound `sat` and `sat-uninstall` launchers may
+run:
+
+```bash
+./scripts/install.sh
+```
+
+This path performs the same locked runtime, image, validation, and launcher
+setup as a managed installation, but it does not mark the checkout as a
+managed application. The uninstaller can therefore remove SAT's launchers,
+environment, and private OpenClaw runtime while preserving the development
+checkout. Normal users should use the managed command in the repository
+[`README.md`](../README.md#install).
+
+To update a checkout-bound installation, update the checkout through the
+contributor's normal Git workflow, confirm that the tracked worktree is clean,
+and rerun `./scripts/install.sh`.
+
 ## Validation CLI
 
 The unified CLI exposes focused validators for checked-in contracts:
@@ -115,7 +135,7 @@ configs/
   openclaw.example.json5       Sanitized role and tool policy template
 docs/
   README.md                    Documentation index
-  product-demo-slice.md        User-facing acceptance contract and status
+  product-demo-slice.md        Guided user-journey acceptance specification
   installation.md             Install, configure, export, and uninstall
   runtime-evidence.md          Runtime, artifact, evidence, and safety model
   phase1-runbook.md            Controlled provider-backed evaluation procedure
@@ -155,7 +175,7 @@ scripts/
   setup.sh                     Development environment setup
   doctor.sh                    Environment and boundary diagnostics
 tests/                         Offline unit, integration, and end-to-end tests
-README.md                      Public entry point and command map
+README.md                      User-facing public overview and quick start
 STATUS.md                      Current implementation and evaluation evidence
 VISION.md                      Product, architecture, experiment, and roadmap
 ```
@@ -170,14 +190,14 @@ OpenClaw state, generated state, and runtime configuration never enter Git.
 
 Update the document that owns the changed fact:
 
-- Update `README.md` when the public overview, primary commands, or repository
-  map changes;
+- Update `README.md` only when the user-facing overview, requirements, install
+  command, first-use path, or primary user commands change;
 - Update `VISION.md` when product behavior, architecture decisions,
   experimental design, scope, or roadmap changes;
 - Update `STATUS.md` when an implementation path, milestone, evaluation
   evidence, or known gap changes;
-- Update `docs/product-demo-slice.md` when the approved next user journey or
-  its acceptance criteria change;
+- Update `docs/product-demo-slice.md` when the guided user-journey interaction
+  or acceptance criteria change; keep implementation status in `STATUS.md`;
 - Update `docs/installation.md` when setup, saved configuration, export, or
   uninstallation behavior changes;
 - Update `docs/runtime-evidence.md` when runtime, artifact, response, integrity,

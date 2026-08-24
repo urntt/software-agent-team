@@ -108,7 +108,7 @@ paths, concurrency, timeouts, repair limits, and evidence roots are advanced
 implementation or evaluation concepts. The normal user must not prepare or
 edit them.
 
-The complete next-milestone acceptance contract is
+The guided product-journey acceptance specification is
 [`docs/product-demo-slice.md`](docs/product-demo-slice.md).
 
 ## Current Technical Decisions
@@ -199,8 +199,8 @@ Each concept has one authoritative owner.
 | --- | --- |
 | Product and architecture decisions | `VISION.md` |
 | Current implementation, milestone evidence, and known gaps | `STATUS.md` |
-| Public overview, commands, and repository map | `README.md` |
-| Product Demo Slice interaction and acceptance specification | `docs/product-demo-slice.md` |
+| User-facing public overview and quick start | `README.md` |
+| Guided product-journey interaction and acceptance specification | `docs/product-demo-slice.md` |
 | Installation, saved configuration, export, and removal behavior | `docs/installation.md` |
 | Runtime, response, persisted-evidence, integrity, and operator-safety reference | `docs/runtime-evidence.md` |
 | Controlled Phase 1 provider-backed evaluation procedure | `docs/phase1-runbook.md` |
@@ -344,7 +344,7 @@ the result. Clarification quality is evaluated separately.
 | Implement the Product Demo Slice before topology comparison | A reproducible engine is not yet a usable product. The core promise starts from a short request, so installation, onboarding, clarification, progress, and delivery must be executable before the project presents an internal evaluation workflow as its demo. |
 | Keep product and evaluation CLI surfaces distinct | Normal users run `sat` and receive guided defaults. Explicit TaskBrief files, benchmark preparation, team IDs, policy paths, timeouts, concurrency, and repair controls remain available to contributors without becoming first-run questions. |
 | Keep generated-product profiles independent from evaluation fixtures | A benchmark must hold experiment inputs constant, while a product request must express the user's intent. Sharing the controller and quality-manifest schema is useful; sharing a task-specific TaskBrief, seed, acceptance suite, environment contract, or delivery command would silently replace the user's request and invalidate both boundaries. |
-| Derive product requirements before the first model call | The current bounded wizard records the user's request, success conditions, and constraints directly, shows the resulting TaskBrief summary, and requires authorization. This avoids charging for a model-authored interpretation before consent and prevents an LLM from becoming the authority for missing user intent. |
+| Derive product requirements before the first model call | The bounded wizard records the user's request, success conditions, and constraints directly, shows the resulting TaskBrief summary, and requires authorization. This avoids charging for a model-authored interpretation before consent and prevents an LLM from becoming the authority for missing user intent. |
 | Require a generated-project command manifest | Setup, start, and test commands vary by project. A validated `sat-project.json` argv contract lets SAT deliver exact commands without assuming FastAPI, a Web server, or any task-specific entry point. |
 | Show controller-backed progress rather than hidden reasoning | Users need attributable phase summaries, elapsed waiting time, Git snapshots, gates, review, and revision status. Hidden chain-of-thought, secrets, and unverifiable percentages are neither required nor appropriate. |
 | Keep product state outside the application checkout | Managed runs, workspaces, and trusted source baselines live under the user-local state root. Installation updates cannot overwrite evidence, and uninstallation can preserve, export, or explicitly purge state independently of the application files. |
@@ -374,12 +374,11 @@ Only the deterministic controller may advance this state machine.
 Phase 1 starts at `CONFIRM_REQUIREMENTS` with a frozen `TaskBrief`. The Product
 Demo Slice connects `REQUEST`, bounded scope clarification, first-run
 onboarding, automatic internal materialization, progress, and delivery to that
-verified engine. The
-implemented vertical slice runs Tester and Reviewer independently after
-deterministic gates. Dispatch is concurrent by default and may be serialized
-for a provider with one generation slot. It performs at most two implementation
-iterations: the initial pass and one revision. Later configurations may use the
-manifest's higher explicit limit.
+verified engine. The function-specialized path runs Tester and Reviewer
+independently after deterministic gates. Dispatch is concurrent by default and
+may be serialized for a provider with one generation slot. It performs at most
+two implementation iterations: the initial pass and one revision. Later
+configurations may use the manifest's higher explicit limit.
 
 The Reviewer recommends `revise` for every correctable product defect,
 including failed deterministic acceptance and security defects in generated
@@ -412,8 +411,8 @@ references, contextual validation, and deterministic transport normalization
 must realize the control-plane decisions above without creating a second
 lifecycle authority.
 
-The complete implemented artifact, response, evidence, integrity, recovery,
-and failure semantics are maintained in
+The detailed artifact, response, evidence, integrity, recovery, and failure
+semantics are maintained in
 [`docs/runtime-evidence.md`](docs/runtime-evidence.md). Executable schemas and
 policies retain the code owners listed in
 [`Ownership Boundaries`](#ownership-boundaries).
@@ -542,10 +541,6 @@ confused with the durable product and experiment decisions in this document.
 `completed` with reproducible artifacts and a clean controller-verified Git
 snapshot.
 
-**Current status:** complete. See [`STATUS.md`](STATUS.md) for evidence and
-[`docs/phase1-runbook.md`](docs/phase1-runbook.md) for the contributor/operator
-acceptance boundary.
-
 ### Phase 2: Product Demo Slice
 
 - Install SAT into a managed user-local location with one command;
@@ -565,9 +560,6 @@ acceptance boundary.
 [`docs/product-demo-slice.md`](docs/product-demo-slice.md) passes its offline
 interaction tests and one fresh supported-device rehearsal without requiring
 the user to operate the evaluation CLI.
-
-**Current status:** implemented and offline tested; the fresh-device,
-provider-backed rehearsal remains required before Phase 2 is complete.
 
 ### Phase 3: Baseline and Domain Specialization
 

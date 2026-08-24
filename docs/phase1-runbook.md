@@ -1,16 +1,13 @@
 # Phase 1 Provider-Backed Evaluation Runbook
 
 This contributor/operator runbook is the procedure for a controlled evaluation
-using a real model provider. Historical records sometimes call such a run a
-"live trace"; that term describes internal evidence, not the product journey a
-new user performs. The intended installation-to-delivery experience is defined
-in [`product-demo-slice.md`](product-demo-slice.md).
+using a real model provider. It is not the normal user journey; users should
+start with the repository [`README.md`](../README.md). Current evaluation
+results belong in [`STATUS.md`](../STATUS.md), not in this procedure.
 
-A version-two evaluation has satisfied the Phase 1 exit checklist, and two
-consecutive replays of the current harness commit have reached `completed`
-through the bounded revision loop. New trials still require fresh run IDs and
-the complete evidence checks below. Repository development and offline tests do
-not make a model call. Following the `sat run` step below does.
+Every trial requires a fresh run ID and the complete evidence checks below.
+Repository development and offline tests do not make a model call. Following
+the `sat run` step below does.
 
 Use [`installation.md`](installation.md) for the normal install, configuration,
 export, and uninstall lifecycle. Use
@@ -312,13 +309,14 @@ If any item is missing or inconsistent, preserve the entire run directory and
 workspace as failure evidence. Do not edit artifacts in place or reinterpret an
 unrecorded action as successful.
 
-## 7. Record the Phase Decision
+## 7. Record the Evaluation Decision
 
 Record the command, selected model, frozen prices, base commit, terminal commit,
 artifact location, actual cost estimate, elapsed time, and any anomaly in the
-experiment notes. Mark Phase 1 complete only after the checklist above is
-satisfied. Otherwise, classify the failure, fix the controller or environment
-through a normal reviewed change, assign a new run ID, and run a new trial.
+experiment notes. Classify the trial against the checklist above. If it does
+not satisfy the acceptance objective, preserve and classify the failure, fix
+the controller or environment through a normal reviewed change, assign a new
+run ID, and run a new trial.
 
 Generated runs and workspaces are ignored local evidence. Archive any evidence
 needed for the experiment before manually removing disposable run state.

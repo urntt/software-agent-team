@@ -2,7 +2,8 @@
 
 ## Purpose
 
-Build a small but complete product that exercises requirements analysis,
+This evaluator-facing summary describes a small but complete product that
+exercises requirements analysis,
 backend behavior, persistence, server-rendered user interface work, automated
 testing, independent review, and revision. The benchmark evaluates the agent
 workflow; it is not a prebuilt application template.

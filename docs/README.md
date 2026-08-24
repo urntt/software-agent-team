@@ -11,7 +11,7 @@ references so that each fact has one clear owner.
 | --- | --- |
 | Understand the product, users, problem, architecture decisions, experiment, scope, or roadmap | [`VISION.md`](../VISION.md) |
 | See what is implemented, what provider-backed evidence exists, and what remains | [`STATUS.md`](../STATUS.md) |
-| Understand or verify the user-facing installation-to-delivery milestone | [`product-demo-slice.md`](product-demo-slice.md) |
+| Maintain or verify acceptance criteria for the guided installation-to-delivery journey | [`product-demo-slice.md`](product-demo-slice.md) |
 | Install, configure a provider/model default, export local data, or uninstall | [`installation.md`](installation.md) |
 | Understand runtime authority, semantic responses, artifacts, persisted evidence, or safety boundaries | [`runtime-evidence.md`](runtime-evidence.md) |
 | Prepare and inspect a controlled Phase 1 provider-backed evaluation | [`phase1-runbook.md`](phase1-runbook.md) |
@@ -23,12 +23,17 @@ references so that each fact has one clear owner.
 ## Document Roles
 
 - `README.md` is the user-facing public entry point and quick start.
-- `VISION.md` owns durable product, architecture, experiment, scope, and
-  roadmap decisions.
-- `STATUS.md` owns time-sensitive implementation and evidence facts.
-- `product-demo-slice.md` specifies the user-facing acceptance contract and its
-  remaining rehearsal gate without replacing the decisions in `VISION.md`.
-- Guides in `docs/` own one operating or development concern each.
+- `installation.md` is the user and operator reference for the supported
+  install, configuration, update, export, and uninstall lifecycle.
+- `VISION.md` serves product and engineering decision-makers by owning durable
+  product, architecture, experiment, scope, and roadmap decisions.
+- `STATUS.md` serves maintainers and evaluators by owning time-sensitive
+  implementation, evidence, gaps, and next-milestone facts.
+- `product-demo-slice.md` is a contributor-facing acceptance specification for
+  the guided user journey; it does not own implementation status.
+- `phase1-runbook.md` is an evaluation-operator procedure, and
+  `development.md` is the contributor reference.
+- Other guides in `docs/` own one operating or engineering concern each.
 - Checked-in code and configuration remain authoritative for executable
   contracts; documentation explains those contracts and links to their owner.
 - Benchmark documents may not add requirements beyond the frozen TaskBrief.

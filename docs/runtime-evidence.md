@@ -1,11 +1,11 @@
 # Runtime, Evidence, and Safety Reference
 
-This document describes how the implemented harness realizes the decisions in
-[`VISION.md`](../VISION.md). `VISION.md` remains authoritative for product and
-architecture decisions; the checked-in schemas, policies, and controller code
-remain authoritative for executable contracts. This reference owns the public
-explanation of runtime authority, response processing, persisted evidence,
-integrity checks, and operator safety boundaries.
+This engineering reference describes how the implemented harness realizes the
+decisions in [`VISION.md`](../VISION.md). `VISION.md` remains authoritative for
+product and architecture decisions; the checked-in schemas, policies, and
+controller code remain authoritative for executable contracts. This reference
+owns the engineering explanation of runtime authority, response processing,
+persisted evidence, integrity checks, and operator safety boundaries.
 
 ## Runtime Authority
 
@@ -271,5 +271,6 @@ publication, external communication, destructive operations, or additional
 spending. A completed harness run is an auditable candidate delivery, not
 authorization for an external side effect.
 
-For the procedure that verifies these boundaries in a real trace, use
+For the procedure that verifies these boundaries in a controlled
+provider-backed evaluation, use
 [`phase1-runbook.md`](phase1-runbook.md).

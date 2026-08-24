@@ -1,9 +1,10 @@
 # Python Product Profile
 
-This directory defines the first generated-project execution profile used by
-bare `sat`. It constrains runtime and verification, not the user's task domain.
-The task-manager materials under `benchmarks/` are a separate controlled
-evaluation fixture and are never used to materialize a product request.
+This contributor reference documents the first generated-project execution
+profile used by bare `sat`. The profile constrains runtime and verification,
+not the user's task domain. The task-manager materials under `benchmarks/` are
+a separate controlled evaluation fixture and are never used to materialize a
+product request.
 
 ## Supported Boundary
 

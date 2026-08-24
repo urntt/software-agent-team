@@ -1,18 +1,16 @@
-# Product Demo Slice
+# Guided Product Journey Acceptance Specification
 
-**Status:** Implemented and offline tested; fresh-device provider rehearsal pending
+This contributor-facing specification defines the user-visible behavior that
+must pass before the guided installation-to-delivery journey is considered
+usable. It is not an installation guide: users should start with the repository
+[`README.md`](../README.md), while operators should use
+[`installation.md`](installation.md).
 
-This document defines the user-visible acceptance contract that must be
-implemented before the harness is presented as a usable product. It derives
-from the product and architecture decisions in [`VISION.md`](../VISION.md),
-which remains authoritative when either document changes.
+The specification derives from the product and architecture decisions in
+[`VISION.md`](../VISION.md). Current implementation and rehearsal status belong
+only to [`STATUS.md`](../STATUS.md).
 
-The Phase 1 controller, Agent workflow, sandbox, quality gates, and evidence
-model are the engine beneath this experience. A provider-backed evaluation
-trial proves that engine can run; it is not the product interaction that a new
-user should be asked to perform.
-
-## Demo Contract
+## User Journey Contract
 
 A new user should be able to:
 
@@ -58,40 +56,6 @@ Commands such as `sat prepare-benchmark`, `sat preflight`, `sat run`, artifact
 validators, explicit policy paths, and experimental overrides remain available
 for contributors and controlled comparisons. They preserve reproducibility and
 write-once evidence, but they are not the first-run product journey.
-
-The phrase "live trace" may describe historical provider-backed evaluation
-evidence in contributor records. It is not a user-facing action or concept.
-
-## Current Implementation Boundary
-
-The primary flow now exists behind `sat` with no subcommand. The managed
-bootstrap, startup diagnostics, first-run model setup, optional provider smoke
-check, request capture, explicit execution-profile confirmation, automatic run
-materialization, progress renderer, terminal result, and non-overwriting
-delivery all have offline behavior coverage.
-
-The installed OpenClaw boundary is also product-owned and isolated. SAT uses a
-marked private binary plus a private config/state/credential root. It does not
-probe, reuse, reconfigure, stop, upgrade, downgrade, or uninstall an OpenClaw
-runtime or Gateway that was already present on the device.
-
-The currently implemented clarification boundary is deterministic and bounded.
-SAT explains that the installed execution profile supports a small greenfield
-Python 3.12 project, collects the user's ordinary-language request, explicit
-success conditions, and optional constraints, then constructs a confirmed
-TaskBrief from those inputs. It does not use a task-specific template or ask a
-model to invent missing intent before authorization. Declining the execution
-profile or final summary ends without a model call.
-
-The product goal is not a particular generated application. The checked-in
-task-manager materials are a controlled evaluation fixture on the advanced
-surface only. They never define, narrow, or replace a request made through bare
-`sat`.
-
-One acceptance gate remains open: the complete flow must be rehearsed from a
-fresh supported Linux/WSL user account with an explicitly authorized provider,
-and the delivered start and test commands must be run there. Offline tests do
-not substitute for that evidence.
 
 ## Installation Experience
 
@@ -152,8 +116,8 @@ provide:
 The wizard offers OpenClaw's trusted setup inside SAT's isolated state, detects
 only that private state's configured default model without probing the
 provider, and offers to use it. It never imports an existing OpenClaw profile.
-The optional authorized smoke check is the current semantic provider/auth
-validation step. Secrets never enter SAT's control-plane configuration,
+The optional authorized smoke check is the semantic provider/auth validation
+step. Secrets never enter SAT's control-plane configuration,
 repository, generated project, run artifacts, logs, exports, or terminal echo;
 OpenClaw stores them only in SAT's private OpenClaw state unless they are
 inherited from the trusted caller environment.
@@ -204,9 +168,9 @@ Write-once evidence and fresh source isolation remain mandatory. The UX change
 removes manual preparation; it does not weaken provenance or overwrite
 protection.
 
-The user starts SAT in an empty destination directory or chooses a new child
-directory. Work occurs in an isolated managed workspace. An accepted clean
-result is materialized into the destination without overwriting existing
+The user starts SAT in a writable parent directory and chooses a new direct
+child directory. Work occurs in an isolated managed workspace. An accepted
+clean result is materialized into that child without overwriting existing
 content. A failed run preserves diagnostic evidence without presenting a
 partial workspace as a successful delivery.
 
@@ -274,9 +238,8 @@ Failures remain honest product outcomes. SAT explains:
 - The next supported action.
 
 SAT never retries a failed run in place, overwrites immutable evidence, or
-claims that an interrupted external action succeeded. Automatic resume may be
-implemented later; until then the CLI clearly distinguishes a new run from
-recovery.
+claims that an interrupted external action succeeded. When automatic resume is
+unavailable, the CLI must clearly distinguish a new run from recovery.
 
 ## Acceptance Criteria
 
@@ -308,20 +271,6 @@ The Product Demo Slice is complete only when all of the following are true:
     from a fresh supported environment with one explicitly authorized provider
     run.
 
-## Implementation Order
-
-1. Separate the product entry point from the evaluation subcommands;
-2. Add explicit installer and startup environment diagnostics;
-3. Add guided provider configuration inside an isolated OpenClaw-owned SAT
-   state boundary without putting secrets in control-plane state or evidence;
-4. Add request collection, bounded clarification, and confirmation;
-5. Add automatic internal materialization and safe delivery destinations;
-6. Emit controller events and implement the progress renderer;
-7. Add the final delivery view and failure guidance;
-8. Add interaction tests, installation tests, documentation, and a fresh-device
-   rehearsal.
-
-Steps 1 through 8 are implemented and offline tested. The remaining Phase 2
-work is the fresh-device provider-backed rehearsal and any root-cause fixes it
-exposes. Topology comparison resumes after that acceptance gate. The comparison
-engine and its historical evidence remain valid inputs to that later work.
+Implementation progress and the next rehearsal step are maintained in
+[`STATUS.md`](../STATUS.md); the development sequence and exit criteria are
+maintained in [`VISION.md`](../VISION.md#development-route).

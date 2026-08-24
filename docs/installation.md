@@ -1,11 +1,9 @@
 # Installation, Configuration, and Uninstallation
 
-This guide owns the supported Linux/WSL installation lifecycle, startup
-diagnostics, first-run model configuration, user-local state, export behavior,
-and removal boundaries. The full user-facing acceptance contract is
-[`product-demo-slice.md`](product-demo-slice.md). Contributors running a
-controlled provider-backed evaluation should also read the
-[`Phase 1 evaluation runbook`](phase1-runbook.md).
+This user and operator guide owns the supported Linux/WSL installation
+lifecycle, startup diagnostics, first-run model configuration, user-local
+state, export behavior, and removal boundaries. Start with the repository
+[`README.md`](../README.md) for the shortest install-to-first-build path.
 
 ## External Prerequisites
 
@@ -24,9 +22,7 @@ installer and every `sat` launch then check that condition directly.
 
 SAT pins Python 3.12, OpenClaw 2026.7.1-2, OpenClaw's local Node.js 24.15.0
 runtime, Python dependencies through `uv.lock`, and the generated-code sandbox
-image through `configs/product-policy.json`. The controlled evaluation policy
-uses the same generic Python image but owns separate task-specific environment
-settings.
+image through `configs/product-policy.json`.
 
 SAT never adopts an OpenClaw installation that predates SAT. Its pinned binary
 and Node.js runtime live under the marked application-private
@@ -88,18 +84,8 @@ may override `SAT_INSTALL_ROOT`, `SAT_REPOSITORY_URL`, `SAT_INSTALL_REF`,
 The OpenClaw prefix is intentionally not configurable: accepting an arbitrary
 prefix would allow installation to mutate a pre-existing OpenClaw runtime.
 
-## Contributor Checkout Installation
-
-Contributors may keep the application bound to a development checkout:
-
-```bash
-./scripts/install.sh
-```
-
-This path performs the same locked setup, image build, validation, and launcher
-checks, but it does not create the managed-install marker. The uninstaller
-therefore removes the launchers and checkout environment while preserving the
-development checkout itself.
+Contributors installing from a source checkout should follow
+[`Checkout Installation`](development.md#checkout-installation) instead.
 
 ## First Launch
 
@@ -145,8 +131,7 @@ On the first configured run, SAT then:
 11. Requires explicit confirmation before any build Agent call.
 
 Declining either the profile or build confirmation exits without starting a
-build. The product path constructs its TaskBrief from the confirmed user input
-and never substitutes the task-manager evaluation fixture.
+build.
 
 ## Saved Configuration
 
@@ -156,12 +141,9 @@ SAT configuration is stored atomically with mode `0600` at:
 ${XDG_CONFIG_HOME:-$HOME/.config}/software-agent-team/config.json
 ```
 
-Schema version 3 stores:
-
-- The exact OpenClaw `provider/model` reference;
-- Optional paired input/output prices for controlled evaluation;
-- Optional advanced Tester/Reviewer concurrency;
-- An optional advanced global role-stage timeout override.
+Schema version 3 stores the exact OpenClaw `provider/model` reference and may
+also contain optional evaluation-only defaults. The guided product flow writes
+only the model reference.
 
 The normal first-run wizard stores only the model in SAT configuration and uses
 checked-in runtime defaults. Credential entry and persistence remain owned by
@@ -189,23 +171,11 @@ Scripted product setup needs only a model:
 sat configure --non-interactive --model provider/model
 ```
 
-Controlled evaluations may additionally freeze real prices and runtime
-overrides:
-
-```bash
-sat configure --non-interactive \
-  --model provider/model \
-  --input-cost-per-million-usd 0.50 \
-  --output-cost-per-million-usd 1.50 \
-  --verification-concurrency 1 \
-  --use-role-timeouts
-```
-
-Input and output prices must be supplied together. When the product wizard has
-no trustworthy price, SAT records estimated cost as unavailable rather than
-inventing `$0.00`. Provider-side quotas or spending limits remain necessary
-because usage arrives only after a model call. The advanced `sat run` command
-still requires explicit prices for comparable evaluation evidence.
+Pricing, verification-concurrency, and timeout configuration belong to the
+controlled evaluation surface and are documented in the
+[`Phase 1 evaluation runbook`](phase1-runbook.md). They are not part of normal
+first-use setup. When no trustworthy price is available, a product run reports
+estimated cost as unavailable rather than inventing `$0.00`.
 
 Set an absolute `SAT_CONFIG_PATH` only when the configuration location must be
 overridden. Keep the same value set for later `sat` and `sat-uninstall`
@@ -241,28 +211,6 @@ project setup, start, and test commands. Those commands come from the accepted
 project's validated `sat-project.json`; SAT does not assume a task domain, Web
 framework, or fixed application entry point.
 
-## Timeout Policy
-
-Without an advanced global override, `configs/product-policy.json` supplies
-role-specific product-stage budgets. `configs/run-policy.json` mirrors the
-role defaults for controlled evaluation:
-
-| Roles | Stage budget |
-| --- | ---: |
-| Clarifier and Planner | 120 seconds |
-| Single Agent, Developers, and Integrator | 900 seconds |
-| Tester and Reviewer | 300 seconds |
-
-One stage budget covers the initial response and its optional semantic repair
-together; repair does not restart the clock. The resolved values are frozen in
-`run.json`.
-
-Use `--stage-timeout-seconds N` only when an evaluation deliberately gives
-every role the same budget. Use `--use-role-timeouts` to clear a saved override
-or ignore it for one advanced run. The deprecated
-`--agent-timeout-seconds` spelling retains the same shared-stage semantics only
-until the next major release.
-
 ## Updating an Installation
 
 Rerun the managed installation command. The bootstrap verifies ownership and a
@@ -272,8 +220,8 @@ checks. User configuration and isolated provider state live outside the
 application directory and remain unchanged. Other OpenClaw installations are
 not candidates for reconciliation.
 
-For a contributor checkout, update it through the contributor's normal Git
-workflow and rerun `./scripts/install.sh`.
+For a contributor checkout, follow the update workflow in
+[`development.md`](development.md#checkout-installation).
 
 ## Guided Uninstallation
 
