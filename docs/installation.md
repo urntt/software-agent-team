@@ -127,8 +127,10 @@ back to the installer.
 
 After the user confirms a build and before the first Agent call, the run
 preflight repeats the restricted container and tool-execution probe against the
-exact immutable image ID recorded for that run. This catches a stale or
-unusable runtime without spending provider tokens.
+exact immutable image ID recorded for that run. It also verifies that the
+exact selected `provider/model` resolves through the run-scoped catalog and
+SAT's isolated auth route. These checks catch a stale container or unresolved
+model before spending provider tokens.
 
 On the first configured run, SAT then:
 
@@ -137,16 +139,19 @@ On the first configured run, SAT then:
 2. Offers to open provider-credential setup inside that isolated state;
 3. Reads only SAT's isolated default model without probing the provider and
    asks the user to confirm or replace the exact `provider/model` reference;
-4. Saves only that model reference in SAT configuration;
-5. Offers one explicit minimal provider smoke check, disabled by default;
-6. Asks what the user wants to build;
-7. States the current small-project Python 3.12 execution profile and asks the
+4. Checks that the exact selection has a local catalog/auth route without
+   generating content, and gives a corrective configuration path when it does
+   not;
+5. Saves only that model reference in SAT configuration;
+6. Offers one explicit minimal provider smoke check, disabled by default;
+7. Asks what the user wants to build;
+8. States the current small-project Python 3.12 execution profile and asks the
    user to confirm that runtime boundary;
-8. Collects explicit success conditions and optional constraints;
-9. Asks for one new direct child project directory;
-10. Generates and shows the request, acceptance, destination, and verification
+9. Collects explicit success conditions and optional constraints;
+10. Asks for one new direct child project directory;
+11. Generates and shows the request, acceptance, destination, and verification
    summary;
-11. Requires explicit confirmation before any build Agent call.
+12. Requires explicit confirmation before any build Agent call.
 
 Interactive text is validated before it enters a TaskBrief. If the terminal
 supplies an invalid Unicode byte sequence, SAT explains the affected field and
@@ -182,6 +187,13 @@ OpenClaw profile. Credentials may instead come from a trusted caller
 environment. They are excluded from SAT configuration, exports, generated
 projects, and run evidence.
 
+The pinned runtime may not yet list every explicitly supported provider model.
+For a reviewed compatibility case, SAT adds versioned routing and model
+metadata to its private run configuration without copying a credential. An
+available trusted provider environment variable is represented only by its
+variable name; otherwise OpenClaw resolves the provider through SAT's isolated
+auth profiles. SAT checks the resulting exact model locally before continuing.
+
 Reconfigure or inspect the secret-free values with:
 
 ```bash
@@ -194,6 +206,10 @@ Scripted product setup needs only a model:
 ```bash
 sat configure --non-interactive --model provider/model
 ```
+
+Non-interactive configuration records the requested reference; the next
+`sat` launch validates its exact catalog/auth route before asking project
+questions. Interactive `sat configure` performs that validation before saving.
 
 Pricing, verification-concurrency, and timeout configuration belong to the
 controlled evaluation surface and are documented in the

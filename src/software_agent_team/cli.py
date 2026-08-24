@@ -9,7 +9,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
@@ -57,9 +58,13 @@ from software_agent_team.quality_gates import (
 )
 from software_agent_team.run_control import RunPhase
 from software_agent_team.runtime_configuration import (
+    OpenClawModelInspection,
     RuntimeConfigurationError,
+    has_model_compatibility,
+    inspect_openclaw_model,
     inspect_runtime_preflight,
     inspect_sandbox_image,
+    materialize_model_check_configuration,
     materialize_run_configuration,
     persist_runtime_preflight,
 )
@@ -317,6 +322,17 @@ def _configure(args: argparse.Namespace) -> int:
         verification_concurrency=concurrency,
         stage_timeout_seconds=timeout,
     )
+    if interactive:
+        inspection = _inspect_selected_model(
+            DEFAULT_OPENCLAW_BINARY,
+            configuration.model,
+            state_dir=state_paths.openclaw,
+            config_path=openclaw_config,
+        )
+        if not inspection.available:
+            raise RuntimeConfigurationError(
+                f"selected model is not locally ready: {inspection.error}"
+            )
     save_user_configuration(configuration, path)
     print("configuration saved")
     _print_configuration(configuration, path)
@@ -503,6 +519,7 @@ def _execute_workflow(
             sandbox_binary=options.sandbox_binary,
             sandbox_image=configuration.policy.sandbox.image,
             expected_sandbox_image_id=frozen_sandbox_image,
+            expected_model=options.model,
         )
         persist_runtime_preflight(
             preflight,
@@ -515,7 +532,10 @@ def _execute_workflow(
                 f"sandbox_image_present={preflight.sandbox_image_present}, "
                 f"sandbox_container_ready={preflight.sandbox_container_ready}, "
                 "sandbox_container_error="
-                f"{preflight.sandbox_container_error or 'none'}"
+                f"{preflight.sandbox_container_error or 'none'}, "
+                f"model={preflight.model or 'none'}, "
+                f"model_available={preflight.model_available}, "
+                f"model_error={preflight.model_error or 'none'}"
             )
 
     def report_gate(
@@ -731,6 +751,47 @@ def _run_openclaw_configuration(
         )
 
 
+@contextmanager
+def _effective_model_configuration(
+    *,
+    model: str,
+    configured_path: Path,
+) -> Iterator[Path]:
+    """Yield the private config plus any pinned model-catalog supplement."""
+
+    if not has_model_compatibility(model) and configured_path.is_file():
+        yield configured_path
+        return
+    with tempfile.TemporaryDirectory(prefix="sat-model-check-") as temporary:
+        compatibility_path = Path(temporary) / "openclaw.model.json"
+        materialize_model_check_configuration(
+            compatibility_path,
+            model=model,
+        )
+        yield compatibility_path
+
+
+def _inspect_selected_model(
+    openclaw_binary: Path,
+    model: str,
+    *,
+    state_dir: Path,
+    config_path: Path,
+) -> OpenClawModelInspection:
+    """Inspect the exact effective model without making a provider request."""
+
+    with _effective_model_configuration(
+        model=model,
+        configured_path=config_path,
+    ) as effective_config:
+        return inspect_openclaw_model(
+            openclaw_binary=openclaw_binary,
+            openclaw_state_dir=state_dir,
+            config_path=effective_config,
+            model=model,
+        )
+
+
 def _run_provider_smoke(
     openclaw_binary: Path,
     model: str,
@@ -740,38 +801,42 @@ def _run_provider_smoke(
 ) -> None:
     """Run one explicitly authorized minimal provider request."""
 
-    try:
-        result = subprocess.run(
-            [
-                str(openclaw_binary),
-                "infer",
-                "model",
-                "run",
-                "--local",
-                "--model",
-                model,
-                "--prompt",
-                'Reply with exactly: {"status":"ok"}',
-                "--json",
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-            stdin=subprocess.DEVNULL,
-            timeout=180,
-            env={
-                **os.environ,
-                **isolated_openclaw_environment(
-                    state_dir=state_dir,
-                    config_path=config_path,
-                ),
-            },
-            shell=False,
-        )
-    except (OSError, subprocess.SubprocessError) as error:
-        raise RuntimeConfigurationError(
-            "the provider smoke check could not run"
-        ) from error
+    with _effective_model_configuration(
+        model=model,
+        configured_path=config_path,
+    ) as effective_config:
+        try:
+            result = subprocess.run(
+                [
+                    str(openclaw_binary),
+                    "infer",
+                    "model",
+                    "run",
+                    "--local",
+                    "--model",
+                    model,
+                    "--prompt",
+                    'Reply with exactly: {"status":"ok"}',
+                    "--json",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                stdin=subprocess.DEVNULL,
+                timeout=180,
+                env={
+                    **os.environ,
+                    **isolated_openclaw_environment(
+                        state_dir=state_dir,
+                        config_path=effective_config,
+                    ),
+                },
+                shell=False,
+            )
+        except (OSError, subprocess.SubprocessError) as error:
+            raise RuntimeConfigurationError(
+                "the provider smoke check could not run"
+            ) from error
     if result.returncode != 0:
         raise RuntimeConfigurationError("the provider smoke check failed")
     try:
@@ -850,9 +915,18 @@ def _ensure_product_configuration(
             "SAT OpenClaw configuration must not be a symbolic link"
         )
     if current is not None and openclaw_config.is_file():
-        print(f"✓ Model configuration: {current.model}")
-        print(f"✓ Isolated OpenClaw state: {state_paths.openclaw}")
-        return current
+        inspection = _inspect_selected_model(
+            DEFAULT_OPENCLAW_BINARY,
+            current.model,
+            state_dir=state_paths.openclaw,
+            config_path=openclaw_config,
+        )
+        if inspection.available:
+            print(f"✓ Model configuration: {current.model}")
+            print(f"✓ Isolated OpenClaw state: {state_paths.openclaw}")
+            return current
+        print(f"! Saved model is not locally ready: {current.model}")
+        print(f"  {inspection.error}")
 
     print("\nFirst-run model setup")
     print("SAT uses an isolated OpenClaw runtime and private provider state.")
@@ -895,6 +969,16 @@ def _ensure_product_configuration(
             stage_timeout_seconds=(
                 current.stage_timeout_seconds if current is not None else None
             ),
+        )
+    inspection = _inspect_selected_model(
+        DEFAULT_OPENCLAW_BINARY,
+        configuration.model,
+        state_dir=state_paths.openclaw,
+        config_path=openclaw_config,
+    )
+    if not inspection.available:
+        raise RuntimeConfigurationError(
+            f"selected model is not locally ready: {inspection.error}"
         )
     save_user_configuration(configuration, path)
     print(f"✓ Saved secret-free model configuration to {path}")

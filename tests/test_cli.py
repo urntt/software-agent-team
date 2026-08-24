@@ -12,6 +12,7 @@ from software_agent_team.benchmark_seed import prepare_benchmark_seed
 from software_agent_team.cli import main
 from software_agent_team.run_control import RunPhase
 from software_agent_team.runtime_configuration import (
+    OpenClawModelInspection,
     RuntimePreflight,
     SandboxImageInspection,
 )
@@ -225,6 +226,14 @@ def test_cli_interactive_configuration_prompts_for_first_run_defaults(
     monkeypatch.setenv("SAT_STATE_ROOT", str(tmp_path / "state"))
     monkeypatch.setattr(cli.sys, "stdin", SimpleNamespace(isatty=lambda: True))
     monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+    monkeypatch.setattr(
+        cli,
+        "_inspect_selected_model",
+        lambda *_args, **_kwargs: OpenClawModelInspection(
+            model="provider/model",
+            available=True,
+        ),
+    )
 
     assert main(["configure"]) == 0
 
@@ -287,6 +296,14 @@ def test_first_run_model_setup_keeps_credentials_and_prices_outside_sat(
         "_discover_openclaw_default_model",
         lambda _binary, **_kwargs: None,
     )
+    monkeypatch.setattr(
+        cli,
+        "_inspect_selected_model",
+        lambda *_args, **_kwargs: OpenClawModelInspection(
+            model="provider/model",
+            available=True,
+        ),
+    )
 
     state_paths = cli.ProductStatePaths.below(tmp_path / "state")
     cli.ensure_product_state(state_paths)
@@ -300,7 +317,55 @@ def test_first_run_model_setup_keeps_credentials_and_prices_outside_sat(
     assert "api_key" not in payload
 
 
+def test_saved_model_is_rechecked_before_the_product_questions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    configuration_path = tmp_path / "config.json"
+    monkeypatch.setenv("SAT_CONFIG_PATH", str(configuration_path))
+    save_user_configuration(
+        UserConfiguration(model="provider/missing-model"),
+        configuration_path,
+    )
+    state_paths = cli.ProductStatePaths.below(tmp_path / "state")
+    cli.ensure_product_state(state_paths)
+    (state_paths.openclaw / "openclaw.json").write_text("{}", encoding="utf-8")
+    answers = iter(
+        (
+            "no",
+            "",
+        )
+    )
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+    monkeypatch.setattr(
+        cli,
+        "_discover_openclaw_default_model",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        cli,
+        "_inspect_selected_model",
+        lambda *_args, **_kwargs: OpenClawModelInspection(
+            model="provider/missing-model",
+            available=False,
+            error="OpenClaw does not recognize the configured model",
+        ),
+    )
+
+    with pytest.raises(
+        cli.RuntimeConfigurationError,
+        match="selected model is not locally ready",
+    ):
+        cli._ensure_product_configuration(state_paths)
+
+    output = capsys.readouterr().out
+    assert "Saved model is not locally ready" in output
+    assert "First-run model setup" in output
+
+
 def test_provider_smoke_uses_the_selected_model_without_exposing_output(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     observed: dict[str, object] = {}
@@ -320,8 +385,10 @@ def test_provider_smoke_uses_the_selected_model_without_exposing_output(
 
     monkeypatch.setattr(cli.subprocess, "run", fake_run)
 
-    state = Path("/tmp/sat-openclaw-state")
+    state = tmp_path / "sat-openclaw-state"
+    state.mkdir()
     config = state / "openclaw.json"
+    config.write_text("{}", encoding="utf-8")
     cli._run_provider_smoke(
         Path("/opt/openclaw"),
         "provider/model",
@@ -340,6 +407,47 @@ def test_provider_smoke_uses_the_selected_model_without_exposing_output(
     assert observed["kwargs"]["env"]["OPENCLAW_GATEWAY_URL"] == ""
     assert observed["kwargs"]["env"]["OPENCLAW_OAUTH_DIR"] == str(state / "credentials")
     assert observed["kwargs"]["env"]["OPENAI_API_KEY"] == "trusted-provider-key"
+
+
+def test_provider_smoke_registers_the_deepseek_vision_compatibility_model(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, object] = {}
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+
+    def fake_run(argv: list[str], **kwargs: object) -> SimpleNamespace:
+        effective_path = Path(kwargs["env"]["OPENCLAW_CONFIG_PATH"])
+        observed["argv"] = argv
+        observed["effective_path"] = effective_path
+        observed["payload"] = json.loads(effective_path.read_text(encoding="utf-8"))
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({"ok": True, "outputs": [{"text": '{"status":"ok"}'}]}),
+        )
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    state = tmp_path / "state"
+    state.mkdir()
+    configured_path = state / "openclaw.json"
+    configured_path.write_text("{}", encoding="utf-8")
+
+    cli._run_provider_smoke(
+        Path("/opt/openclaw"),
+        "deepseek/deepseek-v4-flash-vision-exp",
+        state_dir=state,
+        config_path=configured_path,
+    )
+
+    payload = observed["payload"]
+    assert payload["models"]["providers"]["deepseek"]["models"][0]["id"] == (
+        "deepseek-v4-flash-vision-exp"
+    )
+    assert "apiKey" not in json.dumps(payload)
+    assert observed["effective_path"] != configured_path
+    assert observed["argv"][observed["argv"].index("--model") + 1] == (
+        "deepseek/deepseek-v4-flash-vision-exp"
+    )
 
 
 def test_openclaw_configuration_has_no_hidden_setup_deadline(
@@ -665,8 +773,35 @@ def test_cli_run_constructs_the_real_phase1_boundary_without_invoking_it(
             sandbox_image_present=True,
         )
 
+    def fake_materialize(*args: object, **_kwargs: object) -> Path:
+        destination = args[1]
+        assert isinstance(destination, Path)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text("{}", encoding="utf-8")
+        return destination
+
+    def fake_inspect_runtime(**kwargs: object) -> RuntimePreflight:
+        observed["preflight_kwargs"] = kwargs
+        return RuntimePreflight(
+            openclaw_binary="/opt/openclaw",
+            openclaw_version="OpenClaw test",
+            openclaw_state_dir=str(kwargs["openclaw_state_dir"]),
+            runtime_config=str(kwargs["runtime_config"]),
+            sandbox_binary="/usr/bin/docker",
+            sandbox_version="Docker version test",
+            sandbox_image="sat-python-quality:phase1-v2",
+            sandbox_image_id=f"sha256:{'a' * 64}",
+            config_valid=True,
+            sandbox_image_present=True,
+            sandbox_container_ready=True,
+            model="provider/model",
+            model_available=True,
+        )
+
     monkeypatch.setattr(cli, "WorkflowCoordinator", FakeCoordinator)
     monkeypatch.setattr(cli, "inspect_sandbox_image", fake_inspect_sandbox_image)
+    monkeypatch.setattr(cli, "materialize_run_configuration", fake_materialize)
+    monkeypatch.setattr(cli, "inspect_runtime_preflight", fake_inspect_runtime)
     frozen_brief = REPOSITORY_ROOT / "benchmarks" / "task_manager" / "task-brief.json"
     payload = json.loads(frozen_brief.read_text(encoding="utf-8"))
     payload["run_id"] = "task-manager-trial-2"
@@ -711,6 +846,20 @@ def test_cli_run_constructs_the_real_phase1_boundary_without_invoking_it(
     workspace.mkdir()
     gate_runner = gate_factory(run_directory, workspace)
     assert gate_runner.sandbox.image == f"sha256:{'a' * 64}"
+    runtime_workspace = tmp_path / "runtime-workspace"
+    runtime_workspace.mkdir()
+    runtime_run = tmp_path / "runtime-run"
+    runtime_run.mkdir()
+    observed["runtime_setup"](
+        SimpleNamespace(workspace_path=str(runtime_workspace)),
+        runtime_run,
+    )
+    assert observed["preflight_kwargs"]["expected_model"] == "provider/model"
+    persisted = json.loads(
+        (runtime_run / "runtime-preflight.json").read_text(encoding="utf-8")
+    )
+    assert persisted["model"] == "provider/model"
+    assert persisted["model_available"] is True
     assert "run completed" in capsys.readouterr().out
 
 

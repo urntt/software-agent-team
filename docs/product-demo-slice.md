@@ -117,8 +117,10 @@ provide:
 
 The wizard offers OpenClaw's trusted setup inside SAT's isolated state, detects
 only that private state's configured default model without probing the
-provider, and offers to use it. It never imports an existing OpenClaw profile.
-The optional authorized smoke check is the semantic provider/auth validation
+provider, and offers to use it. Before request collection, SAT confirms that
+the exact model resolves through its configured local catalog and auth route
+without generating content. It never imports an existing OpenClaw profile.
+The optional authorized smoke check remains the semantic provider request
 step. Secrets never enter SAT's control-plane configuration,
 repository, generated project, run artifacts, logs, exports, or terminal echo;
 OpenClaw stores them only in SAT's private OpenClaw state unless they are
@@ -259,8 +261,9 @@ The Product Demo Slice is complete only when all of the following are true:
    SAT's install, configuration, execution, and uninstall targets.
 3. Installation automatically diagnoses the supported environment conditions
    and produces actionable failures.
-4. From a new project directory, `sat` completes startup diagnostics and the
-   first-run configuration without requiring another SAT subcommand.
+4. From a new project directory, `sat` completes startup diagnostics,
+   confirms the exact model's local catalog/auth route, and completes first-run
+   configuration without requiring another SAT subcommand.
 5. The normal user is not asked for prices, concurrency, timeouts, repair
    limits, team IDs, policy paths, run IDs, or JSON files.
 6. SAT asks what to build, performs bounded clarification, shows a requirements

@@ -156,10 +156,11 @@ workspaces/<run_id>/
 ```
 
 `runtime-preflight.json` records the private OpenClaw and Docker identities,
-configuration validity, image presence and immutable ID, restricted-container
-tool execution and liveness, and any non-secret container probe error. A run is
-ready only when the configuration, image identity, and container execution
-checks all pass.
+configuration validity, the exact selected model and local availability result,
+image presence and immutable ID, restricted-container tool execution and
+liveness, and any non-secret model or container probe error. A run is ready
+only when the configuration, exact model route, image identity, and container
+execution checks all pass.
 
 Phase artifacts and captured process output are write-once. `run.json` is
 atomically replaced under an optimistic revision check and records the
@@ -243,6 +244,15 @@ when investigating it rather than editing artifacts in place.
   reused, reconfigured, stopped, upgraded, downgraded, or uninstalled by SAT.
 - Runtime configuration is run-scoped, secret-free, mode `0600`, and ignored
   by Git.
+- A selected model must appear exactly once as available in OpenClaw's
+  configured local model view before Agent execution. This inspection does not
+  generate content. `runtime-preflight.json` persists the selected model,
+  availability result, and a bounded non-secret error.
+- A reviewed compatibility catalog may add routing and model metadata absent
+  from the pinned OpenClaw release. It cannot contain a credential or silently
+  select a fallback. When a trusted caller credential variable is available,
+  the generated config contains only its variable reference; SAT's isolated
+  auth profiles remain the other credential source.
 - Agent containers receive an explicit non-secret environment instead of the
   host process environment or provider credentials.
 - SAT's isolated OpenClaw host process owns model-provider access. Credentials

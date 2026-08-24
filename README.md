@@ -85,6 +85,11 @@ configuration. Provider credentials remain in SAT's isolated OpenClaw state
 or in an explicitly trusted caller environment; they are not written to the
 repository, generated project, run evidence, or SAT exports.
 
+Before asking for a project or starting an Agent, SAT checks that its isolated
+runtime recognizes the exact selected model and has a local catalog/auth route
+for it. This check does not generate content. An optional provider smoke check
+remains a separate, explicitly authorized action because it can incur usage.
+
 See the [installation and configuration guide](docs/installation.md) for
 configuration paths, provider setup, saved defaults, and recovery boundaries.
 

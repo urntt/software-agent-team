@@ -132,6 +132,15 @@ code or experiment evidence justifies a replacement.
   and uses a separate SAT-owned OpenClaw config, credential, session, cache,
   and workspace root. It never adopts another OpenClaw installation or
   profile, even when that installation is compatible and ready.
+- The exact selected `provider/model` must resolve through SAT's isolated
+  catalog and auth state before the first Agent invocation. Startup and
+  run-scoped preflight perform this non-generation check, while an actual
+  provider smoke request remains separately authorized.
+- SAT may carry a small versioned, secret-free catalog supplement when an
+  explicitly supported provider model exists upstream but is absent from the
+  pinned OpenClaw catalog. The supplement declares only routing and model
+  metadata; credentials remain in SAT's isolated auth profiles or a trusted
+  caller environment, and the selected model never falls back silently.
 - The execution boundary normalizes OpenClaw's local and Gateway JSON response
   shapes and records split provider/model metadata as one canonical
   `provider/model` identity.
@@ -334,6 +343,7 @@ the result. Clarification quality is evaluated separately.
 | Keep the Python controller authoritative | Lifecycle, budgets, evidence checks, and termination must be deterministic rather than dependent on an Agent's self-report. |
 | Use OpenClaw as the Agent runtime, not the orchestrator | OpenClaw provides model/provider integration, sessions, tools, and sandboxing; the experiment still needs a model-independent control plane. |
 | Isolate SAT's OpenClaw runtime and state from every existing installation | Compatibility is not ownership. Installing a pinned private binary and overriding every mutable OpenClaw path gives SAT reproducibility without reading, changing, stopping, or deleting a user's existing binary, Gateway, profile, configuration, credentials, sessions, caches, or workspaces. A collision at SAT's private target fails safely instead of being adopted. |
+| Validate and, when necessary, supplement the exact model catalog before Agent work | Saving a `provider/model` string does not prove that the pinned runtime can resolve it. A non-generation catalog/auth check catches unsupported or unauthenticated selections before a build, while a versioned secret-free supplement can bridge a known catalog lag without copying credentials or enabling fallback. |
 | Start with `function_specialized` | It introduces independent planning, testing, and review without the merge conflicts that would confound the first vertical slice. |
 | Keep Tester and Reviewer independent, with configurable dispatch concurrency | They inspect the same immutable evidence and never consume each other's interpretation. Parallel dispatch reduces elapsed time when provider capacity permits; serial dispatch prevents overload without changing the semantic experiment. |
 | Deny Agent-spawning tools to every role | Untracked sub-Agent calls bypass controller budgets, attribution, and scheduling, so only the deterministic controller may authorize model invocations. |

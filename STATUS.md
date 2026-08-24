@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** WSL sandbox process-limit defect fixed; rerun next
+**Current milestone:** Exact vision model route fixed; WSL delivery rerun next
 
 **Last updated:** August 24, 2026
 
@@ -44,11 +44,11 @@ generates a request-specific run ID, TaskBrief, trusted source, workspace, and
 evidence roots, shows controller-derived progress, and delivers only an
 accepted clean Git result with project-specific commands.
 
-This is not yet release-stable evidence. Two WSL rehearsals completed managed
-installation or update, startup diagnostics, isolated provider setup, request
-confirmation, internal run materialization, and the Planner stage. Both then
-reached a stopped Developer sandbox before any workspace tool could run, so no
-project was delivered. The second run was correctly classified as
+This is not yet release-stable evidence. Two earlier WSL rehearsals completed
+managed installation or update, startup diagnostics, isolated provider setup,
+request confirmation, internal run materialization, and the Planner stage.
+Both then reached a stopped Developer sandbox before any workspace tool could
+run, so no project was delivered. The second run was correctly classified as
 `dependency_unavailable` instead of a source-code failure.
 
 The exported execution record identified the stopped container, and a
@@ -63,10 +63,29 @@ execute a Python helper, inspect liveness, and remove the probe. Invalid
 terminal Unicode is now rejected and recollected at the affected prompt rather
 than reaching Pydantic as a raw validation failure.
 
-The complete 376-test offline suite passes, and a real Docker probe accepts
-the corrected restricted runtime with successful in-container Python tool
-execution. This is regression evidence for the diagnosed failure, not a
-substitute for the pending end-to-end WSL rerun.
+The third WSL rehearsal updated the managed application, passed installation,
+and persisted `config_valid=true`, `sandbox_container_ready=true`, and no
+container error in run `sat-20260824-144218-5102217f`. This directly confirms
+the process-limit fix on the Docker Desktop/WSL host. The run then stopped
+before a provider request because the pinned DeepSeek plugin catalog knew only
+its stable model while the selected
+`deepseek/deepseek-v4-flash-vision-exp` reference had not been declared in the
+run-scoped OpenClaw provider catalog. OpenClaw reported the exact failure as
+`Unknown model`, but the old preflight did not inspect that model route and the
+terminal summary therefore surfaced it as a Planner process failure.
+
+SAT now carries a narrow secret-free catalog supplement for that exact model,
+checks the selected configured model and auth route during guided startup and
+run preflight, persists the model result in `runtime-preflight.json`, and stops
+with the direct model diagnostic before any Agent call when it is unavailable.
+An available shell key is represented only by `${DEEPSEEK_API_KEY}`; otherwise
+the isolated OpenClaw auth profile remains authoritative. The generated config
+passes the pinned OpenClaw validator, the exact model is reported locally as
+available, and an authorized minimal inference request returned HTTP 200 with
+the exact provider/model and expected response. This is catalog and
+provider-route evidence, not a completed role or product run. The complete
+385-test offline suite passes, and the corrected restricted Docker helper probe
+remains successful.
 
 The full provider-backed WSL journey still needs to be rerun through accepted
 delivery. The current product supports small greenfield Python 3.12 projects;
@@ -175,8 +194,9 @@ controller owns dynamic revision and termination decisions.
 
 ## Not Yet Available or Completed
 
-- A provider-backed rerun of the complete product journey after two WSL
-  rehearsals exposed and isolated the sandbox process-limit defect;
+- A provider-backed rerun of the complete product journey after the third WSL
+  rehearsal confirmed the sandbox fix and exposed the missing exact-model
+  catalog entry;
 - Adaptive follow-up clarification beyond the current bounded request, success
   condition, and constraint prompts;
 - Generated-project execution profiles beyond the current local Python 3.12
@@ -197,11 +217,12 @@ action succeeded after interruption.
 ## Next Milestone
 
 Rerun the Phase 2 acceptance rehearsal on the supported WSL account: update
-through the public managed-install command, confirm one authorized provider and
-model through the guided flow, request a representative project within the
-Python profile, observe every progress stage, run the delivered project's exact
-commands, inspect failure guidance, and record the result. Fix any further root
-causes before calling the Product Demo Slice complete.
+through the public managed-install command, retain or confirm the saved
+`deepseek/deepseek-v4-flash-vision-exp` selection through the guided flow,
+request a representative project within the Python profile, observe every
+progress stage, run the delivered project's exact commands, inspect failure
+guidance, and record the result. Fix any further root causes before calling the
+Product Demo Slice complete.
 
 Topology implementation and comparison resume in Phase 3 after this gate. The
 Phase 2 acceptance criteria are defined in

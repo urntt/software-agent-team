@@ -24,6 +24,51 @@ class RuntimeConfigurationError(ValueError):
     """Raised when a safe run-scoped Agent configuration cannot be created."""
 
 
+_DEEPSEEK_VISION_MODEL = "deepseek/deepseek-v4-flash-vision-exp"
+_MODEL_COMPATIBILITY: dict[str, dict[str, Any]] = {
+    _DEEPSEEK_VISION_MODEL: {
+        "agent": {
+            "params": {
+                "maxTokens": 16_384,
+                "extra_body": {"thinking": {"type": "disabled"}},
+            }
+        },
+        "provider_id": "deepseek",
+        "credential_env": "DEEPSEEK_API_KEY",
+        "provider": {
+            "baseUrl": "https://api.deepseek.com",
+            "api": "openai-completions",
+            "timeoutSeconds": 600,
+            "models": [
+                {
+                    "id": "deepseek-v4-flash-vision-exp",
+                    "name": "DeepSeek V4 Flash Vision Exp",
+                    "reasoning": True,
+                    "input": ["text", "image"],
+                    "contextWindow": 1_000_000,
+                    "maxTokens": 384_000,
+                    "compat": {
+                        "supportsUsageInStreaming": True,
+                        "supportsReasoningEffort": True,
+                        "maxTokensField": "max_tokens",
+                    },
+                }
+            ],
+        },
+    }
+}
+
+
+class OpenClawModelInspection(BaseModel):
+    """Offline catalog and credential readiness for one exact model ref."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    model: str = Field(min_length=1)
+    available: bool
+    error: str | None = Field(default=None, max_length=1000)
+
+
 class SandboxImageInspection(BaseModel):
     """Non-secret identity returned for one local Docker image reference."""
 
@@ -82,6 +127,9 @@ class RuntimePreflight(BaseModel):
     sandbox_image_present: bool
     sandbox_container_ready: bool
     sandbox_container_error: str | None = Field(default=None, max_length=1000)
+    model: str | None = Field(default=None, min_length=1)
+    model_available: bool | None = None
+    model_error: str | None = Field(default=None, max_length=1000)
 
     @property
     def ready(self) -> bool:
@@ -93,7 +141,66 @@ class RuntimePreflight(BaseModel):
             and self.sandbox_image_id is not None
             and self.sandbox_container_ready
             and self.sandbox_container_error is None
+            and (self.model is None or self.model_available is True)
+            and self.model_error is None
         )
+
+
+def has_model_compatibility(model: str) -> bool:
+    """Return whether SAT carries a catalog supplement for a pinned runtime."""
+
+    return model.strip() in _MODEL_COMPATIBILITY
+
+
+def _apply_model_compatibility(payload: dict[str, Any], model: str) -> None:
+    compatibility = _MODEL_COMPATIBILITY.get(model)
+    if compatibility is None:
+        return
+
+    agents = payload.setdefault("agents", {})
+    defaults = agents.setdefault("defaults", {})
+    agent_models = defaults.setdefault("models", {})
+    if not isinstance(agent_models, dict):
+        raise RuntimeConfigurationError("OpenClaw Agent model settings are invalid")
+    agent_models.setdefault(
+        model,
+        json.loads(json.dumps(compatibility["agent"])),
+    )
+
+    models = payload.setdefault("models", {})
+    if not isinstance(models, dict):
+        raise RuntimeConfigurationError("OpenClaw model catalog is invalid")
+    models.setdefault("mode", "merge")
+    providers = models.setdefault("providers", {})
+    if not isinstance(providers, dict):
+        raise RuntimeConfigurationError("OpenClaw model providers are invalid")
+    provider_id = compatibility["provider_id"]
+    provider_payload = json.loads(json.dumps(compatibility["provider"]))
+    credential_env = compatibility.get("credential_env")
+    if isinstance(credential_env, str) and os.environ.get(credential_env, "").strip():
+        provider_payload["apiKey"] = f"${{{credential_env}}}"
+    configured_provider = providers.get(provider_id)
+    if configured_provider is None:
+        providers[provider_id] = provider_payload
+        return
+    if not isinstance(configured_provider, dict):
+        raise RuntimeConfigurationError(
+            f"OpenClaw provider configuration is invalid: {provider_id}"
+        )
+    for key, value in provider_payload.items():
+        if key != "models":
+            configured_provider.setdefault(key, value)
+    configured_models = configured_provider.setdefault("models", [])
+    if not isinstance(configured_models, list):
+        raise RuntimeConfigurationError(
+            f"OpenClaw provider model catalog is invalid: {provider_id}"
+        )
+    compatibility_model = provider_payload["models"][0]
+    if not any(
+        isinstance(item, dict) and item.get("id") == compatibility_model["id"]
+        for item in configured_models
+    ):
+        configured_models.append(compatibility_model)
 
 
 def persist_runtime_preflight(
@@ -142,6 +249,161 @@ def _fsync_directory(path: Path) -> None:
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
+
+
+def _persist_private_json(
+    payload: Mapping[str, Any],
+    destination: Path,
+    *,
+    label: str,
+) -> Path:
+    destination_parent = destination.parent
+    destination_parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if destination_parent.is_symlink() or not destination_parent.is_dir():
+        raise RuntimeConfigurationError(f"{label} parent must be a real directory")
+    if destination.exists() or destination.is_symlink():
+        raise RuntimeConfigurationError(f"{label} already exists: {destination}")
+
+    content = f"{json.dumps(payload, ensure_ascii=False, indent=2)}\n".encode()
+    temporary = destination_parent / f".{destination.name}.{uuid4().hex}.tmp"
+    try:
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "wb") as output:
+            output.write(content)
+            output.flush()
+            os.fsync(output.fileno())
+        try:
+            os.link(temporary, destination)
+        except FileExistsError as error:
+            raise RuntimeConfigurationError(
+                f"{label} already exists: {destination}"
+            ) from error
+        os.chmod(destination, 0o600)
+        _fsync_directory(destination_parent)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return destination
+
+
+def materialize_model_check_configuration(
+    destination: Path,
+    *,
+    model: str,
+) -> Path:
+    """Write a secret-free config for local catalog checks and approved smoke."""
+
+    normalized = model.strip()
+    provider, separator, model_id = normalized.partition("/")
+    if not provider or not separator or not model_id:
+        raise RuntimeConfigurationError(
+            "OpenClaw model must use a provider/model reference"
+        )
+    payload: dict[str, Any] = {
+        "agents": {
+            "defaults": {
+                "model": {"primary": normalized, "fallbacks": []},
+            }
+        }
+    }
+    _apply_model_compatibility(payload, normalized)
+    return _persist_private_json(
+        payload,
+        destination,
+        label="model check configuration",
+    )
+
+
+def inspect_openclaw_model(
+    *,
+    openclaw_binary: Path,
+    openclaw_state_dir: Path,
+    config_path: Path,
+    model: str,
+    timeout_seconds: int = 30,
+) -> OpenClawModelInspection:
+    """Check one exact local model catalog/auth route without generation."""
+
+    normalized = model.strip()
+    provider, separator, model_id = normalized.partition("/")
+    if not provider or not separator or not model_id:
+        raise RuntimeConfigurationError(
+            "OpenClaw model must use a provider/model reference"
+        )
+    if timeout_seconds < 1:
+        raise RuntimeConfigurationError("model inspection timeout must be positive")
+    if not openclaw_binary.is_file() or not os.access(openclaw_binary, os.X_OK):
+        raise RuntimeConfigurationError("OpenClaw binary is unavailable")
+    if not config_path.is_file() or config_path.is_symlink():
+        raise RuntimeConfigurationError("model inspection configuration is unavailable")
+    if not openclaw_state_dir.is_dir() or openclaw_state_dir.is_symlink():
+        raise RuntimeConfigurationError("SAT OpenClaw state directory is unavailable")
+
+    try:
+        result = subprocess.run(
+            [
+                str(openclaw_binary),
+                "models",
+                "list",
+                "--json",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            timeout=timeout_seconds,
+            env={
+                **os.environ,
+                **isolated_openclaw_environment(
+                    state_dir=openclaw_state_dir,
+                    config_path=config_path,
+                ),
+            },
+            shell=False,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise RuntimeConfigurationError("OpenClaw model inspection failed") from error
+    if result.returncode != 0:
+        return OpenClawModelInspection(
+            model=normalized,
+            available=False,
+            error=f"OpenClaw model listing exited with status {result.returncode}",
+        )
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return OpenClawModelInspection(
+            model=normalized,
+            available=False,
+            error="OpenClaw model listing returned invalid JSON",
+        )
+    entries = payload.get("models") if isinstance(payload, dict) else None
+    if not isinstance(entries, list):
+        return OpenClawModelInspection(
+            model=normalized,
+            available=False,
+            error="OpenClaw model listing omitted its model catalog",
+        )
+    matches = [
+        entry
+        for entry in entries
+        if isinstance(entry, dict) and entry.get("key") == normalized
+    ]
+    if len(matches) != 1:
+        return OpenClawModelInspection(
+            model=normalized,
+            available=False,
+            error=f"OpenClaw does not recognize the configured model: {normalized}",
+        )
+    if matches[0].get("available") is not True:
+        return OpenClawModelInspection(
+            model=normalized,
+            available=False,
+            error=(
+                "OpenClaw has no available catalog/auth route for the configured "
+                f"model: {normalized}"
+            ),
+        )
+    return OpenClawModelInspection(model=normalized, available=True)
 
 
 def inspect_sandbox_image(
@@ -495,6 +757,7 @@ def materialize_run_configuration(
     defaults["skipBootstrap"] = True
     if model is not None:
         defaults["model"] = {"primary": model, "fallbacks": []}
+        _apply_model_compatibility(payload, model)
     sandbox = defaults["sandbox"]
     sandbox["scope"] = "session"
     docker = sandbox.setdefault("docker", {})
@@ -538,36 +801,11 @@ def materialize_run_configuration(
     for agent in agents["list"]:
         agent["workspace"] = str(resolved_workspace)
 
-    destination_parent = destination.parent
-    destination_parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    if destination_parent.is_symlink() or not destination_parent.is_dir():
-        raise RuntimeConfigurationError(
-            "runtime configuration parent must be a real directory"
-        )
-    if destination.exists() or destination.is_symlink():
-        raise RuntimeConfigurationError(
-            f"runtime configuration already exists: {destination}"
-        )
-
-    content = f"{json.dumps(payload, ensure_ascii=False, indent=2)}\n".encode()
-    temporary = destination_parent / f".{destination.name}.{uuid4().hex}.tmp"
-    try:
-        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(descriptor, "wb") as output:
-            output.write(content)
-            output.flush()
-            os.fsync(output.fileno())
-        try:
-            os.link(temporary, destination)
-        except FileExistsError as error:
-            raise RuntimeConfigurationError(
-                f"runtime configuration already exists: {destination}"
-            ) from error
-        os.chmod(destination, 0o600)
-        _fsync_directory(destination_parent)
-    finally:
-        temporary.unlink(missing_ok=True)
-    return destination
+    return _persist_private_json(
+        payload,
+        destination,
+        label="runtime configuration",
+    )
 
 
 def inspect_runtime_preflight(
@@ -578,9 +816,10 @@ def inspect_runtime_preflight(
     sandbox_binary: str,
     sandbox_image: str,
     expected_sandbox_image_id: str | None = None,
+    expected_model: str | None = None,
     timeout_seconds: int = 30,
 ) -> RuntimePreflight:
-    """Check binaries, config, and sandbox lifecycle without model calls."""
+    """Check config, selected model, and sandbox execution without model calls."""
 
     if timeout_seconds < 1:
         raise RuntimeConfigurationError("preflight timeout must be positive")
@@ -616,6 +855,23 @@ def inspect_runtime_preflight(
         )
     except (OSError, subprocess.SubprocessError) as error:
         raise RuntimeConfigurationError("runtime preflight command failed") from error
+
+    model_inspection: OpenClawModelInspection | None = None
+    if expected_model is not None:
+        if config.returncode == 0:
+            model_inspection = inspect_openclaw_model(
+                openclaw_binary=openclaw_binary,
+                openclaw_state_dir=openclaw_state_dir,
+                config_path=runtime_config,
+                model=expected_model,
+                timeout_seconds=timeout_seconds,
+            )
+        else:
+            model_inspection = OpenClawModelInspection(
+                model=expected_model,
+                available=False,
+                error="OpenClaw configuration is invalid",
+            )
 
     sandbox = inspect_sandbox_image(
         sandbox_binary=sandbox_binary,
@@ -656,4 +912,9 @@ def inspect_runtime_preflight(
         sandbox_image_present=sandbox.sandbox_image_present,
         sandbox_container_ready=sandbox_container_ready,
         sandbox_container_error=sandbox_container_error,
+        model=(model_inspection.model if model_inspection is not None else None),
+        model_available=(
+            model_inspection.available if model_inspection is not None else None
+        ),
+        model_error=(model_inspection.error if model_inspection is not None else None),
     )

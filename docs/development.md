@@ -116,6 +116,22 @@ gate use that immutable ID; preflight fails if the configured tag changes
 between resolution and workspace setup or if the restricted probe cannot run
 its tool helper and remain alive.
 
+## Model Catalog Compatibility
+
+`src/software_agent_team/runtime_configuration.py` owns reviewed catalog
+supplements for exact provider models absent from the pinned OpenClaw release.
+A supplement must remain narrow, versioned in Git, secret-free, and covered by
+materialization plus exact-availability tests. Record only verified routing,
+modality, context, output, and compatibility metadata; do not add a credential,
+mutable fallback, or guessed price.
+
+Startup and run preflight inspect OpenClaw's configured model view without a
+provider filter so the check stays on configured local catalog/auth evidence
+and does not invoke provider discovery or content generation. A real provider
+smoke request is a separate explicitly authorized test. When validating a
+trusted shell credential path, the generated configuration may contain the
+environment-variable reference but never its value.
+
 The product profile and evaluation fixture share this dependency image, not a
 TaskBrief, seed, acceptance suite, environment contract, or delivery command.
 The benchmark contract remains frozen for comparable trials. The confirmed
