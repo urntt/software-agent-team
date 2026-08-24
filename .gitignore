@@ -16,6 +16,7 @@ AGENTS.md
 
 # Node and OpenClaw runtime state
 node_modules/
+.sat/
 .openclaw/
 openclaw.json
 configs/openclaw.local.json5

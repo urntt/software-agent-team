@@ -155,6 +155,12 @@ def test_preflight_executes_explicit_commands_without_model_call(
     openclaw.chmod(0o755)
     config = tmp_path / "runtime.json"
     config.write_text("{}", encoding="utf-8")
+    state = tmp_path / "sat-state/openclaw"
+    state.mkdir(parents=True)
+    original_state = tmp_path / "existing-openclaw"
+    monkeypatch.setenv("OPENCLAW_STATE_DIR", str(original_state))
+    monkeypatch.setenv("OPENCLAW_CONFIG_PATH", str(original_state / "openclaw.json"))
+    monkeypatch.setenv("OPENCLAW_AGENT_DIR", str(original_state / "agent"))
     calls: list[list[str]] = []
 
     class Result:
@@ -165,6 +171,10 @@ def test_preflight_executes_explicit_commands_without_model_call(
 
     def fake_run(argv: list[str], **kwargs: object) -> Result:
         assert "shell" not in kwargs
+        environment = kwargs["env"]
+        assert environment["OPENCLAW_STATE_DIR"] == str(state)
+        assert environment["OPENCLAW_CONFIG_PATH"] == str(config)
+        assert environment["OPENCLAW_AGENT_DIR"] == ""
         calls.append(argv)
         if argv[-1] == "--version":
             name = (
@@ -180,6 +190,7 @@ def test_preflight_executes_explicit_commands_without_model_call(
 
     result = inspect_runtime_preflight(
         openclaw_binary=openclaw,
+        openclaw_state_dir=state,
         runtime_config=config,
         sandbox_binary="docker",
         sandbox_image="sat-agent:phase1",
@@ -200,12 +211,15 @@ def test_preflight_executes_explicit_commands_without_model_call(
         ],
     ]
     assert result.sandbox_image_id == f"sha256:{'a' * 64}"
-    assert os.environ.get("OPENCLAW_CONFIG_PATH") is None
+    assert os.environ["OPENCLAW_STATE_DIR"] == str(original_state)
+    assert os.environ["OPENCLAW_CONFIG_PATH"] == str(original_state / "openclaw.json")
+    assert os.environ["OPENCLAW_AGENT_DIR"] == str(original_state / "agent")
 
     evidence = tmp_path / "run" / "runtime-preflight.json"
     persist_runtime_preflight(result, evidence)
     persisted = json.loads(evidence.read_text(encoding="utf-8"))
     assert persisted["config_valid"] is True
+    assert persisted["openclaw_state_dir"] == str(state)
     assert persisted["sandbox_image_id"] == f"sha256:{'a' * 64}"
     with pytest.raises(RuntimeConfigurationError, match="already exists"):
         persist_runtime_preflight(result, evidence)
@@ -220,6 +234,8 @@ def test_preflight_rejects_invalid_docker_image_identity(
     openclaw.chmod(0o755)
     config = tmp_path / "runtime.json"
     config.write_text("{}", encoding="utf-8")
+    state = tmp_path / "sat-state/openclaw"
+    state.mkdir(parents=True)
 
     class Result:
         def __init__(self, stdout: str) -> None:
@@ -242,6 +258,7 @@ def test_preflight_rejects_invalid_docker_image_identity(
     with pytest.raises(RuntimeConfigurationError, match="invalid sandbox image ID"):
         inspect_runtime_preflight(
             openclaw_binary=openclaw,
+            openclaw_state_dir=state,
             runtime_config=config,
             sandbox_binary="docker",
             sandbox_image="sat-agent:phase1",
@@ -257,6 +274,8 @@ def test_preflight_rejects_a_changed_frozen_image_identity(
     openclaw.chmod(0o755)
     config = tmp_path / "runtime.json"
     config.write_text("{}", encoding="utf-8")
+    state = tmp_path / "sat-state/openclaw"
+    state.mkdir(parents=True)
 
     class Result:
         returncode = 0
@@ -280,6 +299,7 @@ def test_preflight_rejects_a_changed_frozen_image_identity(
     with pytest.raises(RuntimeConfigurationError, match="identity changed"):
         inspect_runtime_preflight(
             openclaw_binary=openclaw,
+            openclaw_state_dir=state,
             runtime_config=config,
             sandbox_binary="docker",
             sandbox_image="sat-agent:phase1",

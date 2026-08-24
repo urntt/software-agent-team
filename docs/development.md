@@ -14,10 +14,12 @@ make setup
 make check
 ```
 
-`make setup` prepares the pinned local toolchain and locked Python environment.
-`make check` is fully offline after setup. It verifies tool versions, Git and
-ignore boundaries, configuration contracts, formatting, lint, the complete
-test suite, and all offline workflow paths. It does not call a model or require
+`make setup` prepares the pinned local toolchain, locked Python environment,
+and a marked private OpenClaw runtime at `.sat/openclaw/`. It never discovers,
+adopts, or changes another OpenClaw installation or profile. `make check` is
+fully offline after setup. It verifies tool versions, ownership, Git and ignore
+boundaries, configuration contracts, formatting, lint, the complete test
+suite, and all offline workflow paths. It does not call a model or require
 provider credentials.
 
 Useful targets are:
@@ -134,6 +136,7 @@ src/software_agent_team/
   cli.py                       Unified command-line interface
   execution.py                 OpenClaw and offline execution adapters
   git_workspace.py             Standalone clones and snapshot verification
+  openclaw_runtime.py          Private OpenClaw path and environment isolation
   paths.py                     User-local product state resolution
   product.py                   Diagnostics, request materialization, and delivery
   progress.py                  Controller-backed terminal progress rendering
@@ -147,6 +150,7 @@ src/software_agent_team/
 scripts/
   bootstrap.sh                 Remote managed-install entry point
   install.sh                   Locked Linux/WSL application installation
+  openclaw-environment.sh      Private OpenClaw shell-process environment
   uninstall.sh                 Guided preservation, export, and removal
   setup.sh                     Development environment setup
   doctor.sh                    Environment and boundary diagnostics
@@ -156,10 +160,11 @@ STATUS.md                      Current implementation and evaluation evidence
 VISION.md                      Product, architecture, experiment, and roadmap
 ```
 
-`openclaw/workspaces/` contains stable ignored role workspace boundaries.
-Product `runs/`, `workspaces/`, and `sources/` live under the private
-user-state root. Provider credentials, active OpenClaw state, generated state,
-and runtime configuration never enter Git.
+`openclaw/workspaces/` contains stable ignored role workspace boundaries. The
+installed private OpenClaw binary lives under ignored `.sat/openclaw/`.
+Product `runs/`, `workspaces/`, `sources/`, and isolated OpenClaw provider
+state live under the private user-state root. Provider credentials, active
+OpenClaw state, generated state, and runtime configuration never enter Git.
 
 ## Documentation Workflow
 

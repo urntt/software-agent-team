@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-task_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+task_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 task_uv_bin="${UV_BIN:-$HOME/.local/bin/uv}"
-task_openclaw_prefix="${OPENCLAW_PREFIX:-$HOME/.openclaw}"
+task_openclaw_prefix="$task_root/.sat/openclaw"
 task_bin_dir="${SAT_BIN_DIR:-$HOME/.local/bin}"
 task_sat_target="$task_root/.venv/bin/sat"
 task_sat_link="$task_bin_dir/sat"
@@ -49,6 +49,9 @@ done
   fail "Python runtime Dockerfile is missing"
 [[ -f "$task_root/runtime/python/requirements.lock" ]] || \
   fail "Python runtime dependency lock is missing"
+[[ -f "$task_root/scripts/openclaw-environment.sh" && \
+  ! -L "$task_root/scripts/openclaw-environment.sh" ]] || \
+  fail "OpenClaw environment boundary is missing"
 [[ -x "$task_uninstall_target" ]] || fail "uninstall script is missing or not executable"
 if [[ "${SAT_MANAGED_INSTALL:-0}" == "1" ]]; then
   [[ -f "$task_root/.sat-managed-install" && \
@@ -125,7 +128,8 @@ echo "install: sat=$task_sat_link"
 echo "install: openclaw=$task_openclaw_prefix/bin/openclaw"
 echo "install: image=$task_image"
 echo "install: image_id=$task_image_id"
-echo "install: provider credentials and active OpenClaw configuration were not created"
+echo "install: existing OpenClaw installations and configuration were not read or changed"
+echo "install: SAT provider credentials and configuration will use isolated state on first run"
 if [[ "${SAT_MANAGED_INSTALL:-0}" != "1" ]]; then
   echo "install: uninstall=sat-uninstall"
   case ":$PATH:" in

@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import os
 import shlex
 import shutil
 import subprocess
@@ -28,6 +29,7 @@ from software_agent_team.budgets import ModelPricing
 from software_agent_team.configuration import validate_environment_configuration
 from software_agent_team.execution import OpenClawSubprocessExecutor
 from software_agent_team.git_workspace import GitWorkspace, GitWorkspaceManager
+from software_agent_team.openclaw_runtime import isolated_openclaw_environment
 from software_agent_team.paths import user_state_root
 from software_agent_team.product import (
     ProductFlowError,
@@ -82,7 +84,7 @@ DEFAULT_PRODUCT_SEED = PROJECT_ROOT / "profiles/python/seed"
 DEFAULT_STATE_ROOT = user_state_root()
 DEFAULT_RUNS_ROOT = DEFAULT_STATE_ROOT / "runs"
 DEFAULT_WORKSPACES_ROOT = DEFAULT_STATE_ROOT / "workspaces"
-DEFAULT_OPENCLAW_BINARY = Path.home() / ".openclaw" / "bin" / "openclaw"
+DEFAULT_OPENCLAW_BINARY = PROJECT_ROOT / ".sat" / "openclaw" / "bin" / "openclaw"
 
 
 @dataclass(frozen=True)
@@ -98,6 +100,7 @@ class _WorkflowLaunchOptions:
     runs_root: Path
     workspaces_root: Path
     openclaw_binary: Path
+    openclaw_state_dir: Path
     sandbox_binary: str
     model: str
     input_cost_per_million_usd: Decimal | None
@@ -197,10 +200,36 @@ def _configure(args: argparse.Namespace) -> int:
 
     interactive = not args.non_interactive and sys.stdin.isatty() and not supplied
     if interactive:
-        print("SAT stores the model reference, never provider credentials.")
+        state_paths = ProductStatePaths.below(user_state_root())
+        ensure_product_state(state_paths)
+        openclaw_config = state_paths.openclaw / "openclaw.json"
+        if openclaw_config.is_symlink():
+            raise RuntimeConfigurationError(
+                "SAT OpenClaw configuration must not be a symbolic link"
+            )
+        print("SAT uses its own isolated OpenClaw runtime and provider state.")
+        print("Existing OpenClaw installations and configuration are never used.")
+        if _prompt_yes_no(
+            "Open SAT's isolated OpenClaw provider setup now?",
+            default=not openclaw_config.is_file(),
+        ):
+            _run_openclaw_configuration(
+                DEFAULT_OPENCLAW_BINARY,
+                state_dir=state_paths.openclaw,
+                config_path=openclaw_config,
+            )
+        discovered_model = _discover_openclaw_default_model(
+            DEFAULT_OPENCLAW_BINARY,
+            state_dir=state_paths.openclaw,
+            config_path=openclaw_config,
+        )
+        if discovered_model is not None:
+            print(f"OpenClaw default model detected: {discovered_model}")
         print("Press Enter to keep a value shown in brackets.")
+        default_model = discovered_model or (current.model if current else None)
         model = _prompt_value(
-            "OpenClaw model reference", current.model if current else None
+            "OpenClaw model reference",
+            default_model,
         )
         same_model = current is not None and model == current.model
         input_cost = current.input_cost_per_million_usd if same_model else None
@@ -348,6 +377,8 @@ def _prepare_benchmark(args: argparse.Namespace) -> int:
 
 
 def _preflight(args: argparse.Namespace) -> int:
+    state_paths = ProductStatePaths.below(user_state_root())
+    ensure_product_state(state_paths)
     manifest = load_team_manifest(args.teams)
     configuration = load_quality_gate_configuration(args.policy, args.benchmark)
     with tempfile.TemporaryDirectory(prefix="sat-preflight-") as temporary:
@@ -361,7 +392,7 @@ def _preflight(args: argparse.Namespace) -> int:
         runtime_config = temporary_root / "openclaw.runtime.json"
         limits = configuration.policy.limits
         materialize_run_configuration(
-            args.openclaw,
+            DEFAULT_OPENCLAW_CONFIG,
             runtime_config,
             manifest=manifest,
             workspace=args.source_repository,
@@ -373,7 +404,8 @@ def _preflight(args: argparse.Namespace) -> int:
             sandbox_tmpfs_mb=limits.writable_tmpfs_mb,
         )
         result = inspect_runtime_preflight(
-            openclaw_binary=args.openclaw_binary,
+            openclaw_binary=DEFAULT_OPENCLAW_BINARY,
+            openclaw_state_dir=state_paths.openclaw,
             runtime_config=runtime_config,
             sandbox_binary=args.sandbox_binary,
             sandbox_image=configuration.policy.sandbox.image,
@@ -409,9 +441,13 @@ def _execute_workflow(
         )
     frozen_sandbox_image = sandbox_inspection.sandbox_image_id
     runtime_path = options.runs_root / task_brief.run_id / "openclaw.runtime.json"
+    openclaw_environment = isolated_openclaw_environment(
+        state_dir=options.openclaw_state_dir,
+        config_path=runtime_path,
+    )
     executor = OpenClawSubprocessExecutor(
         openclaw_binary=options.openclaw_binary,
-        environment={"OPENCLAW_CONFIG_PATH": str(runtime_path.resolve())},
+        environment=openclaw_environment,
         local=True,
     )
 
@@ -433,6 +469,7 @@ def _execute_workflow(
         )
         preflight = inspect_runtime_preflight(
             openclaw_binary=options.openclaw_binary,
+            openclaw_state_dir=options.openclaw_state_dir,
             runtime_config=runtime_path,
             sandbox_binary=options.sandbox_binary,
             sandbox_image=configuration.policy.sandbox.image,
@@ -508,10 +545,8 @@ def _execute_workflow(
 
 
 def _run_workflow(args: argparse.Namespace) -> int:
-    if args.runs_root == DEFAULT_RUNS_ROOT or args.workspaces_root == (
-        DEFAULT_WORKSPACES_ROOT
-    ):
-        ensure_product_state(ProductStatePaths.below(DEFAULT_STATE_ROOT))
+    state_paths = ProductStatePaths.below(user_state_root())
+    ensure_product_state(state_paths)
     timeout_supplied, supplied_timeout = _timeout_flag(args)
     user_configuration = None
     if (
@@ -594,12 +629,13 @@ def _run_workflow(args: argparse.Namespace) -> int:
             source_repository=args.source_repository,
             base_ref=args.base_ref,
             teams=args.teams,
-            openclaw=args.openclaw,
+            openclaw=DEFAULT_OPENCLAW_CONFIG,
             policy=args.policy,
             quality_manifest=args.benchmark,
             runs_root=args.runs_root,
             workspaces_root=args.workspaces_root,
-            openclaw_binary=args.openclaw_binary,
+            openclaw_binary=DEFAULT_OPENCLAW_BINARY,
+            openclaw_state_dir=state_paths.openclaw,
             sandbox_binary=args.sandbox_binary,
             model=model,
             input_cost_per_million_usd=input_cost,
@@ -632,13 +668,25 @@ def _prompt_yes_no(label: str, *, default: bool) -> bool:
         print("Please answer y or n.")
 
 
-def _run_openclaw_configuration(openclaw_binary: Path) -> None:
+def _run_openclaw_configuration(
+    openclaw_binary: Path,
+    *,
+    state_dir: Path,
+    config_path: Path,
+) -> None:
     """Delegate credential entry to OpenClaw's trusted interactive boundary."""
 
     try:
         result = subprocess.run(
             [str(openclaw_binary), "configure", "--section", "model"],
             check=False,
+            env={
+                **os.environ,
+                **isolated_openclaw_environment(
+                    state_dir=state_dir,
+                    config_path=config_path,
+                ),
+            },
             shell=False,
         )
     except (OSError, subprocess.SubprocessError) as error:
@@ -651,7 +699,13 @@ def _run_openclaw_configuration(openclaw_binary: Path) -> None:
         )
 
 
-def _run_provider_smoke(openclaw_binary: Path, model: str) -> None:
+def _run_provider_smoke(
+    openclaw_binary: Path,
+    model: str,
+    *,
+    state_dir: Path,
+    config_path: Path,
+) -> None:
     """Run one explicitly authorized minimal provider request."""
 
     try:
@@ -673,6 +727,13 @@ def _run_provider_smoke(openclaw_binary: Path, model: str) -> None:
             text=True,
             stdin=subprocess.DEVNULL,
             timeout=180,
+            env={
+                **os.environ,
+                **isolated_openclaw_environment(
+                    state_dir=state_dir,
+                    config_path=config_path,
+                ),
+            },
             shell=False,
         )
     except (OSError, subprocess.SubprocessError) as error:
@@ -699,7 +760,12 @@ def _run_provider_smoke(openclaw_binary: Path, model: str) -> None:
         )
 
 
-def _discover_openclaw_default_model(openclaw_binary: Path) -> str | None:
+def _discover_openclaw_default_model(
+    openclaw_binary: Path,
+    *,
+    state_dir: Path,
+    config_path: Path,
+) -> str | None:
     """Read OpenClaw's local default model without probing the provider."""
 
     try:
@@ -710,6 +776,13 @@ def _discover_openclaw_default_model(openclaw_binary: Path) -> str | None:
             text=True,
             stdin=subprocess.DEVNULL,
             timeout=30,
+            env={
+                **os.environ,
+                **isolated_openclaw_environment(
+                    state_dir=state_dir,
+                    config_path=config_path,
+                ),
+            },
             shell=False,
         )
     except (OSError, subprocess.SubprocessError):
@@ -732,38 +805,77 @@ def _discover_openclaw_default_model(openclaw_binary: Path) -> str | None:
     return None
 
 
-def _ensure_product_configuration() -> UserConfiguration:
+def _ensure_product_configuration(
+    state_paths: ProductStatePaths,
+) -> UserConfiguration:
     """Load or guide the first secret-free product configuration."""
 
     path = user_configuration_path()
     current = _load_user_configuration(path)
-    if current is not None:
+    openclaw_config = state_paths.openclaw / "openclaw.json"
+    if openclaw_config.is_symlink():
+        raise RuntimeConfigurationError(
+            "SAT OpenClaw configuration must not be a symbolic link"
+        )
+    if current is not None and openclaw_config.is_file():
         print(f"✓ Model configuration: {current.model}")
+        print(f"✓ Isolated OpenClaw state: {state_paths.openclaw}")
         return current
 
     print("\nFirst-run model setup")
-    print("SAT stores only the model reference; provider credentials stay in OpenClaw.")
+    print("SAT uses an isolated OpenClaw runtime and private provider state.")
+    print(
+        "Existing OpenClaw installations, credentials, and configuration "
+        "stay untouched."
+    )
+    if current is not None:
+        print(f"Saved SAT model reference: {current.model}")
     if _prompt_yes_no(
-        "Open OpenClaw provider setup now? "
-        "Choose no only if credentials already exist.",
+        "Open SAT's isolated OpenClaw provider setup now? "
+        "Choose no only when credentials come from the current shell environment.",
         default=True,
     ):
-        _run_openclaw_configuration(DEFAULT_OPENCLAW_BINARY)
-    discovered_model = _discover_openclaw_default_model(DEFAULT_OPENCLAW_BINARY)
+        _run_openclaw_configuration(
+            DEFAULT_OPENCLAW_BINARY,
+            state_dir=state_paths.openclaw,
+            config_path=openclaw_config,
+        )
+    discovered_model = _discover_openclaw_default_model(
+        DEFAULT_OPENCLAW_BINARY,
+        state_dir=state_paths.openclaw,
+        config_path=openclaw_config,
+    )
     if discovered_model is not None:
         print(f"✓ OpenClaw default model detected: {discovered_model}")
+    default_model = discovered_model or (current.model if current else None)
     model = _prompt_value(
         "OpenClaw model reference (provider/model)",
-        discovered_model,
+        default_model,
     )
-    configuration = UserConfiguration(model=model)
+    if current is not None and model == current.model:
+        configuration = current
+    else:
+        configuration = UserConfiguration(
+            model=model,
+            verification_concurrency=(
+                current.verification_concurrency if current is not None else 1
+            ),
+            stage_timeout_seconds=(
+                current.stage_timeout_seconds if current is not None else None
+            ),
+        )
     save_user_configuration(configuration, path)
     print(f"✓ Saved secret-free model configuration to {path}")
     if _prompt_yes_no(
         "Run one minimal provider check now? This may incur provider usage.",
         default=False,
     ):
-        _run_provider_smoke(DEFAULT_OPENCLAW_BINARY, configuration.model)
+        _run_provider_smoke(
+            DEFAULT_OPENCLAW_BINARY,
+            configuration.model,
+            state_dir=state_paths.openclaw,
+            config_path=openclaw_config,
+        )
         print("✓ Provider check completed")
     return configuration
 
@@ -912,7 +1024,9 @@ def _run_product() -> int:
         print("\nSAT is not ready. Complete the actions above and run sat again.")
         return 2
 
-    configuration = _ensure_product_configuration()
+    state_paths = ProductStatePaths.below(user_state_root())
+    ensure_product_state(state_paths)
+    configuration = _ensure_product_configuration(state_paths)
     run_id = generate_product_run_id()
     request = _collect_product_request(
         working_directory=working_directory,
@@ -922,8 +1036,6 @@ def _run_product() -> int:
         return 0
     task_brief, destination = request
 
-    state_paths = ProductStatePaths.below(user_state_root())
-    ensure_product_state(state_paths)
     source_repository = prepare_product_source(
         seed=DEFAULT_PRODUCT_SEED,
         state_paths=state_paths,
@@ -943,6 +1055,7 @@ def _run_product() -> int:
                 runs_root=state_paths.runs,
                 workspaces_root=state_paths.workspaces,
                 openclaw_binary=DEFAULT_OPENCLAW_BINARY,
+                openclaw_state_dir=state_paths.openclaw,
                 sandbox_binary="docker",
                 model=configuration.model,
                 input_cost_per_million_usd=(configuration.input_cost_per_million_usd),
@@ -1132,14 +1245,8 @@ def build_parser() -> argparse.ArgumentParser:
     preflight.add_argument("source_repository", type=Path)
     preflight.add_argument("--base-ref", default="HEAD")
     preflight.add_argument("--teams", type=Path, default=DEFAULT_TEAM_CONFIG)
-    preflight.add_argument("--openclaw", type=Path, default=DEFAULT_OPENCLAW_CONFIG)
     preflight.add_argument("--policy", type=Path, default=DEFAULT_RUN_POLICY)
     preflight.add_argument("--benchmark", type=Path, default=DEFAULT_BENCHMARK)
-    preflight.add_argument(
-        "--openclaw-binary",
-        type=Path,
-        default=DEFAULT_OPENCLAW_BINARY,
-    )
     preflight.add_argument("--sandbox-binary", default="docker")
     preflight.set_defaults(handler=_preflight)
 
@@ -1151,16 +1258,10 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("source_repository", type=Path)
     run.add_argument("--base-ref", default="HEAD")
     run.add_argument("--teams", type=Path, default=DEFAULT_TEAM_CONFIG)
-    run.add_argument("--openclaw", type=Path, default=DEFAULT_OPENCLAW_CONFIG)
     run.add_argument("--policy", type=Path, default=DEFAULT_RUN_POLICY)
     run.add_argument("--benchmark", type=Path, default=DEFAULT_BENCHMARK)
     run.add_argument("--runs-root", type=Path, default=DEFAULT_RUNS_ROOT)
     run.add_argument("--workspaces-root", type=Path, default=DEFAULT_WORKSPACES_ROOT)
-    run.add_argument(
-        "--openclaw-binary",
-        type=Path,
-        default=DEFAULT_OPENCLAW_BINARY,
-    )
     run.add_argument("--sandbox-binary", default="docker")
     run.add_argument(
         "--model",

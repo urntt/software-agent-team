@@ -216,12 +216,22 @@ when investigating it rather than editing artifacts in place.
 
 ## Configuration, Credentials, and Model Boundary
 
+- SAT installs and invokes only its marked private OpenClaw binary. Every
+  invocation receives explicit SAT-owned config, credential, state, workspace,
+  and Agent paths; ambient `OPENCLAW_*` settings and the legacy Agent-directory
+  selector are neutralized. Ordinary provider API-key variables may still be
+  inherited from the trusted caller environment.
+- An OpenClaw binary, Gateway, process, config, profile, credential store,
+  session, cache, or workspace outside those marked paths is never probed,
+  reused, reconfigured, stopped, upgraded, downgraded, or uninstalled by SAT.
 - Runtime configuration is run-scoped, secret-free, mode `0600`, and ignored
   by Git.
 - Agent containers receive an explicit non-secret environment instead of the
   host process environment or provider credentials.
-- OpenClaw's trusted host process owns model-provider access. Agents never
-  receive provider credentials or unrelated host data.
+- SAT's isolated OpenClaw host process owns model-provider access. Credentials
+  may live in its private OpenClaw-owned state or come from trusted caller
+  environment variables; Agents never receive provider credentials or
+  unrelated host data.
 - Model identity is frozen for a run and runtime fallback is disabled. A
   successful call must report the selected canonical `provider/model` and
   integer input/output token counts; missing or different telemetry fails the
@@ -249,6 +259,10 @@ when investigating it rather than editing artifacts in place.
 - The operator must place run state on a disposable or quota-controlled
   filesystem. Docker bind mounts do not provide a portable workspace disk
   quota.
+- OpenClaw installation and state isolation does not reserve host or provider
+  capacity. A concurrently running program may still share CPU, memory,
+  network, Docker, or provider quota with SAT; these are resource-contention
+  boundaries, not permission for SAT to control that program.
 
 ## Human Authorization Boundary
 

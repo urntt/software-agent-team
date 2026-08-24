@@ -14,6 +14,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field
 
 from software_agent_team.configuration import load_openclaw_template
+from software_agent_team.openclaw_runtime import isolated_openclaw_environment
 from software_agent_team.teams import TeamManifest
 
 
@@ -49,6 +50,7 @@ class RuntimePreflight(BaseModel):
 
     openclaw_binary: str = Field(min_length=1)
     openclaw_version: str = Field(min_length=1)
+    openclaw_state_dir: str = Field(min_length=1)
     runtime_config: str = Field(min_length=1)
     sandbox_binary: str = Field(min_length=1)
     sandbox_version: str = Field(min_length=1)
@@ -338,6 +340,7 @@ def materialize_run_configuration(
 def inspect_runtime_preflight(
     *,
     openclaw_binary: Path,
+    openclaw_state_dir: Path,
     runtime_config: Path,
     sandbox_binary: str,
     sandbox_image: str,
@@ -352,9 +355,14 @@ def inspect_runtime_preflight(
         raise RuntimeConfigurationError("OpenClaw binary is unavailable")
     if not runtime_config.is_file() or runtime_config.is_symlink():
         raise RuntimeConfigurationError("runtime configuration is unavailable")
+    if not openclaw_state_dir.is_dir() or openclaw_state_dir.is_symlink():
+        raise RuntimeConfigurationError("SAT OpenClaw state directory is unavailable")
     environment = {
         **os.environ,
-        "OPENCLAW_CONFIG_PATH": str(runtime_config.resolve(strict=True)),
+        **isolated_openclaw_environment(
+            state_dir=openclaw_state_dir,
+            config_path=runtime_config,
+        ),
     }
     try:
         version = subprocess.run(
@@ -393,6 +401,7 @@ def inspect_runtime_preflight(
     return RuntimePreflight(
         openclaw_binary=str(openclaw_binary.resolve(strict=True)),
         openclaw_version=version.stdout.strip() or version.stderr.strip(),
+        openclaw_state_dir=str(openclaw_state_dir.resolve(strict=True)),
         runtime_config=str(runtime_config.resolve(strict=True)),
         sandbox_binary=sandbox.sandbox_binary,
         sandbox_version=sandbox.sandbox_version,

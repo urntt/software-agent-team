@@ -142,6 +142,7 @@ class ProductStatePaths:
     runs: Path
     workspaces: Path
     sources: Path
+    openclaw: Path
 
     @classmethod
     def below(cls, root: Path) -> ProductStatePaths:
@@ -150,6 +151,7 @@ class ProductStatePaths:
             runs=root / "runs",
             workspaces=root / "workspaces",
             sources=root / "sources",
+            openclaw=root / "openclaw",
         )
 
 
@@ -181,7 +183,7 @@ def ensure_product_state(paths: ProductStatePaths) -> None:
         marker.chmod(0o600)
 
     paths.root.chmod(0o700)
-    for path in (paths.runs, paths.workspaces, paths.sources):
+    for path in (paths.runs, paths.workspaces, paths.sources, paths.openclaw):
         path.mkdir(exist_ok=True, mode=0o700)
         if path.is_symlink() or not path.is_dir():
             raise ProductFlowError(f"SAT state path must be a real directory: {path}")

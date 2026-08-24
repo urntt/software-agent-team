@@ -28,6 +28,20 @@ image through `configs/product-policy.json`. The controlled evaluation policy
 uses the same generic Python image but owns separate task-specific environment
 settings.
 
+SAT never adopts an OpenClaw installation that predates SAT. Its pinned binary
+and Node.js runtime live under the marked application-private
+`.sat/openclaw/` directory. Provider configuration, credentials, sessions, and
+caches live under SAT's separately owned user-state root. An OpenClaw binary,
+Gateway, config, credential store, profile, or state directory anywhere else
+is neither probed nor modified, even when it is compatible and already
+configured. SAT runs role calls in OpenClaw local mode, so it does not attach
+to, stop, or reconfigure an already running Gateway.
+
+This is a state and ownership guarantee, not a reservation of shared hardware
+or provider capacity. Concurrent programs can still compete for CPU, memory,
+network bandwidth, Docker capacity, or a provider quota when the user gives
+them access to the same external resources.
+
 ## Managed One-Command Installation
 
 Run this command as a normal Linux/WSL user:
@@ -58,7 +72,8 @@ The installation then:
 
 - Checks architecture, required commands, Docker access, and Linux-container
   mode;
-- Installs the pinned uv, Python, and OpenClaw toolchain when needed;
+- Installs the pinned uv and Python toolchain plus a marked SAT-private
+  OpenClaw runtime when needed;
 - Synchronizes the locked SAT environment;
 - Builds and resolves the pinned sandbox image;
 - Runs configuration validation, formatting, lint, and the full offline test
@@ -69,8 +84,9 @@ The installation then:
 
 The process is idempotent for the same owned installation. Advanced operators
 may override `SAT_INSTALL_ROOT`, `SAT_REPOSITORY_URL`, `SAT_INSTALL_REF`,
-`SAT_BIN_DIR`, `UV_BIN`, or `OPENCLAW_PREFIX`, but those are not normal
-first-use questions.
+`SAT_BIN_DIR`, or `UV_BIN`, but those are not normal first-use questions.
+The OpenClaw prefix is intentionally not configurable: accepting an arbitrary
+prefix would allow installation to mutate a pre-existing OpenClaw runtime.
 
 ## Contributor Checkout Installation
 
@@ -112,19 +128,21 @@ back to the installer.
 
 On the first configured run, SAT then:
 
-1. Offers to open OpenClaw's trusted provider-credential setup;
-2. Reads OpenClaw's local default model without probing the provider and asks
-   the user to confirm or replace the exact `provider/model` reference;
-3. Saves only that model reference in SAT configuration;
-4. Offers one explicit minimal provider smoke check, disabled by default;
-5. Asks what the user wants to build;
-6. States the current small-project Python 3.12 execution profile and asks the
+1. Explains that SAT uses its own isolated OpenClaw provider state and that any
+   existing OpenClaw remains untouched;
+2. Offers to open provider-credential setup inside that isolated state;
+3. Reads only SAT's isolated default model without probing the provider and
+   asks the user to confirm or replace the exact `provider/model` reference;
+4. Saves only that model reference in SAT configuration;
+5. Offers one explicit minimal provider smoke check, disabled by default;
+6. Asks what the user wants to build;
+7. States the current small-project Python 3.12 execution profile and asks the
    user to confirm that runtime boundary;
-7. Collects explicit success conditions and optional constraints;
-8. Asks for one new direct child project directory;
-9. Generates and shows the request, acceptance, destination, and verification
+8. Collects explicit success conditions and optional constraints;
+9. Asks for one new direct child project directory;
+10. Generates and shows the request, acceptance, destination, and verification
    summary;
-10. Requires explicit confirmation before any build Agent call.
+11. Requires explicit confirmation before any build Agent call.
 
 Declining either the profile or build confirmation exits without starting a
 build. The product path constructs its TaskBrief from the confirmed user input
@@ -145,10 +163,18 @@ Schema version 3 stores:
 - Optional advanced Tester/Reviewer concurrency;
 - An optional advanced global role-stage timeout override.
 
-The normal first-run wizard stores only the model and uses checked-in runtime
-defaults. It never accepts or persists an API key. Provider credentials stay in
-OpenClaw's credential store or a trusted caller environment and are excluded
-from SAT exports and evidence.
+The normal first-run wizard stores only the model in SAT configuration and uses
+checked-in runtime defaults. Credential entry and persistence remain owned by
+OpenClaw, but its state is isolated at:
+
+```text
+${SAT_STATE_ROOT:-${XDG_STATE_HOME:-$HOME/.local/state}/software-agent-team}/openclaw/
+```
+
+This directory is not shared with `~/.openclaw` or any caller-selected
+OpenClaw profile. Credentials may instead come from a trusted caller
+environment. They are excluded from SAT configuration, exports, generated
+projects, and run evidence.
 
 Reconfigure or inspect the secret-free values with:
 
@@ -193,12 +219,12 @@ Internal product data lives beneath:
 ${XDG_STATE_HOME:-$HOME/.local/state}/software-agent-team/
 ```
 
-Its separate `runs/`, `workspaces/`, and `sources/` directories contain
-write-once evidence, isolated Agent clones, and trusted seed repositories. Use
-an absolute `SAT_STATE_ROOT` only for a deliberate state-location override.
-SAT creates an exact ownership marker and refuses to adopt a non-empty unowned
-directory, so a mistaken override cannot make an arbitrary directory eligible
-for export or purge.
+Its separate `runs/`, `workspaces/`, `sources/`, and `openclaw/` directories
+contain write-once evidence, isolated Agent clones, trusted seed repositories,
+and SAT's isolated OpenClaw state. Use an absolute `SAT_STATE_ROOT` only for a
+deliberate state-location override. SAT creates an exact ownership marker and
+refuses to adopt an existing unowned directory, so an override cannot make an
+arbitrary OpenClaw or user directory eligible for writes, export, or purge.
 
 SAT generates every run ID and internal path after confirmation. The model
 works only in the isolated workspace. A completed, accepted workspace is copied
@@ -241,8 +267,10 @@ until the next major release.
 
 Rerun the managed installation command. The bootstrap verifies ownership and a
 clean tracked application before fetching the selected ref, then reconciles the
-locked environment, image, launchers, and offline checks. User configuration
-and state live outside the application directory and remain unchanged.
+locked environment, private OpenClaw binary, image, launchers, and offline
+checks. User configuration and isolated provider state live outside the
+application directory and remain unchanged. Other OpenClaw installations are
+not candidates for reconciliation.
 
 For a contributor checkout, update it through the contributor's normal Git
 workflow and rerun `./scripts/install.sh`.
@@ -255,13 +283,14 @@ Run from any directory:
 sat-uninstall
 ```
 
-The default removes SAT launchers and its Python environment. It also removes
-the exact marked managed application directory, or preserves a development
-checkout. By default it preserves:
+The default removes SAT launchers, its Python environment, and its marked
+private OpenClaw binary. It also removes the exact marked managed application
+directory, or preserves a development checkout. By default it preserves:
 
 - SAT configuration;
 - Generated runs, workspaces, and trusted sources;
-- OpenClaw and provider credentials;
+- SAT's isolated OpenClaw provider configuration, credentials, and sessions;
+- Every OpenClaw installation and profile outside SAT;
 - uv and its managed Python installation;
 - Docker and the sandbox image.
 
@@ -286,19 +315,33 @@ sat-uninstall \
   --yes
 ```
 
+SAT's isolated provider state has its own choice because it contains secrets
+and is intentionally excluded from export:
+
+```bash
+sat-uninstall --purge-provider-state --yes
+```
+
+That flag can delete only the `openclaw/` child of a validated SAT-owned state
+root. It cannot select or delete `~/.openclaw`, a named OpenClaw profile, or
+another installation.
+
 Without a terminal, `--yes` is required. Use `sat-uninstall --help` to review
 all keep, purge, export, and confirmation options. `make uninstall` invokes the
 same script from a contributor checkout.
 
 ## Ownership and Recovery Boundaries
 
-Uninstallation never removes provider credentials, shared OpenClaw, uv,
-Docker, or the sandbox image. It deletes a managed application only when a
-regular marker names that exact resolved directory; it refuses a missing,
-symbolic, invalid, or mismatched marker. It also refuses symbolic configuration
-or state targets and a missing or mismatched state-ownership marker before
-export or purge.
+Uninstallation removes only SAT's marked private OpenClaw binary. SAT's
+isolated provider state is preserved unless `--purge-provider-state` is
+explicitly selected. Every other OpenClaw binary, running process, Gateway,
+profile, configuration, credential, and session remains outside the ownership
+boundary. uv, Docker, and the sandbox image are also preserved. The uninstaller
+deletes a managed application or private runtime only when a regular marker
+names that exact resolved directory; it refuses a missing, symbolic, invalid,
+or mismatched marker. It also refuses symbolic configuration or state targets
+and a missing or mismatched state-ownership marker before export or purge.
 
 Preservation is the default because removing a CLI must not silently destroy a
 generated project or its audit evidence. Inspect a completed export before
-selecting either purge option.
+selecting any purge option.

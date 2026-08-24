@@ -33,6 +33,16 @@ def prepare_installation(
     sat_target = checkout / ".venv/bin/sat"
     sat_target.parent.mkdir(parents=True)
     write_executable(sat_target, "#!/usr/bin/env bash\nexit 0\n")
+    private_openclaw = checkout / ".sat/openclaw"
+    (private_openclaw / "bin").mkdir(parents=True)
+    write_executable(
+        private_openclaw / "bin/openclaw",
+        "#!/usr/bin/env bash\nexit 0\n",
+    )
+    (private_openclaw / ".sat-owned-runtime").write_text(
+        f"software-agent-team-openclaw-runtime-v1\nroot={private_openclaw}\n",
+        encoding="utf-8",
+    )
     state = tmp_path / "state"
     (state / "runs/example").mkdir(parents=True)
     (state / "runs/example/final-report.md").write_text(
@@ -46,6 +56,11 @@ def prepare_installation(
     )
     (state / "sources/example").mkdir(parents=True)
     (state / "sources/example/README.md").write_text("seed\n", encoding="utf-8")
+    (state / "openclaw/credentials").mkdir(parents=True)
+    (state / "openclaw/credentials/provider.json").write_text(
+        "private SAT credential state\n",
+        encoding="utf-8",
+    )
     (state / ".sat-state-v1").write_text(
         f"software-agent-team-state-v1\nroot={state}\n",
         encoding="utf-8",
@@ -60,6 +75,12 @@ def prepare_installation(
     configuration.parent.mkdir(parents=True)
     configuration.write_text('{"schema_version": 1}\n', encoding="utf-8")
     configuration.chmod(0o600)
+    existing_openclaw = home / ".openclaw"
+    existing_openclaw.mkdir(parents=True)
+    (existing_openclaw / "openclaw.json").write_text(
+        "existing user OpenClaw\n",
+        encoding="utf-8",
+    )
 
     fake_bin = tmp_path / "fake-bin"
     fake_bin.mkdir()
@@ -116,11 +137,16 @@ def test_uninstaller_preserves_configuration_and_generated_data_by_default(
     assert not (install_bin / "sat").exists()
     assert not (install_bin / "sat-uninstall").exists()
     assert not (checkout / ".venv").exists()
+    assert not (checkout / ".sat/openclaw").exists()
     assert configuration.is_file()
     state = Path(environment["SAT_STATE_ROOT"])
     assert (state / "runs/example/final-report.md").is_file()
     assert (state / "workspaces/example/result.py").is_file()
     assert (state / "sources/example/README.md").is_file()
+    assert (state / "openclaw/credentials/provider.json").is_file()
+    assert (Path(environment["HOME"]) / ".openclaw/openclaw.json").read_text(
+        encoding="utf-8"
+    ) == "existing user OpenClaw\n"
     assert (checkout / "scripts/uninstall.sh").is_file()
     assert "preserved SAT configuration" in completed.stdout
     assert "preserved generated runs, workspaces, and sources" in completed.stdout
@@ -148,6 +174,7 @@ def test_uninstaller_exports_before_explicit_purge(tmp_path: Path) -> None:
     assert not (state / "runs").exists()
     assert not (state / "workspaces").exists()
     assert not (state / "sources").exists()
+    assert (state / "openclaw/credentials/provider.json").is_file()
     assert not (checkout / ".venv").exists()
     assert not (install_bin / "sat").exists()
     assert (export / "configuration/config.json").is_file()
@@ -194,7 +221,7 @@ def test_uninstaller_validates_every_purge_target_before_deleting(
     )
 
     assert completed.returncode == 1
-    assert "symbolic-link generated-data directories" in completed.stderr
+    assert "symbolic-link SAT state directories" in completed.stderr
     assert configuration.is_file()
     assert (state / "runs/example/final-report.md").is_file()
     assert (checkout / ".venv").is_dir()
@@ -241,3 +268,25 @@ def test_uninstaller_refuses_to_purge_an_unowned_state_root(tmp_path: Path) -> N
     assert (state / "runs/example/final-report.md").is_file()
     assert (checkout / ".venv").is_dir()
     assert (install_bin / "sat").is_symlink()
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="uninstaller supports Linux/WSL")
+def test_uninstaller_can_purge_only_sat_provider_state_without_touching_openclaw(
+    tmp_path: Path,
+) -> None:
+    checkout, _, _, environment = prepare_installation(tmp_path)
+    state = Path(environment["SAT_STATE_ROOT"])
+    existing_config = Path(environment["HOME"]) / ".openclaw/openclaw.json"
+
+    completed = run_uninstaller(
+        checkout,
+        environment,
+        "--purge-provider-state",
+        "--yes",
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert not (state / "openclaw").exists()
+    assert (state / "runs/example/final-report.md").is_file()
+    assert existing_config.read_text(encoding="utf-8") == "existing user OpenClaw\n"
+    assert "other OpenClaw installations" in completed.stdout

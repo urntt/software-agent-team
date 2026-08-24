@@ -52,9 +52,11 @@ attributable to its checked-in version.
   quota-controlled filesystem. Docker bind mounts do not provide a portable
   per-workspace disk quota, so host storage capacity is an operator-owned safety
   boundary.
-- Configure credentials through OpenClaw's user-local credential store or the
-  trusted caller environment. Do not put credentials in this repository,
-  runtime configuration, command history, or a TaskBrief.
+- Configure credentials through `sat configure`, which delegates entry to
+  SAT's isolated OpenClaw-owned state, or provide them through the trusted
+  caller environment. Do not put credentials in this repository, SAT
+  configuration, runtime evidence, command history, or a TaskBrief. SAT never
+  imports an existing OpenClaw profile.
 - Select one exact `provider/model` identifier and record its current input and
   output prices per million tokens. The run configuration disables model
   fallback, and the controller rejects missing or different model telemetry.
@@ -79,12 +81,23 @@ From a clean checkout, run:
 ./scripts/install.sh
 ```
 
-The installer prepares the pinned user-local toolchain, locked Python
-environment, checkout-bound `sat` and `sat-uninstall` launchers, shared Python
-quality image, and offline checks. It requires Git, curl, and a running Docker daemon
-that the unprivileged user can access. It does not install Docker at the
-operating-system level or create provider credentials and active OpenClaw
-configuration; configure those outside the checkout before a paid evaluation.
+The installer prepares the pinned user-local toolchain, a marked
+application-private OpenClaw runtime, locked Python environment, checkout-bound
+`sat` and `sat-uninstall` launchers, shared Python quality image, and offline
+checks. It requires Git, curl, and a running Docker daemon that the
+unprivileged user can access. It does not install Docker at the operating-system
+level or create provider credentials. Another OpenClaw installation, whether
+configured and running or not, remains outside every SAT ownership boundary.
+
+Run the guided provider setup once unless credentials come from the trusted
+caller environment:
+
+```bash
+sat configure
+```
+
+This invokes only SAT's private OpenClaw binary and state. It does not read or
+modify another OpenClaw profile.
 
 Save or inspect the exact non-secret advanced defaults for the planned trial.
 Do not run bare `sat`; that is the separate interactive product surface.
@@ -161,9 +174,9 @@ runtime preflight: ready ... config=True image=True ... source_commit=<commit>
 ```
 
 Preflight validates the run-scoped, secret-free OpenClaw configuration, checks
-the pinned OpenClaw binary, confirms that the sandbox executable is Docker, and
-inspects the required image. It does not contact a model provider or validate
-provider quota.
+SAT's pinned private OpenClaw binary and state boundary, confirms that the
+sandbox executable is Docker, and inspects the required image. It does not
+contact a model provider or validate provider quota.
 
 Stop if preflight returns `not-ready` or exit code `1`/`2`. Correct the reported
 environment problem before authorizing a paid call.
@@ -324,7 +337,9 @@ sat-uninstall --export-to "$HOME/sat-phase1-backup" --yes
 
 The destination must not already exist. Inspect `EXPORT.txt` and any copied
 configuration or default product-state roots before using `--purge-config` or
-`--purge-data`. Provider credentials, shared OpenClaw/uv/Docker installations,
-the shared quality image, the source checkout, and the checkout-local trial roots
-remain outside the export and uninstall ownership boundary. Review
-`sat-uninstall --help` before selecting either purge option.
+`--purge-data`. SAT's isolated provider credentials are excluded from export
+and preserved unless `--purge-provider-state` is explicit. Every other
+OpenClaw installation, uv, Docker, the shared quality image, the source
+checkout, and the checkout-local trial roots remain outside the uninstall
+ownership boundary. Review `sat-uninstall --help` before selecting a purge
+option.

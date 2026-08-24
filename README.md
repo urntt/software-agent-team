@@ -94,8 +94,8 @@ runtime, evidence, response, and safety boundaries.
 - Docker for live Agent sandboxes and generated-code quality gates;
 - An unprivileged host account with access to the Docker daemon;
 - Network access for initial setup and the selected model provider;
-- Provider credentials configured through OpenClaw or a trusted caller
-  environment, never in this repository.
+- Provider credentials configured through SAT's isolated OpenClaw boundary or
+  a trusted caller environment, never in this repository.
 
 The checked-in setup pins Python 3.12, OpenClaw 2026.7.1-2, OpenClaw's local
 Node.js 24.15.0 runtime, and Python dependencies through `uv.lock`.
@@ -117,9 +117,11 @@ sat
 ```
 
 SAT performs local diagnostics before asking for a model or making a provider
-request. On first launch it delegates credential entry to OpenClaw, stores only
-the selected `provider/model` reference, and offers an explicitly authorized
-minimal smoke check. It then asks what to build, explains the current Python
+request. On first launch it delegates credential entry to its own isolated
+OpenClaw state, stores only the selected `provider/model` reference in SAT
+configuration, and offers an explicitly authorized minimal smoke check. It
+never reads, changes, stops, or reuses another OpenClaw installation or its
+configuration. SAT then asks what to build, explains the current Python
 execution profile, collects success conditions and optional constraints, asks
 for a new project-directory name, shows the resulting requirements summary,
 and requires confirmation before the model-backed workflow begins.
@@ -140,25 +142,23 @@ Contributors may install from a clean checkout on Linux or WSL:
 ./scripts/install.sh
 ```
 
-The installer prepares the pinned user-local toolchain, locked project
-environment, shared Python quality image, offline checks, and checkout-bound `sat` and
-`sat-uninstall` launchers. It does not install an OS-level Docker daemon or
-create provider credentials.
+The installer prepares a pinned SAT-owned OpenClaw runtime inside the
+application, the locked project environment, shared Python quality image,
+offline checks, and checkout-bound `sat` and `sat-uninstall` launchers. It does
+not install an OS-level Docker daemon, create provider credentials, or inspect
+another OpenClaw installation.
 
-Save or inspect secret-free advanced evaluation defaults:
+Configure SAT's isolated provider state and save or inspect secret-free
+advanced evaluation defaults:
 
 ```bash
 sat configure
 sat configure --show
 ```
 
-Configure provider credentials separately through OpenClaw, then prepare and
-check a deterministic benchmark source repository:
+Then prepare and check a deterministic benchmark source repository:
 
 ```bash
-$HOME/.openclaw/bin/openclaw configure --section model
-$HOME/.openclaw/bin/openclaw models status --check
-
 sat prepare-benchmark ./task-manager-source
 sat preflight ./task-manager-source
 ```
@@ -231,7 +231,8 @@ STATUS.md                      Current implementation and evidence boundary
 VISION.md                      Product and architecture decisions
 ```
 
-Product runs, workspaces, and trusted source baselines live beneath
+Product runs, workspaces, trusted source baselines, and SAT's isolated OpenClaw
+provider state live beneath
 `${XDG_STATE_HOME:-$HOME/.local/state}/software-agent-team/` and never enter
 Git. The harness does not merge, push, deploy, or publish generated results,
 and human authorization remains required for those actions.

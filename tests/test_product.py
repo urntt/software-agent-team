@@ -105,11 +105,23 @@ def test_product_state_is_private_and_rejects_a_symlink(tmp_path: Path) -> None:
 
     assert all(
         path.is_dir()
-        for path in (paths.root, paths.runs, paths.workspaces, paths.sources)
+        for path in (
+            paths.root,
+            paths.runs,
+            paths.workspaces,
+            paths.sources,
+            paths.openclaw,
+        )
     )
     assert all(
         path.stat().st_mode & 0o777 == 0o700
-        for path in (paths.root, paths.runs, paths.workspaces, paths.sources)
+        for path in (
+            paths.root,
+            paths.runs,
+            paths.workspaces,
+            paths.sources,
+            paths.openclaw,
+        )
     )
 
     outside = tmp_path / "outside"

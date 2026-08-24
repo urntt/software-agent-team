@@ -24,11 +24,11 @@ The earlier benchmark defect was corrected and versioned as
 evidence and must not be mixed with version-two comparisons.
 
 Managed installation, startup diagnostics, secret-free first-run model setup,
-execution-profile confirmation, user-owned success conditions, automatic run preparation,
-controller-backed progress, accepted-result delivery, and safe uninstallation
-are implemented and covered offline. Provider credential creation remains in
-OpenClaw's trusted boundary. Repeated comparative experiments and human rubric
-scoring remain pending.
+execution-profile confirmation, user-owned success conditions, automatic run
+preparation, controller-backed progress, accepted-result delivery, and safe
+uninstallation are implemented and covered offline. Provider credential
+creation remains in SAT's isolated OpenClaw-owned boundary. Repeated
+comparative experiments and human rubric scoring remain pending.
 
 The exact acceptance procedure is in
 [`docs/phase1-runbook.md`](docs/phase1-runbook.md). Offline scripted executions
@@ -44,7 +44,7 @@ generates a request-specific run ID, TaskBrief, trusted source, workspace, and
 evidence roots, shows controller-derived progress, and delivers only an
 accepted clean Git result with project-specific commands.
 
-This is not yet release-stable evidence. The complete 356-test offline suite,
+This is not yet release-stable evidence. The complete 364-test offline suite,
 including interaction, installer, workflow, failure, and delivery paths,
 passes, but the journey has not yet passed the required rehearsal from a fresh
 supported Linux/WSL user environment with an explicitly authorized provider.
@@ -69,6 +69,9 @@ The acceptance contract is
 - Sanitized OpenClaw Agent registry, permission checks, run-scoped
   configuration, non-root identity, strict model selection, and offline
   preflight;
+- A marked application-private OpenClaw binary plus explicit private config,
+  credential, state, workspace, and Agent paths for every SAT invocation, with
+  ambient OpenClaw settings neutralized and existing installations untouched;
 - Confirmed task-brief and handoff-envelope contracts;
 - Role-specific minimum-context prompts, strict semantic JSON response parsing,
   controller assembly of persisted envelope, Git, test, and scope facts, and
@@ -107,8 +110,9 @@ The acceptance contract is
   directory, plus the pinned toolchain, locked environment, fixed Docker image,
   stable launchers, update validation, and a checkout-based contributor path;
 - Automatic startup checks for platform, architecture, unprivileged identity,
-  project-parent writability, required commands, OpenClaw, Docker daemon,
-  Linux-container image, storage, and launcher visibility;
+  project-parent writability, required commands, SAT's pinned private
+  OpenClaw, Docker daemon, Linux-container image, storage, and launcher
+  visibility;
 - Integrated first-run and repeatable model configuration with private,
   atomic, schema-versioned secret-free defaults, optional authorized provider
   smoke checking, and no invented zero-cost estimate when prices are unknown;
@@ -125,8 +129,9 @@ The acceptance contract is
   new non-overwriting project child, followed by exact setup, start, and test
   commands from a validated project-owned argv manifest;
 - Guided one-command uninstall with preservation defaults, pre-removal export,
-  explicit configuration/data purge choices, managed-application removal, and
-  clear shared-resource boundaries;
+  separate configuration/data/private-provider-state purge choices,
+  managed-application removal, and preservation of every other OpenClaw
+  installation;
 - Offline end-to-end coverage for success, revision, response repair,
   invalid-response failure, timeout, evidence tampering, non-convergence,
   iteration exhaustion, no-change failure, missing model or token telemetry,
@@ -152,8 +157,7 @@ controller owns dynamic revision and termination decisions.
   condition, and constraint prompts;
 - Generated-project execution profiles beyond the current local Python 3.12
   profile;
-- Automatic discovery and semantic validation of arbitrary existing OpenClaw
-  provider profiles beyond OpenClaw's detected default model and SAT's optional
+- Semantic provider/auth validation beyond the explicitly authorized minimal
   smoke check;
 - Automatic CLI resume of an interrupted run;
 - Executable `single_agent` and `implementation_domain_specialized` workflow

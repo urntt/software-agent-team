@@ -128,6 +128,10 @@ code or experiment evidence justifies a replacement.
   requirements and success conditions remain user-owned; the profile limits
   available runtime and deterministic checks, not the task domain.
 - OpenClaw 2026.7.1-2 is the initial Agent runtime.
+- SAT installs that version beneath its own marked application-private runtime
+  and uses a separate SAT-owned OpenClaw config, credential, session, cache,
+  and workspace root. It never adopts another OpenClaw installation or
+  profile, even when that installation is compatible and ready.
 - The execution boundary normalizes OpenClaw's local and Gateway JSON response
   shapes and records split provider/model metadata as one canonical
   `provider/model` identity.
@@ -173,6 +177,15 @@ code or experiment evidence justifies a replacement.
   is mounted at `/workspace`.
 - Controlled roles load no ambient runtime skills, so unrelated skill prompts
   and files cannot enter the benchmark workspace or its quality checks.
+- Every SAT-launched OpenClaw process receives explicit SAT-owned config,
+  credential, state, workspace, and Agent paths. All ambient `OPENCLAW_*`
+  settings and the legacy Agent-directory selector are neutralized while
+  ordinary trusted provider API-key variables may still be inherited from the
+  caller.
+- An existing OpenClaw binary, Gateway, process, config, profile, credential
+  store, session, cache, or workspace is outside SAT's ownership. SAT does not
+  probe, reuse, reconfigure, stop, upgrade, downgrade, or uninstall it. Role
+  execution uses local mode and never attaches to that Gateway.
 - The controller verifies actual commits, diffs, files, commands, and exit
   codes instead of trusting Agent claims.
 - Credentials, active runtime state, generated workspaces, and raw runs remain
@@ -197,6 +210,7 @@ Each concept has one authoritative owner.
 | Artifact schemas | `src/software_agent_team/artifacts.py` |
 | Immutable artifact, handoff, and output persistence | `src/software_agent_team/artifact_store.py` |
 | Sanitized Agent runtime boundary | `configs/openclaw.example.json5` |
+| SAT-owned OpenClaw process-environment isolation | `src/software_agent_team/openclaw_runtime.py` and `scripts/openclaw-environment.sh` |
 | Run-scoped runtime materialization and preflight | `src/software_agent_team/runtime_configuration.py` |
 | Run lifecycle state and persistence | `src/software_agent_team/run_control.py` |
 | Phase 1 orchestration, decisions, and reports | `src/software_agent_team/workflow.py` |
@@ -310,6 +324,7 @@ the result. Clarification quality is evaluated separately.
 | Use a local-first CLI instead of a Web service | The first users can inspect Git and terminal evidence, while local execution keeps credentials, workspaces, and experimental state under their control. |
 | Keep the Python controller authoritative | Lifecycle, budgets, evidence checks, and termination must be deterministic rather than dependent on an Agent's self-report. |
 | Use OpenClaw as the Agent runtime, not the orchestrator | OpenClaw provides model/provider integration, sessions, tools, and sandboxing; the experiment still needs a model-independent control plane. |
+| Isolate SAT's OpenClaw runtime and state from every existing installation | Compatibility is not ownership. Installing a pinned private binary and overriding every mutable OpenClaw path gives SAT reproducibility without reading, changing, stopping, or deleting a user's existing binary, Gateway, profile, configuration, credentials, sessions, caches, or workspaces. A collision at SAT's private target fails safely instead of being adopted. |
 | Start with `function_specialized` | It introduces independent planning, testing, and review without the merge conflicts that would confound the first vertical slice. |
 | Keep Tester and Reviewer independent, with configurable dispatch concurrency | They inspect the same immutable evidence and never consume each other's interpretation. Parallel dispatch reduces elapsed time when provider capacity permits; serial dispatch prevents overload without changing the semantic experiment. |
 | Deny Agent-spawning tools to every role | Untracked sub-Agent calls bypass controller budgets, attribution, and scheduling, so only the deterministic controller may authorize model invocations. |
@@ -324,8 +339,8 @@ the result. Clarification quality is evaluated separately.
 | Version requirement or acceptance corrections | A hidden or over-specified acceptance condition confounds model evaluation. The confirmed TaskBrief must expose the product contract, black-box checks must accept equivalent compliant presentations, and a correction starts a new benchmark version. |
 | Freeze model identity and evaluation prices for each run | Explicit model telemetry and a fixed price table are required for comparable experiments; model fallback would change the independent variables. A product run may record cost as unavailable when the user has not supplied a trustworthy price instead of inventing a zero estimate. |
 | Treat terminal failure as evidence | Provider, sandbox, artifact, budget, and convergence failures must remain observable instead of being retried or discarded silently. |
-| Keep saved user defaults secret-free | The product wizard stores the model reference only. Optional pricing, concurrency, and a global stage-timeout override remain advanced evaluation settings; provider credentials remain in OpenClaw's trusted user state and never enter SAT configuration or exports. Checked-in role defaults remain the normal timeout policy. |
-| Make uninstall preservation-first | Removing the CLI must not silently destroy run evidence, generated workspaces, provider state, shared tools, or a source checkout; export and purge therefore require explicit user choices. |
+| Keep saved user defaults secret-free | The product wizard stores the model reference only. Optional pricing, concurrency, and a global stage-timeout override remain advanced evaluation settings; provider credentials remain in SAT's isolated OpenClaw-owned state and never enter SAT control-plane configuration or exports. Checked-in role defaults remain the normal timeout policy. |
+| Make uninstall preservation-first | Removing the CLI must not silently destroy run evidence, generated workspaces, SAT's isolated provider state, shared tools, a source checkout, or any other OpenClaw installation; export and purge therefore require explicit user choices. |
 | Implement the Product Demo Slice before topology comparison | A reproducible engine is not yet a usable product. The core promise starts from a short request, so installation, onboarding, clarification, progress, and delivery must be executable before the project presents an internal evaluation workflow as its demo. |
 | Keep product and evaluation CLI surfaces distinct | Normal users run `sat` and receive guided defaults. Explicit TaskBrief files, benchmark preparation, team IDs, policy paths, timeouts, concurrency, and repair controls remain available to contributors without becoming first-run questions. |
 | Keep generated-product profiles independent from evaluation fixtures | A benchmark must hold experiment inputs constant, while a product request must express the user's intent. Sharing the controller and quality-manifest schema is useful; sharing a task-specific TaskBrief, seed, acceptance suite, environment contract, or delivery command would silently replace the user's request and invalidate both boundaries. |
@@ -536,7 +551,8 @@ acceptance boundary.
 - Install SAT into a managed user-local location with one command;
 - Diagnose supported environment conditions automatically and actionably;
 - Make `sat` the guided product entry point;
-- Detect or configure a provider without storing secrets in SAT state;
+- Configure a provider inside SAT's isolated OpenClaw-owned state without
+  storing secrets in SAT control-plane configuration or evidence;
 - Ask what the user wants to build, record success conditions and constraints
   within the installed execution profile, and confirm a concise requirements
   summary;

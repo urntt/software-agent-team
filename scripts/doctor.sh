@@ -1,22 +1,54 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-task_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+task_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 task_uv_bin="${UV_BIN:-$HOME/.local/bin/uv}"
-task_openclaw_prefix="${OPENCLAW_PREFIX:-$HOME/.openclaw}"
+task_openclaw_prefix="$task_root/.sat/openclaw"
 task_openclaw_bin="$task_openclaw_prefix/bin/openclaw"
 task_node_bin="$task_openclaw_prefix/tools/node-v24.15.0/bin/node"
+task_openclaw_marker="$task_openclaw_prefix/.sat-owned-runtime"
+task_openclaw_probe_home=""
+task_openclaw_environment="$task_root/scripts/openclaw-environment.sh"
 
 fail() {
   echo "doctor: $1" >&2
   exit 1
 }
 
+[[ -f "$task_openclaw_environment" && ! -L "$task_openclaw_environment" ]] || \
+  fail "the OpenClaw environment boundary is missing"
+# shellcheck source=scripts/openclaw-environment.sh
+source "$task_openclaw_environment"
+
+cleanup() {
+  if [[ -n "$task_openclaw_probe_home" && \
+    -d "$task_openclaw_probe_home" ]]; then
+    rm -rf -- "$task_openclaw_probe_home"
+  fi
+}
+trap cleanup EXIT
+
 [[ -x "$task_uv_bin" ]] || fail "uv is missing; run 'make setup'"
 [[ -x "$task_openclaw_bin" ]] || fail "OpenClaw is missing; run 'make setup'"
 [[ -x "$task_node_bin" ]] || fail "the pinned OpenClaw Node runtime is missing"
+[[ -f "$task_openclaw_marker" && ! -L "$task_openclaw_marker" ]] || \
+  fail "the SAT OpenClaw runtime ownership marker is missing"
+[[ "$(sed -n '1p' "$task_openclaw_marker")" == \
+  "software-agent-team-openclaw-runtime-v1" ]] || \
+  fail "the SAT OpenClaw runtime ownership marker is invalid"
+[[ "$(sed -n '2p' "$task_openclaw_marker")" == \
+  "root=$task_openclaw_prefix" ]] || \
+  fail "the SAT OpenClaw runtime marker belongs to another path"
 
-[[ "$("$task_openclaw_bin" --version)" == *"2026.7.1-2"* ]] || \
+task_openclaw_probe_home="$(mktemp -d "${TMPDIR:-/tmp}/sat-doctor.XXXXXX")"
+task_openclaw_version="$(
+  sat_run_openclaw_isolated \
+    "$task_openclaw_probe_home" \
+    "$task_openclaw_probe_home/state" \
+    "$task_openclaw_probe_home/state/openclaw.json" \
+    "$task_openclaw_bin" --version
+)"
+[[ "$task_openclaw_version" == *"2026.7.1-2"* ]] || \
   fail "OpenClaw must be version 2026.7.1-2"
 [[ "$("$task_node_bin" --version)" == "v24.15.0" ]] || \
   fail "OpenClaw must use Node v24.15.0"
@@ -60,7 +92,8 @@ task_python_version="$("$task_uv_bin" run --frozen python -c 'import sys; print(
 [[ "$task_python_version" == "3.12" ]] || fail "the project must use Python 3.12"
 
 if find . \
-  \( -path ./.git -o -path ./.venv -o -path ./.pytest_cache -o -path ./.ruff_cache \) \
+  \( -path ./.git -o -path ./.sat -o -path ./.venv -o \
+    -path ./.pytest_cache -o -path ./.ruff_cache \) \
   -prune -o \
   \( -name '.env' -o -name 'openclaw.json' -o -name '*.pem' -o -name '*.key' \) \
   -print -quit | grep -q .; then

@@ -70,6 +70,11 @@ check, request capture, explicit execution-profile confirmation, automatic run
 materialization, progress renderer, terminal result, and non-overwriting
 delivery all have offline behavior coverage.
 
+The installed OpenClaw boundary is also product-owned and isolated. SAT uses a
+marked private binary plus a private config/state/credential root. It does not
+probe, reuse, reconfigure, stop, upgrade, downgrade, or uninstall an OpenClaw
+runtime or Gateway that was already present on the device.
+
 The currently implemented clarification boundary is deterministic and bounded.
 SAT explains that the installed execution profile supports a small greenfield
 Python 3.12 project, collects the user's ordinary-language request, explicit
@@ -104,6 +109,13 @@ The product installation command must:
 6. Run offline configuration and behavior checks;
 7. Finish with one clear next action: enter a project folder and run `sat`.
 
+The pinned OpenClaw runtime must be installed below the SAT application and
+carry an ownership marker. An existing OpenClaw binary, process, Gateway,
+profile, config, or credential store is outside the installer's ownership
+boundary regardless of its path on `PATH`, version, or readiness. A collision
+at SAT's intended private path fails safely instead of adopting or overwriting
+unmarked files.
+
 Diagnostics must identify the failed condition and a concrete corrective
 action. Environment detection belongs to the installer; it must not be
 converted into a long questionnaire for the user.
@@ -137,11 +149,14 @@ provide:
 - Authorization for an optional minimal provider smoke check;
 - Any provider cost or quota warning that requires confirmation.
 
-The wizard offers OpenClaw's trusted setup, detects its locally configured
-default model without probing the provider, and offers to use it. The optional
-authorized smoke check is the current semantic provider/auth validation step.
-Secrets never enter SAT's configuration, repository, generated project, run
-artifacts, logs, or terminal echo.
+The wizard offers OpenClaw's trusted setup inside SAT's isolated state, detects
+only that private state's configured default model without probing the
+provider, and offers to use it. It never imports an existing OpenClaw profile.
+The optional authorized smoke check is the current semantic provider/auth
+validation step. Secrets never enter SAT's control-plane configuration,
+repository, generated project, run artifacts, logs, exports, or terminal echo;
+OpenClaw stores them only in SAT's private OpenClaw state unless they are
+inherited from the trusted caller environment.
 
 Pricing overrides, verification concurrency, role-stage timeouts, repair
 limits, policy files, and team selection remain advanced evaluation options.
@@ -270,24 +285,26 @@ The Product Demo Slice is complete only when all of the following are true:
 1. On a fresh supported Linux/WSL user environment with documented OS-level
    prerequisites, one command installs SAT and ends with `sat` as the only next
    command.
-2. Installation automatically diagnoses the supported environment conditions
+2. A pre-existing configured or running OpenClaw remains byte-for-byte outside
+   SAT's install, configuration, execution, and uninstall targets.
+3. Installation automatically diagnoses the supported environment conditions
    and produces actionable failures.
-3. From a new project directory, `sat` completes startup diagnostics and the
+4. From a new project directory, `sat` completes startup diagnostics and the
    first-run configuration without requiring another SAT subcommand.
-4. The normal user is not asked for prices, concurrency, timeouts, repair
+5. The normal user is not asked for prices, concurrency, timeouts, repair
    limits, team IDs, policy paths, run IDs, or JSON files.
-5. SAT asks what to build, performs bounded clarification, shows a requirements
+6. SAT asks what to build, performs bounded clarification, shows a requirements
    summary, and requires confirmation before model-backed work.
-6. SAT generates every internal identifier, TaskBrief, source baseline, run
+7. SAT generates every internal identifier, TaskBrief, source baseline, run
    path, and workspace automatically without weakening write-once evidence.
-7. The terminal shows controller-backed phase changes, summaries, elapsed
+8. The terminal shows controller-backed phase changes, summaries, elapsed
    waiting time, gate progress, review, and revision information throughout the
    build.
-8. Success returns a clean runnable project, exact start/test commands, quality
+9. Success returns a clean runnable project, exact start/test commands, quality
    results, limitations, and report paths.
-9. Failure returns an honest terminal result and preserved evidence without
+10. Failure returns an honest terminal result and preserved evidence without
    presenting a partial project as accepted.
-10. The complete journey is covered by offline interaction tests and rehearsed
+11. The complete journey is covered by offline interaction tests and rehearsed
     from a fresh supported environment with one explicitly authorized provider
     run.
 
@@ -295,7 +312,8 @@ The Product Demo Slice is complete only when all of the following are true:
 
 1. Separate the product entry point from the evaluation subcommands;
 2. Add explicit installer and startup environment diagnostics;
-3. Add guided provider configuration without moving secrets into SAT state;
+3. Add guided provider configuration inside an isolated OpenClaw-owned SAT
+   state boundary without putting secrets in control-plane state or evidence;
 4. Add request collection, bounded clarification, and confirmation;
 5. Add automatic internal materialization and safe delivery destinations;
 6. Emit controller events and implement the progress renderer;

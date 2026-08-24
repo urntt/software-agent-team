@@ -67,7 +67,7 @@ def test_cli_no_command_runs_the_guided_product_journey(
     monkeypatch.setattr(
         cli,
         "_ensure_product_configuration",
-        lambda: UserConfiguration(model="provider/model"),
+        lambda _state_paths: UserConfiguration(model="provider/model"),
     )
     source = tmp_path / "prepared-source"
     source.mkdir()
@@ -189,8 +189,9 @@ def test_cli_interactive_configuration_prompts_for_first_run_defaults(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     path = tmp_path / "config.json"
-    answers = iter(("provider/model",))
+    answers = iter(("no", "provider/model"))
     monkeypatch.setenv("SAT_CONFIG_PATH", str(path))
+    monkeypatch.setenv("SAT_STATE_ROOT", str(tmp_path / "state"))
     monkeypatch.setattr(cli.sys, "stdin", SimpleNamespace(isatty=lambda: True))
     monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
 
@@ -239,16 +240,27 @@ def test_first_run_model_setup_keeps_credentials_and_prices_outside_sat(
     monkeypatch.setattr(
         cli,
         "_run_openclaw_configuration",
-        lambda _binary: pytest.fail("OpenClaw setup should have been declined"),
+        lambda _binary, **_kwargs: pytest.fail(
+            "OpenClaw setup should have been declined"
+        ),
     )
     monkeypatch.setattr(
         cli,
         "_run_provider_smoke",
-        lambda _binary, _model: pytest.fail("provider smoke should have been declined"),
+        lambda _binary, _model, **_kwargs: pytest.fail(
+            "provider smoke should have been declined"
+        ),
     )
-    monkeypatch.setattr(cli, "_discover_openclaw_default_model", lambda _binary: None)
+    monkeypatch.setattr(
+        cli,
+        "_discover_openclaw_default_model",
+        lambda _binary, **_kwargs: None,
+    )
 
-    configured = cli._ensure_product_configuration()
+    state_paths = cli.ProductStatePaths.below(tmp_path / "state")
+    cli.ensure_product_state(state_paths)
+
+    configured = cli._ensure_product_configuration(state_paths)
 
     assert configured.model == "provider/model"
     assert configured.input_cost_per_million_usd is None
@@ -261,6 +273,11 @@ def test_provider_smoke_uses_the_selected_model_without_exposing_output(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     observed: dict[str, object] = {}
+    monkeypatch.setenv("OPENCLAW_STATE_DIR", "/tmp/existing-openclaw")
+    monkeypatch.setenv("OPENCLAW_CONFIG_PATH", "/tmp/existing-openclaw/config.json")
+    monkeypatch.setenv("OPENCLAW_AGENT_DIR", "/tmp/existing-openclaw/agent")
+    monkeypatch.setenv("OPENCLAW_GATEWAY_URL", "ws://existing.example")
+    monkeypatch.setenv("OPENAI_API_KEY", "trusted-provider-key")
 
     def fake_run(argv: list[str], **kwargs: object) -> SimpleNamespace:
         observed["argv"] = argv
@@ -272,13 +289,26 @@ def test_provider_smoke_uses_the_selected_model_without_exposing_output(
 
     monkeypatch.setattr(cli.subprocess, "run", fake_run)
 
-    cli._run_provider_smoke(Path("/opt/openclaw"), "provider/model")
+    state = Path("/tmp/sat-openclaw-state")
+    config = state / "openclaw.json"
+    cli._run_provider_smoke(
+        Path("/opt/openclaw"),
+        "provider/model",
+        state_dir=state,
+        config_path=config,
+    )
 
     argv = observed["argv"]
     assert argv[0] == "/opt/openclaw"
     assert argv[argv.index("--model") + 1] == "provider/model"
     assert observed["kwargs"]["shell"] is False
     assert observed["kwargs"]["capture_output"] is True
+    assert observed["kwargs"]["env"]["OPENCLAW_STATE_DIR"] == str(state)
+    assert observed["kwargs"]["env"]["OPENCLAW_CONFIG_PATH"] == str(config)
+    assert observed["kwargs"]["env"]["OPENCLAW_AGENT_DIR"] == ""
+    assert observed["kwargs"]["env"]["OPENCLAW_GATEWAY_URL"] == ""
+    assert observed["kwargs"]["env"]["OPENCLAW_OAUTH_DIR"] == str(state / "credentials")
+    assert observed["kwargs"]["env"]["OPENAI_API_KEY"] == "trusted-provider-key"
 
 
 def test_openclaw_configuration_has_no_hidden_setup_deadline(
@@ -293,7 +323,13 @@ def test_openclaw_configuration_has_no_hidden_setup_deadline(
 
     monkeypatch.setattr(cli.subprocess, "run", fake_run)
 
-    cli._run_openclaw_configuration(Path("/opt/openclaw"))
+    state = Path("/tmp/sat-openclaw-state")
+    config = state / "openclaw.json"
+    cli._run_openclaw_configuration(
+        Path("/opt/openclaw"),
+        state_dir=state,
+        config_path=config,
+    )
 
     assert observed["argv"] == [
         "/opt/openclaw",
@@ -302,6 +338,8 @@ def test_openclaw_configuration_has_no_hidden_setup_deadline(
         "model",
     ]
     assert "timeout" not in observed["kwargs"]
+    assert observed["kwargs"]["env"]["OPENCLAW_STATE_DIR"] == str(state)
+    assert observed["kwargs"]["env"]["OPENCLAW_CONFIG_PATH"] == str(config)
 
 
 def test_openclaw_default_model_is_discovered_without_a_provider_probe(
@@ -324,7 +362,13 @@ def test_openclaw_default_model_is_discovered_without_a_provider_probe(
 
     monkeypatch.setattr(cli.subprocess, "run", fake_run)
 
-    model = cli._discover_openclaw_default_model(Path("/opt/openclaw"))
+    state = Path("/tmp/sat-openclaw-state")
+    config = state / "openclaw.json"
+    model = cli._discover_openclaw_default_model(
+        Path("/opt/openclaw"),
+        state_dir=state,
+        config_path=config,
+    )
 
     assert model == "provider/detected-model"
     assert observed["argv"] == [
@@ -335,6 +379,8 @@ def test_openclaw_default_model_is_discovered_without_a_provider_probe(
     ]
     assert "--probe" not in observed["argv"]
     assert observed["kwargs"]["capture_output"] is True
+    assert observed["kwargs"]["env"]["OPENCLAW_STATE_DIR"] == str(state)
+    assert observed["kwargs"]["env"]["OPENCLAW_CONFIG_PATH"] == str(config)
 
 
 def test_product_delivery_refuses_a_changed_final_report(tmp_path: Path) -> None:
@@ -511,6 +557,7 @@ def test_cli_preflight_makes_no_model_call(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     workspace = tmp_path / "workspace"
+    monkeypatch.setenv("SAT_STATE_ROOT", str(tmp_path / "state"))
     prepare_benchmark_seed(
         REPOSITORY_ROOT / "benchmarks" / "task_manager" / "seed",
         workspace,
@@ -529,6 +576,7 @@ def test_cli_preflight_makes_no_model_call(
         return RuntimePreflight(
             openclaw_binary="/opt/openclaw",
             openclaw_version="OpenClaw test",
+            openclaw_state_dir=str(kwargs["openclaw_state_dir"]),
             runtime_config=str(kwargs["runtime_config"]),
             sandbox_binary="/usr/bin/docker",
             sandbox_version="Docker version test",
@@ -555,6 +603,7 @@ def test_cli_run_constructs_the_real_phase1_boundary_without_invoking_it(
 ) -> None:
     source = tmp_path / "source"
     source.mkdir()
+    monkeypatch.setenv("SAT_STATE_ROOT", str(tmp_path / "state"))
     observed: dict[str, object] = {}
 
     class FakeCoordinator:
@@ -641,6 +690,7 @@ def test_cli_run_uses_saved_defaults_when_flags_are_omitted(
     observed: dict[str, object] = {}
     configuration_path = tmp_path / "config.json"
     monkeypatch.setenv("SAT_CONFIG_PATH", str(configuration_path))
+    monkeypatch.setenv("SAT_STATE_ROOT", str(tmp_path / "state"))
     save_user_configuration(
         UserConfiguration(
             model="provider/saved-model",
@@ -701,8 +751,10 @@ def test_cli_run_uses_saved_defaults_when_flags_are_omitted(
 
 def test_cli_run_rejects_changes_to_frozen_benchmark(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    monkeypatch.setenv("SAT_STATE_ROOT", str(tmp_path / "state"))
     frozen_brief = REPOSITORY_ROOT / "benchmarks" / "task_manager" / "task-brief.json"
     payload = json.loads(frozen_brief.read_text(encoding="utf-8"))
     payload["title"] = "Changed benchmark"

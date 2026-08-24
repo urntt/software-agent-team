@@ -18,15 +18,21 @@ task_state_root="${SAT_STATE_ROOT:-$task_xdg_state_root/software-agent-team}"
 task_runs_root="$task_state_root/runs"
 task_workspaces_root="$task_state_root/workspaces"
 task_sources_root="$task_state_root/sources"
+task_provider_state_root="$task_state_root/openclaw"
 task_state_marker="$task_state_root/.sat-state-v1"
+task_runtime_root="$task_root/.sat"
+task_openclaw_runtime="$task_runtime_root/openclaw"
+task_openclaw_runtime_marker="$task_openclaw_runtime/.sat-owned-runtime"
 task_managed_marker="$task_root/.sat-managed-install"
 task_managed_install=0
 
 task_export_to=""
 task_config_policy="keep"
 task_data_policy="keep"
+task_provider_policy="keep"
 task_config_policy_explicit=0
 task_data_policy_explicit=0
+task_provider_policy_explicit=0
 task_assume_yes=0
 
 fail() {
@@ -38,8 +44,9 @@ show_help() {
   cat <<'EOF'
 Usage: sat-uninstall [options]
 
-Remove SAT launchers and its application environment. By default, saved SAT
-configuration and generated runs/workspaces/sources are preserved.
+Remove SAT launchers, its application environment, and its private OpenClaw
+binary. By default, saved SAT configuration, generated data, and SAT's isolated
+OpenClaw provider state are preserved.
 
 Options:
   --export-to PATH  Export SAT configuration and default generated data first.
@@ -48,13 +55,19 @@ Options:
   --purge-config    Delete saved SAT configuration after an optional export.
   --keep-data       Preserve generated runs, workspaces, and sources (default).
   --purge-data      Delete generated data after an optional export.
+  --keep-provider-state
+                    Preserve SAT's isolated OpenClaw credentials and sessions
+                    (default).
+  --purge-provider-state
+                    Delete only SAT's isolated OpenClaw credentials and sessions.
   --yes             Accept the selected policies without interactive prompts.
   -h, --help        Show this help.
 
-The export intentionally excludes provider credentials. OpenClaw, uv, Docker,
-the shared quality image, development checkouts, and custom state roots not selected
-through SAT_STATE_ROOT are never removed by this command. A managed application
-directory is removed; a development checkout is preserved.
+The export intentionally excludes provider credentials. OpenClaw installations
+outside SAT's marked private runtime, uv, Docker, the shared quality image,
+development checkouts, and custom state roots not selected through SAT_STATE_ROOT
+are never read or removed. A managed application directory is removed; a
+development checkout is preserved.
 EOF
 }
 
@@ -91,6 +104,20 @@ while (($#)); do
         fail "choose only one data policy"
       task_data_policy="purge"
       task_data_policy_explicit=1
+      shift
+      ;;
+    --keep-provider-state)
+      [[ "$task_provider_policy_explicit" == "0" ]] || \
+        fail "choose only one provider-state policy"
+      task_provider_policy="keep"
+      task_provider_policy_explicit=1
+      shift
+      ;;
+    --purge-provider-state)
+      [[ "$task_provider_policy_explicit" == "0" ]] || \
+        fail "choose only one provider-state policy"
+      task_provider_policy="purge"
+      task_provider_policy_explicit=1
       shift
       ;;
     --yes)
@@ -160,10 +187,32 @@ validate_state_ownership() {
     fail "SAT state ownership marker belongs to a different path"
 }
 
+validate_runtime_ownership() {
+  if [[ ! -e "$task_runtime_root" && ! -L "$task_runtime_root" ]]; then
+    return
+  fi
+  [[ -d "$task_runtime_root" && ! -L "$task_runtime_root" ]] || \
+    fail "SAT runtime root must be a real directory"
+  if [[ ! -e "$task_openclaw_runtime" && ! -L "$task_openclaw_runtime" ]]; then
+    return
+  fi
+  [[ -d "$task_openclaw_runtime" && ! -L "$task_openclaw_runtime" ]] || \
+    fail "SAT OpenClaw runtime must be a real directory"
+  [[ -f "$task_openclaw_runtime_marker" && \
+    ! -L "$task_openclaw_runtime_marker" ]] || \
+    fail "SAT OpenClaw runtime is missing its ownership marker"
+  [[ "$(sed -n '1p' "$task_openclaw_runtime_marker")" == \
+    "software-agent-team-openclaw-runtime-v1" ]] || \
+    fail "SAT OpenClaw runtime ownership marker is invalid"
+  [[ "$(sed -n '2p' "$task_openclaw_runtime_marker")" == \
+    "root=$task_openclaw_runtime" ]] || \
+    fail "SAT OpenClaw runtime marker belongs to a different path"
+}
+
 if [[ "$task_assume_yes" == "0" ]]; then
   [[ -t 0 && -t 1 ]] || fail "interactive confirmation is unavailable; use --yes"
-  echo "SAT will remove its launchers and application Python environment."
-  echo "OpenClaw, provider credentials, uv, Docker, the image, and source stay intact."
+  echo "SAT will remove its launchers, Python environment, and private OpenClaw binary."
+  echo "Any OpenClaw installation outside SAT remains untouched."
 
   if [[ -z "$task_export_to" ]] && \
     ask_yes_no "Export saved SAT configuration and default generated data first?"; then
@@ -177,9 +226,14 @@ if [[ "$task_assume_yes" == "0" ]]; then
     ask_yes_no "Delete generated runs, workspaces, and sources after export?"; then
     task_data_policy="purge"
   fi
+  if [[ "$task_provider_policy_explicit" == "0" ]] && \
+    ask_yes_no "Delete SAT's isolated OpenClaw credentials and sessions?"; then
+    task_provider_policy="purge"
+  fi
 
   echo "Configuration policy: $task_config_policy"
   echo "Generated-data policy: $task_data_policy"
+  echo "Isolated provider-state policy: $task_provider_policy"
   echo "Export destination: ${task_export_to:-none}"
   if ! ask_yes_no "Continue with uninstall?"; then
     echo "uninstall: cancelled; nothing was changed"
@@ -255,12 +309,15 @@ if [[ -n "$task_export_to" || "$task_config_policy" == "purge" ]]; then
   [[ ! -L "$task_config_path" ]] || \
     fail "refusing to export or delete a symbolic-link configuration"
 fi
-if [[ -n "$task_export_to" || "$task_data_policy" == "purge" ]]; then
+if [[ -n "$task_export_to" || "$task_data_policy" == "purge" || \
+  "$task_provider_policy" == "purge" ]]; then
   validate_state_ownership
   [[ ! -L "$task_state_root" && ! -L "$task_runs_root" && \
-    ! -L "$task_workspaces_root" && ! -L "$task_sources_root" ]] || \
-    fail "refusing to export or delete symbolic-link generated-data directories"
+    ! -L "$task_workspaces_root" && ! -L "$task_sources_root" && \
+    ! -L "$task_provider_state_root" ]] || \
+    fail "refusing to export or delete symbolic-link SAT state directories"
 fi
+validate_runtime_ownership
 
 if [[ -n "$task_export_to" ]]; then
   export_user_state
@@ -275,11 +332,16 @@ fi
 
 if [[ "$task_data_policy" == "purge" ]]; then
   rm -rf -- "$task_runs_root" "$task_workspaces_root" "$task_sources_root"
-  rm -f -- "$task_state_marker"
-  rmdir -- "$task_state_root" 2>/dev/null || true
   echo "uninstall: deleted generated runs, workspaces, and sources"
 else
   echo "uninstall: preserved generated runs, workspaces, and sources"
+fi
+
+if [[ "$task_provider_policy" == "purge" ]]; then
+  rm -rf -- "$task_provider_state_root"
+  echo "uninstall: deleted SAT's isolated OpenClaw provider state"
+else
+  echo "uninstall: preserved SAT's isolated OpenClaw provider state"
 fi
 
 remove_owned_link() {
@@ -303,10 +365,15 @@ if [[ -d "$task_root/.venv" ]]; then
   rm -rf -- "$task_root/.venv"
   echo "uninstall: removed SAT Python environment"
 fi
+if [[ -d "$task_openclaw_runtime" ]]; then
+  rm -rf -- "$task_openclaw_runtime"
+  rmdir -- "$task_runtime_root" 2>/dev/null || true
+  echo "uninstall: removed SAT's private OpenClaw runtime"
+fi
 remove_owned_link "$task_uninstall_link" "$task_uninstall_target" \
   "uninstall launcher"
 
-echo "uninstall: shared OpenClaw, provider credentials, uv, Docker, and image preserved"
+echo "uninstall: other OpenClaw installations, uv, Docker, and image untouched"
 if [[ "$task_managed_install" == "1" ]]; then
   [[ "$task_root" != "$HOME" && "$task_root" != "$(dirname "$HOME")" ]] || \
     fail "refusing to remove an unsafe managed installation root"
