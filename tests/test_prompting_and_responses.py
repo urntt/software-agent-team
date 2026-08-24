@@ -647,6 +647,23 @@ def test_strict_parser_normalizes_presentation_prose_around_one_json_fence() -> 
     assert parsed.body == semantic_body(plan())
 
 
+def test_strict_parser_allows_non_json_bracket_notation_around_json_fence() -> None:
+    payload = json.dumps(plan().model_dump(mode="json"))
+    payload = f"```json\n{payload}\n```"
+    response = (
+        "Verified [project.scripts], ['uv', 'sync', '--dev'], and `{not JSON}`.\n"
+        f"{payload}\n"
+        "The committed implementation is ready."
+    )
+
+    parsed = parse_scripted(
+        response,
+        execution_request(AgentRole.PLANNER, ArtifactKind.IMPLEMENTATION_PLAN),
+    )
+
+    assert parsed.body == semantic_body(plan())
+
+
 def test_strict_parser_normalizes_presentation_prose_around_one_object() -> None:
     response = (
         "I verified the commit and changed paths.\n"

@@ -105,13 +105,17 @@ unambiguous semantic JSON object in any of these forms:
 - One complete object followed by at most four redundant unmatched closing
   delimiters.
 
-Surrounding text is discarded only when it contains no other JSON structure or
-fence. A closing-delimiter suffix is discarded only after the decoder has
-already recovered exactly one complete top-level object; raw transport output
-remains immutable evidence. The parser never guesses between multiple
-candidates. Duplicate keys, multiple objects, multiple fences, non-standard
-constants, unknown semantic fields, and invalid semantic content remain
-invalid.
+Text outside a single explicit JSON fence is discarded only when it contains no
+other decodable JSON object or array and no other fence. Ordinary documentation
+notation there, such as `[project.scripts]`, Python-style argv examples, or
+braces around non-JSON text, does not create a competing JSON candidate. The
+stricter raw-object form continues to reject any structural delimiters in its
+surrounding prose. A closing-delimiter suffix is discarded only after the
+decoder has already recovered exactly one complete top-level object; raw
+transport output remains immutable evidence. The parser never guesses between
+multiple candidates. Duplicate keys, multiple objects, multiple fences,
+non-standard constants, unknown semantic fields, and invalid semantic content
+remain invalid.
 
 One controlled repair may address only the semantic contract. It receives a
 bounded, value-free structural diagnostic, such as the duplicate key name,

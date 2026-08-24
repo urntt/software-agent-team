@@ -240,6 +240,22 @@ def _safe_json_detail(error: TypeError | ValueError) -> str:
     return "response could not be decoded as one JSON object"
 
 
+def _contains_json_structure(value: str) -> bool:
+    """Return whether text contains another decodable JSON object or array."""
+
+    decoder = json.JSONDecoder()
+    for index, character in enumerate(value):
+        if character not in "[{":
+            continue
+        try:
+            parsed, _ = decoder.raw_decode(value, idx=index)
+        except ValueError:
+            continue
+        if isinstance(parsed, (dict, list)):
+            return True
+    return False
+
+
 def _unwrap_single_json_fence(value: str) -> str:
     """Normalize one unambiguous ``json`` fence and presentation-only prose."""
 
@@ -259,7 +275,7 @@ def _unwrap_single_json_fence(value: str) -> str:
         return value
 
     outside = "\n".join(lines[:opening] + lines[closing + 1 :]).strip()
-    if "```" in outside or any(character in outside for character in "{}[]"):
+    if "```" in outside or _contains_json_structure(outside):
         return value
     return "\n".join(lines[opening + 1 : closing])
 

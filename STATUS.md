@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** First clean product run diagnosed; accepted-delivery rerun next
+**Current milestone:** Developer presentation boundary fixed; delivery rerun next
 
 **Last updated:** August 24, 2026
 
@@ -103,8 +103,26 @@ structures, unknown semantic fields, and incomplete plans. Raw provider output
 remains unchanged in execution evidence. The Planner budget is now 180 seconds,
 which covers the observed 139-second initial-plus-repair path with bounded
 margin. A repair still shares the original deadline and cannot reset or double
-the authorized time. The complete 392-test offline suite passes, and the
-corrected restricted Docker helper probe remains successful.
+the authorized time.
+
+A second rehearsal used a newly created Linux account with its own home,
+configuration, provider state, and project parent. The public installer checked
+out the published revision, and the normal `sat` flow again passed every step
+through planning. The Developer completed a clean implementation commit and 24
+project tests in 854.4 seconds, within its existing 900-second budget. Its one
+semantic JSON object was enclosed in the requested JSON fence, but the
+presentation text before the fence included ordinary command notation such as
+Python-style argv arrays. The former fence normalizer treated any square
+bracket outside the fence as a competing JSON structure, requested an
+unnecessary repair, and then correctly rejected the combined 929-second path
+at the shared deadline.
+
+The fence normalizer now distinguishes a separately decodable JSON object or
+array from non-JSON documentation notation. It accepts the observed original
+Developer response without repair while retaining the stricter raw-object
+boundary and rejecting multiple fences or competing JSON values. The existing
+900-second Developer budget is unchanged. The complete 393-test offline suite
+passes, and the corrected restricted Docker helper probe remains successful.
 
 The full provider-backed product journey still needs to reach accepted delivery
 and pass the delivered project's own setup, start, and test commands. The
@@ -214,8 +232,8 @@ controller owns dynamic revision and termination decisions.
 
 ## Not Yet Available or Completed
 
-- A clean provider-backed rerun through accepted delivery after the first normal
-  product run exposed and bounded the Planner response and timing edge case;
+- A clean provider-backed rerun through accepted delivery after two normal
+  product runs exposed and bounded Planner and Developer response edge cases;
 - Adaptive follow-up clarification beyond the current bounded request, success
   condition, and constraint prompts;
 - Generated-project execution profiles beyond the current local Python 3.12
