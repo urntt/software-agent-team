@@ -72,17 +72,26 @@ The installation then:
   OpenClaw runtime when needed;
 - Synchronizes the locked SAT environment;
 - Builds and resolves the pinned sandbox image;
-- Runs configuration validation, formatting, lint, and the full offline test
-  suite;
+- Runs focused offline configuration and CLI installation checks;
 - Creates `$HOME/.local/bin/sat` and `$HOME/.local/bin/sat-uninstall` without
   overwriting unrelated commands;
 - Reports the exact application, launcher, runtime, and image identities.
+
+The managed path does not run repository formatting, lint, or the complete
+developer test suite on the user's device. Those checks remain mandatory for
+contributors and CI through `make check`.
 
 The process is idempotent for the same owned installation. Advanced operators
 may override `SAT_INSTALL_ROOT`, `SAT_REPOSITORY_URL`, `SAT_INSTALL_REF`,
 `SAT_BIN_DIR`, or `UV_BIN`, but those are not normal first-use questions.
 The OpenClaw prefix is intentionally not configurable: accepting an arbitrary
 prefix would allow installation to mutate a pre-existing OpenClaw runtime.
+
+If Docker, a download, or an offline check interrupts installation, correct the
+reported condition and rerun the same managed-install command. The bootstrap
+reuses only a marked, clean SAT application, reconciles the pinned runtime and
+image, and preserves user configuration and state. It does not require deleting
+the partial installation before a retry.
 
 Contributors installing from a source checkout should follow
 [`Checkout Installation`](development.md#checkout-installation) instead.

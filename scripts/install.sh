@@ -9,6 +9,8 @@ task_sat_target="$task_root/.venv/bin/sat"
 task_sat_link="$task_bin_dir/sat"
 task_uninstall_target="$task_root/scripts/uninstall.sh"
 task_uninstall_link="$task_bin_dir/sat-uninstall"
+task_managed_install="${SAT_MANAGED_INSTALL:-0}"
+unset SAT_MANAGED_INSTALL
 
 fail() {
   echo "install: $1" >&2
@@ -53,7 +55,7 @@ done
   ! -L "$task_root/scripts/openclaw-environment.sh" ]] || \
   fail "OpenClaw environment boundary is missing"
 [[ -x "$task_uninstall_target" ]] || fail "uninstall script is missing or not executable"
-if [[ "${SAT_MANAGED_INSTALL:-0}" == "1" ]]; then
+if [[ "$task_managed_install" == "1" ]]; then
   [[ -f "$task_root/.sat-managed-install" && \
     ! -L "$task_root/.sat-managed-install" ]] || \
     fail "managed installation marker is missing"
@@ -109,9 +111,11 @@ task_image_id="$(docker image inspect --format '{{.Id}}' "$task_image")"
 "$task_uv_bin" run --frozen sat validate-config \
   --policy configs/product-policy.json \
   --quality-manifest profiles/python/quality.json >/dev/null
-"$task_uv_bin" run --frozen ruff format --check .
-"$task_uv_bin" run --frozen ruff check .
-"$task_uv_bin" run --frozen pytest
+if [[ "$task_managed_install" != "1" ]]; then
+  "$task_uv_bin" run --frozen ruff format --check .
+  "$task_uv_bin" run --frozen ruff check .
+  "$task_uv_bin" run --frozen pytest
+fi
 
 [[ -x "$task_sat_target" ]] || fail "the locked project environment has no sat CLI"
 mkdir -p -- "$task_bin_dir"
@@ -130,7 +134,7 @@ echo "install: image=$task_image"
 echo "install: image_id=$task_image_id"
 echo "install: existing OpenClaw installations and configuration were not read or changed"
 echo "install: SAT provider credentials and configuration will use isolated state on first run"
-if [[ "${SAT_MANAGED_INSTALL:-0}" != "1" ]]; then
+if [[ "$task_managed_install" != "1" ]]; then
   echo "install: uninstall=sat-uninstall"
   case ":$PATH:" in
     *":$task_bin_dir:"*) echo "install: next=sat" ;;

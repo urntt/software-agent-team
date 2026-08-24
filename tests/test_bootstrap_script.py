@@ -34,6 +34,11 @@ def prepare_source(tmp_path: Path) -> Path:
         """#!/usr/bin/env bash
 set -euo pipefail
 printf 'root=%s managed=%s\n' "$(pwd)" "${SAT_MANAGED_INSTALL:-0}" >> "${INSTALL_LOG:?}"
+if [[ "${FAKE_INSTALL_FAIL_ONCE:-0}" == "1" && \
+      ! -e "${FAKE_INSTALL_ATTEMPT_MARKER:?}" ]]; then
+  : > "${FAKE_INSTALL_ATTEMPT_MARKER:?}"
+  exit 17
+fi
 """,
     )
     (source / ".gitignore").write_text(".sat-managed-install\n", encoding="utf-8")
@@ -71,6 +76,7 @@ esac
         "SAT_INSTALL_REF": "main",
         "SAT_INSTALL_ROOT": str(install_root),
         "INSTALL_LOG": str(install_log),
+        "FAKE_INSTALL_ATTEMPT_MARKER": str(tmp_path / "install-attempted"),
     }
     return environment, install_root, install_log
 
@@ -111,6 +117,27 @@ def test_bootstrap_creates_and_reuses_one_owned_managed_install(
         "bootstrap: uninstall=sat-uninstall",
         "bootstrap: next=sat",
     ]
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="bootstrap supports Linux/WSL")
+def test_bootstrap_retries_an_owned_install_after_inner_failure(
+    tmp_path: Path,
+) -> None:
+    source = prepare_source(tmp_path)
+    environment, install_root, install_log = fake_environment(tmp_path, source)
+    environment["FAKE_INSTALL_FAIL_ONCE"] = "1"
+
+    first = run_bootstrap(environment)
+    second = run_bootstrap(environment)
+
+    assert first.returncode == 17
+    assert second.returncode == 0, second.stderr
+    assert (install_root / ".sat-managed-install").is_file()
+    assert install_log.read_text(encoding="utf-8").splitlines() == [
+        f"root={install_root} managed=1",
+        f"root={install_root} managed=1",
+    ]
+    assert "bootstrap: next=sat" in second.stdout
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="bootstrap supports Linux/WSL")

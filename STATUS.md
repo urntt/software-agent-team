@@ -44,7 +44,7 @@ generates a request-specific run ID, TaskBrief, trusted source, workspace, and
 evidence roots, shows controller-derived progress, and delivers only an
 accepted clean Git result with project-specific commands.
 
-This is not yet release-stable evidence. The complete 364-test offline suite,
+This is not yet release-stable evidence. The complete 365-test offline suite,
 including interaction, installer, workflow, failure, and delivery paths,
 passes, but the journey has not yet passed the required rehearsal from a fresh
 supported Linux/WSL user environment with an explicitly authorized provider.

@@ -111,7 +111,7 @@ exit 0
         fake_bin / "docker",
         """#!/usr/bin/env bash
 set -euo pipefail
-printf '%s\n' "$*" >> "${FAKE_DOCKER_LOG:?}"
+printf 'managed=%s %s\n' "${SAT_MANAGED_INSTALL-unset}" "$*" >> "${FAKE_DOCKER_LOG:?}"
 case "${1:-}" in
   info)
     [[ "${FAKE_DOCKER_INFO_FAIL:-0}" != "1" ]] || exit 1
@@ -175,6 +175,7 @@ echo 'v24.15.0'
         "FAKE_UV_LOG": str(uv_log),
         "FAKE_DOCKER_LOG": str(docker_log),
     }
+    environment.pop("SAT_MANAGED_INSTALL", None)
     return environment, install_bin, uv_log, docker_log
 
 
@@ -247,7 +248,7 @@ def test_managed_installer_leaves_the_next_action_to_the_bootstrap(
         "software-agent-team-managed-v1\n",
         encoding="utf-8",
     )
-    environment, _, _, _ = fake_environment(tmp_path, checkout)
+    environment, _, uv_log, docker_log = fake_environment(tmp_path, checkout)
     environment["SAT_MANAGED_INSTALL"] = "1"
 
     completed = run_installer(checkout, environment)
@@ -255,6 +256,13 @@ def test_managed_installer_leaves_the_next_action_to_the_bootstrap(
     assert completed.returncode == 0, completed.stderr
     assert "install: next=" not in completed.stdout
     assert "install: uninstall=" not in completed.stdout
+    docker_calls = docker_log.read_text(encoding="utf-8").splitlines()
+    assert docker_calls
+    assert all(line.startswith("managed=unset ") for line in docker_calls)
+    uv_calls = uv_log.read_text(encoding="utf-8")
+    assert "run --frozen sat validate-config" in uv_calls
+    assert "ruff" not in uv_calls
+    assert "pytest" not in uv_calls
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="installer supports Linux/WSL")

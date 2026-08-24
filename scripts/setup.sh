@@ -129,5 +129,4 @@ for role_name in sorted(expected):
     (workspace_root / role_name).mkdir(parents=True, exist_ok=True)
 PY
 
-echo "Development environment is ready with an isolated SAT OpenClaw runtime."
-echo "Run 'make check' next."
+echo "setup: pinned toolchain and isolated SAT OpenClaw runtime are ready"

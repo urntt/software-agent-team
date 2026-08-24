@@ -47,11 +47,12 @@ run:
 ./scripts/install.sh
 ```
 
-This path performs the same locked runtime, image, validation, and launcher
-setup as a managed installation, but it does not mark the checkout as a
-managed application. The uninstaller can therefore remove SAT's launchers,
-environment, and private OpenClaw runtime while preserving the development
-checkout. Normal users should use the managed command in the repository
+This path performs the locked runtime, image, configuration, and launcher setup
+used by a managed installation, then also runs formatting, lint, and the full
+offline test suite. It does not mark the checkout as a managed application.
+The uninstaller can therefore remove SAT's launchers, environment, and private
+OpenClaw runtime while preserving the development checkout. Normal users
+should use the managed command in the repository
 [`README.md`](../README.md#install).
 
 To update a checkout-bound installation, update the checkout through the
