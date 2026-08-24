@@ -1,7 +1,7 @@
-.PHONY: install uninstall setup doctor validate lock lock-benchmark format format-check lint test check
+.PHONY: install uninstall setup doctor validate lock lock-runtime format format-check lint test check
 
 UV ?= $(HOME)/.local/bin/uv
-BENCHMARK_EXCLUDE_NEWER ?= 2026-08-09
+RUNTIME_EXCLUDE_NEWER ?= 2026-08-09
 
 install:
 	./scripts/install.sh
@@ -21,13 +21,13 @@ validate:
 lock:
 	$(UV) lock
 
-lock-benchmark:
-	$(UV) pip compile benchmarks/task_manager/requirements.in \
+lock-runtime:
+	$(UV) pip compile runtime/python/requirements.in \
 		--universal \
 		--python-version 3.12 \
-		--exclude-newer $(BENCHMARK_EXCLUDE_NEWER) \
+		--exclude-newer $(RUNTIME_EXCLUDE_NEWER) \
 		--no-annotate \
-		--output-file benchmarks/task_manager/requirements.lock
+		--output-file runtime/python/requirements.lock
 
 format:
 	$(UV) run ruff format .

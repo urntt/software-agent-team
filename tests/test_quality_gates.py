@@ -400,7 +400,7 @@ def test_docker_argv_enforces_every_isolation_limit(
     mounts = [argv[index + 1] for index, value in enumerate(argv) if value == "--mount"]
     assert len(mounts) == 2
     assert all(value.endswith(",readonly") for value in mounts)
-    assert argv[-4:] == ("sat-task-manager-quality:phase1-v1", *invocation.argv)
+    assert argv[-4:] == ("sat-python-quality:phase1-v1", *invocation.argv)
 
 
 def test_runner_defaults_to_docker(configuration, run_paths: tuple[Path, Path]) -> None:
@@ -722,7 +722,7 @@ def test_runner_rejects_working_directory_symlink_escape(
             "gates": (changed_gate, *configuration.benchmark.gates[1:]),
         }
     )
-    changed_configuration = replace(configuration, benchmark=changed_benchmark)
+    changed_configuration = replace(configuration, manifest=changed_benchmark)
     runner = QualityGateRunner(
         changed_configuration,
         run_directory=run_directory,

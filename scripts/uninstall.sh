@@ -52,7 +52,7 @@ Options:
   -h, --help        Show this help.
 
 The export intentionally excludes provider credentials. OpenClaw, uv, Docker,
-the benchmark image, development checkouts, and custom state roots not selected
+the shared quality image, development checkouts, and custom state roots not selected
 through SAT_STATE_ROOT are never removed by this command. A managed application
 directory is removed; a development checkout is preserved.
 EOF

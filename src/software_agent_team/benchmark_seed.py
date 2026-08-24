@@ -1,4 +1,4 @@
-"""Safe preparation of the fixed Phase 1 benchmark seed repository."""
+"""Safe preparation of trusted greenfield source repositories."""
 
 from __future__ import annotations
 
@@ -8,8 +8,12 @@ import subprocess
 from pathlib import Path
 
 
-class BenchmarkSeedError(RuntimeError):
-    """Raised when the controlled benchmark seed cannot be prepared safely."""
+class SeedRepositoryError(RuntimeError):
+    """Raised when a trusted source seed cannot be prepared safely."""
+
+
+# Public compatibility name retained for the evaluation CLI and existing callers.
+BenchmarkSeedError = SeedRepositoryError
 
 
 SEED_IGNORE_PATTERNS = (
@@ -61,37 +65,40 @@ def _run_git(repository: Path, *arguments: str) -> str:
     return result.stdout.strip()
 
 
-def prepare_benchmark_seed(
+def prepare_seed_repository(
     seed: Path,
     destination: Path,
     *,
+    commit_message: str,
     author_name: str = "urntt",
     author_email: str = "urntts@gmail.com",
 ) -> str:
-    """Copy the trusted seed once, initialize Git, and return its base commit."""
+    """Copy one trusted seed, initialize Git, and return its base commit."""
 
     if not author_name.strip() or not author_email.strip():
-        raise BenchmarkSeedError("benchmark commit identity must not be blank")
+        raise SeedRepositoryError("seed commit identity must not be blank")
+    if not commit_message.strip() or "\n" in commit_message or "\r" in commit_message:
+        raise SeedRepositoryError("seed commit message must be one non-blank line")
     try:
         resolved_seed = seed.resolve(strict=True)
     except OSError as error:
-        raise BenchmarkSeedError("benchmark seed does not exist") from error
+        raise SeedRepositoryError("source seed does not exist") from error
     if not resolved_seed.is_dir() or resolved_seed.is_symlink():
-        raise BenchmarkSeedError("benchmark seed must be a real directory")
+        raise SeedRepositoryError("source seed must be a real directory")
     if (resolved_seed / ".git").exists() or (resolved_seed / ".git").is_symlink():
-        raise BenchmarkSeedError("benchmark seed cannot contain Git metadata")
+        raise SeedRepositoryError("source seed cannot contain Git metadata")
     if any(path.is_symlink() for path in resolved_seed.rglob("*")):
-        raise BenchmarkSeedError("benchmark seed cannot contain symbolic links")
+        raise SeedRepositoryError("source seed cannot contain symbolic links")
     if destination.exists() or destination.is_symlink():
-        raise BenchmarkSeedError(f"benchmark destination already exists: {destination}")
+        raise SeedRepositoryError(f"seed destination already exists: {destination}")
     destination.parent.mkdir(parents=True, exist_ok=True)
     if destination.parent.is_symlink() or not destination.parent.is_dir():
-        raise BenchmarkSeedError("benchmark destination parent must be a directory")
+        raise SeedRepositoryError("seed destination parent must be a directory")
     resolved_parent = destination.parent.resolve(strict=True)
     if resolved_parent == resolved_seed or resolved_parent.is_relative_to(
         resolved_seed
     ):
-        raise BenchmarkSeedError("benchmark destination cannot be inside the seed")
+        raise SeedRepositoryError("seed destination cannot be inside the seed")
 
     shutil.copytree(
         resolved_seed,
@@ -107,6 +114,24 @@ def prepare_benchmark_seed(
         "commit",
         "--no-verify",
         "-m",
-        "chore: initialize task-manager benchmark",
+        commit_message.strip(),
     )
     return _run_git(destination, "rev-parse", "HEAD")
+
+
+def prepare_benchmark_seed(
+    seed: Path,
+    destination: Path,
+    *,
+    author_name: str = "urntt",
+    author_email: str = "urntts@gmail.com",
+) -> str:
+    """Prepare the fixed task-manager evaluation seed repository."""
+
+    return prepare_seed_repository(
+        seed,
+        destination,
+        commit_message="chore: initialize task-manager benchmark",
+        author_name=author_name,
+        author_email=author_email,
+    )

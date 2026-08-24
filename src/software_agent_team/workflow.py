@@ -817,7 +817,11 @@ class WorkflowCoordinator:
                 detail = f"Controller-recorded commands failed: {', '.join(failed)}."
             elif criterion.id in manual:
                 criterion_status = CheckStatus.PENDING_REVIEW
-                detail = "Deterministic evidence passed; independent review is pending."
+                detail = (
+                    "Deterministic evidence passed; independent review is pending."
+                    if command_ids
+                    else "This criterion is assigned to independent review."
+                )
             else:
                 criterion_status = CheckStatus.PASSED
                 detail = (

@@ -1,0 +1,34 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "generated-project"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "fastapi==0.116.1",
+  "jinja2==3.1.6",
+  "python-multipart==0.0.20",
+  "uvicorn==0.35.0",
+]
+
+[dependency-groups]
+dev = [
+  "httpx==0.28.1",
+  "pytest==8.4.2",
+  "ruff==0.12.8",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]

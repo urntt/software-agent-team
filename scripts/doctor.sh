@@ -36,15 +36,21 @@ fi
 [[ -f configs/teams.json ]] || fail "team manifest is missing"
 [[ -f configs/openclaw.example.json5 ]] || fail "OpenClaw template is missing"
 [[ -f configs/run-policy.json ]] || fail "run policy is missing"
+[[ -f configs/product-policy.json ]] || fail "product policy is missing"
+[[ -f profiles/python/quality.json ]] || fail "product quality profile is missing"
+[[ -f profiles/python/contract-template.json ]] || \
+  fail "product contract template is missing"
+[[ -f profiles/python/validation/run.py ]] || \
+  fail "product contract validator is missing"
+[[ -f runtime/python/Dockerfile ]] || fail "Python runtime Dockerfile is missing"
+[[ -f runtime/python/requirements.in ]] || \
+  fail "Python runtime dependency input is missing"
+[[ -f runtime/python/requirements.lock ]] || \
+  fail "Python runtime dependency lock is missing"
 [[ -f benchmarks/task_manager/benchmark.json ]] || \
   fail "benchmark manifest is missing"
 [[ -f benchmarks/task_manager/task-brief.json ]] || \
   fail "frozen benchmark TaskBrief is missing"
-[[ -f benchmarks/task_manager/Dockerfile ]] || fail "benchmark Dockerfile is missing"
-[[ -f benchmarks/task_manager/requirements.in ]] || \
-  fail "benchmark dependency input is missing"
-[[ -f benchmarks/task_manager/requirements.lock ]] || \
-  fail "benchmark dependency lock is missing"
 [[ -f benchmarks/task_manager/acceptance/run.py ]] || \
   fail "benchmark acceptance suite is missing"
 [[ -x scripts/bootstrap.sh ]] || fail "bootstrap script is missing or not executable"
@@ -63,6 +69,10 @@ fi
 
 SOFTWARE_AGENT_TEAM_ROOT="$task_root" \
   "$task_uv_bin" run --frozen sat validate-config >/dev/null
+SOFTWARE_AGENT_TEAM_ROOT="$task_root" \
+  "$task_uv_bin" run --frozen sat validate-config \
+  --policy configs/product-policy.json \
+  --quality-manifest profiles/python/quality.json >/dev/null
 "$task_uv_bin" run --frozen sat validate-task-brief examples/task-brief.json >/dev/null
 "$task_uv_bin" run --frozen sat validate-task-brief \
   benchmarks/task_manager/task-brief.json >/dev/null

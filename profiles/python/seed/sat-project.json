@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "setup": ["uv", "sync", "--dev"],
+  "start": ["uv", "run", "replace-with-project-entrypoint"],
+  "test": ["uv", "run", "pytest"]
+}

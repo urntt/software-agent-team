@@ -6,8 +6,9 @@ OpenClaw. A confirmed software request becomes an isolated Git result with
 planning, implementation, quality-gate, review, revision, telemetry, and final
 report evidence.
 
-The first supported vertical slice builds a controlled task-management Web
-application with a function-specialized team:
+The first product profile builds small greenfield Python 3.12 projects, such as
+Web applications, CLI tools, and local automation, with a
+function-specialized team:
 
 ```text
 Planner
@@ -34,7 +35,10 @@ offline tested. A managed installation can launch `sat`, diagnose the local
 runtime, guide secret-free model setup, collect and confirm a request, generate
 all internal run inputs, show controller-backed progress, and atomically
 deliver an accepted Git result. The current product scope is deliberately
-limited to the verified local task-management Web application contract.
+bounded by the checked-in Python execution profile, but the request,
+requirements, success conditions, project commands, and delivered behavior are
+created from the user's confirmed intent rather than from an evaluation
+benchmark.
 
 This product journey has not yet completed its fresh-device, provider-backed
 acceptance rehearsal. Until that evidence exists, the repository does not
@@ -115,13 +119,14 @@ sat
 SAT performs local diagnostics before asking for a model or making a provider
 request. On first launch it delegates credential entry to OpenClaw, stores only
 the selected `provider/model` reference, and offers an explicitly authorized
-minimal smoke check. It then asks what to build, shows the current supported
-scope, asks for a new project-directory name, and requires confirmation before
-the model-backed workflow begins.
+minimal smoke check. It then asks what to build, explains the current Python
+execution profile, collects success conditions and optional constraints, asks
+for a new project-directory name, shows the resulting requirements summary,
+and requires confirmation before the model-backed workflow begins.
 
-The current release accepts only the frozen local task-management Web
-application scope. It refuses or asks the user to narrow other requests rather
-than silently treating them as that benchmark.
+The product path never substitutes the task-manager evaluation fixture for a
+user request. Requests that cannot use the current local Python profile are
+declined explicitly; expanding the set of execution profiles is roadmap work.
 
 ## Advanced Evaluation Quick Start
 
@@ -136,7 +141,7 @@ Contributors may install from a clean checkout on Linux or WSL:
 ```
 
 The installer prepares the pinned user-local toolchain, locked project
-environment, benchmark image, offline checks, and checkout-bound `sat` and
+environment, shared Python quality image, offline checks, and checkout-bound `sat` and
 `sat-uninstall` launchers. It does not install an OS-level Docker daemon or
 create provider credentials.
 
@@ -206,16 +211,19 @@ documents have deliberately separate responsibilities:
 | [`docs/runtime-evidence.md`](docs/runtime-evidence.md) | Runtime authority, response boundary, persisted evidence, integrity, and operator safety |
 | [`docs/phase1-runbook.md`](docs/phase1-runbook.md) | Contributor/operator procedure for a controlled Phase 1 provider-backed evaluation |
 | [`docs/development.md`](docs/development.md) | Local setup, checks, validation commands, layout, and contribution workflow |
-| [`benchmarks/task_manager/requirements.md`](benchmarks/task_manager/requirements.md) | Human-readable summary of the frozen benchmark contract |
+| [`profiles/python/README.md`](profiles/python/README.md) | First generated-project execution profile and command/evidence contract |
+| [`benchmarks/task_manager/requirements.md`](benchmarks/task_manager/requirements.md) | Human-readable summary of the frozen evaluation fixture; it is not the product request contract |
 
 ## Repository Layout
 
 ```text
-benchmarks/task_manager/       Frozen brief, seed, acceptance suite, and image
-configs/                       Team, run-policy, and sanitized runtime inputs
+benchmarks/task_manager/       Frozen evaluation brief, seed, and acceptance suite
+configs/                       Team, product/evaluation policy, and runtime inputs
 docs/                          Installation, operations, and development guides
 examples/                      Example validated artifacts and handoffs
 openclaw/                      Stable role workspace boundaries
+profiles/python/               Product seed, quality contract, and validator
+runtime/python/                Shared content-pinned quality image and dependency lock
 scripts/                       Setup, installation, uninstall, and diagnostics
 src/software_agent_team/       Product flow, controller, contracts, adapters, and CLI
 tests/                         Offline unit, integration, and end-to-end tests

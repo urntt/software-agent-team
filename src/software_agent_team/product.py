@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ctypes
 import errno
+import json
 import os
 import platform
 import re
@@ -15,9 +16,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
+from typing import Literal, Self
 
-from software_agent_team.artifacts import TaskBrief
-from software_agent_team.benchmark_seed import prepare_benchmark_seed
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from software_agent_team.artifacts import AcceptanceCriterion, TaskBrief
+from software_agent_team.benchmark_seed import prepare_seed_repository
 
 MINIMUM_FREE_BYTES = 1_073_741_824
 PROJECT_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
@@ -25,6 +29,9 @@ SUPPORTED_ARCHITECTURES = {"aarch64", "amd64", "arm64", "x86_64"}
 STATE_MARKER_NAME = ".sat-state-v1"
 AT_FDCWD = -100
 RENAME_NOREPLACE = 1
+PROJECT_MANIFEST_NAME = "sat-project.json"
+_MAX_PROJECT_MANIFEST_BYTES = 65_536
+_MAX_REQUEST_ITEMS = 10
 
 
 class ProductFlowError(RuntimeError):
@@ -61,6 +68,70 @@ class StartupDiagnostics:
         return all(
             check.state is not DiagnosticState.ACTION_REQUIRED for check in self.checks
         )
+
+
+class ProjectCommands(BaseModel):
+    """Validated non-shell commands delivered with one generated project."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[1] = 1
+    setup: tuple[str, ...] = Field(min_length=3, max_length=32)
+    start: tuple[str, ...] = Field(min_length=3, max_length=32)
+    test: tuple[str, ...] = Field(min_length=3, max_length=32)
+
+    @field_validator("setup", "start", "test")
+    @classmethod
+    def require_safe_argv(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        """Reject blank, multiline, oversized, or shell-based commands."""
+
+        if any(
+            not value
+            or len(value) > 1024
+            or any(character in value for character in ("\x00", "\r", "\n"))
+            for value in values
+        ):
+            raise ValueError("project commands require non-empty single-line argv")
+        if sum(len(value) for value in values) > 4096:
+            raise ValueError("project command argv is too large")
+        if values[0] != "uv" or (
+            values[1] != "run"
+            and values
+            != (
+                "uv",
+                "sync",
+                "--dev",
+            )
+        ):
+            raise ValueError("project commands must use the versioned uv environment")
+        if values[2] in {
+            "bash",
+            "cmd",
+            "cmd.exe",
+            "dash",
+            "fish",
+            "ksh",
+            "powershell",
+            "pwsh",
+            "sh",
+            "zsh",
+        }:
+            raise ValueError("project commands cannot invoke a command shell")
+        return values
+
+    @model_validator(mode="after")
+    def require_profile_contract(self) -> Self:
+        """Keep setup and test reproducible while allowing a project-specific start."""
+
+        if self.setup != ("uv", "sync", "--dev"):
+            raise ValueError("setup command must be: uv sync --dev")
+        if self.start[:2] != ("uv", "run"):
+            raise ValueError("start command must begin with: uv run")
+        if "replace-with-project-entrypoint" in self.start:
+            raise ValueError("start command still contains the starter placeholder")
+        if self.test != ("uv", "run", "pytest"):
+            raise ValueError("test command must be: uv run pytest")
+        return self
 
 
 @dataclass(frozen=True)
@@ -399,7 +470,7 @@ def generate_product_run_id(
     suffix = random_suffix().casefold()
     if re.fullmatch(r"[0-9a-f]{8}", suffix) is None:
         raise ProductFlowError("run ID suffix must contain eight hexadecimal digits")
-    return f"task-manager-{now:%Y%m%d-%H%M%S}-{suffix}"
+    return f"sat-{now:%Y%m%d-%H%M%S}-{suffix}"
 
 
 def validate_project_destination(parent: Path, project_name: str) -> Path:
@@ -427,25 +498,113 @@ def validate_project_destination(parent: Path, project_name: str) -> Path:
 
 
 def build_product_task_brief(
-    template: TaskBrief,
     *,
     run_id: str,
+    project_name: str,
     source_request: str,
+    success_conditions: Sequence[str] = (),
+    user_constraints: Sequence[str] = (),
 ) -> TaskBrief:
-    """Bind the confirmed user request to the currently supported contract."""
+    """Build a confirmed brief directly from the user's product request."""
 
     request = " ".join(source_request.split())
     if not request:
         raise ProductFlowError("the software request must not be blank")
     if len(request) > 2000:
         raise ProductFlowError("the software request must be at most 2000 characters")
-    return template.model_copy(
-        update={
-            "run_id": run_id,
-            "source_request": request,
-            "confirmed": True,
-            "open_questions": [],
-        }
+
+    def clean_items(values: Sequence[str], *, label: str) -> tuple[str, ...]:
+        cleaned = tuple(" ".join(value.split()) for value in values if value.strip())
+        if len(cleaned) > _MAX_REQUEST_ITEMS:
+            raise ProductFlowError(
+                f"{label} must contain at most {_MAX_REQUEST_ITEMS} items"
+            )
+        if any(len(value) > 500 for value in cleaned):
+            raise ProductFlowError(f"each {label} item must be at most 500 characters")
+        if len(cleaned) != len(set(cleaned)):
+            raise ProductFlowError(f"{label} items must be unique")
+        return cleaned
+
+    conditions = clean_items(success_conditions, label="success condition")
+    constraints = clean_items(user_constraints, label="constraint")
+    confirmed_outcomes = conditions or (request,)
+    outcome_text = "; ".join(confirmed_outcomes)
+    requirements = [
+        f"Implement the confirmed software request exactly as stated: {request}",
+        *(f"Satisfy this confirmed success condition: {item}" for item in conditions),
+        (
+            "Provide automated pytest coverage for the implemented behavior and "
+            "the project-specific entry point."
+        ),
+        "Provide a README with setup, start, test, and known-limitation guidance.",
+        (
+            "Provide sat-project.json with schema_version 1 and argv arrays named "
+            "setup, start, and test. Use ['uv', 'sync', '--dev'] for setup, a "
+            "project-specific non-shell ['uv', 'run', ...] command for start, and "
+            "['uv', 'run', 'pytest'] for test."
+        ),
+    ]
+    return TaskBrief(
+        run_id=run_id,
+        title=project_name.replace("-", " ").replace("_", " ").strip().title(),
+        source_request=request,
+        requirements=requirements,
+        acceptance_criteria=[
+            AcceptanceCriterion(
+                id="AC_REQUEST",
+                description=(
+                    "The delivered project satisfies the confirmed user outcomes: "
+                    f"{outcome_text}"
+                ),
+                verification=(
+                    "Inspect the immutable implementation and its automated tests "
+                    "during independent review."
+                ),
+            ),
+            AcceptanceCriterion(
+                id="AC_RUNNABLE",
+                description=(
+                    "The project supplies a validated, project-specific non-shell "
+                    "setup, start, and test command contract."
+                ),
+                verification="Run CHECK_PROJECT_CONTRACT.",
+            ),
+            AcceptanceCriterion(
+                id="AC_TESTS",
+                description="The project's automated pytest suite passes.",
+                verification="Run CHECK_PROJECT_TESTS.",
+            ),
+            AcceptanceCriterion(
+                id="AC_QUALITY",
+                description="The Python source compiles and passes the pinned linter.",
+                verification="Run CHECK_COMPILE and CHECK_LINT.",
+            ),
+            AcceptanceCriterion(
+                id="AC_DOCUMENTATION",
+                description=(
+                    "The README explains setup, start, tests, and known limitations."
+                ),
+                verification="Run CHECK_PROJECT_CONTRACT and independent review.",
+            ),
+        ],
+        constraints=[
+            "Use the supplied local Python 3.12 execution profile.",
+            (
+                "Do not require credentials, hosted services, an external database, "
+                "or network access after dependency installation."
+            ),
+            (
+                "Keep all source, tests, configuration, and documentation in the "
+                "repository."
+            ),
+            *constraints,
+        ],
+        assumptions=[
+            "This is a new greenfield project delivered for local execution.",
+            "The supplied profile dependencies are available in the quality sandbox.",
+        ],
+        open_questions=[],
+        confirmed=True,
     )
 
 
@@ -458,8 +617,41 @@ def prepare_product_source(
     """Create the trusted greenfield source baseline for one confirmed run."""
 
     destination = state_paths.sources / run_id
-    prepare_benchmark_seed(seed, destination)
+    prepare_seed_repository(
+        seed,
+        destination,
+        commit_message="chore: initialize software project",
+    )
     return destination
+
+
+def load_project_commands(project: Path) -> ProjectCommands:
+    """Load the accepted project's bounded command contract."""
+
+    manifest = project / PROJECT_MANIFEST_NAME
+    if manifest.is_symlink() or not manifest.is_file():
+        raise ProductFlowError(
+            f"accepted project is missing a regular {PROJECT_MANIFEST_NAME}"
+        )
+    raw = manifest.read_bytes()
+    if len(raw) > _MAX_PROJECT_MANIFEST_BYTES:
+        raise ProductFlowError(f"{PROJECT_MANIFEST_NAME} is too large")
+
+    def reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"duplicate JSON key: {key}")
+            result[key] = value
+        return result
+
+    try:
+        payload = json.loads(raw, object_pairs_hook=reject_duplicate_keys)
+        return ProjectCommands.model_validate(payload)
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
+        raise ProductFlowError(
+            f"accepted project has an invalid {PROJECT_MANIFEST_NAME}: {error}"
+        ) from error
 
 
 def _git_output(repository: Path, *arguments: str) -> str:

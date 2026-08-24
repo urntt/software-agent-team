@@ -80,8 +80,8 @@ From a clean checkout, run:
 ```
 
 The installer prepares the pinned user-local toolchain, locked Python
-environment, checkout-bound `sat` and `sat-uninstall` launchers, fixed benchmark
-image, and offline checks. It requires Git, curl, and a running Docker daemon
+environment, checkout-bound `sat` and `sat-uninstall` launchers, shared Python
+quality image, and offline checks. It requires Git, curl, and a running Docker daemon
 that the unprivileged user can access. It does not install Docker at the
 operating-system level or create provider credentials and active OpenClaw
 configuration; configure those outside the checkout before a paid evaluation.
@@ -122,13 +122,13 @@ credentials.
 ## 2. Verify or Rebuild the Frozen Sandbox Image
 
 The one-command installer builds the exact local tag named by
-`configs/run-policy.json`. Rebuild it after an intentional benchmark lock or
+`configs/run-policy.json`. Rebuild it after an intentional runtime lock or
 Dockerfile change:
 
 ```bash
 docker build \
-  --tag sat-task-manager-quality:phase1-v1 \
-  benchmarks/task_manager
+  --tag sat-python-quality:phase1-v1 \
+  runtime/python
 ```
 
 Do not substitute an unrecorded tag or allow an implicit registry pull. Both
@@ -325,6 +325,6 @@ sat-uninstall --export-to "$HOME/sat-phase1-backup" --yes
 The destination must not already exist. Inspect `EXPORT.txt` and any copied
 configuration or default product-state roots before using `--purge-config` or
 `--purge-data`. Provider credentials, shared OpenClaw/uv/Docker installations,
-the benchmark image, the source checkout, and the checkout-local trial roots
+the shared quality image, the source checkout, and the checkout-local trial roots
 remain outside the export and uninstall ownership boundary. Review
 `sat-uninstall --help` before selecting either purge option.

@@ -38,6 +38,7 @@ from software_agent_team.artifacts import (
 from software_agent_team.benchmark_seed import (
     BenchmarkSeedError,
     prepare_benchmark_seed,
+    prepare_seed_repository,
 )
 from software_agent_team.budgets import AgentBudget, ModelPricing
 from software_agent_team.execution import (
@@ -80,6 +81,7 @@ from software_agent_team.quality_gates import (
     QualityGateConfiguration,
     QualityGateConfigurationError,
     QualityGateError,
+    QualityGateManifest,
     QualityGateRunner,
     RunPolicy,
     SandboxUnavailableError,
@@ -188,6 +190,7 @@ __all__ = [
     "QualityGateConfiguration",
     "QualityGateConfigurationError",
     "QualityGateError",
+    "QualityGateManifest",
     "QualityGateRunner",
     "RepositoryValidationError",
     "ReviewFinding",
@@ -241,6 +244,7 @@ __all__ = [
     "parse_phase_artifact",
     "persist_runtime_preflight",
     "prepare_benchmark_seed",
+    "prepare_seed_repository",
     "render_agent_prompt",
     "stable_session_key",
     "validate_artifact_context",

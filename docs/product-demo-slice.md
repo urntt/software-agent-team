@@ -66,15 +66,22 @@ evidence in contributor records. It is not a user-facing action or concept.
 
 The primary flow now exists behind `sat` with no subcommand. The managed
 bootstrap, startup diagnostics, first-run model setup, optional provider smoke
-check, request capture, explicit supported-scope confirmation, automatic run
+check, request capture, explicit execution-profile confirmation, automatic run
 materialization, progress renderer, terminal result, and non-overwriting
 delivery all have offline behavior coverage.
 
-The currently implemented clarification boundary is deliberately narrow. SAT
-states that this release can build one local task-management Web application,
-summarizes its fixed capabilities and constraints, and asks whether that scope
-satisfies the request. It does not pretend to derive a new acceptance suite for
-an arbitrary application. Declining the scope ends without a model call.
+The currently implemented clarification boundary is deterministic and bounded.
+SAT explains that the installed execution profile supports a small greenfield
+Python 3.12 project, collects the user's ordinary-language request, explicit
+success conditions, and optional constraints, then constructs a confirmed
+TaskBrief from those inputs. It does not use a task-specific template or ask a
+model to invent missing intent before authorization. Declining the execution
+profile or final summary ends without a model call.
+
+The product goal is not a particular generated application. The checked-in
+task-manager materials are a controlled evaluation fixture on the advanced
+surface only. They never define, narrow, or replace a request made through bare
+`sat`.
 
 One acceptance gate remains open: the complete flow must be rehearsed from a
 fresh supported Linux/WSL user account with an explicitly authorized provider,
@@ -151,16 +158,17 @@ What would you like to build?
 
 The user may answer in ordinary language. SAT then:
 
-1. Checks whether the request falls within the currently supported product
-   scope;
-2. Asks a bounded number of questions only for missing requirements,
-   constraints, or acceptance conditions;
-3. Shows a concise structured summary in user language;
-4. Requires explicit confirmation before a model-backed build begins.
+1. States the installed execution-profile boundary: a small local Python 3.12
+   project whose checks run without network access;
+2. Asks for semicolon-separated success conditions and optional constraints;
+3. Builds acceptance criteria and requirements from those confirmed inputs;
+4. Shows a concise structured summary in user language;
+5. Requires explicit confirmation before a model-backed build begins.
 
-The initial supported scope must be stated honestly. A request outside that
-scope is rejected or narrowed explicitly rather than silently converted into
-the task-manager benchmark.
+The runtime-profile boundary must be stated honestly. A request that requires
+another language, platform, hosted dependency, credential, or unsupported
+runtime is rejected or narrowed explicitly. It is never converted into an
+evaluation fixture.
 
 A pre-confirmed TaskBrief remains an advanced input, not a prerequisite for
 the primary greenfield flow.
@@ -171,7 +179,7 @@ After confirmation, the controller automatically and atomically:
 
 - Generates a unique internal run ID;
 - Persists the confirmed TaskBrief;
-- Selects the supported default team and policy;
+- Selects the default team, product policy, and Python quality profile;
 - Creates a fresh isolated source baseline and run workspace;
 - Verifies that no existing evidence or user file will be overwritten,
   including when a destination appears while the build is running;
@@ -231,6 +239,11 @@ A completed run ends with one concise delivery view containing:
 - Known limitations or unresolved blockers;
 - Elapsed time and cost summary when available;
 - Paths to the human-readable report and advanced evidence.
+
+Every accepted project must contain `sat-project.json`. This controller-checked
+contract stores setup, project-specific start, and test commands as argv
+arrays, not shell text. SAT validates it before delivery and renders those
+exact commands instead of assuming a Web framework or fixed entry point.
 
 The result folder is the primary delivery. The evidence tree supports trust and
 diagnosis but is not the first thing a user must inspect.

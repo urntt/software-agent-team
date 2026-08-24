@@ -1,0 +1,45 @@
+{
+  "run_id": "product-contract-template",
+  "title": "Confirmed Python project",
+  "source_request": "Build the software described and confirmed by the user.",
+  "requirements": [
+    "Implement the confirmed user request.",
+    "Provide automated tests, project documentation, and sat-project.json."
+  ],
+  "acceptance_criteria": [
+    {
+      "id": "AC_REQUEST",
+      "description": "The delivered project satisfies the confirmed user outcomes.",
+      "verification": "Inspect the immutable implementation and tests during independent review."
+    },
+    {
+      "id": "AC_RUNNABLE",
+      "description": "The project supplies a validated setup, start, and test command contract.",
+      "verification": "Run CHECK_PROJECT_CONTRACT."
+    },
+    {
+      "id": "AC_TESTS",
+      "description": "The project's automated pytest suite passes.",
+      "verification": "Run CHECK_PROJECT_TESTS."
+    },
+    {
+      "id": "AC_QUALITY",
+      "description": "The Python source compiles and passes the pinned linter.",
+      "verification": "Run CHECK_COMPILE and CHECK_LINT."
+    },
+    {
+      "id": "AC_DOCUMENTATION",
+      "description": "The README explains setup, start, tests, and known limitations.",
+      "verification": "Run CHECK_PROJECT_CONTRACT and independent review."
+    }
+  ],
+  "constraints": [
+    "Use the supplied local Python 3.12 execution profile.",
+    "Do not require runtime network access or credentials."
+  ],
+  "assumptions": [
+    "This template defines criterion IDs; each product run supplies user-confirmed content."
+  ],
+  "open_questions": [],
+  "confirmed": true
+}

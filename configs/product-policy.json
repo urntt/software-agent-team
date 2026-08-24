@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "id": "phase1_deterministic",
+  "id": "product_python_v1",
   "agent_budget": {
     "schema_version": 1,
     "max_calls": 14,
@@ -36,7 +36,6 @@
       "PYTHONPYCACHEPREFIX": "/tmp/pycache",
       "PYTHONUNBUFFERED": "1",
       "RUFF_CACHE_DIR": "/tmp/ruff-cache",
-      "TASK_MANAGER_DATABASE_PATH": "/tmp/project-tests.sqlite3",
       "TMPDIR": "/tmp",
       "XDG_CACHE_HOME": "/tmp/cache"
     }

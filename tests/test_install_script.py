@@ -29,7 +29,13 @@ def prepare_checkout(tmp_path: Path) -> Path:
         "scripts/uninstall.sh",
         "scripts/setup.sh",
         "configs/run-policy.json",
-        "benchmarks/task_manager/Dockerfile",
+        "configs/product-policy.json",
+        "profiles/python/quality.json",
+        "profiles/python/contract-template.json",
+        "profiles/python/validation/run.py",
+        "profiles/python/seed/pyproject.toml",
+        "runtime/python/Dockerfile",
+        "runtime/python/requirements.lock",
         "pyproject.toml",
         "uv.lock",
     ):
@@ -116,7 +122,7 @@ if [[ "$*" == "sync --locked" ]]; then
   chmod 755 .venv/bin/sat
 elif [[ "${1:-}" == "run" && "${2:-}" == "--frozen" && \
         "${3:-}" == "python" && "${4:-}" == "-c" ]]; then
-  echo sat-task-manager-quality:phase1-v1
+  echo sat-python-quality:phase1-v1
 elif [[ "${1:-}" == "run" && "${2:-}" == "--frozen" && \
         "${3:-}" == "python" && "${4:-}" == "-" ]]; then
   cat >/dev/null
@@ -187,7 +193,7 @@ def test_installer_prepares_cli_image_and_checks_idempotently(tmp_path: Path) ->
     assert "install: uninstall=sat-uninstall" in first.stdout
     docker_calls = docker_log.read_text(encoding="utf-8")
     assert "info" in docker_calls
-    assert "build --pull=false --tag sat-task-manager-quality:phase1-v1" in (
+    assert "build --pull=false --tag sat-python-quality:phase1-v1 runtime/python" in (
         docker_calls
     )
     assert "image inspect --format {{.Id}}" in docker_calls

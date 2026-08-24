@@ -30,7 +30,7 @@ make format-check
 make lint
 make test
 make check
-make lock-benchmark
+make lock-runtime
 ```
 
 Use `make format` when source formatting changes are required. Always run
@@ -53,18 +53,26 @@ artifact store also verifies run, team, iteration, role, stage, commit,
 acceptance-criterion, canonical-path, referenced-content, and digest context.
 See [`runtime-evidence.md`](runtime-evidence.md) for the full evidence model.
 
-## Benchmark Dependency and Image Updates
+Validate the product profile separately from the default evaluation fixture:
 
-`make lock-benchmark` intentionally refreshes the benchmark dependency lock.
-Set `BENCHMARK_EXCLUDE_NEWER=YYYY-MM-DD` only as part of a reviewed dependency
-update, then rebuild and record a new sandbox image ID.
+```bash
+uv run sat validate-config \
+  --policy configs/product-policy.json \
+  --quality-manifest profiles/python/quality.json
+```
 
-Build the exact image named by `configs/run-policy.json` with:
+## Runtime Image and Evaluation-Fixture Updates
+
+`make lock-runtime` intentionally refreshes the shared Python runtime dependency
+lock. Set `RUNTIME_EXCLUDE_NEWER=YYYY-MM-DD` only as part of a reviewed
+dependency update, then rebuild and record a new sandbox image ID.
+
+Build the exact image named by both product and evaluation policies with:
 
 ```bash
 docker build \
-  --tag sat-task-manager-quality:phase1-v1 \
-  benchmarks/task_manager
+  --tag sat-python-quality:phase1-v1 \
+  runtime/python
 ```
 
 At run start, the controller resolves the configured image tag to its local
@@ -72,7 +80,9 @@ At run start, the controller resolves the configured image tag to its local
 gate use that immutable ID; preflight fails if the configured tag changes
 between resolution and workspace setup.
 
-The benchmark contract is frozen for comparable trials. The confirmed
+The product profile and evaluation fixture share this dependency image, not a
+TaskBrief, seed, acceptance suite, environment contract, or delivery command.
+The benchmark contract remains frozen for comparable trials. The confirmed
 [`task-brief.json`](../benchmarks/task_manager/task-brief.json) is the
 authoritative Agent input. The human-readable
 [`requirements.md`](../benchmarks/task_manager/requirements.md) summarizes it
@@ -95,12 +105,11 @@ benchmarks/task_manager/
   task-brief.json              Frozen confirmed benchmark input
   requirements.md              Human-readable contract summary
   benchmark.json               Fixed commands and criterion coverage
-  Dockerfile                   Frozen execution image
-  requirements.lock            Benchmark dependency lock
   seed/                        Deterministic starting repository
 configs/
   teams.json                   Team topology source of truth
-  run-policy.json              Sandbox, aggregate, and role-stage budgets
+  product-policy.json          Product sandbox and bounded run policy
+  run-policy.json              Controlled evaluation policy
   openclaw.example.json5       Sanitized role and tool policy template
 docs/
   README.md                    Documentation index
@@ -109,6 +118,15 @@ docs/
   runtime-evidence.md          Runtime, artifact, evidence, and safety model
   phase1-runbook.md            Controlled provider-backed evaluation procedure
   development.md               This development guide
+profiles/python/
+  contract-template.json       Stable product criterion-ID contract
+  quality.json                 Generic project checks and coverage
+  seed/                        Greenfield product source baseline
+  validation/run.py            Trusted project-command and docs validator
+runtime/python/
+  Dockerfile                   Shared content-pinned quality image
+  requirements.in             Direct runtime dependencies
+  requirements.lock           Exact transitive dependency lock
 src/software_agent_team/
   artifacts.py                 Persisted schemas
   artifact_store.py            Write-once artifact and output persistence

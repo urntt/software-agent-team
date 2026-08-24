@@ -24,7 +24,9 @@ installer and every `sat` launch then check that condition directly.
 
 SAT pins Python 3.12, OpenClaw 2026.7.1-2, OpenClaw's local Node.js 24.15.0
 runtime, Python dependencies through `uv.lock`, and the generated-code sandbox
-image through `configs/run-policy.json`.
+image through `configs/product-policy.json`. The controlled evaluation policy
+uses the same generic Python image but owns separate task-specific environment
+settings.
 
 ## Managed One-Command Installation
 
@@ -116,15 +118,17 @@ On the first configured run, SAT then:
 3. Saves only that model reference in SAT configuration;
 4. Offers one explicit minimal provider smoke check, disabled by default;
 5. Asks what the user wants to build;
-6. States the current verified task-management application scope and asks the
-   user to confirm that narrowing;
-7. Asks for one new direct child project directory;
-8. Shows the request, product scope, destination, and verification summary;
-9. Requires explicit confirmation before any build Agent call.
+6. States the current small-project Python 3.12 execution profile and asks the
+   user to confirm that runtime boundary;
+7. Collects explicit success conditions and optional constraints;
+8. Asks for one new direct child project directory;
+9. Generates and shows the request, acceptance, destination, and verification
+   summary;
+10. Requires explicit confirmation before any build Agent call.
 
-Declining either scope or build confirmation exits without starting a build.
-The current release does not silently convert an unsupported request into the
-task-manager benchmark.
+Declining either the profile or build confirmation exits without starting a
+build. The product path constructs its TaskBrief from the confirmed user input
+and never substitutes the task-manager evaluation fixture.
 
 ## Saved Configuration
 
@@ -207,12 +211,15 @@ an overwrite-prone operation.
 
 The terminal result reports status, destination, summary, acceptance count,
 elapsed time, report path, limitations or unresolved findings, and exact
-project setup, start, and test commands.
+project setup, start, and test commands. Those commands come from the accepted
+project's validated `sat-project.json`; SAT does not assume a task domain, Web
+framework, or fixed application entry point.
 
 ## Timeout Policy
 
-Without an advanced global override, `configs/run-policy.json` supplies
-role-specific stage budgets:
+Without an advanced global override, `configs/product-policy.json` supplies
+role-specific product-stage budgets. `configs/run-policy.json` mirrors the
+role defaults for controlled evaluation:
 
 | Roles | Stage budget |
 | --- | ---: |

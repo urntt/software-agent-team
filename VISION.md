@@ -82,13 +82,16 @@ interface is not required for the core product.
 
 ### Killer Use Case
 
-The first controlled use case is a small greenfield Web application. The
-initial benchmark is a task-management application using Python 3.12,
-FastAPI, Jinja2, SQLite, and pytest.
+The first product use case is a developer describing a small greenfield
+software project in ordinary language and receiving a runnable, tested,
+reviewed Git result without manually coordinating Agents. The first execution
+profile supports Python 3.12 Web applications, CLI tools, and local automation.
 
-The benchmark is complex enough to require frontend behavior, backend logic,
-persistence, validation, tests, and integration, but small enough to repeat
-under limited model budgets.
+The topology experiment separately uses a frozen task-management Web
+application fixture. That fixture is complex enough to exercise frontend
+behavior, backend logic, persistence, validation, tests, and integration while
+remaining repeatable under limited model budgets. It is evaluation input, not
+the application SAT exists to build and not a template for product requests.
 
 ### Primary Product Experience
 
@@ -121,6 +124,9 @@ code or experiment evidence justifies a replacement.
 - The supported core runtime is Linux, including WSL when the required tools
   work. Native macOS is not part of the Phase 1 acceptance environment.
 - Python 3.12 implements the deterministic control plane.
+- The first generated-project execution profile is Python 3.12. Product
+  requirements and success conditions remain user-owned; the profile limits
+  available runtime and deterministic checks, not the task domain.
 - OpenClaw 2026.7.1-2 is the initial Agent runtime.
 - The execution boundary normalizes OpenClaw's local and Gateway JSON response
   shapes and records split provider/model metadata as one canonical
@@ -194,8 +200,10 @@ Each concept has one authoritative owner.
 | Run-scoped runtime materialization and preflight | `src/software_agent_team/runtime_configuration.py` |
 | Run lifecycle state and persistence | `src/software_agent_team/run_control.py` |
 | Phase 1 orchestration, decisions, and reports | `src/software_agent_team/workflow.py` |
-| Agent-call, token, duration, cost, and per-role stage budgets | `src/software_agent_team/budgets.py`, `src/software_agent_team/workflow.py`, and `configs/run-policy.json` |
-| Fixed benchmark and quality-gate execution | `benchmarks/task_manager/` and `src/software_agent_team/quality_gates.py` |
+| Agent-call, token, duration, cost, and per-role stage budgets | `src/software_agent_team/budgets.py`, `src/software_agent_team/workflow.py`, `configs/product-policy.json`, and `configs/run-policy.json` |
+| Product execution profile and generic quality contract | `profiles/python/`, `runtime/python/`, and `configs/product-policy.json` |
+| Frozen evaluation fixture and task-specific acceptance | `benchmarks/task_manager/` and `configs/run-policy.json` |
+| Shared quality-manifest validation and execution | `src/software_agent_team/quality_gates.py` |
 | Agent process invocation and telemetry parsing | `src/software_agent_team/execution.py` |
 | CLI commands and runtime option resolution | `src/software_agent_team/cli.py` |
 | Product diagnostics, supported request materialization, and safe delivery | `src/software_agent_team/product.py` |
@@ -288,7 +296,9 @@ configuration. Actual cost and duration are reported rather than normalized
 away.
 
 The Product Demo Slice implements bounded clarification before topology
-comparison so the primary product journey is executable. The topology
+comparison so the primary product journey is executable. Its TaskBrief is
+constructed from the user's request, success conditions, and constraints; it
+does not inherit the evaluation fixture. The topology
 experiment still starts from one frozen confirmed `TaskBrief`; clarification
 behavior is not varied during that comparison and therefore does not confound
 the result. Clarification quality is evaluated separately.
@@ -318,6 +328,9 @@ the result. Clarification quality is evaluated separately.
 | Make uninstall preservation-first | Removing the CLI must not silently destroy run evidence, generated workspaces, provider state, shared tools, or a source checkout; export and purge therefore require explicit user choices. |
 | Implement the Product Demo Slice before topology comparison | A reproducible engine is not yet a usable product. The core promise starts from a short request, so installation, onboarding, clarification, progress, and delivery must be executable before the project presents an internal evaluation workflow as its demo. |
 | Keep product and evaluation CLI surfaces distinct | Normal users run `sat` and receive guided defaults. Explicit TaskBrief files, benchmark preparation, team IDs, policy paths, timeouts, concurrency, and repair controls remain available to contributors without becoming first-run questions. |
+| Keep generated-product profiles independent from evaluation fixtures | A benchmark must hold experiment inputs constant, while a product request must express the user's intent. Sharing the controller and quality-manifest schema is useful; sharing a task-specific TaskBrief, seed, acceptance suite, environment contract, or delivery command would silently replace the user's request and invalidate both boundaries. |
+| Derive product requirements before the first model call | The current bounded wizard records the user's request, success conditions, and constraints directly, shows the resulting TaskBrief summary, and requires authorization. This avoids charging for a model-authored interpretation before consent and prevents an LLM from becoming the authority for missing user intent. |
+| Require a generated-project command manifest | Setup, start, and test commands vary by project. A validated `sat-project.json` argv contract lets SAT deliver exact commands without assuming FastAPI, a Web server, or any task-specific entry point. |
 | Show controller-backed progress rather than hidden reasoning | Users need attributable phase summaries, elapsed waiting time, Git snapshots, gates, review, and revision status. Hidden chain-of-thought, secrets, and unverifiable percentages are neither required nor appropriate. |
 | Keep product state outside the application checkout | Managed runs, workspaces, and trusted source baselines live under the user-local state root. Installation updates cannot overwrite evidence, and uninstallation can preserve, export, or explicitly purge state independently of the application files. |
 | Deliver only an accepted result to a new child directory | The model works in an isolated detached clone. After acceptance, SAT copies the exact accepted commit through a same-parent staging directory and publishes it with Linux atomic no-replace semantics, so a failed run, late destination, or conflict never overwrites user files. |
@@ -465,7 +478,7 @@ The core deliverable includes:
 - Isolated standalone clones and immutable snapshots;
 - Deterministic tests and independent review;
 - Bounded internal revision;
-- Task-management benchmark;
+- A controlled evaluation fixture, currently the task-management benchmark;
 - Repeated comparison runs;
 - Representative traces and final reports.
 
@@ -524,8 +537,9 @@ acceptance boundary.
 - Diagnose supported environment conditions automatically and actionably;
 - Make `sat` the guided product entry point;
 - Detect or configure a provider without storing secrets in SAT state;
-- Ask what the user wants to build, clarify within the supported scope, and
-  confirm a concise requirements summary;
+- Ask what the user wants to build, record success conditions and constraints
+  within the installed execution profile, and confirm a concise requirements
+  summary;
 - Generate internal run IDs, TaskBriefs, sources, workspaces, and destinations
   automatically;
 - Show controller-backed progress, review, revision, and failure summaries;

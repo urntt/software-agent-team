@@ -16,7 +16,8 @@ that each fact has one clear owner.
 | Understand runtime authority, semantic responses, artifacts, persisted evidence, or safety boundaries | [`runtime-evidence.md`](runtime-evidence.md) |
 | Prepare and inspect a controlled Phase 1 provider-backed evaluation | [`phase1-runbook.md`](phase1-runbook.md) |
 | Set up a development checkout, run checks, update the benchmark, or contribute | [`development.md`](development.md) |
-| Read the frozen task-manager product contract | [`benchmarks/task_manager/requirements.md`](../benchmarks/task_manager/requirements.md) |
+| Understand the first generated-project runtime and verification boundary | [`profiles/python/README.md`](../profiles/python/README.md) |
+| Read the frozen task-manager evaluation fixture | [`benchmarks/task_manager/requirements.md`](../benchmarks/task_manager/requirements.md) |
 | Understand ignored OpenClaw role workspace boundaries | [`openclaw/workspaces/README.md`](../openclaw/workspaces/README.md) |
 
 ## Document Roles

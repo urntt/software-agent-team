@@ -49,9 +49,11 @@ def test_cli_no_command_runs_the_guided_product_journey(
     monkeypatch.setattr(cli.sys, "stdin", SimpleNamespace(isatty=lambda: True))
     answers = iter(
         (
-            "Build a task manager for my work.",
+            "Build a CLI that checks Markdown links.",
             "yes",
-            "work-tasks",
+            "Exit non-zero for broken links; print file and line",
+            "Use the standard library at runtime",
+            "link-checker",
             "yes",
         )
     )
@@ -95,6 +97,15 @@ def test_cli_no_command_runs_the_guided_product_journey(
     monkeypatch.setattr(cli, "_render_product_outcome", lambda **_kwargs: None)
     monkeypatch.setattr(
         cli,
+        "load_project_commands",
+        lambda _path: SimpleNamespace(
+            setup=("uv", "sync", "--dev"),
+            start=("uv", "run", "link-checker", "."),
+            test=("uv", "run", "pytest"),
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
         "deliver_product_workspace",
         lambda _source, destination, **_kwargs: destination,
     )
@@ -103,14 +114,20 @@ def test_cli_no_command_runs_the_guided_product_journey(
 
     brief = observed["task_brief"]
     options = observed["options"]
-    assert brief.source_request == "Build a task manager for my work."
+    assert brief.source_request == "Build a CLI that checks Markdown links."
+    assert brief.title == "Link Checker"
+    assert "broken links" in brief.acceptance_criteria[0].description
     assert options.source_repository == source
     assert options.model == "provider/model"
+    assert options.policy == cli.DEFAULT_PRODUCT_POLICY
+    assert options.quality_manifest == cli.DEFAULT_PRODUCT_PROFILE
     output = capsys.readouterr().out
     assert "What would you like to build?" in output
+    assert "task-management" not in output
     assert "Requirements summary" in output
     assert "Next commands" in output
-    assert str(tmp_path / "work-tasks") in output
+    assert "link-checker ." in output
+    assert str(tmp_path / "link-checker") in output
 
 
 def test_cli_noninteractive_configuration_is_private_and_reconfigurable(
@@ -450,7 +467,7 @@ def test_cli_validates_the_complete_configuration(
     output = capsys.readouterr().out
     assert "teams=3" in output
     assert "policy=phase1_deterministic" in output
-    assert "benchmark=task_manager_phase1" in output
+    assert "quality_manifest=task_manager_phase1" in output
     assert "gates=4" in output
 
 
@@ -515,7 +532,7 @@ def test_cli_preflight_makes_no_model_call(
             runtime_config=str(kwargs["runtime_config"]),
             sandbox_binary="/usr/bin/docker",
             sandbox_version="Docker version test",
-            sandbox_image="sat-task-manager-quality:phase1-v1",
+            sandbox_image="sat-python-quality:phase1-v1",
             sandbox_image_id=f"sha256:{'a' * 64}",
             config_valid=True,
             sandbox_image_present=True,

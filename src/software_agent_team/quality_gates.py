@@ -1,9 +1,10 @@
 """Versioned deterministic quality gates executed through a sandbox boundary.
 
-The checked-in run policy owns resource and isolation limits.  A benchmark
+The checked-in run policy owns resource and isolation limits. A quality
 manifest owns fixed command argv, working directories, acceptance-criterion
-coverage, and trusted read-only inputs.  Generated repositories cannot change
-either manifest.
+coverage, and trusted read-only inputs. Generated repositories cannot change
+either manifest. Product profiles and controlled benchmarks use the same
+validated boundary without sharing requirements or source seeds.
 """
 
 from __future__ import annotations
@@ -229,7 +230,7 @@ class RunPolicy(BaseModel):
 
 
 class ReadOnlyInputMount(BaseModel):
-    """Trusted benchmark input mounted outside the generated workspace."""
+    """Trusted quality input mounted outside the generated workspace."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -288,8 +289,8 @@ class QualityGateDefinition(BaseModel):
         return values
 
 
-class BenchmarkManifest(BaseModel):
-    """Versioned authority for one benchmark's deterministic acceptance gates."""
+class QualityGateManifest(BaseModel):
+    """Versioned authority for deterministic acceptance gates and trusted inputs."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -348,15 +349,37 @@ class QualityGateConfiguration:
     """Loaded, cross-validated manifests plus their reproducibility hashes."""
 
     policy: RunPolicy
-    benchmark: BenchmarkManifest
+    manifest: QualityGateManifest
     task_brief: TaskBrief
     policy_path: Path
-    benchmark_path: Path
+    manifest_path: Path
     task_brief_path: Path
     policy_sha256: str
-    benchmark_sha256: str
+    manifest_sha256: str
     task_brief_sha256: str
     input_mounts: tuple[ResolvedInputMount, ...]
+
+    @property
+    def benchmark(self) -> QualityGateManifest:
+        """Return the manifest under its compatibility name for evaluation callers."""
+
+        return self.manifest
+
+    @property
+    def benchmark_path(self) -> Path:
+        """Return the manifest path under the legacy evaluation name."""
+
+        return self.manifest_path
+
+    @property
+    def benchmark_sha256(self) -> str:
+        """Return the manifest digest under the legacy evaluation name."""
+
+        return self.manifest_sha256
+
+
+# Compatibility export for callers that explicitly validate benchmark manifests.
+BenchmarkManifest = QualityGateManifest
 
 
 def _reject_duplicate_json_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -400,7 +423,7 @@ def _resolve_trusted_relative(root: Path, relative: str, *, label: str) -> Path:
         resolved.relative_to(root)
     except ValueError as error:
         raise QualityGateConfigurationError(
-            f"{label} escapes the benchmark directory"
+            f"{label} escapes the quality-manifest directory"
         ) from error
     if "," in str(resolved):
         raise QualityGateConfigurationError(f"{label} path cannot contain a comma")
@@ -408,15 +431,15 @@ def _resolve_trusted_relative(root: Path, relative: str, *, label: str) -> Path:
 
 
 def _validate_manifest_commands(
-    benchmark: BenchmarkManifest, policy: RunPolicy
+    manifest: QualityGateManifest, policy: RunPolicy
 ) -> None:
     allowed_roots = {
         PurePosixPath(policy.sandbox.workspace_target),
         PurePosixPath(policy.sandbox.tmpfs_target),
-        *(PurePosixPath(mount.target) for mount in benchmark.input_mounts),
+        *(PurePosixPath(mount.target) for mount in manifest.input_mounts),
     }
     maximum_gate_seconds = 0
-    for gate in benchmark.gates:
+    for gate in manifest.gates:
         if (
             gate.timeout_seconds is not None
             and gate.timeout_seconds > policy.limits.command_timeout_seconds
@@ -455,25 +478,25 @@ def _validate_manifest_commands(
 
 
 def load_quality_gate_configuration(
-    policy_path: Path | str, benchmark_path: Path | str
+    policy_path: Path | str, manifest_path: Path | str
 ) -> QualityGateConfiguration:
-    """Load and cross-validate the authoritative policy and benchmark files."""
+    """Load and cross-validate one authoritative policy and quality manifest."""
 
     policy_path = Path(policy_path).resolve(strict=True)
-    benchmark_path = Path(benchmark_path).resolve(strict=True)
+    manifest_path = Path(manifest_path).resolve(strict=True)
     policy_payload, policy_raw = _read_json(policy_path)
-    benchmark_payload, benchmark_raw = _read_json(benchmark_path)
+    manifest_payload, manifest_raw = _read_json(manifest_path)
     try:
         policy = RunPolicy.model_validate(policy_payload)
-        benchmark = BenchmarkManifest.model_validate(benchmark_payload)
+        manifest = QualityGateManifest.model_validate(manifest_payload)
     except ValueError as error:
         raise QualityGateConfigurationError(str(error)) from error
-    if benchmark.policy_id != policy.id:
-        raise QualityGateConfigurationError("benchmark policy ID does not match policy")
+    if manifest.policy_id != policy.id:
+        raise QualityGateConfigurationError("quality manifest policy ID does not match")
 
-    benchmark_root = benchmark_path.parent.resolve(strict=True)
+    manifest_root = manifest_path.parent.resolve(strict=True)
     task_brief_path = _resolve_trusted_relative(
-        benchmark_root, benchmark.task_brief, label="task brief"
+        manifest_root, manifest.task_brief, label="task brief"
     )
     if not task_brief_path.is_file():
         raise QualityGateConfigurationError("task brief must be a regular file")
@@ -483,12 +506,14 @@ def load_quality_gate_configuration(
     except ValueError as error:
         raise QualityGateConfigurationError(str(error)) from error
     if not task_brief.confirmed:
-        raise QualityGateConfigurationError("benchmark task brief must be confirmed")
+        raise QualityGateConfigurationError(
+            "quality-manifest task brief must be confirmed"
+        )
 
     resolved_mounts: list[ResolvedInputMount] = []
-    for mount in benchmark.input_mounts:
+    for mount in manifest.input_mounts:
         source = _resolve_trusted_relative(
-            benchmark_root, mount.source, label=f"input mount {mount.id}"
+            manifest_root, mount.source, label=f"input mount {mount.id}"
         )
         resolved_mounts.append(
             ResolvedInputMount(
@@ -500,33 +525,34 @@ def load_quality_gate_configuration(
 
     known_criteria = {criterion.id for criterion in task_brief.acceptance_criteria}
     gate_criteria = {
-        criterion_id for gate in benchmark.gates for criterion_id in gate.criterion_ids
+        criterion_id for gate in manifest.gates for criterion_id in gate.criterion_ids
     }
-    declared_criteria = gate_criteria | set(benchmark.manual_review_criteria)
+    declared_criteria = gate_criteria | set(manifest.manual_review_criteria)
     unknown = declared_criteria - known_criteria
     missing = known_criteria - declared_criteria
     if unknown:
         raise QualityGateConfigurationError(
-            f"benchmark references unknown criteria: {', '.join(sorted(unknown))}"
+            "quality manifest references unknown criteria: "
+            + ", ".join(sorted(unknown))
         )
     if missing:
         raise QualityGateConfigurationError(
-            f"benchmark leaves criteria unassigned: {', '.join(sorted(missing))}"
+            f"quality manifest leaves criteria unassigned: {', '.join(sorted(missing))}"
         )
-    _validate_manifest_commands(benchmark, policy)
+    _validate_manifest_commands(manifest, policy)
 
     def digest(content: bytes) -> str:
         return hashlib.sha256(content).hexdigest()
 
     return QualityGateConfiguration(
         policy=policy,
-        benchmark=benchmark,
+        manifest=manifest,
         task_brief=task_brief,
         policy_path=policy_path,
-        benchmark_path=benchmark_path,
+        manifest_path=manifest_path,
         task_brief_path=task_brief_path,
         policy_sha256=digest(policy_raw),
-        benchmark_sha256=digest(benchmark_raw),
+        manifest_sha256=digest(manifest_raw),
         task_brief_sha256=digest(task_raw),
         input_mounts=tuple(resolved_mounts),
     )
@@ -1016,7 +1042,7 @@ class QualityGateRunner:
                 self.workspace
             ):
                 raise QualityGateConfigurationError(
-                    "trusted benchmark inputs must be outside the generated workspace"
+                    "trusted quality inputs must be outside the generated workspace"
                 )
         if sandbox_image_id is None:
             self.sandbox = configuration.policy.sandbox
@@ -1113,7 +1139,7 @@ class QualityGateRunner:
         evidence: list[CommandEvidence] = []
         output_paths = {
             gate.id: self._output_paths(gate, iteration)
-            for gate in self.configuration.benchmark.gates
+            for gate in self.configuration.manifest.gates
         }
         existing = [
             path
@@ -1125,7 +1151,7 @@ class QualityGateRunner:
             raise QualityGateEvidenceError(
                 f"quality-gate evidence already exists: {existing[0].name}"
             )
-        gates = self.configuration.benchmark.gates
+        gates = self.configuration.manifest.gates
         for index, gate in enumerate(gates, start=1):
             elapsed = self.monotonic() - started
             remaining = limits.total_timeout_seconds - elapsed

@@ -443,6 +443,15 @@ def test_offline_workflow_completes_with_parallel_independent_verification(
     }
     assert tester_statuses["AC_DOCUMENTATION"] == "pending_review"
     assert tester_statuses["AC_ACCESSIBILITY"] == "pending_review"
+    tester_details = {
+        item["criterion_id"]: item["detail"] for item in test_report["criteria"]
+    }
+    assert tester_details["AC_DOCUMENTATION"] == (
+        "This criterion is assigned to independent review."
+    )
+    assert tester_details["AC_ACCESSIBILITY"] == (
+        "Deterministic evidence passed; independent review is pending."
+    )
     assert {item["status"] for item in final_report["acceptance_results"]} == {"passed"}
     state = load_run_json(tmp_path)
     transitions = state["transitions"]

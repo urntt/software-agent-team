@@ -37,6 +37,7 @@ from software_agent_team.product import (
     ensure_product_state,
     generate_product_run_id,
     inspect_startup_environment,
+    load_project_commands,
     prepare_product_source,
     render_startup_diagnostics,
     validate_project_destination,
@@ -75,7 +76,9 @@ DEFAULT_OPENCLAW_CONFIG = PROJECT_ROOT / "configs/openclaw.example.json5"
 DEFAULT_RUN_POLICY = PROJECT_ROOT / "configs/run-policy.json"
 DEFAULT_BENCHMARK = PROJECT_ROOT / "benchmarks/task_manager/benchmark.json"
 DEFAULT_BENCHMARK_SEED = PROJECT_ROOT / "benchmarks/task_manager/seed"
-DEFAULT_TASK_BRIEF = PROJECT_ROOT / "benchmarks/task_manager/task-brief.json"
+DEFAULT_PRODUCT_POLICY = PROJECT_ROOT / "configs/product-policy.json"
+DEFAULT_PRODUCT_PROFILE = PROJECT_ROOT / "profiles/python/quality.json"
+DEFAULT_PRODUCT_SEED = PROJECT_ROOT / "profiles/python/seed"
 DEFAULT_STATE_ROOT = user_state_root()
 DEFAULT_RUNS_ROOT = DEFAULT_STATE_ROOT / "runs"
 DEFAULT_WORKSPACES_ROOT = DEFAULT_STATE_ROOT / "workspaces"
@@ -91,7 +94,7 @@ class _WorkflowLaunchOptions:
     teams: Path
     openclaw: Path
     policy: Path
-    benchmark: Path
+    quality_manifest: Path
     runs_root: Path
     workspaces_root: Path
     openclaw_binary: Path
@@ -313,12 +316,13 @@ def _validate_artifact(args: argparse.Namespace) -> int:
 
 def _validate_config(args: argparse.Namespace) -> int:
     manifest, _ = validate_environment_configuration(args.teams, args.openclaw)
-    quality = load_quality_gate_configuration(args.policy, args.benchmark)
+    quality_manifest = args.quality_manifest or args.benchmark or DEFAULT_BENCHMARK
+    quality = load_quality_gate_configuration(args.policy, quality_manifest)
     print(
         "valid configuration: "
         f"teams={len(manifest.teams)} roles={len(manifest.required_roles)} "
         f"default={manifest.default_team} policy={quality.policy.id} "
-        f"benchmark={quality.benchmark.id} gates={len(quality.benchmark.gates)}"
+        f"quality_manifest={quality.manifest.id} gates={len(quality.manifest.gates)}"
     )
     return 0
 
@@ -393,7 +397,7 @@ def _execute_workflow(
     manifest = load_team_manifest(options.teams)
     configuration = load_quality_gate_configuration(
         options.policy,
-        options.benchmark,
+        options.quality_manifest,
     )
     sandbox_inspection = inspect_sandbox_image(
         sandbox_binary=options.sandbox_binary,
@@ -489,7 +493,7 @@ def _execute_workflow(
             output_cost_per_million_usd=options.output_cost_per_million_usd,
         ),
         runtime_setup=runtime_setup,
-        manual_review_criteria=configuration.benchmark.manual_review_criteria,
+        manual_review_criteria=configuration.manifest.manual_review_criteria,
         role_timeout_seconds=configuration.policy.agent_stage_timeouts_seconds,
         stage_timeout_seconds=options.stage_timeout_seconds,
         artifact_repair_limit=options.artifact_repair_limit,
@@ -592,7 +596,7 @@ def _run_workflow(args: argparse.Namespace) -> int:
             teams=args.teams,
             openclaw=args.openclaw,
             policy=args.policy,
-            benchmark=args.benchmark,
+            quality_manifest=args.benchmark,
             runs_root=args.runs_root,
             workspaces_root=args.workspaces_root,
             openclaw_binary=args.openclaw_binary,
@@ -767,8 +771,9 @@ def _ensure_product_configuration() -> UserConfiguration:
 def _collect_product_request(
     *,
     working_directory: Path,
-) -> tuple[str, Path] | None:
-    """Collect, narrow, summarize, and confirm the supported product request."""
+    run_id: str,
+) -> tuple[TaskBrief, Path] | None:
+    """Collect and confirm one user-owned request for the current runtime profile."""
 
     print("\nWhat would you like to build?")
     source_request = input("> ").strip()
@@ -777,13 +782,12 @@ def _collect_product_request(
     if len(source_request) > 2000:
         raise ValueError("the software request must be at most 2000 characters")
 
-    print("\nCurrent verified scope")
-    print("  A local task-management Web application for one user.")
-    print("  Create, view, edit, delete, filter, validate, and persist tasks.")
-    print("  Python 3.12, FastAPI, Jinja2, SQLite, and pytest.")
-    print("  No authentication, hosted service, or external database.")
+    print("\nCurrent execution profile")
+    print("  A small greenfield Python 3.12 project.")
+    print("  Web apps, CLI tools, and local automation are supported.")
+    print("  The quality sandbox has no network access or external services.")
     if not _prompt_yes_no(
-        "Does this supported scope satisfy your request?",
+        "Build your request with this execution profile?",
         default=True,
     ):
         print(
@@ -791,16 +795,45 @@ def _collect_product_request(
         )
         return None
 
-    project_name = input("Project directory [task-manager]: ").strip()
+    success_text = input(
+        "Success conditions (separate multiple items with semicolons) "
+        "[use the request as written]: "
+    ).strip()
+    constraint_text = input(
+        "Additional constraints (separate multiple items with semicolons) [none]: "
+    ).strip()
+    success_conditions = tuple(
+        item.strip() for item in success_text.split(";") if item.strip()
+    )
+    constraints = tuple(
+        item.strip() for item in constraint_text.split(";") if item.strip()
+    )
+
+    project_name = input("Project directory [software-project]: ").strip()
+    project_name = project_name or "software-project"
     destination = validate_project_destination(
         working_directory,
-        project_name or "task-manager",
+        project_name,
+    )
+    task_brief = build_product_task_brief(
+        run_id=run_id,
+        project_name=project_name,
+        source_request=source_request,
+        success_conditions=success_conditions,
+        user_constraints=constraints,
     )
     print("\nRequirements summary")
-    print(f"  Request: {' '.join(source_request.split())}")
-    print("  Product: local task-management Web application")
+    print(f"  Request: {task_brief.source_request}")
+    print("  Profile: local Python 3.12 project")
+    print("  Success conditions:")
+    for item in success_conditions or (task_brief.source_request,):
+        print(f"    - {item}")
+    if constraints:
+        print("  Additional constraints:")
+        for item in constraints:
+            print(f"    - {item}")
     print(f"  Destination: {destination}")
-    print("  Verification: project tests, fixed acceptance suite, and review")
+    print("  Verification: project contract, compile, lint, tests, and review")
     print("  Provider: multiple model requests may be made")
     print("  SAT cannot determine your organization's model or Docker policy.")
     if not _prompt_yes_no(
@@ -809,7 +842,7 @@ def _collect_product_request(
     ):
         print("Build cancelled; no model request was made.")
         return None
-    return source_request, destination
+    return task_brief, destination
 
 
 def _load_final_report(path: Path, *, expected_sha256: str) -> FinalReport:
@@ -864,7 +897,10 @@ def _run_product() -> int:
             "use an explicit subcommand for automation"
         )
 
-    quality = load_quality_gate_configuration(DEFAULT_RUN_POLICY, DEFAULT_BENCHMARK)
+    quality = load_quality_gate_configuration(
+        DEFAULT_PRODUCT_POLICY,
+        DEFAULT_PRODUCT_PROFILE,
+    )
     working_directory = Path.cwd()
     diagnostics = inspect_startup_environment(
         working_directory=working_directory,
@@ -877,23 +913,21 @@ def _run_product() -> int:
         return 2
 
     configuration = _ensure_product_configuration()
-    request = _collect_product_request(working_directory=working_directory)
+    run_id = generate_product_run_id()
+    request = _collect_product_request(
+        working_directory=working_directory,
+        run_id=run_id,
+    )
     if request is None:
         return 0
-    source_request, destination = request
+    task_brief, destination = request
 
-    run_id = generate_product_run_id()
     state_paths = ProductStatePaths.below(user_state_root())
     ensure_product_state(state_paths)
     source_repository = prepare_product_source(
-        seed=DEFAULT_BENCHMARK_SEED,
+        seed=DEFAULT_PRODUCT_SEED,
         state_paths=state_paths,
         run_id=run_id,
-    )
-    task_brief = build_product_task_brief(
-        quality.task_brief,
-        run_id=run_id,
-        source_request=source_request,
     )
     renderer = TerminalProgressRenderer()
     try:
@@ -904,8 +938,8 @@ def _run_product() -> int:
                 base_ref="HEAD",
                 teams=DEFAULT_TEAM_CONFIG,
                 openclaw=DEFAULT_OPENCLAW_CONFIG,
-                policy=DEFAULT_RUN_POLICY,
-                benchmark=DEFAULT_BENCHMARK,
+                policy=DEFAULT_PRODUCT_POLICY,
+                quality_manifest=DEFAULT_PRODUCT_PROFILE,
                 runs_root=state_paths.runs,
                 workspaces_root=state_paths.workspaces,
                 openclaw_binary=DEFAULT_OPENCLAW_BINARY,
@@ -952,6 +986,7 @@ def _run_product() -> int:
         print(f"  Report: {report_path}")
         print("  No destination was reported as successful.")
         return 2
+    project_commands = load_project_commands(delivered)
     _render_product_outcome(
         outcome=outcome,
         report=report,
@@ -959,11 +994,16 @@ def _run_product() -> int:
         destination=delivered,
     )
     uv = shutil.which("uv") or str(Path.home() / ".local/bin/uv")
+
+    def render_command(argv: tuple[str, ...]) -> str:
+        resolved = (uv, *argv[1:]) if argv[0] == "uv" else argv
+        return shlex.join(resolved)
+
     print("\nNext commands")
     print(f"  cd {shlex.quote(str(delivered))}")
-    print(f"  {shlex.quote(uv)} sync --dev")
-    print(f"  {shlex.quote(uv)} run uvicorn app.main:app --reload")
-    print(f"  {shlex.quote(uv)} run pytest")
+    print(f"  {render_command(project_commands.setup)}")
+    print(f"  {render_command(project_commands.start)}")
+    print(f"  {render_command(project_commands.test)}")
     return 0
 
 
@@ -973,7 +1013,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="sat",
         description=(
-            "Build the supported software product with a guided Agent team, "
+            "Build a confirmed software request with a guided Agent team, "
             "or use an explicit subcommand for configuration and evaluation."
         ),
     )
@@ -1052,7 +1092,17 @@ def build_parser() -> argparse.ArgumentParser:
     config.add_argument("--teams", type=Path, default=DEFAULT_TEAM_CONFIG)
     config.add_argument("--openclaw", type=Path, default=DEFAULT_OPENCLAW_CONFIG)
     config.add_argument("--policy", type=Path, default=DEFAULT_RUN_POLICY)
-    config.add_argument("--benchmark", type=Path, default=DEFAULT_BENCHMARK)
+    quality_manifest = config.add_mutually_exclusive_group()
+    quality_manifest.add_argument(
+        "--quality-manifest",
+        type=Path,
+        help="Quality profile or evaluation manifest; defaults to the benchmark.",
+    )
+    quality_manifest.add_argument(
+        "--benchmark",
+        type=Path,
+        help="Compatibility spelling for an evaluation quality manifest.",
+    )
     config.set_defaults(handler=_validate_config)
 
     teams = commands.add_parser(

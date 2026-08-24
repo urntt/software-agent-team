@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "id": "python_product_v1",
+  "policy_id": "product_python_v1",
+  "task_brief": "contract-template.json",
+  "input_mounts": [
+    {
+      "id": "product_contract",
+      "source": "validation",
+      "target": "/opt/software-agent-team/inputs/python-product-contract",
+      "read_only": true
+    }
+  ],
+  "gates": [
+    {
+      "id": "CHECK_PROJECT_CONTRACT",
+      "argv": [
+        "python",
+        "/opt/software-agent-team/inputs/python-product-contract/run.py",
+        "--repository",
+        "/workspace"
+      ],
+      "working_directory": ".",
+      "timeout_seconds": 30,
+      "criterion_ids": ["AC_RUNNABLE", "AC_DOCUMENTATION"]
+    },
+    {
+      "id": "CHECK_COMPILE",
+      "argv": ["python", "-m", "compileall", "-q", "."],
+      "working_directory": ".",
+      "timeout_seconds": 30,
+      "criterion_ids": ["AC_QUALITY"]
+    },
+    {
+      "id": "CHECK_LINT",
+      "argv": ["python", "-m", "ruff", "check", "."],
+      "working_directory": ".",
+      "timeout_seconds": 60,
+      "criterion_ids": ["AC_QUALITY"]
+    },
+    {
+      "id": "CHECK_PROJECT_TESTS",
+      "argv": ["python", "-m", "pytest", "-q", "-p", "no:cacheprovider"],
+      "working_directory": ".",
+      "timeout_seconds": 90,
+      "criterion_ids": ["AC_TESTS"]
+    }
+  ],
+  "manual_review_criteria": ["AC_REQUEST", "AC_DOCUMENTATION"]
+}

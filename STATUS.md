@@ -24,7 +24,7 @@ The earlier benchmark defect was corrected and versioned as
 evidence and must not be mixed with version-two comparisons.
 
 Managed installation, startup diagnostics, secret-free first-run model setup,
-supported-scope request confirmation, automatic run preparation,
+execution-profile confirmation, user-owned success conditions, automatic run preparation,
 controller-backed progress, accepted-result delivery, and safe uninstallation
 are implemented and covered offline. Provider credential creation remains in
 OpenClaw's trusted boundary. Repeated comparative experiments and human rubric
@@ -38,19 +38,20 @@ prove controller behavior, not model quality.
 
 The primary CLI now implements the Product Demo Slice in code. A normal user
 runs `sat`; SAT checks the device, guides model configuration, asks what to
-build, states and confirms the exact supported scope, chooses a new project
-destination, generates the run ID, TaskBrief, trusted source, workspace, and
+build, explains and confirms the installed Python execution profile, collects
+success conditions and constraints, chooses a new project destination,
+generates a request-specific run ID, TaskBrief, trusted source, workspace, and
 evidence roots, shows controller-derived progress, and delivers only an
-accepted clean Git result.
+accepted clean Git result with project-specific commands.
 
-This is not yet release-stable evidence. The complete 349-test offline suite,
+This is not yet release-stable evidence. The complete 356-test offline suite,
 including interaction, installer, workflow, failure, and delivery paths,
 passes, but the journey has not yet passed the required rehearsal from a fresh
-supported Linux/WSL
-user environment with an explicitly authorized provider. The current product
-also supports only the frozen local task-management application contract; its
-bounded clarification is an explicit scope-confirmation step, not a general
-requirements Agent.
+supported Linux/WSL user environment with an explicitly authorized provider.
+The current product supports small greenfield Python 3.12 projects; its bounded
+clarification records explicit user input and is not yet an adaptive
+requirements Agent. The task-manager contract remains isolated to the advanced
+evaluation surface.
 
 The advanced `prepare-benchmark`, `preflight`, and `run` commands remain a
 separate evaluation surface and are not part of the expected product demo.
@@ -80,8 +81,9 @@ The acceptance contract is
   optimistic concurrency checks, and integrity-checked recovery;
 - Safe detached standalone-clone creation and chained iteration snapshot
   verification;
-- Frozen task-management TaskBrief, deterministic seed commit, content-pinned
-  base image, Python dependency lock, per-run immutable local image identity,
+- Frozen task-management TaskBrief, deterministic seed commit, independent
+  acceptance suite, shared content-pinned Python image and dependency lock,
+  per-run immutable local image identity,
   fixed quality-gate manifest, and independent acceptance suite;
 - Docker-only production gates with no network, read-only workspace execution,
   non-root identity, fixed commands, resource limits, timeouts, and bounded
@@ -110,9 +112,10 @@ The acceptance contract is
 - Integrated first-run and repeatable model configuration with private,
   atomic, schema-versioned secret-free defaults, optional authorized provider
   smoke checking, and no invented zero-cost estimate when prices are unknown;
-- Natural-language request capture, explicit current-scope narrowing, concise
-  requirements and destination confirmation, and authorization before model
-  calls;
+- Natural-language request capture, explicit Python execution-profile
+  confirmation, user-provided success conditions and constraints, dynamic
+  TaskBrief construction, concise destination confirmation, and authorization
+  before model calls;
 - Automatic private user-state roots, collision-resistant run IDs, confirmed
   TaskBrief materialization, trusted source creation, isolated workspaces, and
   write-once evidence;
@@ -120,7 +123,7 @@ The acceptance contract is
   independent-review, decision, revision, completion, and failure progress;
 - Accepted-result-only delivery through a same-parent staging directory into a
   new non-overwriting project child, followed by exact setup, start, and test
-  commands;
+  commands from a validated project-owned argv manifest;
 - Guided one-command uninstall with preservation defaults, pre-removal export,
   explicit configuration/data purge choices, managed-application removal, and
   clear shared-resource boundaries;
@@ -145,8 +148,10 @@ controller owns dynamic revision and termination decisions.
 
 - A fresh-device, provider-backed acceptance rehearsal of the complete product
   journey and any fixes that rehearsal exposes;
-- General request clarification or support beyond the current verified local
-  task-management Web application;
+- Adaptive follow-up clarification beyond the current bounded request, success
+  condition, and constraint prompts;
+- Generated-project execution profiles beyond the current local Python 3.12
+  profile;
 - Automatic discovery and semantic validation of arbitrary existing OpenClaw
   provider profiles beyond OpenClaw's detected default model and SAT's optional
   smoke check;
@@ -154,7 +159,8 @@ controller owns dynamic revision and termination decisions.
 - Executable `single_agent` and `implementation_domain_specialized` workflow
   paths;
 - Repeated comparative trials, human rubric scoring, and topology selection;
-- A second product benchmark and product-level clarification flow.
+- Additional product execution profiles and their independent quality
+  contracts.
 
 The current `sat run` command starts from a confirmed `TaskBrief`, requires a
 fresh run ID, and intentionally does not infer that an unrecorded external
@@ -164,8 +170,9 @@ action succeeded after interruption.
 
 Complete the Phase 2 acceptance rehearsal from a fresh supported Linux/WSL
 account: run the public managed-install command, configure one authorized
-provider through the guided flow, request the supported product, observe every
-progress stage, run the delivered project's exact commands, inspect failure
+provider through the guided flow, request a representative project within the
+Python profile, observe every progress stage, run the delivered project's
+exact commands, inspect failure
 guidance, and record the result. Fix any root causes found by that rehearsal
 before calling the Product Demo Slice complete.
 

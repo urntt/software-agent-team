@@ -35,9 +35,20 @@ done
 [[ -w "$task_root" ]] || fail "the checkout is not writable by the current user"
 [[ -f "$task_root/pyproject.toml" ]] || fail "pyproject.toml is missing"
 [[ -f "$task_root/uv.lock" ]] || fail "uv.lock is missing"
-[[ -f "$task_root/configs/run-policy.json" ]] || fail "run policy is missing"
-[[ -f "$task_root/benchmarks/task_manager/Dockerfile" ]] || \
-  fail "benchmark Dockerfile is missing"
+[[ -f "$task_root/configs/product-policy.json" ]] || \
+  fail "product policy is missing"
+[[ -f "$task_root/profiles/python/quality.json" ]] || \
+  fail "product quality profile is missing"
+[[ -f "$task_root/profiles/python/contract-template.json" ]] || \
+  fail "product contract template is missing"
+[[ -f "$task_root/profiles/python/validation/run.py" ]] || \
+  fail "product contract validator is missing"
+[[ -f "$task_root/profiles/python/seed/pyproject.toml" ]] || \
+  fail "product source seed is missing"
+[[ -f "$task_root/runtime/python/Dockerfile" ]] || \
+  fail "Python runtime Dockerfile is missing"
+[[ -f "$task_root/runtime/python/requirements.lock" ]] || \
+  fail "Python runtime dependency lock is missing"
 [[ -x "$task_uninstall_target" ]] || fail "uninstall script is missing or not executable"
 if [[ "${SAT_MANAGED_INSTALL:-0}" == "1" ]]; then
   [[ -f "$task_root/.sat-managed-install" && \
@@ -76,7 +87,7 @@ fi
 cd "$task_root"
 task_image="$(
   "$task_uv_bin" run --frozen python -c \
-    'import json; from pathlib import Path; print(json.loads(Path("configs/run-policy.json").read_text(encoding="utf-8"))["sandbox"]["image"])'
+    'import json; from pathlib import Path; print(json.loads(Path("configs/product-policy.json").read_text(encoding="utf-8"))["sandbox"]["image"])'
 )"
 [[ -n "$task_image" && "$task_image" != -* && "$task_image" != *[$'\t\r\n ']* ]] || \
   fail "run policy contains an invalid Docker image reference"
@@ -84,14 +95,17 @@ task_image="$(
 if ! docker build \
     --pull=false \
     --tag "$task_image" \
-    benchmarks/task_manager; then
+    runtime/python; then
   fail "sandbox image build failed; inspect Docker output and retry"
 fi
 task_image_id="$(docker image inspect --format '{{.Id}}' "$task_image")"
 [[ "$task_image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || \
-  fail "Docker returned an invalid benchmark image ID"
+  fail "Docker returned an invalid product image ID"
 
 "$task_uv_bin" run --frozen sat validate-config >/dev/null
+"$task_uv_bin" run --frozen sat validate-config \
+  --policy configs/product-policy.json \
+  --quality-manifest profiles/python/quality.json >/dev/null
 "$task_uv_bin" run --frozen ruff format --check .
 "$task_uv_bin" run --frozen ruff check .
 "$task_uv_bin" run --frozen pytest
