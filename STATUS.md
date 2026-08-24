@@ -1,10 +1,10 @@
 # Project Status
 
-**Current milestone:** Phase 1 complete; Phase 2 comparison paths pending
+**Current milestone:** Phase 1 engine complete; Product Demo Slice next
 
-**Last updated:** August 23, 2026
+**Last updated:** August 24, 2026
 
-This document records what the repository implements now, what live evidence
+This document records what the repository implements now, what evidence
 supports that claim, and what remains unavailable. It does not redefine the
 product, architecture, experiment, or roadmap; those decisions belong to
 [`VISION.md`](VISION.md).
@@ -12,16 +12,16 @@ product, architecture, experiment, or roadmap; those decisions belong to
 ## Phase 1 Result
 
 The function-specialized vertical slice is implemented and has produced a
-qualifying version-two live trace that reached `completed`. One
-controller-verified implementation commit passed every deterministic gate,
+qualifying version-two provider-backed evaluation that reached `completed`.
+One controller-verified implementation commit passed every deterministic gate,
 all ten acceptance criteria, and independent review, with complete model,
 token, hash, and Git-boundary evidence.
 
-Two consecutive live replays of the current harness commit have also reached
-`completed`, each through the bounded evidence-driven revision loop. The
-earlier benchmark defect was corrected and versioned as
-`task_manager_phase1_v2`; version-one traces remain exploratory evidence and
-must not be mixed with version-two comparisons.
+Two consecutive provider-backed replays of the same engine revision have also
+reached `completed`, each through the bounded evidence-driven revision loop.
+The earlier benchmark defect was corrected and versioned as
+`task_manager_phase1_v2`; version-one evaluation records remain exploratory
+evidence and must not be mixed with version-two comparisons.
 
 Installation, secret-free run-default onboarding, and safe uninstallation are
 implemented. Provider credential creation remains an OpenClaw/operator
@@ -31,6 +31,27 @@ remain pending.
 The exact acceptance procedure is in
 [`docs/phase1-runbook.md`](docs/phase1-runbook.md). Offline scripted executions
 prove controller behavior, not model quality.
+
+## Product Readiness Boundary
+
+Phase 1 validates the engine, not the complete user journey. The current public
+CLI still exposes a contributor/operator workflow:
+
+- Installation starts from a source checkout and creates checkout-bound
+  launchers;
+- `sat` prints a guide instead of running an integrated diagnostic and
+  first-run wizard;
+- Configuration exposes model price, verification concurrency, and timeout
+  controls intended for evaluation;
+- A build requires an existing TaskBrief and source path;
+- Request collection, clarification, confirmation, automatic internal
+  materialization, continuous progress, and the final delivery view are not yet
+  implemented.
+
+The repository must not present `sat prepare-benchmark`, explicit TaskBrief
+editing, or a provider-backed evaluation trial as the expected product demo.
+The approved next acceptance contract is
+[`docs/product-demo-slice.md`](docs/product-demo-slice.md).
 
 ## Implemented and Offline Verified
 
@@ -96,13 +117,18 @@ controller owns dynamic revision and termination decisions.
 
 | Configuration | Purpose | Implementation status |
 | --- | --- | --- |
-| `single_agent` | One-pass baseline | Phase 2 |
-| `function_specialized` | Planner, generalist implementation, independent testing and review | Phase 1 implemented and live-validated |
-| `implementation_domain_specialized` | Parallel frontend/backend work plus integration | Phase 2 |
+| `single_agent` | One-pass baseline | Phase 3 |
+| `function_specialized` | Planner, generalist implementation, independent testing and review | Phase 1 implemented and provider-validated |
+| `implementation_domain_specialized` | Parallel frontend/backend work plus integration | Phase 3 |
 
 ## Not Yet Available or Completed
 
-- Interactive clarification;
+- Managed end-user installation and complete automatic environment diagnosis;
+- An integrated no-subcommand `sat` startup and first-run configuration flow;
+- Natural-language request collection, bounded clarification, and requirements
+  confirmation;
+- Automatic run ID, TaskBrief, source, workspace, and delivery preparation;
+- Controller-backed progress summaries and a concise final delivery view;
 - Automatic CLI resume of an interrupted run;
 - Executable `single_agent` and `implementation_domain_specialized` workflow
   paths;
@@ -115,10 +141,15 @@ action succeeded after interruption.
 
 ## Next Milestone
 
-Phase 2 adds the one-pass single-Agent baseline and the
-implementation-domain-specialized path behind the same controller, evidence,
-quality-gate, budget, and reporting boundaries. The exit criterion is that all
-three configurations complete or fail through one comparable lifecycle.
+Phase 2 implements the Product Demo Slice: one managed installation command,
+automatic diagnostics, guided provider setup, a natural-language request and
+bounded clarification flow, automatic internal preparation, visible progress,
+and a runnable delivery with exact next commands. Normal users must not operate
+the evaluation CLI or edit internal JSON.
+
+Topology implementation and comparison resume in Phase 3 after this product
+journey is executable. The Phase 2 acceptance criteria are defined in
+[`docs/product-demo-slice.md`](docs/product-demo-slice.md).
 
 The development route and evaluation policy are defined in
 [`VISION.md`](VISION.md#development-route).

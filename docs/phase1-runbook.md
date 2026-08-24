@@ -1,9 +1,14 @@
-# Phase 1 Live-Trace Runbook
+# Phase 1 Provider-Backed Evaluation Runbook
 
-This runbook is the operating procedure for a qualifying real model/provider
-trace. A version-two trace has satisfied the Phase 1 exit checklist, and two
+This contributor/operator runbook is the procedure for a controlled evaluation
+using a real model provider. Historical records sometimes call such a run a
+"live trace"; that term describes internal evidence, not the product journey a
+new user performs. The intended installation-to-delivery experience is defined
+in [`product-demo-slice.md`](product-demo-slice.md).
+
+A version-two evaluation has satisfied the Phase 1 exit checklist, and two
 consecutive replays of the current harness commit have reached `completed`
-through the bounded revision loop. New traces still require fresh run IDs and
+through the bounded revision loop. New trials still require fresh run IDs and
 the complete evidence checks below. Repository development and offline tests do
 not make a model call. Following the `sat run` step below does.
 
@@ -11,7 +16,7 @@ Use [`installation.md`](installation.md) for the normal install, configuration,
 export, and uninstall lifecycle. Use
 [`runtime-evidence.md`](runtime-evidence.md) for the underlying runtime,
 artifact, response, integrity, and safety model. This runbook owns only the
-ordered live-trace procedure and its acceptance checklist.
+ordered evaluation procedure and its acceptance checklist.
 
 ## Acceptance Objective
 
@@ -28,10 +33,10 @@ Planner
 ```
 
 A useful failed run remains valid experimental evidence, but the Phase 1
-acceptance trace should reach `completed`, exercise every role, preserve the
-actual model and token telemetry, and leave a reproducible Git snapshot.
+acceptance evaluation should reach `completed`, exercise every role, preserve
+the actual model and token telemetry, and leave a reproducible Git snapshot.
 Do not combine earlier benchmark-version results with version-two comparisons.
-Record the harness Git commit with every trace so the acceptance input is
+Record the harness Git commit with every trial so the acceptance input is
 attributable to its checked-in version.
 
 ## Preconditions
@@ -78,10 +83,10 @@ environment, checkout-bound `sat` and `sat-uninstall` launchers, fixed benchmark
 image, and offline checks. It requires Git, curl, and a running Docker daemon
 that the unprivileged user can access. It does not install Docker at the
 operating-system level or create provider credentials and active OpenClaw
-configuration; configure those outside the checkout before a paid live trace.
+configuration; configure those outside the checkout before a paid evaluation.
 
 Start the first-launch guide, then save the exact non-secret run defaults for
-the planned trace:
+the planned trial:
 
 ```bash
 sat
@@ -94,7 +99,7 @@ concurrency, and an optional global role-stage timeout override. It never
 records an API key. With no override, the checked-in per-role budgets apply.
 For tightly controlled experiments, the equivalent explicit `sat run` flags
 below remain useful because the complete invocation can be copied into the
-trace notes.
+trial notes.
 
 ## 1. Verify the Checkout
 
@@ -136,7 +141,7 @@ git -C ./task-manager-source log -1 --oneline
 ```
 
 The status command should print nothing. Keep the reported base commit with the
-trace notes. The preparation command refuses to overwrite an existing path.
+trial notes. The preparation command refuses to overwrite an existing path.
 
 ## 4. Run Offline Preflight
 
@@ -158,7 +163,7 @@ provider quota.
 Stop if preflight returns `not-ready` or exit code `1`/`2`. Correct the reported
 environment problem before authorizing a paid call.
 
-## 5. Execute One Live Trace
+## 5. Execute One Provider-Backed Trial
 
 Replace the model and prices with the exact operator-approved values. Do not
 substitute or add another model trial without separate authorization:
@@ -293,7 +298,7 @@ Record the command, selected model, frozen prices, base commit, terminal commit,
 artifact location, actual cost estimate, elapsed time, and any anomaly in the
 experiment notes. Mark Phase 1 complete only after the checklist above is
 satisfied. Otherwise, classify the failure, fix the controller or environment
-through a normal reviewed change, assign a new run ID, and run a new trace.
+through a normal reviewed change, assign a new run ID, and run a new trial.
 
 Generated runs and workspaces are ignored local evidence. Archive any evidence
 needed for the experiment before manually removing disposable run state.

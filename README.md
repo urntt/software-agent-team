@@ -22,18 +22,44 @@ Planner
 
 ## Status
 
-Phase 1 is complete. The current harness has passed its offline end-to-end
-suite and produced a qualifying real-model trace plus two consecutive replays
-that reached `completed` through the bounded evidence-driven revision loop.
-Each completed trace preserved controller-verified Git, quality-gate,
-acceptance, independent-review, model, token, duration, and artifact-integrity
-evidence.
+Phase 1 is complete as an engine milestone. The current harness has passed its
+offline end-to-end suite and produced a qualifying provider-backed evaluation
+plus two consecutive replays that reached `completed` through the bounded
+evidence-driven revision loop. Each completed evaluation preserved
+controller-verified Git, quality-gate, acceptance, independent-review, model,
+token, duration, and artifact-integrity evidence.
+
+The intended first-run product journey is not implemented yet. The current
+`sat` entry point prints an operator guide, while an actual build still starts
+from an existing TaskBrief and source path. The next milestone is the
+[`Product Demo Slice`](docs/product-demo-slice.md): managed installation,
+automatic diagnostics, guided configuration, a natural-language request and
+bounded clarification flow, automatic internal preparation, visible progress,
+and a direct runnable delivery.
 
 The executable single-Agent baseline, implementation-domain-specialized path,
-repeated comparative evaluation, interactive clarification, and automatic CLI
-resume remain future work. See [`STATUS.md`](STATUS.md) for the exact
-implementation boundary and [`VISION.md`](VISION.md) for the product direction
-and roadmap.
+repeated comparative evaluation, and automatic CLI resume also remain future
+work. See [`STATUS.md`](STATUS.md) for the exact implementation boundary and
+[`VISION.md`](VISION.md) for the product direction and roadmap.
+
+## Intended Product Experience
+
+```text
+one installation command
+→ enter or create a project folder
+→ run `sat`
+→ automatic diagnostics and first-run configuration
+→ "What would you like to build?"
+→ bounded clarification and requirements confirmation
+→ controller-backed summaries and progress
+→ runnable project, verification result, and exact next commands
+```
+
+Normal users must not prepare run IDs, TaskBrief JSON, benchmark repositories,
+team IDs, policy paths, concurrency, timeouts, repair limits, or evidence roots.
+Those remain internal or advanced evaluation concepts. See
+[`docs/product-demo-slice.md`](docs/product-demo-slice.md) for the complete
+acceptance contract.
 
 ## Architecture at a Glance
 
@@ -66,7 +92,11 @@ runtime, evidence, response, and safety boundaries.
 The checked-in setup pins Python 3.12, OpenClaw 2026.7.1-2, OpenClaw's local
 Node.js 24.15.0 runtime, and Python dependencies through `uv.lock`.
 
-## Quick Start
+## Current Evaluation Quick Start
+
+The commands below document the implemented Phase 1 contributor/operator
+surface. They are useful for controlled evaluation and regression work, but
+they are not the target first-run product experience described above.
 
 Install from a clean checkout on Linux or WSL:
 
@@ -79,7 +109,7 @@ environment, benchmark image, offline checks, and checkout-bound `sat` and
 `sat-uninstall` launchers. It does not install an OS-level Docker daemon or
 create provider credentials.
 
-Start the first-launch guide and save secret-free run defaults:
+Start the current operator guide and save secret-free evaluation defaults:
 
 ```bash
 sat
@@ -98,7 +128,7 @@ sat prepare-benchmark ./task-manager-source
 sat preflight ./task-manager-source
 ```
 
-Run the Phase 1 vertical slice with the saved model, prices, verification
+Run the Phase 1 evaluation workflow with the saved model, prices, verification
 concurrency, and timeout policy:
 
 ```bash
@@ -110,18 +140,18 @@ sat run \
 `sat run` returns `0` for an accepted completed run, `2` for an auditable
 failed run, and `1` when invalid input or local setup prevents a normal
 workflow result. Follow the complete
-[`Phase 1 live-trace runbook`](docs/phase1-runbook.md) before treating a run as
-qualifying experimental evidence.
+[`Phase 1 provider-backed evaluation runbook`](docs/phase1-runbook.md) before
+treating a run as qualifying experimental evidence.
 
 ## Command Map
 
 | Command | Purpose | Detailed reference |
 | --- | --- | --- |
-| `sat` | Show first-launch state and the next configuration or run action | [`docs/installation.md`](docs/installation.md) |
+| `sat` | Currently show operator onboarding; Phase 2 turns it into the guided product entry point | [`docs/product-demo-slice.md`](docs/product-demo-slice.md) |
 | `sat configure` | Create or replace secret-free model, pricing, concurrency, and timeout defaults | [`docs/installation.md`](docs/installation.md) |
-| `sat prepare-benchmark PATH` | Materialize a fresh deterministic task-manager source repository | [`docs/phase1-runbook.md`](docs/phase1-runbook.md) |
-| `sat preflight PATH` | Validate runtime configuration, OpenClaw, Docker image, and source without a model call | [`docs/phase1-runbook.md`](docs/phase1-runbook.md) |
-| `sat run BRIEF PATH` | Execute a fresh bounded workflow and persist its evidence | [`docs/phase1-runbook.md`](docs/phase1-runbook.md) |
+| `sat prepare-benchmark PATH` | Advanced: materialize a deterministic evaluation source repository | [`docs/phase1-runbook.md`](docs/phase1-runbook.md) |
+| `sat preflight PATH` | Advanced: validate evaluation runtime, image, and source without a model call | [`docs/phase1-runbook.md`](docs/phase1-runbook.md) |
+| `sat run BRIEF PATH` | Advanced: execute a controlled workflow from explicit inputs | [`docs/phase1-runbook.md`](docs/phase1-runbook.md) |
 | `sat validate-*` and `sat list-teams` | Validate checked-in contracts or inspect team definitions | [`docs/development.md`](docs/development.md) |
 | `sat-uninstall` | Preserve by default, optionally export, and explicitly purge installed SAT state | [`docs/installation.md`](docs/installation.md) |
 | `make setup` / `make check` | Prepare and validate a development checkout offline | [`docs/development.md`](docs/development.md) |
@@ -140,10 +170,11 @@ documents have deliberately separate responsibilities:
 | --- | --- |
 | [`README.md`](README.md) | Public overview, command map, and repository map |
 | [`VISION.md`](VISION.md) | Product contract, architecture decisions, experiment design, scope, and roadmap |
-| [`STATUS.md`](STATUS.md) | Current implementation, live evidence, known gaps, and next milestone |
+| [`STATUS.md`](STATUS.md) | Current implementation, evaluation evidence, known gaps, and next milestone |
+| [`docs/product-demo-slice.md`](docs/product-demo-slice.md) | Next user-facing installation, onboarding, request, progress, and delivery acceptance contract |
 | [`docs/installation.md`](docs/installation.md) | Installation, first-launch configuration, saved defaults, export, and uninstallation |
 | [`docs/runtime-evidence.md`](docs/runtime-evidence.md) | Runtime authority, response boundary, persisted evidence, integrity, and operator safety |
-| [`docs/phase1-runbook.md`](docs/phase1-runbook.md) | Exact procedure and checklist for a qualifying Phase 1 live trace |
+| [`docs/phase1-runbook.md`](docs/phase1-runbook.md) | Contributor/operator procedure for a controlled Phase 1 provider-backed evaluation |
 | [`docs/development.md`](docs/development.md) | Local setup, checks, validation commands, layout, and contribution workflow |
 | [`benchmarks/task_manager/requirements.md`](benchmarks/task_manager/requirements.md) | Human-readable summary of the frozen benchmark contract |
 

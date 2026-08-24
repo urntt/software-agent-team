@@ -104,9 +104,10 @@ configs/
   openclaw.example.json5       Sanitized role and tool policy template
 docs/
   README.md                    Documentation index
+  product-demo-slice.md        Next user-facing acceptance contract
   installation.md             Install, configure, export, and uninstall
   runtime-evidence.md          Runtime, artifact, evidence, and safety model
-  phase1-runbook.md            Qualifying live-trace procedure
+  phase1-runbook.md            Controlled provider-backed evaluation procedure
   development.md               This development guide
 src/software_agent_team/
   artifacts.py                 Persisted schemas
@@ -129,7 +130,7 @@ scripts/
   doctor.sh                    Environment and boundary diagnostics
 tests/                         Offline unit, integration, and end-to-end tests
 README.md                      Public entry point and command map
-STATUS.md                      Current implementation and live evidence
+STATUS.md                      Current implementation and evaluation evidence
 VISION.md                      Product, architecture, experiment, and roadmap
 ```
 
@@ -145,14 +146,16 @@ Update the document that owns the changed fact:
   map changes;
 - Update `VISION.md` when product behavior, architecture decisions,
   experimental design, scope, or roadmap changes;
-- Update `STATUS.md` when an implementation path, milestone, live evidence, or
-  known gap changes;
+- Update `STATUS.md` when an implementation path, milestone, evaluation
+  evidence, or known gap changes;
+- Update `docs/product-demo-slice.md` when the approved next user journey or
+  its acceptance criteria change;
 - Update `docs/installation.md` when setup, saved configuration, export, or
   uninstallation behavior changes;
 - Update `docs/runtime-evidence.md` when runtime, artifact, response, integrity,
   or safety behavior changes;
-- Update `docs/phase1-runbook.md` when a qualifying trace procedure or evidence
-  checklist changes;
+- Update `docs/phase1-runbook.md` when a controlled provider-backed evaluation
+  procedure or evidence checklist changes;
 - Update benchmark documentation only with an explicitly versioned benchmark
   change.
 

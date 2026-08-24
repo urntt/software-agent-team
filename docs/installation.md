@@ -2,8 +2,15 @@
 
 This guide owns the supported Linux/WSL installation lifecycle, first-launch
 configuration, saved defaults, export behavior, and removal boundaries. For a
-qualifying model-backed experiment, continue with the
-[`Phase 1 live-trace runbook`](phase1-runbook.md) after setup.
+controlled provider-backed evaluation, continue with the
+[`Phase 1 evaluation runbook`](phase1-runbook.md) after setup.
+
+This page documents the implementation that exists now: installation begins
+inside a source checkout, launchers remain bound to that checkout, and `sat`
+prints an operator guide. The next milestone replaces that contributor-facing
+journey with a managed one-command installation and an integrated `sat`
+diagnostic, configuration, request, progress, and delivery flow. Its acceptance
+contract is [`product-demo-slice.md`](product-demo-slice.md).
 
 ## System Requirements
 
@@ -26,7 +33,7 @@ docker version
 docker run --rm hello-world
 ```
 
-## One-Command Installation
+## Current Checkout-Based Installation
 
 From a clean checkout, run:
 
@@ -50,7 +57,7 @@ corresponding user-local location must be changed.
 The installer neither creates provider credentials nor activates an OpenClaw
 provider configuration. Keep those values outside the checkout.
 
-## First Launch
+## Current First Launch
 
 Start the installed command without arguments:
 
@@ -58,9 +65,10 @@ Start the installed command without arguments:
 sat
 ```
 
-`sat` reports whether user defaults exist and prints the provider,
-benchmark-preparation, preflight, run, reconfiguration, and uninstall path.
-Create or replace the defaults interactively with:
+`sat` currently reports whether evaluation defaults exist and prints the
+provider, benchmark-preparation, preflight, run, reconfiguration, and uninstall
+path. It does not yet ask what the user wants to build or execute the complete
+product journey. Create or replace the current defaults interactively with:
 
 ```bash
 sat configure
@@ -197,3 +205,9 @@ custom run roots. Export custom data separately before purging or deleting it.
 The default preservation policy is intentional: removing the CLI must not
 silently destroy generated code or audit evidence. Inspect an export before
 selecting either purge option.
+
+Environment diagnosis belongs to the product, not to a user-maintained manual
+checklist. Phase 2 will make platform, architecture, identity, filesystem,
+required-command, Docker, storage, launcher, and download-connectivity failures
+explicit and actionable before first-run work begins. Provider authorization
+and organizational policy remain external decisions.

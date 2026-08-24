@@ -2,7 +2,7 @@
 
 **Implementation status:** [`STATUS.md`](STATUS.md)
 
-**Last updated:** August 23, 2026
+**Last updated:** August 24, 2026
 
 ## Purpose
 
@@ -53,6 +53,10 @@ A run also receives:
 - Fixed validation commands;
 - Time, iteration, Agent-invocation, token, and cost limits.
 
+The product surface derives or defaults these internal inputs after user
+confirmation. The evaluation surface may provide them explicitly to hold
+experimental variables constant.
+
 ### Outputs
 
 A completed or failed run produces:
@@ -86,6 +90,24 @@ The benchmark is complex enough to require frontend behavior, backend logic,
 persistence, validation, tests, and integration, but small enough to repeat
 under limited model budgets.
 
+### Primary Product Experience
+
+The primary experience is not an operator assembling an evaluation trial from
+internal files and flags. A new user installs SAT, enters or creates a project
+directory, and runs `sat` with no subcommand. SAT then diagnoses the local
+environment, guides first-run provider configuration, asks what the user wants
+to build, performs bounded clarification, confirms a requirements summary,
+prepares all internal run state, shows controller-backed progress, and returns
+a runnable result with exact next commands.
+
+Internal run IDs, TaskBrief JSON, benchmark source paths, team IDs, policy
+paths, concurrency, timeouts, repair limits, and evidence roots are advanced
+implementation or evaluation concepts. The normal user must not prepare or
+edit them.
+
+The complete next-milestone acceptance contract is
+[`docs/product-demo-slice.md`](docs/product-demo-slice.md).
+
 ## Current Technical Decisions
 
 These decisions are active implementation constraints. They change only when
@@ -93,7 +115,9 @@ code or experiment evidence justifies a replacement.
 
 ### Interface and Runtime
 
-- The product interface is a `sat` CLI.
+- The primary product interface is `sat` with no subcommand. Explicit
+  subcommands and policy overrides form a separate contributor/operator
+  evaluation surface.
 - The supported core runtime is Linux, including WSL when the required tools
   work. Native macOS is not part of the Phase 1 acceptance environment.
 - Python 3.12 implements the deterministic control plane.
@@ -157,9 +181,10 @@ Each concept has one authoritative owner.
 | Product and architecture decisions | `VISION.md` |
 | Current implementation, milestone evidence, and known gaps | `STATUS.md` |
 | Public overview, commands, and repository map | `README.md` |
+| Product Demo Slice interaction and acceptance specification | `docs/product-demo-slice.md` |
 | Installation, saved configuration, export, and removal behavior | `docs/installation.md` |
 | Runtime, response, persisted-evidence, integrity, and operator-safety reference | `docs/runtime-evidence.md` |
-| Qualifying Phase 1 live-trace procedure | `docs/phase1-runbook.md` |
+| Controlled Phase 1 provider-backed evaluation procedure | `docs/phase1-runbook.md` |
 | Development workflow and repository reference | `docs/development.md` |
 | Team membership and initial stage order | `configs/teams.json` |
 | Team-manifest validation | `src/software_agent_team/teams.py` |
@@ -259,11 +284,13 @@ Agent count and internal allocation are inherent parts of a team
 configuration. Actual cost and duration are reported rather than normalized
 away.
 
-Requirement clarification is evaluated after the first topology comparison.
-The topology experiment starts from one frozen confirmed `TaskBrief` so input
-interpretation does not confound the result.
+The Product Demo Slice implements bounded clarification before topology
+comparison so the primary product journey is executable. The topology
+experiment still starts from one frozen confirmed `TaskBrief`; clarification
+behavior is not varied during that comparison and therefore does not confound
+the result. Clarification quality is evaluated separately.
 
-## Phase 1 Decision Record
+## Decision Record
 
 | Decision | Reason |
 | --- | --- |
@@ -286,6 +313,9 @@ interpretation does not confound the result.
 | Treat terminal failure as evidence | Provider, sandbox, artifact, budget, and convergence failures must remain observable instead of being retried or discarded silently. |
 | Keep saved user defaults secret-free | Model, pricing, concurrency, and an optional global stage-timeout override improve repeatability, but provider credentials remain in OpenClaw's trusted user state and never enter SAT configuration or exports. Checked-in role defaults remain the normal timeout policy. |
 | Make uninstall preservation-first | Removing the CLI must not silently destroy run evidence, generated workspaces, provider state, shared tools, or a source checkout; export and purge therefore require explicit user choices. |
+| Implement the Product Demo Slice before topology comparison | A reproducible engine is not yet a usable product. The core promise starts from a short request, so installation, onboarding, clarification, progress, and delivery must be executable before the project presents an internal evaluation workflow as its demo. |
+| Keep product and evaluation CLI surfaces distinct | Normal users run `sat` and receive guided defaults. Explicit TaskBrief files, benchmark preparation, team IDs, policy paths, timeouts, concurrency, and repair controls remain available to contributors without becoming first-run questions. |
+| Show controller-backed progress rather than hidden reasoning | Users need attributable phase summaries, elapsed waiting time, Git snapshots, gates, review, and revision status. Hidden chain-of-thought, secrets, and unverifiable percentages are neither required nor appropriate. |
 
 ## Planned Workflow
 
@@ -308,13 +338,14 @@ REQUEST
 
 Only the deterministic controller may advance this state machine.
 
-Phase 1 starts at `CONFIRM_REQUIREMENTS` with a frozen `TaskBrief`; interactive
-`REQUEST` and `CLARIFY` behavior is Phase 4. The implemented vertical slice
-runs Tester and Reviewer independently after deterministic gates. Dispatch is
-concurrent by default and may be serialized for a provider with one generation
-slot. It performs at most two implementation iterations: the initial pass and
-one revision. Later configurations may use the manifest's higher explicit
-limit.
+Phase 1 starts at `CONFIRM_REQUIREMENTS` with a frozen `TaskBrief`. Phase 2
+connects `REQUEST`, `CLARIFY`, first-run onboarding, automatic internal
+materialization, progress, and delivery to that verified engine. The
+implemented vertical slice runs Tester and Reviewer independently after
+deterministic gates. Dispatch is concurrent by default and may be serialized
+for a provider with one generation slot. It performs at most two implementation
+iterations: the initial pass and one revision. Later configurations may use the
+manifest's higher explicit limit.
 
 The Reviewer recommends `revise` for every correctable product defect,
 including failed deterministic acceptance and security defects in generated
@@ -415,7 +446,12 @@ operator checklist is maintained in
 The core deliverable includes:
 
 - Unified `sat` CLI;
+- One-command managed installation with automatic environment diagnostics;
+- A no-subcommand product entry point with guided first-run configuration;
 - Bounded clarification and confirmed task briefs;
+- Automatic internal run, TaskBrief, source, workspace, and delivery
+  materialization;
+- Controller-backed progress summaries and a concise final delivery view;
 - Deterministic run controller and state machine;
 - OpenClaw execution adapter;
 - Three versioned experimental configurations;
@@ -442,10 +478,10 @@ The core version does not include:
 
 ## Implementation Status
 
-Current implementation, live-trace evidence, known gaps, and the next
-executable milestone are maintained in [`STATUS.md`](STATUS.md). Keeping those
-time-sensitive facts separate prevents completed work from being confused with
-the durable product and experiment decisions in this document.
+Current implementation, provider-backed evaluation evidence, known gaps, and
+the next executable milestone are maintained in [`STATUS.md`](STATUS.md).
+Keeping those time-sensitive facts separate prevents completed work from being
+confused with the durable product and experiment decisions in this document.
 
 ## Development Route
 
@@ -465,16 +501,36 @@ the durable product and experiment decisions in this document.
 - Create an isolated standalone clone from a confirmed `TaskBrief`;
 - Invoke Planner, Generalist Developer, Tester, and Reviewer through an adapter;
 - Run deterministic quality gates;
-- Perform at most one revision in the first trace;
+- Perform at most one revision in the first evaluation trial;
 - Produce a final report.
 
-**Exit criterion:** one authorized real-model trace reaches `completed` with
-reproducible artifacts and a clean controller-verified Git snapshot.
+**Exit criterion:** one authorized provider-backed evaluation reaches
+`completed` with reproducible artifacts and a clean controller-verified Git
+snapshot.
 
-**Current status:** complete. See [`STATUS.md`](STATUS.md) for live evidence and
-[`docs/phase1-runbook.md`](docs/phase1-runbook.md) for the acceptance boundary.
+**Current status:** complete. See [`STATUS.md`](STATUS.md) for evidence and
+[`docs/phase1-runbook.md`](docs/phase1-runbook.md) for the contributor/operator
+acceptance boundary.
 
-### Phase 2: Baseline and Domain Specialization
+### Phase 2: Product Demo Slice
+
+- Install SAT into a managed user-local location with one command;
+- Diagnose supported environment conditions automatically and actionably;
+- Make `sat` the guided product entry point;
+- Detect or configure a provider without storing secrets in SAT state;
+- Ask what the user wants to build, clarify within the supported scope, and
+  confirm a concise requirements summary;
+- Generate internal run IDs, TaskBriefs, sources, workspaces, and destinations
+  automatically;
+- Show controller-backed progress, review, revision, and failure summaries;
+- Deliver a clean runnable result with exact next commands.
+
+**Exit criterion:** the journey in
+[`docs/product-demo-slice.md`](docs/product-demo-slice.md) passes its offline
+interaction tests and one fresh supported-device rehearsal without requiring
+the user to operate the evaluation CLI.
+
+### Phase 3: Baseline and Domain Specialization
 
 - Add the one-pass single-Agent path;
 - Add parallel frontend/backend work with explicit ownership;
@@ -484,7 +540,7 @@ reproducible artifacts and a clean controller-verified Git snapshot.
 **Exit criterion:** all three configurations complete or fail through the same
 controller and reporting boundary.
 
-### Phase 3: Controlled Evaluation
+### Phase 4: Controlled Evaluation
 
 - Freeze the benchmark task brief and starting commit;
 - Run repeated trials under predefined budgets;
@@ -493,11 +549,10 @@ controller and reporting boundary.
 
 **Exit criterion:** the recommendation is traceable to run evidence.
 
-### Phase 4: Product Completion
+### Phase 5: Generalization and Pass-Off
 
-- Add bounded interactive clarification;
 - Validate the selected configuration on a second use case;
-- Harden recovery, sandbox policy, and diagnostics;
+- Harden interrupted-run recovery and remaining sandbox diagnostics;
 - Package a demonstration and public-ready technical report.
 
 **Exit criterion:** a user can start from a brief request and receive one
