@@ -580,10 +580,12 @@ def test_cli_preflight_makes_no_model_call(
             runtime_config=str(kwargs["runtime_config"]),
             sandbox_binary="/usr/bin/docker",
             sandbox_version="Docker version test",
-            sandbox_image="sat-python-quality:phase1-v1",
+            sandbox_image="sat-python-quality:phase1-v2",
             sandbox_image_id=f"sha256:{'a' * 64}",
             config_valid=True,
             sandbox_image_present=True,
+            sandbox_container_ready=True,
+            sandbox_container_error=None,
         )
 
     monkeypatch.setattr(cli, "materialize_run_configuration", fake_materialize)

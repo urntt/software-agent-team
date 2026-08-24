@@ -957,6 +957,9 @@ class WorkflowCoordinator:
                 ):
                     record_error = "successful execution omitted token usage"
                     failure_reason = TerminationReason.DEPENDENCY_UNAVAILABLE
+                elif sandbox_error := self._sandbox_runtime_error(result):
+                    record_error = sandbox_error
+                    failure_reason = TerminationReason.DEPENDENCY_UNAVAILABLE
                 else:
                     try:
                         parsed = parse_agent_response(
@@ -1573,6 +1576,20 @@ class WorkflowCoordinator:
         if result.status is AgentExecutionStatus.PROVIDER_FAILED:
             return TerminationReason.DEPENDENCY_UNAVAILABLE
         return TerminationReason.EXECUTION_FAILED
+
+    @staticmethod
+    def _sandbox_runtime_error(result: AgentExecutionResult) -> str | None:
+        """Recognize OpenClaw-owned Docker failures without trusting Agent text."""
+
+        for line in result.telemetry.stderr.splitlines():
+            if "[tools]" not in line or " failed:" not in line:
+                continue
+            if (
+                "Error response from daemon: container " in line
+                and " is not running" in line
+            ) or "Cannot connect to the Docker daemon" in line:
+                return "OpenClaw sandbox became unavailable during Agent tool use"
+        return None
 
     @staticmethod
     def _termination_reason(error: Exception) -> TerminationReason:

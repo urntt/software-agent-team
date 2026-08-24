@@ -6,7 +6,9 @@ import json
 import os
 import shutil
 import subprocess
+import time
 from collections.abc import Mapping
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -43,6 +45,23 @@ class SandboxImageInspection(BaseModel):
         return self.sandbox_image_present and self.sandbox_image_id is not None
 
 
+class SandboxRuntimeProbe(BaseModel):
+    """Result of starting and removing one restricted sandbox container."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    sandbox_binary: str = Field(min_length=1)
+    sandbox_image_id: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    sandbox_container_ready: bool
+    error: str | None = Field(default=None, max_length=1000)
+
+    @property
+    def ready(self) -> bool:
+        """Return whether the image stayed alive under sandbox restrictions."""
+
+        return self.sandbox_container_ready and self.error is None
+
+
 class RuntimePreflight(BaseModel):
     """Non-secret evidence that the local runtime is ready for a live run."""
 
@@ -61,6 +80,8 @@ class RuntimePreflight(BaseModel):
     )
     config_valid: bool
     sandbox_image_present: bool
+    sandbox_container_ready: bool
+    sandbox_container_error: str | None = Field(default=None, max_length=1000)
 
     @property
     def ready(self) -> bool:
@@ -70,6 +91,8 @@ class RuntimePreflight(BaseModel):
             self.config_valid
             and self.sandbox_image_present
             and self.sandbox_image_id is not None
+            and self.sandbox_container_ready
+            and self.sandbox_container_error is None
         )
 
 
@@ -190,6 +213,187 @@ def inspect_sandbox_image(
         sandbox_image=sandbox_image,
         sandbox_image_id=image_id,
         sandbox_image_present=image.returncode == 0,
+    )
+
+
+def probe_sandbox_runtime(
+    *,
+    sandbox_binary: str,
+    sandbox_image_id: str,
+    timeout_seconds: int = 30,
+    settle_seconds: float = 0.2,
+    environment: Mapping[str, str] | None = None,
+) -> SandboxRuntimeProbe:
+    """Verify that an image keeps a restricted sandbox container alive.
+
+    OpenClaw executes tools into a long-lived container. Merely resolving an
+    image is therefore insufficient: an image whose default command exits can
+    pass image inspection while every Agent file or process tool fails. This
+    probe starts the immutable image ID without network access, waits briefly,
+    inspects its state, and removes the test container. It never calls a model.
+    """
+
+    if timeout_seconds < 1:
+        raise RuntimeConfigurationError("preflight timeout must be positive")
+    if not 0 <= settle_seconds <= 5:
+        raise RuntimeConfigurationError("sandbox settle duration is invalid")
+    if not (
+        sandbox_image_id.startswith("sha256:")
+        and len(sandbox_image_id) == 71
+        and all(character in "0123456789abcdef" for character in sandbox_image_id[7:])
+    ):
+        raise RuntimeConfigurationError("sandbox image ID is invalid")
+    resolved_sandbox = shutil.which(sandbox_binary)
+    if resolved_sandbox is None:
+        raise RuntimeConfigurationError(
+            f"sandbox binary is unavailable: {sandbox_binary}"
+        )
+
+    container_name = f"sat-runtime-probe-{uuid4().hex}"
+    start_attempted = False
+    created = False
+    ready = False
+    error_detail: str | None = None
+    try:
+        start_attempted = True
+        started = subprocess.run(
+            [
+                resolved_sandbox,
+                "run",
+                "--detach",
+                "--name",
+                container_name,
+                "--pull",
+                "never",
+                "--network",
+                "none",
+                "--read-only",
+                "--cap-drop",
+                "ALL",
+                "--user",
+                f"{os.getuid()}:{os.getgid()}",
+                "--env",
+                "HOME=/tmp",
+                "--tmpfs",
+                "/tmp:rw,nosuid,nodev,size=16m",
+                "--tmpfs",
+                "/var/tmp:rw,nosuid,nodev,size=8m",
+                "--tmpfs",
+                "/run:rw,nosuid,nodev,size=8m",
+                "--pids-limit",
+                "32",
+                "--memory",
+                "64m",
+                "--memory-swap",
+                "64m",
+                "--cpus",
+                "0.25",
+                "--ulimit",
+                "nofile=128:128",
+                "--label",
+                "software-agent-team.runtime-probe=true",
+                sandbox_image_id,
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            env=environment,
+        )
+        created = started.returncode == 0
+        if not created:
+            error_detail = (
+                "Docker could not start the sandbox probe "
+                f"(exit code {started.returncode})"
+            )
+        else:
+            time.sleep(settle_seconds)
+            inspected = subprocess.run(
+                [
+                    resolved_sandbox,
+                    "container",
+                    "inspect",
+                    "--format",
+                    "{{json .State}}",
+                    container_name,
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=timeout_seconds,
+                env=environment,
+            )
+            if inspected.returncode != 0:
+                error_detail = (
+                    "Docker could not inspect the started sandbox probe "
+                    f"(exit code {inspected.returncode})"
+                )
+            else:
+                try:
+                    state = json.loads(inspected.stdout)
+                except (json.JSONDecodeError, TypeError):
+                    error_detail = "Docker returned invalid sandbox probe state"
+                else:
+                    if not isinstance(state, dict):
+                        error_detail = "Docker returned invalid sandbox probe state"
+                    elif state.get("Running") is True:
+                        ready = True
+                    else:
+                        status = str(state.get("Status") or "unknown")
+                        exit_code = state.get("ExitCode")
+                        oom_killed = state.get("OOMKilled") is True
+                        error_detail = (
+                            "sandbox probe exited during startup "
+                            f"(status={status}, exit_code={exit_code}, "
+                            f"oom_killed={str(oom_killed).lower()})"
+                        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise RuntimeConfigurationError("sandbox runtime probe failed") from error
+    finally:
+        if created:
+            try:
+                removed = subprocess.run(
+                    [
+                        resolved_sandbox,
+                        "container",
+                        "rm",
+                        "--force",
+                        container_name,
+                    ],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout_seconds,
+                    env=environment,
+                )
+            except (OSError, subprocess.SubprocessError) as cleanup_error:
+                raise RuntimeConfigurationError(
+                    "sandbox runtime probe cleanup failed"
+                ) from cleanup_error
+            if removed.returncode != 0:
+                raise RuntimeConfigurationError("sandbox runtime probe cleanup failed")
+        elif start_attempted:
+            with suppress(OSError, subprocess.SubprocessError):
+                subprocess.run(
+                    [
+                        resolved_sandbox,
+                        "container",
+                        "rm",
+                        "--force",
+                        container_name,
+                    ],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout_seconds,
+                    env=environment,
+                )
+
+    return SandboxRuntimeProbe(
+        sandbox_binary=resolved_sandbox,
+        sandbox_image_id=sandbox_image_id,
+        sandbox_container_ready=ready,
+        error=error_detail,
     )
 
 
@@ -347,7 +551,7 @@ def inspect_runtime_preflight(
     expected_sandbox_image_id: str | None = None,
     timeout_seconds: int = 30,
 ) -> RuntimePreflight:
-    """Check binaries, config syntax, and sandbox image without model calls."""
+    """Check binaries, config, and sandbox lifecycle without model calls."""
 
     if timeout_seconds < 1:
         raise RuntimeConfigurationError("preflight timeout must be positive")
@@ -397,6 +601,18 @@ def inspect_runtime_preflight(
         raise RuntimeConfigurationError(
             "sandbox image identity changed after it was frozen"
         )
+    if sandbox.sandbox_image_id is None:
+        sandbox_container_ready = False
+        sandbox_container_error = "sandbox image is unavailable"
+    else:
+        probe = probe_sandbox_runtime(
+            sandbox_binary=sandbox.sandbox_binary,
+            sandbox_image_id=sandbox.sandbox_image_id,
+            timeout_seconds=timeout_seconds,
+            environment=environment,
+        )
+        sandbox_container_ready = probe.ready
+        sandbox_container_error = probe.error
 
     return RuntimePreflight(
         openclaw_binary=str(openclaw_binary.resolve(strict=True)),
@@ -409,4 +625,6 @@ def inspect_runtime_preflight(
         sandbox_image_id=sandbox.sandbox_image_id,
         config_valid=config.returncode == 0,
         sandbox_image_present=sandbox.sandbox_image_present,
+        sandbox_container_ready=sandbox_container_ready,
+        sandbox_container_error=sandbox_container_error,
     )

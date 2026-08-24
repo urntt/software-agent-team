@@ -71,7 +71,8 @@ The installation then:
 - Installs the pinned uv and Python toolchain plus a marked SAT-private
   OpenClaw runtime when needed;
 - Synchronizes the locked SAT environment;
-- Builds and resolves the pinned sandbox image;
+- Builds and resolves the pinned sandbox image, then starts and removes a
+  restricted probe container to prove that its default process stays alive;
 - Runs focused offline configuration and CLI installation checks;
 - Creates `$HOME/.local/bin/sat` and `$HOME/.local/bin/sat-uninstall` without
   overwriting unrelated commands;
@@ -91,7 +92,9 @@ If Docker, a download, or an offline check interrupts installation, correct the
 reported condition and rerun the same managed-install command. The bootstrap
 reuses only a marked, clean SAT application, reconciles the pinned runtime and
 image, and preserves user configuration and state. It does not require deleting
-the partial installation before a retry.
+the partial installation before a retry. A sandbox image that builds but exits
+before OpenClaw can execute tools is rejected before SAT reports installation
+success or creates a new launcher.
 
 Contributors installing from a source checkout should follow
 [`Checkout Installation`](development.md#checkout-installation) instead.
@@ -120,6 +123,11 @@ SAT first performs a fast, non-provider startup inspection covering:
 Every failed condition includes a corrective action. SAT does not rebuild the
 toolchain or image during normal startup; a missing installed component points
 back to the installer.
+
+After the user confirms a build and before the first Agent call, the run
+preflight repeats the restricted container lifecycle probe against the exact
+immutable image ID recorded for that run. This catches a stale or unusable
+runtime without spending provider tokens.
 
 On the first configured run, SAT then:
 

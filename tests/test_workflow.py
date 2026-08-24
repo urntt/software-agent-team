@@ -118,6 +118,7 @@ class DynamicWorkflowExecutor:
         allow_single_verifier: bool = False,
         reported_model: str | None = "offline/test-model",
         report_usage: bool = True,
+        developer_stderr: str = "",
     ) -> None:
         self.workspace = workspace
         self.review_verdicts = review_verdicts or {}
@@ -128,6 +129,7 @@ class DynamicWorkflowExecutor:
         self.commit_changes = commit_changes
         self.reported_model = reported_model
         self.report_usage = report_usage
+        self.developer_stderr = developer_stderr
         self.allow_single_verifier = allow_single_verifier
         self.requests: list[AgentExecutionRequest] = []
         self._counts: dict[AgentRole, int] = {}
@@ -298,7 +300,11 @@ class DynamicWorkflowExecutor:
                 openclaw_duration_ms=5,
                 exit_code=0,
                 stdout=response_text,
-                stderr="",
+                stderr=(
+                    self.developer_stderr
+                    if request.role is AgentRole.GENERALIST_DEVELOPER
+                    else ""
+                ),
                 openclaw_run_id=f"offline-{request.role.value}",
                 session_id=f"offline-{request.role.value}-{request.iteration}",
                 provider="offline",
@@ -950,6 +956,34 @@ def test_workflow_exposes_a_developer_that_produces_no_real_commit(
 
     assert outcome.record.phase is RunPhase.FAILED
     assert outcome.record.termination_reason is TerminationReason.NO_RELEVANT_CHANGE
+    assert outcome.record.snapshots == ()
+
+
+def test_workflow_classifies_a_stopped_agent_sandbox_as_unavailable(
+    tmp_path: Path,
+) -> None:
+    source = initialize_source(tmp_path)
+    workspace = tmp_path / "workspaces" / task_brief().run_id
+    executor = DynamicWorkflowExecutor(
+        workspace,
+        commit_changes=False,
+        developer_stderr=(
+            "[tools] read failed: Error response from daemon: container "
+            f"{'a' * 64} is not running"
+        ),
+    )
+
+    outcome = coordinator(tmp_path, executor).execute(
+        task_brief(),
+        source_repository=source,
+    )
+
+    assert outcome.record.phase is RunPhase.FAILED
+    assert outcome.record.termination_reason is TerminationReason.DEPENDENCY_UNAVAILABLE
+    assert outcome.record.termination_detail == (
+        "generalist_developer failed: "
+        "OpenClaw sandbox became unavailable during Agent tool use"
+    )
     assert outcome.record.snapshots == ()
 
 

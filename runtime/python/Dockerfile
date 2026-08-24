@@ -13,3 +13,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
 WORKDIR /workspace
+
+# OpenClaw creates one long-lived sandbox container per configured scope and
+# executes tools into it. The Python base image would otherwise start
+# `python3`, receive EOF, and exit before the first tool call.
+CMD ["sleep", "infinity"]

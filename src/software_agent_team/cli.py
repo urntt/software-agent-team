@@ -414,6 +414,7 @@ def _preflight(args: argparse.Namespace) -> int:
     print(
         f"runtime preflight: {state} openclaw={result.openclaw_version} "
         f"config={result.config_valid} image={result.sandbox_image_present} "
+        f"container={result.sandbox_container_ready} "
         f"image_id={result.sandbox_image_id or 'none'} "
         f"source_commit={source_commit}"
     )
@@ -483,7 +484,10 @@ def _execute_workflow(
             raise RuntimeConfigurationError(
                 "runtime preflight failed: "
                 f"config_valid={preflight.config_valid}, "
-                f"sandbox_image_present={preflight.sandbox_image_present}"
+                f"sandbox_image_present={preflight.sandbox_image_present}, "
+                f"sandbox_container_ready={preflight.sandbox_container_ready}, "
+                "sandbox_container_error="
+                f"{preflight.sandbox_container_error or 'none'}"
             )
 
     def report_gate(

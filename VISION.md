@@ -169,6 +169,10 @@ code or experiment evidence justifies a replacement.
 - Every run uses an isolated, self-contained Git clone with no remote and a
   detached HEAD.
 - Generated code executes only inside a restricted sandbox.
+- Each Docker sandbox image supplies a long-lived default process because
+  OpenClaw executes role tools into a scope-owned container. Installation and
+  run preflight start and remove a restricted probe container; image presence
+  alone is not readiness evidence.
 - Live Agent containers run as the invoking unprivileged host identity; UID or
   GID `0` is rejected.
 - Clarifier, Planner, Tester, and Reviewer are read-only roles.

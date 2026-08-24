@@ -94,14 +94,21 @@ Build the exact image named by both product and evaluation policies with:
 
 ```bash
 docker build \
-  --tag sat-python-quality:phase1-v1 \
+  --tag sat-python-quality:phase1-v2 \
   runtime/python
 ```
+
+The image default command must remain alive so OpenClaw can execute role tools
+inside its scope-owned container. `scripts/install.sh` and live-run preflight
+both start a no-network, read-only-root probe container and remove it after
+checking the running state. A successful `docker build` or image lookup alone
+is not sufficient runtime evidence.
 
 At run start, the controller resolves the configured image tag to its local
 `sha256:...` image ID. The run-scoped Agent configuration and every quality
 gate use that immutable ID; preflight fails if the configured tag changes
-between resolution and workspace setup.
+between resolution and workspace setup or if the restricted probe container
+does not stay running.
 
 The product profile and evaluation fixture share this dependency image, not a
 TaskBrief, seed, acceptance suite, environment contract, or delivery command.

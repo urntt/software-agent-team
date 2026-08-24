@@ -69,7 +69,8 @@ The product installation command must:
    Docker daemon access and Linux-container mode, available storage, launcher
    conflicts, and required download connectivity;
 4. Install and verify the pinned application toolchain;
-5. Build or obtain the pinned sandbox image;
+5. Build or obtain the pinned sandbox image and prove that its restricted
+   runtime container remains alive for tool execution;
 6. Run focused offline installation checks without executing the contributor
    test suite on the user's device;
 7. Finish with one clear next action: enter a project folder and run `sat`.

@@ -114,10 +114,12 @@ from software_agent_team.runtime_configuration import (
     RuntimeConfigurationError,
     RuntimePreflight,
     SandboxImageInspection,
+    SandboxRuntimeProbe,
     inspect_runtime_preflight,
     inspect_sandbox_image,
     materialize_run_configuration,
     persist_runtime_preflight,
+    probe_sandbox_runtime,
 )
 from software_agent_team.teams import (
     StageMode,
@@ -213,6 +215,7 @@ __all__ = [
     "RuntimeConfigurationError",
     "RuntimePreflight",
     "SandboxImageInspection",
+    "SandboxRuntimeProbe",
     "SandboxUnavailableError",
     "ScriptedAgentExecutor",
     "ScriptedAgentResponse",
@@ -245,6 +248,7 @@ __all__ = [
     "persist_runtime_preflight",
     "prepare_benchmark_seed",
     "prepare_seed_repository",
+    "probe_sandbox_runtime",
     "render_agent_prompt",
     "stable_session_key",
     "validate_artifact_context",

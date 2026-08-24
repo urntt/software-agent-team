@@ -21,6 +21,63 @@ require_command() {
   command -v "$1" >/dev/null 2>&1 || fail "$1 is required"
 }
 
+task_probe_name=""
+
+cleanup_runtime_probe() {
+  if [[ -n "$task_probe_name" ]]; then
+    docker container rm --force "$task_probe_name" >/dev/null 2>&1 || true
+  fi
+}
+
+probe_runtime_image() {
+  local task_probe_state
+  local task_probe_running
+  local task_probe_status
+  local task_probe_exit_code
+  local task_probe_oom_killed
+
+  task_probe_name="sat-install-probe-$$-${RANDOM}"
+  trap cleanup_runtime_probe EXIT
+  if ! docker run \
+      --detach \
+      --name "$task_probe_name" \
+      --network none \
+      --read-only \
+      --cap-drop ALL \
+      --user "$(id -u):$(id -g)" \
+      --env HOME=/tmp \
+      --tmpfs /tmp:rw,nosuid,nodev,size=16m \
+      --tmpfs /var/tmp:rw,nosuid,nodev,size=8m \
+      --tmpfs /run:rw,nosuid,nodev,size=8m \
+      --pids-limit 32 \
+      --memory 64m \
+      --memory-swap 64m \
+      --cpus 0.25 \
+      --ulimit nofile=128:128 \
+      --label software-agent-team.runtime-probe=true \
+      "$task_image_id" >/dev/null; then
+    fail "sandbox image could not start a restricted runtime container"
+  fi
+  sleep 0.2
+  if ! task_probe_state="$(
+    docker container inspect \
+      --format '{{.State.Running}} {{.State.Status}} {{.State.ExitCode}} {{.State.OOMKilled}}' \
+      "$task_probe_name"
+  )"; then
+    fail "sandbox runtime container state could not be inspected"
+  fi
+  read -r task_probe_running task_probe_status \
+    task_probe_exit_code task_probe_oom_killed <<<"$task_probe_state"
+  if [[ "$task_probe_running" != "true" ]]; then
+    fail "sandbox image exited during startup (status=$task_probe_status, exit_code=$task_probe_exit_code, oom_killed=$task_probe_oom_killed)"
+  fi
+  if ! docker container rm --force "$task_probe_name" >/dev/null; then
+    fail "sandbox runtime probe container could not be removed"
+  fi
+  task_probe_name=""
+  trap - EXIT
+}
+
 [[ "$(uname -s)" == "Linux" ]] || fail "only Linux and WSL are supported"
 task_architecture="$(uname -m)"
 case "$task_architecture" in
@@ -106,6 +163,7 @@ fi
 task_image_id="$(docker image inspect --format '{{.Id}}' "$task_image")"
 [[ "$task_image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || \
   fail "Docker returned an invalid product image ID"
+probe_runtime_image
 
 "$task_uv_bin" run --frozen sat validate-config >/dev/null
 "$task_uv_bin" run --frozen sat validate-config \

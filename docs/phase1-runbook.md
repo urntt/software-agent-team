@@ -137,7 +137,7 @@ Dockerfile change:
 
 ```bash
 docker build \
-  --tag sat-python-quality:phase1-v1 \
+  --tag sat-python-quality:phase1-v2 \
   runtime/python
 ```
 
@@ -167,13 +167,15 @@ uv run sat preflight ./task-manager-source
 Expected result:
 
 ```text
-runtime preflight: ready ... config=True image=True ... source_commit=<commit>
+runtime preflight: ready ... config=True image=True container=True ... source_commit=<commit>
 ```
 
 Preflight validates the run-scoped, secret-free OpenClaw configuration, checks
 SAT's pinned private OpenClaw binary and state boundary, confirms that the
-sandbox executable is Docker, and inspects the required image. It does not
-contact a model provider or validate provider quota.
+sandbox executable is Docker, inspects the required image, and starts and
+removes a restricted container to prove that the image stays alive for
+OpenClaw tool execution. It does not contact a model provider or validate
+provider quota.
 
 Stop if preflight returns `not-ready` or exit code `1`/`2`. Correct the reported
 environment problem before authorizing a paid call.
@@ -253,10 +255,11 @@ The workspace status should print nothing. Review both
 Confirm all of the following before marking Phase 1 accepted:
 
 - `runtime-preflight.json` records the expected OpenClaw and Docker versions,
-  `config_valid: true`, `sandbox_image_present: true`, and the exact local
-  `sandbox_image_id`. Confirm the run-scoped OpenClaw config and quality-gate
-  invocations use that ID rather than the mutable tag. Repeated comparison runs
-  use the same image ID.
+  `config_valid: true`, `sandbox_image_present: true`,
+  `sandbox_container_ready: true`, no `sandbox_container_error`, and the exact
+  local `sandbox_image_id`. Confirm the run-scoped OpenClaw config and
+  quality-gate invocations use that ID rather than the mutable tag. Repeated
+  comparison runs use the same image ID.
 - `run.json` ends in `completed` with termination reason `succeeded` and
   references every material transition artifact.
 - `implementation-plan.json` exists.

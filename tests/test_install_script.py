@@ -127,6 +127,23 @@ case "${1:-}" in
     printf 'a%.0s' {1..64}
     printf '\n'
     ;;
+  run)
+    printf 'b%.0s' {1..64}
+    printf '\n'
+    ;;
+  container)
+    case "${2:-}" in
+      inspect)
+        if [[ "${FAKE_DOCKER_PROBE_RUNNING:-1}" == "1" ]]; then
+          echo 'true running 0 false'
+        else
+          echo 'false exited 0 false'
+        fi
+        ;;
+      rm) ;;
+      *) exit 2 ;;
+    esac
+    ;;
   *)
     exit 2
     ;;
@@ -144,7 +161,7 @@ if [[ "$*" == "sync --locked" ]]; then
   chmod 755 .venv/bin/sat
 elif [[ "${1:-}" == "run" && "${2:-}" == "--frozen" && \
         "${3:-}" == "python" && "${4:-}" == "-c" ]]; then
-  echo sat-python-quality:phase1-v1
+  echo sat-python-quality:phase1-v2
 elif [[ "${1:-}" == "run" && "${2:-}" == "--frozen" && \
         "${3:-}" == "python" && "${4:-}" == "-" ]]; then
   cat >/dev/null
@@ -229,10 +246,13 @@ def test_installer_prepares_cli_image_and_checks_idempotently(tmp_path: Path) ->
     assert "install: uninstall=sat-uninstall" in first.stdout
     docker_calls = docker_log.read_text(encoding="utf-8")
     assert "info" in docker_calls
-    assert "build --pull=false --tag sat-python-quality:phase1-v1 runtime/python" in (
+    assert "build --pull=false --tag sat-python-quality:phase1-v2 runtime/python" in (
         docker_calls
     )
     assert "image inspect --format {{.Id}}" in docker_calls
+    assert "run --detach --name sat-install-probe-" in docker_calls
+    assert "container inspect --format {{.State.Running}}" in docker_calls
+    assert "container rm --force sat-install-probe-" in docker_calls
     uv_calls = uv_log.read_text(encoding="utf-8")
     assert "python install 3.12" in uv_calls
     assert "sync --locked" in uv_calls
@@ -277,6 +297,24 @@ def test_installer_rejects_root_before_mutating_the_checkout(tmp_path: Path) -> 
     assert "run the installer as an unprivileged user" in completed.stderr
     assert not (install_bin / "sat").exists()
     assert not docker_log.exists()
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="installer supports Linux/WSL")
+def test_installer_rejects_an_image_that_exits_before_tool_use(
+    tmp_path: Path,
+) -> None:
+    checkout = prepare_checkout(tmp_path)
+    environment, install_bin, _, docker_log = fake_environment(tmp_path, checkout)
+    environment["FAKE_DOCKER_PROBE_RUNNING"] = "0"
+
+    completed = run_installer(checkout, environment)
+
+    assert completed.returncode == 1
+    assert "sandbox image exited during startup" in completed.stderr
+    assert not (install_bin / "sat").exists()
+    assert "container rm --force sat-install-probe-" in docker_log.read_text(
+        encoding="utf-8"
+    )
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="installer supports Linux/WSL")

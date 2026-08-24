@@ -13,6 +13,7 @@ from software_agent_team.runtime_configuration import (
     inspect_runtime_preflight,
     materialize_run_configuration,
     persist_runtime_preflight,
+    probe_sandbox_runtime,
 )
 from software_agent_team.teams import load_team_manifest
 
@@ -181,12 +182,30 @@ def test_preflight_executes_explicit_commands_without_model_call(
                 "Docker version test" if argv[0] == "/bin/docker" else "OpenClaw test"
             )
             return Result(0, name)
-        if "inspect" in argv:
+        if argv[1:3] == ["image", "inspect"]:
             return Result(0, f"sha256:{'a' * 64}")
+        if argv[1] == "run":
+            return Result(0, "b" * 64)
+        if argv[1:3] == ["container", "inspect"]:
+            return Result(
+                0,
+                json.dumps(
+                    {
+                        "Status": "running",
+                        "Running": True,
+                        "ExitCode": 0,
+                        "OOMKilled": False,
+                        "Error": "",
+                    }
+                ),
+            )
+        if argv[1:3] == ["container", "rm"]:
+            return Result(0, "removed")
         return Result(0, "{}")
 
     monkeypatch.setattr(runtime_configuration.shutil, "which", lambda _: "/bin/docker")
     monkeypatch.setattr(runtime_configuration.subprocess, "run", fake_run)
+    monkeypatch.setattr(runtime_configuration.time, "sleep", lambda _: None)
 
     result = inspect_runtime_preflight(
         openclaw_binary=openclaw,
@@ -197,7 +216,7 @@ def test_preflight_executes_explicit_commands_without_model_call(
     )
 
     assert result.ready
-    assert calls == [
+    assert calls[:4] == [
         [str(openclaw), "--version"],
         [str(openclaw), "config", "validate", "--json"],
         ["/bin/docker", "--version"],
@@ -210,7 +229,33 @@ def test_preflight_executes_explicit_commands_without_model_call(
             "sat-agent:phase1",
         ],
     ]
+    assert calls[4][0:4] == [
+        "/bin/docker",
+        "run",
+        "--detach",
+        "--name",
+    ]
+    probe_name = calls[4][4]
+    assert probe_name.startswith("sat-runtime-probe-")
+    assert calls[4][-1] == f"sha256:{'a' * 64}"
+    assert calls[5] == [
+        "/bin/docker",
+        "container",
+        "inspect",
+        "--format",
+        "{{json .State}}",
+        probe_name,
+    ]
+    assert calls[6] == [
+        "/bin/docker",
+        "container",
+        "rm",
+        "--force",
+        probe_name,
+    ]
     assert result.sandbox_image_id == f"sha256:{'a' * 64}"
+    assert result.sandbox_container_ready is True
+    assert result.sandbox_container_error is None
     assert os.environ["OPENCLAW_STATE_DIR"] == str(original_state)
     assert os.environ["OPENCLAW_CONFIG_PATH"] == str(original_state / "openclaw.json")
     assert os.environ["OPENCLAW_AGENT_DIR"] == str(original_state / "agent")
@@ -221,6 +266,7 @@ def test_preflight_executes_explicit_commands_without_model_call(
     assert persisted["config_valid"] is True
     assert persisted["openclaw_state_dir"] == str(state)
     assert persisted["sandbox_image_id"] == f"sha256:{'a' * 64}"
+    assert persisted["sandbox_container_ready"] is True
     with pytest.raises(RuntimeConfigurationError, match="already exists"):
         persist_runtime_preflight(result, evidence)
 
@@ -305,6 +351,107 @@ def test_preflight_rejects_a_changed_frozen_image_identity(
             sandbox_image="sat-agent:phase1",
             expected_sandbox_image_id=f"sha256:{'a' * 64}",
         )
+
+
+def test_preflight_rejects_an_image_whose_container_exits(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    openclaw = tmp_path / "openclaw"
+    openclaw.write_text("binary", encoding="utf-8")
+    openclaw.chmod(0o755)
+    config = tmp_path / "runtime.json"
+    config.write_text("{}", encoding="utf-8")
+    state = tmp_path / "sat-state/openclaw"
+    state.mkdir(parents=True)
+
+    class Result:
+        def __init__(
+            self,
+            returncode: int = 0,
+            stdout: str = "",
+        ) -> None:
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = ""
+
+    def fake_run(argv: list[str], **_kwargs: object) -> Result:
+        if argv[-1] == "--version":
+            return Result(
+                stdout=(
+                    "Docker version test"
+                    if argv[0] == "/bin/docker"
+                    else "OpenClaw test"
+                )
+            )
+        if argv[1:3] == ["image", "inspect"]:
+            return Result(stdout=f"sha256:{'a' * 64}")
+        if argv[1] == "run":
+            return Result(stdout="b" * 64)
+        if argv[1:3] == ["container", "inspect"]:
+            return Result(
+                stdout=json.dumps(
+                    {
+                        "Status": "exited",
+                        "Running": False,
+                        "ExitCode": 0,
+                        "OOMKilled": False,
+                        "Error": "",
+                    }
+                )
+            )
+        return Result(stdout="{}")
+
+    monkeypatch.setattr(runtime_configuration.shutil, "which", lambda _: "/bin/docker")
+    monkeypatch.setattr(runtime_configuration.subprocess, "run", fake_run)
+    monkeypatch.setattr(runtime_configuration.time, "sleep", lambda _: None)
+
+    result = inspect_runtime_preflight(
+        openclaw_binary=openclaw,
+        openclaw_state_dir=state,
+        runtime_config=config,
+        sandbox_binary="docker",
+        sandbox_image="sat-agent:phase1",
+    )
+
+    assert not result.ready
+    assert result.sandbox_image_present is True
+    assert result.sandbox_container_ready is False
+    assert result.sandbox_container_error == (
+        "sandbox probe exited during startup "
+        "(status=exited, exit_code=0, oom_killed=false)"
+    )
+
+
+def test_runtime_probe_attempts_cleanup_after_docker_start_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[str]] = []
+
+    class Result:
+        stdout = ""
+        stderr = ""
+
+        def __init__(self, returncode: int) -> None:
+            self.returncode = returncode
+
+    def fake_run(argv: list[str], **_kwargs: object) -> Result:
+        calls.append(argv)
+        return Result(125 if argv[1] == "run" else 1)
+
+    monkeypatch.setattr(runtime_configuration.shutil, "which", lambda _: "/bin/docker")
+    monkeypatch.setattr(runtime_configuration.subprocess, "run", fake_run)
+
+    probe = probe_sandbox_runtime(
+        sandbox_binary="docker",
+        sandbox_image_id=f"sha256:{'a' * 64}",
+        settle_seconds=0,
+    )
+
+    assert not probe.ready
+    assert probe.error == "Docker could not start the sandbox probe (exit code 125)"
+    assert calls[0][1] == "run"
+    assert calls[1][1:4] == ["container", "rm", "--force"]
 
 
 @pytest.mark.parametrize(

@@ -41,8 +41,9 @@ curl -fsSL \
 ```
 
 The installer validates the device, installs SAT's pinned private runtime,
-prepares its Python environment and Docker image, runs offline checks, and
-adds `sat` and `sat-uninstall` to the user-local command path.
+prepares its Python environment and Docker image, proves that the restricted
+sandbox container stays runnable, runs offline checks, and adds `sat` and
+`sat-uninstall` to the user-local command path.
 
 ## Build a Project
 

@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** Product Demo Slice implemented offline; acceptance rehearsal next
+**Current milestone:** WSL rehearsal defect fixed; provider-backed rerun next
 
 **Last updated:** August 24, 2026
 
@@ -44,14 +44,25 @@ generates a request-specific run ID, TaskBrief, trusted source, workspace, and
 evidence roots, shows controller-derived progress, and delivers only an
 accepted clean Git result with project-specific commands.
 
-This is not yet release-stable evidence. The complete 365-test offline suite,
-including interaction, installer, workflow, failure, and delivery paths,
-passes, but the journey has not yet passed the required rehearsal from a fresh
-supported Linux/WSL user environment with an explicitly authorized provider.
-The current product supports small greenfield Python 3.12 projects; its bounded
-clarification records explicit user input and is not yet an adaptive
-requirements Agent. The task-manager contract remains isolated to the advanced
-evaluation surface.
+This is not yet release-stable evidence. The first WSL rehearsal completed the
+managed installation, an idempotent update, startup diagnostics, isolated
+provider setup, an authorized smoke check, request confirmation, internal run
+materialization, and the Planner stage. It then exposed a runtime-image defect:
+the Python base image's default `python3` process exited immediately, so
+OpenClaw's Developer container was stopped before any file or process tool
+could run. No project was delivered.
+
+The version-two runtime image now provides the long-lived default process that
+OpenClaw's container lifecycle requires. Installation and every live-run
+preflight start and remove a restricted probe container, and trusted OpenClaw
+Docker-unavailable errors are classified as `dependency_unavailable` instead
+of `no_relevant_change`. The complete 369-test offline suite passes; a real
+Docker probe accepts the version-two image and rejects the terminating base
+image. The full provider-backed WSL journey still needs to be rerun through
+accepted delivery. The current product supports small greenfield Python 3.12
+projects; its bounded clarification records explicit user input and is not yet
+an adaptive requirements Agent. The task-manager contract remains isolated to
+the advanced evaluation surface.
 
 The advanced `prepare-benchmark`, `preflight`, and `run` commands remain a
 separate evaluation surface and are not part of the expected product demo.
@@ -109,6 +120,9 @@ The acceptance contract is
 - Remote one-command Linux/WSL bootstrap into an owned user-local application
   directory, plus the pinned toolchain, locked environment, fixed Docker image,
   stable launchers, update validation, and a checkout-based contributor path;
+- A versioned, long-lived OpenClaw sandbox image plus install-time and run-time
+  restricted-container lifecycle probes that reject an image which merely
+  exists but exits before tool execution;
 - Automatic startup checks for platform, architecture, unprivileged identity,
   project-parent writability, required commands, SAT's pinned private
   OpenClaw, Docker daemon, Linux-container image, storage, and launcher
@@ -135,7 +149,7 @@ The acceptance contract is
 - Offline end-to-end coverage for success, revision, response repair,
   invalid-response failure, timeout, evidence tampering, non-convergence,
   iteration exhaustion, no-change failure, missing model or token telemetry,
-  and cost exhaustion.
+  cost exhaustion, and trusted sandbox-runtime loss classification.
 
 ## Current Team Paths
 
@@ -151,8 +165,8 @@ controller owns dynamic revision and termination decisions.
 
 ## Not Yet Available or Completed
 
-- A fresh-device, provider-backed acceptance rehearsal of the complete product
-  journey and any fixes that rehearsal exposes;
+- A provider-backed rerun of the complete product journey after the first WSL
+  rehearsal exposed and drove the runtime-image lifecycle fix;
 - Adaptive follow-up clarification beyond the current bounded request, success
   condition, and constraint prompts;
 - Generated-project execution profiles beyond the current local Python 3.12
@@ -172,13 +186,12 @@ action succeeded after interruption.
 
 ## Next Milestone
 
-Complete the Phase 2 acceptance rehearsal from a fresh supported Linux/WSL
-account: run the public managed-install command, configure one authorized
-provider through the guided flow, request a representative project within the
-Python profile, observe every progress stage, run the delivered project's
-exact commands, inspect failure
-guidance, and record the result. Fix any root causes found by that rehearsal
-before calling the Product Demo Slice complete.
+Rerun the Phase 2 acceptance rehearsal on the supported WSL account: update
+through the public managed-install command, confirm one authorized provider and
+model through the guided flow, request a representative project within the
+Python profile, observe every progress stage, run the delivered project's exact
+commands, inspect failure guidance, and record the result. Fix any further root
+causes before calling the Product Demo Slice complete.
 
 Topology implementation and comparison resume in Phase 3 after this gate. The
 Phase 2 acceptance criteria are defined in

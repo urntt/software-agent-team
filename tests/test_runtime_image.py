@@ -30,6 +30,7 @@ def test_runtime_image_uses_content_pinned_base_and_dependency_lock() -> None:
         dockerfile
     )
     assert "pip install --no-cache-dir --requirement" in dockerfile
+    assert 'CMD ["sleep", "infinity"]' in dockerfile
 
 
 def test_runtime_dependency_lock_contains_only_exact_unique_versions() -> None:
