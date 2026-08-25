@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import math
-import time
 from collections import Counter
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
@@ -121,7 +119,6 @@ class QualityGate(Protocol):
 type QualityGateFactory = Callable[[Path, Path], QualityGate]
 type RuntimeSetup = Callable[[GitWorkspace, Path], None]
 type Clock = Callable[[], datetime]
-type MonotonicClock = Callable[[], float]
 type ArtifactAssembler = Callable[[AgentResponseBody], PhaseArtifact]
 
 
@@ -195,19 +192,20 @@ class WorkflowCoordinator:
         verification_concurrency: int = 2,
         progress_handler: ProgressHandler | None = None,
         clock: Clock = _system_clock,
-        monotonic: MonotonicClock = time.monotonic,
     ) -> None:
         missing_timeouts = set(AgentRole) - set(role_timeout_seconds)
         if missing_timeouts:
             names = ", ".join(sorted(role.value for role in missing_timeouts))
-            raise WorkflowError(f"Agent stage timeouts are missing roles: {names}")
+            raise WorkflowError(f"Agent invocation timeouts are missing roles: {names}")
         if any(
             isinstance(seconds, bool) or not 1 <= seconds <= 3600
             for seconds in role_timeout_seconds.values()
         ):
-            raise WorkflowError("Agent stage timeouts must be between 1 and 3600")
+            raise WorkflowError("Agent invocation timeouts must be between 1 and 3600")
         if stage_timeout_seconds is not None and not 1 <= stage_timeout_seconds <= 3600:
-            raise WorkflowError("global Agent stage timeout must be 1 to 3600 seconds")
+            raise WorkflowError(
+                "global Agent invocation timeout must be 1 to 3600 seconds"
+            )
         if artifact_repair_limit not in {0, 1}:
             raise WorkflowError("Phase 1 permits zero or one artifact repair")
         if verification_concurrency not in {1, 2}:
@@ -250,7 +248,6 @@ class WorkflowCoordinator:
         self.verification_concurrency = verification_concurrency
         self.progress_handler = progress_handler
         self.clock = clock
-        self.monotonic = monotonic
 
     def _emit(self, event: ProgressEvent) -> None:
         """Notify the user interface without transferring workflow authority."""
@@ -898,7 +895,6 @@ class WorkflowCoordinator:
         assembler: ArtifactAssembler,
     ) -> tuple[PhaseArtifact, ArtifactReference, ArtifactReference]:
         stage_timeout = self.agent_stage_timeouts_seconds[inputs.role]
-        deadline = self.monotonic() + stage_timeout
         base_request = build_agent_execution_request(
             inputs,
             timeout_seconds=stage_timeout,
@@ -906,13 +902,6 @@ class WorkflowCoordinator:
         )
         last_error = "Agent did not return a semantic response"
         for attempt in range(1, self.artifact_repair_limit + 2):
-            remaining = deadline - self.monotonic()
-            if remaining <= 0:
-                raise AgentInvocationError(
-                    f"{inputs.role.value} stage timeout was exhausted",
-                    TerminationReason.RESOURCE_LIMIT_REACHED,
-                )
-            remaining_seconds = min(stage_timeout, max(1, math.ceil(remaining)))
             with context.execution_lock:
                 if context.calls_started >= self.budget.max_calls:
                     raise AgentInvocationError(
@@ -924,7 +913,7 @@ class WorkflowCoordinator:
                 base_request,
                 last_error,
                 attempt,
-            ).model_copy(update={"timeout_seconds": remaining_seconds})
+            )
             role_name = request.role.value.replace("_", " ").title()
             self._emit(
                 ProgressEvent(
@@ -943,13 +932,7 @@ class WorkflowCoordinator:
             failure_reason: TerminationReason | None = None
             ignored_controller_fields: tuple[str, ...] = ()
             assembly_error: Exception | None = None
-            if self.monotonic() > deadline:
-                record_error = (
-                    f"{request.role.value} exceeded its {stage_timeout}-second "
-                    "stage timeout"
-                )
-                failure_reason = TerminationReason.RESOURCE_LIMIT_REACHED
-            elif result.status is AgentExecutionStatus.COMPLETED:
+            if result.status is AgentExecutionStatus.COMPLETED:
                 reported_model = result.telemetry.model
                 if reported_model is None:
                     record_error = "successful execution omitted model metadata"
@@ -1015,7 +998,7 @@ class WorkflowCoordinator:
                 controller_supplied_fields=controller_fields_for(request.expected_kind),
                 ignored_controller_fields=ignored_controller_fields,
                 stage_timeout_seconds=stage_timeout,
-                remaining_timeout_seconds=remaining_seconds,
+                remaining_timeout_seconds=request.timeout_seconds,
             )
             self._emit(
                 ProgressEvent(
@@ -1036,12 +1019,6 @@ class WorkflowCoordinator:
                 return response, response_reference, execution_reference
             last_error = record_error or last_error
             if repairable and attempt <= self.artifact_repair_limit:
-                if self.monotonic() >= deadline:
-                    raise AgentInvocationError(
-                        f"{request.role.value} stage timeout was exhausted before "
-                        "response repair",
-                        TerminationReason.RESOURCE_LIMIT_REACHED,
-                    )
                 self._emit(
                     ProgressEvent(
                         kind=ProgressEventKind.AGENT_RETRY,

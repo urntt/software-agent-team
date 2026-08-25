@@ -160,8 +160,8 @@ def load_user_configuration(
         legacy = _UserConfigurationV1.model_validate(payload)
         notice = (
             "configuration schema v1 was loaded without its legacy "
-            "agent_timeout_seconds value; runs now use measured per-role stage "
-            "budgets unless a new global stage override is configured"
+            "agent_timeout_seconds value; runs now use measured per-role "
+            "invocation timeouts unless a new global override is configured"
         )
         if on_migration is None:
             warnings.warn(notice, UserWarning, stacklevel=2)

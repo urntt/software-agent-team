@@ -136,7 +136,7 @@ def _print_configuration(configuration: UserConfiguration, path: Path) -> None:
     print(f"verification concurrency: {configuration.verification_concurrency}")
     timeout = configuration.stage_timeout_seconds
     print(
-        "global Agent stage timeout override (seconds): "
+        "global Agent invocation timeout override (seconds): "
         f"{timeout if timeout is not None else 'role defaults'}"
     )
 
@@ -160,7 +160,8 @@ def _timeout_flag(args: argparse.Namespace) -> tuple[bool, int | None]:
     if args.deprecated_agent_timeout_seconds is not None:
         print(
             "warning: --agent-timeout-seconds is deprecated; it now means one "
-            "shared stage budget including response repair. Use "
+            "invocation timeout applied independently to a bounded response "
+            "repair. Use "
             "--stage-timeout-seconds instead."
         )
         return True, args.deprecated_agent_timeout_seconds
@@ -1329,8 +1330,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--stage-timeout-seconds",
         type=int,
         help=(
-            "Optional global budget for one role stage, including response repair; "
-            "otherwise use checked-in role defaults."
+            "Optional global timeout for each Agent invocation, applied "
+            "independently to one bounded response repair; otherwise use "
+            "checked-in role defaults."
         ),
     )
     configure_timeout.add_argument(
@@ -1342,7 +1344,7 @@ def build_parser() -> argparse.ArgumentParser:
     configure_timeout.add_argument(
         "--use-role-timeouts",
         action="store_true",
-        help="Clear the global override and use checked-in per-role stage budgets.",
+        help="Clear the global override and use checked-in per-role timeouts.",
     )
     configure.set_defaults(handler=_configure)
 
@@ -1452,8 +1454,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--stage-timeout-seconds",
         type=int,
         help=(
-            "Global budget for each role stage, including response repair; "
-            "defaults to the saved override or checked-in per-role budgets."
+            "Global timeout for each Agent invocation, applied independently "
+            "to one bounded response repair; defaults to the saved override "
+            "or checked-in role defaults."
         ),
     )
     run_timeout.add_argument(

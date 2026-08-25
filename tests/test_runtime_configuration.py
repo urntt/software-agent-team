@@ -123,6 +123,7 @@ def test_materialized_config_registers_the_pinned_deepseek_vision_model(
     assert payload["models"]["mode"] == "merge"
     assert provider["baseUrl"] == "https://api.deepseek.com"
     assert provider["api"] == "openai-completions"
+    assert "timeoutSeconds" not in provider
     assert [model["id"] for model in registered] == ["deepseek-v4-flash-vision-exp"]
     assert registered[0]["input"] == ["text", "image"]
     assert (

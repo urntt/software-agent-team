@@ -293,10 +293,16 @@ when investigating it rather than editing artifacts in place.
 
 - CPU, memory, process, open-file, tmpfs, captured command-output, wall-clock,
   iteration, and Agent-invocation limits are mandatory before live runs.
-- Checked-in role-specific stage deadlines reflect measured workloads. A
+- Checked-in role-specific invocation timeouts reflect measured workloads. A
   global CLI or saved timeout override is an explicit experimental variable.
-- An initial semantic response and its optional repair share one monotonic
-  stage deadline.
+- An initial semantic response and its optional one-call repair each receive
+  the resolved role timeout. A repair must regenerate the complete response;
+  it is not given an arbitrary remainder from the first call. The run-wide
+  call-count and Agent-duration budgets still include both invocations.
+- Model compatibility supplements do not set a second provider-transport
+  timeout. The controller passes the frozen per-role timeout to OpenClaw for
+  every invocation, and the outer subprocess boundary permits only bounded
+  shutdown grace beyond it.
 - Reported aggregate input/output tokens, Agent duration, and estimated cost
   are checked after every invocation. Crossing a threshold fails the run and
   prevents another invocation.

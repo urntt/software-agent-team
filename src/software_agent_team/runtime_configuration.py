@@ -38,7 +38,6 @@ _MODEL_COMPATIBILITY: dict[str, dict[str, Any]] = {
         "provider": {
             "baseUrl": "https://api.deepseek.com",
             "api": "openai-completions",
-            "timeoutSeconds": 600,
             "models": [
                 {
                     "id": "deepseek-v4-flash-vision-exp",

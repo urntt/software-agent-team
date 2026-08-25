@@ -110,7 +110,7 @@ sat configure --show
 ```
 
 The configuration records model, current token prices, verification
-concurrency, and an optional global role-stage timeout override. It never
+concurrency, and an optional global Agent-invocation timeout override. It never
 records an API key. With no override, the checked-in per-role budgets apply.
 For tightly controlled experiments, the equivalent explicit `sat run` flags
 below remain useful because the complete invocation can be copied into the
@@ -202,29 +202,30 @@ For a provider with one generation slot, append
 independent verification: Tester and Reviewer still receive the same immutable
 commit and controller evidence, and neither sees the other role's report.
 
-The normal policy uses role-specific stage budgets from
+The normal policy uses role-specific invocation timeouts from
 `configs/run-policy.json`:
 
-| Roles | Stage budget |
+| Roles | Per-invocation timeout |
 | --- | ---: |
 | Clarifier | 120 seconds |
 | Planner | 180 seconds |
 | Single Agent, Developers, and Integrator | 900 seconds |
 | Tester and Reviewer | 300 seconds |
 
-A stage budget covers the initial response and its optional semantic repair
-together. The controller starts one monotonic deadline before the initial
-prompt, gives a repair only the remaining time, and records both the resolved
-stage budget and remaining attempt budget. It does not reset the clock for a
-repair.
+The resolved timeout applies independently to the initial response and its
+optional one-call semantic repair. A repair must regenerate the complete
+semantic response, so reducing it to whatever time happened to remain from the
+first call creates a provider-speed-dependent false failure. The controller
+records the timeout supplied to every invocation. Run-wide call-count, Agent
+duration, token, and cost budgets include both attempts, so a repair does not
+escape the frozen resource policy.
 
 If a measured provider requires an intentionally uniform budget, add
 `--stage-timeout-seconds N` and record that override as an experimental
 variable. `--use-role-timeouts` ignores a saved global override for one run.
-The deprecated `--agent-timeout-seconds` spelling has the same shared-stage
-meaning and will be removed in the next major release; it no longer represents
-a separate per-attempt or per-process allowance. Do not change timeout policy
-after a run starts or omit it from comparisons.
+The deprecated `--agent-timeout-seconds` spelling has the same per-invocation
+meaning and will be removed in the next major release. Do not change timeout
+policy after a run starts or omit it from comparisons.
 
 Use zero prices only when the selected model is genuinely free. The command
 creates a fresh run and detached standalone clone; it never merges, pushes,

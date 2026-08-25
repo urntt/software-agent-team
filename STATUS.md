@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** Run-scoped sandbox cleanup implemented; fresh user rehearsal next
+**Current milestone:** Repair-timeout defect fixed; fresh complete user rehearsal next
 
 **Last updated:** August 25, 2026
 
@@ -94,16 +94,18 @@ an end user sees. Its first response arrived after 72.1 seconds and contained a
 short redundant closing-delimiter suffix as well as real semantic defects: an
 unknown field and incomplete acceptance-criterion coverage. The bounded repair
 was therefore required and produced a valid plan after another 67.0 seconds,
-but the shared 120-second Planner deadline had already expired. SAT correctly
-stopped without delivering an unaccepted project.
+but the then-current shared 120-second Planner deadline had already expired.
+SAT stopped without delivering a project; later live evidence showed that
+sharing one deadline across two separately authorized calls was itself an
+over-constrained timeout policy.
 
 The parser now normalizes only a complete object followed by at most four
 unmatched closing delimiters; it continues to reject additional values,
 structures, unknown semantic fields, and incomplete plans. Raw provider output
-remains unchanged in execution evidence. The Planner budget is now 180 seconds,
-which covers the observed 139-second initial-plus-repair path with bounded
-margin. A repair still shares the original deadline and cannot reset or double
-the authorized time.
+remains unchanged in execution evidence. The Planner timeout is now 180 seconds
+per invocation. An optional one-call repair receives that same complete
+invocation allowance; the run-wide call-count, Agent-duration, token, and cost
+budgets include both calls.
 
 A second rehearsal used a newly created Linux account with its own home,
 configuration, provider state, and project parent. The public installer checked
@@ -114,8 +116,8 @@ semantic JSON object was enclosed in the requested JSON fence, but the
 presentation text before the fence included ordinary command notation such as
 Python-style argv arrays. The former fence normalizer treated any square
 bracket outside the fence as a competing JSON structure, requested an
-unnecessary repair, and then correctly rejected the combined 929-second path
-at the shared deadline.
+unnecessary repair, and then rejected the combined 929-second path at the
+then-current shared deadline.
 
 The fence normalizer now distinguishes a separately decodable JSON object or
 array from non-JSON documentation notation. It accepts the observed original
@@ -168,9 +170,9 @@ reading-list Web app in natural language. Run
 `sat-20260825-005232-c8f61f0a` used
 `deepseek/deepseek-v4-flash-vision-exp`. The Planner completed in 106.6
 seconds. The Developer's first response omitted its required semantic JSON, so
-the existing bounded repair path was legitimately used and remained inside the
-shared 900-second deadline. The first implementation then reached the aligned
-project gates, where pytest correctly exposed an import defect.
+the existing bounded repair path was legitimately used. The first
+implementation then reached the aligned project gates, where pytest correctly
+exposed an import defect.
 
 On iteration two, the Developer changed one file in response to that evidence.
 All four deterministic gates passed, eight generated-project tests passed, and
@@ -195,14 +197,38 @@ interrupted, and exceptional workflows. It selects a container only when its
 OpenClaw label has an exact controller-generated session key for that run and
 one of its bind mounts is beneath the exact SAT-owned state or workspace path.
 Broad name matching is forbidden, and a matching label outside those paths is
-refused, preserving every other OpenClaw boundary. The complete 400-test suite
-passes, including cleanup selection, ownership refusal, removal failure,
-normal completion, and interruption coverage. A fresh provider-backed user
-rehearsal must still prove that no run-scoped containers remain before the
-Product Demo Slice returns to complete status. The current product supports
-small greenfield Python 3.12 projects; its bounded clarification records
-explicit user input and is not yet an adaptive requirements Agent. The
-task-manager contract remains isolated to the advanced evaluation surface.
+refused, preserving every other OpenClaw boundary.
+
+A sixth rehearsal used another empty non-root account, the public installer at
+revision `4f273fd`, bare `sat`, the same natural-language request, and the same
+exact model. Installation, diagnostics, guided configuration, provider smoke,
+confirmation, and run preflight passed. Run
+`sat-20260825-022440-13824df0` recorded the Planner in 105.5 seconds and the
+Developer in 595.5 seconds. The first implementation failed the aligned pytest
+gate with an import defect. Tester returned malformed JSON in 106.2 seconds;
+its one bounded repair returned a valid semantic response in 213.8 seconds.
+Although neither invocation exceeded the 300-second Tester timeout, the old
+controller added their durations and rejected the already-returned repair at
+320 seconds.
+
+That shared-deadline rule is now removed. Every initial response and optional
+one-call repair receives the resolved per-role invocation timeout. The repair
+does not escape resource control: both calls count against frozen total calls,
+Agent duration, tokens, and estimated cost. The DeepSeek compatibility
+supplement's conflicting fixed 600-second provider transport timeout is also
+removed; the frozen controller timeout passed to OpenClaw is now authoritative.
+Regression coverage reproduces a pair whose aggregate duration exceeds one
+invocation timeout, separately proves that the total Agent-duration budget
+still stops it, and prevents the compatibility supplement from restoring a
+second transport cap. The complete 400-test suite passes. The sixth run also
+confirmed terminal cleanup on the real failure path: SAT reported removing
+three run-scoped containers, and an external exact-label audit found no
+container belonging to the run. A fresh completed provider-backed rehearsal is
+still required before the Product Demo Slice returns to complete status. The
+current product supports small
+greenfield Python 3.12 projects; its bounded clarification records explicit
+user input and is not yet an adaptive requirements Agent. The task-manager
+contract remains isolated to the advanced evaluation surface.
 
 The advanced `prepare-benchmark`, `preflight`, and `run` commands remain a
 separate evaluation surface and are not part of the expected product demo.
@@ -229,7 +255,7 @@ The acceptance contract is
 - Confirmed task-brief and handoff-envelope contracts;
 - Role-specific minimum-context prompts, strict semantic JSON response parsing,
   controller assembly of persisted envelope, Git, test, and scope facts, and
-  one deadline-sharing semantic response repair;
+  one independently timed semantic response repair;
 - Concrete phase-artifact and Agent-telemetry contracts with contextual
   validation;
 - Immutable phase artifacts, handoffs, command output, Agent output, canonical
@@ -255,9 +281,9 @@ The acceptance contract is
   Reviewer scope attestation, and controller-owned evidence resolution;
 - Pre-call Agent invocation limits and post-call token, duration, and
   estimated-cost stop thresholds;
-- Checked-in per-role stage budgets, optional global override, frozen resolved
-  run policy, and configuration-schema migration from the former scalar
-  timeout;
+- Checked-in per-role invocation timeouts, optional global override, frozen
+  resolved run policy, and configuration-schema migration from the former
+  scalar timeout;
 - Explicit completed and failed terminal outcomes with machine-readable and
   human-readable reports;
 - Remote one-command Linux/WSL bootstrap into an owned user-local application
@@ -308,8 +334,8 @@ controller owns dynamic revision and termination decisions.
 
 ## Not Yet Available or Completed
 
-- A fresh live-provider rehearsal confirming that the new terminal cleanup
-  leaves no container or child process belonging to the completed run;
+- A fresh completed live-provider rehearsal confirming both independent repair
+  timing and zero container or child-process residue at the terminal outcome;
 - An independent fresh-device rehearsal and live demonstration outside the
   development host;
 - Adaptive follow-up clarification beyond the current bounded request, success

@@ -220,12 +220,12 @@ class RunPolicy(BaseModel):
         cls,
         values: dict[AgentRole, int],
     ) -> dict[AgentRole, int]:
-        """Freeze one explicit stage budget for every versioned Agent role."""
+        """Freeze one explicit invocation timeout for every Agent role."""
 
         missing = set(AgentRole) - set(values)
         if missing:
             names = ", ".join(sorted(role.value for role in missing))
-            raise ValueError(f"Agent stage timeouts are missing roles: {names}")
+            raise ValueError(f"Agent invocation timeouts are missing roles: {names}")
         return dict(sorted(values.items(), key=lambda item: item[0].value))
 
 

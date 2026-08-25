@@ -270,13 +270,13 @@ class RunRecord(BaseModel):
         cls,
         values: dict[AgentRole, int],
     ) -> dict[AgentRole, int]:
-        """Persist the resolved per-role stage budgets used by this run."""
+        """Persist the resolved per-role invocation timeouts used by this run."""
 
         if any(
             isinstance(seconds, bool) or not 1 <= seconds <= 3600
             for seconds in values.values()
         ):
-            raise ValueError("Agent stage timeouts must be between 1 and 3600")
+            raise ValueError("Agent invocation timeouts must be between 1 and 3600")
         return dict(sorted(values.items(), key=lambda item: item[0].value))
 
     @model_validator(mode="after")

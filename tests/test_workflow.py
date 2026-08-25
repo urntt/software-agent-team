@@ -55,10 +55,6 @@ SEED = REPOSITORY_ROOT / "benchmarks" / "task_manager" / "seed"
 FIXED_TIME = datetime(2026, 8, 10, 12, 0, tzinfo=UTC)
 
 
-def fixed_monotonic() -> float:
-    return 0.0
-
-
 def git(repository: Path, *args: str) -> subprocess.CompletedProcess[str]:
     """Run Git without a shell in a test-owned repository."""
 
@@ -360,7 +356,6 @@ def coordinator(
     verification_concurrency: int = 2,
     iteration_limit: int = 2,
     stage_timeout_seconds: int | None = 30,
-    monotonic: Callable[[], float] = fixed_monotonic,
     progress_handler: Callable[[ProgressEvent], None] | None = None,
 ) -> WorkflowCoordinator:
     """Build a coordinator with the real gate runner and fake sandbox backend."""
@@ -397,7 +392,6 @@ def coordinator(
         iteration_limit=iteration_limit,
         verification_concurrency=verification_concurrency,
         progress_handler=progress_handler,
-        monotonic=monotonic,
     )
 
 
@@ -675,33 +669,39 @@ def test_workflow_repairs_one_invalid_agent_response(tmp_path: Path) -> None:
     assert first["error"] is not None
 
 
-def test_response_repair_receives_only_the_remaining_stage_budget(
+def test_response_repair_receives_a_full_independent_attempt_budget(
     tmp_path: Path,
 ) -> None:
     source = initialize_source(tmp_path)
     workspace = tmp_path / "workspaces" / task_brief().run_id
-    elapsed = [0.0]
 
     class SlowFirstPlan(DynamicWorkflowExecutor):
-        def execute(self, request: AgentExecutionRequest) -> AgentExecutionResult:
-            result = super().execute(request)
-            if request.role is AgentRole.PLANNER and len(self.requests) == 1:
-                elapsed[0] = 20.2
-            return result
+        def _result(
+            self,
+            request: AgentExecutionRequest,
+            response_text: str,
+        ) -> AgentExecutionResult:
+            result = super()._result(request, response_text)
+            return result.model_copy(
+                update={
+                    "telemetry": result.telemetry.model_copy(
+                        update={"duration_ms": 20_000}
+                    )
+                }
+            )
 
     executor = SlowFirstPlan(workspace, invalid_plan_once=True)
     outcome = coordinator(
         tmp_path,
         executor,
         stage_timeout_seconds=30,
-        monotonic=lambda: elapsed[0],
     ).execute(task_brief(), source_repository=source)
 
     assert outcome.record.phase is RunPhase.COMPLETED
     planner_requests = [
         request for request in executor.requests if request.role is AgentRole.PLANNER
     ]
-    assert [request.timeout_seconds for request in planner_requests] == [30, 10]
+    assert [request.timeout_seconds for request in planner_requests] == [30, 30]
     plan_records = [
         json.loads(
             (tmp_path / "runs" / task_brief().run_id / reference.path).read_text(
@@ -714,37 +714,52 @@ def test_response_repair_receives_only_the_remaining_stage_budget(
     assert [record["stage_timeout_seconds"] for record in plan_records] == [30, 30]
     assert [record["remaining_timeout_seconds"] for record in plan_records] == [
         30,
-        10,
+        30,
     ]
 
 
-def test_workflow_does_not_start_repair_after_the_stage_deadline(
+def test_response_repair_still_respects_the_total_agent_duration_budget(
     tmp_path: Path,
 ) -> None:
     source = initialize_source(tmp_path)
     workspace = tmp_path / "workspaces" / task_brief().run_id
-    elapsed = [0.0]
 
-    class ExpiredFirstPlan(DynamicWorkflowExecutor):
-        def execute(self, request: AgentExecutionRequest) -> AgentExecutionResult:
-            result = super().execute(request)
-            elapsed[0] = 31.0
-            return result
+    class SlowPlan(DynamicWorkflowExecutor):
+        def _result(
+            self,
+            request: AgentExecutionRequest,
+            response_text: str,
+        ) -> AgentExecutionResult:
+            result = super()._result(request, response_text)
+            return result.model_copy(
+                update={
+                    "telemetry": result.telemetry.model_copy(
+                        update={"duration_ms": 20_000}
+                    )
+                }
+            )
 
-    executor = ExpiredFirstPlan(workspace, invalid_plan_once=True)
+    executor = SlowPlan(workspace, invalid_plan_once=True)
+    budget = AgentBudget(
+        max_calls=14,
+        max_input_tokens=1_000_000,
+        max_output_tokens=200_000,
+        max_agent_duration_seconds=30,
+        max_estimated_cost_usd="25",
+    )
+
     outcome = coordinator(
         tmp_path,
         executor,
+        budget=budget,
         stage_timeout_seconds=30,
-        monotonic=lambda: elapsed[0],
     ).execute(task_brief(), source_repository=source)
 
     assert outcome.record.phase is RunPhase.FAILED
     assert outcome.record.termination_reason is TerminationReason.RESOURCE_LIMIT_REACHED
-    assert len(executor.requests) == 1
-    assert "exceeded its 30-second stage timeout" in (
-        outcome.record.termination_detail or ""
-    )
+    assert outcome.record.termination_detail == "Agent duration budget was exceeded"
+    assert len(executor.requests) == 2
+    assert len(outcome.execution_records) == 2
 
 
 def test_checked_in_role_stage_budgets_are_frozen_into_the_run(

@@ -390,7 +390,9 @@ class AgentExecutionRecord(BaseModel):
             and self.remaining_timeout_seconds is not None
             and self.remaining_timeout_seconds > self.stage_timeout_seconds
         ):
-            raise ValueError("remaining timeout cannot exceed the stage budget")
+            raise ValueError(
+                "invocation timeout cannot exceed the configured role timeout"
+            )
         if not set(self.ignored_controller_fields).issubset(
             self.controller_supplied_fields
         ):

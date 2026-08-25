@@ -126,7 +126,7 @@ repository, generated project, run artifacts, logs, exports, or terminal echo;
 OpenClaw stores them only in SAT's private OpenClaw state unless they are
 inherited from the trusted caller environment.
 
-Pricing overrides, verification concurrency, role-stage timeouts, repair
+Pricing overrides, verification concurrency, role-invocation timeouts, repair
 limits, policy files, and team selection remain advanced evaluation options.
 They are not first-run questions. The controller uses checked-in safe defaults
 unless the user deliberately enters an advanced mode.
