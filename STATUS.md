@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** Delivered-command gate aligned; fresh rerun next
+**Current milestone:** Product revision bound corrected; fresh rerun next
 
 **Last updated:** August 24, 2026
 
@@ -140,7 +140,26 @@ matches the delivered command after `uv run` selects the project environment.
 A checked invariant prevents the gate and generated-project contract from
 drifting back to different entry-point semantics. The accepted third-run
 project is retained as failure evidence and is not treated as a runnable
-delivery. The complete 394-test offline suite passes.
+delivery.
+
+A fourth clean-account rehearsal confirmed that correction. The first
+Developer commit reached the aligned gate in 590.2 seconds; contract, compile,
+and lint passed, while the pytest console entry point correctly rejected an
+unimportable `app` package before collection. Tester and Reviewer requested a
+revision. The Developer then changed one file in 267.9 seconds, resolved that
+recorded import finding, and advanced the suite to 15 of 16 passing tests. The
+new remaining failure was distinct: the server could not create its configured
+SQLite database because the parent data directory did not exist. With the
+hard-coded two-iteration limit exhausted, SAT correctly failed without
+delivery even though the second iteration had measurable progress.
+
+The workflow iteration limit is now an explicit controller input bounded by the
+team manifest. The advanced frozen evaluation remains at two iterations for
+comparability; bare `sat` uses the manifest's three-iteration limit, allowing a
+second evidence-driven revision without asking the user for an internal policy
+choice. Repeated blockers, no-change revisions, resource limits, and all safety
+or evidence-integrity stops remain unchanged. The complete 395-test offline
+suite passes.
 
 The full provider-backed product journey still needs to reach accepted delivery
 and pass the delivered project's own setup, start, and test commands. The
@@ -189,8 +208,8 @@ The acceptance contract is
   output;
 - The complete function-specialized workflow: Planner, Developer, controller
   snapshot, deterministic gates, independent Tester and Reviewer with
-  configurable dispatch concurrency, decision, and at most one evidence-driven
-  revision;
+  configurable dispatch concurrency, decision, and launch-policy-bounded
+  evidence-driven revisions;
 - Bounded command-output diagnostics for verification, correct read-only
   source visibility, and controller-only Agent invocation policy;
 - Explicit deterministic command coverage, `pending_review` manual criteria,
@@ -250,9 +269,9 @@ controller owns dynamic revision and termination decisions.
 
 ## Not Yet Available or Completed
 
-- A clean provider-backed rerun through accepted delivery after three normal
-  product runs exposed Planner, Developer response, and delivered-command gate
-  edge cases;
+- A clean provider-backed rerun through accepted delivery after four normal
+  product runs exposed Planner, Developer response, delivered-command gate, and
+  product iteration-bound edge cases;
 - Adaptive follow-up clarification beyond the current bounded request, success
   condition, and constraint prompts;
 - Generated-project execution profiles beyond the current local Python 3.12

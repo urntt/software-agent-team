@@ -352,7 +352,7 @@ the result. Clarification quality is evaluated separately.
 | Run fixed Docker quality gates before Agent judgment | Reproducible command evidence is stronger than claimed test results and keeps generated code isolated from the host. |
 | Resolve the sandbox tag to one local image ID per run | Both Agent sandboxes and quality gates execute the same immutable image even if a mutable local tag is later reassigned. |
 | Assemble persisted artifacts in the controller | Models should produce planning, implementation summaries, evidence analysis, and review judgment. Known identity, Git, command, status, criterion, and scope facts must come from authoritative controller state instead of requiring an exact model echo. |
-| Allow one semantic-response repair and one implementation revision | A small bounded loop can correct genuinely invalid semantic content or implementation defects without hiding non-convergence, time, or cost. Controller-owned fields are ignored and audited rather than repaired. |
+| Allow one semantic-response repair per role stage and bounded implementation revisions | A small bounded loop can correct genuinely invalid semantic content or implementation defects without hiding non-convergence, time, or cost. The frozen Phase 1 evaluation remains one initial implementation plus one revision; the product flow permits one additional revision when the prior iteration measurably resolved a blocker and exposed a distinct correctable defect. Controller-owned fields are ignored and audited rather than repaired. |
 | Use per-role stage budgets with a shared repair deadline | Planning, implementation, and verification have different measured workloads. Checked-in defaults are 120 seconds for Clarifier, 180 for Planner, 900 for coding/integration roles, and 300 for Tester/Reviewer. The Planner value covers the observed 139-second initial-plus-repair product path with bounded margin; the initial response and optional repair still share one deadline so repair cannot double the authorized time. |
 | Separate review severity from terminal failure | Even a critical-impact product defect may be correctable. Reviewer `fail` therefore requires an explicit safety or evidence-integrity termination reason; ordinary gate failures and implementation defects request `revise`. |
 | Version requirement or acceptance corrections | A hidden or over-specified acceptance condition confounds model evaluation. The confirmed TaskBrief must expose the product contract, black-box checks must accept equivalent compliant presentations, and a correction starts a new benchmark version. |
@@ -395,9 +395,11 @@ Demo Slice connects `REQUEST`, bounded scope clarification, first-run
 onboarding, automatic internal materialization, progress, and delivery to that
 verified engine. The function-specialized path runs Tester and Reviewer
 independently after deterministic gates. Dispatch is concurrent by default and
-may be serialized for a provider with one generation slot. It performs at most
-two implementation iterations: the initial pass and one revision. Later
-configurations may use the manifest's higher explicit limit.
+may be serialized for a provider with one generation slot. The frozen Phase 1
+evaluation performs at most two implementation iterations: the initial pass
+and one revision. The Product Demo Slice may use the team manifest's
+three-iteration limit so a first revision that measurably resolves one blocker
+does not force termination when a distinct correctable defect is then exposed.
 
 The Reviewer recommends `revise` for every correctable product defect,
 including failed deterministic acceptance and security defects in generated
@@ -573,6 +575,8 @@ snapshot.
 - Generate internal run IDs, TaskBriefs, sources, workspaces, and destinations
   automatically;
 - Show controller-backed progress, review, revision, and failure summaries;
+- Permit at most two evidence-driven product revisions while each iteration
+  makes measurable progress, without changing the Phase 1 evaluation limit;
 - Deliver a clean runnable result with exact next commands.
 
 **Exit criterion:** the journey in

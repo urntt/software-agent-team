@@ -55,6 +55,14 @@ allows it. Reviewer `fail` requires an explicit terminal reason proving that a
 run safety or evidence-integrity boundary makes another Developer revision
 unsafe.
 
+Iteration limits belong to the launch policy, not the model. The frozen Phase 1
+evaluation uses two implementation iterations for comparability. The normal
+product flow may use the function-specialized team's explicit limit of three so
+it can address a distinct blocker revealed only after the first revision. The
+controller still stops on acceptance, repeated blockers without measurable
+progress, no relevant Git change, safety or evidence failure, resource limits,
+or iteration exhaustion.
+
 ## Artifact Boundary
 
 The artifact layer is the reproducible interface between Agents and the

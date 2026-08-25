@@ -90,6 +90,8 @@ DEFAULT_STATE_ROOT = user_state_root()
 DEFAULT_RUNS_ROOT = DEFAULT_STATE_ROOT / "runs"
 DEFAULT_WORKSPACES_ROOT = DEFAULT_STATE_ROOT / "workspaces"
 DEFAULT_OPENCLAW_BINARY = PROJECT_ROOT / ".sat" / "openclaw" / "bin" / "openclaw"
+EVALUATION_ITERATION_LIMIT = 2
+PRODUCT_ITERATION_LIMIT = 3
 
 
 @dataclass(frozen=True)
@@ -112,6 +114,7 @@ class _WorkflowLaunchOptions:
     output_cost_per_million_usd: Decimal | None
     stage_timeout_seconds: int | None
     artifact_repair_limit: int
+    iteration_limit: int
     verification_concurrency: int
     progress_handler: ProgressHandler | None = None
 
@@ -586,6 +589,7 @@ def _execute_workflow(
         role_timeout_seconds=configuration.policy.agent_stage_timeouts_seconds,
         stage_timeout_seconds=options.stage_timeout_seconds,
         artifact_repair_limit=options.artifact_repair_limit,
+        iteration_limit=options.iteration_limit,
         verification_concurrency=options.verification_concurrency,
         progress_handler=options.progress_handler,
     )
@@ -694,6 +698,7 @@ def _run_workflow(args: argparse.Namespace) -> int:
             output_cost_per_million_usd=output_cost,
             stage_timeout_seconds=timeout,
             artifact_repair_limit=args.artifact_repair_limit,
+            iteration_limit=EVALUATION_ITERATION_LIMIT,
             verification_concurrency=concurrency,
         ),
     )
@@ -1192,6 +1197,7 @@ def _run_product() -> int:
                 output_cost_per_million_usd=(configuration.output_cost_per_million_usd),
                 stage_timeout_seconds=configuration.stage_timeout_seconds,
                 artifact_repair_limit=1,
+                iteration_limit=PRODUCT_ITERATION_LIMIT,
                 verification_concurrency=configuration.verification_concurrency,
                 progress_handler=renderer,
             ),

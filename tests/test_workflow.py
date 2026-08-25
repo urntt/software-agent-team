@@ -358,6 +358,7 @@ def coordinator(
     budget: AgentBudget | None = None,
     pricing: ModelPricing | None = None,
     verification_concurrency: int = 2,
+    iteration_limit: int = 2,
     stage_timeout_seconds: int | None = 30,
     monotonic: Callable[[], float] = fixed_monotonic,
     progress_handler: Callable[[ProgressEvent], None] | None = None,
@@ -393,6 +394,7 @@ def coordinator(
         clock=lambda: FIXED_TIME,
         role_timeout_seconds=configuration.policy.agent_stage_timeouts_seconds,
         stage_timeout_seconds=stage_timeout_seconds,
+        iteration_limit=iteration_limit,
         verification_concurrency=verification_concurrency,
         progress_handler=progress_handler,
         monotonic=monotonic,
@@ -940,6 +942,33 @@ def test_workflow_stops_at_the_phase1_iteration_limit(tmp_path: Path) -> None:
     )
     assert outcome.record.current_iteration == 2
     assert len(outcome.record.snapshots) == 2
+
+
+def test_workflow_uses_a_third_iteration_when_product_policy_allows_it(
+    tmp_path: Path,
+) -> None:
+    source = initialize_source(tmp_path)
+    workspace = tmp_path / "workspaces" / task_brief().run_id
+    executor = DynamicWorkflowExecutor(
+        workspace,
+        review_verdicts={
+            1: ReviewVerdict.REVISE,
+            2: ReviewVerdict.REVISE,
+            3: ReviewVerdict.ACCEPT,
+        },
+    )
+
+    outcome = coordinator(
+        tmp_path,
+        executor,
+        executions=sandbox_executions(count=12),
+        iteration_limit=3,
+    ).execute(task_brief(), source_repository=source)
+
+    assert outcome.record.phase is RunPhase.COMPLETED
+    assert outcome.record.termination_reason is TerminationReason.SUCCEEDED
+    assert outcome.record.current_iteration == 3
+    assert len(outcome.record.snapshots) == 3
 
 
 def test_workflow_exposes_a_developer_that_produces_no_real_commit(

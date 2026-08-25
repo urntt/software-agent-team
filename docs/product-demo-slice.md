@@ -196,6 +196,13 @@ The deterministic controller emits user-safe events. The terminal displays:
 - Revision reasons and iteration count;
 - Budget or provider failures in plain language.
 
+The normal product policy permits the initial implementation and at most two
+evidence-driven revisions. A third implementation iteration is available only
+inside the existing controller loop; it does not add a user prompt or retry a
+run in place, and non-convergence rules still stop repeated blockers or a
+revision with no relevant change. The advanced frozen evaluation path keeps its
+separate two-iteration comparison limit.
+
 For example:
 
 ```text

@@ -122,6 +122,7 @@ def test_cli_no_command_runs_the_guided_product_journey(
     assert options.model == "provider/model"
     assert options.policy == cli.DEFAULT_PRODUCT_POLICY
     assert options.quality_manifest == cli.DEFAULT_PRODUCT_PROFILE
+    assert options.iteration_limit == 3
     output = capsys.readouterr().out
     assert "What would you like to build?" in output
     assert "task-management" not in output
@@ -833,6 +834,7 @@ def test_cli_run_constructs_the_real_phase1_boundary_without_invoking_it(
     assert pricing.model == "provider/model"
     assert observed["budget"].max_calls == 14
     assert observed["verification_concurrency"] == 1
+    assert observed["iteration_limit"] == 2
     assert observed["execute"] == {
         "source_repository": source,
         "base_ref": "HEAD",
@@ -927,6 +929,7 @@ def test_cli_run_uses_saved_defaults_when_flags_are_omitted(
     assert pricing.model == "provider/saved-model"
     assert str(pricing.input_cost_per_million_usd) == "0.75"
     assert observed["verification_concurrency"] == 1
+    assert observed["iteration_limit"] == 2
     assert observed["stage_timeout_seconds"] == 1800
     assert observed["role_timeout_seconds"][AgentRole.PLANNER] == 180
 

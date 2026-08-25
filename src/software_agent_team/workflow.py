@@ -191,6 +191,7 @@ class WorkflowCoordinator:
         role_timeout_seconds: Mapping[AgentRole, int],
         stage_timeout_seconds: int | None = None,
         artifact_repair_limit: int = 1,
+        iteration_limit: int = PHASE1_ITERATION_LIMIT,
         verification_concurrency: int = 2,
         progress_handler: ProgressHandler | None = None,
         clock: Clock = _system_clock,
@@ -219,6 +220,14 @@ class WorkflowCoordinator:
         team = manifest.get_team(PHASE1_TEAM_ID)
         if AgentRole.GENERALIST_DEVELOPER not in team.roles:
             raise WorkflowError("Phase 1 team is missing the generalist developer")
+        if (
+            isinstance(iteration_limit, bool)
+            or not 1 <= iteration_limit <= team.max_iterations
+        ):
+            raise WorkflowError(
+                "iteration limit must be between 1 and "
+                f"{team.max_iterations} for {team.id}"
+            )
         self.manifest = manifest
         self.runs_root = runs_root
         self.workspaces_root = workspaces_root
@@ -237,6 +246,7 @@ class WorkflowCoordinator:
             for role in AgentRole
         }
         self.artifact_repair_limit = artifact_repair_limit
+        self.iteration_limit = iteration_limit
         self.verification_concurrency = verification_concurrency
         self.progress_handler = progress_handler
         self.clock = clock
@@ -269,7 +279,7 @@ class WorkflowCoordinator:
         record = controller.create(
             task_brief,
             team_id=team.id,
-            iteration_limit=PHASE1_ITERATION_LIMIT,
+            iteration_limit=self.iteration_limit,
             agent_stage_timeouts_seconds=self.agent_stage_timeouts_seconds,
         )
         run_directory = self.runs_root / task_brief.run_id
@@ -281,7 +291,7 @@ class WorkflowCoordinator:
                 run_directory,
                 task_brief=task_brief,
                 team=team,
-                iteration_limit=PHASE1_ITERATION_LIMIT,
+                iteration_limit=self.iteration_limit,
             ),
             run_directory=run_directory,
         )
@@ -362,7 +372,7 @@ class WorkflowCoordinator:
                 team_id=context.team.id,
                 team_roles=frozenset(context.team.roles),
                 iteration=1,
-                iteration_limit=PHASE1_ITERATION_LIMIT,
+                iteration_limit=self.iteration_limit,
                 role=AgentRole.PLANNER,
                 expected_kind=ArtifactKind.IMPLEMENTATION_PLAN,
             ),
@@ -421,7 +431,7 @@ class WorkflowCoordinator:
                     team_id=context.team.id,
                     team_roles=frozenset(context.team.roles),
                     iteration=record.current_iteration,
-                    iteration_limit=PHASE1_ITERATION_LIMIT,
+                    iteration_limit=self.iteration_limit,
                     role=AgentRole.GENERALIST_DEVELOPER,
                     expected_kind=ArtifactKind.WORK_RESULT,
                     input_commit=input_commit,
@@ -624,7 +634,7 @@ class WorkflowCoordinator:
                 record.run_id,
                 expected_revision=record.revision,
                 target=RunPhase.IMPLEMENTING,
-                reason="one bounded evidence-driven revision is required",
+                reason="another bounded evidence-driven revision is required",
                 decision=IterationDecision.REVISE,
             )
             feedback = (test, review, iteration_record)
@@ -967,7 +977,7 @@ class WorkflowCoordinator:
                             request,
                             task_brief=context.brief,
                             team_roles=context.team.roles,
-                            iteration_limit=PHASE1_ITERATION_LIMIT,
+                            iteration_limit=self.iteration_limit,
                         )
                     except AgentArtifactResponseError as error:
                         record_error = self._error_detail(error)
