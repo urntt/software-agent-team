@@ -118,9 +118,10 @@ the export and purge options.
 SAT is experimental software. The supported build path is currently limited
 to new, small Python 3.12 projects; existing-codebase modification, additional
 runtime profiles, interrupted-run resume, deployment, and publication are not
-yet supported. The workflow has comprehensive automated offline coverage, but
-the complete installation-to-result experience has not yet passed its final
-real-provider trial on a newly prepared device.
+yet supported. In addition to comprehensive automated offline coverage, the
+complete public-install-to-running-result journey has passed a live-provider
+rehearsal in a fresh non-root Linux account. Independent rehearsal on another
+device remains useful before a live demonstration.
 
 Read [`STATUS.md`](STATUS.md) for current evidence and known gaps, and
 [`VISION.md`](VISION.md) for product direction, architecture, scope, and the

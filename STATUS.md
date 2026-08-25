@@ -1,8 +1,8 @@
 # Project Status
 
-**Current milestone:** Product revision bound corrected; fresh rerun next
+**Current milestone:** Fresh Linux product journey passed; independent device rehearsal next
 
-**Last updated:** August 24, 2026
+**Last updated:** August 25, 2026
 
 This document records what the repository implements now, what evidence
 supports that claim, and what remains unavailable. It does not redefine the
@@ -161,8 +161,32 @@ choice. Repeated blockers, no-change revisions, resource limits, and all safety
 or evidence-integrity stops remain unchanged. The complete 395-test offline
 suite passes.
 
-The full provider-backed product journey still needs to reach accepted delivery
-and pass the delivered project's own setup, start, and test commands. The
+A fifth rehearsal began with another fresh non-root Linux account and the
+public one-command installer at revision `a4c929d`. The user then invoked only
+`sat`, completed guided first-run configuration, and described a small local
+reading-list Web app in natural language. Run
+`sat-20260825-005232-c8f61f0a` used
+`deepseek/deepseek-v4-flash-vision-exp`. The Planner completed in 106.6
+seconds. The Developer's first response omitted its required semantic JSON, so
+the existing bounded repair path was legitimately used and remained inside the
+shared 900-second deadline. The first implementation then reached the aligned
+project gates, where pytest correctly exposed an import defect.
+
+On iteration two, the Developer changed one file in response to that evidence.
+All four deterministic gates passed, eight generated-project tests passed, and
+the independent Tester and Reviewer both accepted the result. SAT completed all
+five user success conditions in 1,689 seconds and delivered clean commit
+`6283aa12401e1e18272df5315bdc9ef92e2478da`. The exact generated setup and
+test commands then succeeded outside the controller. The exact start command
+bound the application only to `127.0.0.1`; manual HTTP checks added, edited,
+finished, persisted across a clean stop and restart, and deleted a book. Both
+application starts shut down cleanly, and no listener remained afterward.
+
+This confirms the complete provider-backed Product Demo Slice on a clean Linux
+account: public installation, automatic checks, guided configuration, natural
+request capture, visible progress, evidence-driven revision, accepted delivery,
+and runnable-result verification. An independent WSL or second-device rehearsal
+remains the next external confirmation, not a known product blocker. The
 current product supports small greenfield Python 3.12 projects; its bounded
 clarification records explicit user input and is not yet an adaptive
 requirements Agent. The task-manager contract remains isolated to the advanced
@@ -269,9 +293,8 @@ controller owns dynamic revision and termination decisions.
 
 ## Not Yet Available or Completed
 
-- A clean provider-backed rerun through accepted delivery after four normal
-  product runs exposed Planner, Developer response, delivered-command gate, and
-  product iteration-bound edge cases;
+- An independent fresh-device rehearsal and live demonstration outside the
+  development host;
 - Adaptive follow-up clarification beyond the current bounded request, success
   condition, and constraint prompts;
 - Generated-project execution profiles beyond the current local Python 3.12
@@ -291,15 +314,13 @@ action succeeded after interruption.
 
 ## Next Milestone
 
-Start from a new non-root home and project parent, install through the public
-managed-install command, configure
-`deepseek/deepseek-v4-flash-vision-exp` through the guided `sat` flow, request a
-representative project within the Python profile, and observe every progress
-stage. If SAT reaches accepted delivery, execute the exact generated setup,
-start, and test commands and verify the running product as a user. Preserve and
-diagnose any failure, then fix, test, commit, and publish it before starting
-another clean rehearsal. Do not call the Product Demo Slice complete until the
-whole journey succeeds.
+Rehearse the published installer and bare `sat` journey from an intended-user
+WSL environment, then perform the same one-command installation and guided
+product flow during the live demonstration. Use a natural-language request,
+observe the controller-derived progress, and execute the delivered project's
+exact commands. Preserve any failure as evidence and apply the same
+fix-test-publish-before-rerun discipline. The advanced evaluation commands are
+not part of this product demonstration.
 
 Topology implementation and comparison resume in Phase 3 after this gate. The
 Phase 2 acceptance criteria are defined in
