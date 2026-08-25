@@ -40,7 +40,7 @@
     },
     {
       "id": "CHECK_PROJECT_TESTS",
-      "argv": ["python", "-m", "pytest", "-q", "-p", "no:cacheprovider"],
+      "argv": ["pytest", "-q", "-p", "no:cacheprovider"],
       "working_directory": ".",
       "timeout_seconds": 90,
       "criterion_ids": ["AC_TESTS"]

@@ -44,9 +44,12 @@ fixed for reproducibility; `start` belongs to the generated project.
 ## Evidence Boundary
 
 Deterministic gates validate the command/documentation contract, compile the
-Python source, run Ruff, and run the generated pytest suite. User-specific
-behavior is also assigned to independent review because no task-independent
-test suite can prove an arbitrary request. A passing profile therefore means
-the bounded controller evidence and review accepted the result; it is not a
-claim that one generic test suite can establish every possible product
-requirement.
+Python source, run Ruff, and run the generated pytest suite. The pytest gate
+uses the console entry point, matching the `uv run pytest` command delivered to
+the user; it must not substitute `python -m pytest`, which changes import-path
+behavior and can hide a project that fails from a fresh user environment.
+User-specific behavior is also assigned to independent review because no
+task-independent test suite can prove an arbitrary request. A passing profile
+therefore means the bounded controller evidence and review accepted the result;
+it is not a claim that one generic test suite can establish every possible
+product requirement.

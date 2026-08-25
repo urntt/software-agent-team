@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** Developer presentation boundary fixed; delivery rerun next
+**Current milestone:** Delivered-command gate aligned; fresh rerun next
 
 **Last updated:** August 24, 2026
 
@@ -121,8 +121,26 @@ The fence normalizer now distinguishes a separately decodable JSON object or
 array from non-JSON documentation notation. It accepts the observed original
 Developer response without repair while retaining the stricter raw-object
 boundary and rejecting multiple fences or competing JSON values. The existing
-900-second Developer budget is unchanged. The complete 393-test offline suite
-passes, and the corrected restricted Docker helper probe remains successful.
+900-second Developer budget is unchanged. The complete offline suite and the
+corrected restricted Docker helper probe remain successful.
+
+A third clean-account rehearsal then completed the entire controller workflow
+in 1,000 seconds. The Developer response was accepted directly in 659.3
+seconds, all four deterministic gates passed, independent Tester and Reviewer
+responses passed, the decision was `accept`, and SAT delivered a 5/5 project.
+The delivered setup command succeeded, but the exact delivered test command,
+`uv run pytest`, failed while collecting tests because the generated top-level
+`src` package was not importable from the pytest console entry point. The
+then-current Docker gate had used `python -m pytest`; that invocation adds the
+project root to Python's import path and reported 11 passing tests, masking the
+fresh-user failure.
+
+The Python product test gate now invokes the pytest console entry point, which
+matches the delivered command after `uv run` selects the project environment.
+A checked invariant prevents the gate and generated-project contract from
+drifting back to different entry-point semantics. The accepted third-run
+project is retained as failure evidence and is not treated as a runnable
+delivery. The complete 394-test offline suite passes.
 
 The full provider-backed product journey still needs to reach accepted delivery
 and pass the delivered project's own setup, start, and test commands. The
@@ -232,8 +250,9 @@ controller owns dynamic revision and termination decisions.
 
 ## Not Yet Available or Completed
 
-- A clean provider-backed rerun through accepted delivery after two normal
-  product runs exposed and bounded Planner and Developer response edge cases;
+- A clean provider-backed rerun through accepted delivery after three normal
+  product runs exposed Planner, Developer response, and delivered-command gate
+  edge cases;
 - Adaptive follow-up clarification beyond the current bounded request, success
   condition, and constraint prompts;
 - Generated-project execution profiles beyond the current local Python 3.12

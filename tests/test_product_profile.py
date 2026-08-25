@@ -74,6 +74,24 @@ def test_product_profile_is_separate_from_the_task_manager_evaluation() -> None:
     assert "task-manager" not in serialized
 
 
+def test_product_test_gate_matches_the_delivered_pytest_entrypoint() -> None:
+    configuration = load_quality_gate_configuration(
+        REPOSITORY_ROOT / "configs" / "product-policy.json",
+        PROFILE_ROOT / "quality.json",
+    )
+    gate = next(
+        gate
+        for gate in configuration.manifest.gates
+        if gate.id == "CHECK_PROJECT_TESTS"
+    )
+    project_contract = json.loads(
+        (PROFILE_ROOT / "seed" / "sat-project.json").read_text(encoding="utf-8")
+    )
+
+    assert project_contract["test"] == ["uv", "run", "pytest"]
+    assert gate.argv == ("pytest", "-q", "-p", "no:cacheprovider")
+
+
 def test_product_contract_validator_accepts_project_specific_commands(
     tmp_path: Path,
 ) -> None:
