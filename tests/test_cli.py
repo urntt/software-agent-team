@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 import software_agent_team.cli as cli
-from software_agent_team.artifacts import AgentRole
+from software_agent_team.artifacts import AgentRole, TaskBrief
 from software_agent_team.benchmark_seed import prepare_benchmark_seed
 from software_agent_team.cli import main
 from software_agent_team.run_control import RunPhase
@@ -747,6 +747,7 @@ def test_cli_run_constructs_the_real_phase1_boundary_without_invoking_it(
     source.mkdir()
     monkeypatch.setenv("SAT_STATE_ROOT", str(tmp_path / "state"))
     observed: dict[str, object] = {}
+    cleanup_calls: list[dict[str, object]] = []
 
     class FakeCoordinator:
         def __init__(self, **kwargs: object) -> None:
@@ -803,6 +804,11 @@ def test_cli_run_constructs_the_real_phase1_boundary_without_invoking_it(
     monkeypatch.setattr(cli, "inspect_sandbox_image", fake_inspect_sandbox_image)
     monkeypatch.setattr(cli, "materialize_run_configuration", fake_materialize)
     monkeypatch.setattr(cli, "inspect_runtime_preflight", fake_inspect_runtime)
+    monkeypatch.setattr(
+        cli,
+        "cleanup_run_sandbox_containers",
+        lambda **kwargs: cleanup_calls.append(kwargs) or SimpleNamespace(removed=()),
+    )
     frozen_brief = REPOSITORY_ROOT / "benchmarks" / "task_manager" / "task-brief.json"
     payload = json.loads(frozen_brief.read_text(encoding="utf-8"))
     payload["run_id"] = "task-manager-trial-2"
@@ -840,6 +846,21 @@ def test_cli_run_constructs_the_real_phase1_boundary_without_invoking_it(
         "base_ref": "HEAD",
     }
     assert observed["task_brief"].run_id == "task-manager-trial-2"
+    assert cleanup_calls == [
+        {
+            "sandbox_binary": "docker",
+            "run_id": "task-manager-trial-2",
+            "openclaw_state_dir": tmp_path / "state" / "openclaw",
+            "workspace_dir": (tmp_path / "workspaces" / "task-manager-trial-2"),
+            "iteration_limit": 2,
+            "roles": (
+                AgentRole.PLANNER,
+                AgentRole.GENERALIST_DEVELOPER,
+                AgentRole.TESTER,
+                AgentRole.REVIEWER,
+            ),
+        }
+    ]
     gate_factory = observed["quality_gate_factory"]
     assert callable(gate_factory)
     run_directory = tmp_path / "gate-run"
@@ -863,6 +884,87 @@ def test_cli_run_constructs_the_real_phase1_boundary_without_invoking_it(
     assert persisted["model"] == "provider/model"
     assert persisted["model_available"] is True
     assert "run completed" in capsys.readouterr().out
+
+
+def test_execute_workflow_cleans_run_sandboxes_after_interruption(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    state = tmp_path / "state" / "openclaw"
+    state.mkdir(parents=True)
+    cleanup_calls: list[dict[str, object]] = []
+
+    class InterruptedCoordinator:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        def execute(self, *_args: object, **_kwargs: object) -> object:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli, "WorkflowCoordinator", InterruptedCoordinator)
+    monkeypatch.setattr(
+        cli,
+        "inspect_sandbox_image",
+        lambda **kwargs: SandboxImageInspection(
+            sandbox_binary="/usr/bin/docker",
+            sandbox_version="Docker version test",
+            sandbox_image=str(kwargs["sandbox_image"]),
+            sandbox_image_id=f"sha256:{'a' * 64}",
+            sandbox_image_present=True,
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "cleanup_run_sandbox_containers",
+        lambda **kwargs: cleanup_calls.append(kwargs) or SimpleNamespace(removed=()),
+    )
+    task_brief = TaskBrief.model_validate_json(
+        (REPOSITORY_ROOT / "benchmarks/task_manager/task-brief.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    workspaces = tmp_path / "workspaces"
+    options = cli._WorkflowLaunchOptions(
+        source_repository=source,
+        base_ref="HEAD",
+        teams=REPOSITORY_ROOT / "configs/teams.json",
+        openclaw=REPOSITORY_ROOT / "configs/openclaw.example.json5",
+        policy=REPOSITORY_ROOT / "configs/run-policy.json",
+        quality_manifest=REPOSITORY_ROOT / "benchmarks/task_manager/benchmark.json",
+        runs_root=tmp_path / "runs",
+        workspaces_root=workspaces,
+        openclaw_binary=Path("/opt/openclaw"),
+        openclaw_state_dir=state,
+        sandbox_binary="docker",
+        model="provider/model",
+        input_cost_per_million_usd=None,
+        output_cost_per_million_usd=None,
+        stage_timeout_seconds=None,
+        artifact_repair_limit=1,
+        iteration_limit=2,
+        verification_concurrency=1,
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        cli._execute_workflow(task_brief, options)
+
+    assert cleanup_calls == [
+        {
+            "sandbox_binary": "docker",
+            "run_id": task_brief.run_id,
+            "openclaw_state_dir": state,
+            "workspace_dir": (workspaces / task_brief.run_id).resolve(strict=False),
+            "iteration_limit": 2,
+            "roles": (
+                AgentRole.PLANNER,
+                AgentRole.GENERALIST_DEVELOPER,
+                AgentRole.TESTER,
+                AgentRole.REVIEWER,
+            ),
+        }
+    ]
 
 
 def test_cli_run_uses_saved_defaults_when_flags_are_omitted(
@@ -909,6 +1011,11 @@ def test_cli_run_uses_saved_defaults_when_flags_are_omitted(
 
     monkeypatch.setattr(cli, "WorkflowCoordinator", FakeCoordinator)
     monkeypatch.setattr(cli, "inspect_sandbox_image", fake_inspect_sandbox_image)
+    monkeypatch.setattr(
+        cli,
+        "cleanup_run_sandbox_containers",
+        lambda **_kwargs: SimpleNamespace(removed=()),
+    )
 
     assert (
         main(

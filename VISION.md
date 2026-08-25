@@ -183,6 +183,12 @@ code or experiment evidence justifies a replacement.
   diagnostic default. Installation and run preflight must both execute a real
   helper inside a restricted probe container. Image presence or a momentary
   running state alone is not readiness evidence.
+- Because every SAT role session is unique to one immutable run, its OpenClaw
+  container has no valid reuse after that run terminates. SAT removes exact
+  run-scoped containers on success, failure, interruption, and exception. The
+  cleanup selector requires both a controller-generated session identity and a
+  mount inside SAT-owned state or workspace paths; it cannot use a broad name
+  match or affect another OpenClaw installation.
 - The per-container cgroup PID limit is the authoritative process-count
   boundary. SAT does not also set `RLIMIT_NPROC`: that limit can count every
   process sharing the numeric UID outside the container and can prevent PID 1

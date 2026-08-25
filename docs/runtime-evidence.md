@@ -226,6 +226,13 @@ when investigating it rather than editing artifacts in place.
   the same standalone default, while installation plus run preflight prove an
   actual helper can execute and the container remains alive under restricted
   settings instead of treating image presence as readiness.
+- OpenClaw's long-lived lifetime is an internal runtime primitive, not SAT's
+  product lifetime. On every completed, failed, interrupted, or exceptional
+  workflow exit, SAT queries Docker only for exact controller-generated session
+  labels for that run, then removes an entry only when a bind mount is also
+  beneath that run's SAT-owned state or workspace. A matching label outside
+  those paths is refused, so an existing OpenClaw remains outside both the
+  inspection and cleanup boundary.
 - A cgroup PID limit bounds each container. SAT intentionally omits
   `RLIMIT_NPROC`, whose numeric-UID-wide accounting can include processes
   outside the container and reject PID 1 on some Docker hosts.

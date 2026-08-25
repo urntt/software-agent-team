@@ -132,6 +132,13 @@ exact selected `provider/model` resolves through the run-scoped catalog and
 SAT's isolated auth route. These checks catch a stale container or unresolved
 model before spending provider tokens.
 
+OpenClaw keeps role sandboxes alive for session reuse by default. SAT's run
+sessions are unique and immutable, so SAT removes the exact run-scoped role
+containers before returning a completed or failed result, and also attempts
+the same cleanup after interruption. Selection requires both SAT's exact
+session key and a bind mount inside SAT-owned state or the run workspace; an
+existing OpenClaw installation is never a cleanup target.
+
 On the first configured run, SAT then:
 
 1. Explains that SAT uses its own isolated OpenClaw provider state and that any

@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** Fresh Linux product journey passed; independent device rehearsal next
+**Current milestone:** Run-scoped sandbox cleanup implemented; fresh user rehearsal next
 
 **Last updated:** August 25, 2026
 
@@ -158,7 +158,7 @@ team manifest. The advanced frozen evaluation remains at two iterations for
 comparability; bare `sat` uses the manifest's three-iteration limit, allowing a
 second evidence-driven revision without asking the user for an internal policy
 choice. Repeated blockers, no-change revisions, resource limits, and all safety
-or evidence-integrity stops remain unchanged. The complete 395-test offline
+or evidence-integrity stops remain unchanged. The complete 400-test offline
 suite passes.
 
 A fifth rehearsal began with another fresh non-root Linux account and the
@@ -182,15 +182,27 @@ bound the application only to `127.0.0.1`; manual HTTP checks added, edited,
 finished, persisted across a clean stop and restart, and deleted a book. Both
 application starts shut down cleanly, and no listener remained afterward.
 
-This confirms the complete provider-backed Product Demo Slice on a clean Linux
-account: public installation, automatic checks, guided configuration, natural
-request capture, visible progress, evidence-driven revision, accepted delivery,
-and runnable-result verification. An independent WSL or second-device rehearsal
-remains the next external confirmation, not a known product blocker. The
-current product supports small greenfield Python 3.12 projects; its bounded
-clarification records explicit user input and is not yet an adaptive
-requirements Agent. The task-manager contract remains isolated to the advanced
-evaluation surface.
+The generated result therefore passed the functional Product Demo Slice on a
+clean Linux account. A post-run resource audit then found all seven
+session-scoped OpenClaw role containers still running. OpenClaw deliberately
+retains these containers for session reuse, but SAT session keys are unique to
+immutable runs; several older rehearsal containers also retained child test
+processes. This invalidated the claim that the terminal product lifecycle was
+complete even though the generated application itself had shut down.
+
+SAT now performs bounded run-terminal cleanup after completed, failed,
+interrupted, and exceptional workflows. It selects a container only when its
+OpenClaw label has an exact controller-generated session key for that run and
+one of its bind mounts is beneath the exact SAT-owned state or workspace path.
+Broad name matching is forbidden, and a matching label outside those paths is
+refused, preserving every other OpenClaw boundary. The complete 400-test suite
+passes, including cleanup selection, ownership refusal, removal failure,
+normal completion, and interruption coverage. A fresh provider-backed user
+rehearsal must still prove that no run-scoped containers remain before the
+Product Demo Slice returns to complete status. The current product supports
+small greenfield Python 3.12 projects; its bounded clarification records
+explicit user input and is not yet an adaptive requirements Agent. The
+task-manager contract remains isolated to the advanced evaluation surface.
 
 The advanced `prepare-benchmark`, `preflight`, and `run` commands remain a
 separate evaluation surface and are not part of the expected product demo.
@@ -211,6 +223,9 @@ The acceptance contract is
 - A marked application-private OpenClaw binary plus explicit private config,
   credential, state, workspace, and Agent paths for every SAT invocation, with
   ambient OpenClaw settings neutralized and existing installations untouched;
+- Exact run-scoped Agent-container cleanup on normal, failed, interrupted, and
+  exceptional workflow exits, guarded by both session identity and SAT-owned
+  mount provenance;
 - Confirmed task-brief and handoff-envelope contracts;
 - Role-specific minimum-context prompts, strict semantic JSON response parsing,
   controller assembly of persisted envelope, Git, test, and scope facts, and
@@ -293,6 +308,8 @@ controller owns dynamic revision and termination decisions.
 
 ## Not Yet Available or Completed
 
+- A fresh live-provider rehearsal confirming that the new terminal cleanup
+  leaves no container or child process belonging to the completed run;
 - An independent fresh-device rehearsal and live demonstration outside the
   development host;
 - Adaptive follow-up clarification beyond the current bounded request, success
@@ -314,11 +331,12 @@ action succeeded after interruption.
 
 ## Next Milestone
 
-Rehearse the published installer and bare `sat` journey from an intended-user
-WSL environment, then perform the same one-command installation and guided
-product flow during the live demonstration. Use a natural-language request,
-observe the controller-derived progress, and execute the delivered project's
-exact commands. Preserve any failure as evidence and apply the same
+Start once more from a fresh non-root account and public installer, use bare
+`sat` with the same natural-language request and exact provider/model, execute
+the delivered project's commands, and verify by exact session labels that the
+run leaves no OpenClaw role container or child process. Only after that passes,
+repeat the published journey from an intended-user WSL environment and during
+the live demonstration. Preserve any failure as evidence and apply the same
 fix-test-publish-before-rerun discipline. The advanced evaluation commands are
 not part of this product demonstration.
 

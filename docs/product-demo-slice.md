@@ -256,6 +256,10 @@ Failures remain honest product outcomes. SAT explains:
 SAT never retries a failed run in place, overwrites immutable evidence, or
 claims that an interrupted external action succeeded. When automatic resume is
 unavailable, the CLI must clearly distinguish a new run from recovery.
+Before returning control to the terminal, SAT removes the exact run-scoped
+OpenClaw role containers, including any child process still running inside
+them. Cleanup is required for success and also runs after workflow failure or
+interruption; it must not target another OpenClaw installation.
 
 ## Acceptance Criteria
 
@@ -282,9 +286,12 @@ The Product Demo Slice is complete only when all of the following are true:
    build.
 9. Success returns a clean runnable project, exact start/test commands, quality
    results, limitations, and report paths.
-10. Failure returns an honest terminal result and preserved evidence without
+10. A terminal workflow outcome leaves no live or stopped OpenClaw role
+    container belonging to that SAT run and does not stop or remove a container
+    outside SAT-owned state and workspace paths.
+11. Failure returns an honest terminal result and preserved evidence without
    presenting a partial project as accepted.
-11. The complete journey is covered by offline interaction tests and rehearsed
+12. The complete journey is covered by offline interaction tests and rehearsed
     from a fresh supported environment with one explicitly authorized provider
     run.
 

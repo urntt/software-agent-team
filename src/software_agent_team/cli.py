@@ -68,6 +68,7 @@ from software_agent_team.runtime_configuration import (
     materialize_run_configuration,
     persist_runtime_preflight,
 )
+from software_agent_team.sandbox_lifecycle import cleanup_run_sandbox_containers
 from software_agent_team.teams import load_team_manifest
 from software_agent_team.user_configuration import (
     UserConfiguration,
@@ -593,11 +594,44 @@ def _execute_workflow(
         verification_concurrency=options.verification_concurrency,
         progress_handler=options.progress_handler,
     )
-    return coordinator.execute(
-        task_brief,
-        source_repository=options.source_repository,
-        base_ref=options.base_ref,
+    cleanup_roles = tuple(manifest.get_team(manifest.default_team).roles)
+    try:
+        outcome = coordinator.execute(
+            task_brief,
+            source_repository=options.source_repository,
+            base_ref=options.base_ref,
+        )
+    except BaseException as error:
+        try:
+            cleanup_run_sandbox_containers(
+                sandbox_binary=options.sandbox_binary,
+                run_id=task_brief.run_id,
+                openclaw_state_dir=options.openclaw_state_dir,
+                workspace_dir=(options.workspaces_root / task_brief.run_id).resolve(
+                    strict=False
+                ),
+                iteration_limit=options.iteration_limit,
+                roles=cleanup_roles,
+            )
+        except Exception as cleanup_error:
+            error.add_note(f"run-scoped sandbox cleanup also failed: {cleanup_error}")
+        raise
+
+    cleanup = cleanup_run_sandbox_containers(
+        sandbox_binary=options.sandbox_binary,
+        run_id=task_brief.run_id,
+        openclaw_state_dir=options.openclaw_state_dir,
+        workspace_dir=(options.workspaces_root / task_brief.run_id).resolve(
+            strict=False
+        ),
+        iteration_limit=options.iteration_limit,
+        roles=cleanup_roles,
     )
+    print(
+        "runtime cleanup: "
+        f"removed {len(cleanup.removed)} run-scoped Agent sandbox container(s)"
+    )
+    return outcome
 
 
 def _run_workflow(args: argparse.Namespace) -> int:
