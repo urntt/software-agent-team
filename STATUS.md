@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** Repair-timeout defect fixed; fresh complete user rehearsal next
+**Current milestone:** Complete Linux product lifecycle passed; independent device rehearsal next
 
 **Last updated:** August 25, 2026
 
@@ -223,12 +223,48 @@ still stops it, and prevents the compatibility supplement from restoring a
 second transport cap. The complete 400-test suite passes. The sixth run also
 confirmed terminal cleanup on the real failure path: SAT reported removing
 three run-scoped containers, and an external exact-label audit found no
-container belonging to the run. A fresh completed provider-backed rehearsal is
-still required before the Product Demo Slice returns to complete status. The
-current product supports small
-greenfield Python 3.12 projects; its bounded clarification records explicit
-user input and is not yet an adaptive requirements Agent. The task-manager
-contract remains isolated to the advanced evaluation surface.
+container belonging to the run.
+
+A seventh rehearsal then started with another empty non-root Linux account and
+the public installer at corrected revision `a032855`. The user invoked bare
+`sat`, completed the same guided configuration, and supplied the same request,
+success conditions, constraints, destination name, and exact
+`deepseek/deepseek-v4-flash-vision-exp` model. Run
+`sat-20260825-030006-255f469f` completed in 1,725 seconds. Planner completed in
+89.3 seconds. The materialized runtime contained no independent provider
+transport timeout; the first Developer commit completed in 577.1 seconds and
+reached a real pytest failure. Tester completed in 109.0 seconds. Reviewer's
+80.9-second response needed one bounded repair; the independent 81.1-second
+repair succeeded and the controller chose `revise` without a shared-deadline
+false failure.
+
+On iteration two, Developer completed in 402.8 seconds and used one valid
+115.3-second response repair. The controller verified two changed files, all
+four deterministic gates passed, Tester completed in 88.9 seconds, Reviewer
+completed in 93.4 seconds, and the decision was `accept`. SAT delivered clean
+commit `8fa75927662b515fe5c57ed72acf5a4f8b4c3c2d` with 5/5 acceptance results.
+The run used nine Agent calls, two bounded repairs, 1,637,869 milliseconds of
+Agent time, 82,666 input tokens, and 31,727 output tokens, all on the frozen
+model without fallback.
+
+The exact delivered setup command succeeded, and the exact delivered test
+command passed 21 tests. The exact start command listened only on
+`127.0.0.1:8000`. HTTP form checks added, edited, marked finished, persisted
+across a clean stop and restart, and deleted a book. Both starts shut down
+cleanly and released the port. SAT reported removing seven run-scoped Agent
+containers before returning control; an external exact-label audit found zero
+live or stopped containers for the run, while the count of unrelated OpenClaw
+sandboxes remained eleven. Credential scans of the trace, terminal record, and
+delivered project were clear. The setup command generated an untracked
+`uv.lock`; this is a non-blocking reproducibility observation because the
+accepted delivery commit itself was clean and all promised commands and user
+outcomes passed.
+
+This confirms the complete Product Demo Slice on a fresh Linux account. The
+current product supports small greenfield Python 3.12 projects; its bounded
+clarification records explicit user input and is not yet an adaptive
+requirements Agent. The task-manager contract remains isolated to the
+advanced evaluation surface.
 
 The advanced `prepare-benchmark`, `preflight`, and `run` commands remain a
 separate evaluation surface and are not part of the expected product demo.
@@ -334,8 +370,6 @@ controller owns dynamic revision and termination decisions.
 
 ## Not Yet Available or Completed
 
-- A fresh completed live-provider rehearsal confirming both independent repair
-  timing and zero container or child-process residue at the terminal outcome;
 - An independent fresh-device rehearsal and live demonstration outside the
   development host;
 - Adaptive follow-up clarification beyond the current bounded request, success
@@ -357,14 +391,11 @@ action succeeded after interruption.
 
 ## Next Milestone
 
-Start once more from a fresh non-root account and public installer, use bare
-`sat` with the same natural-language request and exact provider/model, execute
-the delivered project's commands, and verify by exact session labels that the
-run leaves no OpenClaw role container or child process. Only after that passes,
-repeat the published journey from an intended-user WSL environment and during
-the live demonstration. Preserve any failure as evidence and apply the same
-fix-test-publish-before-rerun discipline. The advanced evaluation commands are
-not part of this product demonstration.
+Repeat the published installer and bare `sat` journey from an intended-user WSL
+or other independent supported device, then use that same one-command install
+and guided product flow during the live demonstration. Preserve any failure as
+evidence and apply the same fix-test-publish-before-rerun discipline. The
+advanced evaluation commands are not part of this product demonstration.
 
 Topology implementation and comparison resume in Phase 3 after this gate. The
 Phase 2 acceptance criteria are defined in

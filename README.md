@@ -120,11 +120,11 @@ to new, small Python 3.12 projects; existing-codebase modification, additional
 runtime profiles, interrupted-run resume, deployment, and publication are not
 yet supported. In addition to comprehensive automated offline coverage, the
 complete public-install-to-running-result journey has passed a live-provider
-rehearsal in a fresh non-root Linux account. Its post-run audit exposed
-long-lived role containers; exact run-scoped cleanup is now implemented and
-confirmed on a fresh failed product run. That run exposed and fixed a separate
-shared-repair-deadline defect. One fresh end-to-end live-provider confirmation
-is still pending before independent rehearsal on another device.
+rehearsal in a fresh non-root Linux account, including guided setup, a natural
+request, evidence-driven revision, 5/5 accepted delivery, exact delivered
+commands, localhost CRUD and restart persistence, clean application shutdown,
+and zero run-scoped container residue. Independent rehearsal on another device
+remains useful before a live demonstration.
 
 Read [`STATUS.md`](STATUS.md) for current evidence and known gaps, and
 [`VISION.md`](VISION.md) for product direction, architecture, scope, and the
