@@ -47,6 +47,7 @@ class PlanApprovalSource(StrEnum):
 class AgentCapability(StrEnum):
     """Controller-known work contract independent from a user-facing label."""
 
+    CLARIFICATION = "clarification"
     PLANNING = "planning"
     IMPLEMENTATION = "implementation"
     INTEGRATION = "integration"
@@ -69,6 +70,7 @@ class ModelRoutingMode(StrEnum):
 
 
 _CAPABILITY_OUTPUTS = {
+    AgentCapability.CLARIFICATION: ArtifactKind.CLARIFICATION_RECORD,
     AgentCapability.PLANNING: ArtifactKind.IMPLEMENTATION_PLAN,
     AgentCapability.IMPLEMENTATION: ArtifactKind.WORK_RESULT,
     AgentCapability.INTEGRATION: ArtifactKind.WORK_RESULT,
@@ -76,6 +78,7 @@ _CAPABILITY_OUTPUTS = {
     AgentCapability.REVIEW: ArtifactKind.REVIEW_REPORT,
 }
 _READ_ONLY_CAPABILITIES = {
+    AgentCapability.CLARIFICATION,
     AgentCapability.PLANNING,
     AgentCapability.TESTING,
     AgentCapability.REVIEW,
@@ -324,6 +327,16 @@ class TeamPlan(BaseModel):
                 )
             if any(agent.legacy_role is not None for agent in self.agents):
                 raise ValueError("adaptive plans cannot use fixed-fixture roles")
+            if any(
+                agent.capability
+                in {AgentCapability.CLARIFICATION, AgentCapability.PLANNING}
+                for agent in self.agents
+            ):
+                raise ValueError(
+                    "adaptive runtime plans cannot include bootstrap capabilities"
+                )
+            if not self.independent_review:
+                raise ValueError("adaptive plans require independent quality control")
 
         agent_ids = [agent.id for agent in self.agents]
         if len(agent_ids) != len(set(agent_ids)):
@@ -386,12 +399,13 @@ class TeamPlan(BaseModel):
             for agent in self.agents
             if agent.capability is AgentCapability.REVIEW
         }
-        if self.independent_review and (not testing_agents or not review_agents):
-            raise ValueError(
-                "independent review requires testing and review capabilities"
-            )
-        if self.revision_enabled and not self.independent_review:
-            raise ValueError("review-driven revision requires independent review")
+        quality_agents = testing_agents | review_agents
+        if self.independent_review and not quality_agents:
+            raise ValueError("independent review requires a quality capability")
+        if self.origin is TeamPlanOrigin.ADAPTIVE_PLANNING and not quality_agents:
+            raise ValueError("adaptive plans require an independent quality Agent")
+        if self.revision_enabled and not quality_agents:
+            raise ValueError("evidence-driven revision requires a quality capability")
         if not self.revision_enabled and self.iteration_limit != 1:
             raise ValueError("a non-revising TeamPlan requires one iteration")
 
@@ -407,30 +421,25 @@ class TeamPlan(BaseModel):
                     pending.extend(dependencies[current])
             return False
 
-        if self.independent_review:
-            if any(
+        if (
+            testing_agents
+            and review_agents
+            and any(
                 transitively_depends(tester, reviewer)
                 or transitively_depends(reviewer, tester)
                 for tester in testing_agents
                 for reviewer in review_agents
-            ):
-                raise ValueError(
-                    "testing and review capabilities must remain independent"
-                )
+            )
+        ):
+            raise ValueError("testing and review capabilities must remain independent")
+        if self.independent_review:
             for implementation_agent in implementation_agents:
                 if not any(
-                    transitively_depends(tester, implementation_agent)
-                    for tester in testing_agents
+                    transitively_depends(quality_agent, implementation_agent)
+                    for quality_agent in quality_agents
                 ):
                     raise ValueError(
-                        "every implementation path requires downstream testing"
-                    )
-                if not any(
-                    transitively_depends(reviewer, implementation_agent)
-                    for reviewer in review_agents
-                ):
-                    raise ValueError(
-                        "every implementation path requires downstream review"
+                        "every implementation path requires downstream quality coverage"
                     )
 
         def scopes_overlap(first: str, second: str) -> bool:
@@ -688,6 +697,7 @@ def load_team_manifest(path: Path) -> TeamManifest:
 
 
 _ROLE_CAPABILITIES = {
+    AgentRole.CLARIFIER: AgentCapability.CLARIFICATION,
     AgentRole.SINGLE_AGENT: AgentCapability.IMPLEMENTATION,
     AgentRole.PLANNER: AgentCapability.PLANNING,
     AgentRole.GENERALIST_DEVELOPER: AgentCapability.IMPLEMENTATION,
@@ -697,6 +707,14 @@ _ROLE_CAPABILITIES = {
     AgentRole.TESTER: AgentCapability.TESTING,
     AgentRole.REVIEWER: AgentCapability.REVIEW,
 }
+
+
+def capability_for_legacy_role(role: AgentRole) -> AgentCapability:
+    """Resolve one fixed-fixture role into the shared capability contract."""
+
+    return _ROLE_CAPABILITIES[role]
+
+
 _ROLE_RESPONSIBILITIES = {
     AgentRole.SINGLE_AGENT: "Implement the confirmed task as one accountable owner.",
     AgentRole.PLANNER: "Translate the confirmed task into an implementation plan.",

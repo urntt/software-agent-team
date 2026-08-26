@@ -10,11 +10,12 @@ from pathlib import Path
 import pytest
 
 from software_agent_team.artifacts import AgentRole, ArtifactKind
-from software_agent_team.execution import stable_session_key
+from software_agent_team.execution import stable_agent_session_key, stable_session_key
 from software_agent_team.sandbox_lifecycle import (
     SandboxCleanupError,
     cleanup_run_sandbox_containers,
 )
+from software_agent_team.teams import AgentCapability, AgentSpec, PermissionProfile
 
 
 class ScriptedRunner:
@@ -92,6 +93,47 @@ def test_cleanup_with_no_openclaw_containers_is_successful(tmp_path: Path) -> No
             "label=openclaw.sessionKey=agent:planner:sat-sat-test-run-i1-implementation-plan",
         )
     ]
+
+
+def test_cleanup_resolves_sessions_from_run_scoped_agent_specs(tmp_path: Path) -> None:
+    agent = AgentSpec(
+        id="cli_developer",
+        label="CLI Developer",
+        responsibility="Implement the assigned CLI tasks.",
+        rationale="The task has one cohesive write path.",
+        capability=AgentCapability.IMPLEMENTATION,
+        permission_profile=PermissionProfile.WORKSPACE_WRITE,
+        stage_id="implement",
+        expected_output=ArtifactKind.WORK_RESULT,
+        model_route_id="default",
+        timeout_seconds=600,
+        workspace_scope="repository",
+    )
+    runner = ScriptedRunner([completed(), completed()])
+
+    result = cleanup_run_sandbox_containers(
+        sandbox_binary="docker",
+        run_id="sat-dynamic-run",
+        openclaw_state_dir=(tmp_path / "state").resolve(),
+        workspace_dir=(tmp_path / "workspace").resolve(),
+        iteration_limit=2,
+        agents=(agent,),
+        runner=runner,
+    )
+
+    assert result.removed == ()
+    expected = {
+        stable_agent_session_key(
+            run_id="sat-dynamic-run",
+            agent_id="cli_developer",
+            iteration=iteration,
+            expected_kind=ArtifactKind.WORK_RESULT,
+        )
+        for iteration in (1, 2)
+    }
+    assert {
+        call[-1].removeprefix("label=openclaw.sessionKey=") for call in runner.calls
+    } == expected
 
 
 def test_cleanup_removes_only_the_exact_owned_run_container(tmp_path: Path) -> None:

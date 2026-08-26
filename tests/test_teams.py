@@ -80,6 +80,16 @@ def adaptive_payload(team_id: str = "function_specialized") -> dict[str, object]
     )
     for agent in source["agents"]:
         agent["legacy_role"] = None
+    source["agents"] = [
+        agent for agent in source["agents"] if agent["capability"] != "planning"
+    ]
+    remaining_ids = {agent["id"] for agent in source["agents"]}
+    for agent in source["agents"]:
+        agent["dependencies"] = [
+            dependency
+            for dependency in agent["dependencies"]
+            if dependency in remaining_ids
+        ]
     return source
 
 
@@ -281,7 +291,7 @@ def test_adaptive_plan_requires_user_approval_and_run_scoped_identities() -> Non
 @pytest.mark.parametrize(
     ("agent_id", "dependencies", "message"),
     [
-        ("planner", ["reviewer"], "acyclic"),
+        ("generalist_developer", ["reviewer"], "acyclic"),
         ("generalist_developer", ["missing_agent"], "unknown dependencies"),
     ],
 )
@@ -328,10 +338,8 @@ def test_adaptive_plan_rejects_nested_parallel_write_scopes() -> None:
 
 def test_adaptive_plan_orders_readers_against_overlapping_writers() -> None:
     payload = adaptive_payload()
-    developer = next(
-        item for item in payload["agents"] if item["id"] == "generalist_developer"
-    )
-    developer["dependencies"] = []
+    tester = next(item for item in payload["agents"] if item["id"] == "tester")
+    tester["dependencies"] = []
 
     with pytest.raises(ValidationError, match="overlapping workspace access"):
         TeamPlan.model_validate(payload)
@@ -373,5 +381,39 @@ def test_adaptive_plan_requires_quality_coverage_for_every_writer() -> None:
     tester["dependencies"] = ["frontend_developer"]
     reviewer["dependencies"] = ["frontend_developer"]
 
-    with pytest.raises(ValidationError, match="downstream testing"):
+    with pytest.raises(ValidationError, match="downstream quality coverage"):
+        TeamPlan.model_validate(payload)
+
+
+def test_adaptive_plan_accepts_one_independent_quality_agent() -> None:
+    payload = adaptive_payload()
+    payload["agents"] = [
+        agent for agent in payload["agents"] if agent["id"] != "tester"
+    ]
+    payload["max_concurrency"] = 1
+
+    plan = TeamPlan.model_validate(payload)
+
+    assert tuple(agent.id for agent in plan.agents) == (
+        "generalist_developer",
+        "reviewer",
+    )
+    assert plan.execution_waves() == (("generalist_developer",), ("reviewer",))
+
+
+def test_adaptive_plan_rejects_bootstrap_capabilities() -> None:
+    payload = adaptive_payload()
+    payload["agents"][0]["capability"] = "planning"
+    payload["agents"][0]["expected_output"] = "implementation_plan"
+    payload["agents"][0]["permission_profile"] = "read_only"
+
+    with pytest.raises(ValidationError, match="bootstrap capabilities"):
+        TeamPlan.model_validate(payload)
+
+
+def test_adaptive_plan_cannot_disable_independent_quality() -> None:
+    payload = adaptive_payload()
+    payload["independent_review"] = False
+
+    with pytest.raises(ValidationError, match="independent quality control"):
         TeamPlan.model_validate(payload)

@@ -194,9 +194,9 @@ src/software_agent_team/
   planning.py                  Adaptive dialogue, proposals, approval, and evidence
   product.py                   Diagnostics, request materialization, and delivery
   progress.py                  RunEvent journal and terminal rendering
-  prompting.py                 Minimum-context role prompts
+  prompting.py                 Fixed-role and task-defined capability prompts
   quality_gates.py             Fixed sandboxed command runner
-  responses.py                 Strict Agent semantic response parser
+  responses.py                 Strict fixed and run-scoped Agent response parser
   run_control.py               Lifecycle state and atomic persistence
   runtime_configuration.py     Run-scoped OpenClaw config and preflight
   teams.py                     TeamPlan contracts and fixed-fixture compilation

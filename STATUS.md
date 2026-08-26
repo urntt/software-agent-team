@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** Phase 3B Planning and approval engine implemented; dynamic team runtime is next
+**Current milestone:** Phase 3C dynamic invocation boundary implemented; DAG runtime is next
 
 **Last updated:** August 26, 2026
 
@@ -48,7 +48,7 @@ permissions, missing independent quality coverage, unauthorized model routes,
 and over-limit concurrency or Agent counts before Agent creation. Recovery
 verifies the exact TaskBrief binding, TeamPlan digest, fixed manifest version,
 fixed team digest, resolved Agent timeouts, and cross-file run metadata. The
-complete repository check passes with 454 offline tests.
+complete repository check passes with 473 offline tests.
 
 `RunEvent` is also an executable, append-only contract. Every current workflow
 progress update is persisted with a contiguous sequence, lifecycle revision,
@@ -84,11 +84,30 @@ validated preview into an authorized confirmed `TaskBrief`, adaptive
 implementation plan, and executable `TeamPlan`.
 The bootstrap Planner still cannot create an Agent or advance run state.
 
-This interaction is offline-verified as a product-style flow but is not yet
-activated by bare `sat`: activation is intentionally paired with the Phase 3C
-runtime so SAT never presents a dynamic plan and then silently executes the old
-fixed team. Arbitrary run-scoped prompt compilation, general DAG execution, and
-active control application remain pending.
+The first Phase 3C runtime boundary is also implemented. Dynamic execution
+requests and telemetry use an approved run-scoped Agent ID and capability;
+fixed-role identity remains compatibility metadata only for the existing
+evaluation workflow. Capability-specific templates compile the exact approved
+responsibility, assigned tasks, dependencies, permission profile, model route,
+and timeout into minimum-context prompts. Response parsing rejects mismatched
+Agent identity, capability, session, task ownership, model, or timeout.
+
+Run configuration materialization emits only the approved AgentSpecs, clones
+their least-privilege capability profiles, disables model fallback, and binds
+every Agent to the verified workspace and selected route. Exact-label sandbox
+cleanup can derive all owned session identities from those AgentSpecs. Adaptive
+validation excludes the bootstrap Planning and Clarification capabilities from
+the runtime team, requires every writer to own work and receive downstream
+independent quality coverage, and allows a small task to use one writer plus
+one independent quality Agent instead of imposing a hidden Tester/Reviewer
+pair. Fixed evaluation fixtures retain their explicit dual-quality topology.
+
+The Planning interaction is offline-verified as a product-style flow but is
+not yet activated by bare `sat`: activation is intentionally paired with the
+Phase 3C runtime so SAT never presents a dynamic plan and then silently
+executes the old fixed team. Controller artifact and handoff assembly for
+arbitrary Agent IDs, general DAG scheduling, and active control application
+remain pending.
 
 ## Product Readiness Boundary
 
@@ -362,15 +381,19 @@ The acceptance contract is
 - Task-defined proposal compilation into confirmed requirements, adaptive
   implementation intent, least-privilege AgentSpecs, a strict model route,
   dependency waves, per-Agent timeouts, and aggregate controller budgets;
+- Task-proportional Adaptive team validation with no bootstrap capability in
+  the runtime team, exact task ownership and cross-Agent dependency alignment,
+  and at least one downstream read-only quality path for every writer;
 - Hash-chained Planning-turn evidence, immutable proposal revisions, exact
   user-approval digests, natural-language revision, safe structured limit
   edits, cancellation, and a complete plain-language overview;
-- A replaceable OpenClaw subprocess adapter with stable role sessions,
+- A replaceable OpenClaw subprocess adapter with stable fixed-role and
+  run-scoped Agent sessions, explicit Agent ID and capability telemetry,
   version-pinned local and Gateway JSON parsing, and canonical
   `provider/model` telemetry;
-- Sanitized OpenClaw Agent registry, permission checks, run-scoped
-  configuration, non-root identity, strict model selection, and offline
-  preflight;
+- Sanitized OpenClaw Agent registry, permission checks, approved-Agent-only
+  run-scoped configuration, non-root identity, strict per-Agent model
+  selection, and offline preflight;
 - A marked application-private OpenClaw binary plus explicit private config,
   credential, state, workspace, and Agent paths for every SAT invocation, with
   ambient OpenClaw settings neutralized and existing installations untouched;
@@ -378,7 +401,8 @@ The acceptance contract is
   exceptional workflow exits, guarded by both session identity and SAT-owned
   mount provenance;
 - Confirmed task-brief and handoff-envelope contracts;
-- Role-specific minimum-context prompts, strict semantic JSON response parsing,
+- Fixed-role and task-defined capability minimum-context prompts, strict
+  semantic JSON response parsing, dynamic identity/task/route/timeout binding,
   controller assembly of persisted envelope, Git, test, and scope facts, and
   one independently timed semantic response repair;
 - Concrete phase-artifact and Agent-telemetry contracts with contextual
@@ -407,9 +431,10 @@ The acceptance contract is
   Reviewer scope attestation, and controller-owned evidence resolution;
 - Pre-call Agent invocation limits and post-call token, duration, and
   estimated-cost stop thresholds;
-- Checked-in per-role invocation timeouts, optional global override, frozen
-  resolved run policy, and configuration-schema migration from the former
-  scalar timeout;
+- Checked-in capability defaults and fixed-role compatibility invocation
+  timeouts, approved per-Agent Adaptive timeouts, optional global override,
+  frozen resolved run policy, and configuration-schema migration from the
+  former scalar timeout;
 - Explicit completed and failed terminal outcomes with machine-readable and
   human-readable reports;
 - Remote one-command Linux/WSL bootstrap into an owned user-local application
@@ -469,8 +494,8 @@ instead of selecting a fixture.
 - An independent fresh-device rehearsal and live demonstration outside the
   development host;
 - Activation of the implemented Adaptive Planning interaction in bare `sat`;
-- Dynamic Agent prompt compilation, controller-validated Agent creation, and
-  DAG scheduling from an approved task-defined TeamPlan;
+- Controller artifact/handoff assembly for arbitrary Agent IDs and DAG
+  scheduling from an approved task-defined TeamPlan;
 - Compact, standard, and detailed visibility backed by persisted per-Agent
   events;
 - User guidance, correction, pause, resume, interruption, and cancellation
@@ -494,14 +519,13 @@ action succeeded after interruption.
 
 ## Next Milestone
 
-Phase 3C is now the next engineering batch. It compiles prompts from approved
-run-scoped AgentSpecs, creates only controller-authorized OpenClaw Agents, and
-schedules their dependency DAG under the approved permissions, routes,
-timeouts, concurrency, and aggregate budgets. It also activates the completed
-Planning interaction in bare `sat`. Later Phase 3 batches add richer progress
-and controls, then model routing. Fixed-topology comparison moves to Phase 4 so
-it can remain a controlled baseline rather than defining the product's
-permanent role layout.
+The next Phase 3C batch moves persisted artifacts and handoffs from fixed roles
+to run-scoped Agent IDs, then schedules the approved dependency DAG under its
+permissions, routes, timeouts, concurrency, and aggregate budgets. It also
+activates the completed Planning interaction in bare `sat`. Later Phase 3
+batches add richer progress and controls, then model routing. Fixed-topology
+comparison moves to Phase 4 so it can remain a controlled baseline rather than
+defining the product's permanent role layout.
 The detailed sequence and acceptance criteria are in
 [`docs/adaptive-orchestration.md`](docs/adaptive-orchestration.md).
 

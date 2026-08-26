@@ -20,8 +20,10 @@ from software_agent_team.execution import (
     OpenClawSubprocessExecutor,
     ScriptedAgentExecutor,
     ScriptedResponseExhaustedError,
+    stable_agent_session_key,
     stable_session_key,
 )
+from software_agent_team.teams import AgentCapability
 
 STARTED = datetime(2026, 8, 10, 12, 0, tzinfo=UTC)
 
@@ -457,6 +459,68 @@ def test_stable_session_key_is_deterministic_and_phase_scoped() -> None:
     assert first == repeated
     assert first == "agent:tester:sat-task-manager-001-i2-test-report"
     assert first != request().session_key
+
+
+def test_dynamic_agent_identity_drives_command_session_and_telemetry() -> None:
+    dynamic = AgentExecutionRequest(
+        run_id="task-manager-001",
+        team_id="adaptive_team",
+        iteration=2,
+        agent_id="cli_developer",
+        capability=AgentCapability.IMPLEMENTATION,
+        expected_kind=ArtifactKind.WORK_RESULT,
+        prompt="Implement the approved CLI tasks.",
+        timeout_seconds=90,
+        model="provider/model",
+    )
+    observed: dict[str, tuple[str, ...]] = {}
+
+    def runner(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        observed["command"] = tuple(command)
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=openclaw_result('{"summary":"done"}'),
+            stderr="",
+        )
+
+    result = executor_with_clocks(runner).execute(dynamic)
+
+    command = observed["command"]
+    assert command[command.index("--agent") + 1] == "cli_developer"
+    assert dynamic.role is None
+    assert dynamic.session_key == (
+        "agent:cli_developer:sat-task-manager-001-i2-work-result"
+    )
+    assert result.telemetry.agent_id == "cli_developer"
+    assert result.telemetry.capability is AgentCapability.IMPLEMENTATION
+    assert result.telemetry.role is None
+
+
+def test_dynamic_agent_request_rejects_a_capability_output_mismatch() -> None:
+    with pytest.raises(ValidationError, match="cannot produce test_report"):
+        AgentExecutionRequest(
+            run_id="task-manager-001",
+            team_id="adaptive_team",
+            iteration=1,
+            agent_id="cli_developer",
+            capability=AgentCapability.IMPLEMENTATION,
+            expected_kind=ArtifactKind.TEST_REPORT,
+            prompt="Return tests.",
+            timeout_seconds=90,
+        )
+
+
+def test_generic_session_key_rejects_no_identity_aliasing() -> None:
+    assert (
+        stable_agent_session_key(
+            run_id="task-manager-001",
+            agent_id="quality_reviewer",
+            iteration=1,
+            expected_kind=ArtifactKind.REVIEW_REPORT,
+        )
+        == "agent:quality_reviewer:sat-task-manager-001-i1-review-report"
+    )
 
 
 def test_request_rejects_a_role_output_mismatch() -> None:

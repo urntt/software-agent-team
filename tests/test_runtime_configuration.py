@@ -2,11 +2,13 @@
 
 import json
 import os
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
 import software_agent_team.runtime_configuration as runtime_configuration
+from software_agent_team.budgets import AgentBudget
 from software_agent_team.configuration import READ_ONLY_ROLES, WRITE_ROLES
 from software_agent_team.runtime_configuration import (
     RuntimeConfigurationError,
@@ -18,12 +20,98 @@ from software_agent_team.runtime_configuration import (
     persist_runtime_preflight,
     probe_sandbox_runtime,
 )
-from software_agent_team.teams import load_team_manifest
+from software_agent_team.teams import (
+    AgentCapability,
+    AgentSpec,
+    ModelRoute,
+    ModelRoutePlan,
+    ModelRoutingMode,
+    PermissionProfile,
+    PlanApprovalSource,
+    TeamPlan,
+    TeamPlanOrigin,
+    load_team_manifest,
+)
 
 REPOSITORY_ROOT = Path(__file__).parents[1]
 TEAM_CONFIG = REPOSITORY_ROOT / "configs" / "teams.json"
 OPENCLAW_TEMPLATE = REPOSITORY_ROOT / "configs" / "openclaw.example.json5"
 DEEPSEEK_VISION_MODEL = "deepseek/deepseek-v4-flash-vision-exp"
+
+
+def adaptive_team_plan() -> TeamPlan:
+    """Return a minimal approved task-defined runtime team."""
+
+    return TeamPlan(
+        plan_id="sat-runtime-dynamic-team-r1",
+        revision=1,
+        run_id="sat-runtime-dynamic",
+        task_brief_sha256="d" * 64,
+        implementation_plan_sha256="e" * 64,
+        team_id="adaptive_team",
+        origin=TeamPlanOrigin.ADAPTIVE_PLANNING,
+        approval_source=PlanApprovalSource.USER,
+        created_at=datetime(2026, 8, 26, 12, 0, tzinfo=UTC),
+        agents=(
+            AgentSpec(
+                id="cli_developer",
+                label="CLI Developer",
+                responsibility="Implement the approved CLI tasks.",
+                rationale="The task has one cohesive write path.",
+                capability=AgentCapability.IMPLEMENTATION,
+                permission_profile=PermissionProfile.WORKSPACE_WRITE,
+                stage_id="implement",
+                expected_output="work_result",
+                model_route_id="default",
+                timeout_seconds=600,
+                workspace_scope="repository",
+            ),
+            AgentSpec(
+                id="acceptance_tester",
+                label="Acceptance Tester",
+                responsibility="Verify every accepted behavior.",
+                rationale="Testing must remain independent.",
+                capability=AgentCapability.TESTING,
+                permission_profile=PermissionProfile.READ_ONLY,
+                stage_id="verify",
+                dependencies=("cli_developer",),
+                expected_output="test_report",
+                model_route_id="default",
+                timeout_seconds=240,
+                workspace_scope="repository",
+            ),
+            AgentSpec(
+                id="quality_reviewer",
+                label="Quality Reviewer",
+                responsibility="Review quality and manual acceptance scope.",
+                rationale="The writer cannot approve its own result.",
+                capability=AgentCapability.REVIEW,
+                permission_profile=PermissionProfile.READ_ONLY,
+                stage_id="verify",
+                dependencies=("cli_developer",),
+                expected_output="review_report",
+                model_route_id="default",
+                timeout_seconds=240,
+                workspace_scope="repository",
+            ),
+        ),
+        model_routes=ModelRoutePlan(
+            mode=ModelRoutingMode.STRICT,
+            default_route_id="default",
+            routes=(ModelRoute(id="default", model="provider/model"),),
+        ),
+        budget=AgentBudget(
+            max_calls=14,
+            max_input_tokens=1_000_000,
+            max_output_tokens=200_000,
+            max_agent_duration_seconds=7_200,
+            max_estimated_cost_usd="25",
+        ),
+        iteration_limit=2,
+        max_concurrency=2,
+        independent_review=True,
+        revision_enabled=True,
+    )
 
 
 def test_materialized_config_binds_every_role_to_one_run_workspace(
@@ -95,6 +183,63 @@ def test_materialized_config_binds_every_role_to_one_run_workspace(
     for role in WRITE_ROLES:
         assert agents[role.value]["sandbox"]["workspaceAccess"] == "rw"
     assert destination.stat().st_mode & 0o777 == 0o600
+
+
+def test_materialized_config_contains_only_approved_run_scoped_agents(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    destination = tmp_path / "run" / "openclaw.runtime.json"
+    plan = adaptive_team_plan()
+
+    materialize_run_configuration(
+        OPENCLAW_TEMPLATE,
+        destination,
+        manifest=load_team_manifest(TEAM_CONFIG),
+        team_plan=plan,
+        workspace=workspace,
+        sandbox_image="sat-agent:phase1",
+        sandbox_user="1000:1000",
+    )
+
+    payload = json.loads(destination.read_text(encoding="utf-8"))
+    agents = payload["agents"]["list"]
+    assert [agent["id"] for agent in agents] == [
+        "cli_developer",
+        "acceptance_tester",
+        "quality_reviewer",
+    ]
+    assert [agent.get("default", False) for agent in agents] == [True, False, False]
+    assert all(agent["workspace"] == str(workspace.resolve()) for agent in agents)
+    assert agents[0]["sandbox"]["workspaceAccess"] == "rw"
+    assert agents[1]["sandbox"]["workspaceAccess"] == "ro"
+    assert agents[2]["sandbox"]["workspaceAccess"] == "ro"
+    assert all(
+        agent["model"] == {"primary": "provider/model", "fallbacks": []}
+        for agent in agents
+    )
+    assert all("sessions_spawn" in agent["tools"]["deny"] for agent in agents)
+    assert "generalist_developer" not in {agent["id"] for agent in agents}
+
+
+def test_dynamic_materialization_rejects_model_outside_the_team_plan(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    with pytest.raises(RuntimeConfigurationError, match="differs from the TeamPlan"):
+        materialize_run_configuration(
+            OPENCLAW_TEMPLATE,
+            tmp_path / "runtime.json",
+            manifest=load_team_manifest(TEAM_CONFIG),
+            team_plan=adaptive_team_plan(),
+            workspace=workspace,
+            sandbox_image="sat-agent:phase1",
+            sandbox_user="1000:1000",
+            model="provider/other",
+        )
 
 
 def test_materialized_config_registers_the_pinned_deepseek_vision_model(

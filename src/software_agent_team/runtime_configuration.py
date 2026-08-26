@@ -17,7 +17,12 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from software_agent_team.configuration import load_openclaw_template
 from software_agent_team.openclaw_runtime import isolated_openclaw_environment
-from software_agent_team.teams import TeamManifest
+from software_agent_team.teams import (
+    AgentCapability,
+    PermissionProfile,
+    TeamManifest,
+    TeamPlan,
+)
 
 
 class RuntimeConfigurationError(ValueError):
@@ -55,6 +60,15 @@ _MODEL_COMPATIBILITY: dict[str, dict[str, Any]] = {
             ],
         },
     }
+}
+
+_CAPABILITY_TEMPLATE_ROLES = {
+    AgentCapability.CLARIFICATION: "clarifier",
+    AgentCapability.PLANNING: "planner",
+    AgentCapability.IMPLEMENTATION: "generalist_developer",
+    AgentCapability.INTEGRATION: "integrator",
+    AgentCapability.TESTING: "tester",
+    AgentCapability.REVIEW: "reviewer",
 }
 
 
@@ -702,13 +716,15 @@ def materialize_run_configuration(
     sandbox_tmpfs_mb: int = 128,
     sandbox_user: str | None = None,
     model: str | None = None,
+    team_plan: TeamPlan | None = None,
 ) -> Path:
     """Create a secret-free OpenClaw config bound to one verified workspace.
 
-    The checked-in template owns role permissions. This function changes only
-    machine-local runtime values: every Agent's workspace, sandbox scope, and
-    the prebuilt sandbox image. Provider credentials remain in OpenClaw's
-    external state or the trusted caller environment.
+    The checked-in template owns vetted capability and permission profiles.
+    This function emits only approved Agent identities and changes machine-local
+    runtime values: workspace, sandbox scope, image, resource limits, and model
+    routes. Provider credentials remain in OpenClaw's external state or the
+    trusted caller environment.
     """
 
     if not sandbox_image.strip():
@@ -727,6 +743,15 @@ def materialize_run_configuration(
         model = model.strip()
         if not model:
             raise RuntimeConfigurationError("run model must not be blank")
+    if team_plan is not None:
+        default_route = team_plan.model_routes.get_route(
+            team_plan.model_routes.default_route_id
+        )
+        if model is not None and model != default_route.model:
+            raise RuntimeConfigurationError(
+                "run model differs from the TeamPlan default route"
+            )
+        model = default_route.model
     try:
         resolved_workspace = workspace.resolve(strict=True)
     except OSError as error:
@@ -797,8 +822,35 @@ def materialize_run_configuration(
             },
         }
     )
-    for agent in agents["list"]:
-        agent["workspace"] = str(resolved_workspace)
+    if team_plan is None:
+        for agent in agents["list"]:
+            agent["workspace"] = str(resolved_workspace)
+    else:
+        templates = {agent["id"]: agent for agent in agents["list"]}
+        dynamic_agents: list[dict[str, Any]] = []
+        for index, spec in enumerate(team_plan.agents):
+            template_role = _CAPABILITY_TEMPLATE_ROLES[spec.capability]
+            template = templates.get(template_role)
+            if not isinstance(template, dict):
+                raise RuntimeConfigurationError(
+                    f"OpenClaw template is missing {template_role}"
+                )
+            agent = json.loads(json.dumps(template))
+            agent["id"] = spec.id
+            agent["name"] = spec.label
+            agent["workspace"] = str(resolved_workspace)
+            agent.pop("default", None)
+            if index == 0:
+                agent["default"] = True
+            sandbox_config = agent.setdefault("sandbox", {})
+            sandbox_config["workspaceAccess"] = (
+                "ro" if spec.permission_profile is PermissionProfile.READ_ONLY else "rw"
+            )
+            route = team_plan.model_routes.get_route(spec.model_route_id)
+            agent["model"] = {"primary": route.model, "fallbacks": []}
+            _apply_model_compatibility(payload, route.model)
+            dynamic_agents.append(agent)
+        agents["list"] = dynamic_agents
 
     return _persist_private_json(
         payload,

@@ -21,6 +21,11 @@ from software_agent_team.artifacts import (
     ArtifactKind,
     PhaseArtifact,
 )
+from software_agent_team.teams import (
+    AgentCapability,
+    capability_for_legacy_role,
+    expected_output_for_capability,
+)
 
 ROLE_ARTIFACT_KINDS: dict[AgentRole, frozenset[ArtifactKind]] = {
     AgentRole.CLARIFIER: frozenset({ArtifactKind.CLARIFICATION_RECORD}),
@@ -76,8 +81,25 @@ def stable_session_key(
 ) -> str:
     """Build the deterministic, role-scoped OpenClaw session key for one phase."""
 
+    return stable_agent_session_key(
+        run_id=run_id,
+        agent_id=role.value,
+        iteration=iteration,
+        expected_kind=expected_kind,
+    )
+
+
+def stable_agent_session_key(
+    *,
+    run_id: str,
+    agent_id: str,
+    iteration: int,
+    expected_kind: ArtifactKind,
+) -> str:
+    """Build one deterministic session key for a run-scoped Agent invocation."""
+
     return (
-        f"agent:{role.value}:"
+        f"agent:{agent_id}:"
         f"sat-{run_id}-i{iteration}-{expected_kind.value.replace('_', '-')}"
     )
 
@@ -90,11 +112,32 @@ class AgentExecutionRequest(BaseModel):
     run_id: str = Field(min_length=1, pattern=r"^[a-z0-9][a-z0-9_-]*$")
     team_id: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9_]*$")
     iteration: int = Field(ge=1, le=3)
-    role: AgentRole
+    role: AgentRole | None = None
+    agent_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
+    capability: AgentCapability
     expected_kind: ArtifactKind
     prompt: str = Field(min_length=1)
     timeout_seconds: int = Field(ge=1, le=3600)
     model: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def populate_legacy_identity(cls, value: object) -> object:
+        """Expand legacy role-only callers into explicit runtime identity."""
+
+        if not isinstance(value, dict):
+            return value
+        payload = dict(value)
+        role_value = payload.get("role")
+        if role_value is None:
+            return payload
+        try:
+            role = AgentRole(role_value)
+        except ValueError:
+            return payload
+        payload.setdefault("agent_id", role.value)
+        payload.setdefault("capability", capability_for_legacy_role(role).value)
+        return payload
 
     @field_validator("prompt")
     @classmethod
@@ -119,10 +162,21 @@ class AgentExecutionRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_output_contract(self) -> Self:
-        """Keep role dispatch and expected response schema coherent."""
+        """Keep run identity, capability, and response schema coherent."""
 
-        validate_role_artifact_kind(self.role, self.expected_kind)
-        if self.role is AgentRole.PLANNER and self.iteration != 1:
+        if self.role is not None:
+            if self.agent_id != self.role.value:
+                raise ValueError("legacy role identity must match its Agent ID")
+            if self.capability is not capability_for_legacy_role(self.role):
+                raise ValueError("legacy role and Agent capability are inconsistent")
+            validate_role_artifact_kind(self.role, self.expected_kind)
+        elif self.expected_kind is not expected_output_for_capability(self.capability):
+            raise ValueError(
+                f"Agent capability {self.capability.value} cannot produce "
+                f"{self.expected_kind.value}; expected "
+                f"{expected_output_for_capability(self.capability).value}"
+            )
+        if self.capability is AgentCapability.PLANNING and self.iteration != 1:
             raise ValueError("the implementation plan is produced only in iteration 1")
         return self
 
@@ -130,9 +184,9 @@ class AgentExecutionRequest(BaseModel):
     def session_key(self) -> str:
         """Return the stable OpenClaw session identity for this phase."""
 
-        return stable_session_key(
+        return stable_agent_session_key(
             run_id=self.run_id,
-            role=self.role,
+            agent_id=self.agent_id,
             iteration=self.iteration,
             expected_kind=self.expected_kind,
         )
@@ -156,7 +210,9 @@ class AgentExecutionTelemetry(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    role: AgentRole
+    role: AgentRole | None = None
+    agent_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
+    capability: AgentCapability
     session_key: str = Field(min_length=1)
     command: tuple[str, ...] = Field(min_length=1)
     started_at: datetime
@@ -172,6 +228,25 @@ class AgentExecutionTelemetry(BaseModel):
     provider: str | None = None
     model: str | None = None
     usage: AgentTokenUsage | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def populate_legacy_identity(cls, value: object) -> object:
+        """Keep existing telemetry constructors compatible and explicit."""
+
+        if not isinstance(value, dict):
+            return value
+        payload = dict(value)
+        role_value = payload.get("role")
+        if role_value is None:
+            return payload
+        try:
+            role = AgentRole(role_value)
+        except ValueError:
+            return payload
+        payload.setdefault("agent_id", role.value)
+        payload.setdefault("capability", capability_for_legacy_role(role).value)
+        return payload
 
     @field_validator("started_at", "finished_at")
     @classmethod
@@ -201,6 +276,11 @@ class AgentExecutionTelemetry(BaseModel):
     def validate_process_outcome(self) -> Self:
         """Represent either an external process or OpenClaw-declared timeout."""
 
+        if self.role is not None and (
+            self.agent_id != self.role.value
+            or self.capability is not capability_for_legacy_role(self.role)
+        ):
+            raise ValueError("telemetry legacy role identity is inconsistent")
         if self.finished_at < self.started_at:
             raise ValueError("execution cannot finish before it starts")
         if self.timed_out and self.exit_code not in {None, 0}:
@@ -578,7 +658,7 @@ class OpenClawSubprocessExecutor:
             self.openclaw_binary,
             "agent",
             "--agent",
-            request.role.value,
+            request.agent_id,
             "--message-file",
             str(prompt_path),
             "--session-key",
@@ -615,6 +695,8 @@ class OpenClawSubprocessExecutor:
         elapsed = max(0, round((self.monotonic() - started_monotonic) * 1000))
         return AgentExecutionTelemetry(
             role=request.role,
+            agent_id=request.agent_id,
+            capability=request.capability,
             session_key=request.session_key,
             command=command,
             started_at=started_at,
@@ -733,7 +815,7 @@ class ScriptedAgentExecutor:
         self.requests.append(request)
         if not self._responses:
             raise ScriptedResponseExhaustedError(
-                f"no scripted response remains for {request.role.value}"
+                f"no scripted response remains for {request.agent_id}"
             )
         scripted = self._responses.popleft()
         if isinstance(scripted, AgentExecutionResult):
@@ -754,8 +836,10 @@ class ScriptedAgentExecutor:
         now = self.clock()
         telemetry = AgentExecutionTelemetry(
             role=request.role,
+            agent_id=request.agent_id,
+            capability=request.capability,
             session_key=request.session_key,
-            command=("scripted-agent", request.role.value),
+            command=("scripted-agent", request.agent_id),
             started_at=now,
             finished_at=now,
             duration_ms=response.duration_ms,
@@ -765,7 +849,7 @@ class ScriptedAgentExecutor:
             stderr=response.stderr,
             openclaw_run_id=f"scripted-{request.run_id}-{request.iteration}",
             session_id=response.session_id
-            or f"scripted-{request.run_id}-{request.role.value}-{request.iteration}",
+            or f"scripted-{request.run_id}-{request.agent_id}-{request.iteration}",
             provider=response.provider,
             model=response.model,
             usage=response.usage,

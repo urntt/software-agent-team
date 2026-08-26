@@ -14,9 +14,10 @@ Choose the next response by decision value:
   clear, return a complete proposal.
 - On revision, replace the complete proposal and honor the user's stated change.
 - The runtime team excludes this bootstrap Planning capability. It must include
-  implementation, independent testing, and independent review. Dependencies
-  must be acyclic, and testing and review must both depend on every writing path
-  without depending on each other.
+  at least one implementation Agent and at least one read-only quality Agent
+  that is downstream of every writing path. Split testing and review into
+  separate independent Agents only when the task or risk justifies both; do not
+  inflate a small task into a fixed three-role topology.
 - Parallel writers must use disjoint canonical relative workspace scopes.
 - Assign per-Agent timeouts based on the work and controller ceilings; do not
   invent one global timeout.

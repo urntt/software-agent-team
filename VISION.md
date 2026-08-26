@@ -180,7 +180,7 @@ when code, usability evidence, or controlled experiments justify a replacement.
 - Persisted artifacts own cross-Agent communication.
 - OpenClaw session history is diagnostic state, not a reproducibility
   dependency.
-- Role Agents cannot spawn additional model calls. The controller is the sole
+- Execution Agents cannot spawn additional model calls. The controller is the sole
   authority for Agent invocation, accounting, and ordering.
 - A fixed bootstrap Planning capability may propose requirements,
   implementation, Agent, and model plans. It cannot create Agents or advance
@@ -228,7 +228,7 @@ when code, usability evidence, or controlled experiments justify a replacement.
 - Planning, analysis, testing, and review responsibilities use controlled
   read-only permission profiles. Coding and integration responsibilities may
   use controlled writable profiles only inside their assigned workspace.
-- A role label or model proposal never grants a permission. The controller
+- An Agent label or model proposal never grants a permission. The controller
   validates every AgentSpec against versioned capability profiles before
   creating a session.
 - A read-only OpenClaw workspace is mounted at `/agent`; a writable workspace
@@ -277,7 +277,7 @@ Each concept has one authoritative owner.
 | Phase 1 orchestration, decisions, and reports | `src/software_agent_team/workflow.py` |
 | Versioned RunEvent contract, append-only journal, visibility filtering, and terminal rendering | `src/software_agent_team/progress.py` |
 | Versioned ControlCommand contract and controller-owned mailbox history | `src/software_agent_team/controls.py` |
-| Agent-call, token, duration, cost, and per-role invocation budgets | `src/software_agent_team/budgets.py`, `src/software_agent_team/workflow.py`, `configs/product-policy.json`, and `configs/run-policy.json` |
+| Agent-call, token, duration, cost, per-Agent, and fixed-role compatibility invocation budgets | `src/software_agent_team/budgets.py`, `src/software_agent_team/workflow.py`, `configs/product-policy.json`, and `configs/run-policy.json` |
 | Product execution profile and generic quality contract | `profiles/python/`, `runtime/python/`, and `configs/product-policy.json` |
 | Frozen evaluation fixture and task-specific acceptance | `benchmarks/task_manager/` and `configs/run-policy.json` |
 | Shared quality-manifest validation and execution | `src/software_agent_team/quality_gates.py` |
@@ -287,8 +287,8 @@ Each concept has one authoritative owner.
 | User-local product state path | `src/software_agent_team/paths.py` |
 | User-local default schema and persistence | `src/software_agent_team/user_configuration.py` |
 | Managed bootstrap, installation, and uninstallation execution | `scripts/bootstrap.sh`, `scripts/install.sh`, and `scripts/uninstall.sh` |
-| Role prompt assembly | `src/software_agent_team/prompting.py` |
-| Role semantic response validation and field mapping | `src/software_agent_team/responses.py` |
+| Fixed-role and task-defined capability prompt assembly | `src/software_agent_team/prompting.py` |
+| Fixed-role and run-scoped Agent semantic response validation and field mapping | `src/software_agent_team/responses.py` |
 | Source history and iteration snapshots | Git |
 | Agent execution and sessions | OpenClaw |
 | Cross-Agent communication | Persisted run artifacts |
@@ -407,21 +407,22 @@ change in the same controlled trial.
 | Use a local-first CLI instead of a Web service | The first users can inspect Git and terminal evidence, while local execution keeps credentials, workspaces, and experimental state under their control. |
 | Keep the Python controller authoritative | Lifecycle, budgets, evidence checks, and termination must be deterministic rather than dependent on an Agent's self-report. |
 | Derive execution roles from the task, then let the controller create them | A fixed bootstrap Planning capability can propose a TeamPlan after dialogue, but it cannot spawn Agents. User approval plus deterministic validation preserves authority, budget, permission, and audit boundaries while avoiding one permanent product role list. |
+| Require independent quality coverage without imposing a permanent Tester/Reviewer pair | Every writing path needs a downstream read-only quality judgment before acceptance, but a small cohesive task may justify one quality Agent while a higher-risk task may justify independent testing and review. Fixed dual-quality fixtures remain useful experimental controls rather than product topology. |
 | Show one editable plan overview before execution | Requirements, implementation intent, Agent responsibilities, dependencies, permissions, budgets, and model routes affect quality and cost. The user must be able to approve or revise them before the controller creates the team. |
 | Use OpenClaw as the Agent runtime, not the orchestrator | OpenClaw provides model/provider integration, sessions, tools, and sandboxing; the experiment still needs a model-independent control plane. |
 | Isolate SAT's OpenClaw runtime and state from every existing installation | Compatibility is not ownership. Installing a pinned private binary and overriding every mutable OpenClaw path gives SAT reproducibility without reading, changing, stopping, or deleting a user's existing binary, Gateway, profile, configuration, credentials, sessions, caches, or workspaces. A collision at SAT's private target fails safely instead of being adopted. |
 | Validate and, when necessary, supplement the exact model catalog before Agent work | Saving a `provider/model` string does not prove that the pinned runtime can resolve it. A non-generation catalog/auth check catches unsupported or unauthenticated selections before a build, while a versioned secret-free supplement can bridge a known catalog lag without copying credentials or enabling fallback. |
-| Keep the controller's invocation timeout authoritative | A provider compatibility supplement may describe routing and model metadata, but it must not add an independent transport timeout that conflicts with the frozen per-role invocation policy. OpenClaw receives the resolved timeout for every call, and SAT's outer process boundary adds only bounded shutdown grace. |
+| Keep the controller's invocation timeout authoritative | A provider compatibility supplement may describe routing and model metadata, but it must not add an independent transport timeout that conflicts with the approved per-Agent invocation policy. OpenClaw receives the resolved timeout for every call, and SAT's outer process boundary adds only bounded shutdown grace. |
 | Start with `function_specialized` | It introduces independent planning, testing, and review without the merge conflicts that would confound the first vertical slice. |
 | Keep Tester and Reviewer independent, with configurable dispatch concurrency | They inspect the same immutable evidence and never consume each other's interpretation. Parallel dispatch reduces elapsed time when provider capacity permits; serial dispatch prevents overload without changing the semantic experiment. |
-| Deny Agent-spawning tools to every role | Untracked sub-Agent calls bypass controller budgets, attribution, and scheduling, so only the deterministic controller may authorize model invocations. |
+| Deny Agent-spawning tools to every execution Agent | Untracked sub-Agent calls bypass controller budgets, attribution, and scheduling, so only the deterministic controller may authorize model invocations. |
 | Include bounded command-output tails in verifier context | Exit codes and generic summaries identify failure but not its cause. Bounded untrusted excerpts make diagnosis possible while full write-once output remains authoritative. |
 | Use persisted structured handoffs | Durable, attributable artifacts make context and decisions auditable without treating hidden conversation history as state. |
 | Run fixed Docker quality gates before Agent judgment | Reproducible command evidence is stronger than claimed test results and keeps generated code isolated from the host. |
 | Resolve the sandbox tag to one local image ID per run | Both Agent sandboxes and quality gates execute the same immutable image even if a mutable local tag is later reassigned. |
 | Assemble persisted artifacts in the controller | Models should produce planning, implementation summaries, evidence analysis, and review judgment. Known identity, Git, command, status, criterion, and scope facts must come from authoritative controller state instead of requiring an exact model echo. |
 | Allow one semantic-response repair per role stage and bounded implementation revisions | A small bounded loop can correct genuinely invalid semantic content or implementation defects without hiding non-convergence, time, or cost. The frozen Phase 1 evaluation remains one initial implementation plus one revision; the product flow permits one additional revision when the prior iteration measurably resolved a blocker and exposed a distinct correctable defect. Controller-owned fields are ignored and audited rather than repaired. |
-| Use measured per-role invocation timeouts and independent bounded-repair timeouts | Planning, implementation, and verification have different measured workloads. Checked-in defaults are 120 seconds for Clarifier, 180 for Planner, 900 for coding/integration roles, and 300 for Tester/Reviewer. A repair must regenerate a complete semantic response, so it receives the same per-invocation timeout instead of an arbitrarily small remainder from the first call. Repair remains limited to one call, while total call count, Agent duration, token, and cost budgets bound the complete run. |
+| Use measured capability defaults, approved per-Agent invocation timeouts, and independent bounded-repair timeouts | Planning, implementation, and verification have different measured workloads. Fixed-fixture compatibility defaults are 120 seconds for Clarifier, 180 for Planner, 900 for coding/integration, and 300 for testing/review; Adaptive Planning proposes a task-specific value within the corresponding capability ceiling and the user approves it. A repair must regenerate a complete semantic response, so it receives the same per-invocation timeout instead of an arbitrarily small remainder from the first call. Repair remains limited to one call, while total call count, Agent duration, token, and cost budgets bound the complete run. |
 | Separate review severity from terminal failure | Even a critical-impact product defect may be correctable. Reviewer `fail` therefore requires an explicit safety or evidence-integrity termination reason; ordinary gate failures and implementation defects request `revise`. |
 | Version requirement or acceptance corrections | A hidden or over-specified acceptance condition confounds model evaluation. The confirmed TaskBrief must expose the product contract, black-box checks must accept equivalent compliant presentations, and a correction starts a new benchmark version. |
 | Separate product model routing from strict evaluation routing | Controlled evaluations pin one model and price table and disable switching. Product runs may use approved task-, phase-, capability-, or Agent-specific routes, but the controller must resolve and record every model and may switch only under an explicit user-authorized condition. |

@@ -10,7 +10,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from software_agent_team.artifacts import AgentRole
-from software_agent_team.execution import ROLE_ARTIFACT_KINDS, stable_session_key
+from software_agent_team.execution import (
+    ROLE_ARTIFACT_KINDS,
+    stable_agent_session_key,
+    stable_session_key,
+)
+from software_agent_team.teams import AgentCapability, AgentSpec
 
 _CONTAINER_ID = re.compile(r"^[a-f0-9]{12,64}$")
 
@@ -66,8 +71,27 @@ def _run_command(
 def _expected_session_keys(
     run_id: str,
     iteration_limit: int,
-    roles: Sequence[AgentRole],
+    *,
+    roles: Sequence[AgentRole] | None,
+    agents: Sequence[AgentSpec] | None,
 ) -> frozenset[str]:
+    if agents is not None:
+        return frozenset(
+            stable_agent_session_key(
+                run_id=run_id,
+                agent_id=agent.id,
+                iteration=iteration,
+                expected_kind=agent.expected_output,
+            )
+            for agent in agents
+            for iteration in (
+                (1,)
+                if agent.capability
+                in {AgentCapability.CLARIFICATION, AgentCapability.PLANNING}
+                else range(1, iteration_limit + 1)
+            )
+        )
+    assert roles is not None
     return frozenset(
         stable_session_key(
             run_id=run_id,
@@ -106,7 +130,8 @@ def cleanup_run_sandbox_containers(
     openclaw_state_dir: Path,
     workspace_dir: Path,
     iteration_limit: int,
-    roles: Sequence[AgentRole],
+    roles: Sequence[AgentRole] | None = None,
+    agents: Sequence[AgentSpec] | None = None,
     timeout_seconds: int = 30,
     runner: ProcessRunner = subprocess.run,
 ) -> SandboxCleanupResult:
@@ -126,10 +151,21 @@ def cleanup_run_sandbox_containers(
         raise SandboxCleanupError("run ID is not safe for sandbox cleanup")
     if iteration_limit < 1 or iteration_limit > 3:
         raise SandboxCleanupError("iteration limit is outside the supported range")
-    if not roles or any(role not in ROLE_ARTIFACT_KINDS for role in roles):
-        raise SandboxCleanupError("sandbox cleanup roles are not executable")
-    if len(roles) != len(set(roles)):
-        raise SandboxCleanupError("sandbox cleanup roles must be unique")
+    if (roles is None) == (agents is None):
+        raise SandboxCleanupError(
+            "sandbox cleanup requires exactly one role or AgentSpec collection"
+        )
+    if roles is not None:
+        if not roles or any(role not in ROLE_ARTIFACT_KINDS for role in roles):
+            raise SandboxCleanupError("sandbox cleanup roles are not executable")
+        if len(roles) != len(set(roles)):
+            raise SandboxCleanupError("sandbox cleanup roles must be unique")
+    if agents is not None:
+        agent_ids = [agent.id for agent in agents]
+        if not agents or len(agent_ids) != len(set(agent_ids)):
+            raise SandboxCleanupError(
+                "sandbox cleanup AgentSpecs must be non-empty and unique"
+            )
     if timeout_seconds < 1:
         raise SandboxCleanupError("sandbox cleanup timeout must be positive")
     if not openclaw_state_dir.is_absolute() or not workspace_dir.is_absolute():
@@ -137,7 +173,12 @@ def cleanup_run_sandbox_containers(
 
     state_root = openclaw_state_dir.resolve(strict=False)
     workspace_root = workspace_dir.resolve(strict=False)
-    expected_sessions = _expected_session_keys(run_id, iteration_limit, roles)
+    expected_sessions = _expected_session_keys(
+        run_id,
+        iteration_limit,
+        roles=roles,
+        agents=agents,
+    )
 
     discovered_ids: set[str] = set()
     for session_key in sorted(expected_sessions):

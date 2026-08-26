@@ -53,6 +53,7 @@ from software_agent_team.execution import (
     ScriptedAgentExecutor,
     ScriptedAgentResponse,
     ScriptedResponseExhaustedError,
+    stable_agent_session_key,
     stable_session_key,
 )
 from software_agent_team.git_workspace import (
@@ -93,8 +94,12 @@ from software_agent_team.planning import (
 from software_agent_team.prompting import (
     AgentPromptError,
     AgentPromptInputs,
+    DynamicAgentPromptInputs,
+    DynamicUpstreamResult,
     build_agent_execution_request,
+    build_dynamic_agent_execution_request,
     render_agent_prompt,
+    render_dynamic_agent_prompt,
 )
 from software_agent_team.quality_gates import (
     BenchmarkManifest,
@@ -118,6 +123,7 @@ from software_agent_team.responses import (
     TestReportResponse,
     WorkResultResponse,
     parse_agent_response,
+    parse_dynamic_agent_response,
     parse_json_object_response,
 )
 from software_agent_team.run_control import (
@@ -164,6 +170,7 @@ from software_agent_team.teams import (
     TeamPlan,
     TeamPlanOrigin,
     TeamStage,
+    capability_for_legacy_role,
     expected_output_for_capability,
     permission_for_capability,
 )
@@ -212,6 +219,8 @@ __all__ = [
     "CommandEvidence",
     "CriterionResult",
     "DockerSandboxBackend",
+    "DynamicAgentPromptInputs",
+    "DynamicUpstreamResult",
     "ExecutionOutputEvidence",
     "FakeSandboxBackend",
     "FinalReport",
@@ -306,6 +315,8 @@ __all__ = [
     "WorkspaceAlreadyExistsError",
     "WorkspaceIntegrityError",
     "build_agent_execution_request",
+    "build_dynamic_agent_execution_request",
+    "capability_for_legacy_role",
     "expected_output_for_capability",
     "has_model_compatibility",
     "inspect_openclaw_model",
@@ -315,6 +326,7 @@ __all__ = [
     "materialize_model_check_configuration",
     "materialize_run_configuration",
     "parse_agent_response",
+    "parse_dynamic_agent_response",
     "parse_json_object_response",
     "parse_phase_artifact",
     "permission_for_capability",
@@ -324,8 +336,10 @@ __all__ = [
     "preview_adaptive_proposal",
     "probe_sandbox_runtime",
     "render_agent_prompt",
+    "render_dynamic_agent_prompt",
     "render_planning_overview",
     "run_interactive_planning",
+    "stable_agent_session_key",
     "stable_session_key",
     "validate_artifact_context",
     "validate_work_result_snapshot",

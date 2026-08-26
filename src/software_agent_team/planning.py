@@ -287,9 +287,13 @@ class ProposedAgent(BaseModel):
 
     @model_validator(mode="after")
     def reject_bootstrap_capability(self) -> Self:
-        if self.capability is AgentCapability.PLANNING:
+        if self.capability in {
+            AgentCapability.CLARIFICATION,
+            AgentCapability.PLANNING,
+        }:
             raise ValueError(
-                "the bootstrap Planning capability is outside the runtime team"
+                "bootstrap Planning and Clarification capabilities are outside "
+                "the runtime team"
             )
         if self.id in self.dependencies:
             raise ValueError("a proposed Agent cannot depend on itself")
@@ -374,7 +378,7 @@ class PlanningProposalBody(BaseModel):
     approach: tuple[str, ...] = Field(min_length=1, max_length=30)
     tasks: tuple[ProposedTask, ...] = Field(min_length=1, max_length=30)
     risks: tuple[str, ...] = Field(default=(), max_length=30)
-    agents: tuple[ProposedAgent, ...] = Field(min_length=3, max_length=16)
+    agents: tuple[ProposedAgent, ...] = Field(min_length=2, max_length=16)
     iteration_limit: int = Field(ge=1, le=3)
     max_concurrency: int = Field(ge=1, le=16)
     revision_enabled: bool
@@ -417,12 +421,36 @@ class PlanningProposalBody(BaseModel):
         }
         if not implementation_agents:
             raise ValueError("proposal requires an implementation Agent")
-        if not any(
-            agent.capability is AgentCapability.TESTING for agent in self.agents
-        ) or not any(
-            agent.capability is AgentCapability.REVIEW for agent in self.agents
-        ):
-            raise ValueError("proposal requires independent testing and review Agents")
+        quality_agents = {
+            agent.id
+            for agent in self.agents
+            if agent.capability in {AgentCapability.TESTING, AgentCapability.REVIEW}
+        }
+        if not quality_agents:
+            raise ValueError("proposal requires an independent quality Agent")
+
+        dependencies = {agent.id: agent.dependencies for agent in self.agents}
+
+        def transitively_depends(agent_id: str, target: str) -> bool:
+            pending = list(dependencies[agent_id])
+            seen: set[str] = set()
+            while pending:
+                current = pending.pop()
+                if current == target:
+                    return True
+                if current not in seen:
+                    seen.add(current)
+                    pending.extend(dependencies[current])
+            return False
+
+        for implementation_agent in implementation_agents:
+            if not any(
+                transitively_depends(quality_agent, implementation_agent)
+                for quality_agent in quality_agents
+            ):
+                raise ValueError(
+                    "every implementation path requires downstream quality coverage"
+                )
 
         task_ids = tuple(task.id for task in self.tasks)
         if len(task_ids) != len(set(task_ids)):
@@ -434,6 +462,26 @@ class PlanningProposalBody(BaseModel):
         )
         if any(task.owner_agent_id not in implementation_agents for task in self.tasks):
             raise ValueError("every task owner must be an implementation Agent")
+        task_owners = {task.owner_agent_id for task in self.tasks}
+        unassigned_agents = implementation_agents - task_owners
+        if unassigned_agents:
+            raise ValueError(
+                "every implementation Agent must own at least one task: "
+                f"{', '.join(sorted(unassigned_agents))}"
+            )
+        task_owner_by_id = {task.id: task.owner_agent_id for task in self.tasks}
+        for task in self.tasks:
+            for dependency_id in task.dependencies:
+                dependency_owner = task_owner_by_id[dependency_id]
+                if dependency_owner != task.owner_agent_id and not transitively_depends(
+                    task.owner_agent_id,
+                    dependency_owner,
+                ):
+                    raise ValueError(
+                        f"task {task.id} depends on {dependency_id}, but Agent "
+                        f"{task.owner_agent_id} does not depend on "
+                        f"{dependency_owner}"
+                    )
         covered = {
             criterion for task in self.tasks for criterion in task.acceptance_criteria
         }
@@ -682,7 +730,7 @@ class PlanningPolicy(BaseModel):
     max_proposal_revisions: int = Field(default=3, ge=1, le=5)
     response_repair_limit: int = Field(default=1, ge=0, le=2)
     planning_timeout_seconds: int = Field(default=180, ge=1, le=3600)
-    max_agents: int = Field(default=8, ge=3, le=16)
+    max_agents: int = Field(default=8, ge=2, le=16)
     max_concurrency: int = Field(default=4, ge=1, le=16)
     budget: AgentBudget
     capability_timeout_ceiling_seconds: dict[AgentCapability, int]

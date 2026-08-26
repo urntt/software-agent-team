@@ -14,10 +14,19 @@ ordering, iteration and resource budgets, artifact validation, Git evidence,
 quality-gate evidence, decisions, and terminal reports. No Agent may advance
 the lifecycle or declare its own work accepted.
 
-OpenClaw owns model/provider integration, role sessions, tool exposure, and the
-Agent sandbox. Agents own semantic work: planning, coding, evidence analysis,
-and review. Persisted artifacts, rather than hidden chat history, are the
-authoritative handoff boundary.
+OpenClaw owns model/provider integration, Agent sessions, tool exposure, and
+the Agent sandbox. Agents own semantic work: planning, coding, evidence
+analysis, and review. Persisted artifacts, rather than hidden chat history, are
+the authoritative handoff boundary.
+
+Every execution request and telemetry record now carries a run-scoped Agent ID
+and controller-known capability. A fixed evaluation role is optional
+compatibility metadata and must match that identity when present. Dynamic
+requests bind the exact approved AgentSpec output contract, model route,
+per-invocation timeout, deterministic session key, and assigned task IDs;
+mismatched response or telemetry context is rejected before it can become
+evidence. The general DAG controller that assembles dynamic artifacts and
+launches these requests remains staged work, as recorded in `STATUS.md`.
 
 The controller assembles every persisted phase artifact from two distinct
 sources:
@@ -89,10 +98,9 @@ controller. The current implementation defines:
 fixture compilation. `src/software_agent_team/artifacts.py` owns phase and
 handoff artifacts. `src/software_agent_team/planning.py` owns pre-run Adaptive
 Planning dialogue, proposal compilation, and approval evidence.
-`src/software_agent_team/responses.py` owns the smaller
-role-response bodies and the explicit mapping of controller-owned fields for
-each artifact kind. These are different boundaries, not duplicate persisted
-schemas.
+`src/software_agent_team/responses.py` owns the smaller semantic response
+bodies and the explicit mapping of controller-owned fields for each artifact
+kind. These are different boundaries, not duplicate persisted schemas.
 
 Phase artifacts use canonical run-relative paths, write-once persistence, and
 SHA-256 references. Structural schema validation is followed by contextual
@@ -281,7 +289,7 @@ when investigating it rather than editing artifacts in place.
 - Generated code has no external network access by default.
 - Agent sandboxes and production quality gates run through Docker with external
   network access disabled.
-- OpenClaw role tools execute into long-lived scope-owned containers and
+- OpenClaw Agent tools execute into long-lived scope-owned containers and
   explicitly supplies their supervisor command. The pinned runtime image uses
   the same standalone default, while installation plus run preflight prove an
   actual helper can execute and the container remains alive under restricted
@@ -303,14 +311,14 @@ when investigating it rather than editing artifacts in place.
   filesystems, and receive only the assigned workspace and frozen inputs.
 - Live runs require an unprivileged invoking account. Writable Agent
   containers use that account's numeric UID/GID; root identities are rejected.
-- Controlled roles receive no ambient OpenClaw skills. Their explicit prompt,
+- Controlled Agents receive no ambient OpenClaw skills. Their explicit prompt,
   tool policy, and run-scoped repository are the complete execution boundary.
-- Clarifier, Planner, Tester, and Reviewer are read-only roles. Read-only roles
-  deny mutation and process tools and inspect verified source through the
-  read-only `/agent` mount.
-- Coding and Integration roles may write only inside the assigned `/workspace`
-  mount.
-- Every role denies Agent-spawning and one-shot model tools. Only the
+- Clarification, Planning, Testing, and Review capabilities use read-only
+  permission profiles. Read-only Agents deny mutation and process tools and
+  inspect verified source through the read-only `/agent` mount.
+- Implementation and Integration capabilities may write only inside the
+  assigned `/workspace` mount.
+- Every Agent denies Agent-spawning and one-shot model tools. Only the
   controller may authorize, schedule, attribute, and account for a model
   invocation.
 - Host quality-gate execution exists only as a doubly opted-in test backend;
@@ -353,16 +361,18 @@ when investigating it rather than editing artifacts in place.
 
 - CPU, memory, process, open-file, tmpfs, captured command-output, wall-clock,
   iteration, and Agent-invocation limits are mandatory before live runs.
-- Checked-in role-specific invocation timeouts reflect measured workloads. A
-  global CLI or saved timeout override is an explicit experimental variable.
+- Checked-in capability defaults and fixed-role compatibility timeouts reflect
+  measured workloads. An Adaptive TeamPlan freezes the approved timeout for
+  each run-scoped Agent. A global CLI or saved timeout override is an explicit
+  experimental variable.
 - An initial semantic response and its optional one-call repair each receive
-  the resolved role timeout. A repair must regenerate the complete response;
+  the resolved Agent timeout. A repair must regenerate the complete response;
   it is not given an arbitrary remainder from the first call. The run-wide
   call-count and Agent-duration budgets still include both invocations.
 - Model compatibility supplements do not set a second provider-transport
-  timeout. The controller passes the frozen per-role timeout to OpenClaw for
-  every invocation, and the outer subprocess boundary permits only bounded
-  shutdown grace beyond it.
+  timeout. The controller passes the approved per-Agent timeout, or its exact
+  fixed-role compatibility value, to OpenClaw for every invocation, and the
+  outer subprocess boundary permits only bounded shutdown grace beyond it.
 - Reported aggregate input/output tokens, Agent duration, and estimated cost
   are checked after every invocation. Crossing a threshold fails the run and
   prevents another invocation.

@@ -287,6 +287,90 @@ def test_proposal_compiles_to_complete_controller_owned_authority() -> None:
     assert "estimated cost ceiling: $25" in overview
 
 
+def test_small_task_may_use_one_independent_quality_agent() -> None:
+    body = proposal_body()
+    agents = tuple(agent for agent in body.agents if agent.id != "acceptance_tester")
+    smaller = body.model_copy(update={"agents": agents, "max_concurrency": 1})
+
+    preview = preview_adaptive_proposal(
+        request(),
+        proposal(body=PlanningProposalBody.model_validate(smaller)),
+        policy(),
+        created_at=FIXED_TIME,
+    )
+
+    assert tuple(agent.id for agent in preview.team_plan.agents) == (
+        "cli_developer",
+        "quality_reviewer",
+    )
+    assert preview.team_plan.execution_waves() == (
+        ("cli_developer",),
+        ("quality_reviewer",),
+    )
+
+
+def test_proposal_rejects_an_implementation_agent_without_tasks() -> None:
+    body = proposal_body()
+    extra = ProposedAgent(
+        id="docs_developer",
+        label="Documentation Developer",
+        responsibility="Write task documentation.",
+        rationale="Documentation has a separate write scope.",
+        capability=AgentCapability.IMPLEMENTATION,
+        stage_id="implement",
+        workspace_scope="repository/docs",
+        timeout_seconds=300,
+    )
+    agents = tuple(
+        agent.model_copy(
+            update={"dependencies": (*agent.dependencies, extra.id)}
+            if agent.capability in {AgentCapability.TESTING, AgentCapability.REVIEW}
+            else {}
+        )
+        for agent in (*body.agents, extra)
+    )
+
+    with pytest.raises(ValidationError, match="must own at least one task"):
+        PlanningProposalBody.model_validate(body.model_copy(update={"agents": agents}))
+
+
+def test_cross_agent_task_dependencies_require_matching_agent_dependencies() -> None:
+    body = proposal_body()
+    fixture_agent = ProposedAgent(
+        id="fixture_developer",
+        label="Fixture Developer",
+        responsibility="Build deterministic test fixtures.",
+        rationale="Fixture work has an isolated write scope.",
+        capability=AgentCapability.IMPLEMENTATION,
+        stage_id="implement",
+        workspace_scope="repository/tests",
+        timeout_seconds=300,
+    )
+    agents = tuple(
+        agent.model_copy(
+            update={"dependencies": (*agent.dependencies, fixture_agent.id)}
+            if agent.capability in {AgentCapability.TESTING, AgentCapability.REVIEW}
+            else {}
+        )
+        for agent in (*body.agents, fixture_agent)
+    )
+    tasks = (
+        ProposedTask(
+            id="TASK_FIXTURES",
+            owner_agent_id=fixture_agent.id,
+            description="Create deterministic valid and broken link fixtures.",
+            acceptance_criteria=("AC_SCAN",),
+            expected_paths=("tests/fixtures",),
+        ),
+        body.tasks[0].model_copy(update={"dependencies": ("TASK_FIXTURES",)}),
+    )
+
+    with pytest.raises(ValidationError, match="does not depend on fixture_developer"):
+        PlanningProposalBody.model_validate(
+            body.model_copy(update={"agents": agents, "tasks": tasks})
+        )
+
+
 def test_controller_rejects_quality_dependency_and_timeout_policy_violations() -> None:
     invalid_agents = tuple(
         agent.model_copy(

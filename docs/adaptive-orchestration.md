@@ -448,6 +448,15 @@ team and then executes a different fixed team.
 teams and complete or fail through the same controller, evidence, and cleanup
 boundary.
 
+**Implementation note:** run-scoped Agent identity and capability telemetry,
+approved-Agent-only OpenClaw configuration, AgentSpec-derived prompt and
+response contracts, exact model/timeout binding, and AgentSpec-derived cleanup
+selection are implemented. Adaptive plans may use one downstream independent
+quality Agent for a small task; separate testing and review Agents remain an
+explicit justified choice rather than a hidden minimum topology. Controller
+artifact/handoff generalization, bounded DAG dispatch, convergence, and bare
+`sat` activation remain in this batch.
+
 ### Batch 3D: Observable and Controllable Execution
 
 - Implement compact, standard, and detailed renderers over RunEvent;

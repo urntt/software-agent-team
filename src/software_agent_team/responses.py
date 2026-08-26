@@ -25,6 +25,8 @@ from software_agent_team.execution import (
     AgentExecutionResult,
     AgentExecutionStatus,
 )
+from software_agent_team.integrity import canonical_model_sha256
+from software_agent_team.teams import TeamPlan
 
 
 class AgentArtifactResponseError(ValueError):
@@ -198,6 +200,30 @@ class ParsedAgentResponse:
 
     body: AgentResponseBody
     ignored_controller_fields: tuple[str, ...]
+
+
+def _parse_semantic_body(
+    value: str,
+    expected_kind: ArtifactKind,
+) -> ParsedAgentResponse:
+    payload = parse_json_object_response(value)
+    model = RESPONSE_BODY_MODELS.get(expected_kind)
+    controller_fields = _CONTROLLER_FIELDS.get(expected_kind)
+    if model is None or controller_fields is None:
+        raise AgentArtifactResponseError(
+            f"no response body contract exists for {expected_kind.value}"
+        )
+    ignored = tuple(sorted(controller_fields.intersection(payload)))
+    semantic_payload = {
+        key: item for key, item in payload.items() if key not in controller_fields
+    }
+    try:
+        body = model.model_validate(semantic_payload)
+    except (ValueError, ValidationError) as error:
+        raise AgentArtifactResponseError(
+            f"Agent semantic response is invalid: {_safe_validation_detail(error)}"
+        ) from error
+    return ParsedAgentResponse(body=body, ignored_controller_fields=ignored)
 
 
 def _safe_validation_detail(error: ValueError) -> str:
@@ -399,6 +425,14 @@ def parse_agent_response(
         raise AgentArtifactResponseError(
             f"Agent execution did not complete: {result.status.value}"
         )
+    if result.telemetry.agent_id != request.agent_id:
+        raise AgentArtifactResponseError(
+            "execution telemetry Agent ID does not match request"
+        )
+    if result.telemetry.capability is not request.capability:
+        raise AgentArtifactResponseError(
+            "execution telemetry capability does not match request"
+        )
     if result.telemetry.role is not request.role:
         raise AgentArtifactResponseError(
             "execution telemetry role does not match request"
@@ -413,27 +447,19 @@ def parse_agent_response(
         )
     if task_brief.run_id != request.run_id:
         raise AgentArtifactResponseError("request run ID does not match the task brief")
+    if request.role is None:
+        raise AgentArtifactResponseError(
+            "legacy artifact parsing requires a fixed Agent role"
+        )
     if request.role not in team_roles:
         raise AgentArtifactResponseError("requested Agent role is not part of the team")
     if not 1 <= iteration_limit <= 3 or request.iteration > iteration_limit:
         raise AgentArtifactResponseError("request exceeds the run iteration limit")
 
-    payload = parse_json_object_response(result.response_text)
-
-    model = RESPONSE_BODY_MODELS.get(request.expected_kind)
-    controller_fields = _CONTROLLER_FIELDS.get(request.expected_kind)
-    if model is None or controller_fields is None:
-        raise AgentArtifactResponseError(
-            f"no response body contract exists for {request.expected_kind.value}"
-        )
-    ignored = tuple(sorted(controller_fields.intersection(payload)))
-    semantic_payload = {
-        key: value for key, value in payload.items() if key not in controller_fields
-    }
+    parsed = _parse_semantic_body(result.response_text, request.expected_kind)
     try:
-        body = model.model_validate(semantic_payload)
         _validate_response_context(
-            body,
+            parsed.body,
             request,
             result,
             task_brief=task_brief,
@@ -444,7 +470,99 @@ def parse_agent_response(
         raise AgentArtifactResponseError(
             f"Agent semantic response is invalid: {_safe_validation_detail(error)}"
         ) from error
-    return ParsedAgentResponse(
-        body=body,
-        ignored_controller_fields=ignored,
-    )
+    return parsed
+
+
+def parse_dynamic_agent_response(
+    result: AgentExecutionResult,
+    request: AgentExecutionRequest,
+    *,
+    task_brief: TaskBrief,
+    team_plan: TeamPlan,
+    assigned_task_ids: Collection[str] = (),
+) -> ParsedAgentResponse:
+    """Bind one semantic response to an approved run-scoped AgentSpec."""
+
+    if result.status is not AgentExecutionStatus.COMPLETED:
+        raise AgentArtifactResponseError(
+            f"Agent execution did not complete: {result.status.value}"
+        )
+    if request.role is not None or result.telemetry.role is not None:
+        raise AgentArtifactResponseError(
+            "dynamic response parsing does not accept a fixed legacy role"
+        )
+    if result.telemetry.agent_id != request.agent_id:
+        raise AgentArtifactResponseError(
+            "execution telemetry Agent ID does not match request"
+        )
+    if result.telemetry.capability is not request.capability:
+        raise AgentArtifactResponseError(
+            "execution telemetry capability does not match request"
+        )
+    if result.telemetry.session_key != request.session_key:
+        raise AgentArtifactResponseError(
+            "execution telemetry session does not match request"
+        )
+    if not task_brief.confirmed:
+        raise AgentArtifactResponseError(
+            "Agent responses require a confirmed task brief"
+        )
+    if request.run_id != task_brief.run_id or team_plan.run_id != task_brief.run_id:
+        raise AgentArtifactResponseError("dynamic response run IDs do not match")
+    if request.team_id != team_plan.team_id:
+        raise AgentArtifactResponseError("dynamic response team IDs do not match")
+    if canonical_model_sha256(task_brief) != team_plan.task_brief_sha256:
+        raise AgentArtifactResponseError("TeamPlan does not bind the TaskBrief")
+    if request.iteration > team_plan.iteration_limit:
+        raise AgentArtifactResponseError("request exceeds the TeamPlan iteration limit")
+    try:
+        agent = team_plan.get_agent(request.agent_id)
+    except ValueError as error:
+        raise AgentArtifactResponseError(str(error)) from error
+    if (
+        request.capability is not agent.capability
+        or request.expected_kind is not agent.expected_output
+    ):
+        raise AgentArtifactResponseError(
+            "dynamic request differs from the approved AgentSpec"
+        )
+    route = team_plan.model_routes.get_route(agent.model_route_id)
+    if request.timeout_seconds != agent.timeout_seconds or request.model != route.model:
+        raise AgentArtifactResponseError(
+            "dynamic request timeout or model differs from the approved AgentSpec"
+        )
+    if result.telemetry.model != route.model:
+        raise AgentArtifactResponseError(
+            "execution telemetry model differs from the approved AgentSpec"
+        )
+
+    parsed = _parse_semantic_body(result.response_text, request.expected_kind)
+    body = parsed.body
+    criterion_ids = {criterion.id for criterion in task_brief.acceptance_criteria}
+    try:
+        if isinstance(body, WorkResultResponse):
+            expected_tasks = set(assigned_task_ids)
+            completed_tasks = set(body.completed_tasks)
+            if completed_tasks != expected_tasks:
+                raise ValueError(
+                    "completed_tasks must exactly match the Agent's assigned task IDs"
+                )
+        elif isinstance(body, ReviewReportResponse):
+            if body.verdict is ReviewVerdict.FAIL and body.termination_reason is None:
+                raise ValueError("failed reviews require a terminal review reason")
+            unknown = {
+                criterion_id
+                for finding in body.findings
+                for criterion_id in finding.criterion_ids
+                if criterion_id not in criterion_ids
+            }
+            if unknown:
+                raise ValueError(
+                    "review findings reference unknown acceptance criteria: "
+                    f"{', '.join(sorted(unknown))}"
+                )
+    except ValueError as error:
+        raise AgentArtifactResponseError(
+            f"Agent semantic response is invalid: {_safe_validation_detail(error)}"
+        ) from error
+    return parsed
