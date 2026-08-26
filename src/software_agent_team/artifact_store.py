@@ -36,7 +36,7 @@ from software_agent_team.artifacts import (
     validate_artifact_context,
 )
 from software_agent_team.integrity import canonical_model_sha256
-from software_agent_team.teams import TeamPlan
+from software_agent_team.teams import AgentCapability, TeamPlan
 
 
 class ArtifactStoreError(ValueError):
@@ -400,70 +400,165 @@ class ArtifactStore:
                     )
 
         elif isinstance(artifact, IterationRecord):
-            plan = self.load(artifact.implementation_plan)
-            work = self.load(artifact.work_result)
-            test = self.load(artifact.test_report)
-            review = self.load(artifact.review_report)
-            if not isinstance(plan, ImplementationPlan):
-                raise ArtifactStoreError("iteration plan reference has the wrong type")
-            if not isinstance(work, WorkResult):
+            if artifact.implementation_plan is not None:
+                plan = self.load(artifact.implementation_plan)
+                if not isinstance(plan, ImplementationPlan):
+                    raise ArtifactStoreError(
+                        "iteration plan reference has the wrong type"
+                    )
+            elif artifact.implementation_plan_sha256 != (
+                self.team_plan.implementation_plan_sha256
+            ):
+                raise ArtifactStoreError(
+                    "iteration plan digest differs from the approved TeamPlan"
+                )
+
+            works = [self.load(reference) for reference in artifact.work_results]
+            tests = [self.load(reference) for reference in artifact.test_reports]
+            reviews = [self.load(reference) for reference in artifact.review_reports]
+            if not all(isinstance(item, WorkResult) for item in works):
                 raise ArtifactStoreError("iteration work reference has the wrong type")
-            if not isinstance(test, TestReport):
+            if not all(isinstance(item, TestReport) for item in tests):
                 raise ArtifactStoreError("iteration test reference has the wrong type")
-            if not isinstance(review, ReviewReport):
+            if not all(isinstance(item, ReviewReport) for item in reviews):
                 raise ArtifactStoreError(
                     "iteration review reference has the wrong type"
                 )
+            typed_works = [item for item in works if isinstance(item, WorkResult)]
+            typed_tests = [item for item in tests if isinstance(item, TestReport)]
+            typed_reviews = [item for item in reviews if isinstance(item, ReviewReport)]
+            expected_work_producers = {
+                agent.id
+                for agent in self.team_plan.agents
+                if agent.capability
+                in {AgentCapability.IMPLEMENTATION, AgentCapability.INTEGRATION}
+            }
+            expected_test_producers = {
+                agent.id
+                for agent in self.team_plan.agents
+                if agent.capability is AgentCapability.TESTING
+            } or {"controller"}
+            expected_review_producers = {
+                agent.id
+                for agent in self.team_plan.agents
+                if agent.capability is AgentCapability.REVIEW
+            }
+            actual_work_producers = {item.producer for item in typed_works}
+            actual_test_producers = {item.producer for item in typed_tests}
+            actual_review_producers = {item.producer for item in typed_reviews}
+            if actual_work_producers != expected_work_producers:
+                raise ArtifactStoreError(
+                    "iteration work evidence must cover every approved writer"
+                )
+            if actual_test_producers != expected_test_producers:
+                raise ArtifactStoreError(
+                    "iteration test evidence must cover every approved tester"
+                )
+            if actual_review_producers != expected_review_producers:
+                raise ArtifactStoreError(
+                    "iteration review evidence must cover every approved reviewer"
+                )
             if any(
-                item.iteration != artifact.iteration for item in (work, test, review)
+                item.iteration != artifact.iteration
+                for item in (*typed_works, *typed_tests, *typed_reviews)
             ):
                 raise ArtifactStoreError(
                     "iteration references must use the record's iteration"
                 )
-            if (
-                work.input_commit != artifact.input_commit
-                or work.output_commit != artifact.output_commit
-                or test.input_commit != artifact.output_commit
-                or review.input_commit != artifact.output_commit
+
+            expected_input = artifact.input_commit
+            for work in typed_works:
+                if work.input_commit != expected_input:
+                    raise ArtifactStoreError(
+                        "iteration work results must form one commit chain"
+                    )
+                expected_input = work.output_commit
+            if expected_input != artifact.output_commit or any(
+                item.input_commit != artifact.output_commit
+                for item in (*typed_tests, *typed_reviews)
             ):
                 raise ArtifactStoreError(
                     "iteration commits do not match referenced evidence"
                 )
 
+            first_test = typed_tests[0]
+            deterministic_evidence = (
+                first_test.status,
+                first_test.commands,
+                first_test.criteria,
+                first_test.manual_review_criteria,
+                first_test.blockers,
+            )
+            if any(
+                (
+                    test.status,
+                    test.commands,
+                    test.criteria,
+                    test.manual_review_criteria,
+                    test.blockers,
+                )
+                != deterministic_evidence
+                for test in typed_tests[1:]
+            ):
+                raise ArtifactStoreError(
+                    "iteration test reports disagree on controller-owned evidence"
+                )
+
+            reviewed_criteria = {
+                criterion_id
+                for review in typed_reviews
+                for criterion_id in review.reviewed_criteria
+            }
+            if reviewed_criteria != set(first_test.manual_review_criteria):
+                raise ArtifactStoreError(
+                    "iteration reviews must exactly cover manual criteria"
+                )
+            finding_ids = [
+                finding.id for review in typed_reviews for finding in review.findings
+            ]
+            if len(finding_ids) != len(set(finding_ids)):
+                raise ArtifactStoreError(
+                    "review finding IDs must be unique across the iteration"
+                )
             blocking_ids = {
-                finding.id for finding in review.findings if finding.blocking
+                finding.id
+                for review in typed_reviews
+                for finding in review.findings
+                if finding.blocking
             }
             if set(artifact.blocking_finding_ids) != blocking_ids:
                 raise ArtifactStoreError(
-                    "iteration blocking findings must match the review report"
+                    "iteration blocking findings must match all review reports"
                 )
-            if test.manual_review_criteria != review.reviewed_criteria:
-                raise ArtifactStoreError("iteration manual-review scopes must match")
             if artifact.decision is IterationDecision.ACCEPT:
-                if (
-                    test.status is not CheckStatus.PASSED
-                    or review.verdict is not ReviewVerdict.ACCEPT
+                if first_test.status is not CheckStatus.PASSED or any(
+                    review.verdict is not ReviewVerdict.ACCEPT
+                    for review in typed_reviews
                 ):
                     raise ArtifactStoreError(
-                        "accepted iteration requires passing test and review evidence"
+                        "accepted iteration requires all quality evidence to pass"
                     )
                 try:
-                    resolve_acceptance_results(test, review)
+                    resolve_acceptance_results(first_test, tuple(typed_reviews))
                 except ValueError as error:
                     raise ArtifactStoreError(
                         "accepted iteration has unresolved manual criteria"
                     ) from error
             elif artifact.decision is IterationDecision.REVISE:
-                if review.verdict is ReviewVerdict.FAIL or (
-                    test.status is CheckStatus.PASSED
-                    and review.verdict is ReviewVerdict.ACCEPT
+                if any(
+                    review.verdict is ReviewVerdict.FAIL for review in typed_reviews
+                ) or (
+                    first_test.status is CheckStatus.PASSED
+                    and all(
+                        review.verdict is ReviewVerdict.ACCEPT
+                        for review in typed_reviews
+                    )
                 ):
                     raise ArtifactStoreError(
                         "revision decision does not match test and review evidence"
                     )
-            elif (
-                test.status is CheckStatus.PASSED
-                and review.verdict is ReviewVerdict.ACCEPT
+            elif first_test.status is CheckStatus.PASSED and all(
+                review.verdict is ReviewVerdict.ACCEPT for review in typed_reviews
             ):
                 raise ArtifactStoreError(
                     "failure decision cannot replace an acceptance decision"
@@ -491,17 +586,27 @@ class ArtifactStore:
                     )
 
             last_record = iteration_records[-1]
-            last_test = self.load(last_record.test_report)
-            last_review = self.load(last_record.review_report)
-            if not isinstance(last_test, TestReport):
+            last_tests = [
+                self.load(reference) for reference in last_record.test_reports
+            ]
+            last_reviews = [
+                self.load(reference) for reference in last_record.review_reports
+            ]
+            if not all(isinstance(item, TestReport) for item in last_tests):
                 raise ArtifactStoreError("final iteration test reference is invalid")
-            if not isinstance(last_review, ReviewReport):
+            if not all(isinstance(item, ReviewReport) for item in last_reviews):
                 raise ArtifactStoreError("final iteration review reference is invalid")
+            typed_last_tests = [
+                item for item in last_tests if isinstance(item, TestReport)
+            ]
+            typed_last_reviews = [
+                item for item in last_reviews if isinstance(item, ReviewReport)
+            ]
             if artifact.status is FinalStatus.COMPLETED:
                 try:
                     expected_results = resolve_acceptance_results(
-                        last_test,
-                        last_review,
+                        typed_last_tests[0],
+                        tuple(typed_last_reviews),
                     )
                 except ValueError as error:
                     raise ArtifactStoreError(

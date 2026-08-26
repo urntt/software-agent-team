@@ -853,15 +853,21 @@ class ReviewReport(IterationArtifact):
 
 def resolve_acceptance_results(
     test: TestReport,
-    review: ReviewReport,
+    reviews: ReviewReport | tuple[ReviewReport, ...],
 ) -> tuple[CriterionResult, ...]:
-    """Resolve manual criteria only when independent review covers them."""
+    """Resolve manual criteria when accepted independent reviews cover them."""
 
-    if test.manual_review_criteria != review.reviewed_criteria:
-        raise ValueError("test and review manual criterion scopes differ")
-    if review.verdict is not ReviewVerdict.ACCEPT:
-        raise ValueError("manual acceptance requires an accepted review")
+    normalized_reviews = (reviews,) if isinstance(reviews, ReviewReport) else reviews
     manual = set(test.manual_review_criteria)
+    reviewed = {
+        criterion_id
+        for review in normalized_reviews
+        for criterion_id in review.reviewed_criteria
+    }
+    if reviewed != manual:
+        raise ValueError("independent reviews must exactly cover manual criteria")
+    if any(review.verdict is not ReviewVerdict.ACCEPT for review in normalized_reviews):
+        raise ValueError("manual acceptance requires every review to be accepted")
     results: list[CriterionResult] = []
     for criterion in test.criteria:
         if criterion.criterion_id not in manual:
@@ -890,10 +896,14 @@ class IterationRecord(IterationArtifact):
     producer: Literal["controller"] = "controller"
     input_commit: str = Field(pattern=COMMIT_PATTERN)
     output_commit: str = Field(pattern=COMMIT_PATTERN)
-    implementation_plan: ArtifactReference
-    work_result: ArtifactReference
-    test_report: ArtifactReference
-    review_report: ArtifactReference
+    implementation_plan: ArtifactReference | None = None
+    implementation_plan_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    work_results: tuple[ArtifactReference, ...] = Field(min_length=1)
+    test_reports: tuple[ArtifactReference, ...] = Field(min_length=1)
+    review_reports: tuple[ArtifactReference, ...] = ()
     decision: IterationDecision
     blocking_finding_ids: tuple[str, ...] = ()
     blocking_reasons: tuple[str, ...] = ()
@@ -915,15 +925,29 @@ class IterationRecord(IterationArtifact):
     def validate_decision(self) -> Self:
         """Require exact artifact kinds and evidence for revision or failure."""
 
-        expected_kinds = {
-            "implementation_plan": ArtifactKind.IMPLEMENTATION_PLAN,
-            "work_result": ArtifactKind.WORK_RESULT,
-            "test_report": ArtifactKind.TEST_REPORT,
-            "review_report": ArtifactKind.REVIEW_REPORT,
+        if (self.implementation_plan is None) == (
+            self.implementation_plan_sha256 is None
+        ):
+            raise ValueError(
+                "iteration record requires exactly one implementation-plan binding"
+            )
+        if (
+            self.implementation_plan is not None
+            and self.implementation_plan.kind is not ArtifactKind.IMPLEMENTATION_PLAN
+        ):
+            raise ValueError("implementation_plan must reference implementation_plan")
+        expected_collections = {
+            "work_results": ArtifactKind.WORK_RESULT,
+            "test_reports": ArtifactKind.TEST_REPORT,
+            "review_reports": ArtifactKind.REVIEW_REPORT,
         }
-        for field, expected in expected_kinds.items():
-            if getattr(self, field).kind is not expected:
-                raise ValueError(f"{field} must reference {expected.value}")
+        for field, expected in expected_collections.items():
+            references = getattr(self, field)
+            if any(reference.kind is not expected for reference in references):
+                raise ValueError(f"{field} must reference only {expected.value}")
+            paths = [reference.path for reference in references]
+            if len(paths) != len(set(paths)):
+                raise ValueError(f"{field} references must be unique")
         if self.input_commit == self.output_commit:
             raise ValueError("iteration output commit must differ from input")
         has_blocker = bool(self.blocking_finding_ids or self.blocking_reasons)

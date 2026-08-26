@@ -25,8 +25,10 @@ compatibility metadata and must match that identity when present. Dynamic
 requests bind the exact approved AgentSpec output contract, model route,
 per-invocation timeout, deterministic session key, and assigned task IDs;
 mismatched response or telemetry context is rejected before it can become
-evidence. The general DAG controller that assembles dynamic artifacts and
-launches these requests remains staged work, as recorded in `STATUS.md`.
+evidence. Shared controller-owned assembly now binds dynamic implementation,
+test, and review semantics to verified facts. The runtime adapter that launches
+those requests through the general DAG scheduler remains staged work, as
+recorded in `STATUS.md`.
 
 The controller assembles every persisted phase artifact from two distinct
 sources:
@@ -41,19 +43,24 @@ manual-review scope never depend on a model echoing known values.
 
 The controller accepts an iteration only when all of the following agree:
 
-1. The Developer returns a semantic work summary, then the controller verifies
-   a clean descendant Git commit and binds its exact changed-file set into the
-   `WorkResult`.
-2. The Tester analyzes supplied evidence, while the controller binds the
-   actual commands, exit-derived status, command-to-criterion coverage, and
-   blocker state into the `TestReport`.
+1. Every approved implementation or integration Agent returns a semantic work
+   summary. The controller verifies a clean descendant Git commit for each
+   writer and binds the exact changed-file set into an attributable
+   `WorkResult`; the iteration requires those results to form one commit chain.
+2. Every approved Testing Agent analyzes the same supplied evidence, while the
+   controller binds the actual commands, exit-derived status,
+   command-to-criterion coverage, and blocker state into each `TestReport`. If
+   a valid team intentionally has no Testing Agent, the controller persists
+   that deterministic evidence under its own identity.
 3. Every deterministic criterion passes. Criteria assigned to independent
    review remain explicitly `pending_review` in the Tester's criterion results,
    while the overall Tester status is `passed` when no deterministic failure
    or blocker exists.
-4. The Reviewer evaluates the controller-supplied manual-review scope on the
-   same immutable commit and returns `accept` with no blocking finding. The
-   controller binds that commit and scope into the `ReviewReport`.
+4. Approved Review Agents evaluate their controller-supplied manual-review
+   scopes on the same immutable commit and return `accept` with no blocking
+   finding. The controller binds each Agent, commit, and scope into an
+   attributable `ReviewReport`; their combined scope must exactly cover the
+   manual criteria and finding IDs must remain unique across the iteration.
 5. The controller, not either Agent, resolves pending criteria to `passed` in
    the final report.
 
@@ -101,6 +108,9 @@ Planning dialogue, proposal compilation, and approval evidence.
 `src/software_agent_team/responses.py` owns the smaller semantic response
 bodies and the explicit mapping of controller-owned fields for each artifact
 kind. These are different boundaries, not duplicate persisted schemas.
+`src/software_agent_team/assembly.py` is the shared binding layer that combines
+those semantic bodies with controller-owned Git, command, identity, commit,
+and review-scope facts for both fixed and task-defined teams.
 
 Phase artifacts use canonical run-relative paths, write-once persistence, and
 SHA-256 references. Structural schema validation is followed by contextual

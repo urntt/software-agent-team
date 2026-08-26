@@ -270,6 +270,7 @@ Each concept has one authoritative owner.
 | Phase and handoff artifact schemas | `src/software_agent_team/artifacts.py` |
 | Canonical persisted-model integrity digest | `src/software_agent_team/integrity.py` |
 | Immutable artifact, handoff, and output persistence | `src/software_agent_team/artifact_store.py` |
+| Controller binding of Agent semantics to verified runtime facts | `src/software_agent_team/assembly.py` |
 | Sanitized Agent runtime boundary | `configs/openclaw.example.json5` |
 | SAT-owned OpenClaw process-environment isolation | `src/software_agent_team/openclaw_runtime.py` and `scripts/openclaw-environment.sh` |
 | Run-scoped runtime materialization and preflight | `src/software_agent_team/runtime_configuration.py` |

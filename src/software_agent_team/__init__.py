@@ -35,6 +35,13 @@ from software_agent_team.artifacts import (
     parse_phase_artifact,
     validate_artifact_context,
 )
+from software_agent_team.assembly import (
+    ArtifactAssemblyError,
+    assemble_review_report,
+    assemble_test_report,
+    assemble_work_result,
+    validate_verification_assignment,
+)
 from software_agent_team.benchmark_seed import (
     BenchmarkSeedError,
     prepare_benchmark_seed,
@@ -221,6 +228,7 @@ __all__ = [
     "AgentTokenUsage",
     "ApprovedPlanningResult",
     "ArtifactAlreadyExistsError",
+    "ArtifactAssemblyError",
     "ArtifactIntegrityError",
     "ArtifactKind",
     "ArtifactReference",
@@ -334,6 +342,9 @@ __all__ = [
     "WorkflowOutcome",
     "WorkspaceAlreadyExistsError",
     "WorkspaceIntegrityError",
+    "assemble_review_report",
+    "assemble_test_report",
+    "assemble_work_result",
     "build_agent_execution_request",
     "build_dynamic_agent_execution_request",
     "capability_for_legacy_role",
@@ -362,5 +373,6 @@ __all__ = [
     "stable_agent_session_key",
     "stable_session_key",
     "validate_artifact_context",
+    "validate_verification_assignment",
     "validate_work_result_snapshot",
 ]

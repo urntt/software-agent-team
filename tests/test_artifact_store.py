@@ -30,7 +30,9 @@ from software_agent_team.artifacts import (
     IterationDecision,
     IterationRecord,
     PlanTask,
+    ReviewFinding,
     ReviewReport,
+    ReviewSeverity,
     ReviewVerdict,
     TaskBrief,
     WorkResult,
@@ -285,6 +287,48 @@ def adaptive_team_plan() -> TeamPlan:
     )
 
 
+def adaptive_review_team_plan() -> TeamPlan:
+    """Return a dynamic plan with two independent review Agents."""
+
+    base = adaptive_team_plan()
+    reviewers = (
+        AgentSpec(
+            id="product_reviewer",
+            label="Product reviewer",
+            responsibility="Review observable product behavior.",
+            rationale="Product criteria require independent inspection.",
+            capability=AgentCapability.REVIEW,
+            permission_profile=PermissionProfile.READ_ONLY,
+            stage_id="verify",
+            dependencies=("frontend_builder", "backend_builder"),
+            expected_output=ArtifactKind.REVIEW_REPORT,
+            model_route_id="default",
+            timeout_seconds=180,
+            workspace_scope="repository",
+        ),
+        AgentSpec(
+            id="documentation_reviewer",
+            label="Documentation reviewer",
+            responsibility="Review delivery documentation.",
+            rationale="Documentation criteria require independent inspection.",
+            capability=AgentCapability.REVIEW,
+            permission_profile=PermissionProfile.READ_ONLY,
+            stage_id="verify",
+            dependencies=("frontend_builder", "backend_builder"),
+            expected_output=ArtifactKind.REVIEW_REPORT,
+            model_route_id="default",
+            timeout_seconds=180,
+            workspace_scope="repository",
+        ),
+    )
+    return TeamPlan.model_validate(
+        {
+            **base.model_dump(mode="python"),
+            "agents": (*base.agents, *reviewers),
+        }
+    )
+
+
 def make_adaptive_store(tmp_path: Path) -> ArtifactStore:
     """Create a store bound to run-scoped dynamic Agent IDs."""
 
@@ -294,6 +338,18 @@ def make_adaptive_store(tmp_path: Path) -> ArtifactStore:
         run_directory,
         task_brief=task_brief(),
         team_plan=adaptive_team_plan(),
+    )
+
+
+def make_adaptive_review_store(tmp_path: Path) -> ArtifactStore:
+    """Create a store bound to a dynamic team with split review ownership."""
+
+    run_directory = tmp_path / "runs" / "task-manager-001"
+    run_directory.mkdir(parents=True)
+    return ArtifactStore(
+        run_directory,
+        task_brief=task_brief(),
+        team_plan=adaptive_review_team_plan(),
     )
 
 
@@ -395,9 +451,9 @@ def test_store_round_trips_all_six_phase_artifacts(tmp_path: Path) -> None:
         input_commit=INPUT_COMMIT,
         output_commit=OUTPUT_COMMIT,
         implementation_plan=plan_ref,
-        work_result=work_ref,
-        test_report=test_ref,
-        review_report=review_ref,
+        work_results=(work_ref,),
+        test_reports=(test_ref,),
+        review_reports=(review_ref,),
         decision=IterationDecision.ACCEPT,
         summary="The implementation is ready for delivery.",
     )
@@ -544,6 +600,294 @@ def test_store_binds_dynamic_execution_to_approved_capability(
 
     with pytest.raises(ArtifactStoreError, match="context"):
         store.write(record.model_copy(update={"capability": "review"}))
+
+
+def test_dynamic_iteration_accepts_a_work_chain_and_one_testing_agent(
+    tmp_path: Path,
+) -> None:
+    store = make_adaptive_store(tmp_path)
+    middle_commit = "d" * 40
+    final_commit = "e" * 40
+    frontend = work_result().model_copy(
+        update={
+            "team_id": "adaptive_team",
+            "producer": "frontend_builder",
+            "output_commit": middle_commit,
+            "completed_tasks": ("TASK_FRONTEND",),
+            "changed_files": ("frontend/app.py",),
+        }
+    )
+    backend = work_result().model_copy(
+        update={
+            "team_id": "adaptive_team",
+            "producer": "backend_builder",
+            "input_commit": middle_commit,
+            "output_commit": final_commit,
+            "completed_tasks": ("TASK_BACKEND",),
+            "changed_files": ("backend/store.py",),
+        }
+    )
+    test = make_test_report().model_copy(
+        update={
+            "team_id": "adaptive_team",
+            "producer": "quality_auditor",
+            "input_commit": final_commit,
+        }
+    )
+    frontend_ref = store.write(frontend)
+    backend_ref = store.write(backend)
+    test_ref = store.write(test)
+    iteration = IterationRecord(
+        run_id="task-manager-001",
+        team_id="adaptive_team",
+        created_at=CREATED_AT,
+        iteration=1,
+        input_commit=INPUT_COMMIT,
+        output_commit=final_commit,
+        implementation_plan_sha256="d" * 64,
+        work_results=(frontend_ref, backend_ref),
+        test_reports=(test_ref,),
+        decision=IterationDecision.ACCEPT,
+        summary="Both implementations and independent testing passed.",
+    )
+
+    iteration_ref = store.write(iteration)
+    final = FinalReport(
+        run_id="task-manager-001",
+        team_id="adaptive_team",
+        created_at=CREATED_AT,
+        status=FinalStatus.COMPLETED,
+        termination_reason="succeeded",
+        final_commit=final_commit,
+        iterations=(iteration_ref,),
+        acceptance_results=test.criteria,
+        summary="The dynamic team completed the confirmed task.",
+    )
+    final_ref = store.write(final)
+
+    assert store.load(iteration_ref) == iteration
+    assert store.load(final_ref) == final
+
+
+def test_dynamic_iteration_requires_evidence_from_every_approved_writer(
+    tmp_path: Path,
+) -> None:
+    store = make_adaptive_store(tmp_path)
+    final_commit = "d" * 40
+    frontend = work_result().model_copy(
+        update={
+            "team_id": "adaptive_team",
+            "producer": "frontend_builder",
+            "output_commit": final_commit,
+            "completed_tasks": ("TASK_FRONTEND",),
+            "changed_files": ("frontend/app.py",),
+        }
+    )
+    test = make_test_report().model_copy(
+        update={
+            "team_id": "adaptive_team",
+            "producer": "quality_auditor",
+            "input_commit": final_commit,
+        }
+    )
+    frontend_ref = store.write(frontend)
+    test_ref = store.write(test)
+    iteration = IterationRecord(
+        run_id="task-manager-001",
+        team_id="adaptive_team",
+        created_at=CREATED_AT,
+        iteration=1,
+        input_commit=INPUT_COMMIT,
+        output_commit=final_commit,
+        implementation_plan_sha256="d" * 64,
+        work_results=(frontend_ref,),
+        test_reports=(test_ref,),
+        decision=IterationDecision.ACCEPT,
+        summary="The incomplete writer evidence must be rejected.",
+    )
+
+    with pytest.raises(ArtifactStoreError, match="every approved writer"):
+        store.write(iteration)
+
+
+def test_dynamic_iteration_aggregates_split_independent_review_scope(
+    tmp_path: Path,
+) -> None:
+    store = make_adaptive_review_store(tmp_path)
+    middle_commit = "d" * 40
+    final_commit = "e" * 40
+    frontend_ref = store.write(
+        work_result().model_copy(
+            update={
+                "team_id": "adaptive_team",
+                "producer": "frontend_builder",
+                "output_commit": middle_commit,
+                "completed_tasks": ("TASK_FRONTEND",),
+                "changed_files": ("frontend/app.py",),
+            }
+        )
+    )
+    backend_ref = store.write(
+        work_result().model_copy(
+            update={
+                "team_id": "adaptive_team",
+                "producer": "backend_builder",
+                "input_commit": middle_commit,
+                "output_commit": final_commit,
+                "completed_tasks": ("TASK_BACKEND",),
+                "changed_files": ("backend/store.py",),
+            }
+        )
+    )
+    base_test = make_test_report()
+    manual = ("AC_CREATE", "AC_PERSIST")
+    criteria = tuple(
+        criterion.model_copy(
+            update={
+                "status": (
+                    CheckStatus.PENDING_REVIEW
+                    if criterion.criterion_id in manual
+                    else CheckStatus.PASSED
+                )
+            }
+        )
+        for criterion in base_test.criteria
+    )
+    test = PhaseTestReport.model_validate(
+        {
+            **base_test.model_dump(mode="python"),
+            "team_id": "adaptive_team",
+            "producer": "quality_auditor",
+            "input_commit": final_commit,
+            "criteria": criteria,
+            "manual_review_criteria": manual,
+        }
+    )
+    product_review = ReviewReport(
+        run_id="task-manager-001",
+        team_id="adaptive_team",
+        producer="product_reviewer",
+        created_at=CREATED_AT,
+        iteration=1,
+        input_commit=final_commit,
+        verdict=ReviewVerdict.ACCEPT,
+        reviewed_criteria=("AC_CREATE",),
+        summary="The product behavior satisfies its assigned criterion.",
+    )
+    documentation_review = ReviewReport(
+        run_id="task-manager-001",
+        team_id="adaptive_team",
+        producer="documentation_reviewer",
+        created_at=CREATED_AT,
+        iteration=1,
+        input_commit=final_commit,
+        verdict=ReviewVerdict.ACCEPT,
+        reviewed_criteria=("AC_PERSIST",),
+        summary="The persistence guidance satisfies its assigned criterion.",
+    )
+    test_ref = store.write(test)
+    product_review_ref = store.write(product_review)
+    documentation_review_ref = store.write(documentation_review)
+    iteration = IterationRecord(
+        run_id="task-manager-001",
+        team_id="adaptive_team",
+        created_at=CREATED_AT,
+        iteration=1,
+        input_commit=INPUT_COMMIT,
+        output_commit=final_commit,
+        implementation_plan_sha256="d" * 64,
+        work_results=(frontend_ref, backend_ref),
+        test_reports=(test_ref,),
+        review_reports=(product_review_ref, documentation_review_ref),
+        decision=IterationDecision.ACCEPT,
+        summary="All dynamic implementation and split review evidence passed.",
+    )
+
+    iteration_ref = store.write(iteration)
+
+    assert store.load(iteration_ref) == iteration
+
+
+def test_dynamic_iteration_rejects_duplicate_finding_ids_across_reviewers(
+    tmp_path: Path,
+) -> None:
+    store = make_adaptive_review_store(tmp_path)
+    middle_commit = "d" * 40
+    final_commit = "e" * 40
+    frontend_ref = store.write(
+        work_result().model_copy(
+            update={
+                "team_id": "adaptive_team",
+                "producer": "frontend_builder",
+                "output_commit": middle_commit,
+                "completed_tasks": ("TASK_FRONTEND",),
+                "changed_files": ("frontend/app.py",),
+            }
+        )
+    )
+    backend_ref = store.write(
+        work_result().model_copy(
+            update={
+                "team_id": "adaptive_team",
+                "producer": "backend_builder",
+                "input_commit": middle_commit,
+                "output_commit": final_commit,
+                "completed_tasks": ("TASK_BACKEND",),
+                "changed_files": ("backend/store.py",),
+            }
+        )
+    )
+    test_ref = store.write(
+        make_test_report().model_copy(
+            update={
+                "team_id": "adaptive_team",
+                "producer": "quality_auditor",
+                "input_commit": final_commit,
+            }
+        )
+    )
+    duplicate = ReviewFinding(
+        id="FINDING_SHARED",
+        severity=ReviewSeverity.HIGH,
+        blocking=True,
+        category="correctness",
+        description="The reviewers found a blocking correctness issue.",
+        recommendation="Correct the issue before acceptance.",
+    )
+    reviews = tuple(
+        store.write(
+            ReviewReport(
+                run_id="task-manager-001",
+                team_id="adaptive_team",
+                producer=producer,
+                created_at=CREATED_AT,
+                iteration=1,
+                input_commit=final_commit,
+                verdict=ReviewVerdict.REVISE,
+                findings=(duplicate,),
+                summary="A blocking issue requires revision.",
+            )
+        )
+        for producer in ("product_reviewer", "documentation_reviewer")
+    )
+    iteration = IterationRecord(
+        run_id="task-manager-001",
+        team_id="adaptive_team",
+        created_at=CREATED_AT,
+        iteration=1,
+        input_commit=INPUT_COMMIT,
+        output_commit=final_commit,
+        implementation_plan_sha256="d" * 64,
+        work_results=(frontend_ref, backend_ref),
+        test_reports=(test_ref,),
+        review_reports=reviews,
+        decision=IterationDecision.REVISE,
+        blocking_finding_ids=(duplicate.id,),
+        summary="Duplicate finding identities must be rejected.",
+    )
+
+    with pytest.raises(ArtifactStoreError, match="unique across the iteration"):
+        store.write(iteration)
 
 
 def test_store_round_trips_multiple_durable_handoffs(tmp_path: Path) -> None:
@@ -731,14 +1075,14 @@ def test_iteration_record_must_match_referenced_commits(tmp_path: Path) -> None:
         input_commit="d" * 40,
         output_commit=OUTPUT_COMMIT,
         implementation_plan=plan_ref,
-        work_result=work_ref,
-        test_report=test_ref,
-        review_report=review_ref,
+        work_results=(work_ref,),
+        test_reports=(test_ref,),
+        review_reports=(review_ref,),
         decision=IterationDecision.ACCEPT,
         summary="This record contains a mismatched input commit.",
     )
 
-    with pytest.raises(ArtifactStoreError, match="commits"):
+    with pytest.raises(ArtifactStoreError, match="commit"):
         store.write(iteration)
 
 
@@ -754,9 +1098,9 @@ def test_final_report_must_match_final_iteration_evidence(tmp_path: Path) -> Non
             input_commit=INPUT_COMMIT,
             output_commit=OUTPUT_COMMIT,
             implementation_plan=plan_ref,
-            work_result=work_ref,
-            test_report=test_ref,
-            review_report=review_ref,
+            work_results=(work_ref,),
+            test_reports=(test_ref,),
+            review_reports=(review_ref,),
             decision=IterationDecision.ACCEPT,
             summary="The iteration is ready for delivery.",
         )
@@ -804,9 +1148,9 @@ def test_iteration_limit_failure_can_be_grounded_in_failed_gates(
         input_commit=INPUT_COMMIT,
         output_commit=OUTPUT_COMMIT,
         implementation_plan=plan_ref,
-        work_result=work_ref,
-        test_report=test_ref,
-        review_report=review_ref,
+        work_results=(work_ref,),
+        test_reports=(test_ref,),
+        review_reports=(review_ref,),
         decision=IterationDecision.FAIL,
         blocking_reasons=("The deterministic quality gate failed.",),
         summary="The run stopped with reproducible failing gate evidence.",
@@ -830,17 +1174,23 @@ def test_non_accept_iteration_requires_blocking_evidence() -> None:
                 ArtifactKind.IMPLEMENTATION_PLAN,
                 "implementation-plan.json",
             ),
-            work_result=reference(
-                ArtifactKind.WORK_RESULT,
-                "iterations/01/agents/generalist_developer/work-result.json",
+            work_results=(
+                reference(
+                    ArtifactKind.WORK_RESULT,
+                    "iterations/01/agents/generalist_developer/work-result.json",
+                ),
             ),
-            test_report=reference(
-                ArtifactKind.TEST_REPORT,
-                "iterations/01/agents/tester/test-report.json",
+            test_reports=(
+                reference(
+                    ArtifactKind.TEST_REPORT,
+                    "iterations/01/agents/tester/test-report.json",
+                ),
             ),
-            review_report=reference(
-                ArtifactKind.REVIEW_REPORT,
-                "iterations/01/agents/reviewer/review-report.json",
+            review_reports=(
+                reference(
+                    ArtifactKind.REVIEW_REPORT,
+                    "iterations/01/agents/reviewer/review-report.json",
+                ),
             ),
             decision=IterationDecision.FAIL,
             summary="Missing blocking evidence must be rejected.",

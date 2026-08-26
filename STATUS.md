@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** Phase 3C DAG scheduler implemented; dynamic controller integration is next
+**Current milestone:** Phase 3C dynamic evidence aggregation implemented; dynamic runner integration is next
 
 **Last updated:** August 26, 2026
 
@@ -48,7 +48,7 @@ permissions, missing independent quality coverage, unauthorized model routes,
 and over-limit concurrency or Agent counts before Agent creation. Recovery
 verifies the exact TaskBrief binding, TeamPlan digest, fixed manifest version,
 fixed team digest, resolved Agent timeouts, and cross-file run metadata. The
-complete repository check passes with 483 offline tests.
+complete repository check passes with 500 offline tests.
 
 `RunEvent` is also an executable, append-only contract. Every current workflow
 progress update is persisted with a contiguous sequence, lifecycle revision,
@@ -100,6 +100,17 @@ producer, handoff endpoint, stage, and recorded capability back to the exact
 run-scoped `AgentSpec`. The fixed evaluation adapter now writes through this
 same generic evidence boundary.
 
+Controller-owned artifact assembly is now shared by fixed and task-defined
+teams. It combines validated Agent semantics with the exact approved AgentSpec
+identity, controller-verified Git snapshot, deterministic command evidence,
+immutable quality commit, and assigned review scope. Dynamic `IterationRecord`
+aggregation accepts task-proportional teams rather than one hard-coded
+Developer/Tester/Reviewer tuple: it requires a chained result from every
+approved writer, consistent deterministic evidence from every approved Tester
+(or one controller report when the team intentionally has none), and evidence
+from every approved Reviewer. Split review scopes must exactly cover manual
+criteria, and finding identities must be unique across the iteration.
+
 Run configuration materialization emits only the approved AgentSpecs, clones
 their least-privilege capability profiles, disables model fallback, and binds
 every Agent to the verified workspace and selected route. Exact-label sandbox
@@ -113,9 +124,11 @@ pair. Fixed evaluation fixtures retain their explicit dual-quality topology.
 The Planning interaction is offline-verified as a product-style flow but is
 not yet activated by bare `sat`: activation is intentionally paired with the
 Phase 3C runtime so SAT never presents a dynamic plan and then silently
-executes the old fixed team. Generic response assembly, iteration aggregation,
-general DAG scheduling, safe multi-writer integration, and active control
-application remain pending.
+executes the old fixed team. The general DAG scheduler, generic response
+assembly, and dynamic iteration aggregation are implemented. Dynamic Agent
+invocation, persisted handoff creation, quality convergence, aggregate budget
+integration, safe multi-writer execution beyond the current serialized Git
+chain, and active control application remain pending.
 
 ## Product Readiness Boundary
 
@@ -508,8 +521,9 @@ instead of selecting a fixture.
 - An independent fresh-device rehearsal and live demonstration outside the
   development host;
 - Activation of the implemented Adaptive Planning interaction in bare `sat`;
-- Dynamic response/artifact/handoff assembly and quality convergence around
-  the implemented approved-TeamPlan scheduler;
+- Dynamic Agent invocation, persisted handoff creation, quality convergence,
+  and aggregate runtime budget accounting around the implemented
+  approved-TeamPlan scheduler and artifact assembly;
 - Compact, standard, and detailed visibility backed by persisted per-Agent
   events;
 - User guidance, correction, pause, resume, interruption, and cancellation
@@ -533,10 +547,11 @@ action succeeded after interruption.
 
 ## Next Milestone
 
-The next Phase 3C batch connects dynamic response assembly, persisted handoffs,
+The next Phase 3C batch connects dynamic Agent invocation, persisted handoffs,
 deterministic quality gates, iteration convergence, and aggregate runtime
-budgets to the implemented approved-TeamPlan scheduler. It then activates the
-completed Planning interaction in bare `sat`. Later Phase 3
+budgets to the implemented approved-TeamPlan scheduler and shared artifact
+assembly. It then activates the completed Planning interaction in bare `sat`.
+Later Phase 3
 batches add richer progress and controls, then model routing. Fixed-topology
 comparison moves to Phase 4 so it can remain a controlled baseline rather than
 defining the product's permanent role layout.

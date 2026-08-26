@@ -70,14 +70,15 @@ unowned model choices. Responsibility is divided explicitly:
 | Agent number, labels, responsibilities, and capabilities | Bootstrap Planning derives them from the task and explains each one | User approves or revises the overview | Controller creates only approved `AgentSpec` entries |
 | Dependencies and possible parallel waves | Bootstrap Planning proposes a DAG | User approves it; policy supplies safe limits | Controller validates acyclicity and schedules only ready nodes |
 | Maximum concurrency | Bootstrap Planning proposes a bounded value | User may edit it; policy caps it | Controller decides which ready Agents actually start without exceeding the cap |
-| Per-Agent invocation timeout | Bootstrap Planning proposes values by capability and task | User may edit them; capability policy supplies ceilings | Controller passes and enforces the exact approved timeout for every invocation |
+| Per-Agent invocation timeout | Bootstrap Planning estimates workload and expected duration; it does not authorize a timeout | Capability policy resolves a safe default and ceiling; the user may edit the advanced value within that envelope | Controller freezes, passes, and enforces the exact resolved timeout for every invocation |
 | Call, token, duration, iteration, and cost budgets | Product policy supplies the safe envelope; Planning works within it | User sees and approves the effective limits | Controller rejects over-budget plans and stops further launches when a limit is reached |
 | Model route | Planning may recommend task needs; configured profiles and routing policy provide candidates | User approves effective routes and switch conditions | Controller resolves and records the authorized route; there is no silent fallback |
 | Replanning or team changes during execution | User correction or an Agent recommendation may request a change | Material changes require a new validated revision and user confirmation | Controller applies a revision only at a safe checkpoint |
 
-The Planner therefore proposes semantic organization, the user authorizes
-material choices, policy defines the allowed envelope, and the controller owns
-validation, creation, scheduling, timeouts, lifecycle, evidence, and cleanup.
+The Planner therefore proposes semantic organization and workload estimates,
+the user authorizes material choices, policy resolves the allowed operational
+envelope, and the controller owns validation, creation, scheduling, timeouts,
+lifecycle, evidence, and cleanup.
 
 ## Planned User Journey
 
@@ -464,9 +465,15 @@ response contracts, exact model/timeout binding, and AgentSpec-derived cleanup
 selection are implemented. Adaptive plans may use one downstream independent
 quality Agent for a small task; separate testing and review Agents remain an
 explicit justified choice rather than a hidden minimum topology. Controller
-artifact/handoff attribution and bounded DAG dispatch are also implemented.
-Dynamic response assembly, quality convergence, aggregate runtime budget
-integration, and bare `sat` activation remain in this batch.
+artifact/handoff attribution, bounded DAG dispatch, shared controller-owned
+WorkResult/TestReport/ReviewReport assembly, and dynamic iteration aggregation
+are also implemented. Iteration validation requires a chained result from
+every approved writer, deterministic evidence from every approved Tester or
+from the controller when no Tester exists, evidence from every approved
+Reviewer, one immutable quality commit, and complete manual-review coverage.
+Dynamic Agent invocation, persisted handoff creation, quality convergence,
+aggregate runtime budget integration, and bare `sat` activation remain in this
+batch.
 
 ### Batch 3D: Observable and Controllable Execution
 

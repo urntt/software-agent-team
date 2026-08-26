@@ -23,7 +23,6 @@ from software_agent_team.artifacts import (
     ArtifactReference,
     CheckStatus,
     CommandEvidence,
-    CriterionResult,
     FinalReport,
     FinalStatus,
     HandoffEnvelope,
@@ -39,6 +38,13 @@ from software_agent_team.artifacts import (
     TestReport,
     WorkResult,
     resolve_acceptance_results,
+)
+from software_agent_team.assembly import (
+    ArtifactAssemblyError,
+    assemble_review_report,
+    assemble_test_report,
+    assemble_work_result,
+    validate_verification_assignment,
 )
 from software_agent_team.budgets import AgentBudget, ModelPricing
 from software_agent_team.execution import (
@@ -611,9 +617,9 @@ class WorkflowCoordinator:
                 input_commit=snapshot.input_commit,
                 output_commit=snapshot.output_commit,
                 implementation_plan=plan_reference,
-                work_result=work_reference,
-                test_report=test_reference,
-                review_report=review_reference,
+                work_results=(work_reference,),
+                test_reports=(test_reference,),
+                review_reports=(review_reference,),
                 decision=decision,
                 blocking_finding_ids=blocking_ids,
                 blocking_reasons=blocking_reasons,
@@ -765,24 +771,14 @@ class WorkflowCoordinator:
         brief: TaskBrief,
         commands: tuple[CommandEvidence, ...],
     ) -> None:
-        expected = {criterion.id for criterion in brief.acceptance_criteria}
-        if any(not command.criterion_ids for command in commands):
-            raise WorkflowEvidenceError(
-                "quality-gate evidence is missing criterion coverage"
+        try:
+            validate_verification_assignment(
+                brief,
+                commands,
+                self.manual_review_criteria,
             )
-        deterministic = {
-            criterion_id
-            for command in commands
-            for criterion_id in command.criterion_ids
-        }
-        if not deterministic.issubset(expected):
-            raise WorkflowEvidenceError(
-                "quality-gate evidence references an unknown criterion"
-            )
-        if deterministic | set(self.manual_review_criteria) != expected:
-            raise WorkflowEvidenceError(
-                "verification assignment does not cover every criterion"
-            )
+        except ArtifactAssemblyError as error:
+            raise WorkflowEvidenceError(str(error)) from error
 
     def _assemble_plan(
         self,
@@ -811,18 +807,13 @@ class WorkflowCoordinator:
     ) -> WorkResult:
         if not isinstance(body, WorkResultResponse):
             raise WorkflowEvidenceError("Developer returned the wrong semantic body")
-        return WorkResult(
-            run_id=context.brief.run_id,
+        return assemble_work_result(
+            body,
+            task_brief=context.brief,
             team_id=context.team_plan.team_id,
-            producer=AgentRole.GENERALIST_DEVELOPER,
+            agent=context.team_plan.get_agent(AgentRole.GENERALIST_DEVELOPER.value),
+            snapshot=snapshot,
             created_at=_utc(self.clock),
-            iteration=snapshot.iteration,
-            input_commit=snapshot.input_commit,
-            output_commit=snapshot.output_commit,
-            changed_files=snapshot.changed_files,
-            summary=body.summary,
-            completed_tasks=body.completed_tasks,
-            unresolved_issues=body.unresolved_issues,
         )
 
     def _assemble_test_report(
@@ -836,74 +827,16 @@ class WorkflowCoordinator:
     ) -> TestReport:
         if not isinstance(body, TestReportResponse):
             raise WorkflowEvidenceError("Tester returned the wrong semantic body")
-
-        if any(command.timed_out for command in commands):
-            status = CheckStatus.BLOCKED
-        elif any(command.exit_code != 0 for command in commands):
-            status = CheckStatus.FAILED
-        else:
-            status = CheckStatus.PASSED
-
-        manual = set(self.manual_review_criteria)
-        criteria: list[CriterionResult] = []
-        for criterion in context.brief.acceptance_criteria:
-            evidence = tuple(
-                command for command in commands if criterion.id in command.criterion_ids
-            )
-            command_ids = tuple(command.id for command in evidence)
-            timed_out = tuple(command.id for command in evidence if command.timed_out)
-            failed = tuple(
-                command.id
-                for command in evidence
-                if not command.timed_out and command.exit_code != 0
-            )
-            if timed_out:
-                criterion_status = CheckStatus.BLOCKED
-                detail = (
-                    f"Controller-recorded commands timed out: {', '.join(timed_out)}."
-                )
-            elif failed:
-                criterion_status = CheckStatus.FAILED
-                detail = f"Controller-recorded commands failed: {', '.join(failed)}."
-            elif criterion.id in manual:
-                criterion_status = CheckStatus.PENDING_REVIEW
-                detail = (
-                    "Deterministic evidence passed; independent review is pending."
-                    if command_ids
-                    else "This criterion is assigned to independent review."
-                )
-            else:
-                criterion_status = CheckStatus.PASSED
-                detail = (
-                    f"Controller-recorded commands passed: {', '.join(command_ids)}."
-                )
-            criteria.append(
-                CriterionResult(
-                    criterion_id=criterion.id,
-                    status=criterion_status,
-                    command_ids=command_ids,
-                    detail=detail,
-                )
-            )
-
-        blockers = tuple(
-            f"Deterministic command {command.id} timed out."
-            for command in commands
-            if command.timed_out
-        )
-        return TestReport(
-            run_id=context.brief.run_id,
+        return assemble_test_report(
+            body,
+            task_brief=context.brief,
             team_id=context.team_plan.team_id,
-            created_at=_utc(self.clock),
+            agent=context.team_plan.get_agent(AgentRole.TESTER.value),
             iteration=iteration,
             input_commit=input_commit,
-            status=status,
             commands=commands,
-            criteria=tuple(criteria),
             manual_review_criteria=self.manual_review_criteria,
-            findings=body.findings,
-            blockers=blockers,
-            summary=body.summary,
+            created_at=_utc(self.clock),
         )
 
     def _assemble_review_report(
@@ -916,17 +849,15 @@ class WorkflowCoordinator:
     ) -> ReviewReport:
         if not isinstance(body, ReviewReportResponse):
             raise WorkflowEvidenceError("Reviewer returned the wrong semantic body")
-        return ReviewReport(
-            run_id=context.brief.run_id,
+        return assemble_review_report(
+            body,
+            task_brief=context.brief,
             team_id=context.team_plan.team_id,
-            created_at=_utc(self.clock),
+            agent=context.team_plan.get_agent(AgentRole.REVIEWER.value),
             iteration=iteration,
             input_commit=input_commit,
-            verdict=body.verdict,
-            termination_reason=body.termination_reason,
             reviewed_criteria=self.manual_review_criteria,
-            findings=body.findings,
-            summary=body.summary,
+            created_at=_utc(self.clock),
         )
 
     def _invoke(

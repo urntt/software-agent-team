@@ -183,6 +183,7 @@ runtime/python/
 src/software_agent_team/
   artifacts.py                 Persisted schemas
   artifact_store.py            Write-once artifact and output persistence
+  assembly.py                  Semantic response and verified-fact assembly
   budgets.py                   Agent and pricing budgets
   cli.py                       Unified command-line interface
   controls.py                  Persisted user-control command contracts
