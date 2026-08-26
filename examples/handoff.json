@@ -1,16 +1,17 @@
 {
+  "schema_version": 2,
   "run_id": "task-manager-001",
   "team_id": "function_specialized",
   "iteration": 1,
-  "source_role": "generalist_developer",
-  "target_role": "tester",
+  "source_agent_id": "generalist_developer",
+  "target_agent_id": "tester",
   "status": "completed",
   "summary": "Implemented the first task workflow and recorded the changed files.",
   "input_commit": "3a12f72",
   "artifacts": [
     {
       "kind": "work_result",
-      "path": "iterations/01/work-result.json",
+      "path": "iterations/01/agents/generalist_developer/work-result.json",
       "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "description": "Implementation result for the first iteration"
     }

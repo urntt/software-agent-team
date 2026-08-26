@@ -584,7 +584,7 @@ def test_controller_persists_real_workspace_and_snapshot_evidence(
         artifacts=(
             ArtifactReference(
                 kind=ArtifactKind.WORK_RESULT,
-                path="iterations/01/work-result.json",
+                path="iterations/01/agents/generalist_developer/work-result.json",
                 sha256=SHA256,
             ),
         ),

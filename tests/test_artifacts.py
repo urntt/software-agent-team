@@ -21,15 +21,15 @@ def valid_handoff_payload() -> dict[str, object]:
         "run_id": "task-manager-001",
         "team_id": "function_specialized",
         "iteration": 1,
-        "source_role": "generalist_developer",
-        "target_role": "tester",
+        "source_agent_id": "generalist_developer",
+        "target_agent_id": "tester",
         "status": "completed",
         "summary": "Implemented the first task workflow.",
         "input_commit": "3a12f72",
         "artifacts": [
             {
                 "kind": "work_result",
-                "path": "iterations/01/work-result.json",
+                "path": ("iterations/01/agents/generalist_developer/work-result.json"),
                 "sha256": (
                     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                 ),
@@ -99,9 +99,9 @@ def test_artifacts_cannot_escape_the_run_directory(path: str) -> None:
         HandoffEnvelope.model_validate(payload)
 
 
-def test_handoff_must_cross_a_role_boundary() -> None:
+def test_handoff_must_cross_an_agent_boundary() -> None:
     payload = valid_handoff_payload()
-    payload["target_role"] = "generalist_developer"
+    payload["target_agent_id"] = "generalist_developer"
 
     with pytest.raises(ValidationError, match="must differ"):
         HandoffEnvelope.model_validate(payload)
@@ -149,7 +149,8 @@ def valid_execution_payload() -> dict[str, object]:
         "team_id": "function_specialized",
         "iteration": 1,
         "stage": "implement",
-        "role": "generalist_developer",
+        "agent_id": "generalist_developer",
+        "capability": "implementation",
         "session_key": "agent:generalist_developer:test-session",
         "session_id": "session-generalist-developer",
         "model": "test-provider/test-model",
@@ -169,7 +170,7 @@ def valid_execution_payload() -> dict[str, object]:
         "stderr_sha256": "b" * 64,
         "response_artifact": {
             "kind": "work_result",
-            "path": "iterations/01/work-result.json",
+            "path": "iterations/01/agents/generalist_developer/work-result.json",
             "sha256": "c" * 64,
         },
     }
@@ -178,7 +179,8 @@ def valid_execution_payload() -> dict[str, object]:
 def test_valid_agent_execution_record_is_accepted() -> None:
     record = AgentExecutionRecord.model_validate(valid_execution_payload())
 
-    assert record.role.value == "generalist_developer"
+    assert record.agent_id == "generalist_developer"
+    assert record.capability == "implementation"
     assert record.duration_ms == 2000
 
 

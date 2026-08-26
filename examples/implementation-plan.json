@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "kind": "implementation_plan",
   "run_id": "task-manager-001",
   "team_id": "function_specialized",

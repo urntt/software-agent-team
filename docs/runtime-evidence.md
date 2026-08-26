@@ -186,17 +186,16 @@ runs/<run_id>/
 ├── implementation-plan.json
 ├── iterations/
 │   └── <nn>/
-│       ├── work-result.json
-│       ├── test-report.json
-│       ├── review-report.json
 │       ├── iteration-record.json
+│       ├── agents/<agent_id>/
+│       │   └── <typed-agent-artifact>.json
 │       ├── commands/
 │       │   ├── check_<name>.stdout.txt
 │       │   └── check_<name>.stderr.txt
 │       ├── executions/<stage>/
-│       │   ├── <role>-attempt-<nn>.json
-│       │   ├── <role>-attempt-<nn>.stdout.txt
-│       │   └── <role>-attempt-<nn>.stderr.txt
+│       │   ├── <agent_id>-attempt-<nn>.json
+│       │   ├── <agent_id>-attempt-<nn>.stdout.txt
+│       │   └── <agent_id>-attempt-<nn>.stderr.txt
 │       └── handoffs/<stage>/
 │           └── <sequence>-<source>-to-<target>.json
 ├── final-report.json
@@ -205,6 +204,12 @@ runs/<run_id>/
 workspaces/<run_id>/
 └── detached self-contained Git clone and generated result
 ```
+
+Artifact schema v2 attributes handoffs, execution telemetry, and Agent-owned
+artifacts to run-scoped Agent IDs. The Agent namespace prevents two Agents with
+the same output kind from claiming the same immutable path. On every write and
+load, the store checks producer identity, stage membership, capability, and
+handoff endpoints against the approved `TeamPlan`.
 
 The Adaptive Planning store is implemented but is not yet selected by the bare
 `sat` launcher. Its request proves explicit model-work authorization. Every

@@ -18,6 +18,7 @@ from pathlib import Path
 from pydantic import BaseModel, ValidationError
 
 from software_agent_team.artifacts import (
+    AgentRole,
     CheckStatus,
     CommandEvidence,
     FinalReport,
@@ -357,16 +358,27 @@ def _load_json_model[ModelT: BaseModel](path: Path, model: type[ModelT]) -> Mode
 def _validate_handoff(args: argparse.Namespace) -> int:
     handoff = _load_json_model(args.path, HandoffEnvelope)
     manifest = load_team_manifest(args.teams)
+    try:
+        source_role = AgentRole(handoff.source_agent_id)
+        target_role = (
+            None
+            if handoff.target_agent_id is None
+            else AgentRole(handoff.target_agent_id)
+        )
+    except ValueError as error:
+        raise ValueError(
+            "fixed-manifest validation requires compatibility Agent IDs"
+        ) from error
     manifest.validate_handoff_boundary(
         team_id=handoff.team_id,
         iteration=handoff.iteration,
-        source_role=handoff.source_role,
-        target_role=handoff.target_role,
+        source_role=source_role,
+        target_role=target_role,
     )
     print(
         "valid handoff: "
         f"run={handoff.run_id} team={handoff.team_id} "
-        f"iteration={handoff.iteration} source={handoff.source_role}"
+        f"iteration={handoff.iteration} source={handoff.source_agent_id}"
     )
     return 0
 

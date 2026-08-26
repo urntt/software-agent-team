@@ -204,19 +204,22 @@ def advance(
         (RunPhase.IMPLEMENTING, RunPhase.SNAPSHOTTING): (
             (
                 ArtifactKind.WORK_RESULT,
-                f"iterations/{record.current_iteration:02d}/work-result.json",
+                f"iterations/{record.current_iteration:02d}/agents/"
+                "generalist_developer/work-result.json",
             ),
         ),
         (RunPhase.VERIFYING, RunPhase.REVIEWING): (
             (
                 ArtifactKind.TEST_REPORT,
-                f"iterations/{record.current_iteration:02d}/test-report.json",
+                f"iterations/{record.current_iteration:02d}/agents/"
+                "tester/test-report.json",
             ),
         ),
         (RunPhase.REVIEWING, RunPhase.DECIDING): (
             (
                 ArtifactKind.REVIEW_REPORT,
-                f"iterations/{record.current_iteration:02d}/review-report.json",
+                f"iterations/{record.current_iteration:02d}/agents/"
+                "reviewer/review-report.json",
             ),
             (
                 ArtifactKind.ITERATION_RECORD,

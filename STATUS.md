@@ -48,7 +48,7 @@ permissions, missing independent quality coverage, unauthorized model routes,
 and over-limit concurrency or Agent counts before Agent creation. Recovery
 verifies the exact TaskBrief binding, TeamPlan digest, fixed manifest version,
 fixed team digest, resolved Agent timeouts, and cross-file run metadata. The
-complete repository check passes with 473 offline tests.
+complete repository check passes with 475 offline tests.
 
 `RunEvent` is also an executable, append-only contract. Every current workflow
 progress update is persisted with a contiguous sequence, lifecycle revision,
@@ -92,6 +92,14 @@ responsibility, assigned tasks, dependencies, permission profile, model route,
 and timeout into minimum-context prompts. Response parsing rejects mismatched
 Agent identity, capability, session, task ownership, model, or timeout.
 
+Artifact schema v2 removes fixed-role identity from durable handoffs and
+execution records. Every Agent-produced iteration artifact is stored beneath
+an Agent-ID namespace, so multiple approved Agents can produce the same typed
+artifact without path collisions. Artifact-store validation binds each
+producer, handoff endpoint, stage, and recorded capability back to the exact
+run-scoped `AgentSpec`. The fixed evaluation adapter now writes through this
+same generic evidence boundary.
+
 Run configuration materialization emits only the approved AgentSpecs, clones
 their least-privilege capability profiles, disables model fallback, and binds
 every Agent to the verified workspace and selected route. Exact-label sandbox
@@ -105,9 +113,9 @@ pair. Fixed evaluation fixtures retain their explicit dual-quality topology.
 The Planning interaction is offline-verified as a product-style flow but is
 not yet activated by bare `sat`: activation is intentionally paired with the
 Phase 3C runtime so SAT never presents a dynamic plan and then silently
-executes the old fixed team. Controller artifact and handoff assembly for
-arbitrary Agent IDs, general DAG scheduling, and active control application
-remain pending.
+executes the old fixed team. Generic response assembly, iteration aggregation,
+general DAG scheduling, safe multi-writer integration, and active control
+application remain pending.
 
 ## Product Readiness Boundary
 

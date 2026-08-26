@@ -267,8 +267,8 @@ Confirm all of the following before marking Phase 1 accepted:
   references every material transition artifact.
 - `implementation-plan.json` exists.
 - Each iteration contains a controller-assembled and verified
-  `work-result.json`, command
-  stdout/stderr, `test-report.json`, `review-report.json`, and
+  `agents/generalist_developer/work-result.json`, command stdout/stderr,
+  `agents/tester/test-report.json`, `agents/reviewer/review-report.json`, and
   `iteration-record.json`.
 - Planner, Generalist Developer, Tester, and Reviewer execution records exist;
   Tester and Reviewer evaluated the same immutable commit.

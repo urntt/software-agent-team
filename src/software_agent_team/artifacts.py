@@ -9,8 +9,9 @@ from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-ARTIFACT_SCHEMA_VERSION = 1
+ARTIFACT_SCHEMA_VERSION = 2
 COMMIT_PATTERN = r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+AGENT_ID_PATTERN = r"^[a-z][a-z0-9_]*$"
 
 
 class AgentRole(StrEnum):
@@ -96,9 +97,6 @@ class FinalStatus(StrEnum):
 
     COMPLETED = "completed"
     FAILED = "failed"
-
-
-type ArtifactProducer = AgentRole | Literal["controller"]
 
 
 IMPLEMENTATION_ROLES = {
@@ -223,8 +221,8 @@ class HandoffEnvelope(BaseModel):
     iteration: int = Field(ge=1, le=3)
     stage: str = Field(default="handoff", pattern=r"^[a-z][a-z0-9_]*$")
     sequence: int = Field(default=1, ge=1, le=999)
-    source_role: AgentRole
-    target_role: AgentRole | None = None
+    source_agent_id: str = Field(pattern=AGENT_ID_PATTERN)
+    target_agent_id: str | None = Field(default=None, pattern=AGENT_ID_PATTERN)
     status: HandoffStatus
     created_at: datetime | None = None
     summary: str = Field(min_length=1)
@@ -263,8 +261,11 @@ class HandoffEnvelope(BaseModel):
             and not self.blockers
         ):
             raise ValueError("blocked or failed handoffs must identify a blocker")
-        if self.target_role is not None and self.target_role == self.source_role:
-            raise ValueError("source and target roles must differ")
+        if (
+            self.target_agent_id is not None
+            and self.target_agent_id == self.source_agent_id
+        ):
+            raise ValueError("source and target Agents must differ")
         artifact_paths = [artifact.path for artifact in self.artifacts]
         if len(artifact_paths) != len(set(artifact_paths)):
             raise ValueError("handoff artifact references must be unique")
@@ -280,7 +281,7 @@ class PhaseArtifact(BaseModel):
     kind: ArtifactKind
     run_id: str = Field(min_length=1, pattern=r"^[a-z0-9][a-z0-9_-]*$")
     team_id: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9_]*$")
-    producer: ArtifactProducer
+    producer: str = Field(pattern=AGENT_ID_PATTERN)
     created_at: datetime
 
     @field_validator("created_at")
@@ -311,7 +312,8 @@ class AgentExecutionRecord(BaseModel):
     iteration: int = Field(ge=1, le=3)
     stage: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     attempt: int = Field(default=1, ge=1, le=99)
-    role: AgentRole
+    agent_id: str = Field(pattern=AGENT_ID_PATTERN)
+    capability: str = Field(pattern=AGENT_ID_PATTERN)
     session_key: str = Field(min_length=1)
     session_id: str | None = Field(default=None, min_length=1)
     model: str | None = Field(default=None, min_length=1)
@@ -461,7 +463,7 @@ class ImplementationPlan(IterationArtifact):
     """Planner-owned implementation plan for a confirmed task brief."""
 
     kind: Literal[ArtifactKind.IMPLEMENTATION_PLAN] = ArtifactKind.IMPLEMENTATION_PLAN
-    producer: Literal[AgentRole.PLANNER] = AgentRole.PLANNER
+    producer: Literal["planner"] = "planner"
     iteration: Literal[1] = 1
     objective: str = Field(min_length=1)
     approach: tuple[str, ...] = Field(min_length=1)
@@ -518,7 +520,7 @@ class WorkResult(IterationArtifact):
     """Verified source result attributed to one implementation Agent."""
 
     kind: Literal[ArtifactKind.WORK_RESULT] = ArtifactKind.WORK_RESULT
-    producer: AgentRole
+    producer: str = Field(pattern=AGENT_ID_PATTERN)
     input_commit: str = Field(pattern=COMMIT_PATTERN)
     output_commit: str = Field(pattern=COMMIT_PATTERN)
     summary: str = Field(min_length=1)
@@ -543,10 +545,12 @@ class WorkResult(IterationArtifact):
 
     @model_validator(mode="after")
     def validate_result(self) -> Self:
-        """Require an implementation role and a new immutable commit."""
+        """Require a new immutable commit.
 
-        if self.producer not in IMPLEMENTATION_ROLES:
-            raise ValueError("work results require an implementation role")
+        The run-scoped TeamPlan, rather than this context-free model, decides
+        whether the producer owns an implementation capability.
+        """
+
         if self.input_commit == self.output_commit:
             raise ValueError("work result output commit must differ from input")
         return self
@@ -631,7 +635,7 @@ class TestReport(IterationArtifact):
     """Tester analysis grounded in deterministic command evidence."""
 
     kind: Literal[ArtifactKind.TEST_REPORT] = ArtifactKind.TEST_REPORT
-    producer: Literal[AgentRole.TESTER] = AgentRole.TESTER
+    producer: str = Field(default="tester", pattern=AGENT_ID_PATTERN)
     input_commit: str = Field(pattern=COMMIT_PATTERN)
     status: Literal[
         CheckStatus.PASSED,
@@ -790,7 +794,7 @@ class ReviewReport(IterationArtifact):
     """Independent semantic review of one immutable implementation commit."""
 
     kind: Literal[ArtifactKind.REVIEW_REPORT] = ArtifactKind.REVIEW_REPORT
-    producer: Literal[AgentRole.REVIEWER] = AgentRole.REVIEWER
+    producer: str = Field(default="reviewer", pattern=AGENT_ID_PATTERN)
     input_commit: str = Field(pattern=COMMIT_PATTERN)
     verdict: ReviewVerdict = Field(
         description=(
@@ -1029,9 +1033,9 @@ def validate_artifact_context(
     *,
     task_brief: TaskBrief,
     team_id: str,
-    team_roles: set[AgentRole],
+    team_agents: dict[str, str],
     iteration_limit: int,
-    team_stages: dict[str, set[AgentRole]] | None = None,
+    team_stages: dict[str, set[str]] | None = None,
 ) -> None:
     """Validate one phase artifact against its frozen run inputs."""
 
@@ -1045,30 +1049,42 @@ def validate_artifact_context(
     ):
         raise ValueError("artifact iteration exceeds the run iteration limit")
     producer = getattr(artifact, "producer", None)
-    if isinstance(producer, AgentRole) and producer not in team_roles:
-        raise ValueError("artifact producer is not part of the selected team")
+    if (
+        producer is not None
+        and producer != "controller"
+        and producer not in team_agents
+    ):
+        raise ValueError("artifact producer is not part of the approved TeamPlan")
 
     if isinstance(artifact, (HandoffEnvelope, AgentExecutionRecord)):
         if team_stages is None:
             raise ValueError("Agent runtime artifacts require team stage context")
-        stage_roles = team_stages.get(artifact.stage)
-        if stage_roles is None:
+        stage_agents = team_stages.get(artifact.stage)
+        if stage_agents is None:
             raise ValueError("artifact stage is not part of the selected team")
-        role = (
-            artifact.source_role
+        agent_id = (
+            artifact.source_agent_id
             if isinstance(artifact, HandoffEnvelope)
-            else artifact.role
+            else artifact.agent_id
         )
-        if role not in team_roles:
-            raise ValueError("artifact role is not part of the selected team")
-        if role not in stage_roles:
-            raise ValueError("artifact role is not assigned to its declared stage")
+        if agent_id not in team_agents:
+            raise ValueError("artifact Agent is not part of the approved TeamPlan")
+        if agent_id not in stage_agents:
+            raise ValueError("artifact Agent is not assigned to its declared stage")
+        if (
+            isinstance(artifact, AgentExecutionRecord)
+            and artifact.capability != team_agents[agent_id]
+        ):
+            raise ValueError("execution capability differs from its approved AgentSpec")
 
     if isinstance(artifact, HandoffEnvelope):
         if artifact.created_at is None:
             raise ValueError("persisted handoffs require a creation timestamp")
-        if artifact.target_role is not None and artifact.target_role not in team_roles:
-            raise ValueError("handoff target is not part of the selected team")
+        if (
+            artifact.target_agent_id is not None
+            and artifact.target_agent_id not in team_agents
+        ):
+            raise ValueError("handoff target is not part of the approved TeamPlan")
         if artifact.input_commit is None:
             raise ValueError("persisted handoffs require an input commit")
         if re.fullmatch(COMMIT_PATTERN, artifact.input_commit) is None:
@@ -1078,8 +1094,11 @@ def validate_artifact_context(
     referenced_criteria: set[str] = set()
     if isinstance(artifact, ImplementationPlan):
         for task in artifact.tasks:
-            if task.owner not in team_roles or task.owner not in IMPLEMENTATION_ROLES:
-                raise ValueError("plan task owner is not an implementation team role")
+            owner = task.owner.value
+            if team_agents.get(owner) not in {"implementation", "integration"}:
+                raise ValueError(
+                    "plan task owner is not an approved implementation Agent"
+                )
             referenced_criteria.update(task.acceptance_criteria)
         if referenced_criteria != expected_criteria:
             missing = sorted(expected_criteria - referenced_criteria)
@@ -1093,7 +1112,17 @@ def validate_artifact_context(
                 "implementation plan acceptance coverage differs from the task "
                 f"brief ({'; '.join(details)})"
             )
+    elif isinstance(artifact, WorkResult):
+        if team_agents.get(artifact.producer) not in {
+            "implementation",
+            "integration",
+        }:
+            raise ValueError("work-result producer lacks implementation capability")
     elif isinstance(artifact, TestReport):
+        if artifact.producer != "controller" and (
+            team_agents.get(artifact.producer) != "testing"
+        ):
+            raise ValueError("test-report producer lacks testing capability")
         referenced_criteria = {
             criterion.criterion_id for criterion in artifact.criteria
         }
@@ -1104,6 +1133,8 @@ def validate_artifact_context(
         if not set(artifact.manual_review_criteria).issubset(expected_criteria):
             raise ValueError("test report references an unknown manual criterion")
     elif isinstance(artifact, ReviewReport):
+        if team_agents.get(artifact.producer) != "review":
+            raise ValueError("review-report producer lacks review capability")
         referenced_criteria = {
             criterion_id
             for finding in artifact.findings

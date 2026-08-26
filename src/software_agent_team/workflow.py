@@ -1189,7 +1189,7 @@ class WorkflowCoordinator:
         outputs = context.artifact_store.write_execution_outputs(
             iteration=request.iteration,
             stage=stage,
-            role=request.role,
+            agent_id=request.agent_id,
             attempt=attempt,
             stdout=telemetry.stdout,
             stderr=telemetry.stderr,
@@ -1200,7 +1200,8 @@ class WorkflowCoordinator:
             iteration=request.iteration,
             stage=stage,
             attempt=attempt,
-            role=request.role,
+            agent_id=request.agent_id,
+            capability=request.capability.value,
             session_key=request.session_key,
             session_id=telemetry.session_id,
             model=telemetry.model,
@@ -1227,7 +1228,7 @@ class WorkflowCoordinator:
         )
         reference = context.artifact_store.write(
             record,
-            description=f"Agent execution telemetry for {request.role.value}.",
+            description=f"Agent execution telemetry for {request.agent_id}.",
         )
         with context.execution_lock:
             context.execution_records.append(reference)
@@ -1256,8 +1257,8 @@ class WorkflowCoordinator:
             iteration=iteration,
             stage=stage,
             sequence=1,
-            source_role=source,
-            target_role=target,
+            source_agent_id=source.value,
+            target_agent_id=None if target is None else target.value,
             status=HandoffStatus.COMPLETED,
             created_at=_utc(self.clock),
             summary=summary,
@@ -1473,7 +1474,7 @@ class WorkflowCoordinator:
         calls = len(execution_records)
         failures = sum(item.error is not None for item in execution_records)
         identities = Counter(
-            (item.iteration, item.stage, item.role) for item in execution_records
+            (item.iteration, item.stage, item.agent_id) for item in execution_records
         )
         retries = sum(max(0, count - 1) for count in identities.values())
         duration_ms = sum(item.duration_ms for item in execution_records)

@@ -3,7 +3,9 @@
 This contributor-facing specification defines the product contract for
 task-defined Agent teams, interactive planning, observable execution, user
 controls, and model routing. Some contracts and the offline Planning interaction
-are implemented while dynamic execution and active controls remain staged work.
+are implemented. Run-scoped execution identity, prompts, runtime configuration,
+handoffs, telemetry, and Agent-namespaced artifact persistence are in place;
+general DAG execution and active controls remain staged work.
 Current behavior and gaps remain authoritative in
 [`STATUS.md`](../STATUS.md); the completed guided baseline remains specified in
 [`product-demo-slice.md`](product-demo-slice.md).
@@ -252,6 +254,13 @@ the change affects scope, cost, or delivery expectations.
 Existing fixed team manifests remain versioned evaluation fixtures. During
 migration they are compiled into the same `TeamPlan` contract so the repository
 does not retain two lifecycle implementations.
+
+The current Git workspace backend uses one detached clone and one Git index.
+It may execute read-only ready nodes concurrently, but it must serialize
+workspace writers even when their declared path scopes do not overlap. Parallel
+writer execution requires isolated worktrees or clones plus an explicit,
+controller-verified integration step; the scheduler must not infer Git safety
+from path ownership alone.
 
 ## Progress and Information Design
 

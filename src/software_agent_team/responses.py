@@ -26,7 +26,7 @@ from software_agent_team.execution import (
     AgentExecutionStatus,
 )
 from software_agent_team.integrity import canonical_model_sha256
-from software_agent_team.teams import TeamPlan
+from software_agent_team.teams import TeamPlan, capability_for_legacy_role
 
 
 class AgentArtifactResponseError(ValueError):
@@ -406,7 +406,9 @@ def _validate_response_context(
         artifact,
         task_brief=task_brief,
         team_id=request.team_id,
-        team_roles=set(team_roles),
+        team_agents={
+            role.value: capability_for_legacy_role(role).value for role in team_roles
+        },
         iteration_limit=iteration_limit,
     )
 

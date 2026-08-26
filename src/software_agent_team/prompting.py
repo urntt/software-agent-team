@@ -31,7 +31,12 @@ from software_agent_team.execution import (
 from software_agent_team.integrity import canonical_model_sha256
 from software_agent_team.planning import AdaptiveImplementationPlan, ProposedTask
 from software_agent_team.responses import RESPONSE_BODY_MODELS
-from software_agent_team.teams import AgentCapability, AgentSpec, TeamPlan
+from software_agent_team.teams import (
+    AgentCapability,
+    AgentSpec,
+    TeamPlan,
+    capability_for_legacy_role,
+)
 
 TEMPLATE_ROOT = Path(__file__).with_name("prompt_templates")
 
@@ -284,7 +289,10 @@ class AgentPromptInputs(BaseModel):
                     artifact,
                     task_brief=self.task_brief,
                     team_id=self.team_id,
-                    team_roles=set(self.team_roles),
+                    team_agents={
+                        role.value: capability_for_legacy_role(role).value
+                        for role in self.team_roles
+                    },
                     iteration_limit=self.iteration_limit,
                 )
             except ValueError as error:

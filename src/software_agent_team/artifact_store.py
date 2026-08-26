@@ -14,7 +14,6 @@ from pydantic import ValidationError
 from software_agent_team.artifacts import (
     ARTIFACT_MODELS,
     AgentExecutionRecord,
-    AgentRole,
     ArtifactKind,
     ArtifactReference,
     CheckStatus,
@@ -64,12 +63,12 @@ class ExecutionOutputEvidence(NamedTuple):
 def _artifact_path(artifact: PersistedArtifact) -> PurePosixPath:
     if isinstance(artifact, HandoffEnvelope):
         target = (
-            artifact.target_role.value
-            if artifact.target_role is not None
+            artifact.target_agent_id
+            if artifact.target_agent_id is not None
             else "controller"
         )
         filename = (
-            f"{artifact.sequence:02d}-{artifact.source_role.value}-to-{target}.json"
+            f"{artifact.sequence:02d}-{artifact.source_agent_id}-to-{target}.json"
         )
         return (
             PurePosixPath("iterations")
@@ -87,7 +86,10 @@ def _artifact_path(artifact: PersistedArtifact) -> PurePosixPath:
     if not isinstance(artifact, IterationArtifact):
         raise ArtifactStoreError(f"unsupported artifact model: {type(artifact)!r}")
     filename = f"{artifact.kind.value.replace('_', '-')}.json"
-    return PurePosixPath("iterations") / f"{artifact.iteration:02d}" / filename
+    base = PurePosixPath("iterations") / f"{artifact.iteration:02d}"
+    if isinstance(artifact, IterationRecord):
+        return base / filename
+    return base / "agents" / artifact.producer / filename
 
 
 def _execution_directory(record: AgentExecutionRecord) -> PurePosixPath:
@@ -100,7 +102,7 @@ def _execution_directory(record: AgentExecutionRecord) -> PurePosixPath:
 
 
 def _execution_stem(record: AgentExecutionRecord) -> str:
-    return f"{record.role.value}-attempt-{record.attempt:02d}"
+    return f"{record.agent_id}-attempt-{record.attempt:02d}"
 
 
 def _execution_output_paths(
@@ -109,7 +111,7 @@ def _execution_output_paths(
     return _execution_output_paths_for(
         iteration=record.iteration,
         stage=record.stage,
-        role=record.role,
+        agent_id=record.agent_id,
         attempt=record.attempt,
     )
 
@@ -118,11 +120,11 @@ def _execution_output_paths_for(
     *,
     iteration: int,
     stage: str,
-    role: AgentRole,
+    agent_id: str,
     attempt: int,
 ) -> tuple[PurePosixPath, PurePosixPath]:
     directory = PurePosixPath("iterations") / f"{iteration:02d}" / "executions" / stage
-    stem = f"{role.value}-attempt-{attempt:02d}"
+    stem = f"{agent_id}-attempt-{attempt:02d}"
     return directory / f"{stem}.stdout.txt", directory / f"{stem}.stderr.txt"
 
 
@@ -215,7 +217,7 @@ class ArtifactStore:
         *,
         iteration: int,
         stage: str,
-        role: AgentRole,
+        agent_id: str,
         attempt: int,
         stdout: str,
         stderr: str,
@@ -226,14 +228,14 @@ class ArtifactStore:
             raise ArtifactStoreError("execution iteration is outside the run limit")
         if not 1 <= attempt <= 99:
             raise ArtifactStoreError("execution attempt must be between 1 and 99")
-        stage_roles = self.team_plan.legacy_stage_roles.get(stage)
-        if stage_roles is None or role not in stage_roles:
-            raise ArtifactStoreError("execution role is outside the declared stage")
+        stage_agents = self.team_plan.stage_agents.get(stage)
+        if stage_agents is None or agent_id not in stage_agents:
+            raise ArtifactStoreError("execution Agent is outside the declared stage")
 
         stdout_relative, stderr_relative = _execution_output_paths_for(
             iteration=iteration,
             stage=stage,
-            role=role,
+            agent_id=agent_id,
             attempt=attempt,
         )
         self._prepare_parent(stdout_relative.parent)
@@ -328,9 +330,9 @@ class ArtifactStore:
             artifact,
             task_brief=self.task_brief,
             team_id=self.team_plan.team_id,
-            team_roles=set(self.team_plan.legacy_roles),
+            team_agents=self.team_plan.agent_capabilities,
             iteration_limit=self.iteration_limit,
-            team_stages=self.team_plan.legacy_stage_roles,
+            team_stages=self.team_plan.stage_agents,
         )
 
     def _validate_references(self, artifact: PersistedArtifact) -> None:
@@ -353,11 +355,11 @@ class ArtifactStore:
                     )
             if artifact.status is HandoffStatus.COMPLETED and not any(
                 isinstance(loaded, PhaseArtifact)
-                and loaded.producer is artifact.source_role
+                and loaded.producer == artifact.source_agent_id
                 for loaded in loaded_artifacts
             ):
                 raise ArtifactStoreError(
-                    "completed handoffs require evidence produced by the source role"
+                    "completed handoffs require evidence produced by the source Agent"
                 )
 
         elif isinstance(artifact, AgentExecutionRecord):
@@ -386,9 +388,9 @@ class ArtifactStore:
                     raise ArtifactStoreError(
                         "execution response must reference a phase artifact"
                     )
-                if response.producer is not artifact.role:
+                if response.producer != artifact.agent_id:
                     raise ArtifactStoreError(
-                        "execution response producer does not match the Agent role"
+                        "execution response producer does not match the Agent"
                     )
                 if isinstance(response, IterationArtifact) and (
                     response.iteration != artifact.iteration

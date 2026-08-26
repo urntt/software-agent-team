@@ -40,7 +40,15 @@ from software_agent_team.artifacts import TestReport as PhaseTestReport
 from software_agent_team.budgets import AgentBudget
 from software_agent_team.integrity import canonical_model_sha256
 from software_agent_team.teams import (
+    AgentCapability,
+    AgentSpec,
+    ModelRoute,
+    ModelRoutePlan,
+    ModelRoutingMode,
+    PermissionProfile,
+    PlanApprovalSource,
     TeamPlan,
+    TeamPlanOrigin,
     compile_fixed_team_plan,
     load_team_manifest,
 )
@@ -202,6 +210,93 @@ def make_store(tmp_path: Path) -> ArtifactStore:
     )
 
 
+def adaptive_team_plan() -> TeamPlan:
+    """Return a dynamic plan with two independently attributable writers."""
+
+    agents = (
+        AgentSpec(
+            id="frontend_builder",
+            label="Frontend builder",
+            responsibility="Implement the interface.",
+            rationale="The task has a separate interface surface.",
+            capability=AgentCapability.IMPLEMENTATION,
+            permission_profile=PermissionProfile.WORKSPACE_WRITE,
+            stage_id="implement",
+            expected_output=ArtifactKind.WORK_RESULT,
+            model_route_id="default",
+            timeout_seconds=300,
+            workspace_scope="repository/frontend",
+        ),
+        AgentSpec(
+            id="backend_builder",
+            label="Backend builder",
+            responsibility="Implement the persistence layer.",
+            rationale="The task has a separate server surface.",
+            capability=AgentCapability.IMPLEMENTATION,
+            permission_profile=PermissionProfile.WORKSPACE_WRITE,
+            stage_id="implement",
+            expected_output=ArtifactKind.WORK_RESULT,
+            model_route_id="default",
+            timeout_seconds=300,
+            workspace_scope="repository/backend",
+        ),
+        AgentSpec(
+            id="quality_auditor",
+            label="Quality auditor",
+            responsibility="Verify the integrated result.",
+            rationale="Independent evidence is required.",
+            capability=AgentCapability.TESTING,
+            permission_profile=PermissionProfile.READ_ONLY,
+            stage_id="verify",
+            dependencies=("frontend_builder", "backend_builder"),
+            expected_output=ArtifactKind.TEST_REPORT,
+            model_route_id="default",
+            timeout_seconds=180,
+            workspace_scope="repository",
+        ),
+    )
+    return TeamPlan(
+        plan_id="adaptive-plan-r1",
+        revision=1,
+        run_id="task-manager-001",
+        task_brief_sha256=canonical_model_sha256(task_brief()),
+        implementation_plan_sha256="d" * 64,
+        team_id="adaptive_team",
+        origin=TeamPlanOrigin.ADAPTIVE_PLANNING,
+        approval_source=PlanApprovalSource.USER,
+        created_at=CREATED_AT,
+        agents=agents,
+        model_routes=ModelRoutePlan(
+            mode=ModelRoutingMode.STRICT,
+            default_route_id="default",
+            routes=(ModelRoute(id="default", model="test/provider-model"),),
+        ),
+        budget=AgentBudget(
+            max_calls=6,
+            max_input_tokens=100_000,
+            max_output_tokens=20_000,
+            max_agent_duration_seconds=1_200,
+            max_estimated_cost_usd="5",
+        ),
+        iteration_limit=1,
+        max_concurrency=2,
+        independent_review=True,
+        revision_enabled=False,
+    )
+
+
+def make_adaptive_store(tmp_path: Path) -> ArtifactStore:
+    """Create a store bound to run-scoped dynamic Agent IDs."""
+
+    run_directory = tmp_path / "runs" / "task-manager-001"
+    run_directory.mkdir(parents=True)
+    return ArtifactStore(
+        run_directory,
+        task_brief=task_brief(),
+        team_plan=adaptive_team_plan(),
+    )
+
+
 def write_iteration_artifacts(
     store: ArtifactStore,
 ) -> tuple[ArtifactReference, ArtifactReference, ArtifactReference, ArtifactReference]:
@@ -217,8 +312,8 @@ def write_iteration_artifacts(
 def handoff(
     *,
     stage: str,
-    source_role: AgentRole,
-    target_role: AgentRole | None,
+    source_agent_id: AgentRole,
+    target_agent_id: AgentRole | None,
     artifacts: tuple[ArtifactReference, ...],
     sequence: int = 1,
 ) -> HandoffEnvelope:
@@ -230,8 +325,8 @@ def handoff(
         iteration=1,
         stage=stage,
         sequence=sequence,
-        source_role=source_role,
-        target_role=target_role,
+        source_agent_id=source_agent_id.value,
+        target_agent_id=(None if target_agent_id is None else target_agent_id.value),
         status=HandoffStatus.COMPLETED,
         created_at=CREATED_AT,
         summary="Persisted attributable work for the downstream role.",
@@ -255,7 +350,7 @@ def execution_record(
     outputs = store.write_execution_outputs(
         iteration=1,
         stage=stage,
-        role=role,
+        agent_id=role.value,
         attempt=attempt,
         stdout=stdout,
         stderr=stderr,
@@ -268,7 +363,8 @@ def execution_record(
         iteration=1,
         stage=stage,
         attempt=attempt,
-        role=role,
+        agent_id=role.value,
+        capability=store.team_plan.get_agent(role.value).capability.value,
         session_key=f"agent:{role.value}:test-session",
         session_id=f"session-{role.value}",
         model="test-provider/test-model",
@@ -321,9 +417,12 @@ def test_store_round_trips_all_six_phase_artifacts(tmp_path: Path) -> None:
 
     expected_paths = [
         (plan_ref, "implementation-plan.json"),
-        (work_ref, "iterations/01/work-result.json"),
-        (test_ref, "iterations/01/test-report.json"),
-        (review_ref, "iterations/01/review-report.json"),
+        (
+            work_ref,
+            "iterations/01/agents/generalist_developer/work-result.json",
+        ),
+        (test_ref, "iterations/01/agents/tester/test-report.json"),
+        (review_ref, "iterations/01/agents/reviewer/review-report.json"),
         (iteration_ref, "iterations/01/iteration-record.json"),
         (final_ref, "final-report.json"),
     ]
@@ -343,14 +442,118 @@ def test_store_round_trips_all_six_phase_artifacts(tmp_path: Path) -> None:
         store.write_final_report_markdown(final_ref, "# Replacement\n")
 
 
+def test_store_separates_same_kind_outputs_by_dynamic_agent_id(
+    tmp_path: Path,
+) -> None:
+    store = make_adaptive_store(tmp_path)
+    frontend = work_result().model_copy(
+        update={
+            "team_id": "adaptive_team",
+            "producer": "frontend_builder",
+            "completed_tasks": ("TASK_FRONTEND",),
+            "changed_files": ("frontend/app.py",),
+        }
+    )
+    backend = work_result().model_copy(
+        update={
+            "team_id": "adaptive_team",
+            "producer": "backend_builder",
+            "completed_tasks": ("TASK_BACKEND",),
+            "changed_files": ("backend/store.py",),
+        }
+    )
+
+    frontend_ref = store.write(frontend)
+    backend_ref = store.write(backend)
+    handoff_ref = store.write(
+        HandoffEnvelope(
+            run_id="task-manager-001",
+            team_id="adaptive_team",
+            iteration=1,
+            stage="implement",
+            sequence=1,
+            source_agent_id="frontend_builder",
+            target_agent_id="quality_auditor",
+            status=HandoffStatus.COMPLETED,
+            created_at=CREATED_AT,
+            summary="Frontend implementation is ready for quality checks.",
+            input_commit=INPUT_COMMIT,
+            artifacts=[frontend_ref],
+        )
+    )
+
+    assert frontend_ref.path == (
+        "iterations/01/agents/frontend_builder/work-result.json"
+    )
+    assert backend_ref.path == "iterations/01/agents/backend_builder/work-result.json"
+    assert frontend_ref.path != backend_ref.path
+    assert handoff_ref.path.endswith("01-frontend_builder-to-quality_auditor.json")
+    assert store.load(frontend_ref) == frontend
+    assert store.load(backend_ref) == backend
+
+
+def test_store_binds_dynamic_execution_to_approved_capability(
+    tmp_path: Path,
+) -> None:
+    store = make_adaptive_store(tmp_path)
+    response = store.write(
+        work_result().model_copy(
+            update={
+                "team_id": "adaptive_team",
+                "producer": "frontend_builder",
+                "completed_tasks": ("TASK_FRONTEND",),
+                "changed_files": ("frontend/app.py",),
+            }
+        )
+    )
+    outputs = store.write_execution_outputs(
+        iteration=1,
+        stage="implement",
+        agent_id="frontend_builder",
+        attempt=1,
+        stdout='{"status":"completed"}\n',
+        stderr="",
+    )
+    record = AgentExecutionRecord(
+        run_id="task-manager-001",
+        team_id="adaptive_team",
+        iteration=1,
+        stage="implement",
+        attempt=1,
+        agent_id="frontend_builder",
+        capability="implementation",
+        session_key="agent:frontend_builder:test-session",
+        session_id="session-frontend-builder",
+        model="test/provider-model",
+        provider="test",
+        started_at=CREATED_AT,
+        finished_at=CREATED_AT + timedelta(seconds=1),
+        duration_ms=1000,
+        exit_code=0,
+        stdout_path=outputs.stdout_path,
+        stderr_path=outputs.stderr_path,
+        stdout_sha256=outputs.stdout_sha256,
+        stderr_sha256=outputs.stderr_sha256,
+        response_artifact=response,
+    )
+
+    record_ref = store.write(record)
+
+    assert record_ref.path.endswith("frontend_builder-attempt-01.json")
+    assert store.load(record_ref) == record
+
+    with pytest.raises(ArtifactStoreError, match="context"):
+        store.write(record.model_copy(update={"capability": "review"}))
+
+
 def test_store_round_trips_multiple_durable_handoffs(tmp_path: Path) -> None:
     store = make_store(tmp_path)
     plan_ref = store.write(implementation_plan())
     plan_handoff_ref = store.write(
         handoff(
             stage="plan",
-            source_role=AgentRole.PLANNER,
-            target_role=AgentRole.GENERALIST_DEVELOPER,
+            source_agent_id=AgentRole.PLANNER,
+            target_agent_id=AgentRole.GENERALIST_DEVELOPER,
             artifacts=(plan_ref,),
         )
     )
@@ -358,24 +561,24 @@ def test_store_round_trips_multiple_durable_handoffs(tmp_path: Path) -> None:
     test_handoff_ref = store.write(
         handoff(
             stage="implement",
-            source_role=AgentRole.GENERALIST_DEVELOPER,
-            target_role=AgentRole.TESTER,
+            source_agent_id=AgentRole.GENERALIST_DEVELOPER,
+            target_agent_id=AgentRole.TESTER,
             artifacts=(work_ref,),
         )
     )
     review_handoff_ref = store.write(
         handoff(
             stage="implement",
-            source_role=AgentRole.GENERALIST_DEVELOPER,
-            target_role=AgentRole.REVIEWER,
+            source_agent_id=AgentRole.GENERALIST_DEVELOPER,
+            target_agent_id=AgentRole.REVIEWER,
             artifacts=(work_ref,),
         )
     )
     repeated_handoff_ref = store.write(
         handoff(
             stage="implement",
-            source_role=AgentRole.GENERALIST_DEVELOPER,
-            target_role=AgentRole.TESTER,
+            source_agent_id=AgentRole.GENERALIST_DEVELOPER,
+            target_agent_id=AgentRole.TESTER,
             artifacts=(work_ref,),
             sequence=2,
         )
@@ -397,8 +600,8 @@ def test_store_round_trips_multiple_durable_handoffs(tmp_path: Path) -> None:
         store.write(
             handoff(
                 stage="implement",
-                source_role=AgentRole.GENERALIST_DEVELOPER,
-                target_role=AgentRole.TESTER,
+                source_agent_id=AgentRole.GENERALIST_DEVELOPER,
+                target_agent_id=AgentRole.TESTER,
                 artifacts=(work_ref,),
             )
         )
@@ -427,7 +630,7 @@ def test_execution_outputs_are_write_once_and_stage_bound(tmp_path: Path) -> Non
     arguments = {
         "iteration": 1,
         "stage": "implement",
-        "role": AgentRole.GENERALIST_DEVELOPER,
+        "agent_id": AgentRole.GENERALIST_DEVELOPER.value,
         "attempt": 1,
         "stdout": "result",
         "stderr": "diagnostic",
@@ -485,8 +688,8 @@ def test_store_rejects_handoff_role_outside_declared_stage(tmp_path: Path) -> No
     work_ref = store.write(work_result())
     invalid = handoff(
         stage="plan",
-        source_role=AgentRole.GENERALIST_DEVELOPER,
-        target_role=AgentRole.TESTER,
+        source_agent_id=AgentRole.GENERALIST_DEVELOPER,
+        target_agent_id=AgentRole.TESTER,
         artifacts=(work_ref,),
     )
 
@@ -629,15 +832,15 @@ def test_non_accept_iteration_requires_blocking_evidence() -> None:
             ),
             work_result=reference(
                 ArtifactKind.WORK_RESULT,
-                "iterations/01/work-result.json",
+                "iterations/01/agents/generalist_developer/work-result.json",
             ),
             test_report=reference(
                 ArtifactKind.TEST_REPORT,
-                "iterations/01/test-report.json",
+                "iterations/01/agents/tester/test-report.json",
             ),
             review_report=reference(
                 ArtifactKind.REVIEW_REPORT,
-                "iterations/01/review-report.json",
+                "iterations/01/agents/reviewer/review-report.json",
             ),
             decision=IterationDecision.FAIL,
             summary="Missing blocking evidence must be rejected.",
@@ -705,7 +908,7 @@ def test_reference_rejects_an_invalid_digest() -> None:
     with pytest.raises(ValidationError):
         ArtifactReference(
             kind=ArtifactKind.WORK_RESULT,
-            path="iterations/01/work-result.json",
+            path="iterations/01/agents/generalist_developer/work-result.json",
             sha256="short",
         )
 

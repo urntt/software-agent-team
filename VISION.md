@@ -193,12 +193,12 @@ when code, usability evidence, or controlled experiments justify a replacement.
 ### Communication
 
 - Structured asynchronous handoffs are the default communication mechanism.
-- A downstream role receives only its required inputs and attributable upstream
+- A downstream Agent receives only its required inputs and attributable upstream
   artifacts.
 - Direct Agent messages or timed checkpoints are experimental extensions, not
   authoritative state.
-- A handoff records the run, team, iteration, source role, target role, status,
-  input commit, artifacts, blockers, and summary.
+- A handoff records the run, team, iteration, source Agent ID, target Agent ID,
+  status, input commit, artifacts, blockers, and summary.
 - Role names and team membership are task-defined on the product surface. The
   plan must still define attributable responsibilities, typed inputs and
   outputs, dependencies, permissions, budgets, and quality independence.

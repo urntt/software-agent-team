@@ -481,6 +481,21 @@ class TeamPlan(BaseModel):
         raise ValueError(f"unknown TeamPlan Agent: {agent_id}")
 
     @property
+    def agent_capabilities(self) -> dict[str, str]:
+        """Return the approved capability keyed by run-scoped Agent ID."""
+
+        return {agent.id: agent.capability.value for agent in self.agents}
+
+    @property
+    def stage_agents(self) -> dict[str, set[str]]:
+        """Return stage membership keyed by run-scoped Agent ID."""
+
+        stages: dict[str, set[str]] = {}
+        for agent in self.agents:
+            stages.setdefault(agent.stage_id, set()).add(agent.id)
+        return stages
+
+    @property
     def legacy_roles(self) -> tuple[AgentRole, ...]:
         """Return compatibility roles for the current fixed execution adapter."""
 

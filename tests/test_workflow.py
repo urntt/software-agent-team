@@ -459,10 +459,14 @@ def test_offline_workflow_completes_with_parallel_independent_verification(
     assert "Agent calls: 4" in markdown
     assert len(list((run_directory / "iterations/01/commands").glob("*.txt"))) == 8
     test_report = json.loads(
-        (run_directory / "iterations/01/test-report.json").read_text(encoding="utf-8")
+        (run_directory / "iterations/01/agents/tester/test-report.json").read_text(
+            encoding="utf-8"
+        )
     )
     review_report = json.loads(
-        (run_directory / "iterations/01/review-report.json").read_text(encoding="utf-8")
+        (run_directory / "iterations/01/agents/reviewer/review-report.json").read_text(
+            encoding="utf-8"
+        )
     )
     final_report = json.loads(
         (run_directory / "final-report.json").read_text(encoding="utf-8")
@@ -586,7 +590,10 @@ def test_workflow_uses_verified_git_facts_instead_of_model_claims(
     assert outcome.record.phase is RunPhase.COMPLETED
     work = json.loads(
         (
-            tmp_path / "runs" / task_brief().run_id / "iterations/01/work-result.json"
+            tmp_path
+            / "runs"
+            / task_brief().run_id
+            / "iterations/01/agents/generalist_developer/work-result.json"
         ).read_text(encoding="utf-8")
     )
     assert work["input_commit"] != "e" * 40
@@ -863,7 +870,10 @@ def test_workflow_ignores_a_model_supplied_tester_status(tmp_path: Path) -> None
     assert len(tester_requests) == 1
     test_report = json.loads(
         (
-            tmp_path / "runs" / task_brief().run_id / "iterations/01/test-report.json"
+            tmp_path
+            / "runs"
+            / task_brief().run_id
+            / "iterations/01/agents/tester/test-report.json"
         ).read_text(encoding="utf-8")
     )
     assert test_report["status"] == "passed"
@@ -894,7 +904,10 @@ def test_workflow_ignores_tester_changes_to_controller_evidence(
     assert outcome.record.phase is RunPhase.COMPLETED
     test_report = json.loads(
         (
-            tmp_path / "runs" / task_brief().run_id / "iterations/01/test-report.json"
+            tmp_path
+            / "runs"
+            / task_brief().run_id
+            / "iterations/01/agents/tester/test-report.json"
         ).read_text(encoding="utf-8")
     )
     assert test_report["commands"][0]["summary"] != "Agent-altered summary"
