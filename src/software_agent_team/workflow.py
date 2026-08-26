@@ -46,7 +46,13 @@ from software_agent_team.assembly import (
     assemble_work_result,
     validate_verification_assignment,
 )
-from software_agent_team.budgets import AgentBudget, ModelPricing
+from software_agent_team.budgets import (
+    AgentBudget,
+    AgentBudgetExceeded,
+    AgentBudgetLedger,
+    AgentCallReservation,
+    ModelPricing,
+)
 from software_agent_team.execution import (
     AgentExecutionRequest,
     AgentExecutionResult,
@@ -175,11 +181,7 @@ class _WorkflowContext:
     last_review: ReviewReport | None = None
     last_iteration: IterationRecord | None = None
     execution_lock: Lock = field(default_factory=Lock, repr=False)
-    calls_started: int = 0
-    input_tokens: int = 0
-    output_tokens: int = 0
-    agent_duration_ms: int = 0
-    estimated_cost_usd: Decimal = Decimal(0)
+    budget_ledger: AgentBudgetLedger | None = field(default=None, repr=False)
 
 
 class WorkflowCoordinator:
@@ -334,6 +336,7 @@ class WorkflowCoordinator:
                 anchor_reader=read_event_anchor,
             ),
             run_directory=run_directory,
+            budget_ledger=AgentBudgetLedger(self.budget),
         )
         self._emit(
             context,
@@ -876,18 +879,19 @@ class WorkflowCoordinator:
         )
         last_error = "Agent did not return a semantic response"
         for attempt in range(1, self.artifact_repair_limit + 2):
-            with context.execution_lock:
-                if context.calls_started >= self.budget.max_calls:
-                    raise AgentInvocationError(
-                        "Agent call budget is exhausted",
-                        TerminationReason.RESOURCE_LIMIT_REACHED,
-                    )
-                context.calls_started += 1
             request = self._repair_request(
                 base_request,
                 last_error,
                 attempt,
             )
+            assert context.budget_ledger is not None
+            try:
+                reservation = context.budget_ledger.reserve_call(request.agent_id)
+            except AgentBudgetExceeded as error:
+                raise AgentInvocationError(
+                    str(error),
+                    TerminationReason.RESOURCE_LIMIT_REACHED,
+                ) from error
             role_name = request.role.value.replace("_", " ").title()
             self._emit(
                 context,
@@ -974,6 +978,7 @@ class WorkflowCoordinator:
                 ignored_controller_fields=ignored_controller_fields,
                 stage_timeout_seconds=stage_timeout,
                 remaining_timeout_seconds=request.timeout_seconds,
+                reservation=reservation,
             )
             self._emit(
                 context,
@@ -1077,11 +1082,12 @@ class WorkflowCoordinator:
         ignored_controller_fields: tuple[str, ...],
         stage_timeout_seconds: int,
         remaining_timeout_seconds: int,
+        reservation: AgentCallReservation,
     ) -> ArtifactReference:
         telemetry = result.telemetry
         usage = telemetry.usage
         estimated_cost = None
-        budget_error = None
+        budget_error: str | None = None
         if (
             usage is not None
             and usage.input_tokens is not None
@@ -1091,31 +1097,17 @@ class WorkflowCoordinator:
                 input_tokens=usage.input_tokens,
                 output_tokens=usage.output_tokens,
             )
-        with context.execution_lock:
-            prospective_input = context.input_tokens + (
-                0 if usage is None or usage.input_tokens is None else usage.input_tokens
+        assert context.budget_ledger is not None
+        try:
+            context.budget_ledger.complete_call(
+                reservation,
+                input_tokens=None if usage is None else usage.input_tokens,
+                output_tokens=None if usage is None else usage.output_tokens,
+                duration_ms=telemetry.duration_ms,
+                estimated_cost_usd=estimated_cost,
             )
-            prospective_output = context.output_tokens + (
-                0
-                if usage is None or usage.output_tokens is None
-                else usage.output_tokens
-            )
-            prospective_duration = context.agent_duration_ms + telemetry.duration_ms
-            prospective_cost = context.estimated_cost_usd + (
-                estimated_cost or Decimal(0)
-            )
-            if prospective_input > self.budget.max_input_tokens:
-                budget_error = "Agent input-token budget was exceeded"
-            elif prospective_output > self.budget.max_output_tokens:
-                budget_error = "Agent output-token budget was exceeded"
-            elif prospective_duration > self.budget.max_agent_duration_seconds * 1000:
-                budget_error = "Agent duration budget was exceeded"
-            elif prospective_cost > self.budget.max_estimated_cost_usd:
-                budget_error = "Agent estimated-cost budget was exceeded"
-            context.input_tokens = prospective_input
-            context.output_tokens = prospective_output
-            context.agent_duration_ms = prospective_duration
-            context.estimated_cost_usd = prospective_cost
+        except AgentBudgetExceeded as budget_exception:
+            budget_error = str(budget_exception)
         effective_error = error or budget_error
         outputs = context.artifact_store.write_execution_outputs(
             iteration=request.iteration,

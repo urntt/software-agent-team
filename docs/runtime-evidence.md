@@ -391,6 +391,11 @@ when investigating it rather than editing artifacts in place.
 - Reported aggregate input/output tokens, Agent duration, and estimated cost
   are checked after every invocation. Crossing a threshold fails the run and
   prevents another invocation.
+- One thread-safe controller ledger atomically reserves the call count before
+  launch, so concurrently ready Agents cannot oversubscribe the budget. It
+  records completed-call telemetry before raising a post-call token, duration,
+  or known-cost rejection; missing token telemetry and unavailable pricing are
+  counted explicitly rather than converted to zero.
 - A product run without a trustworthy configured price records estimated cost
   as unavailable rather than zero. Controlled comparisons require an explicit
   paired price table.

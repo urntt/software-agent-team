@@ -279,7 +279,7 @@ Each concept has one authoritative owner.
 | Approved TeamPlan dependency and shared-workspace scheduling | `src/software_agent_team/scheduling.py` |
 | Versioned RunEvent contract, append-only journal, visibility filtering, and terminal rendering | `src/software_agent_team/progress.py` |
 | Versioned ControlCommand contract and controller-owned mailbox history | `src/software_agent_team/controls.py` |
-| Agent-call, token, duration, cost, per-Agent, and fixed-role compatibility invocation budgets | `src/software_agent_team/budgets.py`, `src/software_agent_team/workflow.py`, `configs/product-policy.json`, and `configs/run-policy.json` |
+| Agent-call, token, duration, cost, per-Agent, and fixed-role compatibility invocation budgets | `src/software_agent_team/budgets.py`, `configs/product-policy.json`, and `configs/run-policy.json` |
 | Product execution profile and generic quality contract | `profiles/python/`, `runtime/python/`, and `configs/product-policy.json` |
 | Frozen evaluation fixture and task-specific acceptance | `benchmarks/task_manager/` and `configs/run-policy.json` |
 | Shared quality-manifest validation and execution | `src/software_agent_team/quality_gates.py` |

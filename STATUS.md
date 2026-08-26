@@ -48,7 +48,7 @@ permissions, missing independent quality coverage, unauthorized model routes,
 and over-limit concurrency or Agent counts before Agent creation. Recovery
 verifies the exact TaskBrief binding, TeamPlan digest, fixed manifest version,
 fixed team digest, resolved Agent timeouts, and cross-file run metadata. The
-complete repository check passes with 500 offline tests.
+complete repository check passes with 504 offline tests.
 
 `RunEvent` is also an executable, append-only contract. Every current workflow
 progress update is persisted with a contiguous sequence, lifecycle revision,
@@ -458,6 +458,9 @@ The acceptance contract is
   Reviewer scope attestation, and controller-owned evidence resolution;
 - Pre-call Agent invocation limits and post-call token, duration, and
   estimated-cost stop thresholds;
+- Thread-safe aggregate budget reservations shared by fixed and task-defined
+  execution, including post-call usage retention and explicit unpriced or
+  missing-token counters;
 - Checked-in capability defaults and fixed-role compatibility invocation
   timeouts, approved per-Agent Adaptive timeouts, optional global override,
   frozen resolved run policy, and configuration-schema migration from the
