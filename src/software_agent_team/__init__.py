@@ -55,6 +55,11 @@ from software_agent_team.budgets import (
     AgentCallReservation,
     ModelPricing,
 )
+from software_agent_team.dynamic_runner import (
+    DynamicAgentRunner,
+    DynamicAgentRunnerError,
+    DynamicQualityGate,
+)
 from software_agent_team.execution import (
     AgentExecutionError,
     AgentExecutionRequest,
@@ -116,6 +121,7 @@ from software_agent_team.prompting import (
     DynamicUpstreamResult,
     build_agent_execution_request,
     build_dynamic_agent_execution_request,
+    build_semantic_repair_request,
     render_agent_prompt,
     render_dynamic_agent_prompt,
 )
@@ -258,6 +264,9 @@ __all__ = [
     "DagScheduler",
     "DockerSandboxBackend",
     "DynamicAgentPromptInputs",
+    "DynamicAgentRunner",
+    "DynamicAgentRunnerError",
+    "DynamicQualityGate",
     "DynamicUpstreamResult",
     "ExecutionOutputEvidence",
     "FakeSandboxBackend",
@@ -363,6 +372,7 @@ __all__ = [
     "assemble_work_result",
     "build_agent_execution_request",
     "build_dynamic_agent_execution_request",
+    "build_semantic_repair_request",
     "capability_for_legacy_role",
     "expected_output_for_capability",
     "has_model_compatibility",

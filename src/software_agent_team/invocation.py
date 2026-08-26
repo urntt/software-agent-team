@@ -90,6 +90,13 @@ def persist_agent_invocation(
         stdout=telemetry.stdout,
         stderr=telemetry.stderr,
     )
+    record_error = error
+    if budget_error is not None:
+        record_error = (
+            budget_error
+            if record_error is None
+            else f"{record_error}; budget rejection: {budget_error}"
+        )
     record = AgentExecutionRecord(
         run_id=request.run_id,
         team_id=request.team_id,
@@ -120,7 +127,7 @@ def persist_agent_invocation(
         stage_timeout_seconds=stage_timeout_seconds,
         remaining_timeout_seconds=remaining_timeout_seconds,
         response_artifact=response_reference,
-        error=error or budget_error,
+        error=record_error,
     )
     reference = artifact_store.write(
         record,

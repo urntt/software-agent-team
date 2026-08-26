@@ -336,12 +336,12 @@ def test_adaptive_plan_rejects_nested_parallel_write_scopes() -> None:
         TeamPlan.model_validate(payload)
 
 
-def test_adaptive_plan_orders_readers_against_overlapping_writers() -> None:
+def test_adaptive_plan_orders_quality_readers_after_all_writers() -> None:
     payload = adaptive_payload()
     tester = next(item for item in payload["agents"] if item["id"] == "tester")
     tester["dependencies"] = []
 
-    with pytest.raises(ValidationError, match="overlapping workspace access"):
+    with pytest.raises(ValidationError, match="every implementation path"):
         TeamPlan.model_validate(payload)
 
 
@@ -381,7 +381,20 @@ def test_adaptive_plan_requires_quality_coverage_for_every_writer() -> None:
     tester["dependencies"] = ["frontend_developer"]
     reviewer["dependencies"] = ["frontend_developer"]
 
-    with pytest.raises(ValidationError, match="downstream quality coverage"):
+    with pytest.raises(ValidationError, match="every implementation path"):
+        TeamPlan.model_validate(payload)
+
+
+def test_adaptive_plan_cannot_split_final_commit_coverage_across_quality_agents() -> (
+    None
+):
+    payload = adaptive_payload("implementation_domain_specialized")
+    tester = next(item for item in payload["agents"] if item["id"] == "tester")
+    reviewer = next(item for item in payload["agents"] if item["id"] == "reviewer")
+    tester["dependencies"] = ["frontend_developer"]
+    reviewer["dependencies"] = ["backend_developer"]
+
+    with pytest.raises(ValidationError, match="every implementation path"):
         TeamPlan.model_validate(payload)
 
 

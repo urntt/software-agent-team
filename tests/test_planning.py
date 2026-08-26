@@ -371,6 +371,45 @@ def test_cross_agent_task_dependencies_require_matching_agent_dependencies() -> 
         )
 
 
+def test_proposal_cannot_split_final_commit_coverage_across_quality_agents() -> None:
+    body = proposal_body()
+    fixture_agent = ProposedAgent(
+        id="fixture_developer",
+        label="Fixture Developer",
+        responsibility="Build deterministic test fixtures.",
+        rationale="Fixture work has an isolated write scope.",
+        capability=AgentCapability.IMPLEMENTATION,
+        stage_id="implement",
+        workspace_scope="repository/tests",
+        timeout_seconds=300,
+    )
+    agents = tuple(
+        agent.model_copy(
+            update={"dependencies": ("cli_developer",)}
+            if agent.id == "acceptance_tester"
+            else {"dependencies": ("fixture_developer",)}
+            if agent.id == "quality_reviewer"
+            else {}
+        )
+        for agent in (*body.agents, fixture_agent)
+    )
+    tasks = (
+        *body.tasks,
+        ProposedTask(
+            id="TASK_FIXTURES",
+            owner_agent_id=fixture_agent.id,
+            description="Create deterministic link-checker fixtures.",
+            acceptance_criteria=("AC_SCAN",),
+            expected_paths=("tests/fixtures",),
+        ),
+    )
+
+    with pytest.raises(ValidationError, match="every implementation path"):
+        PlanningProposalBody.model_validate(
+            body.model_copy(update={"agents": agents, "tasks": tasks})
+        )
+
+
 def test_controller_rejects_quality_dependency_and_timeout_policy_violations() -> None:
     invalid_agents = tuple(
         agent.model_copy(

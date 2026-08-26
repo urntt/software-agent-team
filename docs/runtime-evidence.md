@@ -267,6 +267,32 @@ as an immutable two-revision digest chain with optimistic concurrency. This is
 the persistence contract for the later interactive control channel; the
 current product CLI does not yet submit or apply these commands.
 
+The dynamic runtime keeps scheduling and invocation as separate controller
+responsibilities. `DagScheduler` decides readiness, actual launch order,
+bounded concurrency, and shared-workspace exclusion from the approved
+`TeamPlan`. `DynamicAgentRunner` may execute only the ready `AgentSpec` passed
+to it. It binds that invocation to the approved capability, model route,
+per-Agent timeout, permission profile, assigned tasks, and dependency
+handoffs; it cannot create Agents, edit the DAG, or extend a timeout.
+
+Each invocation reserves aggregate call capacity atomically before launch and
+records reported tokens, duration, and known price after completion. Raw
+stdout/stderr, telemetry, the semantic response reference when valid, and any
+post-call budget rejection are persisted together. Missing model, provider, or
+token evidence is never treated as zero usage or success. A repair is permitted
+only for a semantic-body failure, receives the same approved invocation
+timeout, and remains bounded by the aggregate call and resource budgets.
+
+Writers are serialized for the current single-clone Git backend. The
+controller verifies their clean input commit, descendant output commit,
+changed paths, and workspace scope. Read-only quality Agents may run in
+parallel but must leave the exact final commit and clean tree unchanged. Every
+quality Agent is downstream of every writer, deterministic gates execute once
+per immutable iteration, and all TestReports and ReviewReports bind to that
+same commit. Completed dependency and terminal handoffs retain both phase and
+execution references. Multi-iteration lifecycle convergence and bare-`sat`
+activation remain staged work.
+
 The controller supports explicit recovery of an isolated clone created
 immediately before a crash. The current `sat run` command intentionally starts
 only a fresh run and does not infer that an unrecorded external action

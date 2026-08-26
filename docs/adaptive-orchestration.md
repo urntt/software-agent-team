@@ -471,9 +471,13 @@ are also implemented. Iteration validation requires a chained result from
 every approved writer, deterministic evidence from every approved Tester or
 from the controller when no Tester exists, evidence from every approved
 Reviewer, one immutable quality commit, and complete manual-review coverage.
-Dynamic Agent invocation, persisted handoff creation, quality convergence,
-aggregate runtime budget integration, and bare `sat` activation remain in this
-batch.
+The dynamic runner now binds each scheduler-approved Agent to its exact model,
+timeout, prompt, semantic repair limit, Git or read-only boundary, aggregate
+budget, execution record, and durable handoffs. Quality gates are shared once
+per immutable iteration, and every quality Agent must be downstream of every
+writer. Multi-iteration quality convergence, lifecycle/final-report
+integration, safe plan amendment checkpoints, and bare `sat` activation remain
+in this batch.
 
 ### Batch 3D: Observable and Controllable Execution
 

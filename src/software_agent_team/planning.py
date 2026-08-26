@@ -443,13 +443,13 @@ class PlanningProposalBody(BaseModel):
                     pending.extend(dependencies[current])
             return False
 
-        for implementation_agent in implementation_agents:
-            if not any(
-                transitively_depends(quality_agent, implementation_agent)
-                for quality_agent in quality_agents
+        for quality_agent in quality_agents:
+            if any(
+                not transitively_depends(quality_agent, implementation_agent)
+                for implementation_agent in implementation_agents
             ):
                 raise ValueError(
-                    "every implementation path requires downstream quality coverage"
+                    "every quality Agent must depend on every implementation path"
                 )
 
         task_ids = tuple(task.id for task in self.tasks)

@@ -187,6 +187,7 @@ src/software_agent_team/
   budgets.py                   Agent and pricing budgets
   cli.py                       Unified command-line interface
   controls.py                  Persisted user-control command contracts
+  dynamic_runner.py            Approved dynamic Agent invocation lifecycle
   execution.py                 OpenClaw and offline execution adapters
   git_workspace.py             Standalone clones and snapshot verification
   integrity.py                 Canonical persisted-model integrity digest

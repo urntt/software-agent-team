@@ -16,7 +16,6 @@ from pydantic import ValidationError
 
 from software_agent_team.artifact_store import ArtifactStore, ArtifactStoreError
 from software_agent_team.artifacts import (
-    IMPLEMENTATION_ROLES,
     AgentExecutionRecord,
     AgentRole,
     ArtifactKind,
@@ -80,6 +79,7 @@ from software_agent_team.progress import (
 from software_agent_team.prompting import (
     AgentPromptInputs,
     build_agent_execution_request,
+    build_semantic_repair_request,
 )
 from software_agent_team.quality_gates import (
     QualityGateBudgetExceeded,
@@ -1027,47 +1027,7 @@ class WorkflowCoordinator:
     ) -> AgentExecutionRequest:
         if attempt == 1:
             return request
-        if request.role is AgentRole.PLANNER:
-            role_check = (
-                "Recompute the union of tasks[].acceptance_criteria and make it "
-                "equal every criterion ID in the TaskBrief; require every "
-                "tasks[].id to begin with TASK_ and match "
-                "^TASK_[A-Z0-9_]+$; verify every task dependency exactly names "
-                "one of those task IDs in the same response."
-            )
-        elif request.role in IMPLEMENTATION_ROLES:
-            role_check = (
-                "Recheck that summary, completed_tasks, and unresolved_issues "
-                "describe only work committed in the clean workspace. Do not "
-                "return commit IDs or changed paths; the controller derives them."
-            )
-        elif request.role is AgentRole.TESTER:
-            role_check = (
-                "Return only evidence-grounded findings and a summary. Do not "
-                "return commands, criteria, statuses, scope, or blockers; the "
-                "controller derives those fields from deterministic evidence."
-            )
-        elif request.role is AgentRole.REVIEWER:
-            role_check = (
-                "Recheck that the verdict, findings, and criterion IDs agree with "
-                "the supplied immutable evidence. Do not return input_commit or "
-                "reviewed_criteria. Use revise, not fail, for a correctable defect; "
-                "fail requires a terminal safety or evidence-integrity reason."
-            )
-        else:  # pragma: no cover - executable roles are exhaustively mapped
-            role_check = "Recheck every field against the supplied run evidence."
-        repair = (
-            "\n\nCONTROLLED_RESPONSE_REPAIR\n"
-            "Your previous response was rejected for this reason: "
-            f"{previous_error}\n"
-            "Revalidate the entire response rather than only the reported error. "
-            "Use each key exactly once and include every semantic field required "
-            "by RESPONSE_SCHEMA_JSON. Do not return controller-owned envelope, "
-            "Git, or deterministic-evidence fields. "
-            f"{role_check} "
-            "Return one corrected semantic JSON object only."
-        )
-        return request.model_copy(update={"prompt": f"{request.prompt}{repair}"})
+        return build_semantic_repair_request(request, previous_error)
 
     def _record_execution(
         self,

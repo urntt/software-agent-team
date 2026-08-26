@@ -545,6 +545,59 @@ def build_agent_execution_request(
     )
 
 
+def build_semantic_repair_request(
+    request: AgentExecutionRequest,
+    previous_error: str,
+) -> AgentExecutionRequest:
+    """Request one complete semantic-body regeneration within the same contract."""
+
+    detail = previous_error.strip()
+    if not detail:
+        raise AgentPromptError("semantic repair requires a rejection reason")
+    if request.capability is AgentCapability.PLANNING:
+        capability_check = (
+            "Recompute the union of tasks[].acceptance_criteria and make it equal "
+            "every criterion ID in the TaskBrief; require every tasks[].id to "
+            "begin with TASK_ and match ^TASK_[A-Z0-9_]+$; verify every task "
+            "dependency exactly names one of those task IDs in the same response."
+        )
+    elif request.capability in {
+        AgentCapability.IMPLEMENTATION,
+        AgentCapability.INTEGRATION,
+    }:
+        capability_check = (
+            "Recheck that summary, completed_tasks, and unresolved_issues describe "
+            "only committed work for the exact assigned tasks. Do not return Git "
+            "facts; the controller derives them."
+        )
+    elif request.capability is AgentCapability.TESTING:
+        capability_check = (
+            "Return only evidence-grounded findings and a summary. Do not return "
+            "commands, statuses, criteria, scope, or blockers; the controller "
+            "derives them."
+        )
+    elif request.capability is AgentCapability.REVIEW:
+        capability_check = (
+            "Recheck that verdict, findings, and criterion IDs agree with the "
+            "supplied immutable evidence. Use revise for correctable defects; fail "
+            "requires a terminal safety or evidence-integrity reason."
+        )
+    else:
+        capability_check = "Recheck every field against the supplied run evidence."
+    repair = (
+        "\n\nCONTROLLED_RESPONSE_REPAIR\n"
+        "Your previous response was rejected for this reason: "
+        f"{detail}\n"
+        "Revalidate the entire response rather than only the reported error, then "
+        "regenerate it completely. Use each key exactly once and include every "
+        "semantic field required "
+        "by RESPONSE_SCHEMA_JSON. Do not return controller-owned envelope, Git, or "
+        "deterministic-evidence fields. "
+        f"{capability_check} Return one corrected semantic JSON object only."
+    )
+    return request.model_copy(update={"prompt": f"{request.prompt}{repair}"})
+
+
 def _dynamic_prompt_context(inputs: DynamicAgentPromptInputs) -> dict[str, object]:
     agent = inputs.agent
     context: dict[str, object] = {

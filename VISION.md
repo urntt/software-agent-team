@@ -277,6 +277,7 @@ Each concept has one authoritative owner.
 | Run lifecycle state and persistence | `src/software_agent_team/run_control.py` |
 | Phase 1 orchestration, decisions, and reports | `src/software_agent_team/workflow.py` |
 | Approved TeamPlan dependency and shared-workspace scheduling | `src/software_agent_team/scheduling.py` |
+| Scheduler-approved dynamic Agent invocation, Git/quality enforcement, and durable handoffs | `src/software_agent_team/dynamic_runner.py` |
 | Versioned RunEvent contract, append-only journal, visibility filtering, and terminal rendering | `src/software_agent_team/progress.py` |
 | Versioned ControlCommand contract and controller-owned mailbox history | `src/software_agent_team/controls.py` |
 | Agent-call, token, duration, cost, per-Agent, and fixed-role compatibility invocation budgets | `src/software_agent_team/budgets.py`, `configs/product-policy.json`, and `configs/run-policy.json` |

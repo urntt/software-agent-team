@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** Phase 3C dynamic evidence aggregation implemented; dynamic runner integration is next
+**Current milestone:** Phase 3C dynamic Agent runner implemented; lifecycle convergence and product activation are next
 
 **Last updated:** August 26, 2026
 
@@ -48,7 +48,7 @@ permissions, missing independent quality coverage, unauthorized model routes,
 and over-limit concurrency or Agent counts before Agent creation. Recovery
 verifies the exact TaskBrief binding, TeamPlan digest, fixed manifest version,
 fixed team digest, resolved Agent timeouts, and cross-file run metadata. The
-complete repository check passes with 504 offline tests.
+complete repository check passes with 514 offline tests.
 
 `RunEvent` is also an executable, append-only contract. Every current workflow
 progress update is persisted with a contiguous sequence, lifecycle revision,
@@ -116,19 +116,43 @@ their least-privilege capability profiles, disables model fallback, and binds
 every Agent to the verified workspace and selected route. Exact-label sandbox
 cleanup can derive all owned session identities from those AgentSpecs. Adaptive
 validation excludes the bootstrap Planning and Clarification capabilities from
-the runtime team, requires every writer to own work and receive downstream
-independent quality coverage, and allows a small task to use one writer plus
-one independent quality Agent instead of imposing a hidden Tester/Reviewer
-pair. Fixed evaluation fixtures retain their explicit dual-quality topology.
+the runtime team, requires every writer to own work, and allows a small task to
+use one writer plus one independent quality Agent instead of imposing a hidden
+Tester/Reviewer pair. Every quality Agent must depend on every writer path, so
+parallel verification cannot start against an intermediate commit. Fixed
+evaluation fixtures retain their explicit dual-quality topology.
+
+The Phase 3C dynamic runner is now implemented behind the general DAG
+scheduler. The scheduler remains the only owner of readiness, launch order,
+bounded concurrency, and shared-Git writer exclusion. The runner invokes only
+the supplied approved `AgentSpec`, preserves its exact model and timeout,
+allows at most one full-timeout semantic repair, accounts for every call in one
+thread-safe aggregate ledger, and persists raw output plus telemetry before a
+post-call budget rejection stops the schedule. Agents cannot create another
+Agent, change dependencies, reorder work, or extend timeouts.
+
+Each dynamic writer starts from the controller's current clean commit, leaves
+a clean descendant commit, and is rejected for changes outside its approved
+workspace scope. Read-only quality Agents must leave the same immutable commit
+and clean tree. Deterministic gates execute exactly once per iteration even
+when Tester and Reviewer Agents run concurrently. Their reports share the same
+controller-owned evidence and final commit; when a justified small team has no
+Tester, the controller persists the deterministic TestReport itself. Dynamic
+source-to-target and terminal handoffs are write-once and include attributable
+phase and execution evidence. Offline integration tests exercise real Git
+commits, parallel quality, semantic repair, missing telemetry, budget
+exhaustion, read-only mutation, and write-scope violations.
 
 The Planning interaction is offline-verified as a product-style flow but is
 not yet activated by bare `sat`: activation is intentionally paired with the
 Phase 3C runtime so SAT never presents a dynamic plan and then silently
-executes the old fixed team. The general DAG scheduler, generic response
-assembly, and dynamic iteration aggregation are implemented. Dynamic Agent
-invocation, persisted handoff creation, quality convergence, aggregate budget
-integration, safe multi-writer execution beyond the current serialized Git
-chain, and active control application remain pending.
+executes the old fixed team. The general DAG scheduler, dynamic runner, generic
+response assembly, dynamic iteration aggregation, persisted handoffs,
+deterministic quality sharing, and aggregate invocation budgets are
+implemented. Multi-iteration convergence, the lifecycle coordinator that
+consumes a complete schedule, bare `sat` activation, safe concurrent writers
+beyond the current serialized Git chain, and active control application remain
+pending.
 
 ## Product Readiness Boundary
 
@@ -524,9 +548,9 @@ instead of selecting a fixture.
 - An independent fresh-device rehearsal and live demonstration outside the
   development host;
 - Activation of the implemented Adaptive Planning interaction in bare `sat`;
-- Dynamic Agent invocation, persisted handoff creation, quality convergence,
-  and aggregate runtime budget accounting around the implemented
-  approved-TeamPlan scheduler and artifact assembly;
+- Multi-iteration dynamic quality convergence, lifecycle/final-report
+  integration, and bare-`sat` activation around the implemented dynamic
+  runner;
 - Compact, standard, and detailed visibility backed by persisted per-Agent
   events;
 - User guidance, correction, pause, resume, interruption, and cancellation
@@ -550,10 +574,10 @@ action succeeded after interruption.
 
 ## Next Milestone
 
-The next Phase 3C batch connects dynamic Agent invocation, persisted handoffs,
-deterministic quality gates, iteration convergence, and aggregate runtime
-budgets to the implemented approved-TeamPlan scheduler and shared artifact
-assembly. It then activates the completed Planning interaction in bare `sat`.
+The next Phase 3C batch connects the implemented dynamic schedule results to
+run lifecycle transitions, iteration decisions, revision feedback, final
+reports, cleanup, and delivery. It then activates the completed Planning
+interaction and dynamic runtime together in bare `sat`.
 Later Phase 3
 batches add richer progress and controls, then model routing. Fixed-topology
 comparison moves to Phase 4 so it can remain a controlled baseline rather than
