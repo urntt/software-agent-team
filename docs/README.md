@@ -12,6 +12,7 @@ references so that each fact has one clear owner.
 | Understand the product, users, problem, architecture decisions, experiment, scope, or roadmap | [`VISION.md`](../VISION.md) |
 | See what is implemented, what provider-backed evidence exists, and what remains | [`STATUS.md`](../STATUS.md) |
 | Maintain or verify acceptance criteria for the guided installation-to-delivery journey | [`product-demo-slice.md`](product-demo-slice.md) |
+| Understand or implement the planned interactive Planning, task-defined teams, progress, controls, and model routing milestone | [`adaptive-orchestration.md`](adaptive-orchestration.md) |
 | Install, configure a provider/model default, export local data, or uninstall | [`installation.md`](installation.md) |
 | Understand runtime authority, semantic responses, artifacts, persisted evidence, or safety boundaries | [`runtime-evidence.md`](runtime-evidence.md) |
 | Prepare and inspect a controlled Phase 1 provider-backed evaluation | [`phase1-runbook.md`](phase1-runbook.md) |
@@ -31,6 +32,9 @@ references so that each fact has one clear owner.
   implementation, evidence, gaps, and next-milestone facts.
 - `product-demo-slice.md` is a contributor-facing acceptance specification for
   the guided user journey; it does not own implementation status.
+- `adaptive-orchestration.md` owns the detailed target interaction, runtime
+  contracts, implementation batches, and acceptance criteria for the next
+  orchestration milestone; it does not claim those capabilities are complete.
 - `phase1-runbook.md` is an evaluation-operator procedure, and
   `development.md` is the contributor reference.
 - Other guides in `docs/` own one operating or engineering concern each.

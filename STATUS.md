@@ -1,8 +1,8 @@
 # Project Status
 
-**Current milestone:** Complete Linux product lifecycle passed; independent device rehearsal next
+**Current milestone:** Adaptive-orchestration contracts and compatibility path; independent-device rehearsal remains the next product evidence gate
 
-**Last updated:** August 25, 2026
+**Last updated:** August 26, 2026
 
 This document records what the repository implements now, what evidence
 supports that claim, and what remains unavailable. It does not redefine the
@@ -43,6 +43,14 @@ success conditions and constraints, chooses a new project destination,
 generates a request-specific run ID, TaskBrief, trusted source, workspace, and
 evidence roots, shows controller-derived progress, and delivers only an
 accepted clean Git result with project-specific commands.
+
+This implemented path still uses bounded fixed prompts, the
+`function_specialized` team, one selected model for the run, controller-backed
+stage progress, and no interactive run-control channel. The task-defined team,
+multi-round Planning dialogue, per-Agent visibility levels, live user controls,
+and model routing described in
+[`docs/adaptive-orchestration.md`](docs/adaptive-orchestration.md) are the next
+milestone, not current capabilities.
 
 This is not yet release-stable evidence. Two earlier WSL rehearsals completed
 managed installation or update, startup diagnostics, isolated provider setup,
@@ -356,11 +364,16 @@ The acceptance contract is
   iteration exhaustion, no-change failure, missing model or token telemetry,
   cost exhaustion, and trusted sandbox-runtime loss classification.
 
-## Current Team Paths
+## Current Fixed Evaluation Team Paths
 
 [`configs/teams.json`](configs/teams.json) defines three comparable topologies.
 The configuration owns membership and initial stage ordering; the Python
 controller owns dynamic revision and termination decisions.
+
+These manifests are fixed evaluation fixtures. The current product path also
+uses `function_specialized`, but the target product design derives a run-scoped
+TeamPlan from the task and compiles both product and evaluation teams into one
+controller contract.
 
 | Configuration | Purpose | Implementation status |
 | --- | --- | --- |
@@ -374,6 +387,17 @@ controller owns dynamic revision and termination decisions.
   development host;
 - Adaptive follow-up clarification beyond the current bounded request, success
   condition, and constraint prompts;
+- A model-assisted Planning dialogue with suggested and custom answers;
+- A user-editable requirements, implementation, Agent, dependency, budget, and
+  model-route overview;
+- Task-defined Agent roles, controller-validated Agent creation, and DAG
+  scheduling;
+- Compact, standard, and detailed visibility backed by persisted per-Agent
+  events;
+- User guidance, correction, pause, resume, interruption, and cancellation
+  through a controller-owned control channel;
+- Multiple secret-free model profiles, per-task/per-stage/per-Agent routing,
+  authorized automatic resolution, or recorded runtime switching;
 - Generated-project execution profiles beyond the current local Python 3.12
   profile;
 - Semantic provider/auth validation beyond the explicitly authorized minimal
@@ -391,15 +415,23 @@ action succeeded after interruption.
 
 ## Next Milestone
 
-Repeat the published installer and bare `sat` journey from an intended-user WSL
-or other independent supported device, then use that same one-command install
-and guided product flow during the live demonstration. Preserve any failure as
-evidence and apply the same fix-test-publish-before-rerun discipline. The
-advanced evaluation commands are not part of this product demonstration.
+The immediate product-evidence task remains a recorded fresh-device run of the
+published installer and bare `sat` journey. Preserve any failure as evidence;
+advanced evaluation commands are not part of that user demonstration.
 
-Topology implementation and comparison resume in Phase 3 after this gate. The
-Phase 2 acceptance criteria are defined in
-[`docs/product-demo-slice.md`](docs/product-demo-slice.md).
+The next engineering batch is Phase 3A: introduce TeamPlan, AgentSpec,
+ModelRoutePlan, RunEvent, and ControlCommand contracts; compile the existing
+fixed manifests into TeamPlan; move the current function-specialized workflow
+onto that single compatibility path; and reject invalid dynamic plans before
+Agent creation. This batch must preserve the completed Product Demo behavior
+and full offline suite.
+
+Phase 3B then adds the Planning dialogue and editable overview; later Phase 3
+batches add dynamic runtime creation, richer progress and controls, and model
+routing. Fixed-topology comparison moves to Phase 4 so it can remain a
+controlled baseline rather than defining the product's permanent role layout.
+The detailed sequence and acceptance criteria are in
+[`docs/adaptive-orchestration.md`](docs/adaptive-orchestration.md).
 
 The development route and evaluation policy are defined in
 [`VISION.md`](VISION.md#development-route).

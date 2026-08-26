@@ -2,7 +2,7 @@
 
 **Implementation status:** [`STATUS.md`](STATUS.md)
 
-**Last updated:** August 24, 2026
+**Last updated:** August 26, 2026
 
 ## Purpose
 
@@ -10,11 +10,12 @@ Build a local-first command-line harness that turns a short software request
 into a runnable, tested, and reviewed product by coordinating configurable
 teams of AI Agents through OpenClaw.
 
-The intended experience is externally one-shot but internally iterative. After
-the user confirms the requirements, the harness may plan, implement, test,
-review, and revise within explicit limits before returning one delivery. The
-user should not need to supervise individual Agents or repeatedly prompt the
-system to correct avoidable defects.
+The intended experience is externally one delivery but internally iterative.
+The user should not need to supervise individual Agents by default, while still
+being able to inspect, guide, correct, pause, interrupt, or cancel a long run.
+Before execution, the harness proposes a task-specific implementation, Agent,
+and model plan for user approval. It may then implement, test, review, and
+revise within explicit limits before returning one delivery.
 
 This repository implements both the harness and the experiment needed to
 determine which team organization works best.
@@ -48,7 +49,8 @@ The product accepts either:
 A run also receives:
 
 - A clean or seeded Git repository;
-- A selected team configuration;
+- A confirmed `TaskBrief` and user-approved `TeamPlan`;
+- Run-scoped `AgentSpec` entries and a `ModelRoutePlan`;
 - Allowed tools and sandbox policy;
 - Fixed validation commands;
 - Time, iteration, Agent-invocation, token, and cost limits.
@@ -64,6 +66,8 @@ A completed or failed run produces:
 - Code in an isolated, self-contained Git clone;
 - Immutable iteration commit references;
 - Structured planning, implementation, test, review, and decision artifacts;
+- The approved team/model plan, its revisions, and Agent-creation records;
+- An ordered progress and user-control event record;
 - Real command output and exit codes from deterministic quality gates;
 - Model, usage, duration, retry, and error telemetry;
 - A final machine-readable record and human-readable report;
@@ -99,9 +103,16 @@ The primary experience is not an operator assembling an evaluation trial from
 internal files and flags. A new user installs SAT, enters or creates a project
 directory, and runs `sat` with no subcommand. SAT then diagnoses the local
 environment, guides first-run provider configuration, asks what the user wants
-to build, performs bounded clarification, confirms a requirements summary,
-prepares all internal run state, shows controller-backed progress, and returns
-a runnable result with exact next commands.
+to build, and conducts a bounded multi-round Planning dialogue. Questions may
+use normal conversation or suggested choices with a custom answer path.
+
+Before execution, SAT shows one editable overview of requirements,
+implementation intent, task-defined Agents, dependencies, permissions, budgets,
+and model routes. After approval, the controller validates and creates the
+run-scoped team. During execution, SAT shows configurable run-level and
+per-Agent progress and accepts user guidance, correction, pause, resume,
+interrupt, or cancellation. It returns a runnable result or an honest terminal
+report with exact next commands.
 
 Internal run IDs, TaskBrief JSON, benchmark source paths, team IDs, policy
 paths, concurrency, timeouts, repair limits, and evidence roots are advanced
@@ -110,11 +121,15 @@ edit them.
 
 The guided product-journey acceptance specification is
 [`docs/product-demo-slice.md`](docs/product-demo-slice.md).
+The next adaptive interaction and orchestration milestone is specified in
+[`docs/adaptive-orchestration.md`](docs/adaptive-orchestration.md).
 
-## Current Technical Decisions
+## Technical Direction and Compatibility Constraints
 
-These decisions are active implementation constraints. They change only when
-code or experiment evidence justifies a replacement.
+These decisions govern both current behavior and the next implementation
+milestone. [`STATUS.md`](STATUS.md) identifies which paths exist now; planned
+adaptive contracts land in the ordered batches below. Decisions change only
+when code, usability evidence, or controlled experiments justify a replacement.
 
 ### Interface and Runtime
 
@@ -132,15 +147,20 @@ code or experiment evidence justifies a replacement.
   and uses a separate SAT-owned OpenClaw config, credential, session, cache,
   and workspace root. It never adopts another OpenClaw installation or
   profile, even when that installation is compatible and ready.
-- The exact selected `provider/model` must resolve through SAT's isolated
-  catalog and auth state before the first Agent invocation. Startup and
-  run-scoped preflight perform this non-generation check, while an actual
-  provider smoke request remains separately authorized.
+- Every resolved `provider/model` must pass SAT's isolated catalog and auth
+  checks before its Agent invocation. Startup validates saved defaults;
+  run-scoped preflight validates the approved route plan without generation,
+  while an actual provider smoke request remains separately authorized.
 - SAT may carry a small versioned, secret-free catalog supplement when an
   explicitly supported provider model exists upstream but is absent from the
   pinned OpenClaw catalog. The supplement declares only routing and model
   metadata; credentials remain in SAT's isolated auth profiles or a trusted
   caller environment, and the selected model never falls back silently.
+- Product runs may select different authorized models by task, phase,
+  capability, or Agent. A deterministic controller policy resolves `auto`
+  preferences and records its reason. Runtime switching is allowed only for an
+  approved candidate and condition; it is never silent. Controlled evaluation
+  mode continues to pin one model and disable switching.
 - The execution boundary normalizes OpenClaw's local and Gateway JSON response
   shapes and records split provider/model metadata as one canonical
   `provider/model` identity.
@@ -162,6 +182,13 @@ code or experiment evidence justifies a replacement.
   dependency.
 - Role Agents cannot spawn additional model calls. The controller is the sole
   authority for Agent invocation, accounting, and ordering.
+- A fixed bootstrap Planning capability may propose requirements,
+  implementation, Agent, and model plans. It cannot create Agents or advance
+  the lifecycle. The controller creates run-scoped execution Agents only after
+  user approval and deterministic TeamPlan validation.
+- The controller owns an append-only event stream and a persisted control
+  channel. Guidance, correction, pause, resume, interruption, cancellation,
+  and any resulting replan are lifecycle inputs, not hidden chat mutations.
 
 ### Communication
 
@@ -172,6 +199,9 @@ code or experiment evidence justifies a replacement.
   authoritative state.
 - A handoff records the run, team, iteration, source role, target role, status,
   input commit, artifacts, blockers, and summary.
+- Role names and team membership are task-defined on the product surface. The
+  plan must still define attributable responsibilities, typed inputs and
+  outputs, dependencies, permissions, budgets, and quality independence.
 
 ### Isolation and Permissions
 
@@ -195,8 +225,12 @@ code or experiment evidence justifies a replacement.
   from starting on otherwise healthy Docker hosts.
 - Live Agent containers run as the invoking unprivileged host identity; UID or
   GID `0` is rejected.
-- Clarifier, Planner, Tester, and Reviewer are read-only roles.
-- Coding and Integration roles may write only inside the assigned workspace.
+- Planning, analysis, testing, and review responsibilities use controlled
+  read-only permission profiles. Coding and integration responsibilities may
+  use controlled writable profiles only inside their assigned workspace.
+- A role label or model proposal never grants a permission. The controller
+  validates every AgentSpec against versioned capability profiles before
+  creating a session.
 - A read-only OpenClaw workspace is mounted at `/agent`; a writable workspace
   is mounted at `/workspace`.
 - Controlled roles load no ambient runtime skills, so unrelated skill prompts
@@ -225,12 +259,13 @@ Each concept has one authoritative owner.
 | Current implementation, milestone evidence, and known gaps | `STATUS.md` |
 | User-facing public overview and quick start | `README.md` |
 | Guided product-journey interaction and acceptance specification | `docs/product-demo-slice.md` |
+| Adaptive Planning, task-defined teams, progress visibility, user controls, and model-routing acceptance design | `docs/adaptive-orchestration.md` |
 | Installation, saved configuration, export, and removal behavior | `docs/installation.md` |
 | Runtime, response, persisted-evidence, integrity, and operator-safety reference | `docs/runtime-evidence.md` |
 | Controlled Phase 1 provider-backed evaluation procedure | `docs/phase1-runbook.md` |
 | Development workflow and repository reference | `docs/development.md` |
-| Team membership and initial stage order | `configs/teams.json` |
-| Team-manifest validation | `src/software_agent_team/teams.py` |
+| Versioned fixed evaluation topology fixtures | `configs/teams.json` |
+| Fixed-manifest validation and future TeamPlan compatibility compilation | `src/software_agent_team/teams.py` |
 | Artifact schemas | `src/software_agent_team/artifacts.py` |
 | Immutable artifact, handoff, and output persistence | `src/software_agent_team/artifact_store.py` |
 | Sanitized Agent runtime boundary | `configs/openclaw.example.json5` |
@@ -262,7 +297,22 @@ change unless a time-bounded removal plan is documented.
 
 ## Experimental Configurations
 
-`configs/teams.json` defines the initial configurations.
+`configs/teams.json` defines fixed, versioned evaluation fixtures. These
+configurations remain useful for controlled comparison, but they are not the
+long-term product requirement that a normal user choose a predefined role
+list.
+
+### Product Default: Task-Defined Team
+
+The target product flow uses a bootstrap Planning session to propose a
+run-scoped TeamPlan from the confirmed task. The user reviews and may revise
+the plan; the deterministic controller validates and creates its Agents. The
+number and names of execution roles therefore vary with the work, while
+permission profiles, quality independence, budgets, evidence, and lifecycle
+authority remain fixed system boundaries.
+
+The detailed contract and migration path are defined in
+[`docs/adaptive-orchestration.md`](docs/adaptive-orchestration.md).
 
 ### Baseline: `single_agent`
 
@@ -318,8 +368,8 @@ additional Agents, handoffs, integration risk, time, and cost.
 
 ### Experimental Control
 
-Team organization is the first independent variable. Initial comparisons hold
-the following constant wherever possible:
+Fixed team organization remains the first independent variable. Initial
+comparisons hold the following constant wherever possible:
 
 - Confirmed task brief;
 - Starting repository commit;
@@ -341,12 +391,20 @@ experiment still starts from one frozen confirmed `TaskBrief`; clarification
 behavior is not varied during that comparison and therefore does not confound
 the result. Clarification quality is evaluated separately.
 
+After the fixed comparison establishes a baseline, a frozen task-generated
+TeamPlan can be added as another configuration while model policy remains
+constant. Model routing is evaluated separately by holding both the TaskBrief
+and TeamPlan constant. Dynamic team formation and multi-model routing must not
+change in the same controlled trial.
+
 ## Decision Record
 
 | Decision | Reason |
 | --- | --- |
 | Use a local-first CLI instead of a Web service | The first users can inspect Git and terminal evidence, while local execution keeps credentials, workspaces, and experimental state under their control. |
 | Keep the Python controller authoritative | Lifecycle, budgets, evidence checks, and termination must be deterministic rather than dependent on an Agent's self-report. |
+| Derive execution roles from the task, then let the controller create them | A fixed bootstrap Planning capability can propose a TeamPlan after dialogue, but it cannot spawn Agents. User approval plus deterministic validation preserves authority, budget, permission, and audit boundaries while avoiding one permanent product role list. |
+| Show one editable plan overview before execution | Requirements, implementation intent, Agent responsibilities, dependencies, permissions, budgets, and model routes affect quality and cost. The user must be able to approve or revise them before the controller creates the team. |
 | Use OpenClaw as the Agent runtime, not the orchestrator | OpenClaw provides model/provider integration, sessions, tools, and sandboxing; the experiment still needs a model-independent control plane. |
 | Isolate SAT's OpenClaw runtime and state from every existing installation | Compatibility is not ownership. Installing a pinned private binary and overriding every mutable OpenClaw path gives SAT reproducibility without reading, changing, stopping, or deleting a user's existing binary, Gateway, profile, configuration, credentials, sessions, caches, or workspaces. A collision at SAT's private target fails safely instead of being adopted. |
 | Validate and, when necessary, supplement the exact model catalog before Agent work | Saving a `provider/model` string does not prove that the pinned runtime can resolve it. A non-generation catalog/auth check catches unsupported or unauthenticated selections before a build, while a versioned secret-free supplement can bridge a known catalog lag without copying credentials or enabling fallback. |
@@ -363,16 +421,17 @@ the result. Clarification quality is evaluated separately.
 | Use measured per-role invocation timeouts and independent bounded-repair timeouts | Planning, implementation, and verification have different measured workloads. Checked-in defaults are 120 seconds for Clarifier, 180 for Planner, 900 for coding/integration roles, and 300 for Tester/Reviewer. A repair must regenerate a complete semantic response, so it receives the same per-invocation timeout instead of an arbitrarily small remainder from the first call. Repair remains limited to one call, while total call count, Agent duration, token, and cost budgets bound the complete run. |
 | Separate review severity from terminal failure | Even a critical-impact product defect may be correctable. Reviewer `fail` therefore requires an explicit safety or evidence-integrity termination reason; ordinary gate failures and implementation defects request `revise`. |
 | Version requirement or acceptance corrections | A hidden or over-specified acceptance condition confounds model evaluation. The confirmed TaskBrief must expose the product contract, black-box checks must accept equivalent compliant presentations, and a correction starts a new benchmark version. |
-| Freeze model identity and evaluation prices for each run | Explicit model telemetry and a fixed price table are required for comparable experiments; model fallback would change the independent variables. A product run may record cost as unavailable when the user has not supplied a trustworthy price instead of inventing a zero estimate. |
+| Separate product model routing from strict evaluation routing | Controlled evaluations pin one model and price table and disable switching. Product runs may use approved task-, phase-, capability-, or Agent-specific routes, but the controller must resolve and record every model and may switch only under an explicit user-authorized condition. |
 | Treat terminal failure as evidence | Provider, sandbox, artifact, budget, and convergence failures must remain observable instead of being retried or discarded silently. |
-| Keep saved user defaults secret-free | The product wizard stores the model reference only. Optional pricing, concurrency, and a global invocation-timeout override remain advanced evaluation settings; provider credentials remain in SAT's isolated OpenClaw-owned state and never enter SAT control-plane configuration or exports. Checked-in role defaults remain the normal timeout policy. |
+| Keep saved user defaults and model profiles secret-free | The product wizard may store provider/model references, routing preferences, and non-secret metadata, but provider credentials remain in SAT's isolated OpenClaw-owned state and never enter SAT control-plane configuration or exports. Optional pricing, concurrency, and a global invocation-timeout override remain advanced settings; checked-in capability defaults remain the normal timeout policy. |
 | Make uninstall preservation-first | Removing the CLI must not silently destroy run evidence, generated workspaces, SAT's isolated provider state, shared tools, a source checkout, or any other OpenClaw installation; export and purge therefore require explicit user choices. |
 | Implement the Product Demo Slice before topology comparison | A reproducible engine is not yet a usable product. The core promise starts from a short request, so installation, onboarding, clarification, progress, and delivery must be executable before the project presents an internal evaluation workflow as its demo. |
 | Keep product and evaluation CLI surfaces distinct | Normal users run `sat` and receive guided defaults. Explicit TaskBrief files, benchmark preparation, team IDs, policy paths, timeouts, concurrency, and repair controls remain available to contributors without becoming first-run questions. |
 | Keep generated-product profiles independent from evaluation fixtures | A benchmark must hold experiment inputs constant, while a product request must express the user's intent. Sharing the controller and quality-manifest schema is useful; sharing a task-specific TaskBrief, seed, acceptance suite, environment contract, or delivery command would silently replace the user's request and invalidate both boundaries. |
-| Derive product requirements before the first model call | The bounded wizard records the user's request, success conditions, and constraints directly, shows the resulting TaskBrief summary, and requires authorization. This avoids charging for a model-authored interpretation before consent and prevents an LLM from becoming the authority for missing user intent. |
+| Establish the base request and model-work authorization before model-assisted Planning | SAT first records enough direct user input to define the requested outcome, execution profile, destination, and authorization. The Planning session may then clarify and propose requirements, but the user remains their final authority and approves every frozen plan revision. |
 | Require a generated-project command manifest | Setup, start, and test commands vary by project. A validated `sat-project.json` argv contract lets SAT deliver exact commands without assuming FastAPI, a Web server, or any task-specific entry point. |
-| Show controller-backed progress rather than hidden reasoning | Users need attributable phase summaries, elapsed waiting time, Git snapshots, gates, review, and revision status. Hidden chain-of-thought, secrets, and unverifiable percentages are neither required nor appropriate. |
+| Use one controller event stream for configurable run-level and per-Agent progress | Compact, standard, and detailed views may expose different safe summaries, dependencies, routes, gates, and budgets without changing execution. Hidden chain-of-thought, secrets, raw unbounded output, and unverifiable percentages are excluded. |
+| Accept user controls through a persisted controller-owned channel | Guidance applies prospectively; correction creates a versioned replan; pause/resume use integrity-checked safe boundaries; interruption and cancellation are best effort for active provider work and preserve cost/evidence. No control may be implemented as an untracked chat mutation. |
 | Keep product state outside the application checkout | Managed runs, workspaces, and trusted source baselines live under the user-local state root. Installation updates cannot overwrite evidence, and uninstallation can preserve, export, or explicitly purge state independently of the application files. |
 | Deliver only an accepted result to a new child directory | The model works in an isolated detached clone. After acceptance, SAT copies the exact accepted commit through a same-parent staging directory and publishes it with Linux atomic no-replace semantics, so a failed run, late destination, or conflict never overwrites user files. |
 
@@ -380,11 +439,15 @@ the result. Clarification quality is evaluated separately.
 
 ```text
 REQUEST
-→ CLARIFY
-→ CONFIRM_REQUIREMENTS
-→ SELECT_TEAM
+→ AUTHORIZE_PLANNING
+→ PLANNING_DIALOGUE
+→ PROPOSE_PLAN
+→ REVIEW_OVERVIEW
+   ├── REVISE_PLAN → PLANNING_DIALOGUE
+   └── CONFIRM_PLAN
+→ VALIDATE_TEAM_AND_ROUTES
 → PREPARE_WORKSPACE
-→ PLAN
+→ CREATE_RUN_SCOPED_AGENTS
 → IMPLEMENT
 → SNAPSHOT
 → VERIFY
@@ -397,7 +460,17 @@ REQUEST
 
 Only the deterministic controller may advance this state machine.
 
-Phase 1 starts at `CONFIRM_REQUIREMENTS` with a frozen `TaskBrief`. The Product
+Execution also accepts persisted control inputs. Guidance enters incomplete
+work at a declared safe boundary. Correction suspends new scheduling and
+creates a versioned Planning revision. Cooperative pause stops new invocations;
+resume revalidates evidence, workspace, dependencies, budgets, credentials,
+and routes. Interruption requests best-effort termination of an active attempt,
+and cancellation terminates the run and cleans only its owned resources. An
+in-flight provider request may already incur usage and may not stop instantly;
+the event stream reports whether each command was queued, applied, rejected,
+or could not take effect.
+
+Phase 1 starts from a frozen confirmed `TaskBrief`. The Product
 Demo Slice connects `REQUEST`, bounded scope clarification, first-run
 onboarding, automatic internal materialization, progress, and delivery to that
 verified engine. The function-specialized path runs Tester and Reviewer
@@ -407,6 +480,12 @@ evaluation performs at most two implementation iterations: the initial pass
 and one revision. The Product Demo Slice may use the team manifest's
 three-iteration limit so a first revision that measurably resolves one blocker
 does not force termination when a distinct correctable defect is then exposed.
+
+The adaptive milestone replaces product-side team selection with a Planning
+session and a user-approved TeamPlan. Existing fixed evaluation manifests are
+compiled to that same contract instead of retaining a parallel controller
+path. The controller emits one RunEvent stream for all renderers and records
+every resolved model route and user control alongside the artifact evidence.
 
 The Reviewer recommends `revise` for every correctable product defect,
 including failed deterministic acceptance and security defects in generated
@@ -459,6 +538,8 @@ policies retain the code owners listed in
 ### First-Delivery Effectiveness
 
 - Human corrections after requirements confirmation;
+- Guidance, correction, pause, interruption, and cancellation counts;
+- Control-command application latency and invalidated downstream work;
 - Internal implementation iterations;
 - Earlier findings resolved;
 - Critical regressions;
@@ -470,6 +551,8 @@ policies retain the code owners listed in
 - Agent timeouts, retries, and failures;
 - Merge or integration conflicts;
 - Claims that disagree with repository evidence;
+- Invalid TeamPlans, dependency deadlocks, and permission conflicts;
+- Unplanned model switches or route-resolution failures;
 - Termination reason.
 
 ### Efficiency
@@ -478,7 +561,8 @@ policies retain the code owners listed in
 - Controller Agent invocations and provider-internal attempts when available;
 - Input and output tokens;
 - Estimated cost;
-- Coordination overhead.
+- Coordination overhead;
+- Per-route latency, usage, cost, and switch reason.
 
 A result counts as improved only when at least one relevant quality indicator
 improves, no critical indicator regresses, and a specific previous finding is
@@ -491,10 +575,10 @@ presented as a conclusive result.
 ## Safety Requirement
 
 Safe execution is a product constraint, not an optional deployment concern.
-The implementation must preserve sandbox isolation, least-privilege role
-tools, explicit non-secret environments, immutable model identity, bounded
-resources and cost, integrity-checked evidence, and human authorization for
-external side effects.
+The implementation must preserve sandbox isolation, least-privilege capability
+profiles, explicit non-secret environments, auditable authorized model routes,
+strict pinned-model evaluation, bounded resources and cost, integrity-checked
+evidence, and human authorization for external side effects.
 
 The concrete Git, sandbox, credential, model, resource, storage, and human
 authorization boundaries are maintained in
@@ -509,10 +593,18 @@ The core deliverable includes:
 - Unified `sat` CLI;
 - One-command managed installation with automatic environment diagnostics;
 - A no-subcommand product entry point with guided first-run configuration;
-- Bounded clarification and confirmed task briefs;
+- Multi-round bounded Planning dialogue and confirmed task briefs;
+- An editable requirements, implementation, Agent, dependency, budget, and
+  model-route overview;
+- Task-defined run-scoped Agents validated and created by the controller;
 - Automatic internal run, TaskBrief, source, workspace, and delivery
   materialization;
-- Controller-backed progress summaries and a concise final delivery view;
+- Configurable controller-backed run/per-Agent progress and a concise final
+  delivery view;
+- Persisted guidance, correction, pause, resume, interruption, and cancellation
+  controls;
+- Task-, phase-, capability-, and Agent-specific model routing with explicit
+  authorized automatic selection;
 - Deterministic run controller and state machine;
 - OpenClaw execution adapter;
 - Three versioned experimental configurations;
@@ -533,6 +625,9 @@ The core version does not include:
 - Arbitrary languages and application types;
 - Large monorepositories;
 - Uncontrolled concurrent edits to the same files;
+- Agent-controlled spawning, permission expansion, or unbounded team growth;
+- Hidden chain-of-thought or unverifiable progress percentages;
+- Silent model fallback or switching outside an approved route plan;
 - Automatic merge, deployment, publication, or App Store submission;
 - A claim that more Agents are inherently better;
 - Hidden retries, failures, fallback, or inconclusive results.
@@ -591,32 +686,115 @@ snapshot.
 interaction tests and one fresh supported-device rehearsal without requiring
 the user to operate the evaluation CLI.
 
-### Phase 3: Baseline and Domain Specialization
+### Phase 3: Adaptive Orchestration and Interactive Control
+
+The detailed contracts, implementation batches, and acceptance criteria are in
+[`docs/adaptive-orchestration.md`](docs/adaptive-orchestration.md). Work is
+ordered so current fixed teams migrate onto one contract instead of creating a
+parallel product controller.
+
+#### Phase 3A: Contracts and Compatibility
+
+- Add versioned TeamPlan, AgentSpec, ModelRoutePlan, RunEvent, and
+  ControlCommand schemas;
+- Validate dependencies, ownership, permissions, quality independence, routes,
+  and budgets before model work;
+- Compile existing fixed evaluation manifests into TeamPlan;
+- Move the current workflow and progress source onto those contracts, then
+  remove the direct fixed-role path.
+
+**Exit criterion:** the current function-specialized path passes its complete
+offline suite through TeamPlan, while invalid dynamic plans fail before Agent
+creation.
+
+#### Phase 3B: Planning Dialogue and Plan Approval
+
+- Add model-work authorization followed by bounded multi-round dialogue;
+- Combine free-form conversation with suggested options and custom answers;
+- Generate one requirements, implementation, team, dependency, budget, and
+  model overview;
+- Let the user approve, request a natural-language revision, or edit safe
+  structured fields;
+- Persist every approved plan revision.
+
+**Exit criterion:** a user can revise and approve a task-defined TeamPlan from
+an ordinary request without editing an internal file.
+
+#### Phase 3C: Dynamic Team Runtime
+
+- Compile role prompts from AgentSpec and versioned templates;
+- Create run-scoped OpenClaw sessions only through the controller;
+- Schedule the dependency DAG with bounded concurrency;
+- Enforce permission profiles, workspace ownership, typed handoffs, independent
+  quality, and aggregate budgets;
+- Apply team amendments only at validated safe checkpoints.
+
+**Exit criterion:** two materially different tasks produce different justified
+teams and complete or fail through the same controller, evidence, and cleanup
+boundary.
+
+#### Phase 3D: Observable and Controllable Execution
+
+- Render compact, standard, and detailed views from one append-only event
+  stream;
+- Show each Agent's phase, safe current activity, dependencies, handoffs,
+  model route, gates, elapsed time, and relevant budgets;
+- Implement persisted guide, correct, cooperative pause/resume, best-effort
+  interrupt, and terminal cancel semantics;
+- Add integrity, restart, non-TTY, cancellation, and resource-cleanup coverage.
+
+**Exit criterion:** offline end-to-end tests exercise every visibility level and
+control; an authorized live run demonstrates guidance and cooperative
+pause/resume without losing evidence integrity.
+
+#### Phase 3E: Model Profiles and Routing
+
+- Support multiple secret-free model profiles;
+- Add task, phase, capability, and Agent preferences;
+- Resolve `auto` deterministically within authorized candidates, capabilities,
+  switch conditions, and budget;
+- Record every resolved model, reason, switch, telemetry, and unavailable-price
+  state;
+- Preserve strict pinned-model evaluation mode.
+
+**Exit criterion:** routing tests cover precedence, capability mismatch,
+unavailable providers, budget rejection, authorized and refused switches, and
+strict evaluation; one authorized run uses two planned routes without silent
+fallback.
+
+#### Phase 3F: Adaptive Product Acceptance
+
+- Rehearse fresh install, Planning dialogue, plan revision, dynamic execution,
+  progress, controls, routing, delivery, export, and uninstall;
+- Record usability and coordination defects;
+- Freeze one adaptive-team evaluation configuration.
+
+**Exit criterion:** a fresh supported device completes the adaptive journey
+without internal files or evaluation commands, with auditable plan, event,
+control, route, Git, quality, and cleanup evidence.
+
+### Phase 4: Baselines and Controlled Evaluation
 
 - Add the one-pass single-Agent path;
-- Add parallel frontend/backend work with explicit ownership;
-- Add deterministic integration before verification;
-- Keep shared inputs, quality gates, model policy, and telemetry comparable.
+- Add the fixed domain-specialized path with explicit integration;
+- Compare fixed topologies with one frozen TaskBrief and model policy;
+- Compare a frozen task-defined TeamPlan with the strongest fixed baseline;
+- Hold TeamPlan constant in a separate model-routing experiment;
+- Analyze quality, reliability, cost, time, intervention, and coordination
+  failures;
+- Select supported defaults or report an inconclusive result.
 
-**Exit criterion:** all three configurations complete or fail through the same
-controller and reporting boundary.
-
-### Phase 4: Controlled Evaluation
-
-- Freeze the benchmark task brief and starting commit;
-- Run repeated trials under predefined budgets;
-- Analyze quality, reliability, cost, time, and coordination failures;
-- Select a supported default or report an inconclusive result.
-
-**Exit criterion:** the recommendation is traceable to run evidence.
+**Exit criterion:** every recommendation is traceable to comparable run
+evidence, and adaptive team design is not confounded with model routing.
 
 ### Phase 5: Generalization and Pass-Off
 
 - Validate the selected configuration on a second use case;
-- Harden interrupted-run recovery and remaining sandbox diagnostics;
+- Harden process-crash recovery and remaining sandbox diagnostics;
 - Package a demonstration and public-ready technical report.
 
-**Exit criterion:** a user can start from a brief request and receive one
+**Exit criterion:** a user can start from a brief request, understand and alter
+the proposed approach, observe or control execution as desired, and receive one
 auditable delivery without manually coordinating Agents.
 
 ## Decision Policy

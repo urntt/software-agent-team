@@ -10,6 +10,12 @@ The specification derives from the product and architecture decisions in
 [`VISION.md`](../VISION.md). Current implementation and rehearsal status belong
 only to [`STATUS.md`](../STATUS.md).
 
+This document remains the completed baseline acceptance contract. The planned
+multi-round Planning dialogue, task-defined Agent teams, configurable per-Agent
+progress, live user controls, and model routing extend this journey without
+retrospectively changing its completion criteria. Their target contract is
+[`adaptive-orchestration.md`](adaptive-orchestration.md).
+
 ## User Journey Contract
 
 A new user should be able to:

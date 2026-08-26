@@ -166,6 +166,7 @@ configs/
 docs/
   README.md                    Documentation index
   product-demo-slice.md        Guided user-journey acceptance specification
+  adaptive-orchestration.md    Planned dynamic-team and interactive-control specification
   installation.md             Install, configure, export, and uninstall
   runtime-evidence.md          Runtime, artifact, evidence, and safety model
   phase1-runbook.md            Controlled provider-backed evaluation procedure
@@ -228,6 +229,9 @@ Update the document that owns the changed fact:
   evidence, or known gap changes;
 - Update `docs/product-demo-slice.md` when the guided user-journey interaction
   or acceptance criteria change; keep implementation status in `STATUS.md`;
+- Update `docs/adaptive-orchestration.md` when the planned Planning, TeamPlan,
+  progress, control, model-routing interaction, implementation sequence, or
+  acceptance contract changes; keep implementation status in `STATUS.md`;
 - Update `docs/installation.md` when setup, saved configuration, export, or
   uninstallation behavior changes;
 - Update `docs/runtime-evidence.md` when runtime, artifact, response, integrity,
