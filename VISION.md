@@ -274,6 +274,8 @@ Each concept has one authoritative owner.
 | Run-scoped runtime materialization and preflight | `src/software_agent_team/runtime_configuration.py` |
 | Run lifecycle state and persistence | `src/software_agent_team/run_control.py` |
 | Phase 1 orchestration, decisions, and reports | `src/software_agent_team/workflow.py` |
+| Versioned RunEvent contract, append-only journal, visibility filtering, and terminal rendering | `src/software_agent_team/progress.py` |
+| Versioned ControlCommand contract and controller-owned mailbox history | `src/software_agent_team/controls.py` |
 | Agent-call, token, duration, cost, and per-role invocation budgets | `src/software_agent_team/budgets.py`, `src/software_agent_team/workflow.py`, `configs/product-policy.json`, and `configs/run-policy.json` |
 | Product execution profile and generic quality contract | `profiles/python/`, `runtime/python/`, and `configs/product-policy.json` |
 | Frozen evaluation fixture and task-specific acceptance | `benchmarks/task_manager/` and `configs/run-policy.json` |
@@ -281,7 +283,6 @@ Each concept has one authoritative owner.
 | Agent process invocation and telemetry parsing | `src/software_agent_team/execution.py` |
 | CLI commands and runtime option resolution | `src/software_agent_team/cli.py` |
 | Product diagnostics, supported request materialization, and safe delivery | `src/software_agent_team/product.py` |
-| Controller-backed progress event rendering | `src/software_agent_team/progress.py` |
 | User-local product state path | `src/software_agent_team/paths.py` |
 | User-local default schema and persistence | `src/software_agent_team/user_configuration.py` |
 | Managed bootstrap, installation, and uninstallation execution | `scripts/bootstrap.sh`, `scripts/install.sh`, and `scripts/uninstall.sh` |

@@ -46,6 +46,7 @@ from software_agent_team.product import (
     validate_project_destination,
 )
 from software_agent_team.progress import (
+    ProgressDraftHandler,
     ProgressEvent,
     ProgressEventKind,
     ProgressHandler,
@@ -543,28 +544,30 @@ def _execute_workflow(
                 f"model_error={preflight.model_error or 'none'}"
             )
 
-    def report_gate(
-        command: CommandEvidence,
-        iteration: int,
-        completed: int,
-        total: int,
-    ) -> None:
-        if options.progress_handler is None:
-            return
-        passed = command.exit_code == 0 and not command.timed_out
-        state = "passed" if passed else "failed"
-        options.progress_handler(
-            ProgressEvent(
-                kind=ProgressEventKind.QUALITY_GATE_COMPLETED,
-                message=(f"Quality gate {completed}/{total} {command.id}: {state}"),
-                phase=RunPhase.VERIFYING,
-                iteration=iteration,
-                completed=completed,
-                total=total,
+    def gate_factory(
+        run_directory: Path,
+        workspace: Path,
+        event_handler: ProgressDraftHandler,
+    ) -> QualityGateRunner:
+        def report_gate(
+            command: CommandEvidence,
+            iteration: int,
+            completed: int,
+            total: int,
+        ) -> None:
+            passed = command.exit_code == 0 and not command.timed_out
+            state = "passed" if passed else "failed"
+            event_handler(
+                ProgressEvent(
+                    kind=ProgressEventKind.QUALITY_GATE_COMPLETED,
+                    message=(f"Quality gate {completed}/{total} {command.id}: {state}"),
+                    phase=RunPhase.VERIFYING,
+                    iteration=iteration,
+                    completed=completed,
+                    total=total,
+                )
             )
-        )
 
-    def gate_factory(run_directory: Path, workspace: Path) -> QualityGateRunner:
         return QualityGateRunner(
             configuration,
             run_directory=run_directory,

@@ -39,7 +39,7 @@ from software_agent_team.teams import (
     validate_fixed_team_plan,
 )
 
-RUN_SCHEMA_VERSION = 5
+RUN_SCHEMA_VERSION = 6
 RUN_STATE_FILENAME = "run.json"
 TASK_BRIEF_FILENAME = "task-brief.json"
 TEAM_PLAN_FILENAME = "team-plan.json"
@@ -237,6 +237,11 @@ class RunRecord(BaseModel):
     team_plan_revision: int = Field(ge=1, le=99)
     team_plan_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     agent_timeouts_seconds: dict[str, int] = Field(default_factory=dict)
+    event_count: int = Field(default=0, ge=0)
+    event_head_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
     phase: RunPhase = RunPhase.CREATED
     current_iteration: int = Field(default=1, ge=1, le=3)
     iteration_limit: int = Field(ge=1, le=3)
@@ -292,6 +297,8 @@ class RunRecord(BaseModel):
     def validate_record(self) -> Self:
         """Validate lifecycle history, iteration, and terminal metadata."""
 
+        if (self.event_count == 0) != (self.event_head_sha256 is None):
+            raise ValueError("run event count and head digest must agree")
         if self.current_iteration > self.iteration_limit:
             raise ValueError("current iteration exceeds the run iteration limit")
         if self.updated_at < self.created_at:
@@ -578,6 +585,49 @@ class RunStore:
                 raise
         return updated
 
+    def replace_event_head(
+        self,
+        previous: RunRecord,
+        updated: RunRecord,
+    ) -> RunRecord:
+        """Atomically anchor one newly persisted append-only RunEvent."""
+
+        run_directory = self._run_directory(previous.run_id)
+        with _exclusive_lock(run_directory / ".lock"):
+            _, _, persisted = self.load(previous.run_id)
+            if persisted != previous:
+                raise RunConflictError(
+                    "persisted run changed before its RunEvent was anchored"
+                )
+            stable_fields = set(RunRecord.model_fields) - {
+                "updated_at",
+                "event_count",
+                "event_head_sha256",
+            }
+            if any(
+                getattr(previous, field) != getattr(updated, field)
+                for field in stable_fields
+            ):
+                raise RunIntegrityError(
+                    "RunEvent anchoring cannot change lifecycle state"
+                )
+            if updated.event_count != previous.event_count + 1:
+                raise RunIntegrityError("RunEvent count must increment exactly once")
+            if updated.event_head_sha256 is None:
+                raise RunIntegrityError("RunEvent anchoring requires a head digest")
+            if updated.updated_at < previous.updated_at:
+                raise RunIntegrityError("RunEvent timestamp predates run state")
+            destination = run_directory / RUN_STATE_FILENAME
+            temporary = run_directory / f".{RUN_STATE_FILENAME}.{uuid4().hex}.tmp"
+            try:
+                _write_new_file(temporary, _serialized_model(updated))
+                os.replace(temporary, destination)
+                _fsync_directory(run_directory)
+            except Exception:
+                temporary.unlink(missing_ok=True)
+                raise
+        return updated
+
     def _run_directory(self, run_id: str) -> Path:
         if not RUN_ID_PATTERN.fullmatch(run_id):
             raise RunControlError(f"invalid run ID: {run_id}")
@@ -592,6 +642,8 @@ class RunStore:
             "team_plan_revision",
             "team_plan_sha256",
             "agent_timeouts_seconds",
+            "event_count",
+            "event_head_sha256",
             "iteration_limit",
             "task_brief_sha256",
             "created_at",
@@ -752,6 +804,37 @@ class RunController:
             artifacts=artifacts,
             decision=decision,
         )
+
+    def record_event_head(
+        self,
+        run_id: str,
+        *,
+        event_sequence: int,
+        event_sha256: str,
+        occurred_at: datetime,
+    ) -> RunRecord:
+        """Anchor the next append-only event without advancing lifecycle state."""
+
+        if re.fullmatch(r"[0-9a-f]{64}", event_sha256) is None:
+            raise RunIntegrityError("RunEvent head digest is invalid")
+        current = self.load(run_id)
+        if event_sequence != current.event_count + 1:
+            raise RunConflictError(
+                "RunEvent sequence conflict: "
+                f"expected {current.event_count + 1}, found {event_sequence}"
+            )
+        event_time = _require_utc(occurred_at)
+        if event_time < current.updated_at:
+            raise RunControlError("RunEvent timestamp predates run state")
+        updated = current.model_copy(
+            update={
+                "updated_at": event_time,
+                "event_count": event_sequence,
+                "event_head_sha256": event_sha256,
+            }
+        )
+        updated = RunRecord.model_validate(updated.model_dump())
+        return self.store.replace_event_head(current, updated)
 
     def attach_workspace(
         self,

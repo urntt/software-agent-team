@@ -12,6 +12,7 @@ from pathlib import Path
 
 from software_agent_team.artifacts import (
     AgentRole,
+    CommandEvidence,
     PlanTask,
     ReviewFinding,
     ReviewSeverity,
@@ -28,7 +29,14 @@ from software_agent_team.execution import (
     AgentExecutor,
     AgentTokenUsage,
 )
-from software_agent_team.progress import ProgressEvent, ProgressEventKind
+from software_agent_team.integrity import canonical_model_sha256
+from software_agent_team.progress import (
+    ProgressDraftHandler,
+    ProgressEvent,
+    ProgressEventKind,
+    RunEvent,
+    RunEventJournal,
+)
 from software_agent_team.quality_gates import (
     FakeSandboxBackend,
     QualityGateRunner,
@@ -356,20 +364,42 @@ def coordinator(
     verification_concurrency: int = 2,
     iteration_limit: int = 2,
     stage_timeout_seconds: int | None = 30,
-    progress_handler: Callable[[ProgressEvent], None] | None = None,
+    progress_handler: Callable[[RunEvent], None] | None = None,
 ) -> WorkflowCoordinator:
     """Build a coordinator with the real gate runner and fake sandbox backend."""
 
     configuration = load_quality_gate_configuration(POLICY, BENCHMARK)
     backend = FakeSandboxBackend(executions or sandbox_executions())
 
-    def gate_factory(run_directory: Path, workspace: Path) -> QualityGateRunner:
+    def gate_factory(
+        run_directory: Path,
+        workspace: Path,
+        event_handler: ProgressDraftHandler,
+    ) -> QualityGateRunner:
+        def report_gate(
+            command: CommandEvidence,
+            iteration: int,
+            completed: int,
+            total: int,
+        ) -> None:
+            event_handler(
+                ProgressEvent(
+                    kind=ProgressEventKind.QUALITY_GATE_COMPLETED,
+                    message=f"Quality gate {completed}/{total}: {command.id}",
+                    phase=RunPhase.VERIFYING,
+                    iteration=iteration,
+                    completed=completed,
+                    total=total,
+                )
+            )
+
         return QualityGateRunner(
             configuration,
             run_directory=run_directory,
             workspace=workspace,
             backend=backend,
             allow_test_backends=True,
+            result_handler=report_gate,
         )
 
     return WorkflowCoordinator(
@@ -465,7 +495,7 @@ def test_workflow_emits_only_controller_backed_progress_events(tmp_path: Path) -
     source = initialize_source(tmp_path)
     workspace = tmp_path / "workspaces" / task_brief().run_id
     executor = DynamicWorkflowExecutor(workspace)
-    events: list[ProgressEvent] = []
+    events: list[RunEvent] = []
 
     outcome = coordinator(
         tmp_path,
@@ -479,20 +509,46 @@ def test_workflow_emits_only_controller_backed_progress_events(tmp_path: Path) -
     assert ProgressEventKind.WORKSPACE_READY in kinds
     assert ProgressEventKind.SNAPSHOT_VERIFIED in kinds
     assert ProgressEventKind.QUALITY_GATES_STARTED in kinds
+    gate_events = [
+        event
+        for event in events
+        if event.kind is ProgressEventKind.QUALITY_GATE_COMPLETED
+    ]
+    assert [event.completed for event in gate_events] == [1, 2, 3, 4]
+    assert {event.total for event in gate_events} == {4}
     assert ProgressEventKind.DECISION_RECORDED in kinds
     assert kinds[-1] is ProgressEventKind.RUN_COMPLETED
-    started_roles = {
-        event.role for event in events if event.kind is ProgressEventKind.AGENT_STARTED
+    started_agents = {
+        event.agent_id
+        for event in events
+        if event.kind is ProgressEventKind.AGENT_STARTED
     }
-    assert started_roles == {
-        AgentRole.PLANNER,
-        AgentRole.GENERALIST_DEVELOPER,
-        AgentRole.TESTER,
-        AgentRole.REVIEWER,
+    assert started_agents == {
+        "planner",
+        "generalist_developer",
+        "tester",
+        "reviewer",
     }
     rendered_messages = "\n".join(event.message for event in events)
     assert "RUN_CONTEXT_JSON" not in rendered_messages
     assert "response_text" not in rendered_messages
+    assert tuple(events) == outcome.events
+    assert outcome.record.event_count == len(outcome.events)
+    assert outcome.record.event_head_sha256 == canonical_model_sha256(
+        outcome.events[-1]
+    )
+    journal = RunEventJournal(
+        tmp_path / "runs" / outcome.record.run_id,
+        run_id=outcome.record.run_id,
+    )
+    assert journal.load() == outcome.events
+    assert [event.sequence for event in outcome.events] == list(
+        range(1, len(outcome.events) + 1)
+    )
+    assert all(
+        current.lifecycle_revision <= following.lifecycle_revision
+        for current, following in zip(outcome.events, outcome.events[1:], strict=False)
+    )
 
 
 def test_workflow_reports_unconfigured_cost_without_inventing_zero(

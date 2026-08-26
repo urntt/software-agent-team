@@ -57,9 +57,12 @@ from software_agent_team.git_workspace import (
 )
 from software_agent_team.integrity import canonical_model_sha256
 from software_agent_team.progress import (
+    ProgressDraftHandler,
     ProgressEvent,
     ProgressEventKind,
     ProgressHandler,
+    RunEvent,
+    RunEventJournal,
 )
 from software_agent_team.prompting import (
     AgentPromptInputs,
@@ -117,7 +120,7 @@ class QualityGate(Protocol):
         """Execute the fixed checks for one immutable snapshot."""
 
 
-type QualityGateFactory = Callable[[Path, Path], QualityGate]
+type QualityGateFactory = Callable[[Path, Path, ProgressDraftHandler], QualityGate]
 type RuntimeSetup = Callable[[GitWorkspace, Path], None]
 type Clock = Callable[[], datetime]
 type ArtifactAssembler = Callable[[AgentResponseBody], PhaseArtifact]
@@ -147,6 +150,7 @@ class WorkflowOutcome:
     human_report_path: str
     execution_records: tuple[ArtifactReference, ...]
     handoffs: tuple[ArtifactReference, ...]
+    events: tuple[RunEvent, ...]
 
 
 @dataclass
@@ -155,6 +159,7 @@ class _WorkflowContext:
     team_plan: TeamPlan
     controller: RunController
     artifact_store: ArtifactStore
+    event_journal: RunEventJournal
     run_directory: Path
     execution_records: list[ArtifactReference] = field(default_factory=list)
     handoffs: list[ArtifactReference] = field(default_factory=list)
@@ -250,11 +255,16 @@ class WorkflowCoordinator:
         self.progress_handler = progress_handler
         self.clock = clock
 
-    def _emit(self, event: ProgressEvent) -> None:
-        """Notify the user interface without transferring workflow authority."""
+    @staticmethod
+    def _emit(context: _WorkflowContext, event: ProgressEvent) -> RunEvent:
+        """Persist one controller event before notifying presentation code."""
 
-        if self.progress_handler is not None:
-            self.progress_handler(event)
+        record = context.controller.load(context.brief.run_id)
+        return context.event_journal.append(
+            event,
+            lifecycle_revision=record.revision,
+            phase=record.phase,
+        )
 
     def execute(
         self,
@@ -290,6 +300,11 @@ class WorkflowCoordinator:
             team_plan=team_plan,
         )
         run_directory = self.runs_root / task_brief.run_id
+
+        def read_event_anchor() -> tuple[int, str | None]:
+            current = controller.load(task_brief.run_id)
+            return current.event_count, current.event_head_sha256
+
         context = _WorkflowContext(
             brief=task_brief,
             team_plan=team_plan,
@@ -299,15 +314,29 @@ class WorkflowCoordinator:
                 task_brief=task_brief,
                 team_plan=team_plan,
             ),
+            event_journal=RunEventJournal(
+                run_directory,
+                run_id=task_brief.run_id,
+                handler=self.progress_handler,
+                clock=self.clock,
+                anchor_writer=lambda event: controller.record_event_head(
+                    event.run_id,
+                    event_sequence=event.sequence,
+                    event_sha256=canonical_model_sha256(event),
+                    occurred_at=event.occurred_at,
+                ),
+                anchor_reader=read_event_anchor,
+            ),
             run_directory=run_directory,
         )
         self._emit(
+            context,
             ProgressEvent(
                 kind=ProgressEventKind.RUN_STARTED,
                 message=f"Build started (run {record.run_id})",
                 phase=RunPhase.CREATED,
                 iteration=1,
-            )
+            ),
         )
 
         try:
@@ -334,16 +363,18 @@ class WorkflowCoordinator:
             if self.runtime_setup is not None:
                 self.runtime_setup(workspace, run_directory)
             self._emit(
+                context,
                 ProgressEvent(
                     kind=ProgressEventKind.WORKSPACE_READY,
                     message="Isolated workspace and runtime verified",
                     phase=RunPhase.PLANNING,
                     iteration=record.current_iteration,
-                )
+                ),
             )
             quality_gate = self.quality_gate_factory(
                 run_directory,
                 Path(workspace.workspace_path),
+                lambda event: self._emit(context, event),
             )
             return self._execute_planned_run(
                 context,
@@ -450,18 +481,6 @@ class WorkflowCoordinator:
             if len(verified_snapshot) != 1:
                 raise WorkflowEvidenceError("Developer snapshot was not assembled once")
             snapshot = verified_snapshot[0]
-            self._emit(
-                ProgressEvent(
-                    kind=ProgressEventKind.SNAPSHOT_VERIFIED,
-                    message=(
-                        "Git snapshot verified: "
-                        f"{len(snapshot.changed_files)} files changed"
-                    ),
-                    phase=RunPhase.SNAPSHOTTING,
-                    iteration=record.current_iteration,
-                    changed_files=snapshot.changed_files,
-                )
-            )
             record = context.controller.advance(
                 record.run_id,
                 expected_revision=record.revision,
@@ -474,6 +493,19 @@ class WorkflowCoordinator:
                 record.run_id,
                 expected_revision=record.revision,
                 snapshot=snapshot,
+            )
+            self._emit(
+                context,
+                ProgressEvent(
+                    kind=ProgressEventKind.SNAPSHOT_VERIFIED,
+                    message=(
+                        "Git snapshot verified: "
+                        f"{len(snapshot.changed_files)} files changed"
+                    ),
+                    phase=RunPhase.VERIFYING,
+                    iteration=record.current_iteration,
+                    changed_files=snapshot.changed_files,
+                ),
             )
             for target in (AgentRole.TESTER, AgentRole.REVIEWER):
                 self._handoff(
@@ -488,12 +520,13 @@ class WorkflowCoordinator:
                 )
 
             self._emit(
+                context,
                 ProgressEvent(
                     kind=ProgressEventKind.QUALITY_GATES_STARTED,
                     message="Running deterministic quality gates",
                     phase=RunPhase.VERIFYING,
                     iteration=record.current_iteration,
-                )
+                ),
             )
             commands = quality_gate.run(iteration=record.current_iteration)
             if not commands:
@@ -601,6 +634,7 @@ class WorkflowCoordinator:
                 artifacts=(review_reference, iteration_reference),
             )
             self._emit(
+                context,
                 ProgressEvent(
                     kind=ProgressEventKind.DECISION_RECORDED,
                     message=(
@@ -610,7 +644,7 @@ class WorkflowCoordinator:
                     phase=RunPhase.DECIDING,
                     iteration=record.current_iteration,
                     decision=decision,
-                )
+                ),
             )
 
             if decision is IterationDecision.ACCEPT:
@@ -925,13 +959,14 @@ class WorkflowCoordinator:
             )
             role_name = request.role.value.replace("_", " ").title()
             self._emit(
+                context,
                 ProgressEvent(
                     kind=ProgressEventKind.AGENT_STARTED,
                     message=f"{role_name} is working",
-                    role=request.role,
+                    agent_id=request.role.value,
                     iteration=request.iteration,
                     attempt=attempt,
-                )
+                ),
             )
             result = self.executor.execute(request)
             response: PhaseArtifact | None = None
@@ -1010,17 +1045,18 @@ class WorkflowCoordinator:
                 remaining_timeout_seconds=request.timeout_seconds,
             )
             self._emit(
+                context,
                 ProgressEvent(
                     kind=ProgressEventKind.AGENT_COMPLETED,
                     message=(
                         f"{role_name} response recorded "
                         f"({result.telemetry.duration_ms / 1000:.1f}s)"
                     ),
-                    role=request.role,
+                    agent_id=request.role.value,
                     iteration=request.iteration,
                     attempt=attempt,
                     duration_ms=result.telemetry.duration_ms,
-                )
+                ),
             )
             if assembly_error is not None:
                 raise assembly_error
@@ -1029,13 +1065,14 @@ class WorkflowCoordinator:
             last_error = record_error or last_error
             if repairable and attempt <= self.artifact_repair_limit:
                 self._emit(
+                    context,
                     ProgressEvent(
                         kind=ProgressEventKind.AGENT_RETRY,
                         message=f"{role_name} response needs one bounded repair",
-                        role=request.role,
+                        agent_id=request.role.value,
                         iteration=request.iteration,
                         attempt=attempt,
-                    )
+                    ),
                 )
                 continue
             raise AgentInvocationError(
@@ -1330,12 +1367,13 @@ class WorkflowCoordinator:
             final_report=final_reference,
         )
         self._emit(
+            context,
             ProgressEvent(
                 kind=ProgressEventKind.RUN_COMPLETED,
                 message="Build accepted; preparing the verified delivery",
                 phase=RunPhase.COMPLETED,
                 iteration=record.current_iteration,
-            )
+            ),
         )
         return self._outcome(context, record, final_reference, markdown_path)
 
@@ -1387,6 +1425,7 @@ class WorkflowCoordinator:
             final_report=final_reference,
         )
         self._emit(
+            context,
             ProgressEvent(
                 kind=ProgressEventKind.RUN_FAILED,
                 message=(
@@ -1395,7 +1434,7 @@ class WorkflowCoordinator:
                 ),
                 phase=RunPhase.FAILED,
                 iteration=record.current_iteration,
-            )
+            ),
         )
         return self._outcome(context, record, final_reference, markdown_path)
 
@@ -1406,6 +1445,7 @@ class WorkflowCoordinator:
         final_reference: ArtifactReference,
         markdown_path: str,
     ) -> WorkflowOutcome:
+        record = context.controller.load(record.run_id)
         return WorkflowOutcome(
             record=record,
             final_report=final_reference,
@@ -1414,6 +1454,7 @@ class WorkflowCoordinator:
                 sorted(context.execution_records, key=lambda item: item.path)
             ),
             handoffs=tuple(sorted(context.handoffs, key=lambda item: item.path)),
+            events=context.event_journal.load(),
         )
 
     def _render_report(

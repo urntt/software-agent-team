@@ -1,21 +1,34 @@
-"""Controller-backed progress events and terminal rendering."""
+"""Persisted controller events and user-safe terminal rendering."""
 
 from __future__ import annotations
 
+import json
+import os
+import re
 import sys
 import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from enum import StrEnum
-from typing import TextIO
+from pathlib import Path, PurePosixPath
+from typing import Literal, Self, TextIO
+from uuid import uuid4
 
-from software_agent_team.artifacts import AgentRole, IterationDecision
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from software_agent_team.artifacts import IterationDecision
+from software_agent_team.integrity import canonical_model_sha256
 from software_agent_team.run_control import RunPhase
+
+RUN_EVENT_SCHEMA_VERSION = 1
+EVENTS_DIRECTORY = "events"
+EVENT_FILENAME_PATTERN = re.compile(r"^(?P<sequence>[0-9]{6})\.json$")
 
 
 class ProgressEventKind(StrEnum):
-    """Stable user-safe workflow events emitted by the controller."""
+    """Stable event identities emitted by the deterministic controller."""
 
     RUN_STARTED = "run_started"
     WORKSPACE_READY = "workspace_ready"
@@ -30,14 +43,288 @@ class ProgressEventKind(StrEnum):
     RUN_FAILED = "run_failed"
 
 
+class RunEventCategory(StrEnum):
+    """User-facing grouping independent from a renderer layout."""
+
+    LIFECYCLE = "lifecycle"
+    AGENT = "agent"
+    GIT = "git"
+    QUALITY_GATE = "quality_gate"
+    DECISION = "decision"
+
+
+class RunEventVisibility(StrEnum):
+    """Lowest detail level at which one safe event should be rendered."""
+
+    COMPACT = "compact"
+    STANDARD = "standard"
+    DETAILED = "detailed"
+
+
+class AgentRunState(StrEnum):
+    """Controller-observed state for one run-scoped Agent."""
+
+    RUNNING = "running"
+    COMPLETED = "completed"
+    WAITING_REPAIR = "waiting_repair"
+
+
+class RunEventSource(StrEnum):
+    """Authority behind a bounded event summary."""
+
+    CONTROLLER = "controller"
+    AGENT_SAFE_SUMMARY = "agent_safe_summary"
+
+
+class RunEventReferenceKind(StrEnum):
+    """Typed evidence that a RunEvent may point to without embedding it."""
+
+    ARTIFACT = "artifact"
+    HANDOFF = "handoff"
+    QUALITY_GATE = "quality_gate"
+    GIT = "git"
+    BUDGET = "budget"
+    MODEL_ROUTE = "model_route"
+    CONTROL_COMMAND = "control_command"
+
+
+_EVENT_METADATA: dict[
+    ProgressEventKind,
+    tuple[RunEventCategory, RunEventVisibility, AgentRunState | None],
+] = {
+    ProgressEventKind.RUN_STARTED: (
+        RunEventCategory.LIFECYCLE,
+        RunEventVisibility.COMPACT,
+        None,
+    ),
+    ProgressEventKind.WORKSPACE_READY: (
+        RunEventCategory.LIFECYCLE,
+        RunEventVisibility.STANDARD,
+        None,
+    ),
+    ProgressEventKind.AGENT_STARTED: (
+        RunEventCategory.AGENT,
+        RunEventVisibility.STANDARD,
+        AgentRunState.RUNNING,
+    ),
+    ProgressEventKind.AGENT_COMPLETED: (
+        RunEventCategory.AGENT,
+        RunEventVisibility.STANDARD,
+        AgentRunState.COMPLETED,
+    ),
+    ProgressEventKind.AGENT_RETRY: (
+        RunEventCategory.AGENT,
+        RunEventVisibility.COMPACT,
+        AgentRunState.WAITING_REPAIR,
+    ),
+    ProgressEventKind.SNAPSHOT_VERIFIED: (
+        RunEventCategory.GIT,
+        RunEventVisibility.STANDARD,
+        None,
+    ),
+    ProgressEventKind.QUALITY_GATES_STARTED: (
+        RunEventCategory.QUALITY_GATE,
+        RunEventVisibility.STANDARD,
+        None,
+    ),
+    ProgressEventKind.QUALITY_GATE_COMPLETED: (
+        RunEventCategory.QUALITY_GATE,
+        RunEventVisibility.STANDARD,
+        None,
+    ),
+    ProgressEventKind.DECISION_RECORDED: (
+        RunEventCategory.DECISION,
+        RunEventVisibility.COMPACT,
+        None,
+    ),
+    ProgressEventKind.RUN_COMPLETED: (
+        RunEventCategory.LIFECYCLE,
+        RunEventVisibility.COMPACT,
+        None,
+    ),
+    ProgressEventKind.RUN_FAILED: (
+        RunEventCategory.LIFECYCLE,
+        RunEventVisibility.COMPACT,
+        None,
+    ),
+}
+
+
+def _require_utc(value: datetime) -> datetime:
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError("RunEvent timestamps must include a timezone")
+    return value.astimezone(UTC)
+
+
+def _clean_summary(value: str) -> str:
+    cleaned = value.strip()
+    if not cleaned:
+        raise ValueError("RunEvent summaries must not be blank")
+    if any(character in cleaned for character in ("\n", "\r", "\x00")):
+        raise ValueError("RunEvent summaries must be one safe line")
+    return cleaned
+
+
+class RunEventReference(BaseModel):
+    """One bounded reference to controller-owned evidence."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: RunEventReferenceKind
+    id: str = Field(min_length=1, max_length=120)
+    path: str | None = Field(default=None, max_length=300)
+    sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+
+    @field_validator("id")
+    @classmethod
+    def require_clean_id(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("RunEvent reference IDs must not be blank")
+        return cleaned
+
+    @field_validator("path")
+    @classmethod
+    def require_safe_path(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        path = PurePosixPath(cleaned)
+        if (
+            not cleaned
+            or "\\" in cleaned
+            or path.is_absolute()
+            or path == PurePosixPath(".")
+            or ".." in path.parts
+            or str(path) != cleaned
+        ):
+            raise ValueError("RunEvent reference paths must be canonical and relative")
+        return cleaned
+
+
+class RunEvent(BaseModel):
+    """One immutable, attributable, user-safe controller event."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[RUN_EVENT_SCHEMA_VERSION] = RUN_EVENT_SCHEMA_VERSION
+    run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
+    sequence: int = Field(ge=1)
+    occurred_at: datetime
+    lifecycle_revision: int = Field(ge=0)
+    kind: ProgressEventKind
+    category: RunEventCategory
+    minimum_visibility: RunEventVisibility
+    source: RunEventSource = RunEventSource.CONTROLLER
+    summary: str = Field(min_length=1, max_length=500)
+    phase: RunPhase
+    agent_id: str | None = Field(
+        default=None,
+        pattern=r"^[a-z][a-z0-9_]*$",
+    )
+    agent_state: AgentRunState | None = None
+    iteration: int | None = Field(default=None, ge=1, le=99)
+    attempt: int | None = Field(default=None, ge=1, le=99)
+    duration_ms: int | None = Field(default=None, ge=0)
+    completed: int | None = Field(default=None, ge=0)
+    total: int | None = Field(default=None, ge=1)
+    changed_files: tuple[str, ...] = ()
+    decision: IterationDecision | None = None
+    references: tuple[RunEventReference, ...] = ()
+    control_command_id: str | None = Field(
+        default=None,
+        pattern=r"^ctl-[a-z0-9][a-z0-9-]*$",
+    )
+    previous_event_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+
+    @field_validator("occurred_at")
+    @classmethod
+    def require_utc_timestamp(cls, value: datetime) -> datetime:
+        return _require_utc(value)
+
+    @field_validator("summary")
+    @classmethod
+    def require_safe_summary(cls, value: str) -> str:
+        return _clean_summary(value)
+
+    @field_validator("changed_files")
+    @classmethod
+    def require_safe_changed_files(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        if len(values) != len(set(values)):
+            raise ValueError("RunEvent changed files must be unique")
+        for value in values:
+            path = PurePosixPath(value)
+            if (
+                not value
+                or "\\" in value
+                or path.is_absolute()
+                or path == PurePosixPath(".")
+                or ".." in path.parts
+                or str(path) != value
+            ):
+                raise ValueError(
+                    "RunEvent changed files must be canonical and relative"
+                )
+        return values
+
+    @model_validator(mode="after")
+    def validate_event(self) -> Self:
+        category, visibility, agent_state = _EVENT_METADATA[self.kind]
+        if self.category is not category:
+            raise ValueError("RunEvent category does not match its kind")
+        if self.minimum_visibility is not visibility:
+            raise ValueError("RunEvent visibility does not match its kind")
+        if self.agent_state is not agent_state:
+            raise ValueError("RunEvent Agent state does not match its kind")
+        if agent_state is not None:
+            if self.agent_id is None or self.attempt is None:
+                raise ValueError("Agent events require an Agent ID and attempt")
+        elif self.agent_id is not None or self.attempt is not None:
+            raise ValueError("non-Agent events cannot claim an Agent attempt")
+        if (self.completed is None) != (self.total is None):
+            raise ValueError("RunEvent gate progress requires completed and total")
+        if self.completed is not None and self.completed > self.total:
+            raise ValueError("RunEvent completed count cannot exceed its total")
+        if self.kind is ProgressEventKind.QUALITY_GATE_COMPLETED:
+            if self.completed is None:
+                raise ValueError("completed quality gates require progress counts")
+        elif self.completed is not None:
+            raise ValueError("only completed quality gates record progress counts")
+        if self.kind is ProgressEventKind.DECISION_RECORDED:
+            if self.decision is None:
+                raise ValueError("decision events require a controller decision")
+        elif self.decision is not None:
+            raise ValueError("only decision events record a controller decision")
+        if self.sequence == 1 and self.previous_event_sha256 is not None:
+            raise ValueError("the first RunEvent cannot reference a predecessor")
+        if self.sequence > 1 and self.previous_event_sha256 is None:
+            raise ValueError("later RunEvents require a predecessor digest")
+        reference_keys = [
+            (reference.kind, reference.id, reference.path)
+            for reference in self.references
+        ]
+        if len(reference_keys) != len(set(reference_keys)):
+            raise ValueError("RunEvent references must be unique")
+        return self
+
+    @property
+    def message(self) -> str:
+        """Expose the previous renderer name without duplicating persisted data."""
+
+        return self.summary
+
+
 @dataclass(frozen=True)
 class ProgressEvent:
-    """One attributable event derived from controller-owned state or evidence."""
+    """Internal controller draft enriched and persisted by a RunEventJournal."""
 
     kind: ProgressEventKind
     message: str
     phase: RunPhase | None = None
-    role: AgentRole | None = None
+    agent_id: str | None = None
     iteration: int | None = None
     attempt: int | None = None
     duration_ms: int | None = None
@@ -45,34 +332,231 @@ class ProgressEvent:
     total: int | None = None
     changed_files: tuple[str, ...] = ()
     decision: IterationDecision | None = None
+    references: tuple[RunEventReference, ...] = ()
+    control_command_id: str | None = None
+    source: RunEventSource = RunEventSource.CONTROLLER
 
 
-ProgressHandler = Callable[[ProgressEvent], None]
+ProgressHandler = Callable[[RunEvent], None]
+ProgressDraftHandler = Callable[[ProgressEvent], None]
+EventClock = Callable[[], datetime]
+EventAnchorWriter = Callable[[RunEvent], None]
+EventAnchorReader = Callable[[], tuple[int, str | None]]
+
+
+def _system_clock() -> datetime:
+    return datetime.now(UTC)
+
+
+def _serialized_event(event: RunEvent) -> bytes:
+    payload = json.dumps(event.model_dump(mode="json"), ensure_ascii=False, indent=2)
+    return f"{payload}\n".encode()
+
+
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+class RunEventJournal:
+    """Thread-safe, append-only, hash-chained RunEvent persistence."""
+
+    def __init__(
+        self,
+        run_directory: Path,
+        *,
+        run_id: str,
+        handler: ProgressHandler | None = None,
+        clock: EventClock = _system_clock,
+        anchor_writer: EventAnchorWriter | None = None,
+        anchor_reader: EventAnchorReader | None = None,
+    ) -> None:
+        if run_directory.is_symlink() or not run_directory.is_dir():
+            raise ValueError("RunEvent journal requires an existing run directory")
+        self.run_directory = run_directory
+        self.run_id = run_id
+        self.handler = handler
+        self.clock = clock
+        if (anchor_writer is None) != (anchor_reader is None):
+            raise ValueError("RunEvent anchoring requires both read and write sides")
+        self.anchor_writer = anchor_writer
+        self.anchor_reader = anchor_reader
+        self.events_directory = run_directory / EVENTS_DIRECTORY
+        if self.events_directory.is_symlink():
+            raise ValueError("RunEvent directory cannot be a symbolic link")
+        self.events_directory.mkdir(mode=0o700, exist_ok=True)
+        self._lock = threading.Lock()
+        self.render_errors: list[str] = []
+
+    def append(
+        self,
+        draft: ProgressEvent,
+        *,
+        lifecycle_revision: int,
+        phase: RunPhase,
+    ) -> RunEvent:
+        """Enrich, persist, and then render one controller event."""
+
+        if draft.phase is not None and draft.phase is not phase:
+            raise ValueError("RunEvent phase differs from controller state")
+        with self._lock:
+            existing = self._load_unlocked()
+            self._verify_anchor_unlocked(existing)
+            previous = existing[-1] if existing else None
+            occurred_at = _require_utc(self.clock())
+            if previous is not None and occurred_at < previous.occurred_at:
+                raise ValueError("RunEvent timestamps must be monotonic")
+            category, visibility, agent_state = _EVENT_METADATA[draft.kind]
+            event = RunEvent(
+                run_id=self.run_id,
+                sequence=len(existing) + 1,
+                occurred_at=occurred_at,
+                lifecycle_revision=lifecycle_revision,
+                kind=draft.kind,
+                category=category,
+                minimum_visibility=visibility,
+                source=draft.source,
+                summary=draft.message,
+                phase=draft.phase or phase,
+                agent_id=draft.agent_id,
+                agent_state=agent_state,
+                iteration=draft.iteration,
+                attempt=draft.attempt,
+                duration_ms=draft.duration_ms,
+                completed=draft.completed,
+                total=draft.total,
+                changed_files=draft.changed_files,
+                decision=draft.decision,
+                references=draft.references,
+                control_command_id=draft.control_command_id,
+                previous_event_sha256=(
+                    None if previous is None else canonical_model_sha256(previous)
+                ),
+            )
+            destination = self._write_unlocked(event)
+            if self.anchor_writer is not None:
+                try:
+                    self.anchor_writer(event)
+                except Exception:
+                    destination.unlink(missing_ok=True)
+                    _fsync_directory(self.events_directory)
+                    raise
+
+        if self.handler is not None:
+            try:
+                self.handler(event)
+            except Exception as error:
+                detail = " ".join(str(error).split()) or "renderer failed"
+                self.render_errors.append(f"{type(error).__name__}: {detail[:400]}")
+        return event
+
+    def load(self) -> tuple[RunEvent, ...]:
+        """Load and verify every complete event and its predecessor chain."""
+
+        with self._lock:
+            events = self._load_unlocked()
+            self._verify_anchor_unlocked(events)
+            return events
+
+    def _load_unlocked(self) -> tuple[RunEvent, ...]:
+        paths = sorted(
+            path
+            for path in self.events_directory.iterdir()
+            if not path.name.startswith(".")
+        )
+        events: list[RunEvent] = []
+        for expected_sequence, path in enumerate(paths, start=1):
+            match = EVENT_FILENAME_PATTERN.fullmatch(path.name)
+            if match is None or path.is_symlink() or not path.is_file():
+                raise ValueError("RunEvent journal contains an invalid entry")
+            if int(match.group("sequence")) != expected_sequence:
+                raise ValueError("RunEvent filenames must form a contiguous sequence")
+            try:
+                event = RunEvent.model_validate_json(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as error:
+                raise ValueError("RunEvent journal contains invalid JSON") from error
+            if event.run_id != self.run_id or event.sequence != expected_sequence:
+                raise ValueError("RunEvent identity does not match its journal")
+            previous = events[-1] if events else None
+            expected_digest = (
+                None if previous is None else canonical_model_sha256(previous)
+            )
+            if event.previous_event_sha256 != expected_digest:
+                raise ValueError("RunEvent predecessor digest does not match")
+            if previous is not None:
+                if event.occurred_at < previous.occurred_at:
+                    raise ValueError("RunEvent timestamps must be monotonic")
+                if event.lifecycle_revision < previous.lifecycle_revision:
+                    raise ValueError("RunEvent lifecycle revisions must be monotonic")
+            events.append(event)
+        return tuple(events)
+
+    def _verify_anchor_unlocked(self, events: tuple[RunEvent, ...]) -> None:
+        if self.anchor_reader is None:
+            return
+        count, digest = self.anchor_reader()
+        expected_digest = None if not events else canonical_model_sha256(events[-1])
+        if count != len(events) or digest != expected_digest:
+            raise ValueError("RunEvent journal does not match its run-state anchor")
+
+    def _write_unlocked(self, event: RunEvent) -> Path:
+        destination = self.events_directory / f"{event.sequence:06d}.json"
+        if destination.exists():
+            raise ValueError("RunEvent sequence already exists")
+        temporary = self.events_directory / f".{event.sequence:06d}.{uuid4().hex}.tmp"
+        try:
+            with temporary.open("xb") as output:
+                output.write(_serialized_event(event))
+                output.flush()
+                os.fsync(output.fileno())
+            os.rename(temporary, destination)
+            _fsync_directory(self.events_directory)
+        except Exception:
+            temporary.unlink(missing_ok=True)
+            raise
+        return destination
+
+
+_VISIBILITY_RANK = {
+    RunEventVisibility.COMPACT: 0,
+    RunEventVisibility.STANDARD: 1,
+    RunEventVisibility.DETAILED: 2,
+}
 
 
 class TerminalProgressRenderer:
-    """Render safe summaries and elapsed waiting time without model reasoning."""
+    """Render persisted safe summaries and elapsed waiting time."""
 
     def __init__(
         self,
         *,
         output: TextIO | None = None,
+        visibility: RunEventVisibility = RunEventVisibility.STANDARD,
         heartbeat_seconds: float = 10.0,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         if heartbeat_seconds <= 0:
             raise ValueError("progress heartbeat must be positive")
         self.output = sys.stdout if output is None else output
+        self.visibility = visibility
         self.heartbeat_seconds = heartbeat_seconds
         self.monotonic = monotonic
         self._lock = threading.Lock()
         self._waiting: dict[
-            tuple[AgentRole, int, int], tuple[threading.Event, threading.Thread]
+            tuple[str, int, int], tuple[threading.Event, threading.Thread]
         ] = {}
 
-    def __call__(self, event: ProgressEvent) -> None:
-        """Render one event and manage any matching elapsed-time heartbeat."""
+    def __call__(self, event: RunEvent) -> None:
+        """Render one persisted event and manage its elapsed-time heartbeat."""
 
+        if (
+            _VISIBILITY_RANK[event.minimum_visibility]
+            > _VISIBILITY_RANK[self.visibility]
+        ):
+            return
         if event.kind is ProgressEventKind.AGENT_STARTED:
             self._start_waiting(event)
             return
@@ -94,7 +578,7 @@ class TerminalProgressRenderer:
             ProgressEventKind.RUN_COMPLETED: "✓",
             ProgressEventKind.RUN_FAILED: "✗",
         }[event.kind]
-        self._print(f"{symbol} {event.message}")
+        self._print(f"{symbol} {event.summary}")
         if event.kind in {
             ProgressEventKind.RUN_COMPLETED,
             ProgressEventKind.RUN_FAILED,
@@ -111,23 +595,23 @@ class TerminalProgressRenderer:
             stop.set()
             thread.join(timeout=min(self.heartbeat_seconds, 0.2))
 
-    def _key(self, event: ProgressEvent) -> tuple[AgentRole, int, int] | None:
-        if event.role is None or event.iteration is None or event.attempt is None:
+    def _key(self, event: RunEvent) -> tuple[str, int, int] | None:
+        if event.agent_id is None or event.iteration is None or event.attempt is None:
             return None
-        return event.role, event.iteration, event.attempt
+        return event.agent_id, event.iteration, event.attempt
 
-    def _start_waiting(self, event: ProgressEvent) -> None:
+    def _start_waiting(self, event: RunEvent) -> None:
         key = self._key(event)
         if key is None:
-            self._print(f"● {event.message}")
+            self._print(f"● {event.summary}")
             return
-        self._print(f"● {event.message}")
+        self._print(f"● {event.summary}")
         stop = threading.Event()
         started = self.monotonic()
         thread = threading.Thread(
             target=self._heartbeat,
-            args=(stop, started, event.message),
-            name=f"sat-progress-{event.role.value}",
+            args=(stop, started, event.summary),
+            name=f"sat-progress-{event.agent_id}",
             daemon=True,
         )
         with self._lock:
@@ -137,7 +621,7 @@ class TerminalProgressRenderer:
             previous[0].set()
         thread.start()
 
-    def _stop_waiting(self, event: ProgressEvent) -> None:
+    def _stop_waiting(self, event: RunEvent) -> None:
         key = self._key(event)
         if key is None:
             return

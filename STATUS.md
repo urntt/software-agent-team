@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** Phase 3A TeamPlan compatibility path implemented; event and control contracts remain before interactive Adaptive Planning
+**Current milestone:** Phase 3A contracts and compatibility path implemented; interactive Adaptive Planning is next
 
 **Last updated:** August 26, 2026
 
@@ -36,7 +36,7 @@ prove controller behavior, not model quality.
 
 ## Adaptive Orchestration Progress
 
-The first Phase 3A compatibility batch is implemented. `TeamPlan`, `AgentSpec`,
+The Phase 3A compatibility path is implemented. `TeamPlan`, `AgentSpec`,
 and `ModelRoutePlan` are executable versioned contracts rather than roadmap-only
 names. The current function-specialized workflow compiles its fixed evaluation
 fixture into that contract, persists `team-plan.json`, and gives the frozen plan
@@ -48,12 +48,23 @@ permissions, missing independent quality coverage, unauthorized model routes,
 and over-limit concurrency or Agent counts before Agent creation. Recovery
 verifies the exact TaskBrief binding, TeamPlan digest, fixed manifest version,
 fixed team digest, resolved Agent timeouts, and cross-file run metadata. The
-complete repository check passes with 421 offline tests.
+complete repository check passes with 443 offline tests.
 
-This foundation does not yet make the normal product team dynamic. `RunEvent`
-and `ControlCommand`, Planning dialogue and approval evidence, arbitrary
-run-scoped prompt compilation, and general DAG execution remain pending in the
-following Phase 3 batches.
+`RunEvent` is also an executable, append-only contract. Every current workflow
+progress update is persisted with a contiguous sequence, lifecycle revision,
+phase, Agent identity when applicable, visibility class, and predecessor
+digest. `run.json` atomically anchors the latest event, so recovery detects
+missing, reordered, modified, or extra events, including a changed tail.
+Compact, standard, and detailed filtering consumes the same event contract;
+the current product launcher still selects the standard renderer.
+
+`ControlCommand` and its controller-owned revision store define and preserve
+the request, target, safe application boundary, status, consequence, plan or
+lifecycle result, and provider-cost caveat for guide, correct, pause, resume,
+interrupt, and cancel. This is a persistence boundary, not a claim that the
+normal CLI can apply controls yet. Planning dialogue and approval evidence,
+arbitrary run-scoped prompt compilation, general DAG execution, and active
+control application remain pending in the following Phase 3 batches.
 
 ## Product Readiness Boundary
 
@@ -314,6 +325,12 @@ The acceptance contract is
   run-scoped contract, including frozen TaskBrief binding, Agent timeouts,
   dependency waves, workspace scopes, model route, budget, and manifest
   provenance;
+- Versioned, hash-chained `RunEvent` persistence with run-state head anchoring,
+  controller lifecycle and Agent attribution, safe summaries, and renderer
+  visibility filtering;
+- Versioned `ControlCommand` requests and terminal resolutions with typed
+  targets, command-specific safe boundaries, optimistic revisions, immutable
+  metadata, and predecessor-digest verification;
 - A replaceable OpenClaw subprocess adapter with stable role sessions,
   version-pinned local and Gateway JSON parsing, and canonical
   `provider/model` telemetry;
@@ -451,13 +468,9 @@ The immediate product-evidence task remains a recorded fresh-device run of the
 published installer and bare `sat` journey. Preserve any failure as evidence;
 advanced evaluation commands are not part of that user demonstration.
 
-The remaining Phase 3A work is to introduce `RunEvent` and `ControlCommand`,
-migrate the progress source to append-only events, and preserve current product
-behavior through the complete offline suite. The TeamPlan compatibility path
-is implemented: the current workflow compiles and persists a plan, and invalid
-adaptive plans fail before Agent creation.
-
-Phase 3B then adds the Planning dialogue and editable overview; later Phase 3
+Phase 3B is now the next engineering batch. It adds the Planning dialogue,
+editable overview, explicit user approval evidence, and deterministic fixture
+path on top of the completed TeamPlan and RunEvent contracts. Later Phase 3
 batches add dynamic runtime creation, richer progress and controls, and model
 routing. Fixed-topology comparison moves to Phase 4 so it can remain a
 controlled baseline rather than defining the product's permanent role layout.

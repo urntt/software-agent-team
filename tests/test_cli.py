@@ -867,7 +867,7 @@ def test_cli_run_constructs_the_real_phase1_boundary_without_invoking_it(
     workspace = tmp_path / "gate-workspace"
     run_directory.mkdir()
     workspace.mkdir()
-    gate_runner = gate_factory(run_directory, workspace)
+    gate_runner = gate_factory(run_directory, workspace, lambda _event: None)
     assert gate_runner.sandbox.image == f"sha256:{'a' * 64}"
     runtime_workspace = tmp_path / "runtime-workspace"
     runtime_workspace.mkdir()

@@ -73,6 +73,8 @@ controller. The current implementation defines:
 - `ArtifactReference`;
 - `AgentExecutionRecord`;
 - `TeamPlan`, `AgentSpec`, and `ModelRoutePlan` run authority;
+- `RunEvent` append-only progress evidence;
+- `ControlCommand` request and resolution history;
 - Versioned Agent roles and fixed evaluation team definitions;
 - `ImplementationPlan`;
 - `WorkResult`;
@@ -151,6 +153,12 @@ runs/<run_id>/
 ├── task-brief.json
 ├── team-plan.json
 ├── run.json
+├── events/
+│   └── <sequence>.json
+├── controls/
+│   └── <command_id>/
+│       ├── 000001.json
+│       └── 000002.json
 ├── openclaw.runtime.json
 ├── runtime-preflight.json
 ├── implementation-plan.json
@@ -192,6 +200,25 @@ atomically replaced under an optimistic revision check and records the
 evidence references required for every material transition. A loader verifies
 the frozen TaskBrief, TeamPlan, fixed-fixture provenance when applicable, and
 all cross-file digests before returning state.
+
+Every compatibility-workflow status update is first enriched into a versioned
+`RunEvent` with its run ID, contiguous sequence, UTC timestamp, lifecycle
+revision, category, minimum visibility, phase, and attributable Agent attempt
+when applicable. Events are written as an append-only predecessor-digest
+chain. After each append, `run.json` atomically anchors the exact event count
+and latest digest; if anchoring fails, the unowned event file is removed before
+presentation code sees it. Recovery therefore detects missing, reordered,
+modified, or extra events, including tampering with the latest event. A
+renderer consumes this same persisted contract. Renderer failure is isolated
+from controller execution and cannot erase the event.
+
+`ControlCommand` defines `guide`, `correct`, `pause`, `resume`, `interrupt`,
+and `cancel` requests, typed targets, safe application boundaries, and the
+`queued`, `applied`, `rejected`, `superseded`, and `best_effort_failed` result
+states. The controller-owned store writes the request and terminal resolution
+as an immutable two-revision digest chain with optimistic concurrency. This is
+the persistence contract for the later interactive control channel; the
+current product CLI does not yet submit or apply these commands.
 
 The controller supports explicit recovery of an isolated clone created
 immediately before a crash. The current `sat run` command intentionally starts

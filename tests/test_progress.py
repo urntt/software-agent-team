@@ -1,36 +1,74 @@
-"""Tests for controller-backed terminal progress rendering."""
+"""Tests for persisted controller events and terminal rendering."""
 
+import json
 import time
+from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime
 from io import StringIO
+from pathlib import Path
+from typing import Any
 
-from software_agent_team.artifacts import AgentRole
+import pytest
+
+from software_agent_team.integrity import canonical_model_sha256
 from software_agent_team.progress import (
     ProgressEvent,
     ProgressEventKind,
+    RunEventJournal,
+    RunEventVisibility,
     TerminalProgressRenderer,
 )
+from software_agent_team.run_control import RunPhase
+
+FIXED_TIME = datetime(2026, 8, 26, 12, 0, tzinfo=UTC)
 
 
-def test_progress_renderer_shows_elapsed_waiting_and_verified_completion() -> None:
+def journal(
+    tmp_path: Path,
+    *,
+    handler=None,
+) -> RunEventJournal:
+    """Create a journal below one test-owned run directory."""
+
+    run_directory = tmp_path / "runs" / "event-run-001"
+    run_directory.mkdir(parents=True)
+    return RunEventJournal(
+        run_directory,
+        run_id="event-run-001",
+        handler=handler,
+        clock=lambda: FIXED_TIME,
+    )
+
+
+def test_progress_renderer_shows_elapsed_waiting_and_verified_completion(
+    tmp_path: Path,
+) -> None:
     output = StringIO()
     renderer = TerminalProgressRenderer(output=output, heartbeat_seconds=0.01)
-    started = ProgressEvent(
-        kind=ProgressEventKind.AGENT_STARTED,
-        message="Planner is working",
-        role=AgentRole.PLANNER,
-        iteration=1,
-        attempt=1,
+    event_journal = journal(tmp_path, handler=renderer)
+    event_journal.append(
+        ProgressEvent(
+            kind=ProgressEventKind.AGENT_STARTED,
+            message="Planner is working",
+            agent_id="planner",
+            iteration=1,
+            attempt=1,
+        ),
+        lifecycle_revision=2,
+        phase=RunPhase.PLANNING,
     )
-    renderer(started)
     time.sleep(0.03)
-    renderer(
+    event_journal.append(
         ProgressEvent(
             kind=ProgressEventKind.AGENT_COMPLETED,
             message="Planner response recorded (0.1s)",
-            role=AgentRole.PLANNER,
+            agent_id="planner",
             iteration=1,
             attempt=1,
-        )
+            duration_ms=100,
+        ),
+        lifecycle_revision=2,
+        phase=RunPhase.PLANNING,
     )
     renderer.close()
 
@@ -41,21 +79,220 @@ def test_progress_renderer_shows_elapsed_waiting_and_verified_completion() -> No
     assert "reasoning" not in rendered.casefold()
 
 
-def test_progress_renderer_closes_multiple_independent_verifiers() -> None:
+def test_progress_renderer_closes_multiple_independent_verifiers(
+    tmp_path: Path,
+) -> None:
     output = StringIO()
     renderer = TerminalProgressRenderer(output=output, heartbeat_seconds=1)
-    for role in (AgentRole.TESTER, AgentRole.REVIEWER):
-        renderer(
+    event_journal = journal(tmp_path, handler=renderer)
+    for agent_id in ("tester", "reviewer"):
+        event_journal.append(
             ProgressEvent(
                 kind=ProgressEventKind.AGENT_STARTED,
-                message=f"{role.value} is working",
-                role=role,
+                message=f"{agent_id} is working",
+                agent_id=agent_id,
                 iteration=1,
                 attempt=1,
-            )
+            ),
+            lifecycle_revision=5,
+            phase=RunPhase.VERIFYING,
         )
 
     renderer.close()
 
     assert "tester is working" in output.getvalue()
     assert "reviewer is working" in output.getvalue()
+
+
+def test_journal_persists_a_contiguous_hash_chain(tmp_path: Path) -> None:
+    event_journal = journal(tmp_path)
+    first = event_journal.append(
+        ProgressEvent(
+            kind=ProgressEventKind.RUN_STARTED,
+            message="Build started",
+            phase=RunPhase.CREATED,
+            iteration=1,
+        ),
+        lifecycle_revision=0,
+        phase=RunPhase.CREATED,
+    )
+    second = event_journal.append(
+        ProgressEvent(
+            kind=ProgressEventKind.WORKSPACE_READY,
+            message="Workspace ready",
+            phase=RunPhase.PLANNING,
+            iteration=1,
+        ),
+        lifecycle_revision=2,
+        phase=RunPhase.PLANNING,
+    )
+
+    assert first.sequence == 1
+    assert first.previous_event_sha256 is None
+    assert second.sequence == 2
+    assert second.previous_event_sha256 is not None
+    assert event_journal.load() == (first, second)
+    assert sorted(path.name for path in event_journal.events_directory.iterdir()) == [
+        "000001.json",
+        "000002.json",
+    ]
+
+
+def test_journal_rejects_a_phase_not_owned_by_controller_state(
+    tmp_path: Path,
+) -> None:
+    event_journal = journal(tmp_path)
+
+    with pytest.raises(ValueError, match="phase differs"):
+        event_journal.append(
+            ProgressEvent(
+                kind=ProgressEventKind.WORKSPACE_READY,
+                message="Workspace ready",
+                phase=RunPhase.PLANNING,
+                iteration=1,
+            ),
+            lifecycle_revision=1,
+            phase=RunPhase.PREPARING_WORKSPACE,
+        )
+
+
+def test_journal_detects_tampering_in_an_earlier_event(tmp_path: Path) -> None:
+    event_journal = journal(tmp_path)
+    for kind, message, revision, phase in (
+        (ProgressEventKind.RUN_STARTED, "Build started", 0, RunPhase.CREATED),
+        (
+            ProgressEventKind.WORKSPACE_READY,
+            "Workspace ready",
+            2,
+            RunPhase.PLANNING,
+        ),
+    ):
+        event_journal.append(
+            ProgressEvent(kind=kind, message=message, phase=phase, iteration=1),
+            lifecycle_revision=revision,
+            phase=phase,
+        )
+    first_path = event_journal.events_directory / "000001.json"
+    payload = json.loads(first_path.read_text(encoding="utf-8"))
+    payload["summary"] = "Tampered summary"
+    first_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="predecessor digest"):
+        event_journal.load()
+
+
+def test_run_state_anchor_detects_tampering_in_the_latest_event(
+    tmp_path: Path,
+) -> None:
+    run_directory = tmp_path / "runs" / "anchored-run-001"
+    run_directory.mkdir(parents=True)
+    anchor: dict[str, Any] = {"count": 0, "digest": None}
+
+    def write_anchor(event) -> None:
+        anchor["count"] = event.sequence
+        anchor["digest"] = canonical_model_sha256(event)
+
+    event_journal = RunEventJournal(
+        run_directory,
+        run_id="anchored-run-001",
+        clock=lambda: FIXED_TIME,
+        anchor_writer=write_anchor,
+        anchor_reader=lambda: (anchor["count"], anchor["digest"]),
+    )
+    event_journal.append(
+        ProgressEvent(
+            kind=ProgressEventKind.RUN_STARTED,
+            message="Build started",
+            phase=RunPhase.CREATED,
+            iteration=1,
+        ),
+        lifecycle_revision=0,
+        phase=RunPhase.CREATED,
+    )
+    latest_path = event_journal.events_directory / "000001.json"
+    payload = json.loads(latest_path.read_text(encoding="utf-8"))
+    payload["summary"] = "Tampered latest summary"
+    latest_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="run-state anchor"):
+        event_journal.load()
+
+
+def test_concurrent_agent_events_receive_unique_sequences(tmp_path: Path) -> None:
+    event_journal = journal(tmp_path)
+
+    def append(index: int) -> None:
+        event_journal.append(
+            ProgressEvent(
+                kind=ProgressEventKind.AGENT_STARTED,
+                message=f"Agent {index} started",
+                agent_id=f"worker_{index}",
+                iteration=1,
+                attempt=1,
+            ),
+            lifecycle_revision=4,
+            phase=RunPhase.VERIFYING,
+        )
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        tuple(pool.map(append, range(1, 9)))
+
+    events = event_journal.load()
+    assert [event.sequence for event in events] == list(range(1, 9))
+    assert {event.agent_id for event in events} == {
+        f"worker_{index}" for index in range(1, 9)
+    }
+
+
+def test_renderer_failure_does_not_change_persisted_execution_state(
+    tmp_path: Path,
+) -> None:
+    def broken_renderer(event) -> None:
+        raise RuntimeError(f"cannot render event {event.sequence}")
+
+    event_journal = journal(tmp_path, handler=broken_renderer)
+    event = event_journal.append(
+        ProgressEvent(
+            kind=ProgressEventKind.RUN_STARTED,
+            message="Build started",
+            phase=RunPhase.CREATED,
+            iteration=1,
+        ),
+        lifecycle_revision=0,
+        phase=RunPhase.CREATED,
+    )
+
+    assert event_journal.load() == (event,)
+    assert event_journal.render_errors == ["RuntimeError: cannot render event 1"]
+
+
+def test_compact_visibility_hides_standard_detail(tmp_path: Path) -> None:
+    output = StringIO()
+    renderer = TerminalProgressRenderer(
+        output=output,
+        visibility=RunEventVisibility.COMPACT,
+    )
+    event_journal = journal(tmp_path, handler=renderer)
+    event_journal.append(
+        ProgressEvent(
+            kind=ProgressEventKind.RUN_STARTED,
+            message="Visible run summary",
+            phase=RunPhase.CREATED,
+            iteration=1,
+        ),
+        lifecycle_revision=0,
+        phase=RunPhase.CREATED,
+    )
+    event_journal.append(
+        ProgressEvent(
+            kind=ProgressEventKind.WORKSPACE_READY,
+            message="Hidden workspace detail",
+            phase=RunPhase.PLANNING,
+            iteration=1,
+        ),
+        lifecycle_revision=2,
+        phase=RunPhase.PLANNING,
+    )
+
+    assert "Visible run summary" in output.getvalue()
+    assert "Hidden workspace detail" not in output.getvalue()

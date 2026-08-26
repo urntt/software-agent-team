@@ -185,13 +185,14 @@ src/software_agent_team/
   artifact_store.py            Write-once artifact and output persistence
   budgets.py                   Agent and pricing budgets
   cli.py                       Unified command-line interface
+  controls.py                  Persisted user-control command contracts
   execution.py                 OpenClaw and offline execution adapters
   git_workspace.py             Standalone clones and snapshot verification
   integrity.py                 Canonical persisted-model integrity digest
   openclaw_runtime.py          Private OpenClaw path and environment isolation
   paths.py                     User-local product state resolution
   product.py                   Diagnostics, request materialization, and delivery
-  progress.py                  Controller-backed terminal progress rendering
+  progress.py                  RunEvent journal and terminal rendering
   prompting.py                 Minimum-context role prompts
   quality_gates.py             Fixed sandboxed command runner
   responses.py                 Strict Agent semantic response parser

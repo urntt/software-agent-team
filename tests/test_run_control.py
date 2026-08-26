@@ -285,6 +285,8 @@ def test_create_freezes_input_and_recovers_the_same_record(tmp_path: Path) -> No
         "reviewer": 300,
         "tester": 300,
     }
+    assert record.event_count == 0
+    assert record.event_head_sha256 is None
     assert len(record.task_brief_sha256) == 64
     assert (runs / record.run_id / "task-brief.json").is_file()
     assert (runs / record.run_id / "team-plan.json").is_file()
@@ -292,6 +294,41 @@ def test_create_freezes_input_and_recovers_the_same_record(tmp_path: Path) -> No
 
     recovered = make_controller(runs).load(record.run_id)
     assert recovered == record
+
+
+def test_controller_anchors_events_without_advancing_lifecycle_revision(
+    tmp_path: Path,
+) -> None:
+    controller = make_controller(tmp_path / "runs")
+    record = create_run(controller)
+
+    anchored = controller.record_event_head(
+        record.run_id,
+        event_sequence=1,
+        event_sha256="e" * 64,
+        occurred_at=FIXED_TIME,
+    )
+
+    assert anchored.event_count == 1
+    assert anchored.event_head_sha256 == "e" * 64
+    assert anchored.revision == record.revision
+    assert anchored.transitions == record.transitions
+    advanced = advance(controller, anchored, RunPhase.PREPARING_WORKSPACE)
+    assert advanced.event_count == 1
+    assert advanced.event_head_sha256 == "e" * 64
+
+
+def test_controller_rejects_an_out_of_order_event_anchor(tmp_path: Path) -> None:
+    controller = make_controller(tmp_path / "runs")
+    record = create_run(controller)
+
+    with pytest.raises(RunConflictError, match="expected 1, found 2"):
+        controller.record_event_head(
+            record.run_id,
+            event_sequence=2,
+            event_sha256="e" * 64,
+            occurred_at=FIXED_TIME,
+        )
 
 
 def test_create_requires_a_confirmed_task_brief(tmp_path: Path) -> None:
