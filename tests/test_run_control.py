@@ -34,8 +34,10 @@ from software_agent_team.run_control import (
     TerminationReason,
 )
 from software_agent_team.teams import (
+    PlanApprovalSource,
     TeamManifest,
     TeamPlan,
+    TeamPlanOrigin,
     compile_fixed_team_plan,
     load_team_manifest,
 )
@@ -113,6 +115,34 @@ def fixed_team_plan(
         max_concurrency=min(2, len(team.roles)),
         created_at=FIXED_TIME,
     )
+
+
+def adaptive_team_plan(*, run_id: str = "task-manager-001") -> TeamPlan:
+    """Convert the fixed fixture into a valid adaptive lifecycle authority."""
+
+    payload = fixed_team_plan(run_id=run_id).model_dump(mode="json")
+    payload.update(
+        plan_id=f"{run_id}-adaptive-r1",
+        team_id="adaptive_team",
+        origin=TeamPlanOrigin.ADAPTIVE_PLANNING.value,
+        approval_source=PlanApprovalSource.USER.value,
+        implementation_plan_sha256="e" * 64,
+        source_manifest_version=None,
+        source_team_id=None,
+        source_team_sha256=None,
+    )
+    payload["agents"] = [
+        agent for agent in payload["agents"] if agent["capability"] != "planning"
+    ]
+    remaining = {agent["id"] for agent in payload["agents"]}
+    for agent in payload["agents"]:
+        agent["legacy_role"] = None
+        agent["dependencies"] = [
+            dependency
+            for dependency in agent["dependencies"]
+            if dependency in remaining
+        ]
+    return TeamPlan.model_validate(payload)
 
 
 def make_controller(
@@ -297,6 +327,107 @@ def test_create_freezes_input_and_recovers_the_same_record(tmp_path: Path) -> No
 
     recovered = make_controller(runs).load(record.run_id)
     assert recovered == record
+
+
+def test_adaptive_planning_transition_binds_the_approved_plan_digest(
+    tmp_path: Path,
+) -> None:
+    runs = tmp_path / "runs"
+    controller = RunController(RunStore(runs), None, clock=lambda: FIXED_TIME)
+    task_brief = confirmed_task_brief()
+    plan = adaptive_team_plan()
+    record = controller.create(task_brief, team_plan=plan)
+    record = controller.advance(
+        record.run_id,
+        expected_revision=record.revision,
+        target=RunPhase.PREPARING_WORKSPACE,
+        reason="prepare workspace",
+    )
+    record = controller.attach_workspace(
+        record.run_id,
+        expected_revision=record.revision,
+        workspace=workspace(record.run_id),
+    )
+
+    record = controller.advance(
+        record.run_id,
+        expected_revision=record.revision,
+        target=RunPhase.IMPLEMENTING,
+        reason="approved adaptive plan is ready",
+        implementation_plan_sha256=plan.implementation_plan_sha256,
+    )
+
+    assert record.phase is RunPhase.IMPLEMENTING
+    assert record.transitions[-1].artifacts == ()
+    assert record.transitions[-1].implementation_plan_sha256 == "e" * 64
+    assert controller.load(record.run_id) == record
+
+
+def test_adaptive_planning_transition_rejects_missing_or_wrong_digest(
+    tmp_path: Path,
+) -> None:
+    controller = RunController(
+        RunStore(tmp_path / "runs"),
+        None,
+        clock=lambda: FIXED_TIME,
+    )
+    plan = adaptive_team_plan()
+    record = controller.create(confirmed_task_brief(), team_plan=plan)
+    record = controller.advance(
+        record.run_id,
+        expected_revision=record.revision,
+        target=RunPhase.PREPARING_WORKSPACE,
+        reason="prepare workspace",
+    )
+    record = controller.attach_workspace(
+        record.run_id,
+        expected_revision=record.revision,
+        workspace=workspace(record.run_id),
+    )
+
+    for digest in (None, "f" * 64):
+        with pytest.raises(RunIntegrityError, match="approved TeamPlan"):
+            controller.advance(
+                record.run_id,
+                expected_revision=record.revision,
+                target=RunPhase.IMPLEMENTING,
+                reason="use unbound adaptive plan",
+                implementation_plan_sha256=digest,
+            )
+
+
+def test_adaptive_plan_transition_digest_tampering_is_detected(
+    tmp_path: Path,
+) -> None:
+    runs = tmp_path / "runs"
+    controller = RunController(RunStore(runs), None, clock=lambda: FIXED_TIME)
+    plan = adaptive_team_plan()
+    record = controller.create(confirmed_task_brief(), team_plan=plan)
+    record = controller.advance(
+        record.run_id,
+        expected_revision=record.revision,
+        target=RunPhase.PREPARING_WORKSPACE,
+        reason="prepare workspace",
+    )
+    record = controller.attach_workspace(
+        record.run_id,
+        expected_revision=record.revision,
+        workspace=workspace(record.run_id),
+    )
+    record = controller.advance(
+        record.run_id,
+        expected_revision=record.revision,
+        target=RunPhase.IMPLEMENTING,
+        reason="approved adaptive plan is ready",
+        implementation_plan_sha256=plan.implementation_plan_sha256,
+    )
+    state_path = runs / record.run_id / "run.json"
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    payload["transitions"][-1]["implementation_plan_sha256"] = "f" * 64
+    state_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(RunIntegrityError, match="approved implementation plan"):
+        controller.load(record.run_id)
 
 
 def test_controller_anchors_events_without_advancing_lifecycle_revision(

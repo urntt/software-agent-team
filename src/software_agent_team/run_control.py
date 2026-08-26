@@ -33,6 +33,7 @@ from software_agent_team.artifacts import (
 from software_agent_team.git_workspace import GitSnapshot, GitWorkspace
 from software_agent_team.integrity import canonical_model_sha256
 from software_agent_team.teams import (
+    AgentCapability,
     TeamManifest,
     TeamPlan,
     TeamPlanOrigin,
@@ -147,6 +148,10 @@ class RunTransition(BaseModel):
     occurred_at: datetime
     reason: str = Field(min_length=1)
     artifacts: tuple[ArtifactReference, ...] = ()
+    implementation_plan_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
     decision: IterationDecision | None = None
 
     @field_validator("occurred_at")
@@ -188,21 +193,32 @@ class RunTransition(BaseModel):
         if len(paths) != len(set(paths)):
             raise ValueError("transition artifact references must be unique")
         kinds = {reference.kind for reference in self.artifacts}
+        plan_transition = (
+            self.source is RunPhase.PLANNING and self.target is RunPhase.IMPLEMENTING
+        )
+        has_plan_artifact = ArtifactKind.IMPLEMENTATION_PLAN in kinds
+        if plan_transition:
+            if has_plan_artifact == (self.implementation_plan_sha256 is not None):
+                raise ValueError(
+                    "planning transition requires exactly one implementation-plan "
+                    "artifact or approved digest"
+                )
+        elif self.implementation_plan_sha256 is not None:
+            raise ValueError(
+                "only a planning transition may bind an implementation-plan digest"
+            )
+
         required: set[ArtifactKind] = set()
         if self.target is RunPhase.FAILED:
             required = {ArtifactKind.FINAL_REPORT}
         else:
             required = {
-                (RunPhase.PLANNING, RunPhase.IMPLEMENTING): {
-                    ArtifactKind.IMPLEMENTATION_PLAN
-                },
                 (RunPhase.IMPLEMENTING, RunPhase.SNAPSHOTTING): {
                     ArtifactKind.WORK_RESULT
                 },
                 (RunPhase.VERIFYING, RunPhase.REVIEWING): {ArtifactKind.TEST_REPORT},
                 (RunPhase.REVIEWING, RunPhase.DECIDING): {
-                    ArtifactKind.REVIEW_REPORT,
-                    ArtifactKind.ITERATION_RECORD,
+                    ArtifactKind.ITERATION_RECORD
                 },
                 (RunPhase.DELIVERING, RunPhase.COMPLETED): {ArtifactKind.FINAL_REPORT},
             }.get((self.source, self.target), set())
@@ -557,6 +573,7 @@ class RunStore:
             raise RunIntegrityError("persisted TeamPlan binds a different task brief")
         if canonical_model_sha256(team_plan) != record.team_plan_sha256:
             raise RunIntegrityError("persisted team plan digest does not match")
+        self._validate_transition_plan_boundary(team_plan, record)
         return task_brief, team_plan, record
 
     def replace(self, previous: RunRecord, updated: RunRecord) -> RunRecord:
@@ -564,7 +581,7 @@ class RunStore:
 
         run_directory = self._run_directory(previous.run_id)
         with _exclusive_lock(run_directory / ".lock"):
-            _, _, persisted = self.load(previous.run_id)
+            _, team_plan, persisted = self.load(previous.run_id)
             if persisted.revision != previous.revision:
                 raise RunConflictError(
                     f"run revision conflict: expected {previous.revision}, "
@@ -574,6 +591,7 @@ class RunStore:
                 raise RunConflictError("persisted run differs from the expected record")
 
             self._validate_replacement(previous, updated)
+            self._validate_transition_plan_boundary(team_plan, updated)
             destination = run_directory / RUN_STATE_FILENAME
             temporary = run_directory / f".{RUN_STATE_FILENAME}.{uuid4().hex}.tmp"
             try:
@@ -695,6 +713,46 @@ class RunStore:
         ):
             raise RunIntegrityError("verification transition must attach a snapshot")
 
+    @staticmethod
+    def _validate_transition_plan_boundary(
+        team_plan: TeamPlan,
+        record: RunRecord,
+    ) -> None:
+        """Bind lifecycle plan and review evidence to the frozen TeamPlan."""
+
+        for transition in record.transitions:
+            if (
+                transition.source is RunPhase.PLANNING
+                and transition.target is RunPhase.IMPLEMENTING
+            ):
+                if team_plan.origin is TeamPlanOrigin.ADAPTIVE_PLANNING:
+                    if transition.implementation_plan_sha256 != (
+                        team_plan.implementation_plan_sha256
+                    ):
+                        raise RunIntegrityError(
+                            "planning transition differs from the approved "
+                            "implementation plan"
+                        )
+                elif transition.implementation_plan_sha256 is not None:
+                    raise RunIntegrityError(
+                        "fixed planning transition cannot claim an adaptive digest"
+                    )
+            if (
+                transition.source is RunPhase.REVIEWING
+                and transition.target is RunPhase.DECIDING
+                and any(
+                    agent.capability is AgentCapability.REVIEW
+                    for agent in team_plan.agents
+                )
+                and not any(
+                    reference.kind is ArtifactKind.REVIEW_REPORT
+                    for reference in transition.artifacts
+                )
+            ):
+                raise RunIntegrityError(
+                    "review transition is missing approved Reviewer evidence"
+                )
+
 
 Clock = Callable[[], datetime]
 
@@ -765,6 +823,7 @@ class RunController:
         target: RunPhase,
         reason: str,
         artifacts: tuple[ArtifactReference, ...] = (),
+        implementation_plan_sha256: str | None = None,
         decision: IterationDecision | None = None,
     ) -> RunRecord:
         """Apply one non-terminal lifecycle transition."""
@@ -773,7 +832,10 @@ class RunController:
             raise InvalidRunTransitionError(
                 "use complete() or fail() for terminal transitions"
             )
-        current = self._load_expected(run_id, expected_revision)
+        team_plan, current = self._load_expected_with_plan(
+            run_id,
+            expected_revision,
+        )
         if (
             current.phase is RunPhase.PREPARING_WORKSPACE
             and target is RunPhase.PLANNING
@@ -786,6 +848,33 @@ class RunController:
         if not _is_legal_transition(current.phase, target):
             raise InvalidRunTransitionError(
                 f"illegal run transition: {current.phase.value} -> {target.value}"
+            )
+        if current.phase is RunPhase.PLANNING and target is RunPhase.IMPLEMENTING:
+            if team_plan.origin is TeamPlanOrigin.ADAPTIVE_PLANNING:
+                if implementation_plan_sha256 != (team_plan.implementation_plan_sha256):
+                    raise RunIntegrityError(
+                        "implementation-plan digest differs from the approved TeamPlan"
+                    )
+            elif implementation_plan_sha256 is not None:
+                raise RunIntegrityError(
+                    "fixed TeamPlan cannot start from an adaptive plan digest"
+                )
+        elif implementation_plan_sha256 is not None:
+            raise InvalidRunTransitionError(
+                "implementation-plan digest is valid only when planning starts"
+            )
+        if (
+            current.phase is RunPhase.REVIEWING
+            and target is RunPhase.DECIDING
+            and any(
+                agent.capability is AgentCapability.REVIEW for agent in team_plan.agents
+            )
+            and not any(
+                reference.kind is ArtifactKind.REVIEW_REPORT for reference in artifacts
+            )
+        ):
+            raise InvalidRunTransitionError(
+                "approved Reviewers require review-report transition evidence"
             )
 
         iteration_after = current.current_iteration
@@ -802,6 +891,7 @@ class RunController:
             iteration_after=iteration_after,
             reason=reason,
             artifacts=artifacts,
+            implementation_plan_sha256=implementation_plan_sha256,
             decision=decision,
         )
 
@@ -942,7 +1032,16 @@ class RunController:
         )
 
     def _load_expected(self, run_id: str, expected_revision: int) -> RunRecord:
-        current = self.load(run_id)
+        _, current = self._load_expected_with_plan(run_id, expected_revision)
+        return current
+
+    def _load_expected_with_plan(
+        self,
+        run_id: str,
+        expected_revision: int,
+    ) -> tuple[TeamPlan, RunRecord]:
+        _, team_plan, current = self.store.load(run_id)
+        self._validate_team_plan_boundary(team_plan, record=current)
         if current.revision != expected_revision:
             raise RunConflictError(
                 f"run revision conflict: expected {expected_revision}, "
@@ -950,7 +1049,7 @@ class RunController:
             )
         if current.phase.is_terminal:
             raise InvalidRunTransitionError("terminal runs cannot transition again")
-        return current
+        return team_plan, current
 
     def _transition(
         self,
@@ -960,6 +1059,7 @@ class RunController:
         iteration_after: int,
         reason: str,
         artifacts: tuple[ArtifactReference, ...] = (),
+        implementation_plan_sha256: str | None = None,
         decision: IterationDecision | None = None,
         termination_reason: TerminationReason | None = None,
         termination_detail: str | None = None,
@@ -977,6 +1077,7 @@ class RunController:
             occurred_at=now,
             reason=reason,
             artifacts=artifacts,
+            implementation_plan_sha256=implementation_plan_sha256,
             decision=decision,
         )
         updates: dict[str, object] = {

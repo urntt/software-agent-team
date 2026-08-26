@@ -48,7 +48,7 @@ permissions, missing independent quality coverage, unauthorized model routes,
 and over-limit concurrency or Agent counts before Agent creation. Recovery
 verifies the exact TaskBrief binding, TeamPlan digest, fixed manifest version,
 fixed team digest, resolved Agent timeouts, and cross-file run metadata. The
-complete repository check passes with 514 offline tests.
+complete repository check passes with 517 offline tests.
 
 `RunEvent` is also an executable, append-only contract. Every current workflow
 progress update is persisted with a contiguous sequence, lifecycle revision,

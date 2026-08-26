@@ -231,6 +231,12 @@ controller-owned structured edit. Approval binds the exact proposal, confirmed
 TaskBrief, adaptive implementation plan, and TeamPlan digests; the bootstrap
 Planner cannot create Agents or change lifecycle state.
 
+When an adaptive run enters implementation, its lifecycle transition binds the
+approved adaptive implementation-plan digest directly. It does not manufacture
+a fixed-role `ImplementationPlan` artifact. Fixed compatibility runs continue
+to reference their actual Planner artifact, and recovery rejects a transition
+whose evidence form or digest differs from the frozen TeamPlan origin.
+
 `runtime-preflight.json` records the private OpenClaw and Docker identities,
 configuration validity, the exact selected model and local availability result,
 image presence and immutable ID, restricted-container tool execution and
