@@ -54,6 +54,7 @@ from software_agent_team.planning import AdaptiveImplementationPlan
 from software_agent_team.prompting import (
     AgentPromptError,
     DynamicAgentPromptInputs,
+    DynamicRevisionFeedback,
     DynamicUpstreamResult,
     build_dynamic_agent_execution_request,
     build_semantic_repair_request,
@@ -140,6 +141,7 @@ class DynamicAgentRunner:
         iteration: int = 1,
         input_commit: str | None = None,
         artifact_repair_limit: int = 1,
+        revision_feedback: DynamicRevisionFeedback | None = None,
         clock: Callable[[], datetime] = _system_clock,
     ) -> None:
         if team_plan.origin is not TeamPlanOrigin.ADAPTIVE_PLANNING:
@@ -231,6 +233,7 @@ class DynamicAgentRunner:
         self.iteration = iteration
         self.input_commit = verified_commit
         self.artifact_repair_limit = artifact_repair_limit
+        self.revision_feedback = revision_feedback
         self.clock = clock
 
         self._state_lock = RLock()
@@ -419,10 +422,12 @@ class DynamicAgentRunner:
             team_plan=self.team_plan,
             agent_id=agent.id,
             iteration=self.iteration,
+            iteration_input_commit=self.input_commit,
             input_commit=input_commit,
             upstream_results=self._upstream_results(agent, upstream),
             command_evidence=commands,
             manual_review_criteria=manual_scope,
+            revision_feedback=self.revision_feedback,
         )
         base_request = build_dynamic_agent_execution_request(prompt_inputs)
         assigned_task_ids = tuple(task.id for task in prompt_inputs.assigned_tasks)

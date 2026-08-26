@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** Phase 3C dynamic Agent runner implemented; lifecycle convergence and product activation are next
+**Current milestone:** Phase 3C adaptive lifecycle convergence implemented; bare-`sat` activation is next
 
 **Last updated:** August 26, 2026
 
@@ -45,10 +45,12 @@ dispatch. There is no second fixed-role run-control path.
 
 Validation rejects invalid dependencies, write-scope conflicts, incompatible
 permissions, missing independent quality coverage, unauthorized model routes,
-and over-limit concurrency or Agent counts before Agent creation. Recovery
+and over-limit concurrency or Agent counts before Agent creation. Adaptive
+validation also rejects a plan whose complete planned iterations cannot fit
+its call budget. Recovery
 verifies the exact TaskBrief binding, TeamPlan digest, fixed manifest version,
 fixed team digest, resolved Agent timeouts, and cross-file run metadata. The
-complete repository check passes with 517 offline tests.
+complete repository check passes with 524 offline tests.
 
 `RunEvent` is also an executable, append-only contract. Every current workflow
 progress update is persisted with a contiguous sequence, lifecycle revision,
@@ -82,6 +84,9 @@ hash-chained model turns including rejected response evidence, immutable
 proposal revisions, and the exact approval digests. Approval promotes the
 validated preview into an authorized confirmed `TaskBrief`, adaptive
 implementation plan, and executable `TeamPlan`.
+The resulting `ApprovedPlanningResult` revalidates those exact digests and
+cross-plan bindings at its execution boundary, so mutated approved inputs
+cannot be substituted before runtime.
 The bootstrap Planner still cannot create an Agent or advance run state.
 
 The first Phase 3C runtime boundary is also implemented. Dynamic execution
@@ -143,16 +148,32 @@ phase and execution evidence. Offline integration tests exercise real Git
 commits, parallel quality, semantic repair, missing telemetry, budget
 exhaustion, read-only mutation, and write-scope violations.
 
-The Planning interaction is offline-verified as a product-style flow but is
-not yet activated by bare `sat`: activation is intentionally paired with the
-Phase 3C runtime so SAT never presents a dynamic plan and then silently
-executes the old fixed team. The general DAG scheduler, dynamic runner, generic
-response assembly, dynamic iteration aggregation, persisted handoffs,
-deterministic quality sharing, and aggregate invocation budgets are
-implemented. Multi-iteration convergence, the lifecycle coordinator that
-consumes a complete schedule, bare `sat` activation, safe concurrent writers
-beyond the current serialized Git chain, and active control application remain
-pending.
+The Phase 3C adaptive lifecycle coordinator is now implemented. It consumes
+only an exact `ApprovedPlanningResult`, creates the generic `RunController`,
+and lets `DagScheduler` remain the sole authority for readiness, order, and
+parallel launch. When the first quality Agent becomes ready, a synchronous
+controller checkpoint verifies the complete writer commit chain, records one
+aggregate Git snapshot, and enters `VERIFYING` before that Agent starts. Tests
+and reviews therefore cannot run first and have lifecycle evidence filled in
+afterward.
+
+The coordinator aggregates every approved writer, Tester (or the controller's
+deterministic report), and Reviewer into one `IterationRecord`; resolves
+accept, revise, terminal failure, iteration exhaustion, and repeated blockers;
+and produces one integrity-checked JSON and shared Markdown final report.
+Revision feedback contains only controller-derived blocking findings and test
+reasons, is bound to the previous output commit as the next iteration's start,
+and is distinct from each downstream Agent's current snapshot commit. Offline
+end-to-end tests cover one-pass acceptance, evidence-driven revision followed
+by acceptance, unchanged-blocker termination, pre-snapshot Agent failure, and
+a valid Tester-only quality topology.
+
+The Planning interaction and its adaptive execution backend are offline
+verified but are not yet activated by bare `sat`: activation remains atomic so
+SAT never presents a dynamic plan and then silently executes the old fixed
+team. Safe concurrent writers beyond the current serialized Git chain, safe
+plan amendment checkpoints, richer visibility, and active control application
+remain pending.
 
 ## Product Readiness Boundary
 
@@ -168,8 +189,8 @@ This implemented path still uses bounded fixed prompts and the
 `function_specialized` evaluation fixture, now compiled into a frozen
 run-scoped `TeamPlan`; it uses one selected model for the run,
 controller-backed stage progress, and no interactive run-control channel. The
-task-defined runtime, activation of the implemented multi-round Planning
-dialogue, per-Agent visibility levels, live user controls, and model routing
+activation of the implemented multi-round Planning dialogue and adaptive
+execution, per-Agent visibility levels, live user controls, and model routing
 described in
 [`docs/adaptive-orchestration.md`](docs/adaptive-orchestration.md) are the next
 milestone, not current capabilities.
@@ -547,10 +568,8 @@ instead of selecting a fixture.
 
 - An independent fresh-device rehearsal and live demonstration outside the
   development host;
-- Activation of the implemented Adaptive Planning interaction in bare `sat`;
-- Multi-iteration dynamic quality convergence, lifecycle/final-report
-  integration, and bare-`sat` activation around the implemented dynamic
-  runner;
+- Bare-`sat` activation of the implemented Planning dialogue and adaptive
+  lifecycle as one ordinary-user path;
 - Compact, standard, and detailed visibility backed by persisted per-Agent
   events;
 - User guidance, correction, pause, resume, interruption, and cancellation
@@ -574,11 +593,9 @@ action succeeded after interruption.
 
 ## Next Milestone
 
-The next Phase 3C batch connects the implemented dynamic schedule results to
-run lifecycle transitions, iteration decisions, revision feedback, final
-reports, cleanup, and delivery. It then activates the completed Planning
-interaction and dynamic runtime together in bare `sat`.
-Later Phase 3
+The next Phase 3C batch activates the completed Planning interaction and
+adaptive runtime together in bare `sat`, including runtime setup, cleanup, and
+accepted-result delivery through the existing product boundary. Later Phase 3
 batches add richer progress and controls, then model routing. Fixed-topology
 comparison moves to Phase 4 so it can remain a controlled baseline rather than
 defining the product's permanent role layout.

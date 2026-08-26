@@ -60,6 +60,12 @@ from software_agent_team.dynamic_runner import (
     DynamicAgentRunnerError,
     DynamicQualityGate,
 )
+from software_agent_team.dynamic_workflow import (
+    DynamicQualityGateFactory,
+    DynamicWorkflowCoordinator,
+    DynamicWorkflowError,
+    DynamicWorkflowOutcome,
+)
 from software_agent_team.execution import (
     AgentExecutionError,
     AgentExecutionRequest,
@@ -118,6 +124,7 @@ from software_agent_team.prompting import (
     AgentPromptError,
     AgentPromptInputs,
     DynamicAgentPromptInputs,
+    DynamicRevisionFeedback,
     DynamicUpstreamResult,
     build_agent_execution_request,
     build_dynamic_agent_execution_request,
@@ -139,6 +146,7 @@ from software_agent_team.quality_gates import (
     SandboxUnavailableError,
     load_quality_gate_configuration,
 )
+from software_agent_team.reporting import render_run_report
 from software_agent_team.responses import (
     AgentArtifactResponseError,
     ImplementationPlanResponse,
@@ -267,7 +275,12 @@ __all__ = [
     "DynamicAgentRunner",
     "DynamicAgentRunnerError",
     "DynamicQualityGate",
+    "DynamicQualityGateFactory",
+    "DynamicRevisionFeedback",
     "DynamicUpstreamResult",
+    "DynamicWorkflowCoordinator",
+    "DynamicWorkflowError",
+    "DynamicWorkflowOutcome",
     "ExecutionOutputEvidence",
     "FakeSandboxBackend",
     "FinalReport",
@@ -396,6 +409,7 @@ __all__ = [
     "render_agent_prompt",
     "render_dynamic_agent_prompt",
     "render_planning_overview",
+    "render_run_report",
     "run_interactive_planning",
     "stable_agent_session_key",
     "stable_session_key",

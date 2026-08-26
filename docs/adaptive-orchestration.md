@@ -2,11 +2,11 @@
 
 This contributor-facing specification defines the product contract for
 task-defined Agent teams, interactive planning, observable execution, user
-controls, and model routing. Some contracts and the offline Planning interaction
-are implemented. Run-scoped execution identity, prompts, runtime configuration,
-handoffs, telemetry, Agent-namespaced artifact persistence, and deterministic
-DAG scheduling are in place; dynamic workflow integration and active controls
-remain staged work.
+controls, and model routing. Planning, run-scoped execution identity, prompts,
+runtime configuration, handoffs, telemetry, Agent-namespaced artifact
+persistence, deterministic DAG scheduling, and multi-iteration lifecycle
+convergence are implemented. Bare-`sat` activation and active controls remain
+staged work.
 Current behavior and gaps remain authoritative in
 [`STATUS.md`](../STATUS.md); the completed guided baseline remains specified in
 [`product-demo-slice.md`](product-demo-slice.md).
@@ -475,9 +475,13 @@ The dynamic runner now binds each scheduler-approved Agent to its exact model,
 timeout, prompt, semantic repair limit, Git or read-only boundary, aggregate
 budget, execution record, and durable handoffs. Quality gates are shared once
 per immutable iteration, and every quality Agent must be downstream of every
-writer. Multi-iteration quality convergence, lifecycle/final-report
-integration, safe plan amendment checkpoints, and bare `sat` activation remain
-in this batch.
+writer. The adaptive lifecycle coordinator crosses the authoritative snapshot
+boundary before the first quality Agent starts, aggregates every approved
+output, decides accept/revise/fail, binds prior blocking evidence to the next
+iteration's starting commit, stops an unchanged repeated blocker, and writes
+the same integrity-checked final evidence and human report as the compatibility
+workflow. Safe plan amendment checkpoints and bare `sat` activation remain in
+this batch.
 
 ### Batch 3D: Observable and Controllable Execution
 

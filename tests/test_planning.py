@@ -14,6 +14,7 @@ from software_agent_team.execution import ScriptedAgentExecutor
 from software_agent_team.integrity import canonical_model_sha256
 from software_agent_team.planning import (
     AdaptivePlanningCoordinator,
+    ApprovedPlanningResult,
     PlanningError,
     PlanningIntegrityError,
     PlanningModelResponse,
@@ -580,6 +581,11 @@ def test_dialogue_revision_structured_edit_and_approval_are_recoverable(
     assert len(executor.requests) == 3
     assert all(call.role.value == "clarifier" for call in executor.requests)
     assert all(call.timeout_seconds == 180 for call in executor.requests)
+
+    tampered = approved.model_dump(mode="json")
+    tampered["team_plan"]["agents"][0]["timeout_seconds"] += 1
+    with pytest.raises(ValidationError, match="does not bind the supplied TeamPlan"):
+        ApprovedPlanningResult.model_validate(tampered)
 
 
 def test_invalid_complete_proposal_is_repaired_before_it_is_shown(

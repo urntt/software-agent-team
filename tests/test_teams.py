@@ -268,6 +268,14 @@ def test_adaptive_plan_accepts_user_approved_run_scoped_agents() -> None:
     assert plan.execution_waves()[-1] == ("tester", "reviewer")
 
 
+def test_adaptive_plan_budget_covers_every_planned_iteration_invocation() -> None:
+    payload = adaptive_payload()
+    payload["budget"]["max_calls"] = 4
+
+    with pytest.raises(ValidationError, match="planned Agent invocations"):
+        TeamPlan.model_validate(payload)
+
+
 def test_adaptive_plan_requires_user_approval_and_run_scoped_identities() -> None:
     payload = adaptive_payload()
     payload["approval_source"] = PlanApprovalSource.COMPATIBILITY_POLICY.value

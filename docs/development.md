@@ -166,7 +166,7 @@ configs/
 docs/
   README.md                    Documentation index
   product-demo-slice.md        Guided user-journey acceptance specification
-  adaptive-orchestration.md    Planned dynamic-team and interactive-control specification
+  adaptive-orchestration.md    Dynamic-team and interactive-control specification
   installation.md             Install, configure, export, and uninstall
   runtime-evidence.md          Runtime, artifact, evidence, and safety model
   phase1-runbook.md            Controlled provider-backed evaluation procedure
@@ -188,6 +188,7 @@ src/software_agent_team/
   cli.py                       Unified command-line interface
   controls.py                  Persisted user-control command contracts
   dynamic_runner.py            Approved dynamic Agent invocation lifecycle
+  dynamic_workflow.py          Adaptive lifecycle convergence and decisions
   execution.py                 OpenClaw and offline execution adapters
   git_workspace.py             Standalone clones and snapshot verification
   integrity.py                 Canonical persisted-model integrity digest
@@ -199,13 +200,14 @@ src/software_agent_team/
   progress.py                  RunEvent journal and terminal rendering
   prompting.py                 Fixed-role and task-defined capability prompts
   quality_gates.py             Fixed sandboxed command runner
+  reporting.py                 Shared terminal report rendering
   responses.py                 Strict fixed and run-scoped Agent response parser
   run_control.py               Lifecycle state and atomic persistence
   runtime_configuration.py     Run-scoped OpenClaw config and preflight
   scheduling.py                Approved DAG and shared-workspace scheduling
   teams.py                     TeamPlan contracts and fixed-fixture compilation
   user_configuration.py        User-local secret-free live-run defaults
-  workflow.py                  Phase 1 orchestration and final reporting
+  workflow.py                  Fixed-fixture compatibility orchestration
 scripts/
   bootstrap.sh                 Remote managed-install entry point
   install.sh                   Locked Linux/WSL application installation

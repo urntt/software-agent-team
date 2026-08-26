@@ -379,6 +379,13 @@ class TeamPlan(BaseModel):
             raise ValueError("TeamPlan concurrency cannot exceed its Agent count")
         if len(self.agents) > self.budget.max_calls:
             raise ValueError("TeamPlan Agent count exceeds the run call budget")
+        if (
+            self.origin is TeamPlanOrigin.ADAPTIVE_PLANNING
+            and len(self.agents) * self.iteration_limit > self.budget.max_calls
+        ):
+            raise ValueError(
+                "TeamPlan planned Agent invocations exceed the run call budget"
+            )
 
         implementation_agents = {
             agent.id

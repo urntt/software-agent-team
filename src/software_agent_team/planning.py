@@ -778,6 +778,60 @@ class ApprovedPlanningResult(BaseModel):
     team_plan: TeamPlan
     approval: PlanningApproval
 
+    @model_validator(mode="after")
+    def validate_approval_boundary(self) -> Self:
+        """Bind execution inputs to the exact proposal revision the user approved."""
+
+        run_ids = {
+            self.task_brief.run_id,
+            self.implementation_plan.run_id,
+            self.team_plan.run_id,
+            self.approval.run_id,
+        }
+        if len(run_ids) != 1:
+            raise ValueError("approved Planning inputs use different run IDs")
+        if (
+            self.implementation_plan.revision != self.approval.revision
+            or self.team_plan.revision != self.approval.revision
+        ):
+            raise ValueError("approved Planning inputs use different revisions")
+        if self.implementation_plan.team_id != self.team_plan.team_id:
+            raise ValueError(
+                "approved implementation and team plans use different teams"
+            )
+        if self.team_plan.task_brief_sha256 != canonical_model_sha256(self.task_brief):
+            raise ValueError("approved TeamPlan does not bind the supplied TaskBrief")
+        if self.team_plan.implementation_plan_sha256 != canonical_model_sha256(
+            self.implementation_plan
+        ):
+            raise ValueError(
+                "approved TeamPlan does not bind the supplied implementation plan"
+            )
+        expected_digests = {
+            "task brief": (
+                self.approval.task_brief_sha256,
+                canonical_model_sha256(self.task_brief),
+            ),
+            "implementation plan": (
+                self.approval.implementation_plan_sha256,
+                canonical_model_sha256(self.implementation_plan),
+            ),
+            "TeamPlan": (
+                self.approval.team_plan_sha256,
+                canonical_model_sha256(self.team_plan),
+            ),
+        }
+        mismatched = [
+            label
+            for label, (approved, actual) in expected_digests.items()
+            if approved != actual
+        ]
+        if mismatched:
+            raise ValueError(
+                "Planning approval does not bind the supplied " + ", ".join(mismatched)
+            )
+        return self
+
 
 Clock = Callable[[], datetime]
 QuestionAnswerer = Callable[[PlanningQuestion], str | None]

@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-from collections import Counter
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from decimal import Decimal
 from pathlib import Path
 from threading import Lock
 from typing import Protocol, cast
@@ -16,7 +14,6 @@ from pydantic import ValidationError
 
 from software_agent_team.artifact_store import ArtifactStore, ArtifactStoreError
 from software_agent_team.artifacts import (
-    AgentExecutionRecord,
     AgentRole,
     ArtifactKind,
     ArtifactReference,
@@ -86,6 +83,7 @@ from software_agent_team.quality_gates import (
     QualityGateError,
     SandboxUnavailableError,
 )
+from software_agent_team.reporting import render_run_report
 from software_agent_team.responses import (
     AgentArtifactResponseError,
     AgentResponseBody,
@@ -1296,140 +1294,14 @@ class WorkflowCoordinator:
         record: RunRecord,
         report: FinalReport,
     ) -> str:
-        execution_records = [
-            cast(AgentExecutionRecord, context.artifact_store.load(reference))
-            for reference in sorted(
-                context.execution_records,
-                key=lambda item: item.path,
-            )
-        ]
-        calls = len(execution_records)
-        failures = sum(item.error is not None for item in execution_records)
-        identities = Counter(
-            (item.iteration, item.stage, item.agent_id) for item in execution_records
+        return render_run_report(
+            artifact_store=context.artifact_store,
+            record=record,
+            report=report,
+            execution_records=tuple(context.execution_records),
+            handoffs=tuple(context.handoffs),
+            command_evidence=tuple(context.command_evidence),
         )
-        retries = sum(max(0, count - 1) for count in identities.values())
-        duration_ms = sum(item.duration_ms for item in execution_records)
-        input_tokens = [
-            item.input_tokens
-            for item in execution_records
-            if item.input_tokens is not None
-        ]
-        output_tokens = [
-            item.output_tokens
-            for item in execution_records
-            if item.output_tokens is not None
-        ]
-        gate_duration_ms = sum(
-            command.duration_ms for command in context.command_evidence
-        )
-        estimated_cost_values = tuple(
-            item.estimated_cost_usd
-            for item in execution_records
-            if item.estimated_cost_usd is not None
-        )
-        estimated_cost_text = (
-            f"${sum(estimated_cost_values, Decimal(0)):.6f}"
-            if estimated_cost_values
-            else "not configured"
-        )
-        token_text = (
-            f"{sum(input_tokens)} input / {sum(output_tokens)} output"
-            if input_tokens or output_tokens
-            else "not reported"
-        )
-        lines = [
-            f"# Run report: {report.run_id}",
-            "",
-            f"- Status: `{report.status.value}`",
-            f"- Team: `{report.team_id}`",
-            f"- Termination reason: `{report.termination_reason}`",
-            f"- Final commit: `{report.final_commit or 'not available'}`",
-            f"- Iterations recorded: {len(report.iterations)}",
-            "",
-            "## Summary",
-            "",
-            report.summary,
-            "",
-            "## Acceptance results",
-            "",
-            "| Criterion | Status | Detail |",
-            "| --- | --- | --- |",
-        ]
-        if report.acceptance_results:
-            lines.extend(
-                f"| {item.criterion_id} | {item.status.value} | "
-                f"{item.detail.replace('|', '\\|')} |"
-                for item in report.acceptance_results
-            )
-        else:
-            lines.append(
-                "| _none recorded_ | blocked | No test report was available. |"
-            )
-        lines.extend(
-            [
-                "",
-                "## Execution metrics",
-                "",
-                f"- Agent calls: {calls}",
-                f"- Controlled response repairs: {retries}",
-                f"- Failed Agent attempts: {failures}",
-                f"- Agent duration: {duration_ms} ms",
-                f"- Deterministic-gate duration: {gate_duration_ms} ms",
-                f"- Reported tokens: {token_text}",
-                f"- Estimated model cost: {estimated_cost_text}",
-                "",
-                "## Evidence index",
-                "",
-                "### Iteration decisions",
-                "",
-            ]
-        )
-        lines.extend(
-            f"- `{reference.path}` (`{reference.sha256}`)"
-            for reference in report.iterations
-        )
-        if not report.iterations:
-            lines.append("- No complete iteration decision was recorded.")
-        lines.extend(["", "### Agent executions", ""])
-        lines.extend(
-            f"- `{reference.path}` (`{reference.sha256}`)"
-            for reference in sorted(
-                context.execution_records,
-                key=lambda item: item.path,
-            )
-        )
-        if not context.execution_records:
-            lines.append(
-                "- No Agent execution completed far enough to record telemetry."
-            )
-        lines.extend(["", "### Handoffs", ""])
-        lines.extend(
-            f"- `{reference.path}` (`{reference.sha256}`)"
-            for reference in sorted(context.handoffs, key=lambda item: item.path)
-        )
-        if not context.handoffs:
-            lines.append("- No cross-role handoff was recorded.")
-        if report.unresolved_findings:
-            lines.extend(["", "## Unresolved findings", ""])
-            lines.extend(f"- {item}" for item in report.unresolved_findings)
-        lines.extend(
-            [
-                "",
-                "## Workspace",
-                "",
-                (
-                    "The isolated result remains at "
-                    f"`{record.workspace.workspace_path}`."
-                    if record.workspace is not None
-                    else "No isolated workspace was attached."
-                ),
-                "",
-                "This report is derived from the immutable JSON artifacts in this run.",
-                "",
-            ]
-        )
-        return "\n".join(lines)
 
     @staticmethod
     def _agent_termination_reason(

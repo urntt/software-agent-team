@@ -13,6 +13,8 @@ from software_agent_team.artifacts import (
     ArtifactKind,
     CommandEvidence,
     HandoffStatus,
+    ReviewFinding,
+    ReviewSeverity,
     TaskBrief,
 )
 from software_agent_team.budgets import AgentBudget
@@ -21,6 +23,7 @@ from software_agent_team.integrity import canonical_model_sha256
 from software_agent_team.planning import AdaptiveImplementationPlan, ProposedTask
 from software_agent_team.prompting import (
     DynamicAgentPromptInputs,
+    DynamicRevisionFeedback,
     DynamicUpstreamResult,
     build_dynamic_agent_execution_request,
     render_dynamic_agent_prompt,
@@ -195,6 +198,7 @@ def developer_inputs() -> DynamicAgentPromptInputs:
         team_plan=team_plan(),
         agent_id="cli_developer",
         iteration=1,
+        iteration_input_commit=INPUT_COMMIT,
         input_commit=INPUT_COMMIT,
     )
 
@@ -206,9 +210,30 @@ def quality_inputs() -> DynamicAgentPromptInputs:
         team_plan=team_plan(),
         agent_id="acceptance_tester",
         iteration=1,
+        iteration_input_commit=INPUT_COMMIT,
         input_commit=OUTPUT_COMMIT,
         upstream_results=(upstream_result(),),
         command_evidence=command_evidence(),
+    )
+
+
+def revision_feedback() -> DynamicRevisionFeedback:
+    return DynamicRevisionFeedback(
+        previous_iteration=1,
+        output_commit=OUTPUT_COMMIT,
+        blocking_findings=(
+            ReviewFinding(
+                id="FINDING_DOCS",
+                severity=ReviewSeverity.HIGH,
+                blocking=True,
+                category="documentation",
+                description="The usage example omits the failure exit status.",
+                recommendation="Document the failure behavior with an example.",
+                path="README.md",
+                criterion_ids=("AC_LINKS",),
+            ),
+        ),
+        summary="Correct the documented failure behavior.",
     )
 
 
@@ -250,6 +275,33 @@ def test_quality_prompt_contains_read_only_evidence_not_write_authority() -> Non
     assert '"id": "CHECK_TEST"' in rendered
     assert "Do not modify files or execute additional commands" in rendered
     assert "TASK_LINKS" in rendered
+
+
+def test_dynamic_revision_requires_commit_bound_blocking_feedback() -> None:
+    inputs = developer_inputs().model_copy(
+        update={
+            "iteration": 2,
+            "iteration_input_commit": OUTPUT_COMMIT,
+            "input_commit": OUTPUT_COMMIT,
+            "revision_feedback": revision_feedback(),
+        }
+    )
+
+    rendered = render_dynamic_agent_prompt(inputs)
+
+    assert '"previous_iteration": 1' in rendered
+    assert '"id": "FINDING_DOCS"' in rendered
+    assert "correct every attributable blocker" in rendered
+
+    payload = inputs.model_dump(mode="json")
+    payload["revision_feedback"] = None
+    with pytest.raises(ValidationError, match="requires prior blocking feedback"):
+        DynamicAgentPromptInputs.model_validate(payload)
+
+    payload = inputs.model_dump(mode="json")
+    payload["revision_feedback"]["output_commit"] = INPUT_COMMIT
+    with pytest.raises(ValidationError, match="iteration input commit"):
+        DynamicAgentPromptInputs.model_validate(payload)
 
 
 def test_dynamic_response_binds_identity_and_exact_assigned_tasks() -> None:

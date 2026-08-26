@@ -296,8 +296,10 @@ parallel but must leave the exact final commit and clean tree unchanged. Every
 quality Agent is downstream of every writer, deterministic gates execute once
 per immutable iteration, and all TestReports and ReviewReports bind to that
 same commit. Completed dependency and terminal handoffs retain both phase and
-execution references. Multi-iteration lifecycle convergence and bare-`sat`
-activation remain staged work.
+execution references. `DynamicWorkflowCoordinator` records the aggregate
+snapshot before starting quality work, resolves each iteration, binds blocking
+evidence to a bounded revision, and writes terminal evidence. Bare-`sat`
+activation remains staged work.
 
 The controller supports explicit recovery of an isolated clone created
 immediately before a crash. The current `sat run` command intentionally starts

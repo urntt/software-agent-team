@@ -18,6 +18,7 @@ from software_agent_team.artifacts import (
     HandoffStatus,
     ImplementationPlan,
     IterationRecord,
+    ReviewFinding,
     ReviewReport,
     TaskBrief,
     TestReport,
@@ -91,6 +92,45 @@ class DynamicUpstreamResult(BaseModel):
         return cleaned
 
 
+class DynamicRevisionFeedback(BaseModel):
+    """Controller-derived actionable evidence for one bounded revision."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    previous_iteration: int = Field(ge=1, le=2)
+    output_commit: str = Field(pattern=COMMIT_PATTERN)
+    blocking_findings: tuple[ReviewFinding, ...] = ()
+    blocking_reasons: tuple[str, ...] = ()
+    summary: str = Field(min_length=1, max_length=2000)
+
+    @field_validator("blocking_reasons")
+    @classmethod
+    def require_unique_reasons(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        cleaned = tuple(value.strip() for value in values)
+        if any(not value for value in cleaned) or len(cleaned) != len(set(cleaned)):
+            raise ValueError("revision blocking reasons must be non-empty and unique")
+        return cleaned
+
+    @field_validator("summary")
+    @classmethod
+    def require_clean_summary(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("revision feedback summary must not be blank")
+        return cleaned
+
+    @model_validator(mode="after")
+    def require_blocking_evidence(self) -> Self:
+        finding_ids = [finding.id for finding in self.blocking_findings]
+        if len(finding_ids) != len(set(finding_ids)):
+            raise ValueError("revision feedback finding IDs must be unique")
+        if any(not finding.blocking for finding in self.blocking_findings):
+            raise ValueError("revision feedback may include only blocking findings")
+        if not self.blocking_findings and not self.blocking_reasons:
+            raise ValueError("revision feedback requires blocking evidence")
+        return self
+
+
 class DynamicAgentPromptInputs(BaseModel):
     """Validated minimum context for one approved run-scoped AgentSpec."""
 
@@ -101,10 +141,12 @@ class DynamicAgentPromptInputs(BaseModel):
     team_plan: TeamPlan
     agent_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     iteration: int = Field(ge=1, le=3)
+    iteration_input_commit: str = Field(pattern=COMMIT_PATTERN)
     input_commit: str = Field(pattern=COMMIT_PATTERN)
     upstream_results: tuple[DynamicUpstreamResult, ...] = ()
     command_evidence: tuple[CommandEvidence, ...] = ()
     manual_review_criteria: tuple[str, ...] = ()
+    revision_feedback: DynamicRevisionFeedback | None = None
 
     @field_validator("upstream_results")
     @classmethod
@@ -154,6 +196,18 @@ class DynamicAgentPromptInputs(BaseModel):
             raise ValueError("TeamPlan does not bind the implementation plan")
         if self.iteration > self.team_plan.iteration_limit:
             raise ValueError("dynamic prompt iteration exceeds the TeamPlan")
+        if self.iteration == 1:
+            if self.revision_feedback is not None:
+                raise ValueError("initial dynamic iteration cannot receive feedback")
+        elif self.revision_feedback is None:
+            raise ValueError("dynamic revision requires prior blocking feedback")
+        elif (
+            self.revision_feedback.previous_iteration != self.iteration - 1
+            or self.revision_feedback.output_commit != self.iteration_input_commit
+        ):
+            raise ValueError(
+                "dynamic revision feedback does not match the iteration input commit"
+            )
         agent = self.team_plan.get_agent(self.agent_id)
         if agent.capability not in DYNAMIC_CAPABILITY_TEMPLATES:
             raise ValueError("Agent capability has no dynamic prompt contract")
@@ -608,6 +662,7 @@ def _dynamic_prompt_context(inputs: DynamicAgentPromptInputs) -> dict[str, objec
             "team_plan_revision": inputs.team_plan.revision,
             "iteration": inputs.iteration,
             "iteration_limit": inputs.team_plan.iteration_limit,
+            "iteration_input_commit": inputs.iteration_input_commit,
             "input_commit": inputs.input_commit,
             "expected_artifact_kind": agent.expected_output.value,
         },
@@ -635,6 +690,8 @@ def _dynamic_prompt_context(inputs: DynamicAgentPromptInputs) -> dict[str, objec
             item.model_dump(mode="json") for item in inputs.upstream_results
         ],
     }
+    if inputs.revision_feedback is not None:
+        context["revision_feedback"] = inputs.revision_feedback.model_dump(mode="json")
     if agent.capability in {AgentCapability.TESTING, AgentCapability.REVIEW}:
         context["source_snapshot"] = {
             "access": "read_only",
