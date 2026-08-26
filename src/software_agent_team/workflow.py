@@ -68,6 +68,7 @@ from software_agent_team.git_workspace import (
     validate_work_result_snapshot,
 )
 from software_agent_team.integrity import canonical_model_sha256
+from software_agent_team.invocation import persist_agent_invocation
 from software_agent_team.progress import (
     ProgressDraftHandler,
     ProgressEvent,
@@ -1084,83 +1085,31 @@ class WorkflowCoordinator:
         remaining_timeout_seconds: int,
         reservation: AgentCallReservation,
     ) -> ArtifactReference:
-        telemetry = result.telemetry
-        usage = telemetry.usage
-        estimated_cost = None
-        budget_error: str | None = None
-        if (
-            usage is not None
-            and usage.input_tokens is not None
-            and usage.output_tokens is not None
-        ):
-            estimated_cost = self.pricing.estimate_cost(
-                input_tokens=usage.input_tokens,
-                output_tokens=usage.output_tokens,
-            )
         assert context.budget_ledger is not None
-        try:
-            context.budget_ledger.complete_call(
-                reservation,
-                input_tokens=None if usage is None else usage.input_tokens,
-                output_tokens=None if usage is None else usage.output_tokens,
-                duration_ms=telemetry.duration_ms,
-                estimated_cost_usd=estimated_cost,
-            )
-        except AgentBudgetExceeded as budget_exception:
-            budget_error = str(budget_exception)
-        effective_error = error or budget_error
-        outputs = context.artifact_store.write_execution_outputs(
-            iteration=request.iteration,
-            stage=stage,
-            agent_id=request.agent_id,
-            attempt=attempt,
-            stdout=telemetry.stdout,
-            stderr=telemetry.stderr,
-        )
-        record = AgentExecutionRecord(
-            run_id=request.run_id,
-            team_id=request.team_id,
-            iteration=request.iteration,
+        persisted = persist_agent_invocation(
+            artifact_store=context.artifact_store,
+            budget_ledger=context.budget_ledger,
+            reservation=reservation,
+            request=request,
+            result=result,
             stage=stage,
             attempt=attempt,
-            agent_id=request.agent_id,
-            capability=request.capability.value,
-            session_key=request.session_key,
-            session_id=telemetry.session_id,
-            model=telemetry.model,
-            provider=telemetry.provider,
-            started_at=telemetry.started_at,
-            finished_at=telemetry.finished_at,
-            duration_ms=telemetry.duration_ms,
-            exit_code=telemetry.exit_code,
-            timed_out=telemetry.timed_out,
-            input_tokens=None if usage is None else usage.input_tokens,
-            output_tokens=None if usage is None else usage.output_tokens,
-            estimated_cost_usd=estimated_cost,
-            stdout_path=outputs.stdout_path,
-            stderr_path=outputs.stderr_path,
-            stdout_sha256=outputs.stdout_sha256,
-            stderr_sha256=outputs.stderr_sha256,
-            response_contract="semantic_body_v1",
+            response_reference=response_reference,
+            error=error,
             controller_supplied_fields=controller_supplied_fields,
             ignored_controller_fields=ignored_controller_fields,
+            pricing=self.pricing,
             stage_timeout_seconds=stage_timeout_seconds,
             remaining_timeout_seconds=remaining_timeout_seconds,
-            response_artifact=response_reference,
-            error=effective_error,
-        )
-        reference = context.artifact_store.write(
-            record,
-            description=f"Agent execution telemetry for {request.agent_id}.",
         )
         with context.execution_lock:
-            context.execution_records.append(reference)
-        if budget_error is not None:
+            context.execution_records.append(persisted.reference)
+        if persisted.budget_error is not None:
             raise AgentInvocationError(
-                budget_error,
+                persisted.budget_error,
                 TerminationReason.RESOURCE_LIMIT_REACHED,
             )
-        return reference
+        return persisted.reference
 
     def _handoff(
         self,

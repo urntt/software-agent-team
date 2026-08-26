@@ -82,6 +82,10 @@ from software_agent_team.git_workspace import (
     WorkspaceIntegrityError,
     validate_work_result_snapshot,
 )
+from software_agent_team.invocation import (
+    PersistedInvocation,
+    persist_agent_invocation,
+)
 from software_agent_team.planning import (
     AdaptiveImplementationPlan,
     AdaptivePlanningCoordinator,
@@ -280,6 +284,7 @@ __all__ = [
     "OpenClawSubprocessExecutor",
     "ParsedAgentResponse",
     "PermissionProfile",
+    "PersistedInvocation",
     "PlanApprovalSource",
     "PlanTask",
     "PlanningApproval",
@@ -372,6 +377,7 @@ __all__ = [
     "parse_json_object_response",
     "parse_phase_artifact",
     "permission_for_capability",
+    "persist_agent_invocation",
     "persist_runtime_preflight",
     "prepare_benchmark_seed",
     "prepare_seed_repository",
