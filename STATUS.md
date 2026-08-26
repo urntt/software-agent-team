@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** Phase 3C dynamic invocation boundary implemented; DAG runtime is next
+**Current milestone:** Phase 3C DAG scheduler implemented; dynamic controller integration is next
 
 **Last updated:** August 26, 2026
 
@@ -48,7 +48,7 @@ permissions, missing independent quality coverage, unauthorized model routes,
 and over-limit concurrency or Agent counts before Agent creation. Recovery
 verifies the exact TaskBrief binding, TeamPlan digest, fixed manifest version,
 fixed team digest, resolved Agent timeouts, and cross-file run metadata. The
-complete repository check passes with 475 offline tests.
+complete repository check passes with 483 offline tests.
 
 `RunEvent` is also an executable, append-only contract. Every current workflow
 progress update is persisted with a contiguous sequence, lifecycle revision,
@@ -417,6 +417,12 @@ The acceptance contract is
   validation;
 - Immutable phase artifacts, handoffs, command output, Agent output, canonical
   paths, and SHA-256 references;
+- Deterministic TeamPlan DAG scheduling with dependency readiness, exact Agent
+  count, approved concurrency caps, per-Agent timeout propagation, fail-fast
+  launch control, attributable skipped nodes, and ordered progress events;
+- Shared-Git workspace safety that permits concurrent read-only Agents while
+  making every workspace writer exclusive until isolated worktrees and an
+  explicit integration protocol exist;
 - Persisted run lifecycle with a write-once `team-plan.json`, validated
   transitions, atomic replacement, optimistic concurrency checks, cross-file
   digests, fixed-fixture provenance, and integrity-checked recovery;
@@ -502,8 +508,8 @@ instead of selecting a fixture.
 - An independent fresh-device rehearsal and live demonstration outside the
   development host;
 - Activation of the implemented Adaptive Planning interaction in bare `sat`;
-- Controller artifact/handoff assembly for arbitrary Agent IDs and DAG
-  scheduling from an approved task-defined TeamPlan;
+- Dynamic response/artifact/handoff assembly and quality convergence around
+  the implemented approved-TeamPlan scheduler;
 - Compact, standard, and detailed visibility backed by persisted per-Agent
   events;
 - User guidance, correction, pause, resume, interruption, and cancellation
@@ -527,10 +533,10 @@ action succeeded after interruption.
 
 ## Next Milestone
 
-The next Phase 3C batch moves persisted artifacts and handoffs from fixed roles
-to run-scoped Agent IDs, then schedules the approved dependency DAG under its
-permissions, routes, timeouts, concurrency, and aggregate budgets. It also
-activates the completed Planning interaction in bare `sat`. Later Phase 3
+The next Phase 3C batch connects dynamic response assembly, persisted handoffs,
+deterministic quality gates, iteration convergence, and aggregate runtime
+budgets to the implemented approved-TeamPlan scheduler. It then activates the
+completed Planning interaction in bare `sat`. Later Phase 3
 batches add richer progress and controls, then model routing. Fixed-topology
 comparison moves to Phase 4 so it can remain a controlled baseline rather than
 defining the product's permanent role layout.

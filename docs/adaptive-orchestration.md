@@ -4,8 +4,9 @@ This contributor-facing specification defines the product contract for
 task-defined Agent teams, interactive planning, observable execution, user
 controls, and model routing. Some contracts and the offline Planning interaction
 are implemented. Run-scoped execution identity, prompts, runtime configuration,
-handoffs, telemetry, and Agent-namespaced artifact persistence are in place;
-general DAG execution and active controls remain staged work.
+handoffs, telemetry, Agent-namespaced artifact persistence, and deterministic
+DAG scheduling are in place; dynamic workflow integration and active controls
+remain staged work.
 Current behavior and gaps remain authoritative in
 [`STATUS.md`](../STATUS.md); the completed guided baseline remains specified in
 [`product-demo-slice.md`](product-demo-slice.md).
@@ -463,8 +464,9 @@ response contracts, exact model/timeout binding, and AgentSpec-derived cleanup
 selection are implemented. Adaptive plans may use one downstream independent
 quality Agent for a small task; separate testing and review Agents remain an
 explicit justified choice rather than a hidden minimum topology. Controller
-artifact/handoff generalization, bounded DAG dispatch, convergence, and bare
-`sat` activation remain in this batch.
+artifact/handoff attribution and bounded DAG dispatch are also implemented.
+Dynamic response assembly, quality convergence, aggregate runtime budget
+integration, and bare `sat` activation remain in this batch.
 
 ### Batch 3D: Observable and Controllable Execution
 

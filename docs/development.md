@@ -199,6 +199,7 @@ src/software_agent_team/
   responses.py                 Strict fixed and run-scoped Agent response parser
   run_control.py               Lifecycle state and atomic persistence
   runtime_configuration.py     Run-scoped OpenClaw config and preflight
+  scheduling.py                Approved DAG and shared-workspace scheduling
   teams.py                     TeamPlan contracts and fixed-fixture compilation
   user_configuration.py        User-local secret-free live-run defaults
   workflow.py                  Phase 1 orchestration and final reporting
