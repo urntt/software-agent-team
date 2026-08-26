@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
@@ -26,18 +25,24 @@ from pydantic import (
 )
 
 from software_agent_team.artifacts import (
-    AgentRole,
     ArtifactKind,
     ArtifactReference,
     IterationDecision,
     TaskBrief,
 )
 from software_agent_team.git_workspace import GitSnapshot, GitWorkspace
-from software_agent_team.teams import TeamManifest
+from software_agent_team.integrity import canonical_model_sha256
+from software_agent_team.teams import (
+    TeamManifest,
+    TeamPlan,
+    TeamPlanOrigin,
+    validate_fixed_team_plan,
+)
 
-RUN_SCHEMA_VERSION = 4
+RUN_SCHEMA_VERSION = 5
 RUN_STATE_FILENAME = "run.json"
 TASK_BRIEF_FILENAME = "task-brief.json"
+TEAM_PLAN_FILENAME = "team-plan.json"
 RUN_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
 
@@ -229,9 +234,9 @@ class RunRecord(BaseModel):
     schema_version: Literal[RUN_SCHEMA_VERSION] = RUN_SCHEMA_VERSION
     run_id: str = Field(min_length=1, pattern=r"^[a-z0-9][a-z0-9_-]*$")
     team_id: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9_]*$")
-    team_manifest_version: int = Field(ge=1)
-    team_definition_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    agent_stage_timeouts_seconds: dict[AgentRole, int] = Field(default_factory=dict)
+    team_plan_revision: int = Field(ge=1, le=99)
+    team_plan_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    agent_timeouts_seconds: dict[str, int] = Field(default_factory=dict)
     phase: RunPhase = RunPhase.CREATED
     current_iteration: int = Field(default=1, ge=1, le=3)
     iteration_limit: int = Field(ge=1, le=3)
@@ -264,20 +269,24 @@ class RunRecord(BaseModel):
             raise ValueError("termination detail must not be blank")
         return cleaned
 
-    @field_validator("agent_stage_timeouts_seconds")
+    @field_validator("agent_timeouts_seconds")
     @classmethod
-    def require_bounded_stage_timeouts(
+    def require_bounded_agent_timeouts(
         cls,
-        values: dict[AgentRole, int],
-    ) -> dict[AgentRole, int]:
-        """Persist the resolved per-role invocation timeouts used by this run."""
+        values: dict[str, int],
+    ) -> dict[str, int]:
+        """Persist exact run-scoped invocation timeouts by Agent ID."""
 
+        if not values or any(
+            re.fullmatch(r"[a-z][a-z0-9_]*", agent_id) is None for agent_id in values
+        ):
+            raise ValueError("Agent timeout keys must be valid Agent IDs")
         if any(
             isinstance(seconds, bool) or not 1 <= seconds <= 3600
             for seconds in values.values()
         ):
             raise ValueError("Agent invocation timeouts must be between 1 and 3600")
-        return dict(sorted(values.items(), key=lambda item: item[0].value))
+        return dict(sorted(values.items()))
 
     @model_validator(mode="after")
     def validate_record(self) -> Self:
@@ -427,16 +436,6 @@ def _serialized_model(model: BaseModel) -> bytes:
     return f"{payload}\n".encode()
 
 
-def _model_digest(model: BaseModel) -> str:
-    canonical = json.dumps(
-        model.model_dump(mode="json"),
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode()
-    return hashlib.sha256(canonical).hexdigest()
-
-
 def _write_new_file(path: Path, content: bytes) -> None:
     with path.open("xb") as output:
         output.write(content)
@@ -468,15 +467,26 @@ class RunStore:
     def __init__(self, root: Path) -> None:
         self.root = root
 
-    def create(self, task_brief: TaskBrief, record: RunRecord) -> RunRecord:
+    def create(
+        self,
+        task_brief: TaskBrief,
+        team_plan: TeamPlan,
+        record: RunRecord,
+    ) -> RunRecord:
         """Persist a new run without overwriting any existing run state."""
 
         if not task_brief.confirmed:
             raise RunIntegrityError("a run requires a confirmed task brief")
         if task_brief.run_id != record.run_id:
             raise RunIntegrityError("task brief and run record IDs must match")
-        if _model_digest(task_brief) != record.task_brief_sha256:
+        if team_plan.run_id != record.run_id:
+            raise RunIntegrityError("team plan and run record IDs must match")
+        if canonical_model_sha256(task_brief) != record.task_brief_sha256:
             raise RunIntegrityError("task brief digest does not match the run record")
+        if team_plan.task_brief_sha256 != record.task_brief_sha256:
+            raise RunIntegrityError("team plan does not bind the frozen task brief")
+        if canonical_model_sha256(team_plan) != record.team_plan_sha256:
+            raise RunIntegrityError("team plan digest does not match the run record")
 
         self.root.mkdir(parents=True, exist_ok=True)
         with _exclusive_lock(self.root / ".lock"):
@@ -492,6 +502,10 @@ class RunStore:
                     _serialized_model(task_brief),
                 )
                 _write_new_file(
+                    staging / TEAM_PLAN_FILENAME,
+                    _serialized_model(team_plan),
+                )
+                _write_new_file(
                     staging / RUN_STATE_FILENAME,
                     _serialized_model(record),
                 )
@@ -504,7 +518,7 @@ class RunStore:
                 raise
         return record
 
-    def load(self, run_id: str) -> tuple[TaskBrief, RunRecord]:
+    def load(self, run_id: str) -> tuple[TaskBrief, TeamPlan, RunRecord]:
         """Load and verify the frozen input and latest complete run record."""
 
         run_directory = self._run_directory(run_id)
@@ -514,6 +528,9 @@ class RunStore:
         try:
             task_brief = TaskBrief.model_validate_json(
                 (run_directory / TASK_BRIEF_FILENAME).read_text(encoding="utf-8")
+            )
+            team_plan = TeamPlan.model_validate_json(
+                (run_directory / TEAM_PLAN_FILENAME).read_text(encoding="utf-8")
             )
             record = RunRecord.model_validate_json(
                 (run_directory / RUN_STATE_FILENAME).read_text(encoding="utf-8")
@@ -525,16 +542,22 @@ class RunStore:
             raise RunIntegrityError("persisted task brief is not confirmed")
         if task_brief.run_id != run_id or record.run_id != run_id:
             raise RunIntegrityError("persisted run ID does not match its directory")
-        if _model_digest(task_brief) != record.task_brief_sha256:
+        if team_plan.run_id != run_id:
+            raise RunIntegrityError("persisted team plan run ID does not match")
+        if canonical_model_sha256(task_brief) != record.task_brief_sha256:
             raise RunIntegrityError("persisted task brief digest does not match")
-        return task_brief, record
+        if team_plan.task_brief_sha256 != record.task_brief_sha256:
+            raise RunIntegrityError("persisted TeamPlan binds a different task brief")
+        if canonical_model_sha256(team_plan) != record.team_plan_sha256:
+            raise RunIntegrityError("persisted team plan digest does not match")
+        return task_brief, team_plan, record
 
     def replace(self, previous: RunRecord, updated: RunRecord) -> RunRecord:
         """Atomically append exactly one transition to a current run record."""
 
         run_directory = self._run_directory(previous.run_id)
         with _exclusive_lock(run_directory / ".lock"):
-            _, persisted = self.load(previous.run_id)
+            _, _, persisted = self.load(previous.run_id)
             if persisted.revision != previous.revision:
                 raise RunConflictError(
                     f"run revision conflict: expected {previous.revision}, "
@@ -566,9 +589,9 @@ class RunStore:
             "schema_version",
             "run_id",
             "team_id",
-            "team_manifest_version",
-            "team_definition_sha256",
-            "agent_stage_timeouts_seconds",
+            "team_plan_revision",
+            "team_plan_sha256",
+            "agent_timeouts_seconds",
             "iteration_limit",
             "task_brief_sha256",
             "created_at",
@@ -634,7 +657,7 @@ class RunController:
     def __init__(
         self,
         store: RunStore,
-        manifest: TeamManifest,
+        manifest: TeamManifest | None,
         *,
         clock: Clock = _system_clock,
     ) -> None:
@@ -646,40 +669,40 @@ class RunController:
         self,
         task_brief: TaskBrief,
         *,
-        team_id: str,
-        iteration_limit: int,
-        agent_stage_timeouts_seconds: Mapping[AgentRole, int] | None = None,
+        team_plan: TeamPlan,
     ) -> RunRecord:
         """Create the initial recoverable record for a confirmed task brief."""
 
         if not task_brief.confirmed:
             raise RunControlError("a run requires a confirmed task brief")
-        team = self.manifest.get_team(team_id)
-        if not 1 <= iteration_limit <= team.max_iterations:
-            raise RunControlError(
-                f"iteration limit must be between 1 and {team.max_iterations} "
-                f"for {team_id}"
-            )
+        if team_plan.run_id != task_brief.run_id:
+            raise RunControlError("TeamPlan run ID must match the confirmed task")
+        task_brief_sha256 = canonical_model_sha256(task_brief)
+        if team_plan.task_brief_sha256 != task_brief_sha256:
+            raise RunControlError("TeamPlan must bind the confirmed task brief")
+        self._validate_team_plan_boundary(team_plan)
 
         now = _require_utc(self.clock())
         record = RunRecord(
             run_id=task_brief.run_id,
-            team_id=team_id,
-            team_manifest_version=self.manifest.schema_version,
-            team_definition_sha256=_model_digest(team),
-            agent_stage_timeouts_seconds=dict(agent_stage_timeouts_seconds or {}),
-            iteration_limit=iteration_limit,
-            task_brief_sha256=_model_digest(task_brief),
+            team_id=team_plan.team_id,
+            team_plan_revision=team_plan.revision,
+            team_plan_sha256=canonical_model_sha256(team_plan),
+            agent_timeouts_seconds={
+                agent.id: agent.timeout_seconds for agent in team_plan.agents
+            },
+            iteration_limit=team_plan.iteration_limit,
+            task_brief_sha256=task_brief_sha256,
             created_at=now,
             updated_at=now,
         )
-        return self.store.create(task_brief, record)
+        return self.store.create(task_brief, team_plan, record)
 
     def load(self, run_id: str) -> RunRecord:
         """Recover the latest complete state without inferring new work."""
 
-        _, record = self.store.load(run_id)
-        self._validate_manifest_boundary(record)
+        _, team_plan, record = self.store.load(run_id)
+        self._validate_team_plan_boundary(team_plan, record=record)
         return record
 
     def advance(
@@ -894,15 +917,32 @@ class RunController:
         updated = RunRecord.model_validate(updated.model_dump())
         return self.store.replace(current, updated)
 
-    def _validate_manifest_boundary(self, record: RunRecord) -> None:
-        if record.team_manifest_version != self.manifest.schema_version:
+    def _validate_team_plan_boundary(
+        self,
+        team_plan: TeamPlan,
+        *,
+        record: RunRecord | None = None,
+    ) -> None:
+        try:
+            if team_plan.origin is TeamPlanOrigin.FIXED_MANIFEST:
+                if self.manifest is None:
+                    raise ValueError("fixed TeamPlan requires its source manifest")
+                validate_fixed_team_plan(team_plan, self.manifest)
+        except ValueError as error:
             raise RunIntegrityError(
-                "persisted run uses a different team manifest version"
-            )
-        team = self.manifest.get_team(record.team_id)
-        if record.team_definition_sha256 != _model_digest(team):
-            raise RunIntegrityError("persisted run uses a different team definition")
-        if record.iteration_limit > team.max_iterations:
-            raise RunIntegrityError(
-                "persisted iteration limit exceeds the selected team limit"
-            )
+                f"TeamPlan provenance is invalid: {error}"
+            ) from error
+
+        if record is None:
+            return
+        if record.team_id != team_plan.team_id:
+            raise RunIntegrityError("persisted run uses a different TeamPlan team")
+        if record.team_plan_revision != team_plan.revision:
+            raise RunIntegrityError("persisted run uses a different TeamPlan revision")
+        if record.team_plan_sha256 != canonical_model_sha256(team_plan):
+            raise RunIntegrityError("persisted run uses a different TeamPlan digest")
+        if record.iteration_limit != team_plan.iteration_limit:
+            raise RunIntegrityError("persisted iteration limit differs from TeamPlan")
+        timeouts = {agent.id: agent.timeout_seconds for agent in team_plan.agents}
+        if record.agent_timeouts_seconds != timeouts:
+            raise RunIntegrityError("persisted Agent timeouts differ from TeamPlan")

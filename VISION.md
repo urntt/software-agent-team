@@ -265,8 +265,9 @@ Each concept has one authoritative owner.
 | Controlled Phase 1 provider-backed evaluation procedure | `docs/phase1-runbook.md` |
 | Development workflow and repository reference | `docs/development.md` |
 | Versioned fixed evaluation topology fixtures | `configs/teams.json` |
-| Fixed-manifest validation and future TeamPlan compatibility compilation | `src/software_agent_team/teams.py` |
-| Artifact schemas | `src/software_agent_team/artifacts.py` |
+| Run-scoped TeamPlan, AgentSpec, ModelRoutePlan, validation, and fixed-manifest compatibility compilation | `src/software_agent_team/teams.py` |
+| Phase and handoff artifact schemas | `src/software_agent_team/artifacts.py` |
+| Canonical persisted-model integrity digest | `src/software_agent_team/integrity.py` |
 | Immutable artifact, handoff, and output persistence | `src/software_agent_team/artifact_store.py` |
 | Sanitized Agent runtime boundary | `configs/openclaw.example.json5` |
 | SAT-owned OpenClaw process-environment isolation | `src/software_agent_team/openclaw_runtime.py` and `scripts/openclaw-environment.sh` |

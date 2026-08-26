@@ -10,12 +10,15 @@ from pydantic import ValidationError
 
 import software_agent_team.run_control as run_control
 from software_agent_team.artifacts import (
+    AgentRole,
     ArtifactKind,
     ArtifactReference,
     IterationDecision,
     TaskBrief,
 )
+from software_agent_team.budgets import AgentBudget
 from software_agent_team.git_workspace import GitSnapshot, GitWorkspace
+from software_agent_team.integrity import canonical_model_sha256
 from software_agent_team.run_control import (
     InvalidRunTransitionError,
     RunAlreadyExistsError,
@@ -30,7 +33,12 @@ from software_agent_team.run_control import (
     RunTransition,
     TerminationReason,
 )
-from software_agent_team.teams import TeamManifest, load_team_manifest
+from software_agent_team.teams import (
+    TeamManifest,
+    TeamPlan,
+    compile_fixed_team_plan,
+    load_team_manifest,
+)
 
 REPOSITORY_ROOT = Path(__file__).parents[1]
 TEAM_CONFIG = REPOSITORY_ROOT / "configs" / "teams.json"
@@ -75,6 +83,38 @@ def confirmed_task_brief(run_id: str = "task-manager-001") -> TaskBrief:
     return TaskBrief.model_validate(payload)
 
 
+def fixed_team_plan(
+    *,
+    run_id: str = "task-manager-001",
+    team_id: str = "function_specialized",
+    iteration_limit: int = 2,
+    manifest: TeamManifest | None = None,
+) -> TeamPlan:
+    """Compile a deterministic fixed-fixture plan for controller tests."""
+
+    selected_manifest = manifest or load_team_manifest(TEAM_CONFIG)
+    team = selected_manifest.get_team(team_id)
+    brief = confirmed_task_brief(run_id)
+    return compile_fixed_team_plan(
+        selected_manifest,
+        team_id=team_id,
+        run_id=run_id,
+        task_brief_sha256=canonical_model_sha256(brief),
+        model="test/provider-model",
+        budget=AgentBudget(
+            max_calls=14,
+            max_input_tokens=1_000_000,
+            max_output_tokens=200_000,
+            max_agent_duration_seconds=3_600,
+            max_estimated_cost_usd="25",
+        ),
+        role_timeout_seconds={role: 300 for role in AgentRole},
+        iteration_limit=iteration_limit,
+        max_concurrency=min(2, len(team.roles)),
+        created_at=FIXED_TIME,
+    )
+
+
 def make_controller(
     root: Path,
     *,
@@ -98,10 +138,14 @@ def create_run(
 ) -> RunRecord:
     """Create one function-specialized run for a test."""
 
+    assert controller.manifest is not None
     return controller.create(
         confirmed_task_brief(run_id),
-        team_id="function_specialized",
-        iteration_limit=iteration_limit,
+        team_plan=fixed_team_plan(
+            run_id=run_id,
+            iteration_limit=iteration_limit,
+            manifest=controller.manifest,
+        ),
     )
 
 
@@ -233,9 +277,17 @@ def test_create_freezes_input_and_recovers_the_same_record(tmp_path: Path) -> No
     assert record.current_iteration == 1
     assert record.iteration_limit == 2
     assert record.revision == 0
-    assert len(record.team_definition_sha256) == 64
+    assert record.team_plan_revision == 1
+    assert len(record.team_plan_sha256) == 64
+    assert record.agent_timeouts_seconds == {
+        "generalist_developer": 300,
+        "planner": 300,
+        "reviewer": 300,
+        "tester": 300,
+    }
     assert len(record.task_brief_sha256) == 64
     assert (runs / record.run_id / "task-brief.json").is_file()
+    assert (runs / record.run_id / "team-plan.json").is_file()
     assert (runs / record.run_id / "run.json").is_file()
 
     recovered = make_controller(runs).load(record.run_id)
@@ -249,9 +301,19 @@ def test_create_requires_a_confirmed_task_brief(tmp_path: Path) -> None:
     with pytest.raises(RunControlError, match="confirmed"):
         controller.create(
             draft,
-            team_id="function_specialized",
-            iteration_limit=2,
+            team_plan=fixed_team_plan(run_id=draft.run_id),
         )
+
+
+def test_create_requires_the_plan_to_bind_the_exact_task_brief(tmp_path: Path) -> None:
+    controller = make_controller(tmp_path / "runs")
+    plan = fixed_team_plan()
+    changed_brief = confirmed_task_brief().model_copy(
+        update={"source_request": "A different confirmed request."}
+    )
+
+    with pytest.raises(RunControlError, match="bind the confirmed task brief"):
+        controller.create(changed_brief, team_plan=plan)
 
 
 @pytest.mark.parametrize(
@@ -259,17 +321,16 @@ def test_create_requires_a_confirmed_task_brief(tmp_path: Path) -> None:
     [("single_agent", 2), ("function_specialized", 4)],
 )
 def test_iteration_limit_cannot_exceed_team_configuration(
-    tmp_path: Path,
     team_id: str,
     iteration_limit: int,
 ) -> None:
-    controller = make_controller(tmp_path / "runs")
+    manifest = load_team_manifest(TEAM_CONFIG)
 
-    with pytest.raises(RunControlError, match="iteration limit"):
-        controller.create(
-            confirmed_task_brief(),
+    with pytest.raises(ValueError, match="iteration limit"):
+        fixed_team_plan(
             team_id=team_id,
             iteration_limit=iteration_limit,
+            manifest=manifest,
         )
 
 
@@ -509,6 +570,40 @@ def test_task_brief_tampering_is_detected(tmp_path: Path) -> None:
         controller.load(record.run_id)
 
 
+def test_team_plan_tampering_is_detected(tmp_path: Path) -> None:
+    runs = tmp_path / "runs"
+    controller = make_controller(runs)
+    record = create_run(controller)
+    plan_path = runs / record.run_id / "team-plan.json"
+    payload = json.loads(plan_path.read_text(encoding="utf-8"))
+    payload["agents"][0]["responsibility"] = "A modified responsibility."
+    plan_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(RunIntegrityError, match="digest"):
+        controller.load(record.run_id)
+
+
+def test_team_plan_cannot_change_when_its_digest_is_also_rewritten(
+    tmp_path: Path,
+) -> None:
+    runs = tmp_path / "runs"
+    controller = make_controller(runs)
+    record = create_run(controller)
+    run_directory = runs / record.run_id
+    plan_path = run_directory / "team-plan.json"
+    plan_payload = json.loads(plan_path.read_text(encoding="utf-8"))
+    plan_payload["agents"][0]["responsibility"] = "A modified responsibility."
+    changed_plan = TeamPlan.model_validate(plan_payload)
+    plan_path.write_text(changed_plan.model_dump_json(), encoding="utf-8")
+    state_path = run_directory / "run.json"
+    state_payload = json.loads(state_path.read_text(encoding="utf-8"))
+    state_payload["team_plan_sha256"] = canonical_model_sha256(changed_plan)
+    state_path.write_text(json.dumps(state_payload), encoding="utf-8")
+
+    with pytest.raises(RunIntegrityError, match="fixed manifest compilation"):
+        controller.load(record.run_id)
+
+
 @pytest.mark.parametrize(
     "mutation",
     [
@@ -539,6 +634,16 @@ def test_missing_run_file_is_rejected(tmp_path: Path) -> None:
     controller = make_controller(runs)
     record = create_run(controller)
     (runs / record.run_id / "run.json").unlink()
+
+    with pytest.raises(RunIntegrityError, match="persisted run"):
+        controller.load(record.run_id)
+
+
+def test_missing_team_plan_file_is_rejected(tmp_path: Path) -> None:
+    runs = tmp_path / "runs"
+    controller = make_controller(runs)
+    record = create_run(controller)
+    (runs / record.run_id / "team-plan.json").unlink()
 
     with pytest.raises(RunIntegrityError, match="persisted run"):
         controller.load(record.run_id)

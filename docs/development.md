@@ -187,6 +187,7 @@ src/software_agent_team/
   cli.py                       Unified command-line interface
   execution.py                 OpenClaw and offline execution adapters
   git_workspace.py             Standalone clones and snapshot verification
+  integrity.py                 Canonical persisted-model integrity digest
   openclaw_runtime.py          Private OpenClaw path and environment isolation
   paths.py                     User-local product state resolution
   product.py                   Diagnostics, request materialization, and delivery
@@ -196,6 +197,7 @@ src/software_agent_team/
   responses.py                 Strict Agent semantic response parser
   run_control.py               Lifecycle state and atomic persistence
   runtime_configuration.py     Run-scoped OpenClaw config and preflight
+  teams.py                     TeamPlan contracts and fixed-fixture compilation
   user_configuration.py        User-local secret-free live-run defaults
   workflow.py                  Phase 1 orchestration and final reporting
 scripts/

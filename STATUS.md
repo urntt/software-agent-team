@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** Adaptive-orchestration contracts and compatibility path; independent-device rehearsal remains the next product evidence gate
+**Current milestone:** Phase 3A TeamPlan compatibility path implemented; event and control contracts remain before interactive Adaptive Planning
 
 **Last updated:** August 26, 2026
 
@@ -34,6 +34,27 @@ The exact acceptance procedure is in
 [`docs/phase1-runbook.md`](docs/phase1-runbook.md). Offline scripted executions
 prove controller behavior, not model quality.
 
+## Adaptive Orchestration Progress
+
+The first Phase 3A compatibility batch is implemented. `TeamPlan`, `AgentSpec`,
+and `ModelRoutePlan` are executable versioned contracts rather than roadmap-only
+names. The current function-specialized workflow compiles its fixed evaluation
+fixture into that contract, persists `team-plan.json`, and gives the frozen plan
+to run control, artifact validation, timeout resolution, and verification
+dispatch. There is no second fixed-role run-control path.
+
+Validation rejects invalid dependencies, write-scope conflicts, incompatible
+permissions, missing independent quality coverage, unauthorized model routes,
+and over-limit concurrency or Agent counts before Agent creation. Recovery
+verifies the exact TaskBrief binding, TeamPlan digest, fixed manifest version,
+fixed team digest, resolved Agent timeouts, and cross-file run metadata. The
+complete repository check passes with 421 offline tests.
+
+This foundation does not yet make the normal product team dynamic. `RunEvent`
+and `ControlCommand`, Planning dialogue and approval evidence, arbitrary
+run-scoped prompt compilation, and general DAG execution remain pending in the
+following Phase 3 batches.
+
 ## Product Readiness Boundary
 
 The primary CLI now implements the Product Demo Slice in code. A normal user
@@ -44,11 +65,12 @@ generates a request-specific run ID, TaskBrief, trusted source, workspace, and
 evidence roots, shows controller-derived progress, and delivers only an
 accepted clean Git result with project-specific commands.
 
-This implemented path still uses bounded fixed prompts, the
-`function_specialized` team, one selected model for the run, controller-backed
-stage progress, and no interactive run-control channel. The task-defined team,
-multi-round Planning dialogue, per-Agent visibility levels, live user controls,
-and model routing described in
+This implemented path still uses bounded fixed prompts and the
+`function_specialized` evaluation fixture, now compiled into a frozen
+run-scoped `TeamPlan`; it uses one selected model for the run,
+controller-backed stage progress, and no interactive run-control channel. The
+task-defined team, multi-round Planning dialogue, per-Agent visibility levels,
+live user controls, and model routing described in
 [`docs/adaptive-orchestration.md`](docs/adaptive-orchestration.md) are the next
 milestone, not current capabilities.
 
@@ -284,6 +306,14 @@ The acceptance contract is
 - Reproducible toolchain setup and diagnostics;
 - Unified validation, benchmark-preparation, preflight, and `sat run` CLI;
 - Versioned team manifest and validation;
+- Versioned `TeamPlan`, `AgentSpec`, and `ModelRoutePlan` contracts with
+  validation for dependency cycles, unknown references, write ownership,
+  permission profiles, quality independence and coverage, model
+  authorization, concurrency, iteration limits, and minimum call feasibility;
+- Exact compilation of every fixed evaluation fixture into the same
+  run-scoped contract, including frozen TaskBrief binding, Agent timeouts,
+  dependency waves, workspace scopes, model route, budget, and manifest
+  provenance;
 - A replaceable OpenClaw subprocess adapter with stable role sessions,
   version-pinned local and Gateway JSON parsing, and canonical
   `provider/model` telemetry;
@@ -304,8 +334,9 @@ The acceptance contract is
   validation;
 - Immutable phase artifacts, handoffs, command output, Agent output, canonical
   paths, and SHA-256 references;
-- Persisted run lifecycle with validated transitions, atomic replacement,
-  optimistic concurrency checks, and integrity-checked recovery;
+- Persisted run lifecycle with a write-once `team-plan.json`, validated
+  transitions, atomic replacement, optimistic concurrency checks, cross-file
+  digests, fixed-fixture provenance, and integrity-checked recovery;
 - Safe detached standalone-clone creation and chained iteration snapshot
   verification;
 - Frozen task-management TaskBrief, deterministic seed commit, independent
@@ -371,9 +402,10 @@ The configuration owns membership and initial stage ordering; the Python
 controller owns dynamic revision and termination decisions.
 
 These manifests are fixed evaluation fixtures. The current product path also
-uses `function_specialized`, but the target product design derives a run-scoped
-TeamPlan from the task and compiles both product and evaluation teams into one
-controller contract.
+uses `function_specialized`, but it no longer passes that definition directly
+to run control: SAT compiles it into the same `TeamPlan` contract that adaptive
+teams will use. The target product design derives that plan from the task
+instead of selecting a fixture.
 
 | Configuration | Purpose | Implementation status |
 | --- | --- | --- |
@@ -419,12 +451,11 @@ The immediate product-evidence task remains a recorded fresh-device run of the
 published installer and bare `sat` journey. Preserve any failure as evidence;
 advanced evaluation commands are not part of that user demonstration.
 
-The next engineering batch is Phase 3A: introduce TeamPlan, AgentSpec,
-ModelRoutePlan, RunEvent, and ControlCommand contracts; compile the existing
-fixed manifests into TeamPlan; move the current function-specialized workflow
-onto that single compatibility path; and reject invalid dynamic plans before
-Agent creation. This batch must preserve the completed Product Demo behavior
-and full offline suite.
+The remaining Phase 3A work is to introduce `RunEvent` and `ControlCommand`,
+migrate the progress source to append-only events, and preserve current product
+behavior through the complete offline suite. The TeamPlan compatibility path
+is implemented: the current workflow compiles and persists a plan, and invalid
+adaptive plans fail before Agent creation.
 
 Phase 3B then adds the Planning dialogue and editable overview; later Phase 3
 batches add dynamic runtime creation, richer progress and controls, and model

@@ -13,6 +13,7 @@ from software_agent_team.artifacts import (
     TaskBrief,
     WorkResult,
 )
+from software_agent_team.budgets import AgentBudget
 from software_agent_team.git_workspace import (
     GitWorkspaceError,
     GitWorkspaceManager,
@@ -22,8 +23,9 @@ from software_agent_team.git_workspace import (
     WorkspaceIntegrityError,
     validate_work_result_snapshot,
 )
+from software_agent_team.integrity import canonical_model_sha256
 from software_agent_team.run_control import RunController, RunPhase, RunStore
-from software_agent_team.teams import load_team_manifest
+from software_agent_team.teams import compile_fixed_team_plan, load_team_manifest
 
 REPOSITORY_ROOT = Path(__file__).parents[1]
 TEAM_CONFIG = REPOSITORY_ROOT / "configs" / "teams.json"
@@ -526,8 +528,24 @@ def test_controller_persists_real_workspace_and_snapshot_evidence(
     brief = TaskBrief.model_validate_json(TASK_BRIEF.read_text(encoding="utf-8"))
     record = controller.create(
         brief,
-        team_id="function_specialized",
-        iteration_limit=2,
+        team_plan=compile_fixed_team_plan(
+            manifest,
+            team_id="function_specialized",
+            run_id=brief.run_id,
+            task_brief_sha256=canonical_model_sha256(brief),
+            model="test/provider-model",
+            budget=AgentBudget(
+                max_calls=14,
+                max_input_tokens=1_000_000,
+                max_output_tokens=200_000,
+                max_agent_duration_seconds=3_600,
+                max_estimated_cost_usd="25",
+            ),
+            role_timeout_seconds={role: 300 for role in AgentRole},
+            iteration_limit=2,
+            max_concurrency=2,
+            created_at=FIXED_TIME,
+        ),
     )
     record = controller.advance(
         record.run_id,

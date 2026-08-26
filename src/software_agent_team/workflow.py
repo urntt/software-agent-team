@@ -55,6 +55,7 @@ from software_agent_team.git_workspace import (
     WorkspaceIntegrityError,
     validate_work_result_snapshot,
 )
+from software_agent_team.integrity import canonical_model_sha256
 from software_agent_team.progress import (
     ProgressEvent,
     ProgressEventKind,
@@ -87,7 +88,7 @@ from software_agent_team.run_control import (
     TerminationReason,
 )
 from software_agent_team.runtime_configuration import RuntimeConfigurationError
-from software_agent_team.teams import TeamDefinition, TeamManifest
+from software_agent_team.teams import TeamManifest, TeamPlan, compile_fixed_team_plan
 
 PHASE1_TEAM_ID = "function_specialized"
 PHASE1_ITERATION_LIMIT = 2
@@ -151,7 +152,7 @@ class WorkflowOutcome:
 @dataclass
 class _WorkflowContext:
     brief: TaskBrief
-    team: TeamDefinition
+    team_plan: TeamPlan
     controller: RunController
     artifact_store: ArtifactStore
     run_directory: Path
@@ -267,7 +268,18 @@ class WorkflowCoordinator:
         known_criteria = {criterion.id for criterion in task_brief.acceptance_criteria}
         if not set(self.manual_review_criteria).issubset(known_criteria):
             raise WorkflowError("manual-review scope references an unknown criterion")
-        team = self.manifest.get_team(PHASE1_TEAM_ID)
+        team_plan = compile_fixed_team_plan(
+            self.manifest,
+            team_id=PHASE1_TEAM_ID,
+            run_id=task_brief.run_id,
+            task_brief_sha256=canonical_model_sha256(task_brief),
+            model=self.pricing.model,
+            budget=self.budget,
+            role_timeout_seconds=self.agent_stage_timeouts_seconds,
+            iteration_limit=self.iteration_limit,
+            max_concurrency=self.verification_concurrency,
+            created_at=_utc(self.clock),
+        )
         controller = RunController(
             RunStore(self.runs_root),
             self.manifest,
@@ -275,20 +287,17 @@ class WorkflowCoordinator:
         )
         record = controller.create(
             task_brief,
-            team_id=team.id,
-            iteration_limit=self.iteration_limit,
-            agent_stage_timeouts_seconds=self.agent_stage_timeouts_seconds,
+            team_plan=team_plan,
         )
         run_directory = self.runs_root / task_brief.run_id
         context = _WorkflowContext(
             brief=task_brief,
-            team=team,
+            team_plan=team_plan,
             controller=controller,
             artifact_store=ArtifactStore(
                 run_directory,
                 task_brief=task_brief,
-                team=team,
-                iteration_limit=self.iteration_limit,
+                team_plan=team_plan,
             ),
             run_directory=run_directory,
         )
@@ -366,8 +375,8 @@ class WorkflowCoordinator:
             context,
             AgentPromptInputs(
                 task_brief=context.brief,
-                team_id=context.team.id,
-                team_roles=frozenset(context.team.roles),
+                team_id=context.team_plan.team_id,
+                team_roles=frozenset(context.team_plan.legacy_roles),
                 iteration=1,
                 iteration_limit=self.iteration_limit,
                 role=AgentRole.PLANNER,
@@ -425,8 +434,8 @@ class WorkflowCoordinator:
                 context,
                 AgentPromptInputs(
                     task_brief=context.brief,
-                    team_id=context.team.id,
-                    team_roles=frozenset(context.team.roles),
+                    team_id=context.team_plan.team_id,
+                    team_roles=frozenset(context.team_plan.legacy_roles),
                     iteration=record.current_iteration,
                     iteration_limit=self.iteration_limit,
                     role=AgentRole.GENERALIST_DEVELOPER,
@@ -660,8 +669,8 @@ class WorkflowCoordinator:
                 context,
                 AgentPromptInputs(
                     task_brief=context.brief,
-                    team_id=context.team.id,
-                    team_roles=frozenset(context.team.roles),
+                    team_id=context.team_plan.team_id,
+                    team_roles=frozenset(context.team_plan.legacy_roles),
                     iteration=record.current_iteration,
                     iteration_limit=record.iteration_limit,
                     role=role,
@@ -692,7 +701,7 @@ class WorkflowCoordinator:
                 ),
             )
 
-        if self.verification_concurrency == 1:
+        if context.team_plan.max_concurrency == 1:
             tester = invoke(AgentRole.TESTER, ArtifactKind.TEST_REPORT)
             reviewer = invoke(AgentRole.REVIEWER, ArtifactKind.REVIEW_REPORT)
         else:
@@ -750,7 +759,7 @@ class WorkflowCoordinator:
             raise WorkflowEvidenceError("Planner returned the wrong semantic body")
         return ImplementationPlan(
             run_id=context.brief.run_id,
-            team_id=context.team.id,
+            team_id=context.team_plan.team_id,
             created_at=_utc(self.clock),
             objective=body.objective,
             approach=body.approach,
@@ -770,7 +779,7 @@ class WorkflowCoordinator:
             raise WorkflowEvidenceError("Developer returned the wrong semantic body")
         return WorkResult(
             run_id=context.brief.run_id,
-            team_id=context.team.id,
+            team_id=context.team_plan.team_id,
             producer=AgentRole.GENERALIST_DEVELOPER,
             created_at=_utc(self.clock),
             iteration=snapshot.iteration,
@@ -850,7 +859,7 @@ class WorkflowCoordinator:
         )
         return TestReport(
             run_id=context.brief.run_id,
-            team_id=context.team.id,
+            team_id=context.team_plan.team_id,
             created_at=_utc(self.clock),
             iteration=iteration,
             input_commit=input_commit,
@@ -875,7 +884,7 @@ class WorkflowCoordinator:
             raise WorkflowEvidenceError("Reviewer returned the wrong semantic body")
         return ReviewReport(
             run_id=context.brief.run_id,
-            team_id=context.team.id,
+            team_id=context.team_plan.team_id,
             created_at=_utc(self.clock),
             iteration=iteration,
             input_commit=input_commit,
@@ -894,7 +903,7 @@ class WorkflowCoordinator:
         stage: str,
         assembler: ArtifactAssembler,
     ) -> tuple[PhaseArtifact, ArtifactReference, ArtifactReference]:
-        stage_timeout = self.agent_stage_timeouts_seconds[inputs.role]
+        stage_timeout = context.team_plan.timeout_for_role(inputs.role)
         base_request = build_agent_execution_request(
             inputs,
             timeout_seconds=stage_timeout,
@@ -959,7 +968,7 @@ class WorkflowCoordinator:
                             result,
                             request,
                             task_brief=context.brief,
-                            team_roles=context.team.roles,
+                            team_roles=context.team_plan.legacy_roles,
                             iteration_limit=self.iteration_limit,
                         )
                     except AgentArtifactResponseError as error:
@@ -1206,7 +1215,7 @@ class WorkflowCoordinator:
     ) -> ArtifactReference:
         handoff = HandoffEnvelope(
             run_id=context.brief.run_id,
-            team_id=context.team.id,
+            team_id=context.team_plan.team_id,
             iteration=iteration,
             stage=stage,
             sequence=1,

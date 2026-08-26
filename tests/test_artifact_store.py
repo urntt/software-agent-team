@@ -37,7 +37,13 @@ from software_agent_team.artifacts import (
     parse_phase_artifact,
 )
 from software_agent_team.artifacts import TestReport as PhaseTestReport
-from software_agent_team.teams import TeamDefinition, load_team_manifest
+from software_agent_team.budgets import AgentBudget
+from software_agent_team.integrity import canonical_model_sha256
+from software_agent_team.teams import (
+    TeamPlan,
+    compile_fixed_team_plan,
+    load_team_manifest,
+)
 
 REPOSITORY_ROOT = Path(__file__).parents[1]
 TEAM_CONFIG = REPOSITORY_ROOT / "configs" / "teams.json"
@@ -55,10 +61,29 @@ def task_brief() -> TaskBrief:
     )
 
 
-def function_team() -> TeamDefinition:
-    """Load the first vertical-slice team definition."""
+def function_team_plan() -> TeamPlan:
+    """Compile the first vertical-slice fixture into one frozen run plan."""
 
-    return load_team_manifest(TEAM_CONFIG).get_team("function_specialized")
+    manifest = load_team_manifest(TEAM_CONFIG)
+    brief = task_brief()
+    return compile_fixed_team_plan(
+        manifest,
+        team_id="function_specialized",
+        run_id="task-manager-001",
+        task_brief_sha256=canonical_model_sha256(brief),
+        model="test/provider-model",
+        budget=AgentBudget(
+            max_calls=14,
+            max_input_tokens=1_000_000,
+            max_output_tokens=200_000,
+            max_agent_duration_seconds=3_600,
+            max_estimated_cost_usd="25",
+        ),
+        role_timeout_seconds={role: 300 for role in AgentRole},
+        iteration_limit=2,
+        max_concurrency=2,
+        created_at=CREATED_AT,
+    )
 
 
 def reference(kind: ArtifactKind, path: str) -> ArtifactReference:
@@ -173,8 +198,7 @@ def make_store(tmp_path: Path) -> ArtifactStore:
     return ArtifactStore(
         run_directory,
         task_brief=task_brief(),
-        team=function_team(),
-        iteration_limit=2,
+        team_plan=function_team_plan(),
     )
 
 

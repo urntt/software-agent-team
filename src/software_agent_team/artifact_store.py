@@ -36,7 +36,8 @@ from software_agent_team.artifacts import (
     resolve_acceptance_results,
     validate_artifact_context,
 )
-from software_agent_team.teams import TeamDefinition
+from software_agent_team.integrity import canonical_model_sha256
+from software_agent_team.teams import TeamPlan
 
 
 class ArtifactStoreError(ValueError):
@@ -150,8 +151,7 @@ class ArtifactStore:
         root: Path,
         *,
         task_brief: TaskBrief,
-        team: TeamDefinition,
-        iteration_limit: int,
+        team_plan: TeamPlan,
     ) -> None:
         if root.is_symlink() or not root.is_dir():
             raise ArtifactStoreError(
@@ -159,12 +159,14 @@ class ArtifactStore:
             )
         if not task_brief.confirmed:
             raise ArtifactStoreError("artifact store requires a confirmed task brief")
-        if not 1 <= iteration_limit <= team.max_iterations:
-            raise ArtifactStoreError("artifact store iteration limit is invalid")
+        if task_brief.run_id != team_plan.run_id:
+            raise ArtifactStoreError("TeamPlan belongs to a different run")
+        if canonical_model_sha256(task_brief) != team_plan.task_brief_sha256:
+            raise ArtifactStoreError("TeamPlan binds a different task brief")
         self.root = root
         self.task_brief = task_brief
-        self.team = team
-        self.iteration_limit = iteration_limit
+        self.team_plan = team_plan
+        self.iteration_limit = team_plan.iteration_limit
 
     def write(
         self,
@@ -224,11 +226,8 @@ class ArtifactStore:
             raise ArtifactStoreError("execution iteration is outside the run limit")
         if not 1 <= attempt <= 99:
             raise ArtifactStoreError("execution attempt must be between 1 and 99")
-        stage_definition = next(
-            (candidate for candidate in self.team.stages if candidate.id == stage),
-            None,
-        )
-        if stage_definition is None or role not in stage_definition.roles:
+        stage_roles = self.team_plan.legacy_stage_roles.get(stage)
+        if stage_roles is None or role not in stage_roles:
             raise ArtifactStoreError("execution role is outside the declared stage")
 
         stdout_relative, stderr_relative = _execution_output_paths_for(
@@ -328,10 +327,10 @@ class ArtifactStore:
         validate_artifact_context(
             artifact,
             task_brief=self.task_brief,
-            team_id=self.team.id,
-            team_roles=set(self.team.roles),
+            team_id=self.team_plan.team_id,
+            team_roles=set(self.team_plan.legacy_roles),
             iteration_limit=self.iteration_limit,
-            team_stages={stage.id: set(stage.roles) for stage in self.team.stages},
+            team_stages=self.team_plan.legacy_stage_roles,
         )
 
     def _validate_references(self, artifact: PersistedArtifact) -> None:

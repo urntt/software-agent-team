@@ -1,13 +1,19 @@
-"""Versioned team-configuration contracts and loaders."""
+"""Versioned team fixtures, run-scoped plans, validation, and compilation."""
 
 import json
+from collections.abc import Mapping
+from datetime import UTC, datetime
 from enum import StrEnum
-from pathlib import Path
-from typing import Self
+from pathlib import Path, PurePosixPath
+from typing import Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from software_agent_team.artifacts import AgentRole
+from software_agent_team.artifacts import AgentRole, ArtifactKind
+from software_agent_team.budgets import AgentBudget
+from software_agent_team.integrity import canonical_model_sha256
+
+TEAM_PLAN_SCHEMA_VERSION = 1
 
 
 class TeamKind(StrEnum):
@@ -22,6 +28,492 @@ class StageMode(StrEnum):
 
     SEQUENTIAL = "sequential"
     PARALLEL = "parallel"
+
+
+class TeamPlanOrigin(StrEnum):
+    """Authority that produced one approved run-scoped team plan."""
+
+    FIXED_MANIFEST = "fixed_manifest"
+    ADAPTIVE_PLANNING = "adaptive_planning"
+
+
+class PlanApprovalSource(StrEnum):
+    """Actor that authorized one immutable plan revision."""
+
+    COMPATIBILITY_POLICY = "compatibility_policy"
+    USER = "user"
+
+
+class AgentCapability(StrEnum):
+    """Controller-known work contract independent from a user-facing label."""
+
+    PLANNING = "planning"
+    IMPLEMENTATION = "implementation"
+    INTEGRATION = "integration"
+    TESTING = "testing"
+    REVIEW = "review"
+
+
+class PermissionProfile(StrEnum):
+    """Versioned least-privilege profiles assignable to an AgentSpec."""
+
+    READ_ONLY = "read_only"
+    WORKSPACE_WRITE = "workspace_write"
+
+
+class ModelRoutingMode(StrEnum):
+    """Whether a run pins one route or permits authorized policy resolution."""
+
+    STRICT = "strict"
+    POLICY = "policy"
+
+
+_CAPABILITY_OUTPUTS = {
+    AgentCapability.PLANNING: ArtifactKind.IMPLEMENTATION_PLAN,
+    AgentCapability.IMPLEMENTATION: ArtifactKind.WORK_RESULT,
+    AgentCapability.INTEGRATION: ArtifactKind.WORK_RESULT,
+    AgentCapability.TESTING: ArtifactKind.TEST_REPORT,
+    AgentCapability.REVIEW: ArtifactKind.REVIEW_REPORT,
+}
+_READ_ONLY_CAPABILITIES = {
+    AgentCapability.PLANNING,
+    AgentCapability.TESTING,
+    AgentCapability.REVIEW,
+}
+
+
+def _clean_unique_text(values: tuple[str, ...], *, label: str) -> tuple[str, ...]:
+    cleaned = tuple(value.strip() for value in values)
+    if any(not value for value in cleaned):
+        raise ValueError(f"{label} entries must not be blank")
+    if len(cleaned) != len(set(cleaned)):
+        raise ValueError(f"{label} entries must be unique")
+    return cleaned
+
+
+def _require_utc(value: datetime) -> datetime:
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError("team-plan timestamps must include a timezone")
+    return value.astimezone(UTC)
+
+
+class ModelRoute(BaseModel):
+    """One explicitly authorized provider/model route."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
+    model: str = Field(min_length=3)
+    required_capabilities: tuple[str, ...] = ()
+
+    @field_validator("model")
+    @classmethod
+    def require_canonical_model(cls, value: str) -> str:
+        """Require an explicit provider/model identity without whitespace."""
+
+        cleaned = value.strip()
+        provider, separator, model = cleaned.partition("/")
+        if (
+            not separator
+            or not provider
+            or not model
+            or any(character.isspace() for character in cleaned)
+        ):
+            raise ValueError("model routes require a canonical provider/model")
+        return cleaned
+
+    @field_validator("required_capabilities")
+    @classmethod
+    def require_unique_capabilities(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        return _clean_unique_text(values, label="model capability")
+
+
+class ModelRoutePlan(BaseModel):
+    """Approved model candidates and switching policy for one TeamPlan."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    mode: ModelRoutingMode
+    default_route_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
+    routes: tuple[ModelRoute, ...] = Field(min_length=1)
+    authorized_switch_conditions: tuple[str, ...] = ()
+
+    @field_validator("authorized_switch_conditions")
+    @classmethod
+    def require_unique_switch_conditions(
+        cls,
+        values: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        return _clean_unique_text(values, label="model switch condition")
+
+    @model_validator(mode="after")
+    def validate_routes(self) -> Self:
+        route_ids = [route.id for route in self.routes]
+        if len(route_ids) != len(set(route_ids)):
+            raise ValueError("model route IDs must be unique")
+        if self.default_route_id not in route_ids:
+            raise ValueError("default model route must reference an authorized route")
+        if self.mode is ModelRoutingMode.STRICT and (
+            len(self.routes) != 1 or self.authorized_switch_conditions
+        ):
+            raise ValueError("strict model routing requires one route and no switches")
+        return self
+
+    def get_route(self, route_id: str) -> ModelRoute:
+        """Return one authorized route or reject an unknown reference."""
+
+        for route in self.routes:
+            if route.id == route_id:
+                return route
+        raise ValueError(f"unknown model route: {route_id}")
+
+
+class AgentSpec(BaseModel):
+    """One run-scoped responsibility proposed or compiled for the controller."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
+    label: str = Field(min_length=1, max_length=80)
+    responsibility: str = Field(min_length=1, max_length=500)
+    rationale: str = Field(min_length=1, max_length=500)
+    capability: AgentCapability
+    permission_profile: PermissionProfile
+    stage_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
+    dependencies: tuple[str, ...] = ()
+    expected_output: ArtifactKind
+    model_route_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
+    timeout_seconds: int = Field(ge=1, le=3600)
+    workspace_scope: str = Field(min_length=1, max_length=200)
+    legacy_role: AgentRole | None = None
+
+    @field_validator("label", "responsibility", "rationale")
+    @classmethod
+    def require_clean_text(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("AgentSpec text must not be blank")
+        return cleaned
+
+    @field_validator("dependencies")
+    @classmethod
+    def require_unique_dependencies(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        return _clean_unique_text(values, label="Agent dependency")
+
+    @field_validator("workspace_scope")
+    @classmethod
+    def require_safe_workspace_scope(cls, value: str) -> str:
+        cleaned = value.strip()
+        path = PurePosixPath(cleaned)
+        if (
+            not cleaned
+            or "\\" in cleaned
+            or path.is_absolute()
+            or path == PurePosixPath(".")
+            or ".." in path.parts
+            or str(path) != cleaned
+        ):
+            raise ValueError("workspace scopes must be canonical safe relative paths")
+        return cleaned
+
+    @model_validator(mode="after")
+    def validate_capability_boundary(self) -> Self:
+        if self.expected_output is not _CAPABILITY_OUTPUTS[self.capability]:
+            raise ValueError("Agent capability and expected output are inconsistent")
+        if self.capability in _READ_ONLY_CAPABILITIES:
+            if self.permission_profile is not PermissionProfile.READ_ONLY:
+                raise ValueError("planning and quality capabilities must be read-only")
+        elif self.permission_profile is not PermissionProfile.WORKSPACE_WRITE:
+            raise ValueError("implementation capabilities require workspace write")
+        if self.id in self.dependencies:
+            raise ValueError("an Agent cannot depend on itself")
+        return self
+
+
+class TeamPlan(BaseModel):
+    """Approved run-scoped authority for Agent creation and scheduling."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[TEAM_PLAN_SCHEMA_VERSION] = TEAM_PLAN_SCHEMA_VERSION
+    plan_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
+    revision: int = Field(ge=1, le=99)
+    run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
+    task_brief_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    implementation_plan_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    team_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
+    origin: TeamPlanOrigin
+    approval_source: PlanApprovalSource
+    created_at: datetime
+    source_manifest_version: int | None = Field(default=None, ge=1)
+    source_team_id: str | None = Field(
+        default=None,
+        pattern=r"^[a-z][a-z0-9_]*$",
+    )
+    source_team_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    agents: tuple[AgentSpec, ...] = Field(min_length=1, max_length=16)
+    model_routes: ModelRoutePlan
+    budget: AgentBudget
+    iteration_limit: int = Field(ge=1, le=3)
+    max_concurrency: int = Field(ge=1, le=16)
+    independent_review: bool
+    revision_enabled: bool
+
+    @field_validator("created_at")
+    @classmethod
+    def require_utc_timestamp(cls, value: datetime) -> datetime:
+        return _require_utc(value)
+
+    @model_validator(mode="after")
+    def validate_plan(self) -> Self:
+        if self.origin is TeamPlanOrigin.FIXED_MANIFEST:
+            if self.approval_source is not PlanApprovalSource.COMPATIBILITY_POLICY:
+                raise ValueError("fixed plans require compatibility-policy approval")
+            if self.implementation_plan_sha256 is not None:
+                raise ValueError(
+                    "fixed compatibility plans create their implementation "
+                    "plan at runtime"
+                )
+            if None in {
+                self.source_manifest_version,
+                self.source_team_id,
+                self.source_team_sha256,
+            }:
+                raise ValueError("fixed plans require complete manifest provenance")
+            if self.source_team_id != self.team_id:
+                raise ValueError("fixed plan team ID must match its source fixture")
+            if any(agent.legacy_role is None for agent in self.agents):
+                raise ValueError("fixed plans require a legacy role for every Agent")
+        else:
+            if self.approval_source is not PlanApprovalSource.USER:
+                raise ValueError("adaptive plans require user approval")
+            if self.implementation_plan_sha256 is None:
+                raise ValueError(
+                    "adaptive plans must bind an approved implementation plan"
+                )
+            if any(
+                value is not None
+                for value in (
+                    self.source_manifest_version,
+                    self.source_team_id,
+                    self.source_team_sha256,
+                )
+            ):
+                raise ValueError(
+                    "adaptive plans cannot claim fixed-manifest provenance"
+                )
+            if any(agent.legacy_role is not None for agent in self.agents):
+                raise ValueError("adaptive plans cannot use fixed-fixture roles")
+
+        agent_ids = [agent.id for agent in self.agents]
+        if len(agent_ids) != len(set(agent_ids)):
+            raise ValueError("TeamPlan Agent IDs must be unique")
+        known_agents = set(agent_ids)
+        dependencies = {agent.id: set(agent.dependencies) for agent in self.agents}
+        for agent_id, required in dependencies.items():
+            unknown = required - known_agents
+            if unknown:
+                raise ValueError(
+                    f"Agent {agent_id} references unknown dependencies: "
+                    f"{', '.join(sorted(unknown))}"
+                )
+
+        visiting: set[str] = set()
+        visited: set[str] = set()
+
+        def visit(agent_id: str) -> None:
+            if agent_id in visiting:
+                raise ValueError("TeamPlan dependencies must be acyclic")
+            if agent_id in visited:
+                return
+            visiting.add(agent_id)
+            for dependency in dependencies[agent_id]:
+                visit(dependency)
+            visiting.remove(agent_id)
+            visited.add(agent_id)
+
+        for agent_id in agent_ids:
+            visit(agent_id)
+
+        route_ids = {route.id for route in self.model_routes.routes}
+        unknown_routes = {agent.model_route_id for agent in self.agents} - route_ids
+        if unknown_routes:
+            raise ValueError(
+                "Agent model routes are not authorized: "
+                f"{', '.join(sorted(unknown_routes))}"
+            )
+        if self.max_concurrency > len(self.agents):
+            raise ValueError("TeamPlan concurrency cannot exceed its Agent count")
+        if len(self.agents) > self.budget.max_calls:
+            raise ValueError("TeamPlan Agent count exceeds the run call budget")
+
+        implementation_agents = {
+            agent.id
+            for agent in self.agents
+            if agent.capability
+            in {AgentCapability.IMPLEMENTATION, AgentCapability.INTEGRATION}
+        }
+        if not implementation_agents:
+            raise ValueError("TeamPlan requires an implementation capability")
+
+        testing_agents = {
+            agent.id
+            for agent in self.agents
+            if agent.capability is AgentCapability.TESTING
+        }
+        review_agents = {
+            agent.id
+            for agent in self.agents
+            if agent.capability is AgentCapability.REVIEW
+        }
+        if self.independent_review and (not testing_agents or not review_agents):
+            raise ValueError(
+                "independent review requires testing and review capabilities"
+            )
+        if self.revision_enabled and not self.independent_review:
+            raise ValueError("review-driven revision requires independent review")
+        if not self.revision_enabled and self.iteration_limit != 1:
+            raise ValueError("a non-revising TeamPlan requires one iteration")
+
+        def transitively_depends(agent_id: str, target: str) -> bool:
+            pending = list(dependencies[agent_id])
+            seen: set[str] = set()
+            while pending:
+                current = pending.pop()
+                if current == target:
+                    return True
+                if current not in seen:
+                    seen.add(current)
+                    pending.extend(dependencies[current])
+            return False
+
+        if self.independent_review:
+            if any(
+                transitively_depends(tester, reviewer)
+                or transitively_depends(reviewer, tester)
+                for tester in testing_agents
+                for reviewer in review_agents
+            ):
+                raise ValueError(
+                    "testing and review capabilities must remain independent"
+                )
+            for implementation_agent in implementation_agents:
+                if not any(
+                    transitively_depends(tester, implementation_agent)
+                    for tester in testing_agents
+                ):
+                    raise ValueError(
+                        "every implementation path requires downstream testing"
+                    )
+                if not any(
+                    transitively_depends(reviewer, implementation_agent)
+                    for reviewer in review_agents
+                ):
+                    raise ValueError(
+                        "every implementation path requires downstream review"
+                    )
+
+        def scopes_overlap(first: str, second: str) -> bool:
+            first_parts = PurePosixPath(first).parts
+            second_parts = PurePosixPath(second).parts
+            common_length = min(len(first_parts), len(second_parts))
+            return first_parts[:common_length] == second_parts[:common_length]
+
+        for index, agent in enumerate(self.agents):
+            for other in self.agents[index + 1 :]:
+                if (
+                    agent.permission_profile is PermissionProfile.READ_ONLY
+                    and other.permission_profile is PermissionProfile.READ_ONLY
+                ):
+                    continue
+                if not scopes_overlap(agent.workspace_scope, other.workspace_scope):
+                    continue
+                if not (
+                    transitively_depends(agent.id, other.id)
+                    or transitively_depends(other.id, agent.id)
+                ):
+                    raise ValueError(
+                        "overlapping workspace access with a writer must be "
+                        "dependency ordered"
+                    )
+
+        if self.origin is TeamPlanOrigin.FIXED_MANIFEST:
+            legacy_roles = [agent.legacy_role for agent in self.agents]
+            if len(legacy_roles) != len(set(legacy_roles)):
+                raise ValueError("fixed TeamPlan legacy roles must be unique")
+        return self
+
+    def get_agent(self, agent_id: str) -> AgentSpec:
+        """Return one AgentSpec or reject an unknown run-scoped identity."""
+
+        for agent in self.agents:
+            if agent.id == agent_id:
+                return agent
+        raise ValueError(f"unknown TeamPlan Agent: {agent_id}")
+
+    @property
+    def legacy_roles(self) -> tuple[AgentRole, ...]:
+        """Return compatibility roles for the current fixed execution adapter."""
+
+        roles = tuple(agent.legacy_role for agent in self.agents)
+        if any(role is None for role in roles):
+            raise ValueError("TeamPlan contains an Agent without a legacy role")
+        return tuple(role for role in roles if role is not None)
+
+    @property
+    def legacy_role_timeouts(self) -> dict[AgentRole, int]:
+        """Return exact timeout evidence keyed by the current adapter role."""
+
+        return {
+            agent.legacy_role: agent.timeout_seconds
+            for agent in self.agents
+            if agent.legacy_role is not None
+        }
+
+    @property
+    def legacy_stage_roles(self) -> dict[str, set[AgentRole]]:
+        """Return current artifact-stage membership compiled from AgentSpecs."""
+
+        stages: dict[str, set[AgentRole]] = {}
+        for agent in self.agents:
+            if agent.legacy_role is None:
+                raise ValueError("TeamPlan contains an Agent without a legacy role")
+            stages.setdefault(agent.stage_id, set()).add(agent.legacy_role)
+        return stages
+
+    def timeout_for_role(self, role: AgentRole) -> int:
+        """Resolve one current-adapter invocation timeout from the TeamPlan."""
+
+        for agent in self.agents:
+            if agent.legacy_role is role:
+                return agent.timeout_seconds
+        raise ValueError(f"role {role.value} is not part of TeamPlan {self.plan_id}")
+
+    def execution_waves(self) -> tuple[tuple[str, ...], ...]:
+        """Return deterministic topological waves for inspection and scheduling."""
+
+        remaining = {agent.id: set(agent.dependencies) for agent in self.agents}
+        waves: list[tuple[str, ...]] = []
+        completed: set[str] = set()
+        while remaining:
+            ready = tuple(
+                agent.id
+                for agent in self.agents
+                if agent.id in remaining and remaining[agent.id].issubset(completed)
+            )
+            if not ready:
+                raise ValueError("TeamPlan dependencies cannot be scheduled")
+            waves.append(ready)
+            completed.update(ready)
+            for agent_id in ready:
+                del remaining[agent_id]
+        return tuple(waves)
 
 
 class TeamStage(BaseModel):
@@ -179,3 +671,175 @@ def load_team_manifest(path: Path) -> TeamManifest:
 
     payload = json.loads(path.read_text(encoding="utf-8"))
     return TeamManifest.model_validate(payload)
+
+
+_ROLE_CAPABILITIES = {
+    AgentRole.SINGLE_AGENT: AgentCapability.IMPLEMENTATION,
+    AgentRole.PLANNER: AgentCapability.PLANNING,
+    AgentRole.GENERALIST_DEVELOPER: AgentCapability.IMPLEMENTATION,
+    AgentRole.FRONTEND_DEVELOPER: AgentCapability.IMPLEMENTATION,
+    AgentRole.BACKEND_DEVELOPER: AgentCapability.IMPLEMENTATION,
+    AgentRole.INTEGRATOR: AgentCapability.INTEGRATION,
+    AgentRole.TESTER: AgentCapability.TESTING,
+    AgentRole.REVIEWER: AgentCapability.REVIEW,
+}
+_ROLE_RESPONSIBILITIES = {
+    AgentRole.SINGLE_AGENT: "Implement the confirmed task as one accountable owner.",
+    AgentRole.PLANNER: "Translate the confirmed task into an implementation plan.",
+    AgentRole.GENERALIST_DEVELOPER: (
+        "Implement and revise the complete product from the approved plan."
+    ),
+    AgentRole.FRONTEND_DEVELOPER: (
+        "Implement and revise the user-interface portion of the approved plan."
+    ),
+    AgentRole.BACKEND_DEVELOPER: (
+        "Implement and revise the server and persistence portion of the plan."
+    ),
+    AgentRole.INTEGRATOR: (
+        "Integrate independently owned implementation work into one coherent result."
+    ),
+    AgentRole.TESTER: (
+        "Analyze controller-run command evidence against confirmed acceptance."
+    ),
+    AgentRole.REVIEWER: (
+        "Independently review the immutable result and configured manual scope."
+    ),
+}
+_ROLE_RATIONALES = {
+    AgentRole.SINGLE_AGENT: "This fixture measures a one-owner baseline.",
+    AgentRole.PLANNER: "Planning is separated from source mutation in this fixture.",
+    AgentRole.GENERALIST_DEVELOPER: (
+        "One implementation owner avoids integration conflicts in the vertical slice."
+    ),
+    AgentRole.FRONTEND_DEVELOPER: (
+        "The domain-specialized fixture isolates interface implementation context."
+    ),
+    AgentRole.BACKEND_DEVELOPER: (
+        "The domain-specialized fixture isolates server and persistence context."
+    ),
+    AgentRole.INTEGRATOR: (
+        "Separate domain work requires explicit controller-visible integration."
+    ),
+    AgentRole.TESTER: "Testing remains independent from source authorship.",
+    AgentRole.REVIEWER: "Acceptance requires judgment independent from implementation.",
+}
+_ROLE_WORKSPACE_SCOPES = {
+    AgentRole.SINGLE_AGENT: "repository",
+    AgentRole.PLANNER: "repository",
+    AgentRole.GENERALIST_DEVELOPER: "repository",
+    AgentRole.FRONTEND_DEVELOPER: "repository/frontend",
+    AgentRole.BACKEND_DEVELOPER: "repository/backend",
+    AgentRole.INTEGRATOR: "repository",
+    AgentRole.TESTER: "repository",
+    AgentRole.REVIEWER: "repository",
+}
+
+
+def compile_fixed_team_plan(
+    manifest: TeamManifest,
+    *,
+    team_id: str,
+    run_id: str,
+    task_brief_sha256: str,
+    model: str,
+    budget: AgentBudget,
+    role_timeout_seconds: Mapping[AgentRole, int],
+    iteration_limit: int,
+    max_concurrency: int,
+    created_at: datetime,
+) -> TeamPlan:
+    """Compile one fixed evaluation fixture into the run-scoped plan contract."""
+
+    team = manifest.get_team(team_id)
+    if not 1 <= iteration_limit <= team.max_iterations:
+        raise ValueError(
+            f"iteration limit must be between 1 and {team.max_iterations} for {team.id}"
+        )
+    if not 1 <= max_concurrency <= len(team.roles):
+        raise ValueError("team concurrency must be between one and its Agent count")
+    missing_timeouts = set(team.roles) - set(role_timeout_seconds)
+    if missing_timeouts:
+        names = ", ".join(sorted(role.value for role in missing_timeouts))
+        raise ValueError(f"TeamPlan invocation timeouts are missing roles: {names}")
+
+    agents: list[AgentSpec] = []
+    previous_stage_roles: tuple[AgentRole, ...] = ()
+    for stage in team.stages:
+        for role in stage.roles:
+            capability = _ROLE_CAPABILITIES[role]
+            permission = (
+                PermissionProfile.READ_ONLY
+                if capability in _READ_ONLY_CAPABILITIES
+                else PermissionProfile.WORKSPACE_WRITE
+            )
+            agents.append(
+                AgentSpec(
+                    id=role.value,
+                    label=role.value.replace("_", " ").title(),
+                    responsibility=_ROLE_RESPONSIBILITIES[role],
+                    rationale=_ROLE_RATIONALES[role],
+                    capability=capability,
+                    permission_profile=permission,
+                    stage_id=stage.id,
+                    dependencies=tuple(item.value for item in previous_stage_roles),
+                    expected_output=_CAPABILITY_OUTPUTS[capability],
+                    model_route_id="primary",
+                    timeout_seconds=role_timeout_seconds[role],
+                    workspace_scope=_ROLE_WORKSPACE_SCOPES[role],
+                    legacy_role=role,
+                )
+            )
+        previous_stage_roles = tuple(stage.roles)
+
+    return TeamPlan(
+        plan_id=f"{run_id}-team-v1",
+        revision=1,
+        run_id=run_id,
+        task_brief_sha256=task_brief_sha256,
+        team_id=team.id,
+        origin=TeamPlanOrigin.FIXED_MANIFEST,
+        approval_source=PlanApprovalSource.COMPATIBILITY_POLICY,
+        created_at=created_at,
+        source_manifest_version=manifest.schema_version,
+        source_team_id=team.id,
+        source_team_sha256=canonical_model_sha256(team),
+        agents=tuple(agents),
+        model_routes=ModelRoutePlan(
+            mode=ModelRoutingMode.STRICT,
+            default_route_id="primary",
+            routes=(ModelRoute(id="primary", model=model),),
+        ),
+        budget=budget,
+        iteration_limit=iteration_limit,
+        max_concurrency=max_concurrency,
+        independent_review=team.independent_review,
+        revision_enabled=team.revision_enabled,
+    )
+
+
+def validate_fixed_team_plan(plan: TeamPlan, manifest: TeamManifest) -> None:
+    """Prove that a fixed-origin plan is the exact compiled fixture plus run inputs."""
+
+    if plan.origin is not TeamPlanOrigin.FIXED_MANIFEST:
+        raise ValueError("only fixed-origin TeamPlans use manifest validation")
+    if plan.source_manifest_version != manifest.schema_version:
+        raise ValueError("TeamPlan uses a different team manifest version")
+    team = manifest.get_team(plan.team_id)
+    if plan.source_team_sha256 != canonical_model_sha256(team):
+        raise ValueError("TeamPlan uses a different fixed team definition")
+
+    route = plan.model_routes.get_route(plan.model_routes.default_route_id)
+    expected = compile_fixed_team_plan(
+        manifest,
+        team_id=plan.team_id,
+        run_id=plan.run_id,
+        task_brief_sha256=plan.task_brief_sha256,
+        model=route.model,
+        budget=plan.budget,
+        role_timeout_seconds=plan.legacy_role_timeouts,
+        iteration_limit=plan.iteration_limit,
+        max_concurrency=plan.max_concurrency,
+        created_at=plan.created_at,
+    )
+    if expected != plan:
+        raise ValueError("TeamPlan differs from its fixed manifest compilation")

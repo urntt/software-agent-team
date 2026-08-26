@@ -776,13 +776,10 @@ def test_checked_in_role_stage_budgets_are_frozen_into_the_run(
     ).execute(task_brief(), source_repository=source)
 
     assert outcome.record.phase is RunPhase.COMPLETED
-    assert outcome.record.agent_stage_timeouts_seconds[AgentRole.PLANNER] == 180
-    assert (
-        outcome.record.agent_stage_timeouts_seconds[AgentRole.GENERALIST_DEVELOPER]
-        == 900
-    )
-    assert outcome.record.agent_stage_timeouts_seconds[AgentRole.TESTER] == 300
-    assert outcome.record.agent_stage_timeouts_seconds[AgentRole.REVIEWER] == 300
+    assert outcome.record.agent_timeouts_seconds["planner"] == 180
+    assert outcome.record.agent_timeouts_seconds["generalist_developer"] == 900
+    assert outcome.record.agent_timeouts_seconds["tester"] == 300
+    assert outcome.record.agent_timeouts_seconds["reviewer"] == 300
     requested = {request.role: request.timeout_seconds for request in executor.requests}
     assert requested[AgentRole.PLANNER] == 180
     assert requested[AgentRole.GENERALIST_DEVELOPER] == 900

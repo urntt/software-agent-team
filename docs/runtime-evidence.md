@@ -72,7 +72,8 @@ controller. The current implementation defines:
 - `HandoffEnvelope`;
 - `ArtifactReference`;
 - `AgentExecutionRecord`;
-- Versioned Agent roles and team definitions;
+- `TeamPlan`, `AgentSpec`, and `ModelRoutePlan` run authority;
+- Versioned Agent roles and fixed evaluation team definitions;
 - `ImplementationPlan`;
 - `WorkResult`;
 - `TestReport`;
@@ -80,8 +81,9 @@ controller. The current implementation defines:
 - `IterationRecord`;
 - `FinalReport`.
 
-`src/software_agent_team/artifacts.py` is the schema source of truth for
-persisted artifacts. `src/software_agent_team/responses.py` owns the smaller
+`src/software_agent_team/teams.py` owns run-scoped team authority and fixed
+fixture compilation. `src/software_agent_team/artifacts.py` owns phase and
+handoff artifacts. `src/software_agent_team/responses.py` owns the smaller
 role-response bodies and the explicit mapping of controller-owned fields for
 each artifact kind. These are different boundaries, not duplicate persisted
 schemas.
@@ -128,8 +130,9 @@ remain invalid.
 One controlled repair may address only the semantic contract. It receives a
 bounded, value-free structural diagnostic, such as the duplicate key name,
 while the immutable execution record retains the raw provider output. The
-initial response and optional repair share one monotonic role-stage deadline;
-repair receives only the time remaining and never restarts the clock.
+initial response and optional repair each receive the frozen per-invocation
+timeout. Both calls remain inside aggregate call, duration, token, and cost
+budgets.
 
 If a model returns controller-owned fields, they are ignored and recorded in
 the execution record. Missing or incorrect echoes such as `kind`, commit
@@ -146,6 +149,7 @@ the evidence follows this layout:
 ```text
 runs/<run_id>/
 ├── task-brief.json
+├── team-plan.json
 ├── run.json
 ├── openclaw.runtime.json
 ├── runtime-preflight.json
@@ -179,10 +183,15 @@ liveness, and any non-secret model or container probe error. A run is ready
 only when the configuration, exact model route, image identity, and container
 execution checks all pass.
 
-Phase artifacts and captured process output are write-once. `run.json` is
+Phase artifacts and captured process output are write-once. `team-plan.json`
+freezes Agent identities, responsibilities, dependency waves, workspace and
+permission boundaries, invocation timeouts, model authorization, concurrency,
+iteration policy, and aggregate budget. Its digest is immutable run metadata,
+and the plan itself binds the exact confirmed `TaskBrief` digest. `run.json` is
 atomically replaced under an optimistic revision check and records the
 evidence references required for every material transition. A loader verifies
-the frozen TaskBrief and selected team definition before returning state.
+the frozen TaskBrief, TeamPlan, fixed-fixture provenance when applicable, and
+all cross-file digests before returning state.
 
 The controller supports explicit recovery of an isolated clone created
 immediately before a crash. The current `sat run` command intentionally starts
