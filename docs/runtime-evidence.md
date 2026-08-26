@@ -69,6 +69,8 @@ The artifact layer is the reproducible interface between Agents and the
 controller. The current implementation defines:
 
 - `TaskBrief`;
+- `PlanningRequest`, `PlanningTurn`, `PlanningProposal`, and `PlanningApproval`;
+- `AdaptiveImplementationPlan`;
 - `HandoffEnvelope`;
 - `ArtifactReference`;
 - `AgentExecutionRecord`;
@@ -85,7 +87,9 @@ controller. The current implementation defines:
 
 `src/software_agent_team/teams.py` owns run-scoped team authority and fixed
 fixture compilation. `src/software_agent_team/artifacts.py` owns phase and
-handoff artifacts. `src/software_agent_team/responses.py` owns the smaller
+handoff artifacts. `src/software_agent_team/planning.py` owns pre-run Adaptive
+Planning dialogue, proposal compilation, and approval evidence.
+`src/software_agent_team/responses.py` owns the smaller
 role-response bodies and the explicit mapping of controller-owned fields for
 each artifact kind. These are different boundaries, not duplicate persisted
 schemas.
@@ -149,6 +153,16 @@ controlled evaluations may select explicit roots. Beneath the selected roots,
 the evidence follows this layout:
 
 ```text
+planning/<run_id>/
+├── request.json
+├── session.json
+├── turns/
+│   └── <sequence>.json
+├── proposals/
+│   └── <revision>.json
+└── approvals/
+    └── <revision>.json
+
 runs/<run_id>/
 ├── task-brief.json
 ├── team-plan.json
@@ -183,6 +197,16 @@ runs/<run_id>/
 workspaces/<run_id>/
 └── detached self-contained Git clone and generated result
 ```
+
+The Adaptive Planning store is implemented but is not yet selected by the bare
+`sat` launcher. Its request proves explicit model-work authorization. Every
+model invocation, including a rejected semantic response, becomes a write-once
+turn containing prompt and response digests plus bounded provider evidence.
+Turns form a predecessor-digest chain anchored by atomic `session.json` state.
+Proposal revisions are immutable and must match their source turn or a
+controller-owned structured edit. Approval binds the exact proposal, confirmed
+TaskBrief, adaptive implementation plan, and TeamPlan digests; the bootstrap
+Planner cannot create Agents or change lifecycle state.
 
 `runtime-preflight.json` records the private OpenClaw and Docker identities,
 configuration validity, the exact selected model and local availability result,

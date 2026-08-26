@@ -191,6 +191,7 @@ src/software_agent_team/
   integrity.py                 Canonical persisted-model integrity digest
   openclaw_runtime.py          Private OpenClaw path and environment isolation
   paths.py                     User-local product state resolution
+  planning.py                  Adaptive dialogue, proposals, approval, and evidence
   product.py                   Diagnostics, request materialization, and delivery
   progress.py                  RunEvent journal and terminal rendering
   prompting.py                 Minimum-context role prompts

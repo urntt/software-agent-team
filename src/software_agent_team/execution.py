@@ -23,6 +23,7 @@ from software_agent_team.artifacts import (
 )
 
 ROLE_ARTIFACT_KINDS: dict[AgentRole, frozenset[ArtifactKind]] = {
+    AgentRole.CLARIFIER: frozenset({ArtifactKind.CLARIFICATION_RECORD}),
     AgentRole.SINGLE_AGENT: frozenset({ArtifactKind.WORK_RESULT}),
     AgentRole.PLANNER: frozenset({ArtifactKind.IMPLEMENTATION_PLAN}),
     AgentRole.GENERALIST_DEVELOPER: frozenset({ArtifactKind.WORK_RESULT}),

@@ -82,6 +82,20 @@ _READ_ONLY_CAPABILITIES = {
 }
 
 
+def expected_output_for_capability(capability: AgentCapability) -> ArtifactKind:
+    """Return the controller-owned output contract for one capability."""
+
+    return _CAPABILITY_OUTPUTS[capability]
+
+
+def permission_for_capability(capability: AgentCapability) -> PermissionProfile:
+    """Resolve the least-privilege profile assigned to one capability."""
+
+    if capability in _READ_ONLY_CAPABILITIES:
+        return PermissionProfile.READ_ONLY
+    return PermissionProfile.WORKSPACE_WRITE
+
+
 def _clean_unique_text(values: tuple[str, ...], *, label: str) -> tuple[str, ...]:
     cleaned = tuple(value.strip() for value in values)
     if any(not value for value in cleaned):

@@ -307,6 +307,35 @@ def _unwrap_single_json_object(value: str) -> str:
     return stripped[opening:closing]
 
 
+def parse_json_object_response(value: str) -> dict[str, object]:
+    """Decode one unambiguous model JSON object with bounded transport repair.
+
+    This parser deliberately normalizes only presentation noise that cannot
+    change the semantic object. Schema-specific validation remains the caller's
+    responsibility.
+    """
+
+    try:
+        normalized = _unwrap_single_json_object(_unwrap_single_json_fence(value))
+        payload = json.loads(
+            normalized,
+            object_pairs_hook=_reject_duplicate_keys,
+            parse_constant=_reject_nonstandard_constant,
+        )
+    except (TypeError, ValueError) as error:
+        raise AgentArtifactResponseError(
+            "Agent response JSON is invalid: "
+            f"{_safe_json_detail(error)}. The response must contain exactly one "
+            "unambiguous JSON object; a single json fence or presentation-only "
+            "surrounding prose and a bounded redundant closing-delimiter suffix "
+            "are normalized, but multiple fences or outside JSON structures are "
+            "forbidden"
+        ) from error
+    if not isinstance(payload, dict):
+        raise AgentArtifactResponseError("Agent response must be a JSON object")
+    return payload
+
+
 def _validate_response_context(
     body: AgentResponseBody,
     request: AgentExecutionRequest,
@@ -389,26 +418,7 @@ def parse_agent_response(
     if not 1 <= iteration_limit <= 3 or request.iteration > iteration_limit:
         raise AgentArtifactResponseError("request exceeds the run iteration limit")
 
-    try:
-        normalized = _unwrap_single_json_object(
-            _unwrap_single_json_fence(result.response_text)
-        )
-        payload = json.loads(
-            normalized,
-            object_pairs_hook=_reject_duplicate_keys,
-            parse_constant=_reject_nonstandard_constant,
-        )
-    except (TypeError, ValueError) as error:
-        raise AgentArtifactResponseError(
-            "Agent response JSON is invalid: "
-            f"{_safe_json_detail(error)}. The response must contain exactly one "
-            "unambiguous JSON object; a single json fence or presentation-only "
-            "surrounding prose and a bounded redundant closing-delimiter suffix "
-            "are normalized, but multiple fences or outside JSON structures are "
-            "forbidden"
-        ) from error
-    if not isinstance(payload, dict):
-        raise AgentArtifactResponseError("Agent response must be a JSON object")
+    payload = parse_json_object_response(result.response_text)
 
     model = RESPONSE_BODY_MODELS.get(request.expected_kind)
     controller_fields = _CONTROLLER_FIELDS.get(request.expected_kind)

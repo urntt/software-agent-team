@@ -1,9 +1,10 @@
 # Adaptive Orchestration and Interactive Control Specification
 
-This contributor-facing specification defines the planned product contract for
+This contributor-facing specification defines the product contract for
 task-defined Agent teams, interactive planning, observable execution, user
-controls, and model routing. It is a target design, not a claim about current
-implementation. Current behavior and gaps remain authoritative in
+controls, and model routing. Some contracts and the offline Planning interaction
+are implemented while dynamic execution and active controls remain staged work.
+Current behavior and gaps remain authoritative in
 [`STATUS.md`](../STATUS.md); the completed guided baseline remains specified in
 [`product-demo-slice.md`](product-demo-slice.md).
 
@@ -55,6 +56,25 @@ each proposed Agent exists rather than selecting a larger team by default.
 Independent quality control is a controller requirement, not a fixed role
 name. A plan may assign testing and review to one or more read-only Agents, but
 the same Agent that writes a change cannot be the sole authority accepting it.
+
+## Decision and Control Responsibility
+
+Adaptive does not make execution order, parallelism, Agent count, or timeouts
+unowned model choices. Responsibility is divided explicitly:
+
+| Decision | Proposal | Approval or default | Runtime enforcement |
+| --- | --- | --- | --- |
+| Agent number, labels, responsibilities, and capabilities | Bootstrap Planning derives them from the task and explains each one | User approves or revises the overview | Controller creates only approved `AgentSpec` entries |
+| Dependencies and possible parallel waves | Bootstrap Planning proposes a DAG | User approves it; policy supplies safe limits | Controller validates acyclicity and schedules only ready nodes |
+| Maximum concurrency | Bootstrap Planning proposes a bounded value | User may edit it; policy caps it | Controller decides which ready Agents actually start without exceeding the cap |
+| Per-Agent invocation timeout | Bootstrap Planning proposes values by capability and task | User may edit them; capability policy supplies ceilings | Controller passes and enforces the exact approved timeout for every invocation |
+| Call, token, duration, iteration, and cost budgets | Product policy supplies the safe envelope; Planning works within it | User sees and approves the effective limits | Controller rejects over-budget plans and stops further launches when a limit is reached |
+| Model route | Planning may recommend task needs; configured profiles and routing policy provide candidates | User approves effective routes and switch conditions | Controller resolves and records the authorized route; there is no silent fallback |
+| Replanning or team changes during execution | User correction or an Agent recommendation may request a change | Material changes require a new validated revision and user confirmation | Controller applies a revision only at a safe checkpoint |
+
+The Planner therefore proposes semantic organization, the user authorizes
+material choices, policy defines the allowed envelope, and the controller owns
+validation, creation, scheduling, timeouts, lifecycle, evidence, and cleanup.
 
 ## Planned User Journey
 
@@ -126,11 +146,11 @@ same controller validation.
 Approval freezes version one of the run contract. Later corrections create a
 new version; they never mutate an already referenced plan in place.
 
-## Planned Contracts
+## Versioned Contracts
 
-Names below describe logical versioned contracts. Executable schemas will be
-added to the existing artifact layer rather than maintained as a parallel
-configuration system.
+The Planning, team, event, and control contracts below are executable schemas.
+Dynamic prompt compilation and control application build on them rather than
+creating a parallel configuration system.
 
 ### `TeamPlan`
 
@@ -407,6 +427,13 @@ before any model invocation.
 
 **Exit:** a user can start from an ordinary request, revise the proposed team,
 and approve a complete validated TeamPlan without editing an internal file.
+
+**Implementation note:** the versioned request, question/proposal response,
+append-only turn and proposal store, natural-language revision, safe limit
+editor, complete overview, explicit approval evidence, and deterministic
+ordinary-user interaction test are implemented. The bare `sat` launcher will
+activate this interaction together with Batch 3C so it never approves a dynamic
+team and then executes a different fixed team.
 
 ### Batch 3C: Dynamic Team Runtime
 

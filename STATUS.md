@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** Phase 3A contracts and compatibility path implemented; interactive Adaptive Planning is next
+**Current milestone:** Phase 3B Planning and approval engine implemented; dynamic team runtime is next
 
 **Last updated:** August 26, 2026
 
@@ -48,7 +48,7 @@ permissions, missing independent quality coverage, unauthorized model routes,
 and over-limit concurrency or Agent counts before Agent creation. Recovery
 verifies the exact TaskBrief binding, TeamPlan digest, fixed manifest version,
 fixed team digest, resolved Agent timeouts, and cross-file run metadata. The
-complete repository check passes with 443 offline tests.
+complete repository check passes with 454 offline tests.
 
 `RunEvent` is also an executable, append-only contract. Every current workflow
 progress update is persisted with a contiguous sequence, lifecycle revision,
@@ -62,9 +62,33 @@ the current product launcher still selects the standard renderer.
 the request, target, safe application boundary, status, consequence, plan or
 lifecycle result, and provider-cost caveat for guide, correct, pause, resume,
 interrupt, and cancel. This is a persistence boundary, not a claim that the
-normal CLI can apply controls yet. Planning dialogue and approval evidence,
-arbitrary run-scoped prompt compilation, general DAG execution, and active
-control application remain pending in the following Phase 3 batches.
+normal CLI can apply controls yet.
+
+The Phase 3B Planning engine is also implemented. A versioned `PlanningRequest`
+proves explicit model-work authorization before the first invocation. The
+read-only bootstrap Planner may return either one decision-value question with
+two or three suggestions and a custom-answer path, or one complete proposal.
+Strict proposal validation covers requirements, acceptance criteria,
+implementation tasks, task ownership, dynamic Agent responsibilities,
+dependencies, workspace scopes, independent quality coverage, concurrency,
+iterations, per-Agent timeouts, the configured model route, and controller
+budgets before the proposal is shown.
+
+The ordinary-user interaction supports free-form answers, natural-language
+replacement revisions, safe edits to maximum concurrency, iteration count, and
+individual Agent timeouts, cancellation, a complete plain-language overview,
+and explicit approval. `PlanningStore` persists the authorized request,
+hash-chained model turns including rejected response evidence, immutable
+proposal revisions, and the exact approval digests. Approval promotes the
+validated preview into an authorized confirmed `TaskBrief`, adaptive
+implementation plan, and executable `TeamPlan`.
+The bootstrap Planner still cannot create an Agent or advance run state.
+
+This interaction is offline-verified as a product-style flow but is not yet
+activated by bare `sat`: activation is intentionally paired with the Phase 3C
+runtime so SAT never presents a dynamic plan and then silently executes the old
+fixed team. Arbitrary run-scoped prompt compilation, general DAG execution, and
+active control application remain pending.
 
 ## Product Readiness Boundary
 
@@ -80,8 +104,9 @@ This implemented path still uses bounded fixed prompts and the
 `function_specialized` evaluation fixture, now compiled into a frozen
 run-scoped `TeamPlan`; it uses one selected model for the run,
 controller-backed stage progress, and no interactive run-control channel. The
-task-defined team, multi-round Planning dialogue, per-Agent visibility levels,
-live user controls, and model routing described in
+task-defined runtime, activation of the implemented multi-round Planning
+dialogue, per-Agent visibility levels, live user controls, and model routing
+described in
 [`docs/adaptive-orchestration.md`](docs/adaptive-orchestration.md) are the next
 milestone, not current capabilities.
 
@@ -331,6 +356,15 @@ The acceptance contract is
 - Versioned `ControlCommand` requests and terminal resolutions with typed
   targets, command-specific safe boundaries, optimistic revisions, immutable
   metadata, and predecessor-digest verification;
+- Versioned, explicitly authorized Adaptive Planning requests; strict
+  question-or-proposal responses; high-value focused questions with suggested
+  and custom answers; controller validation and bounded semantic repair;
+- Task-defined proposal compilation into confirmed requirements, adaptive
+  implementation intent, least-privilege AgentSpecs, a strict model route,
+  dependency waves, per-Agent timeouts, and aggregate controller budgets;
+- Hash-chained Planning-turn evidence, immutable proposal revisions, exact
+  user-approval digests, natural-language revision, safe structured limit
+  edits, cancellation, and a complete plain-language overview;
 - A replaceable OpenClaw subprocess adapter with stable role sessions,
   version-pinned local and Gateway JSON parsing, and canonical
   `provider/model` telemetry;
@@ -434,13 +468,9 @@ instead of selecting a fixture.
 
 - An independent fresh-device rehearsal and live demonstration outside the
   development host;
-- Adaptive follow-up clarification beyond the current bounded request, success
-  condition, and constraint prompts;
-- A model-assisted Planning dialogue with suggested and custom answers;
-- A user-editable requirements, implementation, Agent, dependency, budget, and
-  model-route overview;
-- Task-defined Agent roles, controller-validated Agent creation, and DAG
-  scheduling;
+- Activation of the implemented Adaptive Planning interaction in bare `sat`;
+- Dynamic Agent prompt compilation, controller-validated Agent creation, and
+  DAG scheduling from an approved task-defined TeamPlan;
 - Compact, standard, and detailed visibility backed by persisted per-Agent
   events;
 - User guidance, correction, pause, resume, interruption, and cancellation
@@ -464,16 +494,14 @@ action succeeded after interruption.
 
 ## Next Milestone
 
-The immediate product-evidence task remains a recorded fresh-device run of the
-published installer and bare `sat` journey. Preserve any failure as evidence;
-advanced evaluation commands are not part of that user demonstration.
-
-Phase 3B is now the next engineering batch. It adds the Planning dialogue,
-editable overview, explicit user approval evidence, and deterministic fixture
-path on top of the completed TeamPlan and RunEvent contracts. Later Phase 3
-batches add dynamic runtime creation, richer progress and controls, and model
-routing. Fixed-topology comparison moves to Phase 4 so it can remain a
-controlled baseline rather than defining the product's permanent role layout.
+Phase 3C is now the next engineering batch. It compiles prompts from approved
+run-scoped AgentSpecs, creates only controller-authorized OpenClaw Agents, and
+schedules their dependency DAG under the approved permissions, routes,
+timeouts, concurrency, and aggregate budgets. It also activates the completed
+Planning interaction in bare `sat`. Later Phase 3 batches add richer progress
+and controls, then model routing. Fixed-topology comparison moves to Phase 4 so
+it can remain a controlled baseline rather than defining the product's
+permanent role layout.
 The detailed sequence and acceptance criteria are in
 [`docs/adaptive-orchestration.md`](docs/adaptive-orchestration.md).
 
