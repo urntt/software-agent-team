@@ -80,7 +80,10 @@ def require_setup_artifact_policy(repository: Path) -> None:
         fail(".gitignore must exclude the root .venv setup directory")
     require_effective_ignore(repository, ".venv/.sat-setup-probe", "root .venv")
     lock = repository / "uv.lock"
-    if lock.exists() or lock.is_symlink():
+    lock_present = lock.exists() or lock.is_symlink()
+    lock_tracked = is_git_tracked(repository, "uv.lock")
+    lock_ignored = is_effectively_ignored(repository, "uv.lock", "uv.lock")
+    if lock_tracked or (lock_present and not lock_ignored):
         content = require_regular_file(lock, "uv.lock", max_bytes=MAX_LOCK_BYTES)
         require_portable_uv_lock(repository, content)
     elif not rules.intersection({"uv.lock", "/uv.lock"}):
@@ -191,8 +194,8 @@ def require_portable_uv_lock(repository: Path, content: bytes) -> None:
     inspect(payload, "root")
 
 
-def require_effective_ignore(repository: Path, relative_path: str, label: str) -> None:
-    """Verify the checked-in rule wins after Git applies later negations."""
+def is_effectively_ignored(repository: Path, relative_path: str, label: str) -> bool:
+    """Return whether Git excludes one path after applying every ignore rule."""
 
     result = subprocess.run(
         [
@@ -209,10 +212,39 @@ def require_effective_ignore(repository: Path, relative_path: str, label: str) -
         capture_output=True,
         text=True,
     )
-    if result.returncode == 1:
-        fail(f".gitignore must effectively exclude {label}")
-    if result.returncode != 0:
+    if result.returncode in {0, 1}:
+        return result.returncode == 0
+    else:
         fail(f"cannot verify the .gitignore setup policy for {label}")
+
+
+def require_effective_ignore(repository: Path, relative_path: str, label: str) -> None:
+    """Verify the checked-in rule wins after Git applies later negations."""
+
+    if not is_effectively_ignored(repository, relative_path, label):
+        fail(f".gitignore must effectively exclude {label}")
+
+
+def is_git_tracked(repository: Path, relative_path: str) -> bool:
+    """Return whether one path belongs to the proposed Git delivery."""
+
+    result = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repository),
+            "ls-files",
+            "--error-unmatch",
+            "--",
+            relative_path,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode in {0, 1}:
+        return result.returncode == 0
+    fail(f"cannot verify whether {relative_path} belongs to the Git delivery")
 
 
 def validate_argv(value: object, label: str) -> tuple[str, ...]:

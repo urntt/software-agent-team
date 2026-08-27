@@ -111,10 +111,13 @@ dependencies. The product quality profile copies clean committed files into
 fresh executable tmpfs scratch, then runs the exact generated setup, test, and
 start argv with network disabled. The source and container root remain
 read-only, and the process remains non-root, capability-dropped, and
-resource-bounded. Before setup, the profile parses a committed `uv.lock` and
-rejects host- or sandbox-only local sources; the private wheelhouse may satisfy
-runtime resolution but its absolute path must never be committed into the
-generated project. The image also installs the root-owned immutable
+resource-bounded. Before setup, the profile parses every `uv.lock` tracked in
+the proposed Git delivery, even when an ignore rule also matches it, and rejects
+host- or sandbox-only local sources. An effectively ignored untracked lock is
+runtime residue outside the delivery and is absent from the clean-copy command
+gate; the private wheelhouse may satisfy runtime resolution but its absolute
+path must never be committed into the generated project. The image also
+installs the root-owned immutable
 `sat-probe-write` helper. That command can atomically create only a new bounded
 `/tmp/sat-review-probe-*` `.py`, `.json`, or `.txt` direct child; it refuses
 overwrite and unsafe paths while the project mount and general write tools stay

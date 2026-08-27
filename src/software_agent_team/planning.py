@@ -1305,6 +1305,8 @@ class PlanningPreview(BaseModel):
 
     destination: str
     execution_profile: tuple[str, ...]
+    execution_profile_constraints: tuple[str, ...]
+    planner_constraints: tuple[str, ...]
     task_brief: TaskBrief
     implementation_plan: AdaptiveImplementationPlan
     team_plan: TeamPlan
@@ -1640,6 +1642,12 @@ def preview_adaptive_proposal(
     return PlanningPreview(
         destination=request.destination,
         execution_profile=request.execution_profile,
+        execution_profile_constraints=request.base_constraints,
+        planner_constraints=tuple(
+            constraint
+            for constraint in body.constraints
+            if constraint not in request.base_constraints
+        ),
         task_brief=task_brief,
         implementation_plan=implementation_plan,
         team_plan=team_plan,
@@ -1724,18 +1732,28 @@ def render_planning_overview(preview: PlanningPreview) -> str:
         *(f"    - {item}" for item in preview.execution_profile),
         "  Requirements:",
         *(f"    - {item}" for item in brief.requirements),
-        "  Acceptance criteria:",
-        *(
-            f"    - {item.id}: {item.description} (verify: {item.verification}; "
-            "Review boundaries: "
-            + (
-                ", ".join(boundary.value for boundary in item.review_boundaries)
-                or "none"
-            )
-            + ")"
-            for item in brief.acceptance_criteria
-        ),
     ]
+    if preview.execution_profile_constraints:
+        lines.append("  Execution-profile constraints (controller-owned):")
+        lines.extend(f"    - {item}" for item in preview.execution_profile_constraints)
+    if preview.planner_constraints:
+        lines.append("  Additional task constraints proposed by Planning:")
+        lines.extend(f"    - {item}" for item in preview.planner_constraints)
+    lines.extend(
+        (
+            "  Acceptance criteria:",
+            *(
+                f"    - {item.id}: {item.description} (verify: "
+                f"{item.verification}; Review boundaries: "
+                + (
+                    ", ".join(boundary.value for boundary in item.review_boundaries)
+                    or "none"
+                )
+                + ")"
+                for item in brief.acceptance_criteria
+            ),
+        )
+    )
     used_boundaries = tuple(
         dict.fromkeys(
             boundary
@@ -1859,9 +1877,6 @@ def render_planning_overview(preview: PlanningPreview) -> str:
             "    - independent downstream quality judgment: required",
         )
     )
-    if brief.constraints:
-        lines.append("  Constraints:")
-        lines.extend(f"    - {item}" for item in brief.constraints)
     if implementation.risks:
         lines.append("  Risks:")
         lines.extend(f"    - {item}" for item in implementation.risks)

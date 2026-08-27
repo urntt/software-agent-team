@@ -485,6 +485,54 @@ def test_product_contract_rejects_an_oversized_uv_lock(tmp_path: Path) -> None:
     assert "uv.lock is too large" in result.stderr
 
 
+def test_product_contract_ignores_untracked_excluded_runtime_lock(
+    tmp_path: Path,
+) -> None:
+    """Sandbox-only setup residue is not part of the proposed Git delivery."""
+
+    project = tmp_path / "project"
+    project.mkdir()
+    write_valid_project(project)
+    commit_project(project)
+    (project / "uv.lock").write_text(
+        'version = 1\nwheels = [{ path = "/opt/software-agent-team/wheels" }]\n',
+        encoding="utf-8",
+    )
+
+    result = run_validator(project)
+
+    assert result.returncode == 0, result.stderr
+    tracked = subprocess.run(
+        ["git", "-C", str(project), "ls-files", "--error-unmatch", "uv.lock"],
+        check=False,
+        capture_output=True,
+    )
+    assert tracked.returncode == 1
+
+
+def test_product_contract_validates_ignored_lock_when_forced_into_delivery(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    write_valid_project(project)
+    commit_project(project)
+    (project / "uv.lock").write_text(
+        'version = 1\nwheels = [{ path = "/opt/software-agent-team/wheels" }]\n',
+        encoding="utf-8",
+    )
+    subprocess.run(
+        ["git", "-C", str(project), "add", "--force", "uv.lock"],
+        check=True,
+        capture_output=True,
+    )
+
+    result = run_validator(project)
+
+    assert result.returncode == 1
+    assert "non-portable local reference" in result.stderr
+
+
 def test_product_contract_requires_the_setup_environment_to_be_ignored(
     tmp_path: Path,
 ) -> None:
@@ -549,6 +597,32 @@ def test_exact_command_gate_uses_only_committed_files_in_fresh_scratch(
     assert len({call["cwd"] for call in calls}) == 1
     assert calls[0]["cwd"] != str(project)
     assert not (project / ".venv").exists()
+
+
+def test_exact_command_gate_ignores_excluded_runtime_lock_in_source_workspace(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    write_valid_project(project)
+    commit_project(project)
+    (project / "uv.lock").write_text(
+        'version = 1\nwheels = [{ path = "/opt/software-agent-team/wheels" }]\n',
+        encoding="utf-8",
+    )
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    write_fake_uv(fake_bin)
+    log = tmp_path / "uv.jsonl"
+    environment = {
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "FAKE_UV_LOG": str(log),
+    }
+
+    result = run_command_validator(project, environment=environment)
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["source"] == "committed_tracked_files"
 
 
 def test_exact_command_gate_reports_setup_failure_without_running_later_commands(

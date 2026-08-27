@@ -270,6 +270,12 @@ The proposal shown before execution contains:
 8. Time, call, token, and cost limits when known;
 9. The delivery destination and expected validation commands.
 
+The overview presents controller-owned execution-profile constraints separately
+from additional task-specific constraints proposed during Planning. The Planner
+is instructed not to repeat, paraphrase, shorten, or broaden the former. Both
+collections remain present in the compiled TaskBrief so source labeling improves
+the approval experience without discarding a material Planner addition.
+
 The default editor supports natural-language revision and structured changes
 to requirements, priorities, Agent responsibilities, dependencies, and model
 preferences. Raw system prompts, arbitrary tool grants, and direct policy-file
@@ -444,14 +450,25 @@ by a failed direct probe and a later successful direct probe, the successful
 emission supplies the claim while both calls remain auditable. A satisfied
 assessment still cannot select a positive substring from any other matched
 failed tool result, failed or timed-out deterministic command, or a chain with
-no successful probe emission. That self-directed evidence remains
+no successful probe emission. If the report is already `revise`, has at least
+one independently blocked assessment and blocking finding, and an additional
+positive assessment fails only this safety check, the controller performs a
+monotonic recovery: it re-grounds that assessment as `blocked` against the same
+failed evidence and adds a criterion-scoped controller finding requiring fresh
+verification. This keeps an otherwise useful revision in the iteration loop
+without treating failure as proof of success. It does not apply to `accept` or
+`fail`, unmatched selectors, an invalid pre-existing blocker relationship, or
+any other semantic defect. That self-directed evidence remains
 attributable and is not
 relabeled as a controller deterministic gate. Documentation may state only the
 boundary established by the implementation and evidence. The generated-project
 contract separately checks that the README shows each exact manifest command,
 that documented first setup does not leave an unexplained root virtual
-environment or lock file in an otherwise clean delivery, and that a committed
-lock contains no host- or sandbox-only dependency source. A deterministic gate
+environment or lock file in an otherwise clean delivery, and that every lock in
+the proposed Git delivery contains no host- or sandbox-only dependency source.
+An effectively ignored untracked lock is setup/runtime residue outside that
+delivery and is neither parsed as product metadata nor copied into validation
+scratch. A deterministic gate
 copies clean committed files into fresh scratch, then executes exact setup,
 test, and start argv through the runtime's offline wheelhouse. Its start argv
 must work from the project root without appended arguments. Independent Review

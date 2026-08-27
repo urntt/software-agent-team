@@ -841,6 +841,106 @@ def test_satisfied_review_rejects_a_matching_failed_tool_result() -> None:
         )
 
 
+def test_controller_downgrades_unsafe_positive_evidence_in_existing_revision() -> None:
+    """A useful revise report must not be lost to one unsafe positive claim."""
+
+    brief = task_brief().model_copy(
+        update={
+            "acceptance_criteria": [
+                *task_brief().acceptance_criteria,
+                AcceptanceCriterion(
+                    id="AC_JSON",
+                    description="Duplicate groups are reported as structured JSON.",
+                    verification="Run the CLI against a duplicate-group fixture.",
+                ),
+            ]
+        }
+    )
+    blocked = ReviewCriterionAssessmentResponse(
+        criterion_id="AC_LINKS",
+        status="blocked",
+        adversarial_check="Exercised the configured exclusion pattern.",
+        evidence="The direct probe preserved the counterexample.",
+        tool_evidence=(review_tool_claim("EXCLUDE_PATTERN_FAILED"),),
+    )
+    unsafe_positive = ReviewCriterionAssessmentResponse(
+        criterion_id="AC_JSON",
+        status="satisfied",
+        adversarial_check="Exercised duplicate JSON grouping.",
+        evidence="Claimed a marker emitted before a later assertion failed.",
+        tool_evidence=(review_tool_claim("JSON_GROUP_DIGEST_OK"),),
+    )
+    request, result = _review_result(
+        ReviewReportResponse(
+            verdict="revise",
+            criterion_assessments=(blocked, unsafe_positive),
+            findings=(
+                ReviewFinding(
+                    id="FINDING_EXCLUDE_PATTERN",
+                    severity=ReviewSeverity.HIGH,
+                    blocking=True,
+                    category="correctness",
+                    description="Configured wildcard exclusions are not applied.",
+                    recommendation="Apply wildcard matching before grouping paths.",
+                    criterion_ids=("AC_LINKS",),
+                ),
+            ),
+            summary="The implementation requires revision for a confirmed defect.",
+        )
+    )
+    result = result.model_copy(
+        update={
+            "telemetry": result.telemetry.model_copy(
+                update={
+                    "tool_calls": (
+                        captured_tool_call(
+                            1,
+                            framed_probe_output(
+                                stdout="EXCLUDE_PATTERN_FAILED",
+                                exit_code=1,
+                            ),
+                            executable="sat-probe-run",
+                            failed=True,
+                        ),
+                        captured_tool_call(
+                            2,
+                            framed_probe_output(
+                                stdout="JSON_GROUP_DIGEST_OK",
+                                exit_code=1,
+                            ),
+                            executable="sat-probe-run",
+                            failed=True,
+                        ),
+                    )
+                }
+            )
+        }
+    )
+
+    parsed = parse_dynamic_agent_response(
+        result,
+        request,
+        task_brief=brief,
+        team_plan=team_plan(brief),
+        reviewed_criterion_ids=("AC_LINKS", "AC_JSON"),
+    )
+
+    assert isinstance(parsed.body, GroundedReviewReportResponse)
+    assert parsed.body.verdict.value == "revise"
+    assessments = {
+        item.criterion_id: item for item in parsed.body.criterion_assessments
+    }
+    assert assessments["AC_LINKS"].status.value == "blocked"
+    assert assessments["AC_JSON"].status.value == "blocked"
+    assert assessments["AC_JSON"].tool_evidence[0].tool_call_id == "tool-002"
+    assert "controller downgraded" in assessments["AC_JSON"].evidence.casefold()
+    findings = {finding.id: finding for finding in parsed.body.findings}
+    generated = findings["FINDING_UNVERIFIED_REVIEW_EVIDENCE_AC_JSON"]
+    assert generated.blocking is True
+    assert generated.criterion_ids == ("AC_JSON",)
+    assert '"status":"satisfied"' in result.response_text
+
+
 @pytest.mark.parametrize(
     ("executable", "output", "error"),
     (

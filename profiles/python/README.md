@@ -55,18 +55,22 @@ command.
 
 The validated setup contract also protects the first-use repository state.
 The root `.venv` must be ignored. A root `uv.lock` must either be a bounded
-regular file already present in the accepted clean snapshot or be explicitly
+regular file in the proposed Git delivery or be explicitly and effectively
 ignored, so running the documented setup command does not silently introduce
 unexplained local state. The task-independent seed supplies the ignore policy;
-a generated project may instead commit a lock when its implementation and
-tests establish that as the reproducible choice. A committed lock must be
+a generated project may instead force-add and commit a lock when its
+implementation and tests establish that as the reproducible choice. Every lock
+tracked by Git is validated even when an ignore rule also matches it. An
+effectively ignored untracked lock created by setup or sandbox tooling is
+runtime residue outside the delivery, so its contents do not make the accepted
+snapshot pass or fail. A delivered lock must be
 portable with the delivered repository: its TOML must not contain absolute or
 Windows drive paths, `file:` sources, parent-directory references, missing
 project-relative artifacts, symlinked local sources, or a registry/path that
 exists only in SAT's private offline wheelhouse. Remote registries and archives
 must use remote URLs. The validator asks Git to confirm that explicit ignore
 rules remain effective after applying later patterns or negations, and parses a
-committed lock before any same-image setup command can mask a host-local source.
+delivered lock before any same-image setup command can mask a host-local source.
 
 ## Evidence Boundary
 

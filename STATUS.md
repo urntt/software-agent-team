@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** Phase 3E implemented; seventeen fresh installed adaptive rehearsals include one accepted strict-route Adaptive Planning delivery and one provider-backed foreground-control rehearsal; the latest protocol and portability repairs await a clean retry
+**Current milestone:** Phase 3E implemented; eighteen fresh installed adaptive rehearsals include one accepted strict-route Adaptive Planning delivery and one provider-backed foreground-control rehearsal; the latest delivery-boundary and Review-recovery repairs await a clean retry
 
 **Last updated:** August 27, 2026
 
@@ -787,10 +787,46 @@ Developer, Reviewer, seed, profile, and decision documentation all state that
 the offline wheelhouse is runtime infrastructure rather than delivery metadata.
 Finally, bounded scheduler event text ends at a word boundary when possible and
 uses an explicit `… [truncated]` suffix. The complete repository check passes
-720 tests. A new fresh-account provider run is required to verify accepted
-delivery and external setup under these repairs; two-route switching,
-process-restart recovery, and the independent-device demonstration remain
-separate evidence requirements.
+720 tests at that revision. The next fresh-account provider run, described
+below, exercised these repairs and exposed additional delivery-boundary and
+Review-recovery defects. Two-route switching, process-restart recovery, and the
+independent-device demonstration remain separate evidence requirements.
+
+The eighteenth fresh-account run used the public installer, bare `sat`, and the
+same strict `deepseek/deepseek-v4-flash-vision-exp` route. A bounded Planning
+repair removed one unknown response field, after which the user approved an
+`impl -> tester -> reviewer` DAG with concurrency one and resolved timeouts of
+1,350, 300, and 600 seconds. The writer committed eight tracked files and ten
+tests. Compile, Ruff, and pytest passed, but the contract and exact-command
+gates rejected a non-portable `uv.lock` created by sandbox setup. That lock was
+effectively ignored and absent from the implementation commit; the validator
+had inspected working-tree residue before determining whether it belonged to
+the proposed delivery.
+
+The Tester accurately retained both failed gates. Review then found a separate
+product defect: documented `*.log` exclusion was implemented as exact string
+membership rather than wildcard matching. Its bounded semantic repair produced
+a useful `revise` report, but three positive assessments cited markers emitted
+before their direct probes failed. The evidence boundary correctly refused to
+treat those markers as success, yet the whole report became
+`artifact_invalid`, losing the valid revision path.
+
+The product contract now distinguishes Git delivery content before parsing a
+lock. Every tracked lock is validated even when an ignore rule matches it; an
+effectively ignored untracked lock is neither delivery metadata nor clean-copy
+input. Review grounding now has one narrow monotonic recovery: only an
+already-`revise` report with a separate blocked assessment and blocking finding
+may change an unsafe positive assessment to `blocked` and add a
+criterion-scoped controller evidence-gap finding. Accepted or terminal reports,
+zero-match selectors, and invalid blocker mappings are never salvaged. An exact
+replay of both archived Reviewer attempts and all 41 captured tool calls now
+returns `revise`; AC_JSON, AC_MINSIZE, and AC_TESTS_SUITE are blocked rather than
+misrepresented as satisfied. The plan overview also separates
+controller-owned execution-profile constraints from additional Planning
+constraints, and the Planner prompt forbids restating the former. Focused
+coverage passes 115 tests and the complete repository check passes 725 tests.
+A fresh provider-backed ordinary-user run remains required before claiming the
+repaired path reaches accepted delivery.
 
 The rehearsal sequence below concerns the predecessor guided fixed-team
 product path and is retained as defect and regression evidence. It proves the
@@ -1184,8 +1220,8 @@ derived from the task.
 
 - An independent-device live demonstration of the activated Adaptive Planning
   and Dynamic Team journey;
-- An accepted fresh-account provider delivery after the Round 17 Review-evidence
-  and lock-portability repairs;
+- An accepted fresh-account provider delivery after the Round 18
+  delivery-boundary and Review-recovery repairs;
 - Durable control recovery after a foreground process crash and a
   secondary-process control client;
 - A provider-backed run using two planned model routes and live switch
@@ -1209,9 +1245,9 @@ action succeeded after interruption.
 
 ## Next Milestone
 
-The next verification step is a fresh-account ordinary-user retry of the Round
-17 request under the corrected Review and lock contracts. Two planned model
-routes and the independent-device demonstration follow. Phase 3F then closes
+The next verification step is a fresh-account ordinary-user retry under the
+corrected delivery and Review contracts. Two planned model routes and the
+independent-device demonstration follow. Phase 3F then closes
 the remaining acceptance and usability defects. Fixed-topology comparison remains in Phase 4
 so it can serve as a controlled baseline rather than define the product's
 permanent role layout.

@@ -30,6 +30,10 @@ Choose the next response by decision value:
 - Every `expected_paths` entry is relative to the repository root and canonical.
   A directory is written as `tests`, not `tests/`; never use an absolute path,
   backslash, `.` segment, or `..` segment.
+- The controller already owns every `base_constraints` entry in
+  PLANNING_CONTEXT_JSON. Put only additional task-specific constraints in the
+  proposal's `constraints` array; do not repeat, paraphrase, shorten, or broaden
+  an execution-profile constraint.
 - The `tasks` array describes work assigned to the proposed runtime Agents.
   Every implementation or integration Agent owns at least one task, and those
   writer-owned tasks cover every proposal-owned acceptance criterion. A testing

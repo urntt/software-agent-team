@@ -217,6 +217,34 @@ def proposal(
     )
 
 
+def test_planning_overview_separates_constraint_authority_without_losing_data() -> None:
+    body = proposal_body().model_copy(
+        update={
+            "constraints": (
+                "Use the versioned uv environment",
+                *proposal_body().constraints,
+            )
+        }
+    )
+    preview = preview_adaptive_proposal(
+        request(),
+        proposal(body=body),
+        policy(),
+        created_at=FIXED_TIME,
+    )
+
+    assert preview.task_brief.constraints == [
+        "Use the versioned uv environment",
+        "Use only the standard library at runtime.",
+    ]
+    overview = render_planning_overview(preview)
+    assert "Execution-profile constraints (controller-owned):" in overview
+    assert "Additional task constraints proposed by Planning:" in overview
+    assert preview.planner_constraints == ("Use only the standard library at runtime.",)
+    assert overview.count("Use the versioned uv environment") == 1
+    assert overview.count("Use only the standard library at runtime.") == 1
+
+
 def response(value: PlanningModelResponse) -> str:
     return value.model_dump_json()
 
@@ -1442,6 +1470,7 @@ def test_dialogue_revision_structured_edit_and_approval_are_recoverable(
     assert "assign every task that creates or modifies project code" in compact_prompt
     assert "quality-owned task may describe only inspection" in compact_prompt
     assert "protocol identifiers, not informal descriptions of depth" in compact_prompt
+    assert "do not repeat, paraphrase, shorten, or broaden" in compact_prompt
     planning_context_text = (
         executor.requests[0]
         .prompt.split("PLANNING_CONTEXT_JSON\n", 1)[1]

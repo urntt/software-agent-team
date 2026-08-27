@@ -24,6 +24,7 @@ from software_agent_team.artifacts import (
     ReviewCriterionStatus,
     ReviewFinding,
     ReviewReport,
+    ReviewSeverity,
     ReviewTerminationReason,
     ReviewToolEvidenceReference,
     ReviewVerdict,
@@ -41,6 +42,10 @@ from software_agent_team.teams import TeamPlan, capability_for_legacy_role
 
 class AgentArtifactResponseError(ValueError):
     """Raised when an Agent response cannot become attributable run evidence."""
+
+
+class _UnsafeSatisfiedEvidenceError(ValueError):
+    """Identify a positive Review claim that matched only unsafe evidence."""
 
 
 @dataclass(frozen=True)
@@ -349,7 +354,7 @@ def _ground_review_tool_evidence(
             )
             if not tool_matches and not command_matches:
                 if ineligible_probe_matches:
-                    raise ValueError(
+                    raise _UnsafeSatisfiedEvidenceError(
                         f"{label} satisfied evidence fragment is absent from "
                         "protocol-eligible child stdout in a complete direct probe; "
                         "rerun it and emit the fragment after the relevant assertion "
@@ -376,7 +381,7 @@ def _ground_review_tool_evidence(
                         )
                     )
                 if any(_matched_tool_result_failed(call) for _, call in tool_matches):
-                    raise ValueError(
+                    raise _UnsafeSatisfiedEvidenceError(
                         f"{label} satisfied evidence selects an overall failed "
                         "tool result; rerun the direct probe successfully and cite "
                         "a fragment emitted by child stdout"
@@ -386,7 +391,7 @@ def _ground_review_tool_evidence(
                     for command in command_matches
                     if _matched_command_failed(command)
                 ):
-                    raise ValueError(
+                    raise _UnsafeSatisfiedEvidenceError(
                         f"{label} satisfied evidence selects a failed or timed-out "
                         "deterministic command: " + ", ".join(failed_commands)
                     )
@@ -415,12 +420,18 @@ def _ground_review_tool_evidence(
         )
         return references, command_ids
 
-    grounded_assessments: list[ReviewCriterionAssessment] = []
-    for assessment in body.criterion_assessments:
+    def ground_assessment(
+        assessment: ReviewCriterionAssessmentResponse,
+        *,
+        status: ReviewCriterionStatus,
+        evidence: str | None = None,
+    ) -> ReviewCriterionAssessment:
+        """Ground one assessment under an explicit controller-owned status."""
+
         references, command_ids = resolve_claims(
             assessment.tool_evidence,
             label=f"criterion {assessment.criterion_id}",
-            status=assessment.status,
+            status=status,
         )
         boundary_checks = tuple(
             ReviewBoundaryCheck(
@@ -437,27 +448,91 @@ def _ground_review_tool_evidence(
                         f"criterion {assessment.criterion_id} boundary "
                         f"{boundary.boundary.value}"
                     ),
-                    status=assessment.status,
+                    status=status,
                 ),
             )
         )
-        grounded_assessments.append(
-            ReviewCriterionAssessment(
-                criterion_id=assessment.criterion_id,
-                status=assessment.status,
-                adversarial_check=assessment.adversarial_check,
-                evidence=assessment.evidence,
-                command_evidence_ids=command_ids,
-                tool_evidence=references,
-                boundary_checks=boundary_checks,
+        return ReviewCriterionAssessment(
+            criterion_id=assessment.criterion_id,
+            status=status,
+            adversarial_check=assessment.adversarial_check,
+            evidence=evidence or assessment.evidence,
+            command_evidence_ids=command_ids,
+            tool_evidence=references,
+            boundary_checks=boundary_checks,
+        )
+
+    recoverable_revision = (
+        body.verdict is ReviewVerdict.REVISE
+        and any(
+            assessment.status is ReviewCriterionStatus.BLOCKED
+            for assessment in body.criterion_assessments
+        )
+        and any(finding.blocking for finding in body.findings)
+    )
+    grounded_assessments: list[ReviewCriterionAssessment] = []
+    downgraded: dict[str, str] = {}
+    for assessment in body.criterion_assessments:
+        try:
+            grounded_assessments.append(
+                ground_assessment(assessment, status=assessment.status)
+            )
+        except _UnsafeSatisfiedEvidenceError as error:
+            if (
+                assessment.status is not ReviewCriterionStatus.SATISFIED
+                or not recoverable_revision
+            ):
+                raise
+            detail = str(error)
+            downgraded[assessment.criterion_id] = detail
+            grounded_assessments.append(
+                ground_assessment(
+                    assessment,
+                    status=ReviewCriterionStatus.BLOCKED,
+                    evidence=(
+                        "The controller downgraded this positive assessment because "
+                        f"its selected evidence was not safe proof: {detail}"
+                    ),
+                )
+            )
+    grounded = tuple(grounded_assessments)
+    findings = list(body.findings)
+    finding_ids = {finding.id for finding in findings}
+    for criterion_id, detail in downgraded.items():
+        if any(
+            finding.blocking and criterion_id in finding.criterion_ids
+            for finding in findings
+        ):
+            continue
+        stem = re.sub(r"[^A-Z0-9_]", "_", criterion_id.upper())
+        candidate = f"FINDING_UNVERIFIED_REVIEW_EVIDENCE_{stem}"
+        suffix = 2
+        while candidate in finding_ids:
+            candidate = f"FINDING_UNVERIFIED_REVIEW_EVIDENCE_{stem}_{suffix}"
+            suffix += 1
+        finding_ids.add(candidate)
+        findings.append(
+            ReviewFinding(
+                id=candidate,
+                severity=ReviewSeverity.MEDIUM,
+                blocking=True,
+                category="review evidence",
+                description=(
+                    f"The controller could not verify the positive Review assessment "
+                    f"for {criterion_id}: {detail}"
+                ),
+                recommendation=(
+                    "Run a fresh isolated protocol-eligible check and cite evidence "
+                    "from a successful result before accepting this criterion."
+                ),
+                criterion_ids=(criterion_id,),
             )
         )
-    grounded = tuple(grounded_assessments)
     return GroundedReviewReportResponse(
         verdict=body.verdict,
         termination_reason=body.termination_reason,
         criterion_assessments=grounded,
-        findings=_bind_unambiguous_blocking_finding_scope(body.findings, grounded),
+        findings=_bind_unambiguous_blocking_finding_scope(tuple(findings), grounded),
         summary=body.summary,
     )
 

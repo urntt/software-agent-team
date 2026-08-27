@@ -65,12 +65,13 @@ On first use, SAT guides you through:
 5. Explicit authorization for model-backed Planning;
 6. A bounded conversation containing only questions that can materially change
    the result;
-7. One overview of requirements, acceptance criteria, Agent work assignments
-   with their controller-derived write or read-only authority, proposed Agents,
-   dependencies, permissions, explicit Review entry obligations for absolute
-   guarantees and the exact meaning of each boundary, resolved model profiles
-   and fallback authority, timeout reasons, concurrency, iterations, and
-   budgets; and
+7. One overview of requirements, acceptance criteria, controller-owned
+   execution-profile constraints separated from additional task constraints,
+   Agent work assignments with their controller-derived write or read-only
+   authority, proposed Agents, dependencies, permissions, explicit Review entry
+   obligations for absolute guarantees and the exact meaning of each boundary,
+   resolved model profiles and fallback authority, timeout reasons,
+   concurrency, iterations, and budgets; and
 8. Approval, a natural-language revision request, a supported safe edit, or
    cancellation before any execution Agent is created.
 
@@ -204,6 +205,11 @@ an unambiguous relationship solely for serialization. If re-verification fails
 after a revision changed the commit, the terminal report keeps the prior
 finding unresolved while distinguishing its earlier evidence from the current,
 not-yet-independently-verified commit.
+When a report already requires revision for a separately blocked criterion,
+SAT can conservatively turn an additional unsafe positive evidence claim into a
+blocked evidence gap without another model call. It never uses this recovery to
+accept a run, and the failed result remains attributable evidence rather than
+proof of success.
 For an `exec` tool call, SAT attributes only the leading environment assignments
 and first executable token, then stops parsing the unpersisted shell suffix. It
 still hashes the complete canonical arguments and records the real result, so a
@@ -224,10 +230,12 @@ The generated Python profile requires README documentation of the exact setup,
 start, and test argv. The start command must be directly usable from the
 project root without extra arguments. A dedicated quality gate verifies all
 three exact commands from a fresh copy of the immutable commit; the ordinary
-clean-workspace pytest gate remains an independent check. A committed `uv.lock`
-must also be installable outside SAT's image: the profile rejects absolute,
-`file:`, parent-directory, missing project-relative, and private-wheelhouse
-sources before delivery.
+clean-workspace pytest gate remains an independent check. Every `uv.lock`
+tracked in the proposed delivery must also be installable outside SAT's image:
+the profile rejects absolute, `file:`, parent-directory, missing
+project-relative, and private-wheelhouse sources before delivery. An effectively
+ignored untracked lock is runtime residue and is excluded from this delivery
+judgment and from the clean scratch copy.
 
 The activated adaptive path has passed a complete strict-route live-provider
 rehearsal in a fresh non-root Linux account. Public installation and bare

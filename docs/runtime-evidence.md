@@ -181,7 +181,14 @@ result; unframed or partial output and traceback source text in child stderr
 cannot establish success. When a failed direct probe and a later successful
 direct probe emit the same fragment, the successful emission is bound while the
 failed attempt remains in the execution record. Repeated or overlapping
-selectors are deterministically deduplicated. Evidence never crosses an
+selectors are deterministically deduplicated. A report that is already
+`revise`, contains an independently blocked assessment and blocking finding,
+and has one additional positive assessment backed only by a failed or
+protocol-ineligible result may be recovered without another model call. The
+controller changes only that assessment to `blocked`, binds the same evidence
+under blocked semantics, and adds a criterion-scoped evidence-gap finding. It
+never applies this monotonic downgrade to `accept`, `fail`, a no-match selector,
+or an otherwise-invalid blocker relationship. Evidence never crosses an
 Agent, stage, iteration, commit, or repair chain. A no-match selector uses or
 exhausts the one bounded semantic repair; multiple real matches do not.
 
@@ -516,10 +523,13 @@ when investigating it rather than editing artifacts in place.
   `user.name` and `user.email` values for the isolated clone.
 - A generated Python project must ignore its root setup environment and must
   either contain a bounded regular `uv.lock` in the accepted clean snapshot or
-  explicitly ignore that local lock artifact. A committed lock is parsed before
-  setup and must not contain absolute or Windows-drive paths, `file:` sources,
-  parent-directory references, missing or symlinked project-local artifacts, or
-  SAT's private offline-wheelhouse location. This contract prevents the exact
+  explicitly ignore that local lock artifact. Every lock tracked in the
+  proposed Git delivery is parsed before setup even when an ignore pattern also
+  matches it, and must not contain absolute or Windows-drive paths, `file:`
+  sources, parent-directory references, missing or symlinked project-local
+  artifacts, or SAT's private offline-wheelhouse location. An effectively
+  ignored untracked lock is runtime residue outside the delivery and is neither
+  parsed nor copied into clean scratch. This contract prevents the exact
   documented setup command from silently dirtying first-use Git state and
   prevents same-image setup from masking non-portable delivery metadata; it does
   not claim that an ignored lock provides dependency reproducibility.
@@ -582,7 +592,10 @@ when investigating it rather than editing artifacts in place.
   direct-probe match for the same fragment, while both calls remain captured.
   SAT otherwise rejects a satisfied assessment when a matched tool result
   failed, a matched deterministic command failed or timed out, or no successful
-  probe marker exists. The image includes pinned `uv`
+  probe marker exists. An already-revising report with a separate grounded
+  blocker may conservatively downgrade such an unsafe positive assessment to a
+  new blocked evidence gap; it cannot preserve an accepted verdict or turn the
+  failed result into positive evidence. The image includes pinned `uv`
   for relevant bounded probes. The source mount
   remains read-only, and resulting
   criterion-by-criterion evidence is attributable rather than controller-owned
