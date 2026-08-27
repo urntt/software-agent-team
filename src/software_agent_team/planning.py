@@ -1122,6 +1122,11 @@ class AgentTimeoutResolution(BaseModel):
     ceiling_seconds: int = Field(ge=30, le=3600)
     minimum_seconds: int | None = Field(default=None, ge=30, le=3600)
     scope_criterion_count: int | None = Field(default=None, ge=1, le=100)
+    scope_boundary_obligation_count: int | None = Field(
+        default=None,
+        ge=0,
+        le=400,
+    )
     resolved_seconds: int = Field(ge=30, le=3600)
     source: Literal[
         "policy_workload",
@@ -1142,6 +1147,11 @@ class AgentTimeoutResolution(BaseModel):
             raise ValueError("a raised timeout minimum requires review scope evidence")
         if self.scope_criterion_count is not None and self.minimum_seconds is None:
             raise ValueError("review scope evidence requires an explicit minimum")
+        if (
+            self.scope_boundary_obligation_count is not None
+            and self.scope_criterion_count is None
+        ):
+            raise ValueError("boundary obligations require criterion scope evidence")
         if not minimum <= self.resolved_seconds <= self.ceiling_seconds:
             raise ValueError("resolved timeout must remain inside its policy envelope")
         workload_seconds = policy.resolve(self.workload)
@@ -1205,8 +1215,8 @@ class PlanningPolicy(BaseModel):
     max_agents: int = Field(default=8, ge=2, le=16)
     max_concurrency: int = Field(default=4, ge=1, le=16)
     max_review_agents: int = Field(default=16, ge=1, le=16)
-    review_substantial_criterion_threshold: int = Field(default=6, ge=2, le=99)
-    review_complex_criterion_threshold: int = Field(default=11, ge=3, le=100)
+    review_substantial_work_unit_threshold: int = Field(default=6, ge=2, le=499)
+    review_complex_work_unit_threshold: int = Field(default=11, ge=3, le=500)
     budget: AgentBudget
     capability_timeouts: dict[AgentCapability, CapabilityTimeoutPolicy]
     model_routing: ModelRoutingPolicy | None = None
@@ -1245,18 +1255,27 @@ class PlanningPolicy(BaseModel):
     @model_validator(mode="after")
     def require_ordered_review_scope_thresholds(self) -> Self:
         if (
-            self.review_substantial_criterion_threshold
-            >= self.review_complex_criterion_threshold
+            self.review_substantial_work_unit_threshold
+            >= self.review_complex_work_unit_threshold
         ):
             raise ValueError("review scope timeout thresholds must be ordered")
         return self
 
-    def review_scope_workload(self, criterion_count: int) -> AgentWorkload:
-        """Classify the minimum Reviewer workload from its exact scope size."""
+    def review_scope_workload(
+        self,
+        criterion_count: int,
+        boundary_obligation_count: int = 0,
+    ) -> AgentWorkload:
+        """Classify Review work from criteria plus explicit boundary obligations."""
 
-        if criterion_count >= self.review_complex_criterion_threshold:
+        if not 1 <= criterion_count <= 100:
+            raise ValueError("review criterion count must be within 1..100")
+        if not 0 <= boundary_obligation_count <= 400:
+            raise ValueError("review boundary obligation count must be within 0..400")
+        work_units = criterion_count + boundary_obligation_count
+        if work_units >= self.review_complex_work_unit_threshold:
             return AgentWorkload.COMPLEX
-        if criterion_count >= self.review_substantial_criterion_threshold:
+        if work_units >= self.review_substantial_work_unit_threshold:
             return AgentWorkload.SUBSTANTIAL
         return AgentWorkload.ROUTINE
 
@@ -1517,10 +1536,21 @@ def preview_adaptive_proposal(
             if proposed.capability is AgentCapability.REVIEW
             else None
         )
+        scope_boundary_obligation_count = (
+            sum(
+                len(criterion.review_boundaries)
+                for criterion in task_brief.acceptance_criteria
+            )
+            if proposed.capability is AgentCapability.REVIEW
+            else None
+        )
         minimum_timeout = timeout_policy.default_seconds
         if scope_criterion_count is not None:
             minimum_timeout = timeout_policy.resolve(
-                policy.review_scope_workload(scope_criterion_count)
+                policy.review_scope_workload(
+                    scope_criterion_count,
+                    scope_boundary_obligation_count or 0,
+                )
             )
         override = proposal.timeout_overrides_seconds.get(proposed.id)
         if override is not None and not (
@@ -1550,6 +1580,7 @@ def preview_adaptive_proposal(
                 ceiling_seconds=timeout_policy.ceiling_seconds,
                 minimum_seconds=minimum_timeout,
                 scope_criterion_count=scope_criterion_count,
+                scope_boundary_obligation_count=scope_boundary_obligation_count,
                 resolved_seconds=resolved_timeout,
                 source=resolution_source,
             )
@@ -1723,9 +1754,13 @@ def render_planning_overview(preview: PlanningPreview) -> str:
         if timeout.source == "policy_workload":
             timeout_source = f"controller policy from {timeout.workload.value} workload"
         elif timeout.source == "policy_scope_floor":
+            boundary_obligations = timeout.scope_boundary_obligation_count or 0
+            work_units = (timeout.scope_criterion_count or 0) + boundary_obligations
             timeout_source = (
                 "controller review-scope floor for "
-                f"{timeout.scope_criterion_count} criteria"
+                f"{timeout.scope_criterion_count} criteria + "
+                f"{boundary_obligations} boundary obligations "
+                f"({work_units} work units)"
             )
         else:
             timeout_source = "user override"
@@ -2499,18 +2534,23 @@ class AdaptivePlanningCoordinator:
                     for capability, timeout in self.policy.capability_timeouts.items()
                 },
                 "review_scope_timeout_floor": {
-                    "routine_below_criteria": (
-                        self.policy.review_substantial_criterion_threshold
+                    "work_unit_definition": (
+                        "one unit per criterion plus one unit per explicit "
+                        "Review boundary obligation"
                     ),
-                    "substantial_from_criteria": (
-                        self.policy.review_substantial_criterion_threshold
+                    "routine_below_work_units": (
+                        self.policy.review_substantial_work_unit_threshold
                     ),
-                    "complex_from_criteria": (
-                        self.policy.review_complex_criterion_threshold
+                    "substantial_from_work_units": (
+                        self.policy.review_substantial_work_unit_threshold
+                    ),
+                    "complex_from_work_units": (
+                        self.policy.review_complex_work_unit_threshold
                     ),
                     "instruction": (
                         "The controller may raise Reviewer timeout from exact "
-                        "criterion scope; the Planner still proposes only workload."
+                        "criterion and boundary scope; the Planner still proposes "
+                        "only workload."
                     ),
                 },
                 "runtime_capabilities": [

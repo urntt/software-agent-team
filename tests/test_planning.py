@@ -767,9 +767,10 @@ def test_controller_raises_reviewer_timeout_floor_from_exact_scope() -> None:
     assert resolution.workload is AgentWorkload.ROUTINE
     assert resolution.minimum_seconds == 270
     assert resolution.scope_criterion_count == 6
-    assert "controller review-scope floor for 6 criteria" in (
-        render_planning_overview(preview)
-    )
+    assert (
+        "controller review-scope floor for 6 criteria + 0 boundary obligations "
+        "(6 work units)"
+    ) in (render_planning_overview(preview))
     assert "allowed 270..300" in render_planning_overview(preview)
 
     too_short = proposal().model_copy(
@@ -794,11 +795,50 @@ def test_review_scope_timeout_thresholds_are_deterministic_and_ordered() -> None
     assert configured.review_scope_workload(11) is AgentWorkload.COMPLEX
     assert configured.review_scope_workload(12) is AgentWorkload.COMPLEX
     assert configured.review_scope_workload(13) is AgentWorkload.COMPLEX
+    assert configured.review_scope_workload(10, 20) is AgentWorkload.COMPLEX
     with pytest.raises(ValidationError, match="thresholds must be ordered"):
         policy(
-            review_substantial_criterion_threshold=11,
-            review_complex_criterion_threshold=11,
+            review_substantial_work_unit_threshold=11,
+            review_complex_work_unit_threshold=11,
         )
+
+
+def test_controller_counts_explicit_review_boundaries_as_scope_work() -> None:
+    boundaries = tuple(ReviewBoundaryKind)
+    body = proposal_body()
+    criteria = tuple(
+        criterion.model_copy(update={"review_boundaries": boundaries})
+        for criterion in body.acceptance_criteria
+    )
+    profile_criterion = AcceptanceCriterion(
+        id="AC_PROFILE_BOUNDARY",
+        description="The profile guarantee holds across every approved boundary.",
+        verification="Probe every approved profile boundary independently.",
+        review_boundaries=boundaries,
+    )
+
+    preview = preview_adaptive_proposal(
+        request(),
+        proposal(body=body.model_copy(update={"acceptance_criteria": criteria})),
+        policy(profile_acceptance_criteria=(profile_criterion,)),
+        created_at=FIXED_TIME,
+    )
+
+    reviewer = preview.team_plan.get_agent("quality_reviewer")
+    resolution = next(
+        item
+        for item in preview.timeout_resolutions
+        if item.agent_id == "quality_reviewer"
+    )
+    assert reviewer.timeout_seconds == 300
+    assert resolution.source == "policy_scope_floor"
+    assert resolution.scope_criterion_count == 3
+    assert resolution.scope_boundary_obligation_count == 12
+    assert resolution.minimum_seconds == 300
+    assert (
+        "controller review-scope floor for 3 criteria + 12 boundary obligations "
+        "(15 work units)"
+    ) in render_planning_overview(preview)
 
 
 def test_controller_maps_eleven_criterion_review_to_complex_timeout() -> None:
@@ -1400,6 +1440,7 @@ def test_store_loads_approval_written_before_scope_timeout_evidence(
     for resolution in payload["timeout_resolutions"]:
         resolution.pop("minimum_seconds")
         resolution.pop("scope_criterion_count")
+        resolution.pop("scope_boundary_obligation_count")
     approval_path.write_text(json.dumps(payload), encoding="utf-8")
 
     session = store.load_session(request().run_id)

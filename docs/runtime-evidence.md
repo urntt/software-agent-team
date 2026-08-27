@@ -150,6 +150,14 @@ were ignored, and never lets them override authoritative values. Missing or
 incorrect controller-owned fields are therefore neither model-quality failures
 nor reasons to spend a repair call.
 
+A blocking Review finding remains unresolved until a later independent Review
+accepts the changed commit. If execution stops after a writer produced a new
+commit but before that re-verification completes, `FinalReport` identifies the
+iteration and commit where the finding was proved, identifies the newer commit,
+and labels the state pending re-verification. It does not rewrite the old
+finding as resolved or present its old observation as a fresh claim about the
+new commit.
+
 Reviewer evidence claims cross a separate grounding boundary. The response
 schema requires each criterion assessment to supply only small bounded
 observable result fragments. It forbids the model from supplying or predicting
@@ -609,13 +617,19 @@ when investigating it rather than editing artifacts in place.
   or complex workload class. Product policy deterministically resolves that
   class inside a capability-specific default-to-ceiling envelope; a direct user
   timeout override must remain inside the effective envelope. Reviewer scope
-  independently maps fewer than 6, 6–10, or 11+ criteria to a routine,
-  substantial, or complex minimum; the controller uses the higher of that
-  floor and Planner workload. The resulting
+  assigns one work unit to every criterion and one more to every explicit
+  Review boundary obligation, then maps fewer than 6, 6–10, or 11+ work units
+  to a routine, substantial, or complex minimum. The controller uses the higher
+  of that floor and Planner workload. The resulting
   Adaptive TeamPlan freezes the exact timeout for each run-scoped Agent. A
   global CLI or saved timeout override collapses every Adaptive envelope to one
   explicit value but cannot undercut the scope floor; it remains an
   experimental variable.
+- The approval evidence records the criterion count and boundary-obligation
+  count used by the scope calculation. Those facts and the exact resolved
+  seconds are visible before approval. Runtime Agents cannot extend the frozen
+  value, and an earlier invocation duration does not silently mutate an already
+  approved TeamPlan.
 - Without a global override, the product envelope uses the checked-in
   capability timeout as its default and twice that value, capped at 3,600
   seconds, as its ceiling. Routine selects the default, complex selects the

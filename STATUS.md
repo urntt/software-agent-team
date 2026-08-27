@@ -87,7 +87,10 @@ dependencies, workspace scopes, independent quality coverage, concurrency,
 iterations, per-Agent workload classes, the configured model route, and
 controller budgets before the proposal is shown. The Planner does not
 authorize seconds: controller policy maps routine, substantial, or complex
-workload into a capability-specific default-to-ceiling timeout envelope.
+workload into a capability-specific default-to-ceiling timeout envelope. Review
+scope adds one work unit per assigned criterion and per explicit boundary
+obligation, so the timeout floor reflects the structured verification contract
+rather than criterion count alone.
 
 The ordinary-user interaction supports free-form answers, natural-language
 replacement revisions, safe edits to maximum concurrency, iteration count, and
@@ -96,7 +99,8 @@ and explicit approval. `PlanningStore` persists the authorized request,
 hash-chained model turns including rejected response evidence, immutable
 proposal revisions, exact approval digests, and the controller's per-Agent
 timeout resolutions with workload class, policy envelope, source, and final
-seconds. Approval promotes the
+seconds, including the Review criterion and boundary-obligation counts used by
+scope policy. Approval promotes the
 validated preview into an authorized confirmed `TaskBrief`, adaptive
 implementation plan, and executable `TeamPlan`.
 The resulting `ApprovedPlanningResult` revalidates those exact digests and
@@ -630,6 +634,28 @@ counterexample. Controller validation rejects missing, duplicate, reused, or
 unapproved boundary claims. The complete 698-test offline suite passes. A fresh
 installed provider rerun remains required to verify the expanded Planning and
 Review contracts at the real provider boundary.
+
+That fresh provider run is now recorded. Public install and bare `sat` produced
+and approved a task-defined `implementer -> reviewer` team. The
+`semantic_body_v4` Reviewer grounded all four approved boundary classes, found
+that a user-selected top-level symlink root was still followed, and correctly
+requested revision despite five passing deterministic gates. The Implementer
+then fixed the root guard, its contradictory regression test, and README; all
+five gates and 30 tests passed again. The second Review exceeded the former
+450-second allowance before returning a semantic response, so the controller
+failed without delivery. This confirms the Review evidence fixes and exposes a
+separate timeout-policy gap: ten criteria concealed twenty additional explicit
+boundary obligations.
+
+Review timeout resolution now counts criteria plus boundary obligations as
+work units. Under the current 300-to-600-second Review envelope, that live scope
+resolves to the 600-second complex allowance and remains visible before
+approval; small reviews retain routine or substantial values. Failure reports
+also distinguish a finding proved on an earlier commit from a changed commit
+whose independent re-verification did not complete. Focused Planning and
+Dynamic Workflow tests cover both regressions, and the complete check is 700
+tests passed; a new fresh-account provider run is still required before
+claiming end-to-end delivery success.
 
 The rehearsal sequence below concerns the predecessor guided fixed-team
 product path and is retained as defect and regression evidence. It proves the

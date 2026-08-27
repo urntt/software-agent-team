@@ -344,11 +344,13 @@ class AdaptiveExecutor:
         revise_first: bool = False,
         always_revise: bool = False,
         omit_builder_model: bool = False,
+        timeout_second_review: bool = False,
     ) -> None:
         self.workspace = workspace
         self.revise_first = revise_first
         self.always_revise = always_revise
         self.omit_builder_model = omit_builder_model
+        self.timeout_second_review = timeout_second_review
         self.requests: list[AgentExecutionRequest] = []
         self.counts: dict[str, int] = {}
 
@@ -387,6 +389,25 @@ class AdaptiveExecutor:
                 summary="Deterministic evidence covers the greeting behavior."
             ).model_dump_json()
         elif request.agent_id == "reviewer":
+            if self.timeout_second_review and count == 2:
+                return AgentExecutionResult(
+                    status=AgentExecutionStatus.TIMED_OUT,
+                    error="review exceeded its approved invocation timeout",
+                    telemetry=AgentExecutionTelemetry(
+                        role=None,
+                        agent_id=request.agent_id,
+                        capability=request.capability,
+                        session_key=request.session_key,
+                        command=("fake-agent", request.agent_id),
+                        started_at=FIXED_TIME,
+                        finished_at=FIXED_TIME,
+                        duration_ms=request.timeout_seconds * 1000,
+                        timed_out=True,
+                        exit_code=None,
+                        stdout="",
+                        stderr="review timed out",
+                    ),
+                )
             if self.always_revise or (self.revise_first and count == 1):
                 body = ReviewReportResponse(
                     verdict="revise",
@@ -634,6 +655,43 @@ def test_dynamic_workflow_revises_from_commit_bound_feedback_then_accepts(
     ][1]
     assert '"previous_iteration": 1' in second_builder.prompt
     assert '"id": "FINDING_DOCS"' in second_builder.prompt
+
+
+def test_failed_reverification_distinguishes_prior_finding_from_current_commit(
+    tmp_path: Path,
+) -> None:
+    approved = approved_inputs(run_id="adaptive-reverify-timeout", iteration_limit=2)
+    source = initialize_source(tmp_path)
+    executor = AdaptiveExecutor(
+        tmp_path / "workspaces" / approved.task_brief.run_id,
+        revise_first=True,
+        timeout_second_review=True,
+    )
+    gates = RecordingQualityGateFactory()
+
+    outcome = coordinator(tmp_path, approved, executor, gates).execute(
+        approved,
+        source_repository=source,
+    )
+    store, report = load_report(tmp_path, outcome, approved)
+    first_iteration = store.load(report.iterations[0])
+
+    assert isinstance(first_iteration, IterationRecord)
+    assert outcome.record.phase is RunPhase.FAILED
+    assert outcome.record.termination_reason is (
+        TerminationReason.RESOURCE_LIMIT_REACHED
+    )
+    assert report.final_commit != first_iteration.output_commit
+    carried = next(
+        item
+        for item in report.unresolved_findings
+        if item.startswith("Finding FINDING_DOCS was discovered")
+    )
+    assert first_iteration.output_commit[:12] in carried
+    assert report.final_commit is not None
+    assert report.final_commit[:12] in carried
+    assert "independent re-verification did not complete" in carried
+    assert carried.endswith("The usage result type is not documented.")
 
 
 def test_dynamic_workflow_persists_runner_failure_without_claiming_new_commit(

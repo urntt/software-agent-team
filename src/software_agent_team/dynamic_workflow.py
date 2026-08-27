@@ -1037,12 +1037,24 @@ class DynamicWorkflowCoordinator:
         for test in context.last_tests:
             unresolved.extend(test.blockers)
             unresolved.extend(test.findings)
-        unresolved.extend(
-            finding.description
-            for review in context.last_reviews
-            for finding in review.findings
-            if finding.blocking
-        )
+        for review in context.last_reviews:
+            for finding in review.findings:
+                if not finding.blocking:
+                    continue
+                if (
+                    review.iteration < record.current_iteration
+                    and review.input_commit != record.current_commit
+                ):
+                    unresolved.append(
+                        f"Finding {finding.id} was discovered on commit "
+                        f"{review.input_commit[:12]} in iteration "
+                        f"{review.iteration}. The implementation changed on commit "
+                        f"{record.current_commit[:12]}, but independent "
+                        "re-verification did not complete; the finding remains "
+                        f"unresolved: {finding.description}"
+                    )
+                else:
+                    unresolved.append(finding.description)
         limitations = _unique(
             [issue for work in context.last_works for issue in work.unresolved_issues]
         )

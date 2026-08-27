@@ -68,7 +68,7 @@ On first use, SAT guides you through:
 7. One overview of requirements, acceptance criteria, Agent work assignments
    with their controller-derived write or read-only authority, proposed Agents,
    dependencies, permissions, explicit Review entry obligations for absolute
-   guarantees, resolved model profiles and fallback authority, timeouts,
+   guarantees, resolved model profiles and fallback authority, timeout reasons,
    concurrency, iterations, and budgets; and
 8. Approval, a natural-language revision request, a supported safe edit, or
    cancellation before any execution Agent is created.
@@ -166,8 +166,9 @@ Planning model waits also show elapsed heartbeats, response validation, and a
 bounded-repair transition. Provider heartbeats stop on hidden completion
 events as well as terminal Agent state, and failed quality gates render as
 failures rather than successful check marks. Reviewer timeout has a
-controller-derived criterion-scope floor. Its project mount and general write
-tools remain read-only, while an immutable path-restricted helper can create a
+controller-derived scope floor that counts both assigned criteria and every
+explicit Review boundary obligation. Its project mount and general write tools
+remain read-only, while an immutable path-restricted helper can create a
 new bounded `/tmp/sat-review-probe-*` script or fixture without overwriting an
 existing file. The image also includes a locked offline Python wheelhouse.
 Deterministic verification copies only clean committed files into fresh
@@ -184,7 +185,10 @@ overlapping selectors are deduplicated, while a fragment with no eligible match
 is rejected. A sole unscoped blocking finding is deterministically bound to the
 otherwise-uncovered blocked criteria; ambiguous multiple-finding mappings are
 still rejected. The model never has to predict controller-owned IDs or repeat
-an unambiguous relationship solely for serialization.
+an unambiguous relationship solely for serialization. If re-verification fails
+after a revision changed the commit, the terminal report keeps the prior
+finding unresolved while distinguishing its earlier evidence from the current,
+not-yet-independently-verified commit.
 The foreground control palette, live visibility changes, prospective guidance,
 replacement Planning, cooperative pause/resume, best-effort interruption, and
 terminal cancellation are integrated and covered offline. Durable resume after

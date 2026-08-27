@@ -79,7 +79,7 @@ unowned model choices. Responsibility is divided explicitly:
 | Agent number, labels, responsibilities, and capabilities | Bootstrap Planning derives them from the task and explains each one | User approves or revises the overview | Controller creates only approved `AgentSpec` entries |
 | Dependencies and possible parallel waves | Bootstrap Planning proposes a DAG | User approves it; policy supplies safe limits | Controller validates acyclicity and schedules only ready nodes |
 | Maximum concurrency | Bootstrap Planning proposes a bounded value | User may edit it; policy caps it | Controller decides which ready Agents actually start without exceeding the cap |
-| Per-Agent invocation timeout | Bootstrap Planning classifies workload as routine, substantial, or complex; it does not choose seconds | Capability policy maps that class into a default-to-ceiling envelope; exact Review scope may raise the minimum; the user may set an exact advanced override only inside the effective envelope | Controller freezes, passes, and enforces the exact resolved timeout for every invocation |
+| Per-Agent invocation timeout | Bootstrap Planning classifies workload as routine, substantial, or complex; it does not choose seconds | Capability policy maps that class into a default-to-ceiling envelope; exact Review criteria and boundary obligations may raise the minimum; the user may set an exact advanced override only inside the effective envelope | Controller freezes, passes, and enforces the exact resolved timeout for every invocation |
 | Call, token, duration, iteration, and cost budgets | Product policy supplies the safe envelope; Planning works within it | User sees and approves the effective limits | Controller rejects over-budget plans and stops further launches when a limit is reached |
 | Model route | Planning may recommend task needs; configured profiles and routing policy provide candidates | User approves effective routes and switch conditions | Controller resolves and records the authorized route; there is no silent fallback |
 | Replanning or team changes during execution | User correction or an Agent recommendation may request a change | Material changes require a new validated revision and user confirmation | Controller applies a revision only at a safe checkpoint |
@@ -98,12 +98,14 @@ For the current product profile, `routine` maps to the checked-in capability
 default, `complex` maps to twice that default capped at 3,600 seconds, and
 `substantial` maps to their integer midpoint. Coding and integration therefore
 resolve to 900, 1,350, or 1,800 seconds; testing and review resolve to 300, 450,
-or 600 seconds. Review scope independently supplies a minimum: fewer than six
-criteria is routine, six through ten is substantial, and eleven or more is
-complex. The controller uses the higher of the Planner estimate and this
-scope floor. An explicit global timeout override collapses all three workload
-classes to one value but cannot undercut an applicable scope floor. Every
-resolution and reason is shown in the overview and never comes from an
+or 600 seconds. Review scope independently supplies a minimum through auditable
+work units: each assigned criterion counts once and each explicit
+`review_boundaries` entry counts once more. Fewer than six work units is routine,
+six through ten is substantial, and eleven or more is complex. The controller
+uses the higher of the Planner estimate and this scope floor. An explicit global
+timeout override collapses all three workload classes to one value but cannot
+undercut an applicable scope floor. Every resolution, criterion count, boundary
+obligation count, and reason is shown in the overview and never comes from an
 execution Agent.
 
 ## Planned User Journey
@@ -248,9 +250,10 @@ same controller validation.
 
 Approval freezes version one of the run contract, including the workload,
 policy envelope, resolution source, and exact timeout selected for every
-Agent. A Reviewer resolution also records its criterion count and effective
-minimum when scope policy applies. Later corrections create a new version;
-they never mutate an already referenced plan in place.
+Agent. A Reviewer resolution also records its criterion count, explicit
+boundary-obligation count, and effective minimum when scope policy applies.
+Later corrections create a new version; they never mutate an already referenced
+plan in place.
 
 ## Versioned Contracts
 
@@ -669,7 +672,7 @@ timeout, prompt, semantic repair limit, Git or read-only boundary, aggregate
 budget, execution record, and durable handoffs. Quality gates are shared once
 per immutable iteration, and every quality Agent must be downstream of every
 writer. Reviewer timeouts take the higher of Planner workload and the
-controller-derived criterion-scope floor. The Reviewer runtime keeps project
+controller-derived criterion-plus-boundary work-unit floor. The Reviewer runtime keeps project
 source read-only and denies the general write tool. Its immutable
 `sat-probe-write` command provides the bounded `/tmp` probe-authoring capability
 that actually exists in the foreground execution surface. `sat-probe-run`
