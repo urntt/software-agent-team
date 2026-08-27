@@ -6,9 +6,11 @@ controls, and model routing. Planning, run-scoped execution identity, prompts,
 runtime configuration, handoffs, telemetry, Agent-namespaced artifact
 persistence, deterministic DAG scheduling, multi-iteration lifecycle
 convergence, bare-`sat` activation, and configurable per-Agent progress are
-implemented and offline verified. The foreground control channel is also
-implemented and offline verified; its provider-backed rehearsal and durable
-process-restart recovery remain pending. Secret-free model profiles,
+implemented and offline verified. A fresh public-install, bare-`sat`, strict
+single-route rehearsal has also completed accepted delivery and independent
+post-delivery validation. The foreground control channel is implemented and
+offline verified; its provider-backed rehearsal and durable process-restart
+recovery remain pending. Secret-free model profiles,
 deterministic plan-time route resolution, route-specific runtime validation,
 and explicit provider-failure switching are implemented and offline verified;
 a provider-backed two-route rehearsal remains pending.
@@ -803,6 +805,12 @@ provider-backed two-route exit run remains pending.
 internal files or evaluation commands, and the resulting plan, events, model
 routes, interventions, Git evidence, quality results, and cleanup are
 auditable.
+
+**Implementation note:** the strict single-route ordinary-user subset now has
+provider-backed evidence from public installation through Planning, user
+approval, dynamic execution, evidence-backed Review, accepted delivery,
+independent project checks, and cleanup. The remaining exit evidence covers
+foreground interventions, a two-route run, and an independent supported device.
 
 ## Acceptance Criteria
 

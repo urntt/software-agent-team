@@ -209,8 +209,10 @@ terminal cancellation are integrated and covered offline. Durable resume after
 a process restart remains under development. Secret-free multi-model profiles,
 deterministic plan-time route resolution, per-Agent route inspection, and an
 explicit provider-failure fallback are implemented and covered offline. A
-fresh provider-backed adaptive rehearsal, including a run with two authorized
-routes, remains required before claiming demonstration readiness for that path.
+fresh provider-backed strict-route adaptive rehearsal has now completed from
+the public installer through accepted delivery and independent post-delivery
+checks. A run with two authorized routes remains required before claiming
+demonstration readiness for the multi-route path.
 
 The generated Python profile requires README documentation of the exact setup,
 start, and test argv. The start command must be directly usable from the
@@ -218,11 +220,13 @@ project root without extra arguments. A dedicated quality gate verifies all
 three exact commands from a fresh copy of the immutable commit; the ordinary
 clean-workspace pytest gate remains an independent check.
 
-The earlier guided fixed-team path passed a complete live-provider rehearsal
-in a fresh non-root Linux account, including accepted delivery, exact project
-commands, application checks, and zero run-scoped container residue. That
-evidence does not prove the newly activated adaptive path; a fresh installed
-adaptive rehearsal remains required before claiming demonstration readiness.
+The activated adaptive path has passed a complete strict-route live-provider
+rehearsal in a fresh non-root Linux account. Public installation and bare
+`sat` produced a user-approved task-defined team, accepted all ten criteria,
+delivered a clean project, passed all exact project commands and thirteen
+independent post-delivery checks, and left no run-scoped container residue.
+This evidence does not yet prove foreground controls, a two-route switch, or
+an independent-device demonstration.
 
 Read [`STATUS.md`](STATUS.md) for current evidence and known gaps, and
 [`VISION.md`](VISION.md) for product direction, architecture, scope, and the

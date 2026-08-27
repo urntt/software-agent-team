@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** Phase 3E implemented; fifteen fresh installed adaptive rehearsals have driven controller, transport, progress, profile, and review-boundary corrections, with the Round 15 evidence and boundary fixes awaiting a clean provider rerun
+**Current milestone:** Phase 3E implemented; sixteen fresh installed adaptive rehearsals have produced the first accepted strict-route Adaptive Planning and Dynamic Team delivery with independent post-delivery validation
 
 **Last updated:** August 27, 2026
 
@@ -704,8 +704,38 @@ the user overview, implementation and quality prompts all state that the
 user-selected primary root itself is `top_level_input` and every child inside it
 is `nested_input`. Focused artifact, Planning, dynamic-prompt, and OpenClaw
 session-evidence tests pass, and the complete repository check passes 705 tests.
-A new fresh-account provider run remains required before claiming end-to-end
-delivery success.
+A fresh-account provider run was still required at that point before claiming
+end-to-end delivery success.
+
+That sixteenth fresh-account run now supplies the required evidence. The public
+one-command installer completed in an empty non-root home, and the operator then
+used bare `sat` without a TaskBrief, benchmark, explicit run ID, source path,
+team, timeout, or concurrency arguments. One Planning call proposed an
+`impl -> reviewer` team with maximum concurrency two. The user approved it;
+policy resolved the substantial writer to 1,350 seconds and raised Review to
+600 seconds from ten criteria plus seventeen explicit boundary obligations.
+The controller froze those values, and the scheduler ran the Agents serially
+because the approved dependency prevented parallel launch.
+
+The Implementer produced one clean commit through 38 attributable tool calls.
+All five deterministic gates passed, including 20 clean-workspace tests and
+fresh-scratch execution of the exact generated setup, test, and start commands.
+The first Reviewer attempt captured 37 real tool calls and 67 attributable
+session records without an integrity error. Its response required one bounded
+semantic JSON repair; the zero-call repair safely reused only the same
+Reviewer's verified evidence against the same immutable commit. The final
+Review accepted all ten criteria with no finding, including an explicit probe
+that treated a symlink supplied as the scan root as `top_level_input`.
+
+The controller completed and delivered the project. A separate ordinary-user
+black-box check then reran exact setup, test, and no-argument start commands and
+tested duplicate grouping, exclusion, minimum size, invalid size, missing input,
+root and nested symlinks, symlink files, and post-command Git cleanliness.
+All thirteen checks passed, the delivered HEAD matched the controller's final
+commit, and terminal cleanup left zero containers or volumes. This establishes
+the current strict single-route ordinary product journey. Foreground controls,
+two authorized routes, durable process-restart recovery, and an
+independent-device demonstration remain separate evidence requirements.
 
 The rehearsal sequence below concerns the predecessor guided fixed-team
 product path and is retained as defect and regression evidence. It proves the
@@ -1096,9 +1126,8 @@ derived from the task.
 
 ## Not Yet Available or Completed
 
-- A fresh installed provider-backed rehearsal of the activated Adaptive
-  Planning and Dynamic Team journey, followed by an independent-device live
-  demonstration;
+- An independent-device live demonstration of the activated Adaptive Planning
+  and Dynamic Team journey;
 - A provider-backed rehearsal of foreground guidance and cooperative
   pause/resume;
 - Durable control recovery after a foreground process crash and a
@@ -1124,11 +1153,10 @@ action succeeded after interruption.
 
 ## Next Milestone
 
-The next verification step is a fresh installed provider-backed adaptive
-rehearsal covering the ordinary product journey, followed by focused live
-evidence for guidance, cooperative pause/resume, and two planned model routes.
-Phase 3F then closes the acceptance and usability defects. Fixed-topology
-comparison remains in Phase 4
+The next verification steps are focused live evidence for guidance,
+cooperative pause/resume, and two planned model routes, followed by the
+independent-device demonstration. Phase 3F then closes the remaining acceptance
+and usability defects. Fixed-topology comparison remains in Phase 4
 so it can serve as a controlled baseline rather than define the product's
 permanent role layout.
 The detailed sequence and acceptance criteria are in
