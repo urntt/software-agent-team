@@ -313,11 +313,13 @@ adversarially challenge the same scope. A Dynamic Reviewer returns exactly one
 criterion assessment for every assigned criterion, with a concrete negative or
 boundary case and observable evidence. A blocked assessment and its blocking
 finding must reference the same criterion; missing coverage is an invalid
-response rather than implicit acceptance. Every assessment must also cite a
-controller-numbered tool result from that exact invocation and an exact bounded
-result fragment. The response schema makes that citation structurally required;
-the controller derives tool identity, outcome, and hashes instead of requiring
-the model to echo known facts. Review may run bounded foreground
+response rather than implicit acceptance. Every assessment must also supply a
+distinctive exact bounded result fragment from that invocation. The response
+schema makes the fragment structurally required and forbids a model-supplied
+tool ID. The controller requires exactly one current sanitized result to contain
+the fragment, then enriches the persisted assessment with its own tool ID,
+identity, outcome, and hashes. Zero or ambiguous matches are invalid. Review may
+run bounded foreground
 probes in the no-network sandbox against the read-only source and temporary
 fixtures. General write tools remain denied. Review creates a script or fixture
 only through the immutable `sat-probe-write` helper, which accepts a new bounded
@@ -596,8 +598,9 @@ source read-only and denies the general write tool. Its immutable
 that actually exists in the foreground execution surface; the runtime also
 contains the pinned `uv` needed to exercise generated-project commands. The
 OpenClaw adapter validates the current session turn, pairs actual tool calls and
-results, persists only bounded sanitized records, and rejects zero-call or
-mismatched Reviewer citations. Complete Agent summaries remain immutable
+results, persists only bounded sanitized records, uniquely resolves semantic
+result fragments to controller-owned tool IDs, and rejects zero-call, absent,
+or ambiguous Reviewer evidence. Complete Agent summaries remain immutable
 artifact evidence; the
 controller derives bounded scheduler and downstream-prompt projections with an
 explicit truncation marker, original length, and source-summary SHA-256 rather

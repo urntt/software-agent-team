@@ -306,10 +306,12 @@ Confirm all of the following before marking Phase 1 accepted:
   the resolved stage and remaining attempt timeouts. Missing or incorrect
   echoes of `kind`, Git facts, command evidence, status, criteria, or scope are
   not treated as semantic response failures.
-- Every Reviewer criterion assessment cites a tool ID and exact observable
-  fragment present in that attempt's sanitized tool record. Session provenance
-  is `captured`, tool calls and results pair exactly, and a zero-call turn is
-  never accepted as evidence of a probe.
+- Every Reviewer semantic criterion assessment supplies an exact observable
+  fragment that uniquely matches one result in that attempt's sanitized tool
+  record. The persisted assessment contains the controller-resolved tool ID;
+  the model does not supply it. Session provenance is `captured`, tool calls and
+  results pair exactly, and a zero-call or ambiguous turn is never accepted as
+  evidence of a probe.
 - Every handoff points to immutable artifact references with matching SHA-256
   digests.
 - All fixed quality gates passed, every acceptance criterion has a result, and

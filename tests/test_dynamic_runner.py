@@ -21,7 +21,6 @@ from software_agent_team.artifacts import (
     HandoffEnvelope,
     HandoffStatus,
     ReviewReport,
-    ReviewToolEvidenceReference,
     TaskBrief,
     WorkResult,
 )
@@ -48,6 +47,7 @@ from software_agent_team.progress import ProgressEvent, ProgressEventKind
 from software_agent_team.responses import (
     ReviewCriterionAssessmentResponse,
     ReviewReportResponse,
+    ReviewToolEvidenceClaim,
     WorkResultResponse,
 )
 from software_agent_team.responses import (
@@ -78,13 +78,10 @@ FIXED_TIME = datetime(2026, 8, 26, 12, 0, tzinfo=UTC)
 MODEL = "test/provider-model"
 
 
-def review_tool_reference() -> ReviewToolEvidenceReference:
-    """Reference the fake executor's attributable read result."""
+def review_tool_claim() -> ReviewToolEvidenceClaim:
+    """Select the fake executor's attributable read result."""
 
-    return ReviewToolEvidenceReference(
-        tool_call_id="tool-001",
-        observable="fake-review-observation",
-    )
+    return ReviewToolEvidenceClaim(observable="fake-review-observation")
 
 
 def review_tool_call() -> AgentToolCallEvidence:
@@ -402,7 +399,7 @@ class DynamicExecutor:
                         evidence=(
                             "README.md and greeting.py describe the same string result."
                         ),
-                        tool_evidence=(review_tool_reference(),),
+                        tool_evidence=(review_tool_claim(),),
                     ),
                 ),
                 findings=(),
@@ -709,7 +706,7 @@ def test_dynamic_reviewer_repairs_a_zero_call_fabricated_tool_citation(
     assert len(reviewer_requests) == 2
     assert [request.timeout_seconds for request in reviewer_requests] == [47, 47]
     assert "CONTROLLED_RESPONSE_REPAIR" in reviewer_requests[1].prompt
-    assert "tool_evidence may cite only calls made in this invocation" in (
+    assert "tool_evidence may contain only a distinctive exact output fragment" in (
         reviewer_requests[1].prompt
     )
     reviewer_records = [
@@ -722,7 +719,7 @@ def test_dynamic_reviewer_repairs_a_zero_call_fabricated_tool_citation(
     assert reviewer_records[0].tool_evidence_status is AgentToolEvidenceStatus.CAPTURED
     assert reviewer_records[0].response_contract == "semantic_body_v2"
     assert reviewer_records[0].tool_calls == ()
-    assert "unknown tool call tool-001" in (reviewer_records[0].error or "")
+    assert "does not match any current tool result" in (reviewer_records[0].error or "")
     assert isinstance(reviewer_records[1], AgentExecutionRecord)
     assert len(reviewer_records[1].tool_calls) == 1
     assert reviewer_records[1].response_artifact == runner.outputs["reviewer"]

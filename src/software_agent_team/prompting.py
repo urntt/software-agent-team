@@ -678,9 +678,10 @@ def build_semantic_repair_request(
             "each assessment includes a concrete adversarial check and observable "
             "evidence, and every blocked status matches a blocking finding with "
             "the same criterion ID. Repeat any tool checks needed for this repair; "
-            "tool_evidence may cite only calls made in this invocation, numbered "
-            "tool-001 onward in execution order, with a matching observable output "
-            "fragment; do not echo controller-owned tool names or outcomes. Use "
+            "tool_evidence may contain only a distinctive exact output fragment "
+            "from this invocation; do not predict a controller tool ID or echo "
+            "controller-owned tool names or outcomes. The fragment must match "
+            "exactly one current result. Use "
             "revise for correctable defects; fail requires a terminal safety or "
             "evidence-integrity reason."
         )

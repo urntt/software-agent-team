@@ -87,8 +87,8 @@ from software_agent_team.reporting import render_run_report
 from software_agent_team.responses import (
     AgentArtifactResponseError,
     AgentResponseBody,
+    GroundedReviewReportResponse,
     ImplementationPlanResponse,
-    ReviewReportResponse,
     TestReportResponse,
     WorkResultResponse,
     controller_fields_for,
@@ -849,7 +849,7 @@ class WorkflowCoordinator:
         iteration: int,
         input_commit: str,
     ) -> ReviewReport:
-        if not isinstance(body, ReviewReportResponse):
+        if not isinstance(body, GroundedReviewReportResponse):
             raise WorkflowEvidenceError("Reviewer returned the wrong semantic body")
         return assemble_review_report(
             body,

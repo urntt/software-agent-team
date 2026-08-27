@@ -77,7 +77,7 @@ from software_agent_team.quality_gates import (
 )
 from software_agent_team.responses import (
     AgentArtifactResponseError,
-    ReviewReportResponse,
+    GroundedReviewReportResponse,
     TestReportResponse,
     WorkResultResponse,
     controller_fields_for,
@@ -862,7 +862,7 @@ class DynamicAgentRunner:
                 created_at=created_at,
             )
         if agent.capability is AgentCapability.REVIEW:
-            if not isinstance(body, ReviewReportResponse):
+            if not isinstance(body, GroundedReviewReportResponse):
                 raise ArtifactAssemblyError("Reviewer returned the wrong semantic body")
             return assemble_review_report(
                 body,

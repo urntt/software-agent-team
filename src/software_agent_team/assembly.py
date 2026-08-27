@@ -15,7 +15,7 @@ from software_agent_team.artifacts import (
 )
 from software_agent_team.git_workspace import GitSnapshot
 from software_agent_team.responses import (
-    ReviewReportResponse,
+    GroundedReviewReportResponse,
     TestReportResponse,
     WorkResultResponse,
 )
@@ -198,7 +198,7 @@ def assemble_test_report(
 
 
 def assemble_review_report(
-    body: ReviewReportResponse,
+    body: GroundedReviewReportResponse,
     *,
     task_brief: TaskBrief,
     team_id: str,

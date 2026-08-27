@@ -9,6 +9,7 @@ from software_agent_team.artifacts import (
     ArtifactKind,
     CheckStatus,
     CommandEvidence,
+    ReviewCriterionAssessment,
     ReviewToolEvidenceReference,
     ReviewVerdict,
     TaskBrief,
@@ -22,8 +23,7 @@ from software_agent_team.assembly import (
 )
 from software_agent_team.git_workspace import GitSnapshot
 from software_agent_team.responses import (
-    ReviewCriterionAssessmentResponse,
-    ReviewReportResponse,
+    GroundedReviewReportResponse,
     WorkResultResponse,
 )
 from software_agent_team.responses import (
@@ -290,10 +290,10 @@ def test_verification_assignment_requires_exact_confirmed_coverage(
 
 
 def test_review_report_binds_dynamic_reviewer_and_controller_scope() -> None:
-    body = ReviewReportResponse(
+    body = GroundedReviewReportResponse(
         verdict=ReviewVerdict.ACCEPT,
         criterion_assessments=(
-            ReviewCriterionAssessmentResponse(
+            ReviewCriterionAssessment(
                 criterion_id="AC_DOCUMENTATION",
                 status="satisfied",
                 adversarial_check="Checked a clean first-use setup path.",
@@ -346,10 +346,10 @@ def test_review_report_rejects_wrong_capability_or_scope(
     scope: tuple[str, ...],
     message: str,
 ) -> None:
-    body = ReviewReportResponse(
+    body = GroundedReviewReportResponse(
         verdict=ReviewVerdict.ACCEPT,
         criterion_assessments=(
-            ReviewCriterionAssessmentResponse(
+            ReviewCriterionAssessment(
                 criterion_id="AC_DOCUMENTATION",
                 status="satisfied",
                 adversarial_check="Checked the documented setup path.",

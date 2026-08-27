@@ -59,11 +59,13 @@ The controller accepts an iteration only when all of the following agree:
    scopes on the same immutable commit. A Dynamic Reviewer must return exactly
    one `criterion_assessments` entry for every assigned criterion, including a
    concrete adversarial check, observable evidence, and `satisfied` or
-   `blocked` status. Every assessment also cites at least one
-   controller-numbered tool call from that exact invocation and a distinctive
-   fragment present in its bounded result record. Every blocked assessment must
-   map to a blocking finding with the same criterion ID. The controller binds
-   each Agent, commit, scope, and validated citations into an attributable
+   `blocked` status. Every semantic assessment also supplies at least one
+   distinctive fragment from a bounded result in that exact invocation. The
+   controller requires each fragment to identify exactly one sanitized tool
+   result and enriches the persisted assessment with its own tool-call ID.
+   Every blocked assessment must map to a blocking finding with the same
+   criterion ID. The controller binds each Agent, commit, scope, and grounded
+   references into an attributable
    `ReviewReport`; their combined scope must exactly cover the manual criteria
    and finding IDs must remain unique across the iteration.
 5. The controller, not either Agent, resolves pending criteria to `passed` in
@@ -146,12 +148,14 @@ incorrect controller-owned fields are therefore neither model-quality failures
 nor reasons to spend a repair call.
 
 Reviewer tool claims cross a separate grounding boundary. The response schema
-requires each criterion assessment to supply only a current-invocation
-`tool-00N` citation and a small exact observable result fragment. It does not
-ask the model to echo a tool name, outcome, exit code, arguments, or digest.
-The controller resolves those known facts from its own sanitized execution
-record, rejects unknown call IDs or absent fragments, and uses the existing one
-bounded semantic repair for a structurally valid but ungrounded citation.
+requires each criterion assessment to supply only a small, distinctive exact
+observable result fragment. It forbids the model from supplying or predicting a
+controller tool ID and does not ask it to echo a tool name, outcome, exit code,
+arguments, or digest. The controller searches only its current sanitized
+execution record, requires the fragment to occur in exactly one result, and
+enriches the persisted assessment with that result's `tool-00N` ID. No match,
+multiple matches, or duplicate selectors for one result use the existing one
+bounded semantic repair.
 Execution records label this grounded Reviewer shape `semantic_body_v2`; other
 current semantic bodies remain `semantic_body_v1`.
 

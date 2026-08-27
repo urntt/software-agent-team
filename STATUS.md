@@ -408,7 +408,7 @@ matching `/tmp/sat-review-probe-*` with `.py`, `.json`, or `.txt`, enforces line
 and total-size limits, creates with mode `0600`, and rejects overwrite,
 symlinks, nesting, traversal, and partial-write residue. Reviewer explicitly
 denies the nonexistent general `write` tool and uses the helper through its
-available foreground `exec` surface. The full 653-test suite passes. A
+available foreground `exec` surface. The full 656-test suite passes. A
 restricted non-root, no-network, read-only-root container probe also confirmed
 root-owned helper mode `0555`, caller-owned output mode `0600`, direct Python
 execution, refusal of overwrite, symlink, and `/agent` targets, read-only
@@ -426,15 +426,29 @@ SAT's isolated session index, extracts only the latest exact current-prompt
 turn, pairs tool calls and results one-to-one, and persists bounded sanitized
 records with invocation-local IDs, hashes, outcomes, excerpts, and transcript
 provenance. Raw session JSONL is not copied into run artifacts. Dynamic Review
-response schema now requires every criterion assessment to cite a current
-`tool-00N` record and a matching observable fragment; the model does not echo
-controller-owned tool identity or outcome. For `exec`, SAT records only the
+response schema now requires every criterion assessment to supply a distinctive
+exact observable fragment from the current invocation. The model cannot supply
+or predict a controller tool ID. SAT requires the fragment to match exactly one
+sanitized result and enriches the persisted assessment with its own `tool-00N`
+ID, identity, and outcome. For `exec`, SAT records only the
 direct executable plus a hash of the complete arguments, so helper/Python/Git
 paths remain inspectable without persisting possible environment-assignment
 values or the full command. A captured zero-call turn therefore cannot support
-an accepted claim, stale or mismatched citations enter the one bounded semantic
-repair, and invalid session provenance stops at the safety boundary without
-another provider call. A repeat fresh installed provider authority probe and
+an accepted claim; absent, ambiguous, or duplicate result selectors enter the
+one bounded semantic repair, while invalid session provenance stops at the
+safety boundary without another provider call.
+
+A fresh installed probe against the first ID-bearing contract confirmed the
+capture boundary and exposed why semantic bodies must not carry those IDs. The
+controller recorded 20 actual calls, including successful `sat-probe-write` and
+direct Python results with both required markers, while the model's four exact
+observable fragments were paired with four incorrect guessed `tool-00N` values.
+The parser correctly rejected the response, but requiring a model to count an
+evolving tool loop and predict a controller-owned presentation ID was itself a
+protocol defect. The observable-only contract above removes that requirement;
+offline regressions include unrelated preliminary calls, unique resolution,
+zero matches, multiple matches, duplicate selections, and rejection of a
+model-supplied ID. A repeat fresh installed provider authority probe and
 complete adaptive run remain required before this journey is demonstration
 ready.
 
@@ -723,7 +737,7 @@ The acceptance contract is
 - Contract-aware response normalization that permits presentation argv arrays
   around one semantic object while rejecting any additional object candidate;
 - Exact Dynamic Reviewer criterion assessments with adversarial checks,
-  current-invocation tool citations and matching result fragments,
+  exact current-invocation result selectors and controller-resolved tool IDs,
   blocked-finding cross-binding, and bounded no-network foreground probes
   against read-only source;
 - Concrete phase-artifact and Agent-telemetry contracts with contextual

@@ -46,14 +46,19 @@ def _clean_unique_text(values: tuple[str, ...]) -> tuple[str, ...]:
     return cleaned
 
 
-def _validate_review_tool_evidence(
+def _ground_review_tool_evidence(
     body: ReviewReportResponse,
     result: AgentExecutionResult,
-) -> None:
-    """Bind every manual assessment to a current controller-captured tool result."""
+) -> GroundedReviewReportResponse:
+    """Resolve model-visible result fragments to controller-owned tool-call IDs."""
 
     if not body.criterion_assessments:
-        return
+        return GroundedReviewReportResponse(
+            verdict=body.verdict,
+            termination_reason=body.termination_reason,
+            findings=body.findings,
+            summary=body.summary,
+        )
     telemetry = result.telemetry
     if telemetry.tool_evidence_status is AgentToolEvidenceStatus.INVALID:
         raise ValueError(
@@ -62,25 +67,53 @@ def _validate_review_tool_evidence(
         )
     if telemetry.tool_evidence_status is not AgentToolEvidenceStatus.CAPTURED:
         raise ValueError("review tool evidence was not captured")
-    calls = {item.id: item for item in telemetry.tool_calls}
+    grounded_assessments: list[ReviewCriterionAssessment] = []
     for assessment in body.criterion_assessments:
-        if not assessment.tool_evidence:
-            raise ValueError(
-                f"criterion {assessment.criterion_id} must cite at least one "
-                "current tool result"
+        references: list[ReviewToolEvidenceReference] = []
+        for claim in assessment.tool_evidence:
+            matches = tuple(
+                call
+                for call in telemetry.tool_calls
+                if claim.observable in call.output_excerpt
             )
-        for reference in assessment.tool_evidence:
-            call = calls.get(reference.tool_call_id)
-            if call is None:
+            if not matches:
                 raise ValueError(
-                    f"criterion {assessment.criterion_id} references unknown "
-                    f"tool call {reference.tool_call_id}"
+                    f"criterion {assessment.criterion_id} evidence fragment does "
+                    "not match any current tool result"
                 )
-            if reference.observable not in call.output_excerpt:
+            if len(matches) != 1:
                 raise ValueError(
-                    f"tool call {reference.tool_call_id} does not contain the "
-                    "cited observable"
+                    f"criterion {assessment.criterion_id} evidence fragment "
+                    "matches multiple current tool results"
                 )
+            references.append(
+                ReviewToolEvidenceReference(
+                    tool_call_id=matches[0].id,
+                    observable=claim.observable,
+                )
+            )
+        identifiers = [reference.tool_call_id for reference in references]
+        if len(identifiers) != len(set(identifiers)):
+            raise ValueError(
+                f"criterion {assessment.criterion_id} cites the same current "
+                "tool result more than once"
+            )
+        grounded_assessments.append(
+            ReviewCriterionAssessment(
+                criterion_id=assessment.criterion_id,
+                status=assessment.status,
+                adversarial_check=assessment.adversarial_check,
+                evidence=assessment.evidence,
+                tool_evidence=tuple(references),
+            )
+        )
+    return GroundedReviewReportResponse(
+        verdict=body.verdict,
+        termination_reason=body.termination_reason,
+        criterion_assessments=tuple(grounded_assessments),
+        findings=body.findings,
+        summary=body.summary,
+    )
 
 
 class ImplementationPlanResponse(BaseModel):
@@ -156,10 +189,57 @@ class TestReportResponse(BaseModel):
         return cleaned
 
 
-class ReviewCriterionAssessmentResponse(ReviewCriterionAssessment):
-    """Reviewer assessment with a required current-invocation citation."""
+class ReviewToolEvidenceClaim(BaseModel):
+    """Model-visible exact fragment used to select one current tool result."""
 
-    tool_evidence: tuple[ReviewToolEvidenceReference, ...] = Field(min_length=1)
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    observable: str = Field(min_length=1, max_length=256)
+
+    @field_validator("observable")
+    @classmethod
+    def require_clean_observable(cls, value: str) -> str:
+        """Keep semantic selectors small, exact, and text-safe."""
+
+        cleaned = value.strip()
+        if not cleaned or "\x00" in cleaned:
+            raise ValueError("tool evidence observables must be nonblank text")
+        return cleaned
+
+
+class ReviewCriterionAssessmentResponse(BaseModel):
+    """Reviewer assessment with model-visible result-fragment selectors."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    criterion_id: str = Field(min_length=1, pattern=r"^[A-Z][A-Z0-9_-]*$")
+    status: ReviewCriterionStatus
+    adversarial_check: str = Field(min_length=1, max_length=2000)
+    evidence: str = Field(min_length=1, max_length=2000)
+    tool_evidence: tuple[ReviewToolEvidenceClaim, ...] = Field(min_length=1)
+
+    @field_validator("adversarial_check", "evidence")
+    @classmethod
+    def require_clean_assessment_text(cls, value: str) -> str:
+        """Reject empty presentation-only assessment text."""
+
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("criterion assessment text must not be blank")
+        return cleaned
+
+    @field_validator("tool_evidence")
+    @classmethod
+    def require_unique_tool_evidence(
+        cls,
+        values: tuple[ReviewToolEvidenceClaim, ...],
+    ) -> tuple[ReviewToolEvidenceClaim, ...]:
+        """Make every semantic result selector distinct within one criterion."""
+
+        observables = [value.observable for value in values]
+        if len(observables) != len(set(observables)):
+            raise ValueError("criterion tool-evidence observables must be unique")
+        return values
 
 
 class ReviewReportResponse(BaseModel):
@@ -187,11 +267,34 @@ class ReviewReportResponse(BaseModel):
         return cleaned
 
 
+class GroundedReviewReportResponse(BaseModel):
+    """Controller-resolved Review semantics ready for artifact assembly."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    verdict: ReviewVerdict
+    termination_reason: ReviewTerminationReason | None = None
+    criterion_assessments: tuple[ReviewCriterionAssessment, ...] = ()
+    findings: tuple[ReviewFinding, ...] = ()
+    summary: str = Field(min_length=1)
+
+    @field_validator("summary")
+    @classmethod
+    def require_clean_summary(cls, value: str) -> str:
+        """Reject whitespace-only controller-bound summaries."""
+
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("summary must not be blank")
+        return cleaned
+
+
 type AgentResponseBody = (
     ImplementationPlanResponse
     | WorkResultResponse
     | TestReportResponse
     | ReviewReportResponse
+    | GroundedReviewReportResponse
 )
 
 
@@ -442,7 +545,7 @@ def _validate_response_context(
             risks=body.risks,
             assumptions=body.assumptions,
         )
-    elif isinstance(body, ReviewReportResponse):
+    elif isinstance(body, GroundedReviewReportResponse):
         if body.verdict is ReviewVerdict.FAIL and body.termination_reason is None:
             raise ValueError("failed reviews require a terminal review reason")
         artifact = ReviewReport(
@@ -520,16 +623,21 @@ def parse_agent_response(
 
     parsed = _parse_semantic_body(result.response_text, request.expected_kind)
     try:
+        body = parsed.body
+        if isinstance(body, ReviewReportResponse):
+            body = _ground_review_tool_evidence(body, result)
+            parsed = ParsedAgentResponse(
+                body=body,
+                ignored_controller_fields=parsed.ignored_controller_fields,
+            )
         _validate_response_context(
-            parsed.body,
+            body,
             request,
             result,
             task_brief=task_brief,
             team_roles=team_roles,
             iteration_limit=iteration_limit,
         )
-        if isinstance(parsed.body, ReviewReportResponse):
-            _validate_review_tool_evidence(parsed.body, result)
     except (ValueError, ValidationError) as error:
         raise AgentArtifactResponseError(
             f"Agent semantic response is invalid: {_safe_validation_detail(error)}"
@@ -610,6 +718,17 @@ def parse_dynamic_agent_response(
 
     parsed = _parse_semantic_body(result.response_text, request.expected_kind)
     body = parsed.body
+    if isinstance(body, ReviewReportResponse):
+        try:
+            body = _ground_review_tool_evidence(body, result)
+        except (ValueError, ValidationError) as error:
+            raise AgentArtifactResponseError(
+                f"Agent semantic response is invalid: {_safe_validation_detail(error)}"
+            ) from error
+        parsed = ParsedAgentResponse(
+            body=body,
+            ignored_controller_fields=parsed.ignored_controller_fields,
+        )
     criterion_ids = {criterion.id for criterion in task_brief.acceptance_criteria}
     try:
         if isinstance(body, WorkResultResponse):
@@ -619,7 +738,7 @@ def parse_dynamic_agent_response(
                 raise ValueError(
                     "completed_tasks must exactly match the Agent's assigned task IDs"
                 )
-        elif isinstance(body, ReviewReportResponse):
+        elif isinstance(body, GroundedReviewReportResponse):
             if body.verdict is ReviewVerdict.FAIL and body.termination_reason is None:
                 raise ValueError("failed reviews require a terminal review reason")
             expected_review_scope = set(reviewed_criterion_ids)
@@ -646,7 +765,6 @@ def parse_dynamic_agent_response(
                     "criterion assessments must exactly cover assigned review scope"
                     + (f" ({'; '.join(detail)})" if detail else "")
                 )
-            _validate_review_tool_evidence(body, result)
             unknown = {
                 criterion_id
                 for finding in body.findings

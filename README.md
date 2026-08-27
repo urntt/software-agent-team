@@ -170,7 +170,9 @@ new bounded `/tmp/sat-review-probe-*` script or fixture without overwriting an
 existing file. The image also includes the pinned `uv` required to exercise
 exact project commands. Reviewer criterion claims must cite actual
 current-invocation tool results; SAT extracts and sanitizes those records itself
-and rejects fabricated, stale, or mismatched citations.
+and uniquely resolves each model-supplied exact result fragment to its own tool
+ID. Fabricated, stale, or ambiguous fragments are rejected; the model never has
+to predict a controller-owned ID.
 The foreground control palette, live visibility changes, prospective guidance,
 replacement Planning, cooperative pause/resume, best-effort interruption, and
 terminal cancellation are integrated and covered offline. Durable resume after

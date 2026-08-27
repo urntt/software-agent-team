@@ -20,7 +20,6 @@ from software_agent_team.artifacts import (
     IterationRecord,
     ReviewFinding,
     ReviewSeverity,
-    ReviewToolEvidenceReference,
     TaskBrief,
 )
 from software_agent_team.budgets import AgentBudget, ModelPricing
@@ -60,6 +59,7 @@ from software_agent_team.progress import (
 from software_agent_team.responses import (
     ReviewCriterionAssessmentResponse,
     ReviewReportResponse,
+    ReviewToolEvidenceClaim,
     WorkResultResponse,
 )
 from software_agent_team.responses import (
@@ -84,13 +84,10 @@ FIXED_TIME = datetime(2026, 8, 26, 12, 0, tzinfo=UTC)
 MODEL = "test/provider-model"
 
 
-def review_tool_reference() -> ReviewToolEvidenceReference:
-    """Reference the adaptive fixture's attributable read observation."""
+def review_tool_claim() -> ReviewToolEvidenceClaim:
+    """Select the adaptive fixture's attributable read observation."""
 
-    return ReviewToolEvidenceReference(
-        tool_call_id="tool-001",
-        observable="adaptive-review-observation",
-    )
+    return ReviewToolEvidenceClaim(observable="adaptive-review-observation")
 
 
 def review_tool_call() -> AgentToolCallEvidence:
@@ -405,7 +402,7 @@ class AdaptiveExecutor:
                                 "README.md omits the string result type exposed by "
                                 "greeting.py."
                             ),
-                            tool_evidence=(review_tool_reference(),),
+                            tool_evidence=(review_tool_claim(),),
                         ),
                     ),
                     findings=(
@@ -437,7 +434,7 @@ class AdaptiveExecutor:
                                 "README.md now documents the string returned by "
                                 "greeting.py."
                             ),
-                            tool_evidence=(review_tool_reference(),),
+                            tool_evidence=(review_tool_claim(),),
                         ),
                     ),
                     summary="The final commit satisfies the review scope.",

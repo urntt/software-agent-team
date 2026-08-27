@@ -40,6 +40,7 @@ from software_agent_team.prompting import (
 )
 from software_agent_team.responses import (
     AgentArtifactResponseError,
+    GroundedReviewReportResponse,
     ImplementationPlanResponse,
     ReviewReportResponse,
     WorkResultResponse,
@@ -589,7 +590,12 @@ def test_strict_parser_accepts_each_phase_role_output(
 ) -> None:
     parsed = parse_scripted(artifact, execution_request(role, kind))
 
-    assert parsed.body == semantic_body(artifact)
+    expected = semantic_body(artifact)
+    if isinstance(artifact, ReviewReport):
+        assert isinstance(parsed.body, GroundedReviewReportResponse)
+        assert parsed.body.model_dump(mode="json") == expected.model_dump(mode="json")
+    else:
+        assert parsed.body == expected
     assert "kind" in parsed.ignored_controller_fields
 
 

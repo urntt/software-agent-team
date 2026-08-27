@@ -185,10 +185,12 @@ from software_agent_team.quality_gates import (
 from software_agent_team.reporting import render_run_report
 from software_agent_team.responses import (
     AgentArtifactResponseError,
+    GroundedReviewReportResponse,
     ImplementationPlanResponse,
     ParsedAgentResponse,
     ReviewCriterionAssessmentResponse,
     ReviewReportResponse,
+    ReviewToolEvidenceClaim,
     TestReportResponse,
     WorkResultResponse,
     parse_agent_response,
@@ -350,6 +352,7 @@ __all__ = [
     "GitWorkspace",
     "GitWorkspaceError",
     "GitWorkspaceManager",
+    "GroundedReviewReportResponse",
     "HandoffEnvelope",
     "HandoffStatus",
     "HostTestBackend",
@@ -404,6 +407,7 @@ __all__ = [
     "ReviewReportResponse",
     "ReviewSeverity",
     "ReviewTerminationReason",
+    "ReviewToolEvidenceClaim",
     "ReviewToolEvidenceReference",
     "ReviewVerdict",
     "RunAlreadyExistsError",

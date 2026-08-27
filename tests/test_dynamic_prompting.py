@@ -10,12 +10,12 @@ from pydantic import ValidationError
 
 from software_agent_team.artifacts import (
     AcceptanceCriterion,
+    AgentToolCallEvidence,
     ArtifactKind,
     CommandEvidence,
     HandoffStatus,
     ReviewFinding,
     ReviewSeverity,
-    ReviewToolEvidenceReference,
     TaskBrief,
 )
 from software_agent_team.budgets import AgentBudget
@@ -32,8 +32,10 @@ from software_agent_team.prompting import (
 )
 from software_agent_team.responses import (
     AgentArtifactResponseError,
+    GroundedReviewReportResponse,
     ReviewCriterionAssessmentResponse,
     ReviewReportResponse,
+    ReviewToolEvidenceClaim,
     WorkResultResponse,
     parse_dynamic_agent_response,
 )
@@ -54,12 +56,28 @@ INPUT_COMMIT = "1" * 40
 OUTPUT_COMMIT = "2" * 40
 
 
-def review_tool_reference() -> ReviewToolEvidenceReference:
-    """Reference the scripted adapter's explicit review observation."""
+def review_tool_claim(
+    observable: str = "scripted-review-observation",
+) -> ReviewToolEvidenceClaim:
+    """Select the scripted adapter's explicit review observation."""
 
-    return ReviewToolEvidenceReference(
-        tool_call_id="tool-001",
-        observable="scripted-review-observation",
+    return ReviewToolEvidenceClaim(observable=observable)
+
+
+def captured_tool_call(index: int, output: str) -> AgentToolCallEvidence:
+    """Return one controller-numbered result for semantic grounding tests."""
+
+    encoded = output.encode()
+    return AgentToolCallEvidence(
+        id=f"tool-{index:03d}",
+        tool_name="read",
+        external_call_sha256=f"{index:064x}",
+        arguments_sha256=f"{index + 100:064x}",
+        outcome="succeeded",
+        is_error=False,
+        output_sha256=f"{index + 200:064x}",
+        output_bytes=len(encoded),
+        output_excerpt=output,
     )
 
 
@@ -357,6 +375,9 @@ def test_review_prompt_requires_adversarial_absolute_claim_boundaries() -> None:
     assessment_schema = response_schema["$defs"]["ReviewCriterionAssessmentResponse"]
     assert "tool_evidence" in assessment_schema["required"]
     assert "default" not in assessment_schema["properties"]["tool_evidence"]
+    claim_schema = response_schema["$defs"]["ReviewToolEvidenceClaim"]
+    assert claim_schema["required"] == ["observable"]
+    assert "tool_call_id" not in claim_schema["properties"]
 
 
 def _review_result(response: ReviewReportResponse | str):
@@ -389,7 +410,7 @@ def test_dynamic_review_response_requires_exact_criterion_assessments() -> None:
         status="satisfied",
         adversarial_check="Ran the CLI against a missing local-link fixture.",
         evidence="The CLI returned non-zero and named the broken link.",
-        tool_evidence=(review_tool_reference(),),
+        tool_evidence=(review_tool_claim(),),
     )
     request, result = _review_result(
         ReviewReportResponse(
@@ -407,39 +428,74 @@ def test_dynamic_review_response_requires_exact_criterion_assessments() -> None:
         reviewed_criterion_ids=("AC_LINKS",),
     )
 
-    assert isinstance(parsed.body, ReviewReportResponse)
-    assert parsed.body.criterion_assessments == (assessment,)
+    assert isinstance(parsed.body, GroundedReviewReportResponse)
+    assert parsed.body.criterion_assessments[0].criterion_id == assessment.criterion_id
+    reference = parsed.body.criterion_assessments[0].tool_evidence[0]
+    assert reference.tool_call_id == "tool-001"
+    assert reference.observable == "scripted-review-observation"
 
 
-@pytest.mark.parametrize(
-    ("reference", "error"),
-    [
-        (
-            ReviewToolEvidenceReference(
-                tool_call_id="tool-002",
-                observable="scripted-review-observation",
-            ),
-            "unknown tool call tool-002",
+def test_controller_resolves_observables_after_unrelated_preliminary_calls() -> None:
+    helper_output = "created /tmp/sat-review-probe-boundary.py bytes=226"
+    marker_output = "SAT_REVIEWER_HELPER_OK\nSAT_AGENT_WRITE_BLOCKED"
+    assessment = ReviewCriterionAssessmentResponse(
+        criterion_id="AC_LINKS",
+        status="satisfied",
+        adversarial_check="Exercised the missing-link boundary with a probe.",
+        evidence="The helper and Python result established the behavior.",
+        tool_evidence=(
+            review_tool_claim(helper_output),
+            review_tool_claim(marker_output),
         ),
-        (
-            ReviewToolEvidenceReference(
-                tool_call_id="tool-001",
-                observable="fabricated observation",
+    )
+    request, result = _review_result(
+        ReviewReportResponse(
+            verdict="accept",
+            criterion_assessments=(assessment,),
+            summary="The assigned criterion is satisfied.",
+        )
+    )
+    calls = tuple(
+        captured_tool_call(index, output)
+        for index, output in enumerate(
+            (
+                "initial listing",
+                "helper availability",
+                "source inspection",
+                helper_output,
+                "clean workspace",
+                marker_output,
             ),
-            "does not contain the cited observable",
-        ),
-    ],
-)
-def test_dynamic_review_response_rejects_ungrounded_tool_claims(
-    reference: ReviewToolEvidenceReference,
-    error: str,
-) -> None:
+            start=1,
+        )
+    )
+    result = result.model_copy(
+        update={"telemetry": result.telemetry.model_copy(update={"tool_calls": calls})}
+    )
+
+    parsed = parse_dynamic_agent_response(
+        result,
+        request,
+        task_brief=task_brief(),
+        team_plan=team_plan(),
+        reviewed_criterion_ids=("AC_LINKS",),
+    )
+
+    assert isinstance(parsed.body, GroundedReviewReportResponse)
+    references = parsed.body.criterion_assessments[0].tool_evidence
+    assert [reference.tool_call_id for reference in references] == [
+        "tool-004",
+        "tool-006",
+    ]
+
+
+def test_dynamic_review_response_rejects_an_unmatched_tool_claim() -> None:
     assessment = ReviewCriterionAssessmentResponse(
         criterion_id="AC_LINKS",
         status="satisfied",
         adversarial_check="Ran the CLI against a missing local-link fixture.",
         evidence="Claimed an observation that must be controller-bound.",
-        tool_evidence=(reference,),
+        tool_evidence=(review_tool_claim("fabricated observation"),),
     )
     request, result = _review_result(
         ReviewReportResponse(
@@ -449,7 +505,76 @@ def test_dynamic_review_response_rejects_ungrounded_tool_claims(
         )
     )
 
-    with pytest.raises(AgentArtifactResponseError, match=error):
+    with pytest.raises(AgentArtifactResponseError, match="does not match any"):
+        parse_dynamic_agent_response(
+            result,
+            request,
+            task_brief=task_brief(),
+            team_plan=team_plan(),
+            reviewed_criterion_ids=("AC_LINKS",),
+        )
+
+
+def test_dynamic_review_response_rejects_an_ambiguous_tool_claim() -> None:
+    assessment = ReviewCriterionAssessmentResponse(
+        criterion_id="AC_LINKS",
+        status="satisfied",
+        adversarial_check="Ran two probes with an indistinguishable result.",
+        evidence="The semantic selector must identify one result.",
+        tool_evidence=(review_tool_claim(),),
+    )
+    request, result = _review_result(
+        ReviewReportResponse(
+            verdict="accept",
+            criterion_assessments=(assessment,),
+            summary="Claimed the assigned criterion is satisfied.",
+        )
+    )
+    first = result.telemetry.tool_calls[0]
+    duplicate = first.model_copy(
+        update={
+            "id": "tool-002",
+            "external_call_sha256": "e" * 64,
+        }
+    )
+    result = result.model_copy(
+        update={
+            "telemetry": result.telemetry.model_copy(
+                update={"tool_calls": (first, duplicate)}
+            )
+        }
+    )
+
+    with pytest.raises(AgentArtifactResponseError, match="matches multiple"):
+        parse_dynamic_agent_response(
+            result,
+            request,
+            task_brief=task_brief(),
+            team_plan=team_plan(),
+            reviewed_criterion_ids=("AC_LINKS",),
+        )
+
+
+def test_dynamic_review_response_rejects_duplicate_selectors_for_one_result() -> None:
+    assessment = ReviewCriterionAssessmentResponse(
+        criterion_id="AC_LINKS",
+        status="satisfied",
+        adversarial_check="Ran one missing-link probe.",
+        evidence="Two fragments must not duplicate one result reference.",
+        tool_evidence=(
+            review_tool_claim("scripted-review-observation"),
+            review_tool_claim("review-observation"),
+        ),
+    )
+    request, result = _review_result(
+        ReviewReportResponse(
+            verdict="accept",
+            criterion_assessments=(assessment,),
+            summary="Claimed the assigned criterion is satisfied.",
+        )
+    )
+
+    with pytest.raises(AgentArtifactResponseError, match="same current tool result"):
         parse_dynamic_agent_response(
             result,
             request,
@@ -486,13 +611,46 @@ def test_dynamic_review_response_structurally_requires_tool_evidence() -> None:
         )
 
 
+def test_dynamic_review_response_rejects_a_model_supplied_controller_tool_id() -> None:
+    response = {
+        "verdict": "accept",
+        "termination_reason": None,
+        "criterion_assessments": [
+            {
+                "criterion_id": "AC_LINKS",
+                "status": "satisfied",
+                "adversarial_check": "Ran a missing-link probe.",
+                "evidence": "Observed the expected non-zero result.",
+                "tool_evidence": [
+                    {
+                        "tool_call_id": "tool-001",
+                        "observable": "scripted-review-observation",
+                    }
+                ],
+            }
+        ],
+        "findings": [],
+        "summary": "Claimed the assigned criterion is satisfied.",
+    }
+    request, result = _review_result(json.dumps(response))
+
+    with pytest.raises(AgentArtifactResponseError, match="tool_call_id"):
+        parse_dynamic_agent_response(
+            result,
+            request,
+            task_brief=task_brief(),
+            team_plan=team_plan(),
+            reviewed_criterion_ids=("AC_LINKS",),
+        )
+
+
 def test_dynamic_review_response_rejects_a_citation_when_no_tool_was_called() -> None:
     assessment = ReviewCriterionAssessmentResponse(
         criterion_id="AC_LINKS",
         status="satisfied",
         adversarial_check="Claimed to run a missing-link probe.",
         evidence="Claimed the CLI returned non-zero.",
-        tool_evidence=(review_tool_reference(),),
+        tool_evidence=(review_tool_claim(),),
     )
     request, result = _review_result(
         ReviewReportResponse(
@@ -505,7 +663,7 @@ def test_dynamic_review_response_rejects_a_citation_when_no_tool_was_called() ->
         update={"telemetry": result.telemetry.model_copy(update={"tool_calls": ()})}
     )
 
-    with pytest.raises(AgentArtifactResponseError, match="unknown tool call tool-001"):
+    with pytest.raises(AgentArtifactResponseError, match="does not match any"):
         parse_dynamic_agent_response(
             result,
             request,
@@ -540,7 +698,7 @@ def test_dynamic_review_response_rejects_missing_or_unscoped_evidence() -> None:
                     status="satisfied",
                     adversarial_check="Checked another behavior.",
                     evidence="Observed another behavior.",
-                    tool_evidence=(review_tool_reference(),),
+                    tool_evidence=(review_tool_claim(),),
                 ),
             ),
             summary="Reviewed a criterion outside the assigned scope.",
@@ -564,7 +722,7 @@ def test_dynamic_review_response_rejects_missing_or_unscoped_evidence() -> None:
                     status="satisfied",
                     adversarial_check="Checked the assigned behavior.",
                     evidence="Observed the assigned behavior.",
-                    tool_evidence=(review_tool_reference(),),
+                    tool_evidence=(review_tool_claim(),),
                 ),
             ),
             summary="Claimed an unknown assigned criterion is satisfied.",
@@ -586,7 +744,7 @@ def test_dynamic_review_response_binds_blocked_assessment_to_finding() -> None:
         status="blocked",
         adversarial_check="Ran the CLI against a broken nested link.",
         evidence="The command returned zero despite the broken link.",
-        tool_evidence=(review_tool_reference(),),
+        tool_evidence=(review_tool_claim(),),
     )
     request, result = _review_result(
         ReviewReportResponse(
@@ -614,15 +772,16 @@ def test_dynamic_review_response_binds_blocked_assessment_to_finding() -> None:
         team_plan=team_plan(),
         reviewed_criterion_ids=("AC_LINKS",),
     )
-    assert isinstance(parsed.body, ReviewReportResponse)
+    assert isinstance(parsed.body, GroundedReviewReportResponse)
 
-    missing_scope = parsed.body.model_copy(
-        update={
-            "findings": tuple(
-                finding.model_copy(update={"criterion_ids": ()})
-                for finding in parsed.body.findings
-            )
-        }
+    missing_scope = ReviewReportResponse(
+        verdict="revise",
+        criterion_assessments=(blocked,),
+        findings=tuple(
+            finding.model_copy(update={"criterion_ids": ()})
+            for finding in parsed.body.findings
+        ),
+        summary=parsed.body.summary,
     )
     request, result = _review_result(missing_scope)
     with pytest.raises(AgentArtifactResponseError, match="must reference"):
