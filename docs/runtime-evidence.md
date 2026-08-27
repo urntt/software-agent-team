@@ -515,7 +515,7 @@ when investigating it rather than editing artifacts in place.
   or complex workload class. Product policy deterministically resolves that
   class inside a capability-specific default-to-ceiling envelope; a direct user
   timeout override must remain inside the effective envelope. Reviewer scope
-  independently maps fewer than 6, 6–12, or 13+ criteria to a routine,
+  independently maps fewer than 6, 6–10, or 11+ criteria to a routine,
   substantial, or complex minimum; the controller uses the higher of that
   floor and Planner workload. The resulting
   Adaptive TeamPlan freezes the exact timeout for each run-scoped Agent. A

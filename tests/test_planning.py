@@ -631,13 +631,48 @@ def test_review_scope_timeout_thresholds_are_deterministic_and_ordered() -> None
 
     assert configured.review_scope_workload(5) is AgentWorkload.ROUTINE
     assert configured.review_scope_workload(6) is AgentWorkload.SUBSTANTIAL
-    assert configured.review_scope_workload(12) is AgentWorkload.SUBSTANTIAL
+    assert configured.review_scope_workload(9) is AgentWorkload.SUBSTANTIAL
+    assert configured.review_scope_workload(10) is AgentWorkload.SUBSTANTIAL
+    assert configured.review_scope_workload(11) is AgentWorkload.COMPLEX
+    assert configured.review_scope_workload(12) is AgentWorkload.COMPLEX
     assert configured.review_scope_workload(13) is AgentWorkload.COMPLEX
     with pytest.raises(ValidationError, match="thresholds must be ordered"):
         policy(
-            review_substantial_criterion_threshold=13,
-            review_complex_criterion_threshold=13,
+            review_substantial_criterion_threshold=11,
+            review_complex_criterion_threshold=11,
         )
+
+
+def test_controller_maps_eleven_criterion_review_to_complex_timeout() -> None:
+    profile_criteria = tuple(
+        AcceptanceCriterion(
+            id=f"AC_PROFILE_{index}",
+            description=f"The project satisfies profile condition {index}.",
+            verification=f"Verify profile condition {index} independently.",
+        )
+        for index in range(1, 10)
+    )
+    configured = policy(profile_acceptance_criteria=profile_criteria)
+
+    preview = preview_adaptive_proposal(
+        request(),
+        proposal(),
+        configured,
+        created_at=FIXED_TIME,
+    )
+
+    reviewer = preview.team_plan.get_agent("quality_reviewer")
+    resolution = next(
+        item
+        for item in preview.timeout_resolutions
+        if item.agent_id == "quality_reviewer"
+    )
+    assert len(preview.task_brief.acceptance_criteria) == 11
+    assert reviewer.timeout_seconds == 300
+    assert resolution.source == "policy_scope_floor"
+    assert resolution.workload is AgentWorkload.ROUTINE
+    assert resolution.minimum_seconds == 300
+    assert resolution.scope_criterion_count == 11
 
 
 def test_controller_adds_profile_criteria_without_model_echo() -> None:

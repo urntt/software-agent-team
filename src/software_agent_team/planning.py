@@ -1093,7 +1093,7 @@ class PlanningPolicy(BaseModel):
     max_concurrency: int = Field(default=4, ge=1, le=16)
     max_review_agents: int = Field(default=16, ge=1, le=16)
     review_substantial_criterion_threshold: int = Field(default=6, ge=2, le=99)
-    review_complex_criterion_threshold: int = Field(default=13, ge=3, le=100)
+    review_complex_criterion_threshold: int = Field(default=11, ge=3, le=100)
     budget: AgentBudget
     capability_timeouts: dict[AgentCapability, CapabilityTimeoutPolicy]
     model_routing: ModelRoutingPolicy | None = None

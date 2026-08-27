@@ -90,8 +90,8 @@ default, `complex` maps to twice that default capped at 3,600 seconds, and
 `substantial` maps to their integer midpoint. Coding and integration therefore
 resolve to 900, 1,350, or 1,800 seconds; testing and review resolve to 300, 450,
 or 600 seconds. Review scope independently supplies a minimum: fewer than six
-criteria is routine, six through twelve is substantial, and thirteen or more
-is complex. The controller uses the higher of the Planner estimate and this
+criteria is routine, six through ten is substantial, and eleven or more is
+complex. The controller uses the higher of the Planner estimate and this
 scope floor. An explicit global timeout override collapses all three workload
 classes to one value but cannot undercut an applicable scope floor. Every
 resolution and reason is shown in the overview and never comes from an
@@ -583,10 +583,11 @@ timeout, prompt, semantic repair limit, Git or read-only boundary, aggregate
 budget, execution record, and durable handoffs. Quality gates are shared once
 per immutable iteration, and every quality Agent must be downstream of every
 writer. Reviewer timeouts take the higher of Planner workload and the
-controller-derived criterion-scope floor. The Reviewer runtime keeps source
-read-only but permits `/tmp` probe-script creation and contains the pinned `uv`
-needed to exercise generated-project commands. Complete Agent summaries remain
-immutable artifact evidence; the
+controller-derived criterion-scope floor. The Reviewer runtime keeps project
+source read-only but makes the write-tool exception explicit and permits it
+only for uniquely named `/tmp` probe scripts or fixtures; the runtime contains
+the pinned `uv` needed to exercise generated-project commands. Complete Agent
+summaries remain immutable artifact evidence; the
 controller derives bounded scheduler and downstream-prompt projections with an
 explicit truncation marker, original length, and source-summary SHA-256 rather
 than failing a handoff or asking the model to regenerate known content. The

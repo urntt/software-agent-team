@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** Phase 3E implemented; five fresh installed adaptive rehearsals have driven controller, transport, progress, profile, and review-boundary corrections, with a clean provider rerun next
+**Current milestone:** Phase 3E implemented; six fresh installed adaptive rehearsals have driven controller, transport, progress, profile, and review-boundary corrections, with a clean provider rerun next
 
 **Last updated:** August 27, 2026
 
@@ -50,7 +50,7 @@ validation also rejects a plan whose complete planned iterations cannot fit
 its call budget. Recovery
 verifies the exact TaskBrief binding, TeamPlan digest, fixed manifest version,
 fixed team digest, resolved Agent timeouts, and cross-file run metadata. The
-complete repository check passes with 609 offline tests.
+complete repository check passes with 610 offline tests.
 
 `RunEvent` is also an executable, append-only contract. Every current workflow
 progress update is persisted with a contiguous sequence, lifecycle revision,
@@ -363,7 +363,7 @@ SAT now aggregates all visible transport text in order while requiring exactly
 one semantic response object, stops hidden lifecycle heartbeats when the exact
 Agent terminates, renders gate outcomes truthfully, and shows bounded Planning
 heartbeats and repair checkpoints. Review scope supplies a controller-owned
-timeout floor, so 6–12 criteria resolve to at least 450 seconds and 13 or more
+timeout floor, so 6–10 criteria resolve to at least 450 seconds and 11 or more
 to 600 seconds under the current policy. Review may create uniquely named
 scripts only under `/tmp` and run them directly against read-only source; the
 pinned quality image now includes `uv` for the exact generated commands.
@@ -371,9 +371,31 @@ pinned quality image now includes `uv` for the exact generated commands.
 The Python profile now accepts ordinary documentation headings but requires
 the exact setup, direct no-extra-argument start, and test commands. It requires
 both clean-tree and post-setup pytest to work, including explicit src-layout
-import configuration. The full 609-test check passes. Another fresh installed
-provider run remains required before this adaptive journey is demonstration
-ready.
+import configuration.
+
+The sixth fresh-account rehearsal confirmed that Planning heartbeats, bounded
+repair state, completed-Agent heartbeat termination, truthful gate symbols,
+the exact generated-project command contract, and criterion-scope timeout
+resolution all reached the installed path. One Implementation Agent completed
+in a single call, produced a clean commit, and passed all four deterministic
+gates. Its downstream Reviewer was responsible for 11 criteria and still
+timed out at the 450-second substantial allowance before returning a semantic
+report, so SAT correctly withheld delivery and cleaned its run containers.
+
+The Reviewer prompt had two contradictory boundaries: a general prohibition
+on modifying files and a final prohibition on mutating tools both conflicted
+with the middle instruction to use the write tool for `/tmp` probe scripts.
+The live session never used write and instead spent tool turns on heredoc
+commands that deterministic preflight correctly rejected. The prompt now says
+that project source is read-only while uniquely named `/tmp` probe scripts or
+fixtures are the sole file-mutation exception, and it asks the Reviewer to
+consolidate related probes rather than repeat commands. The provider-backed
+11-criterion timeout at the substantial allowance now maps 11 or more criteria
+to the existing complex allowance. The separate 10-criterion timeout only
+proved that routine was insufficient, so 10 remains substantial; this does not
+change coding, testing, smaller Review, call-count, or total-duration budgets.
+The full 610-test suite passes. A fresh installed provider run remains required
+before this adaptive journey is demonstration ready.
 
 The rehearsal sequence below concerns the predecessor guided fixed-team
 product path and is retained as defect and regression evidence. It proves the
