@@ -167,13 +167,17 @@ failures rather than successful check marks. Reviewer timeout has a
 controller-derived criterion-scope floor. Its project mount and general write
 tools remain read-only, while an immutable path-restricted helper can create a
 new bounded `/tmp/sat-review-probe-*` script or fixture without overwriting an
-existing file. The image also includes the pinned `uv` required to exercise
-exact project commands. Reviewer criterion claims must cite actual
-current-invocation tool results; SAT extracts and sanitizes those records itself
-and binds every current result containing each model-supplied exact fragment to
-its own tool ID. Repeated or overlapping selectors are deduplicated, while a
-fragment with no current match is rejected; the model never has to predict a
-controller-owned ID or manufacture unique wording.
+existing file. The image also includes a locked offline Python wheelhouse.
+Deterministic verification copies only clean committed files into fresh
+sandbox scratch and runs the generated project's exact setup, test, and start
+commands with no network. Reviewer criterion claims must cite actual tool
+results. On the normal adaptive path, a bounded semantic repair may reuse an
+integrity-checked result from an earlier attempt by the same Reviewer against
+the same immutable commit. SAT extracts and sanitizes those records itself and
+persists attempt-qualified tool IDs. Repeated or overlapping selectors are
+deduplicated, while a fragment with no eligible match is rejected; the model
+never has to predict a controller-owned attempt or tool ID or manufacture
+unique wording.
 The foreground control palette, live visibility changes, prospective guidance,
 replacement Planning, cooperative pause/resume, best-effort interruption, and
 terminal cancellation are integrated and covered offline. Durable resume after
@@ -185,8 +189,9 @@ routes, remains required before claiming demonstration readiness for that path.
 
 The generated Python profile requires README documentation of the exact setup,
 start, and test argv. The start command must be directly usable from the
-project root without extra arguments, and pytest must work in both the clean
-quality workspace and the documented post-setup flow.
+project root without extra arguments. A dedicated quality gate verifies all
+three exact commands from a fresh copy of the immutable commit; the ordinary
+clean-workspace pytest gate remains an independent check.
 
 The earlier guided fixed-team path passed a complete live-provider rehearsal
 in a fresh non-root Linux account, including accepted delivery, exact project

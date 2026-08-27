@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tomllib
@@ -80,6 +81,81 @@ def run_validator(repository: Path) -> subprocess.CompletedProcess[str]:
     )
 
 
+def commit_project(repository: Path) -> None:
+    """Commit the test project so clean-copy validation has a Git authority."""
+
+    for arguments in (
+        ("config", "user.name", "urntt"),
+        ("config", "user.email", "urntts@gmail.com"),
+        ("add", "."),
+        ("commit", "--quiet", "-m", "test: initialize generated project"),
+    ):
+        subprocess.run(
+            ["git", "-C", str(repository), *arguments],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+
+def write_fake_uv(path: Path) -> Path:
+    """Create a deterministic exact-command executable for host-side tests."""
+
+    executable = path / "uv"
+    executable.write_text(
+        """#!/usr/bin/env python3
+import json
+import os
+from pathlib import Path
+import sys
+
+cwd = Path.cwd()
+argv = sys.argv[1:]
+log = Path(os.environ["FAKE_UV_LOG"])
+with log.open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps({"argv": argv, "cwd": str(cwd)}) + "\\n")
+if (cwd / ".git").exists() or (cwd / "local-only.txt").exists():
+    raise SystemExit(31)
+if os.environ.get("FAKE_UV_FAIL") == " ".join(argv):
+    raise SystemExit(32)
+if argv == ["sync", "--dev"]:
+    (cwd / ".venv").mkdir()
+    (cwd / ".venv" / "ready").write_text("ready", encoding="utf-8")
+elif argv == ["run", "pytest"]:
+    if not (cwd / ".venv" / "ready").is_file():
+        raise SystemExit(33)
+elif argv == ["run", "link-checker", "."]:
+    if not (cwd / ".venv" / "ready").is_file():
+        raise SystemExit(34)
+else:
+    raise SystemExit(35)
+""",
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    return executable
+
+
+def run_command_validator(
+    repository: Path,
+    *,
+    environment: dict[str, str],
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            sys.executable,
+            str(PROFILE_ROOT / "validation" / "run_commands.py"),
+            "--repository",
+            str(repository),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+        timeout=20,
+    )
+
+
 def test_product_profile_is_separate_from_the_task_manager_evaluation() -> None:
     configuration = load_quality_gate_configuration(
         REPOSITORY_ROOT / "configs" / "product-policy.json",
@@ -88,7 +164,8 @@ def test_product_profile_is_separate_from_the_task_manager_evaluation() -> None:
 
     assert configuration.policy.id == "product_python_v1"
     assert configuration.manifest.id == "python_product_v1"
-    assert configuration.policy.sandbox.image == "sat-python-quality:phase1-v4"
+    assert configuration.policy.sandbox.image == "sat-python-quality:phase1-v5"
+    assert configuration.policy.limits.total_timeout_seconds == 420
     serialized = json.dumps(
         {
             "policy": configuration.policy.model_dump(mode="json"),
@@ -140,6 +217,18 @@ def test_product_test_gate_matches_the_delivered_pytest_entrypoint() -> None:
 
     assert project_contract["test"] == ["uv", "run", "pytest"]
     assert gate.argv == ("pytest", "-q", "-p", "no:cacheprovider")
+    exact_gate = next(
+        gate
+        for gate in configuration.manifest.gates
+        if gate.id == "CHECK_EXACT_PROJECT_COMMANDS"
+    )
+    assert exact_gate.argv == (
+        "python",
+        "/opt/software-agent-team/inputs/python-product-contract/run_commands.py",
+        "--repository",
+        "/workspace",
+    )
+    assert exact_gate.criterion_ids == ("AC_RUNNABLE", "AC_TESTS")
     seed_configuration = tomllib.loads(
         (PROFILE_ROOT / "seed" / "pyproject.toml").read_text(encoding="utf-8")
     )
@@ -276,3 +365,111 @@ def test_product_contract_rejects_a_negated_setup_ignore_rule(
 
     assert result.returncode == 1
     assert ".gitignore must effectively exclude uv.lock" in result.stderr
+
+
+def test_exact_command_gate_uses_only_committed_files_in_fresh_scratch(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    write_valid_project(project)
+    commit_project(project)
+    (project / "local-only.txt").write_text("must not be copied", encoding="utf-8")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    write_fake_uv(fake_bin)
+    log = tmp_path / "uv.jsonl"
+    environment = {
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "FAKE_UV_LOG": str(log),
+    }
+
+    result = run_command_validator(project, environment=environment)
+
+    assert result.returncode == 0, result.stderr
+    summary = json.loads(result.stdout)
+    assert summary == {
+        "setup": "passed",
+        "source": "committed_tracked_files",
+        "start": "exited_zero",
+        "test": "passed",
+        "workspace": "fresh_sandbox_scratch_copy",
+    }
+    calls = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+    assert [call["argv"] for call in calls] == [
+        ["sync", "--dev"],
+        ["run", "pytest"],
+        ["run", "link-checker", "."],
+    ]
+    assert len({call["cwd"] for call in calls}) == 1
+    assert calls[0]["cwd"] != str(project)
+    assert not (project / ".venv").exists()
+
+
+def test_exact_command_gate_reports_setup_failure_without_running_later_commands(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    write_valid_project(project)
+    commit_project(project)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    write_fake_uv(fake_bin)
+    log = tmp_path / "uv.jsonl"
+    environment = {
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "FAKE_UV_LOG": str(log),
+        "FAKE_UV_FAIL": "sync --dev",
+    }
+
+    result = run_command_validator(project, environment=environment)
+
+    assert result.returncode == 1
+    assert "setup command failed" in result.stderr
+    calls = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+    assert [call["argv"] for call in calls] == [["sync", "--dev"]]
+
+
+def test_exact_command_gate_rejects_modified_tracked_files(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    write_valid_project(project)
+    commit_project(project)
+    readme = (project / "README.md").read_text(encoding="utf-8")
+    (project / "README.md").write_text(
+        f"{readme}\nPost-commit change.\n",
+        encoding="utf-8",
+    )
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    write_fake_uv(fake_bin)
+    environment = {
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "FAKE_UV_LOG": str(tmp_path / "uv.jsonl"),
+    }
+
+    result = run_command_validator(project, environment=environment)
+
+    assert result.returncode == 1
+    assert "differ from the immutable commit" in result.stderr
+
+
+def test_exact_command_gate_rejects_a_tracked_symlink(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    write_valid_project(project)
+    (project / "linked-readme").symlink_to("README.md")
+    commit_project(project)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    write_fake_uv(fake_bin)
+    environment = {
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "FAKE_UV_LOG": str(tmp_path / "uv.jsonl"),
+    }
+
+    result = run_command_validator(project, environment=environment)
+
+    assert result.returncode == 1
+    assert "tracked entries must be regular files: linked-readme" in result.stderr

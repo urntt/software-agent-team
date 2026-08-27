@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 from software_agent_team.artifacts import (
     AgentRole,
+    AgentToolCallEvidence,
     AgentToolEvidenceStatus,
     ArtifactKind,
     ImplementationPlan,
@@ -37,6 +38,18 @@ class AgentArtifactResponseError(ValueError):
     """Raised when an Agent response cannot become attributable run evidence."""
 
 
+@dataclass(frozen=True)
+class ReviewToolEvidenceAttempt:
+    """One integrity-checked attempt in a bounded Reviewer response chain."""
+
+    execution_attempt: int
+    tool_calls: tuple[AgentToolCallEvidence, ...]
+
+    def __post_init__(self) -> None:
+        if self.execution_attempt < 1:
+            raise ValueError("review evidence attempt must be positive")
+
+
 def _clean_unique_text(values: tuple[str, ...]) -> tuple[str, ...]:
     cleaned = tuple(value.strip() for value in values)
     if any(not value for value in cleaned):
@@ -49,8 +62,10 @@ def _clean_unique_text(values: tuple[str, ...]) -> tuple[str, ...]:
 def _ground_review_tool_evidence(
     body: ReviewReportResponse,
     result: AgentExecutionResult,
+    *,
+    evidence_attempts: tuple[ReviewToolEvidenceAttempt, ...] = (),
 ) -> GroundedReviewReportResponse:
-    """Bind model-visible fragments to every matching current tool result."""
+    """Bind fragments to matching results in one bounded Reviewer chain."""
 
     if not body.criterion_assessments:
         return GroundedReviewReportResponse(
@@ -67,29 +82,48 @@ def _ground_review_tool_evidence(
         )
     if telemetry.tool_evidence_status is not AgentToolEvidenceStatus.CAPTURED:
         raise ValueError("review tool evidence was not captured")
+    attempts = evidence_attempts or (
+        ReviewToolEvidenceAttempt(
+            execution_attempt=1,
+            tool_calls=telemetry.tool_calls,
+        ),
+    )
+    attempt_numbers = [item.execution_attempt for item in attempts]
+    if attempt_numbers != sorted(set(attempt_numbers)):
+        raise ValueError("review evidence attempts must be unique and ordered")
+    if attempts[-1].tool_calls != telemetry.tool_calls:
+        raise ValueError("review evidence chain does not end at the current attempt")
     grounded_assessments: list[ReviewCriterionAssessment] = []
     for assessment in body.criterion_assessments:
-        observable_by_tool_call_id: dict[str, str] = {}
+        observable_by_tool_call: dict[tuple[int, str], str] = {}
         for claim in assessment.tool_evidence:
             matches = tuple(
-                call
-                for call in telemetry.tool_calls
+                (attempt.execution_attempt, call)
+                for attempt in attempts
+                for call in attempt.tool_calls
                 if claim.observable in call.output_excerpt
             )
             if not matches:
                 raise ValueError(
                     f"criterion {assessment.criterion_id} evidence fragment does "
-                    "not match any current tool result"
+                    "not match any eligible review-chain tool result"
                 )
-            for match in matches:
-                observable_by_tool_call_id.setdefault(match.id, claim.observable)
+            for execution_attempt, match in matches:
+                observable_by_tool_call.setdefault(
+                    (execution_attempt, match.id),
+                    claim.observable,
+                )
         references = tuple(
             ReviewToolEvidenceReference(
+                execution_attempt=attempt.execution_attempt,
                 tool_call_id=call.id,
-                observable=observable_by_tool_call_id[call.id],
+                observable=observable_by_tool_call[
+                    (attempt.execution_attempt, call.id)
+                ],
             )
-            for call in telemetry.tool_calls
-            if call.id in observable_by_tool_call_id
+            for attempt in attempts
+            for call in attempt.tool_calls
+            if (attempt.execution_attempt, call.id) in observable_by_tool_call
         )
         grounded_assessments.append(
             ReviewCriterionAssessment(
@@ -633,6 +667,7 @@ def parse_dynamic_agent_response(
     team_plan: TeamPlan,
     assigned_task_ids: Collection[str] = (),
     reviewed_criterion_ids: Collection[str] = (),
+    review_tool_evidence_attempts: tuple[ReviewToolEvidenceAttempt, ...] = (),
 ) -> ParsedAgentResponse:
     """Bind one semantic response to an approved run-scoped AgentSpec."""
 
@@ -700,7 +735,11 @@ def parse_dynamic_agent_response(
     body = parsed.body
     if isinstance(body, ReviewReportResponse):
         try:
-            body = _ground_review_tool_evidence(body, result)
+            body = _ground_review_tool_evidence(
+                body,
+                result,
+                evidence_attempts=review_tool_evidence_attempts,
+            )
         except (ValueError, ValidationError) as error:
             raise AgentArtifactResponseError(
                 f"Agent semantic response is invalid: {_safe_validation_detail(error)}"

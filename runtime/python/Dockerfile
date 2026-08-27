@@ -9,13 +9,22 @@ COPY requirements.lock /opt/software-agent-team/requirements.lock
 RUN python -m pip install --no-cache-dir --requirement \
     /opt/software-agent-team/requirements.lock
 
+RUN mkdir -p /opt/software-agent-team/wheels \
+    && python -m pip download --no-cache-dir --only-binary=:all: \
+    --dest /opt/software-agent-team/wheels --requirement \
+    /opt/software-agent-team/requirements.lock colorama==0.4.6 \
+    && chmod -R a=rX /opt/software-agent-team/wheels
+
 COPY sat_probe_write.py /usr/local/bin/sat-probe-write
 
 RUN chown 0:0 /usr/local/bin/sat-probe-write \
     && chmod 0555 /usr/local/bin/sat-probe-write
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    UV_CACHE_DIR=/tmp/uv-cache \
+    UV_FIND_LINKS=/opt/software-agent-team/wheels \
+    UV_OFFLINE=1
 
 WORKDIR /workspace
 

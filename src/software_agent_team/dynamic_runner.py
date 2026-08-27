@@ -78,6 +78,7 @@ from software_agent_team.quality_gates import (
 from software_agent_team.responses import (
     AgentArtifactResponseError,
     GroundedReviewReportResponse,
+    ReviewToolEvidenceAttempt,
     TestReportResponse,
     WorkResultResponse,
     controller_fields_for,
@@ -475,6 +476,7 @@ class DynamicAgentRunner:
         repair_detail: str | None = None
         semantic_repairs = 0
         attempt = 1
+        review_evidence_attempts: list[ReviewToolEvidenceAttempt] = []
         route_ids = self.team_plan.model_routes.authorized_route_ids(agent.id)
         route_index = 0
         provider_switching = ModelSwitchCondition.PROVIDER_FAILURE in (
@@ -531,8 +533,17 @@ class DynamicAgentRunner:
             record_error: str | None = None
             repairable = False
             failure: Exception | None = None
+            current_review_evidence: ReviewToolEvidenceAttempt | None = None
             try:
                 self._validate_execution_result(result, request)
+                if (
+                    agent.capability is AgentCapability.REVIEW
+                    and result.status is AgentExecutionStatus.COMPLETED
+                ):
+                    current_review_evidence = ReviewToolEvidenceAttempt(
+                        execution_attempt=attempt,
+                        tool_calls=result.telemetry.tool_calls,
+                    )
                 snapshot = (
                     None
                     if result.status is AgentExecutionStatus.INTERRUPTED
@@ -556,6 +567,14 @@ class DynamicAgentRunner:
                             team_plan=self.team_plan,
                             assigned_task_ids=assigned_task_ids,
                             reviewed_criterion_ids=manual_scope,
+                            review_tool_evidence_attempts=(
+                                *review_evidence_attempts,
+                                *(
+                                    ()
+                                    if current_review_evidence is None
+                                    else (current_review_evidence,)
+                                ),
+                            ),
                         )
                     except AgentArtifactResponseError as error:
                         record_error = self._error_detail(error)
@@ -598,6 +617,8 @@ class DynamicAgentRunner:
                 pricing=pricing,
             )
             self._record_execution_reference(agent.id, persisted.reference)
+            if current_review_evidence is not None:
+                review_evidence_attempts.append(current_review_evidence)
             self._emit_activity(
                 agent,
                 kind=ProgressEventKind.AGENT_INVOCATION_COMPLETED,

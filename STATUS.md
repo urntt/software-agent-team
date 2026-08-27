@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** Phase 3E implemented; six fresh installed adaptive rehearsals have driven controller, transport, progress, profile, and review-boundary corrections, with a clean provider rerun next
+**Current milestone:** Phase 3E implemented; seven fresh installed adaptive rehearsals have driven controller, transport, progress, profile, and review-boundary corrections, with a clean provider rerun next
 
 **Last updated:** August 27, 2026
 
@@ -468,6 +468,47 @@ rejection of a model-supplied ID. A repeat fresh installed provider authority
 probe and complete adaptive run remain required before this journey is
 demonstration ready.
 
+The next fresh-account adaptive run passed device checks, isolated
+configuration, provider smoke, ordinary request capture, first-response
+Planning, overview approval, one Implementation Agent, and all deterministic
+quality gates. The writer produced a clean eight-file commit and its generated
+suite passed 54 tests. The independent Reviewer then made 21 attributable tool
+calls. Its first semantic response was invalid only because two finding paths
+were absolute. The bounded repair corrected those fields and correctly reused
+the unchanged probe fragments without repeating tool calls. The former
+grounding logic searched only the repair invocation, so it rejected valid
+evidence from the immediately preceding attempt and withheld delivery. This is
+a controller protocol defect, not evidence that a more capable model is
+required.
+
+Adaptive Reviewer grounding now carries sanitized evidence forward only within
+the same Reviewer, role stage, immutable commit, and bounded semantic-repair
+chain. Persisted references use `(execution_attempt, tool_call_id)` identities,
+so invocation-local IDs may safely repeat across attempts without ambiguity.
+The model still supplies only exact observable fragments and never predicts an
+attempt or tool ID. Regressions cover successful zero-call semantic repair,
+same-local-ID attempts, invalid chain order, and attempted evidence substitution
+outside the current chain. Replaying the preserved live attempts through the
+corrected grounding boundary accepts all 12 criterion assessments and binds 38
+references to attempt one while attempt two correctly contains zero tool calls.
+
+The same run also exposed a separate delivery-command evidence gap. A Reviewer
+probe had created a virtual environment beneath one mount path and later
+observed it beneath another, so that environment was not relocatable; the
+controller had not independently run every exact generated-project command
+from a clean post-commit copy. Runtime image `phase1-v5` now contains a locked
+offline wheelhouse. A new deterministic product gate rejects tracked drift and
+unsafe Git entries, copies only committed regular files into fresh disposable
+scratch, and runs the exact setup, test, and start argv with the network
+disabled. Its tmpfs is executable only so project-local virtual-environment
+entry points can launch; source and root filesystems remain read-only and the
+container remains non-root, capability-dropped, and resource-bounded. A real
+restricted container verification passed setup, all 54 project tests, and
+start against image ID
+`sha256:9e129565b0dea409d8808dbe58570701494db5181001a5480b40bf212f0013f4`.
+The complete 667-test offline suite passes. A fresh installed provider rerun
+remains required before declaring the adaptive journey demonstration ready.
+
 The rehearsal sequence below concerns the predecessor guided fixed-team
 product path and is retained as defect and regression evidence. It proves the
 installer, isolated runtime, fixed compatibility controller, delivery, and
@@ -753,8 +794,8 @@ The acceptance contract is
 - Contract-aware response normalization that permits presentation argv arrays
   around one semantic object while rejecting any additional object candidate;
 - Exact Dynamic Reviewer criterion assessments with adversarial checks,
-  exact current-invocation result selectors and controller-resolved tool IDs,
-  blocked-finding cross-binding, and bounded no-network foreground probes
+  same-chain attempt-qualified result selectors and controller-resolved tool
+  IDs, blocked-finding cross-binding, and bounded no-network foreground probes
   against read-only source;
 - Concrete phase-artifact and Agent-telemetry contracts with contextual
   validation;
@@ -775,9 +816,10 @@ The acceptance contract is
   acceptance suite, shared content-pinned Python image and dependency lock,
   per-run immutable local image identity,
   fixed quality-gate manifest, and independent acceptance suite;
-- Docker-only production gates with no network, read-only workspace execution,
-  non-root identity, fixed commands, resource limits, timeouts, and bounded
-  output;
+- Docker-only production gates with no network, read-only source execution,
+  non-root identity, fixed commands, resource limits, timeouts, bounded output,
+  plus fresh-scratch execution of exact generated setup, test, and start argv
+  through a locked offline wheelhouse;
 - The complete function-specialized workflow: Planner, Developer, controller
   snapshot, deterministic gates, independent Tester and Reviewer with
   configurable dispatch concurrency, decision, and launch-policy-bounded

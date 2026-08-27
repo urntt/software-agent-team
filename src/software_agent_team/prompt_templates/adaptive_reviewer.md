@@ -40,14 +40,17 @@ Return exactly one `criterion_assessments` entry for every assigned criterion.
 Each entry must name the concrete negative or boundary case you challenged and
 the observable source, documentation, deterministic-command, or sandbox-probe
 evidence for the result. It must also contain at least one `tool_evidence`
-reference to a tool result from this invocation. Controller-owned tool IDs are
-outside your response contract. For every reference, provide only a bounded
-exact result fragment of at most 256 characters; do not predict or return a
-tool-call ID. The controller binds every current result containing that
-fragment and supplies each tool ID, name, and outcome in its own execution
-record. It deduplicates repeated or overlapping fragments and rejects only a
-fragment that matches no current result. One call may support multiple criteria
-when it genuinely exercises them. If you cannot establish a
+reference to a tool result from this invocation or, during a controlled
+semantic repair, an earlier integrity-checked attempt in the same Reviewer
+chain. Controller-owned attempt and tool IDs are outside your response
+contract. For every reference, provide only a bounded exact result fragment of
+at most 256 characters; do not predict or return an attempt or tool-call ID.
+The controller binds every eligible result containing that fragment and
+supplies the execution attempt, tool ID, name, and outcome in its own evidence.
+It deduplicates repeated or overlapping fragments and rejects only a fragment
+that matches no eligible result. A semantic repair does not need to rerun an
+unchanged probe whose result was already captured in this chain. One call may
+support multiple criteria when it genuinely exercises them. If you cannot establish a
 criterion, mark it `blocked` and create a blocking finding that references that
 criterion. Never mark a criterion satisfied from a summary claim or passing
 project-authored test alone.

@@ -7,7 +7,15 @@ from enum import StrEnum
 from pathlib import PurePosixPath
 from typing import Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 ARTIFACT_SCHEMA_VERSION = 2
 COMMIT_PATTERN = r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
@@ -393,8 +401,24 @@ class ReviewToolEvidenceReference(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    execution_attempt: int = Field(default=1, ge=1)
     tool_call_id: str = Field(pattern=r"^tool-[0-9]{3}$")
     observable: str = Field(min_length=1, max_length=256)
+
+    @model_serializer(mode="wrap")
+    def preserve_legacy_attempt_omission(
+        self,
+        handler: SerializerFunctionWrapHandler,
+    ) -> object:
+        """Keep existing schema-v2 artifacts byte-stable when loaded again."""
+
+        serialized = handler(self)
+        if (
+            isinstance(serialized, dict)
+            and "execution_attempt" not in self.model_fields_set
+        ):
+            serialized.pop("execution_attempt", None)
+        return serialized
 
     @field_validator("observable")
     @classmethod
@@ -981,7 +1005,9 @@ class ReviewCriterionAssessment(BaseModel):
     ) -> tuple[ReviewToolEvidenceReference, ...]:
         """Keep controller tool references unambiguous within one criterion."""
 
-        identifiers = [value.tool_call_id for value in values]
+        identifiers = [
+            (value.execution_attempt, value.tool_call_id) for value in values
+        ]
         if len(identifiers) != len(set(identifiers)):
             raise ValueError("criterion tool-evidence references must be unique")
         return values

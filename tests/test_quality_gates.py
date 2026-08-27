@@ -395,12 +395,12 @@ def test_docker_argv_enforces_every_isolation_limit(
         "1.0",
     )
     assert any(
-        value.startswith("/tmp:rw,nosuid,nodev,noexec,size=128m") for value in argv
+        value.startswith("/tmp:rw,exec,nosuid,nodev,size=128m") for value in argv
     )
     mounts = [argv[index + 1] for index, value in enumerate(argv) if value == "--mount"]
     assert len(mounts) == 2
     assert all(value.endswith(",readonly") for value in mounts)
-    assert argv[-4:] == ("sat-python-quality:phase1-v4", *invocation.argv)
+    assert argv[-4:] == ("sat-python-quality:phase1-v5", *invocation.argv)
 
 
 def test_runner_defaults_to_docker(configuration, run_paths: tuple[Path, Path]) -> None:

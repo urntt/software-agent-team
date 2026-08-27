@@ -151,13 +151,21 @@ Reviewer tool claims cross a separate grounding boundary. The response schema
 requires each criterion assessment to supply only small bounded exact
 observable result fragments. It forbids the model from supplying or predicting
 a controller tool ID and does not ask it to echo a tool name, outcome, exit
-code, arguments, or digest. The controller searches only its current sanitized
-execution record, requires every fragment to occur in at least one result,
-binds every matching `tool-00N` ID, and deterministically deduplicates repeated
-or overlapping selectors. A no-match selector uses the existing one bounded
-semantic repair; multiple real current matches do not.
+code, arguments, or digest. The fixed-fixture compatibility path searches only
+the current sanitized execution record. The adaptive path does the same on an
+initial response; during its one controlled semantic repair, it may also search
+integrity-checked attempts from the same Reviewer, role stage, immutable commit,
+and invocation chain. The controller requires every fragment to occur in at
+least one eligible result, binds every matching `(execution_attempt,
+tool-00N)` identity, and deterministically deduplicates repeated or overlapping
+selectors. Evidence never crosses an Agent, stage, iteration, commit, or repair
+chain. A no-match selector uses or exhausts the one bounded semantic repair;
+multiple real matches do not.
 Execution records label this grounded Reviewer shape `semantic_body_v2`; other
-current semantic bodies remain `semantic_body_v1`.
+current semantic bodies remain `semantic_body_v1`. Existing schema-v2 Review
+artifacts that predate attempt qualification are interpreted as attempt one and
+serialize without an invented field, preserving their canonical content and
+digests. Newly grounded references record the attempt explicitly.
 
 ## Semantic Response Boundary
 
@@ -217,13 +225,14 @@ while discarding the full command and any leading environment-assignment
 values. Size and record-count limits apply before parsing.
 
 A complete session with zero tool calls is valid captured evidence, but it
-cannot satisfy a citation. A missing, substituted, incomplete, malformed, or
-unpaired session is invalid runtime evidence and stops Review at the safety
-boundary rather than spending a semantic repair. A semantic repair may cite
-only calls repeated in that repair invocation. Raw OpenClaw session JSONL is
-never copied into run artifacts; the sanitized records, transcript SHA-256,
-and current-turn record count make the accepted claim auditable without making
-raw session history a later replay dependency.
+cannot satisfy a citation by itself. A missing, substituted, incomplete,
+malformed, or unpaired session is invalid runtime evidence and stops Review at
+the safety boundary rather than spending a semantic repair. On the adaptive
+path, a repair may reuse an earlier eligible attempt without repeating an
+unchanged probe; every reference records the originating execution attempt.
+Raw OpenClaw session JSONL is never copied into run artifacts; the sanitized
+records, transcript SHA-256, and current-turn record count make the accepted
+claim auditable without making raw session history a later replay dependency.
 
 ## Persisted Run Evidence
 
@@ -512,10 +521,18 @@ when investigating it rather than editing artifacts in place.
   canonical direct child matching `/tmp/sat-review-probe-*`, creates it
   atomically with mode `0600`, and rejects overwrite, symlinks, nesting, and
   traversal. Simple direct probe invocations pass command preflight, and the
-  image includes pinned `uv` for exact post-setup manifest commands. The source
-  mount remains read-only, and resulting
+  image includes pinned `uv` for relevant bounded probes. The source mount
+  remains read-only, and resulting
   criterion-by-criterion evidence is attributable rather than controller-owned
   deterministic command evidence.
+- Product quality verification mounts clean executable tmpfs scratch because
+  an offline `uv sync` creates project-local virtual-environment entry points
+  that must launch there. It first rejects tracked drift and unsafe entries,
+  copies only committed regular files, and executes exact setup, test, and
+  start argv. Network remains disabled; source and root filesystems remain
+  read-only; the process remains non-root, capability-dropped, and bounded by
+  PID, file, memory, CPU, output, and timeout limits. Scratch is discarded with
+  the gate container.
 - Implementation and Integration capabilities may write only inside the
   assigned `/workspace` mount.
 - Every Agent denies Agent-spawning and one-shot model tools. Only the

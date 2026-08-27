@@ -365,6 +365,20 @@ def test_review_assessments_exactly_cover_controller_scope() -> None:
 
     assert report.criterion_assessments[0].criterion_id == "AC_PERSIST"
     assert report.criterion_assessments[0].tool_evidence[0].tool_call_id == ("tool-001")
+    serialized = report.model_dump(mode="json")
+    serialized_reference = serialized["criterion_assessments"][0]["tool_evidence"][0]
+    assert "execution_attempt" not in serialized_reference
+
+    explicit = valid_review_payload()
+    explicit["criterion_assessments"][0]["tool_evidence"][0]["execution_attempt"] = 1
+    explicit_report = ReviewReport.model_validate(explicit)
+    explicit_serialized = explicit_report.model_dump(mode="json")
+    assert (
+        explicit_serialized["criterion_assessments"][0]["tool_evidence"][0][
+            "execution_attempt"
+        ]
+        == 1
+    )
 
 
 def test_review_assessment_rejects_duplicate_tool_references() -> None:
@@ -376,6 +390,19 @@ def test_review_assessment_rejects_duplicate_tool_references() -> None:
 
     with pytest.raises(ValidationError, match="references must be unique"):
         ReviewReport.model_validate(payload)
+
+    payload = valid_review_payload()
+    assessments = payload["criterion_assessments"]
+    assert isinstance(assessments, list)
+    references = assessments[0]["tool_evidence"]
+    second_attempt = deepcopy(references[0])
+    second_attempt["execution_attempt"] = 2
+    references.append(second_attempt)
+    report = ReviewReport.model_validate(payload)
+    assert [
+        reference.execution_attempt
+        for reference in report.criterion_assessments[0].tool_evidence
+    ] == [1, 2]
 
     payload = valid_review_payload()
     payload["reviewed_criteria"] = ["AC_PERSIST", "AC_OTHER"]

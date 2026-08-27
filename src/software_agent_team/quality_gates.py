@@ -799,7 +799,7 @@ class DockerSandboxBackend:
             str(limits.cpu_cores),
             "--tmpfs",
             (
-                f"{invocation.sandbox.tmpfs_target}:rw,nosuid,nodev,noexec,"
+                f"{invocation.sandbox.tmpfs_target}:rw,exec,nosuid,nodev,"
                 f"size={limits.writable_tmpfs_mb}m,mode=1777"
             ),
             "--workdir",

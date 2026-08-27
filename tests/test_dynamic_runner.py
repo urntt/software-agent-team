@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import subprocess
 import threading
 from datetime import UTC, datetime
@@ -305,6 +306,7 @@ class DynamicExecutor:
         synchronize_quality: bool = False,
         provider_fail_once_for: str | None = None,
         zero_review_tool_calls_once: bool = False,
+        invalid_review_response_once: bool = False,
         invalid_review_evidence: bool = False,
         writer_presentation_arrays: bool = False,
         writer_summary: str = "Implemented and documented the greeting utility.",
@@ -315,6 +317,7 @@ class DynamicExecutor:
         self.mutate_reader = mutate_reader
         self.provider_fail_once_for = provider_fail_once_for
         self.zero_review_tool_calls_once = zero_review_tool_calls_once
+        self.invalid_review_response_once = invalid_review_response_once
         self.invalid_review_evidence = invalid_review_evidence
         self.writer_presentation_arrays = writer_presentation_arrays
         self.writer_summary = writer_summary
@@ -405,6 +408,10 @@ class DynamicExecutor:
                 findings=(),
                 summary="The final commit satisfies the assigned review scope.",
             ).model_dump_json()
+            if self.invalid_review_response_once and count == 1:
+                payload = json.loads(response_text)
+                payload["unexpected_presentation_field"] = None
+                response_text = json.dumps(payload)
         else:  # pragma: no cover - the fixture owns the complete team
             raise AssertionError(f"unexpected Agent: {request.agent_id}")
         return self._result(request, response_text)
@@ -420,10 +427,12 @@ class DynamicExecutor:
         response_text: str,
     ) -> AgentExecutionResult:
         is_review = request.capability is AgentCapability.REVIEW
-        omit_review_call = (
-            is_review
-            and self.zero_review_tool_calls_once
-            and self._counts[request.agent_id] == 1
+        omit_review_call = is_review and (
+            (self.zero_review_tool_calls_once and self._counts[request.agent_id] == 1)
+            or (
+                self.invalid_review_response_once
+                and self._counts[request.agent_id] == 2
+            )
         )
         invalid_review_evidence = is_review and self.invalid_review_evidence
         return AgentExecutionResult(
@@ -720,10 +729,48 @@ def test_dynamic_reviewer_repairs_a_zero_call_fabricated_tool_citation(
     assert reviewer_records[0].tool_evidence_status is AgentToolEvidenceStatus.CAPTURED
     assert reviewer_records[0].response_contract == "semantic_body_v2"
     assert reviewer_records[0].tool_calls == ()
-    assert "does not match any current tool result" in (reviewer_records[0].error or "")
+    assert "does not match any eligible review-chain tool result" in (
+        reviewer_records[0].error or ""
+    )
     assert isinstance(reviewer_records[1], AgentExecutionRecord)
     assert len(reviewer_records[1].tool_calls) == 1
     assert reviewer_records[1].response_artifact == runner.outputs["reviewer"]
+
+
+def test_dynamic_reviewer_repair_reuses_prior_attempt_tool_evidence(
+    tmp_path: Path,
+) -> None:
+    runner, team_plan, executor, _, _ = runtime(
+        tmp_path,
+        executor_options={"invalid_review_response_once": True},
+    )
+
+    result = DagScheduler().execute(team_plan, runner)
+
+    assert result.status is ScheduleStatus.COMPLETED
+    reviewer_requests = [
+        request for request in executor.requests if request.agent_id == "reviewer"
+    ]
+    assert len(reviewer_requests) == 2
+    assert "earlier attempt" in reviewer_requests[1].prompt
+    assert "does not need to rerun" in reviewer_requests[1].prompt
+    reviewer_records = [
+        runner.artifact_store.load(reference)
+        for reference in runner.execution_records
+        if "/verify/reviewer-" in reference.path
+    ]
+    assert len(reviewer_records) == 2
+    assert isinstance(reviewer_records[0], AgentExecutionRecord)
+    assert len(reviewer_records[0].tool_calls) == 1
+    assert "unexpected_presentation_field" in (reviewer_records[0].error or "")
+    assert isinstance(reviewer_records[1], AgentExecutionRecord)
+    assert reviewer_records[1].tool_calls == ()
+    assert reviewer_records[1].response_artifact == runner.outputs["reviewer"]
+    review = runner.artifact_store.load(runner.outputs["reviewer"])
+    assert isinstance(review, ReviewReport)
+    reference = review.criterion_assessments[0].tool_evidence[0]
+    assert reference.execution_attempt == 1
+    assert reference.tool_call_id == "tool-001"
 
 
 def test_dynamic_reviewer_session_integrity_failure_is_not_semantically_repaired(

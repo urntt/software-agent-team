@@ -30,6 +30,11 @@ def test_runtime_image_uses_content_pinned_base_and_dependency_lock() -> None:
         dockerfile
     )
     assert "pip install --no-cache-dir --requirement" in dockerfile
+    assert "pip download --no-cache-dir --only-binary=:all:" in dockerfile
+    assert "UV_FIND_LINKS=/opt/software-agent-team/wheels" in dockerfile
+    assert "UV_CACHE_DIR=/tmp/uv-cache" in dockerfile
+    assert "UV_OFFLINE=1" in dockerfile
+    assert "requirements.lock colorama==0.4.6" in dockerfile
     assert "COPY sat_probe_write.py /usr/local/bin/sat-probe-write" in dockerfile
     assert "chown 0:0 /usr/local/bin/sat-probe-write" in dockerfile
     assert "chmod 0555 /usr/local/bin/sat-probe-write" in dockerfile
@@ -49,3 +54,5 @@ def test_runtime_dependency_lock_contains_only_exact_unique_versions() -> None:
     assert len(locked) == len(set(locked))
     assert all(PINNED_REQUIREMENT.fullmatch(requirement) for requirement in locked)
     assert set(direct) <= set(locked)
+    assert "hatchling==1.27.0" in locked
+    assert "editables==0.5" in locked

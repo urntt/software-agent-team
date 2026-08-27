@@ -94,7 +94,7 @@ Build the exact image named by both product and evaluation policies with:
 
 ```bash
 docker build \
-  --tag sat-python-quality:phase1-v4 \
+  --tag sat-python-quality:phase1-v5 \
   runtime/python
 ```
 
@@ -105,9 +105,13 @@ no-network, read-only-root probe, execute a Python helper inside it, inspect its
 state, and remove it. A successful `docker build`, image lookup, or momentary
 container start alone is not sufficient runtime evidence.
 
-The image includes the exact `uv` pinned in `runtime/python/requirements.in` so
-a read-only Reviewer can exercise generated-project manifest commands after
-the Developer's documented setup. It also installs the root-owned immutable
+The image includes the exact `uv` pinned in `runtime/python/requirements.in`
+and a locked offline wheelhouse containing project setup and build
+dependencies. The product quality profile copies clean committed files into
+fresh executable tmpfs scratch, then runs the exact generated setup, test, and
+start argv with network disabled. The source and container root remain
+read-only, and the process remains non-root, capability-dropped, and
+resource-bounded. The image also installs the root-owned immutable
 `sat-probe-write` helper. That command can atomically create only a new bounded
 `/tmp/sat-review-probe-*` `.py`, `.json`, or `.txt` direct child; it refuses
 overwrite and unsafe paths while the project mount and general write tools stay
@@ -185,6 +189,7 @@ profiles/python/
   quality.json                 Generic project checks and coverage
   seed/                        Greenfield product source baseline
   validation/run.py            Trusted project-command and docs validator
+  validation/run_commands.py   Clean-copy exact-command validator
 runtime/python/
   Dockerfile                   Shared content-pinned quality image
   requirements.in             Direct runtime dependencies

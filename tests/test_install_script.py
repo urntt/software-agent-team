@@ -34,6 +34,7 @@ def prepare_checkout(tmp_path: Path) -> Path:
         "profiles/python/quality.json",
         "profiles/python/contract-template.json",
         "profiles/python/validation/run.py",
+        "profiles/python/validation/run_commands.py",
         "profiles/python/seed/pyproject.toml",
         "runtime/python/Dockerfile",
         "runtime/python/requirements.lock",
@@ -164,7 +165,7 @@ if [[ "$*" == "sync --locked" ]]; then
   chmod 755 .venv/bin/sat
 elif [[ "${1:-}" == "run" && "${2:-}" == "--frozen" && \
         "${3:-}" == "python" && "${4:-}" == "-c" ]]; then
-  echo sat-python-quality:phase1-v4
+  echo sat-python-quality:phase1-v5
 elif [[ "${1:-}" == "run" && "${2:-}" == "--frozen" && \
         "${3:-}" == "python" && "${4:-}" == "-" ]]; then
   cat >/dev/null
@@ -249,7 +250,7 @@ def test_installer_prepares_cli_image_and_checks_idempotently(tmp_path: Path) ->
     assert "install: uninstall=sat-uninstall" in first.stdout
     docker_calls = docker_log.read_text(encoding="utf-8")
     assert "info" in docker_calls
-    assert "build --pull=false --tag sat-python-quality:phase1-v4 runtime/python" in (
+    assert "build --pull=false --tag sat-python-quality:phase1-v5 runtime/python" in (
         docker_calls
     )
     assert "image inspect --format {{.Id}}" in docker_calls

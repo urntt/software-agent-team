@@ -35,6 +35,7 @@ from software_agent_team.responses import (
     GroundedReviewReportResponse,
     ReviewCriterionAssessmentResponse,
     ReviewReportResponse,
+    ReviewToolEvidenceAttempt,
     ReviewToolEvidenceClaim,
     WorkResultResponse,
     parse_dynamic_agent_response,
@@ -403,6 +404,7 @@ def test_review_prompt_requires_adversarial_absolute_claim_boundaries() -> None:
     claim_schema = response_schema["$defs"]["ReviewToolEvidenceClaim"]
     assert claim_schema["required"] == ["observable"]
     assert "tool_call_id" not in claim_schema["properties"]
+    assert "execution_attempt" not in claim_schema["properties"]
 
 
 def _review_result(response: ReviewReportResponse | str):
@@ -456,6 +458,7 @@ def test_dynamic_review_response_requires_exact_criterion_assessments() -> None:
     assert isinstance(parsed.body, GroundedReviewReportResponse)
     assert parsed.body.criterion_assessments[0].criterion_id == assessment.criterion_id
     reference = parsed.body.criterion_assessments[0].tool_evidence[0]
+    assert reference.execution_attempt == 1
     assert reference.tool_call_id == "tool-001"
     assert reference.observable == "scripted-review-observation"
 
@@ -587,6 +590,82 @@ def test_dynamic_review_response_binds_every_matching_tool_result() -> None:
     assert {reference.observable for reference in references} == {
         "scripted-review-observation"
     }
+
+
+def test_controller_grounds_a_repair_against_prior_attempt_evidence() -> None:
+    assessment = ReviewCriterionAssessmentResponse(
+        criterion_id="AC_LINKS",
+        status="satisfied",
+        adversarial_check="Ran the CLI against a missing local-link fixture.",
+        evidence="The prior attempt observed the expected failure.",
+        tool_evidence=(review_tool_claim(),),
+    )
+    request, result = _review_result(
+        ReviewReportResponse(
+            verdict="accept",
+            criterion_assessments=(assessment,),
+            summary="The repaired response preserves captured evidence.",
+        )
+    )
+    prior_calls = result.telemetry.tool_calls
+    result = result.model_copy(
+        update={"telemetry": result.telemetry.model_copy(update={"tool_calls": ()})}
+    )
+
+    parsed = parse_dynamic_agent_response(
+        result,
+        request,
+        task_brief=task_brief(),
+        team_plan=team_plan(),
+        reviewed_criterion_ids=("AC_LINKS",),
+        review_tool_evidence_attempts=(
+            ReviewToolEvidenceAttempt(
+                execution_attempt=1,
+                tool_calls=prior_calls,
+            ),
+            ReviewToolEvidenceAttempt(
+                execution_attempt=2,
+                tool_calls=(),
+            ),
+        ),
+    )
+
+    assert isinstance(parsed.body, GroundedReviewReportResponse)
+    reference = parsed.body.criterion_assessments[0].tool_evidence[0]
+    assert reference.execution_attempt == 1
+    assert reference.tool_call_id == "tool-001"
+
+
+def test_controller_rejects_a_review_chain_not_ending_at_current_attempt() -> None:
+    assessment = ReviewCriterionAssessmentResponse(
+        criterion_id="AC_LINKS",
+        status="satisfied",
+        adversarial_check="Ran the CLI against a missing local-link fixture.",
+        evidence="Claimed prior evidence from a mismatched chain.",
+        tool_evidence=(review_tool_claim(),),
+    )
+    request, result = _review_result(
+        ReviewReportResponse(
+            verdict="accept",
+            criterion_assessments=(assessment,),
+            summary="Claimed evidence from a mismatched chain.",
+        )
+    )
+
+    with pytest.raises(AgentArtifactResponseError, match="does not end"):
+        parse_dynamic_agent_response(
+            result,
+            request,
+            task_brief=task_brief(),
+            team_plan=team_plan(),
+            reviewed_criterion_ids=("AC_LINKS",),
+            review_tool_evidence_attempts=(
+                ReviewToolEvidenceAttempt(
+                    execution_attempt=1,
+                    tool_calls=(),
+                ),
+            ),
+        )
 
 
 def test_dynamic_review_response_deduplicates_repeated_and_overlapping_selectors() -> (

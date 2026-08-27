@@ -44,6 +44,18 @@
       "working_directory": ".",
       "timeout_seconds": 90,
       "criterion_ids": ["AC_TESTS"]
+    },
+    {
+      "id": "CHECK_EXACT_PROJECT_COMMANDS",
+      "argv": [
+        "python",
+        "/opt/software-agent-team/inputs/python-product-contract/run_commands.py",
+        "--repository",
+        "/workspace"
+      ],
+      "working_directory": ".",
+      "timeout_seconds": 120,
+      "criterion_ids": ["AC_RUNNABLE", "AC_TESTS"]
     }
   ],
   "manual_review_criteria": ["AC_REQUEST", "AC_DOCUMENTATION"]

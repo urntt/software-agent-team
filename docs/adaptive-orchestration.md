@@ -332,13 +332,18 @@ criterion assessment for every assigned criterion, with a concrete negative or
 boundary case and observable evidence. A blocked assessment and its blocking
 finding must reference the same criterion; missing coverage is an invalid
 response rather than implicit acceptance. Every assessment must also supply one
-or more bounded exact result fragments from that invocation. The response schema
-makes the fragment structurally required and forbids a model-supplied tool ID.
-The controller requires every fragment to occur in at least one current
-sanitized result, enriches the persisted assessment with every matching tool ID,
-identity, outcome, and hashes, and deduplicates repeated or overlapping
-selectors. A zero match is invalid; multiple real current matches are preserved
-instead of delegated back to model wording. Review may run bounded foreground
+or more bounded exact result fragments. The response schema makes the fragment
+structurally required and forbids model-supplied attempt or tool IDs. An initial
+response uses its current invocation. During the one controlled semantic
+repair, the same Reviewer may also reuse integrity-checked results captured by
+an earlier attempt in that same role-stage, immutable-commit, and invocation
+chain. The controller requires every fragment to occur in at least one eligible
+sanitized result, enriches the persisted assessment with every matching
+attempt-qualified tool ID, identity, outcome, and hashes, and deduplicates
+repeated or overlapping selectors. Evidence cannot cross an Agent, stage,
+iteration, commit, or repair chain. A zero match is invalid; multiple real
+matches are preserved instead of delegated back to model wording. Review may
+run bounded foreground
 probes in the no-network sandbox against the read-only source and temporary
 fixtures. General write tools remain denied. Review creates a script or fixture
 only through the immutable `sat-probe-write` helper, which accepts a new bounded
@@ -352,11 +357,11 @@ relabeled as a controller deterministic gate. Documentation may state only the
 boundary established by the implementation and evidence. The generated-project
 contract separately checks that the README shows each exact manifest command
 and that documented first setup does not leave an unexplained root virtual
-environment or lock file in an otherwise clean delivery. Its start argv must
-work from the project root without appended arguments, and its tests must be
-importable in the clean quality workspace as well as pass after documented
-setup; independent Review probes runtime behavior that static validation
-cannot infer.
+environment or lock file in an otherwise clean delivery. A deterministic gate
+copies clean committed files into fresh scratch, then executes exact setup,
+test, and start argv through the runtime's offline wheelhouse. Its start argv
+must work from the project root without appended arguments. Independent Review
+probes task-specific runtime behavior that this generic contract cannot infer.
 
 Existing fixed team manifests remain versioned evaluation fixtures. During
 migration they are compiled into the same `TeamPlan` contract so the repository
@@ -615,11 +620,13 @@ controller-derived criterion-scope floor. The Reviewer runtime keeps project
 source read-only and denies the general write tool. Its immutable
 `sat-probe-write` command provides the bounded `/tmp` probe-authoring capability
 that actually exists in the foreground execution surface; the runtime also
-contains the pinned `uv` needed to exercise generated-project commands. The
-OpenClaw adapter validates the current session turn, pairs actual tool calls and
-results, persists only bounded sanitized records, binds every matching semantic
-result fragment to controller-owned tool IDs, deduplicates overlapping
-selectors, and rejects zero-call or absent Reviewer evidence. Complete Agent
+contains pinned `uv` for relevant bounded probes. The OpenClaw adapter validates
+each exact session turn, pairs actual tool calls and results, and persists only
+bounded sanitized records. Dynamic semantic repair may carry those records
+forward only within one Reviewer, role stage, immutable commit, and invocation
+chain. Every matching semantic fragment is bound to an attempt-qualified
+controller-owned tool ID; overlapping selectors are deduplicated, and zero-call
+or absent Reviewer evidence is rejected. Complete Agent
 summaries remain immutable artifact evidence; the controller derives bounded
 scheduler and downstream-prompt projections with an
 explicit truncation marker, original length, and source-summary SHA-256 rather
@@ -742,9 +749,10 @@ The adaptive-orchestration milestone is complete only when:
     topology comparisons remain reproducible.
 12. Approved plan revisions, events, controls, routes, artifacts, and Git facts
     form one integrity-checked report.
-13. Reviewer criterion claims are bound to attributable current-invocation tool
-    records; fabricated, stale, mismatched, or unavailable tool evidence cannot
-    pass as accepted Review.
+13. Reviewer criterion claims are bound to attributable attempt-qualified tool
+    records from the same bounded Reviewer chain; fabricated, cross-Agent,
+    cross-stage, cross-commit, mismatched, or unavailable evidence cannot pass
+    as accepted Review.
 14. Offline tests cover success, correction, pause/recovery, interruption,
     cancellation, invalid plans, routing failures, and non-TTY output, followed
     by at least one explicitly authorized provider-backed acceptance run.

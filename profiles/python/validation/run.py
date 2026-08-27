@@ -9,11 +9,21 @@ import re
 import shlex
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 MAX_MANIFEST_BYTES = 65_536
 MAX_LOCK_BYTES = 1_048_576
 EXPECTED_KEYS = {"schema_version", "setup", "start", "test"}
+
+
+@dataclass(frozen=True)
+class ProjectCommands:
+    """Validated exact commands owned by one generated project."""
+
+    setup: tuple[str, ...]
+    start: tuple[str, ...]
+    test: tuple[str, ...]
 
 
 def documents_exact_command(readme: str, argv: tuple[str, ...]) -> bool:
@@ -126,7 +136,7 @@ def reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
     return result
 
 
-def validate(repository: Path) -> None:
+def validate(repository: Path) -> ProjectCommands:
     try:
         repository = repository.resolve(strict=True)
     except OSError:
@@ -200,6 +210,7 @@ def validate(repository: Path) -> None:
     tests = repository / "tests"
     if tests.is_symlink() or not tests.is_dir() or not any(tests.rglob("test_*.py")):
         fail("tests must contain at least one test_*.py file")
+    return ProjectCommands(setup=setup, start=start, test=test)
 
 
 def main() -> None:
