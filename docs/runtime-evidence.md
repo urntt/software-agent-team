@@ -438,11 +438,13 @@ Semantic response repair does not itself authorize a route switch.
 Writers are serialized for the current single-clone Git backend. The
 controller verifies their clean input commit, descendant output commit,
 changed paths, and workspace scope. Read-only quality Agents may run in
-parallel but must leave the exact final commit and clean tree unchanged. Every
-quality Agent is downstream of every writer, deterministic gates execute once
-per immutable iteration, and all TestReports and ReviewReports bind to that
-same commit. Completed dependency and terminal handoffs retain both phase and
-execution references. `DynamicWorkflowCoordinator` records the aggregate
+parallel up to the approved cap or sequentially when the approved DAG gives one
+quality Agent another's durable output as a dependency. They must leave the
+exact final commit and clean tree unchanged. Every quality Agent is downstream
+of every writer, deterministic gates execute once per immutable iteration, and
+all TestReports and ReviewReports bind to that same commit. Completed dependency
+and terminal handoffs retain both phase and execution references.
+`DynamicWorkflowCoordinator` records the aggregate
 snapshot before starting quality work, resolves each iteration, binds blocking
 evidence to a bounded revision, and writes terminal evidence. Bare `sat` passes
 the exact approved Planning result through this path and then uses the existing

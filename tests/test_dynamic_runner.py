@@ -171,6 +171,7 @@ def dynamic_inputs(
     *,
     include_tester: bool = True,
     include_quality_tasks: bool = False,
+    chain_quality: bool = False,
     run_budget: AgentBudget | None = None,
     writer_scope: str = "repository",
 ) -> tuple[TaskBrief, AdaptiveImplementationPlan, TeamPlan]:
@@ -203,7 +204,11 @@ def dynamic_inputs(
                 id="TASK_REVIEW",
                 owner_agent_id="reviewer",
                 description="Review documentation against the final behavior.",
-                dependencies=("TASK_BUILD",),
+                dependencies=(
+                    ("TASK_TEST",)
+                    if chain_quality and include_tester
+                    else ("TASK_BUILD",)
+                ),
                 acceptance_criteria=("AC_REVIEW",),
                 expected_paths=("greeting.py", "README.md"),
             )
@@ -261,7 +266,9 @@ def dynamic_inputs(
             capability=AgentCapability.REVIEW,
             permission_profile=PermissionProfile.READ_ONLY,
             stage_id="verify",
-            dependencies=("builder",),
+            dependencies=(
+                ("tester",) if chain_quality and include_tester else ("builder",)
+            ),
             expected_output=ArtifactKind.REVIEW_REPORT,
             model_route_id="default",
             timeout_seconds=47,
@@ -518,6 +525,7 @@ def runtime(
     *,
     include_tester: bool = True,
     include_quality_tasks: bool = False,
+    chain_quality: bool = False,
     run_budget: AgentBudget | None = None,
     writer_scope: str = "repository",
     executor_options: dict[str, object] | None = None,
@@ -528,6 +536,7 @@ def runtime(
     task_brief, implementation_plan, team_plan = dynamic_inputs(
         include_tester=include_tester,
         include_quality_tasks=include_quality_tasks,
+        chain_quality=chain_quality,
         run_budget=run_budget,
         writer_scope=writer_scope,
     )
@@ -685,6 +694,37 @@ def test_dynamic_runner_preserves_quality_tasks_as_read_only_prompt_focus(
         agent.permission_profile is PermissionProfile.READ_ONLY
         for agent in team_plan.agents
         if agent.id in {"tester", "reviewer"}
+    )
+
+
+def test_dynamic_runner_executes_an_approved_testing_to_review_handoff(
+    tmp_path: Path,
+) -> None:
+    runner, team_plan, executor, quality_gate, _ = runtime(
+        tmp_path,
+        include_quality_tasks=True,
+        chain_quality=True,
+    )
+
+    result = DagScheduler().execute(team_plan, runner)
+
+    assert result.status is ScheduleStatus.COMPLETED
+    assert result.max_observed_concurrency == 1
+    assert result.completion_order == ("builder", "tester", "reviewer")
+    assert quality_gate.calls == 1
+    reviewer_request = next(
+        request for request in executor.requests if request.agent_id == "reviewer"
+    )
+    assert '"agent_id": "tester"' in reviewer_request.prompt
+    assert "Deterministic evidence covers the implemented behavior." in (
+        reviewer_request.prompt
+    )
+    handoffs = [runner.artifact_store.load(reference) for reference in runner.handoffs]
+    assert any(
+        isinstance(item, HandoffEnvelope)
+        and item.source_agent_id == "tester"
+        and item.target_agent_id == "reviewer"
+        for item in handoffs
     )
 
 

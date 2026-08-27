@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** Phase 3E implemented; eight fresh installed adaptive rehearsals have driven controller, transport, progress, profile, and review-boundary corrections, with a clean provider rerun next
+**Current milestone:** Phase 3E implemented; nine fresh installed adaptive rehearsals have driven controller, transport, progress, profile, and review-boundary corrections, with a clean provider rerun next
 
 **Last updated:** August 27, 2026
 
@@ -150,8 +150,10 @@ validation excludes the bootstrap Planning and Clarification capabilities from
 the runtime team, requires every writer to own work, and allows a small task to
 use one writer plus one independent quality Agent instead of imposing a hidden
 Tester/Reviewer pair. Every quality Agent must depend on every writer path, so
-parallel verification cannot start against an intermediate commit. Fixed
-evaluation fixtures retain their explicit dual-quality topology.
+verification cannot start against an intermediate commit. Separate quality
+Agents may be parallel peers or form an explicit handoff chain on that same
+immutable commit. Fixed evaluation fixtures retain their explicit dual-quality
+topology.
 
 The Phase 3C dynamic runner is now implemented behind the general DAG
 scheduler. The scheduler remains the only owner of readiness, launch order,
@@ -531,6 +533,30 @@ prompt construction, and runner startup. The exact preserved repaired response
 now compiles unchanged with its original `impl -> reviewer` execution waves
 and no additional model call. The complete 673-test offline suite passes. A new
 fresh installed provider rerun is still required.
+
+That next fresh-account run confirmed the quality-owned task fix at the real
+Planning boundary, then exposed another hidden topology constraint. Both the
+initial proposal and its repair selected implementation, testing, and Review
+Agents and placed Review after Testing. `PlanningProposalBody` accepted the
+DAG, but `TeamPlan` silently rejected any dependency between Testing and Review
+with `testing and review capabilities must remain independent`. The repair saw
+only that abstract error and repeated the same chain. No overview, execution
+run, runtime Agent, workspace, or destination was created. The proposal also
+described test-file creation in a task owned by the read-only Testing Agent;
+the text could not grant writes but the mismatch was not visible enough.
+
+Quality sequencing now belongs to the approved Agent DAG: Testing and Review
+may be peers or one may consume the other's durable handoff, provided both are
+read-only and transitively downstream of every writer. The dynamic runner test
+executes `builder -> tester -> reviewer` on one immutable commit, passes the
+Tester summary into the Reviewer prompt, runs deterministic gates once, and
+records the exact handoff. The Planner contract now assigns all project-file
+creation to implementation/integration Agents. The user overview derives a
+write-versus-read-only authority line from each task owner's `AgentSpec`, so
+task prose cannot grant mutation authority or conceal the actual boundary. The
+two archived Planning responses now compile unchanged with their proposed
+three-wave DAG. The complete 674-test offline suite passes. A new fresh
+installed provider rerun remains required.
 
 The rehearsal sequence below concerns the predecessor guided fixed-team
 product path and is retained as defect and regression evidence. It proves the

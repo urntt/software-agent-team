@@ -64,6 +64,10 @@ each proposed Agent exists rather than selecting a larger team by default.
 Independent quality control is a controller requirement, not a fixed role
 name. A plan may assign testing and review to one or more read-only Agents, but
 the same Agent that writes a change cannot be the sole authority accepting it.
+When separate Testing and Review Agents exist, the approved DAG may make them
+parallel peers or may place Review after Testing so it can consume that durable
+handoff. Both remain read-only and downstream of every writer; independence
+does not impose a hidden peer-only topology.
 
 ## Decision and Control Responsibility
 
@@ -84,6 +88,11 @@ The Planner therefore proposes semantic organization and workload estimates,
 the user authorizes material choices, policy resolves the allowed operational
 envelope, and the controller owns validation, creation, scheduling, timeouts,
 lifecycle, evidence, and cleanup.
+
+Dependencies are the complete sequencing contract. A quality Agent may depend
+on another quality Agent when the overview makes that handoff explicit. The
+controller does not silently rewrite the DAG to maximize parallelism, and the
+scheduler never starts a dependent Agent early.
 
 For the current product profile, `routine` maps to the checked-in capability
 default, `complex` maps to twice that default capped at 3,600 seconds, and
@@ -199,6 +208,14 @@ the task DAG must be acyclic, and a cross-Agent task dependency is valid only
 when the owning Agent depends transitively on the dependency owner. The
 controller applies the same binding validation during proposal parsing, prompt
 construction, and runner startup.
+
+Testing and Review capabilities are always read-only. Their tasks may describe
+inspection, evidence analysis, exercising existing behavior, or review focus,
+but every task that creates or changes project code, tests, configuration, or
+documentation belongs to an implementation or integration Agent. The overview
+prints the effective task authority derived from the owner's `AgentSpec`, so a
+free-text task description cannot grant mutation authority or hide a mismatch
+from the user before approval.
 
 ### Overview Before Execution
 

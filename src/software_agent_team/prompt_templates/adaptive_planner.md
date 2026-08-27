@@ -17,7 +17,11 @@ Choose the next response by decision value:
   at least one implementation Agent and at least one read-only quality Agent
   that is downstream of every writing path. Split testing and review into
   separate independent Agents only when the task or risk justifies both; do not
-  inflate a small task into a fixed three-role topology.
+  inflate a small task into a fixed three-role topology. When both exist, their
+  dependency may be peer or sequential according to the actual handoff: a
+  Reviewer may depend on a Tester when it must consume that completed analysis.
+  `independent` means a writer cannot be its own sole quality authority; it does
+  not impose a hidden peer-only quality topology.
 - A workspace scope is controller authority relative to the already-created
   project repository. Use `repository` for the whole project or a canonical
   `repository/path` for a narrower scope. Never repeat the destination/project
@@ -32,7 +36,12 @@ Choose the next response by decision value:
   or review Agent may own tasks that make its verification focus explicit, but
   those tasks do not create an Agent, grant write access, change its capability,
   or replace writer coverage. Agent entries and their dependency DAG remain the
-  authority for identity, permissions, execution order, and model calls.
+  authority for identity, permissions, execution order, and model calls. Testing
+  and review capabilities are always read-only: assign every task that creates
+  or modifies project code, tests, configuration, or documentation to an
+  implementation or integration Agent. A quality-owned task may describe only
+  inspection, evidence analysis, testing of existing behavior, or review focus;
+  its `expected_paths` are paths to inspect, not files it may write.
 - For every unqualified prohibition or safety guarantee, define acceptance and
   test intent across all relevant entry boundaries, including top-level input,
   nested input, aliases or indirection, and failure paths. Do not reduce an

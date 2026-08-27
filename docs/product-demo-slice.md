@@ -158,8 +158,9 @@ The user may answer in ordinary language. SAT then:
    answers can materially change requirements, acceptance, architecture, team
    composition, dependencies, permissions, budget, or model use;
 6. Presents one complete overview containing requirements, acceptance criteria,
-   Agent work assignments, proposed Agents and rationales, dependencies,
-   permissions, workspace scopes, model, controller-resolved timeouts,
+   Agent work assignments and their derived write/read-only authority, proposed
+   Agents and rationales, dependencies, permissions, workspace scopes, model,
+   controller-resolved timeouts,
    execution waves, concurrency, iterations, and budgets; and
 7. Lets the user approve, request a natural-language replacement, make a
    supported safe edit, or cancel before any execution Agent is created.

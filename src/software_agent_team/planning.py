@@ -55,6 +55,7 @@ from software_agent_team.teams import (
     AgentSpec,
     ModelRoute,
     ModelRoutingMode,
+    PermissionProfile,
     PlanApprovalSource,
     TeamPlan,
     TeamPlanOrigin,
@@ -1620,9 +1621,16 @@ def render_planning_overview(preview: PlanningPreview) -> str:
     for task in implementation.tasks:
         task_dependencies = ", ".join(task.dependencies) or "none"
         task_criteria = ", ".join(task.acceptance_criteria)
+        task_owner = plan.get_agent(task.owner_agent_id)
+        task_authority = (
+            "workspace changes permitted within approved scope"
+            if task_owner.permission_profile is PermissionProfile.WORKSPACE_WRITE
+            else "read-only verification focus; no project changes permitted"
+        )
         lines.extend(
             (
                 f"    - {task.id} -> {task.owner_agent_id}: {task.description}",
+                f"      authority: {task_authority}",
                 f"      acceptance: {task_criteria}",
                 f"      dependencies: {task_dependencies}",
             )
@@ -1701,7 +1709,7 @@ def render_planning_overview(preview: PlanningPreview) -> str:
             "    - cumulative Agent time: "
             f"{plan.budget.max_agent_duration_seconds} seconds",
             f"    - estimated cost ceiling: ${plan.budget.max_estimated_cost_usd}",
-            "    - independent testing and review: required",
+            "    - independent downstream quality judgment: required",
         )
     )
     if brief.constraints:

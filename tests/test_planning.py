@@ -355,6 +355,7 @@ def test_proposal_preserves_quality_owned_work_without_granting_authority() -> N
     )
     overview = render_planning_overview(preview)
     assert "TASK_REVIEW -> quality_reviewer" in overview
+    assert "read-only verification focus; no project changes permitted" in overview
     assert "permission: read_only" in overview
 
 
@@ -437,6 +438,7 @@ def test_proposal_compiles_to_complete_controller_owned_authority() -> None:
         in overview
     )
     assert "permission: workspace_write" in overview
+    assert "workspace changes permitted within approved scope" in overview
     assert "timeout: 600 seconds" in overview
     assert "model: provider/model" in overview
     assert "model calls: 14" in overview
@@ -1055,8 +1057,10 @@ def test_proposal_cannot_split_final_commit_coverage_across_quality_agents() -> 
         )
 
 
-def test_controller_rejects_quality_dependency_and_timeout_policy_violations() -> None:
-    invalid_agents = tuple(
+def test_controller_preserves_quality_dependency_and_rejects_timeout_violation() -> (
+    None
+):
+    chained_agents = tuple(
         agent.model_copy(
             update={"dependencies": ("acceptance_tester",)}
             if agent.id == "quality_reviewer"
@@ -1064,17 +1068,22 @@ def test_controller_rejects_quality_dependency_and_timeout_policy_violations() -
         )
         for agent in proposal_body().agents
     )
-    invalid = proposal(
-        body=proposal_body().model_copy(update={"agents": invalid_agents})
+    chained = proposal(
+        body=proposal_body().model_copy(update={"agents": chained_agents})
     )
 
-    with pytest.raises(ValueError, match="must remain independent"):
-        preview_adaptive_proposal(
-            request(),
-            invalid,
-            policy(),
-            created_at=FIXED_TIME,
-        )
+    preview = preview_adaptive_proposal(
+        request(),
+        chained,
+        policy(),
+        created_at=FIXED_TIME,
+    )
+
+    assert preview.team_plan.execution_waves() == (
+        ("cli_developer",),
+        ("acceptance_tester",),
+        ("quality_reviewer",),
+    )
 
     invalid = apply_structured_edit(
         proposal(),
@@ -1261,6 +1270,10 @@ def test_dialogue_revision_structured_edit_and_approval_are_recoverable(
     assert "`tasks` array describes work assigned" in compact_prompt
     assert "testing or review Agent may own tasks" in compact_prompt
     assert "do not create an Agent, grant write access" in compact_prompt
+    assert "Reviewer may depend on a Tester" in compact_prompt
+    assert "does not impose a hidden peer-only quality topology" in compact_prompt
+    assert "assign every task that creates or modifies project code" in compact_prompt
+    assert "quality-owned task may describe only inspection" in compact_prompt
 
     tampered = approved.model_dump(mode="json")
     tampered["team_plan"]["agents"][0]["timeout_seconds"] += 1
@@ -1316,18 +1329,11 @@ def test_store_loads_approval_written_before_scope_timeout_evidence(
 def test_invalid_complete_proposal_is_repaired_before_it_is_shown(
     tmp_path: Path,
 ) -> None:
-    invalid_agents = tuple(
-        agent.model_copy(
-            update={"dependencies": ("acceptance_tester",)}
-            if agent.id == "quality_reviewer"
-            else {}
-        )
-        for agent in proposal_body().agents
-    )
-    invalid_body = proposal_body().model_copy(update={"agents": invalid_agents})
+    invalid_payload = proposal_response().model_dump(mode="json")
+    invalid_payload["proposal"]["tasks"][0]["owner_agent_id"] = "absent_agent"
     executor = ScriptedAgentExecutor(
         [
-            response(proposal_response(invalid_body)),
+            json.dumps(invalid_payload),
             response(proposal_response()),
         ]
     )
@@ -1351,7 +1357,9 @@ def test_invalid_complete_proposal_is_repaired_before_it_is_shown(
     rejected = store.load_turn(request().run_id, 1)
     assert rejected.parsed_response is None
     assert rejected.validation_error is not None
-    assert "must remain independent" in rejected.validation_error
+    assert "tasks reference unknown Agent owners: absent_agent" in (
+        rejected.validation_error
+    )
     assert "previous_response_rejected" in executor.requests[1].prompt
     assert [activity.kind for activity in activities] == [
         PlanningActivityKind.WAITING_MODEL,

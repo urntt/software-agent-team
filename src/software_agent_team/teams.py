@@ -600,17 +600,6 @@ class TeamPlan(BaseModel):
                     pending.extend(dependencies[current])
             return False
 
-        if (
-            testing_agents
-            and review_agents
-            and any(
-                transitively_depends(tester, reviewer)
-                or transitively_depends(reviewer, tester)
-                for tester in testing_agents
-                for reviewer in review_agents
-            )
-        ):
-            raise ValueError("testing and review capabilities must remain independent")
         if self.independent_review:
             for quality_agent in quality_agents:
                 if any(

@@ -392,13 +392,19 @@ def test_model_routes_reject_ambiguous_duplicate_provider_models() -> None:
         TeamPlan.model_validate(payload)
 
 
-def test_adaptive_plan_keeps_testing_and_review_independent() -> None:
+def test_adaptive_plan_allows_an_explicit_testing_to_review_handoff() -> None:
     payload = adaptive_payload()
     reviewer = next(item for item in payload["agents"] if item["id"] == "reviewer")
     reviewer["dependencies"] = ["tester"]
 
-    with pytest.raises(ValidationError, match="must remain independent"):
-        TeamPlan.model_validate(payload)
+    plan = TeamPlan.model_validate(payload)
+
+    assert plan.execution_waves() == (
+        ("generalist_developer",),
+        ("tester",),
+        ("reviewer",),
+    )
+    assert plan.get_agent("reviewer").dependencies == ("tester",)
 
 
 def test_adaptive_plan_requires_quality_coverage_for_every_writer() -> None:
