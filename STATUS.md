@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** Phase 3E implemented; ten fresh installed adaptive rehearsals have driven controller, transport, progress, profile, and review-boundary corrections, with a clean provider rerun next
+**Current milestone:** Phase 3E implemented; fourteen fresh installed adaptive rehearsals have driven controller, transport, progress, profile, and review-boundary corrections, with a clean provider rerun next
 
 **Last updated:** August 27, 2026
 
@@ -110,12 +110,15 @@ The bootstrap Planner still cannot create an Agent or advance run state.
 
 Planning criterion ownership is now explicit. The response schema requires
 every Planner-defined criterion to have implementation-task coverage and
-accepts only stable criterion-ID syntax. The policy-aware preview separately
-allows task bindings to profile criterion IDs supplied in the current context,
-continues to reject unknown IDs and echoed profile definitions, and preserves
-valid bindings in the approved implementation plan. Dynamic prompt validation
-rechecks those task references against the exact controller-materialized
-TaskBrief rather than trusting a standalone model response.
+accepts only stable criterion-ID syntax. Before that context-free coverage
+check, the policy-aware response boundary removes and audits definition echoes
+whose exact IDs belong to the active controller profile; task bindings remain,
+and no model-authored profile text or Review boundary becomes authoritative.
+The preview separately allows those bindings, rejects unknown IDs, materializes
+only canonical profile definitions, and preserves valid bindings in the
+approved implementation plan. Dynamic prompt validation rechecks those task
+references against the exact controller-materialized TaskBrief rather than
+trusting a standalone model response.
 
 The first Phase 3C runtime boundary is also implemented. Dynamic execution
 requests and telemetry use an approved run-scoped Agent ID and capability;
@@ -656,6 +659,29 @@ whose independent re-verification did not complete. Focused Planning and
 Dynamic Workflow tests cover both regressions, and the complete check is 700
 tests passed; a new fresh-account provider run is still required before
 claiming end-to-end delivery success.
+
+That fresh-account retry passed the public installer, automatic diagnostics,
+first-run configuration, provider smoke, and ordinary request capture. The
+initial Planning response and its bounded repair both proposed the same
+two-Agent `implementation -> review` DAG, but both copied the known
+`AC_DOCUMENTATION` and `AC_QUALITY` definitions from policy context. The
+initial response reached context-free writer coverage first and was rejected
+because only the Reviewer task referenced `AC_QUALITY`; the repair added that
+binding to the writer, then reached the later profile-ownership collision and
+failed before overview. No runtime Agent, execution run, workspace, or
+destination was created.
+
+The Planning response boundary now removes exact active-profile definition
+echoes before proposal-owned coverage validation, records each removal beside
+the immutable raw response, retains task bindings, and materializes only the
+controller's canonical criteria. It does not infer an unknown ID or alter any
+Agent, task, dependency, concurrency, workload, model, timeout, or approval.
+Both preserved provider responses now replay to their original two-Agent DAG
+without a repair; focused Planning tests cover active-policy scoping, raw
+evidence, canonical materialization, and unchanged strict rejection outside
+that scope, and the complete repository check passes 702 tests. A new
+fresh-account provider run remains required before claiming end-to-end
+delivery success.
 
 The rehearsal sequence below concerns the predecessor guided fixed-team
 product path and is retained as defect and regression evidence. It proves the

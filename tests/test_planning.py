@@ -383,6 +383,56 @@ def test_response_normalizer_leaves_unsafe_paths_for_strict_rejection() -> None:
         PlanningModelResponse.model_validate(normalized)
 
 
+def test_response_normalizer_removes_only_active_profile_criterion_echoes() -> None:
+    profile_criterion = AcceptanceCriterion(
+        id="AC_PROFILE",
+        description="The controller owns this canonical contract.",
+        verification="Run the controller-owned profile gate.",
+    )
+    payload = proposal_response().model_dump(mode="json")
+    payload["proposal"]["acceptance_criteria"].append(
+        {
+            "id": "AC_PROFILE",
+            "description": "A model-authored rewrite must not replace the contract.",
+            "verification": "A model-authored verification must not be authoritative.",
+            "review_boundaries": ["top_level_input"],
+        }
+    )
+    payload["proposal"]["tasks"].append(
+        quality_task_payload(acceptance_criteria=["AC_PROFILE"])
+    )
+    original = json.loads(json.dumps(payload))
+
+    normalized, changes = planning._normalize_planning_response_payload(
+        payload,
+        profile_criterion_ids=(profile_criterion.id,),
+    )
+    parsed = PlanningModelResponse.model_validate(normalized)
+
+    assert payload == original
+    assert parsed.proposal is not None
+    assert [item.id for item in parsed.proposal.acceptance_criteria] == [
+        "AC_SCAN",
+        "AC_REPORT",
+    ]
+    assert parsed.proposal.tasks[-1].acceptance_criteria == ("AC_PROFILE",)
+    assert changes == (
+        "removed controller-owned profile criterion AC_PROFILE from "
+        "proposal.acceptance_criteria[2]",
+    )
+
+    unchanged, unchanged_changes = planning._normalize_planning_response_payload(
+        payload
+    )
+    assert unchanged == payload
+    assert unchanged_changes == ()
+    with pytest.raises(
+        ValidationError,
+        match="writer tasks do not cover proposal acceptance criteria: AC_PROFILE",
+    ):
+        PlanningModelResponse.model_validate(unchanged)
+
+
 def quality_task_payload(
     *,
     acceptance_criteria: list[str] | None = None,
@@ -1615,6 +1665,72 @@ def test_valid_quality_task_does_not_consume_a_model_repair_call(
     turn = store.load_turn(request().run_id, 1)
     assert turn.response_text == raw_response
     assert turn.response_normalizations == ()
+
+
+def test_profile_criterion_echo_does_not_consume_a_model_repair_call(
+    tmp_path: Path,
+) -> None:
+    profile_criterion = AcceptanceCriterion(
+        id="AC_PROFILE",
+        description="The project satisfies the fixed runtime contract.",
+        verification="Run the profile contract gate.",
+    )
+    payload = proposal_response().model_dump(mode="json")
+    payload["proposal"]["acceptance_criteria"].append(
+        {
+            "id": "AC_PROFILE",
+            "description": "The model repeats and rewrites the fixed contract.",
+            "verification": "Trust the model-authored check.",
+            "review_boundaries": ["failure_path"],
+        }
+    )
+    payload["proposal"]["tasks"].append(
+        quality_task_payload(acceptance_criteria=["AC_PROFILE"])
+    )
+    raw_response = json.dumps(payload)
+    executor = ScriptedAgentExecutor([raw_response])
+    store = PlanningStore(tmp_path / "planning")
+    configured = policy(
+        response_repair_limit=0,
+        profile_acceptance_criteria=(profile_criterion,),
+    )
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=configured,
+        clock=AdvancingClock(),
+    )
+
+    created = coordinator.start(
+        request(),
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+
+    assert created is not None
+    assert len(executor.requests) == 1
+    assert [item.id for item in created.body.acceptance_criteria] == [
+        "AC_SCAN",
+        "AC_REPORT",
+    ]
+    assert created.body.tasks[-1].acceptance_criteria == ("AC_PROFILE",)
+    preview = preview_adaptive_proposal(
+        request(),
+        created,
+        configured,
+        created_at=FIXED_TIME,
+    )
+    materialized = next(
+        item
+        for item in preview.task_brief.acceptance_criteria
+        if item.id == "AC_PROFILE"
+    )
+    assert materialized == profile_criterion
+    turn = store.load_turn(request().run_id, 1)
+    assert turn.response_text == raw_response
+    assert turn.response_normalizations == (
+        "removed controller-owned profile criterion AC_PROFILE from "
+        "proposal.acceptance_criteria[2]",
+    )
 
 
 def test_cancellation_stops_before_a_proposal_or_approval(tmp_path: Path) -> None:

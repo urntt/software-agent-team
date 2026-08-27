@@ -318,9 +318,12 @@ Its request proves explicit model-work authorization. Every
 model invocation, including a rejected semantic response, becomes a write-once
 turn containing prompt and response digests plus bounded provider evidence.
 The turn preserves the exact raw response. When the controller infers an
-unambiguous missing question/proposal discriminator or canonicalizes a safe
-relative Planning path presentation, it stores the validated normalized body
-and an explicit field-level normalization list alongside that raw evidence.
+unambiguous missing question/proposal discriminator, removes an exact active
+profile criterion definition that is already controller-owned, or canonicalizes
+a safe relative Planning path presentation, it stores the validated normalized
+body and an explicit normalization list alongside that raw evidence. Removing
+an echoed profile definition never adopts its model-authored text or removes a
+legal task binding to the canonical profile ID.
 Quality-owned tasks are retained as approved semantic intent and passed to the
 matching read-only Agent. They do not alter the AgentSpec-owned permission,
 dependency, model, timeout, scope, or invocation contract.
@@ -336,8 +339,10 @@ then revalidates those seconds against the TeamPlan at the execution boundary.
 The bootstrap Planner cannot create Agents or change lifecycle state.
 
 Task-criterion binding is context-aware without transferring profile ownership
-to the model. A proposal must cover every criterion it defines. It may also
-bind a task to a profile criterion ID explicitly supplied by the current
+to the model. A proposal must cover every Planner-owned criterion it defines.
+An exact definition echo of an active profile ID is discarded and audited
+before that coverage check because the model definition has no authority. A
+task may bind to a profile criterion ID explicitly supplied by the current
 controller policy, while the controller remains the sole source of that
 criterion's description and verification contract. Before persisting a valid
 proposal, the controller rejects task references outside the union of those two

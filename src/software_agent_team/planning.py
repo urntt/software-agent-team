@@ -288,6 +288,8 @@ def _canonicalize_model_path(value: object) -> object:
 
 def _normalize_planning_response_payload(
     payload: dict[str, object],
+    *,
+    profile_criterion_ids: Collection[str] = (),
 ) -> tuple[dict[str, object], tuple[str, ...]]:
     """Apply bounded semantic-preserving normalization before strict validation."""
 
@@ -306,6 +308,21 @@ def _normalize_planning_response_payload(
     proposal = normalized.get("proposal")
     if not isinstance(proposal, dict):
         return normalized, tuple(changes)
+    acceptance_criteria = proposal.get("acceptance_criteria")
+    controller_owned_ids = set(profile_criterion_ids)
+    if isinstance(acceptance_criteria, list) and controller_owned_ids:
+        retained_criteria: list[object] = []
+        for criterion_index, criterion in enumerate(acceptance_criteria):
+            criterion_id = criterion.get("id") if isinstance(criterion, dict) else None
+            if isinstance(criterion_id, str) and criterion_id in controller_owned_ids:
+                changes.append(
+                    "removed controller-owned profile criterion "
+                    f"{criterion_id} from proposal.acceptance_criteria"
+                    f"[{criterion_index}]"
+                )
+                continue
+            retained_criteria.append(criterion)
+        proposal["acceptance_criteria"] = retained_criteria
     tasks = proposal.get("tasks")
     if isinstance(tasks, list):
         for task_index, task in enumerate(tasks):
@@ -2416,7 +2433,13 @@ class AdaptivePlanningCoordinator:
                 try:
                     payload = parse_json_object_response(result.response_text)
                     payload, response_normalizations = (
-                        _normalize_planning_response_payload(payload)
+                        _normalize_planning_response_payload(
+                            payload,
+                            profile_criterion_ids=(
+                                criterion.id
+                                for criterion in self.policy.profile_acceptance_criteria
+                            ),
+                        )
                     )
                     parsed = PlanningModelResponse.model_validate(payload)
                     if parsed.kind is PlanningResponseKind.PROPOSAL:

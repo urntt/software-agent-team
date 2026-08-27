@@ -159,8 +159,12 @@ SAT is experimental software. The supported build path is currently limited
 to new, small Python 3.12 projects; existing-codebase modification, additional
 runtime profiles, interrupted-run resume, deployment, and publication are not
 yet supported. Adaptive Planning, plan approval, task-defined execution, and
-delivery are integrated in the normal `sat` path and covered offline. The same
-append-only event stream now drives configurable per-Agent progress, including
+delivery are integrated in the normal `sat` path and covered offline. Planning
+retains raw model evidence while deterministically ignoring repeated
+definitions of fixed controller-owned profile criteria; legal task bindings
+still resolve to the canonical profile contract without consuming a model
+repair. The same append-only event stream now drives configurable per-Agent
+progress, including
 dependency, provider-wait, repair, terminal, route, duration, and budget facts.
 Planning model waits also show elapsed heartbeats, response validation, and a
 bounded-repair transition. Provider heartbeats stop on hidden completion

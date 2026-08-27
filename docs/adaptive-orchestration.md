@@ -162,15 +162,22 @@ may perform only these bounded, semantics-preserving normalizations:
 
 - Infer `kind` when exactly one non-null `question` or `proposal` body makes it
   unambiguous;
+- Remove a criterion definition whose exact ID belongs to the active
+  controller-owned execution profile, while retaining any task binding to that
+  known ID and using only the profile's canonical definition;
 - Canonicalize safe relative `expected_paths` values such as `tests/` to
   `tests`;
 - Canonicalize safe `workspace_scope` presentation such as `repository/` to
   `repository`.
 
 The immutable turn retains the exact raw response and records every normalized
-field separately. Absolute paths, backslashes, parent traversal, ambiguous
-response bodies, unknown fields, and other semantic defects remain invalid.
-They may consume the one bounded semantic repair when policy permits it.
+field or removed profile-owned definition separately. The active policy is the
+only source of IDs eligible for criterion-ownership normalization; the
+controller does not compare or adopt the model-authored description,
+verification text, or Review boundaries. Absolute paths, backslashes, parent
+traversal, ambiguous response bodies, unknown fields outside such an ignored
+definition, and other semantic defects remain invalid. They may consume the
+one bounded semantic repair when policy permits it.
 
 OpenClaw may deliver the semantic response and an ancillary tool diagnostic as
 separate visible payloads. The execution boundary preserves their original
@@ -187,16 +194,19 @@ workspace scope and is rejected rather than silently widened.
 Acceptance criteria have two distinct owners. The Planner defines
 task-specific criteria and must bind every one of them to at least one
 implementation task. The execution profile defines fixed criteria whose text
-and verification contract remain controller-owned; the Planner must not echo
-those definitions, but an implementation task may reference a profile
-criterion ID supplied in the current Planning context when the task materially
-implements or verifies it. Context-free response validation checks ID syntax
-and complete coverage of Planner-owned criteria. The policy-aware controller
-preview then resolves every task reference against the union of proposal and
-current profile IDs. It rejects any other ID before an overview is shown and
-preserves valid profile bindings when it materializes the TaskBrief and
-implementation plan. A profile criterion need not be forced onto a task merely
-because it exists.
+and verification contract remain controller-owned; the Planner should not echo
+those definitions, but a task may reference a profile criterion ID supplied in
+the current Planning context when the task materially implements or verifies
+it. If a response nevertheless repeats an exact active profile ID in its
+definition list, the controller removes that non-authoritative definition
+before context-free proposal coverage validation and records the removal. It
+does not import any model-authored text or boundary from the echo. Context-free
+validation then checks ID syntax and complete coverage of the remaining
+Planner-owned criteria. The policy-aware controller preview resolves every
+task reference against the union of proposal and current profile IDs. It
+rejects any other ID before an overview is shown and preserves valid profile
+bindings when it materializes the TaskBrief and implementation plan. A profile
+criterion need not be forced onto a task merely because it exists.
 
 Each Planner-owned criterion also declares `review_boundaries`. Most criteria
 use an empty list. A description containing an unqualified prohibition or
@@ -633,10 +643,12 @@ append-only turn and proposal store, natural-language revision, safe limit
 editor, complete overview, explicit approval evidence, and deterministic
 ordinary-user interaction test are implemented. Bare `sat` now activates this
 interaction together with Batch 3C, so an approved dynamic plan is the exact
-plan the controller executes. The Planning boundary also normalizes only
-unambiguous response-kind and safe relative-path presentation before strict
-validation, while preserving the raw response and recording each normalization
-in the Planning turn.
+plan the controller executes. Before strict validation, the Planning boundary
+infers only an unambiguous response kind, canonicalizes only safe relative-path
+presentation, and removes exact active-profile criterion-definition echoes
+without removing their legal task bindings or adopting model-authored profile
+text. The raw response and every normalization remain recorded in the Planning
+turn.
 Blocking model waits emit a concise heartbeat every ten seconds, record when a
 response returns, show contract validation, and explicitly announce the one
 bounded repair. These messages expose elapsed time and controller state, not
