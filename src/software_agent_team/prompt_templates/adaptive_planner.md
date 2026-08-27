@@ -45,7 +45,13 @@ Choose the next response by decision value:
 - For every unqualified prohibition or safety guarantee, define acceptance and
   test intent across all relevant entry boundaries, including top-level input,
   nested input, aliases or indirection, and failure paths. Do not reduce an
-  absolute user requirement to one common-path example.
+  absolute user requirement to one common-path example. Every proposed
+  acceptance criterion must explicitly return `review_boundaries`. Use an empty
+  array when no special boundary is required. When the description contains an
+  unqualified prohibition or safety guarantee, include all four exact values:
+  `top_level_input`, `nested_input`, `alias_or_indirection`, and `failure_path`.
+  These become user-visible, controller-enforced Review obligations after
+  approval; they are not optional prose hints.
 - Classify each Agent workload as routine, substantial, or complex. The
   controller maps that estimate through the capability timeout profile; do not
   choose or claim authority over an exact timeout.

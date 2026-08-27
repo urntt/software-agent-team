@@ -169,13 +169,16 @@ deduplicates repeated or overlapping selectors. Evidence never crosses an
 Agent, stage, iteration, commit, or repair chain. A no-match selector uses or
 exhausts the one bounded semantic repair; multiple real matches do not.
 
-Execution records label this grounded Reviewer shape `semantic_body_v3`; other
-current semantic bodies remain `semantic_body_v1`. `semantic_body_v2` remains
-valid historical evidence for the attempt-qualified tool-only contract.
+Execution records label this grounded Reviewer shape `semantic_body_v4`; other
+current semantic bodies remain `semantic_body_v1`. `semantic_body_v2` and
+`semantic_body_v3` remain valid historical evidence for the attempt-qualified
+tool-only and deterministic-command grounding contracts, respectively.
 Existing schema-v2 Review artifacts that predate attempt qualification or
 command references serialize without invented fields, preserving their
 canonical content and digests. Newly grounded references record actual
-attempt-qualified tool IDs and command IDs explicitly.
+attempt-qualified tool IDs and command IDs explicitly. Version four also
+persists controller-approved entry-boundary checks and their distinct grounded
+evidence.
 
 ## Semantic Response Boundary
 

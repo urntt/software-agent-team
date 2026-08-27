@@ -92,6 +92,15 @@ class ReviewCriterionStatus(StrEnum):
     BLOCKED = "blocked"
 
 
+class ReviewBoundaryKind(StrEnum):
+    """Entry boundaries required for an absolute Review claim."""
+
+    TOP_LEVEL_INPUT = "top_level_input"
+    NESTED_INPUT = "nested_input"
+    ALIAS_OR_INDIRECTION = "alias_or_indirection"
+    FAILURE_PATH = "failure_path"
+
+
 class AgentToolCallOutcome(StrEnum):
     """Controller-normalized outcome of one attributable Agent tool call."""
 
@@ -171,6 +180,31 @@ class AcceptanceCriterion(BaseModel):
     id: str = Field(min_length=1, pattern=r"^[A-Z][A-Z0-9_-]*$")
     description: str = Field(min_length=1)
     verification: str = Field(min_length=1)
+    review_boundaries: tuple[ReviewBoundaryKind, ...] = ()
+
+    @field_validator("review_boundaries")
+    @classmethod
+    def require_unique_review_boundaries(
+        cls,
+        values: tuple[ReviewBoundaryKind, ...],
+    ) -> tuple[ReviewBoundaryKind, ...]:
+        """Keep explicit Review obligations ordered and unique."""
+
+        if len(values) != len(set(values)):
+            raise ValueError("acceptance review boundaries must be unique")
+        return values
+
+    @model_serializer(mode="wrap")
+    def omit_empty_review_boundaries(
+        self,
+        handler: SerializerFunctionWrapHandler,
+    ) -> object:
+        """Preserve existing TaskBrief bytes when no boundary is required."""
+
+        serialized = handler(self)
+        if isinstance(serialized, dict) and not self.review_boundaries:
+            serialized.pop("review_boundaries", None)
+        return serialized
 
 
 class TaskBrief(BaseModel):
@@ -499,6 +533,7 @@ class AgentExecutionRecord(BaseModel):
             "semantic_body_v1",
             "semantic_body_v2",
             "semantic_body_v3",
+            "semantic_body_v4",
         ]
         | None
     ) = None
@@ -983,6 +1018,60 @@ class ReviewFinding(BaseModel):
         return self
 
 
+class ReviewBoundaryCheck(BaseModel):
+    """Controller-grounded evidence for one required Review entry boundary."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    boundary: ReviewBoundaryKind
+    adversarial_check: str = Field(min_length=1, max_length=1000)
+    command_evidence_ids: tuple[str, ...] = ()
+    tool_evidence: tuple[ReviewToolEvidenceReference, ...] = Field(min_length=1)
+
+    @field_validator("adversarial_check")
+    @classmethod
+    def require_clean_adversarial_check(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("boundary adversarial check must not be blank")
+        return cleaned
+
+    @field_validator("command_evidence_ids")
+    @classmethod
+    def require_unique_command_evidence(
+        cls,
+        values: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        if len(values) != len(set(values)) or any(
+            re.fullmatch(r"CHECK_[A-Z0-9_]+", value) is None for value in values
+        ):
+            raise ValueError("boundary command-evidence references must be valid")
+        return values
+
+    @field_validator("tool_evidence")
+    @classmethod
+    def require_unique_tool_evidence(
+        cls,
+        values: tuple[ReviewToolEvidenceReference, ...],
+    ) -> tuple[ReviewToolEvidenceReference, ...]:
+        identifiers = [
+            (value.execution_attempt, value.tool_call_id) for value in values
+        ]
+        if len(identifiers) != len(set(identifiers)):
+            raise ValueError("boundary tool-evidence references must be unique")
+        return values
+
+    @model_serializer(mode="wrap")
+    def omit_empty_command_evidence(
+        self,
+        handler: SerializerFunctionWrapHandler,
+    ) -> object:
+        serialized = handler(self)
+        if isinstance(serialized, dict) and not self.command_evidence_ids:
+            serialized.pop("command_evidence_ids", None)
+        return serialized
+
+
 class ReviewCriterionAssessment(BaseModel):
     """Attributable evidence and adversarial reasoning for one criterion."""
 
@@ -994,6 +1083,7 @@ class ReviewCriterionAssessment(BaseModel):
     evidence: str = Field(min_length=1, max_length=2000)
     command_evidence_ids: tuple[str, ...] = ()
     tool_evidence: tuple[ReviewToolEvidenceReference, ...] = ()
+    boundary_checks: tuple[ReviewBoundaryCheck, ...] = ()
 
     @field_validator("adversarial_check", "evidence")
     @classmethod
@@ -1036,6 +1126,17 @@ class ReviewCriterionAssessment(BaseModel):
             raise ValueError("criterion tool-evidence references must be unique")
         return values
 
+    @field_validator("boundary_checks")
+    @classmethod
+    def require_unique_boundary_checks(
+        cls,
+        values: tuple[ReviewBoundaryCheck, ...],
+    ) -> tuple[ReviewBoundaryCheck, ...]:
+        boundaries = [value.boundary for value in values]
+        if len(boundaries) != len(set(boundaries)):
+            raise ValueError("criterion boundary checks must be unique")
+        return values
+
     @model_serializer(mode="wrap")
     def omit_empty_command_evidence(
         self,
@@ -1046,6 +1147,8 @@ class ReviewCriterionAssessment(BaseModel):
         serialized = handler(self)
         if isinstance(serialized, dict) and not self.command_evidence_ids:
             serialized.pop("command_evidence_ids", None)
+        if isinstance(serialized, dict) and not self.boundary_checks:
+            serialized.pop("boundary_checks", None)
         return serialized
 
 

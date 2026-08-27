@@ -303,8 +303,9 @@ Confirm all of the following before marking Phase 1 accepted:
   compares their provider/model metadata using the canonical `provider/model`
   identity.
 - Every semantic execution record identifies `semantic_body_v1`, or
-  `semantic_body_v3` for a grounded Reviewer response. Historical
-  `semantic_body_v2` records retain the attempt-qualified tool-only contract.
+  `semantic_body_v4` for a grounded Reviewer response with explicit approved
+  boundary checks. Historical `semantic_body_v2` and `semantic_body_v3` records
+  retain their prior tool-only and deterministic-command grounding contracts.
   The record lists the controller-supplied persisted fields, records any
   redundant model-returned controller fields that were ignored, and records
   the resolved stage and remaining attempt timeouts. Missing or incorrect

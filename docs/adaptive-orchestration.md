@@ -196,6 +196,13 @@ preserves valid profile bindings when it materializes the TaskBrief and
 implementation plan. A profile criterion need not be forced onto a task merely
 because it exists.
 
+Each Planner-owned criterion also declares `review_boundaries`. Most criteria
+use an empty list. A description containing an unqualified prohibition or
+safety guarantee must declare all four controller-known entry boundaries:
+top-level input, nested input, alias or indirection, and failure path. These
+obligations are shown in the overview and become part of the confirmed
+TaskBrief; they cannot be silently weakened by the execution Reviewer.
+
 The `tasks` collection records approved work intent for any runtime Agent.
 Implementation and integration Agents must each own at least one task, and
 their tasks—not quality-only tasks—must cover every Planner-owned acceptance
@@ -364,7 +371,13 @@ findings must cover the same criteria. When exactly one unscoped blocking
 finding remains, the controller binds it to every otherwise-uncovered blocked
 criterion; multiple unscoped findings are ambiguous and invalid. Missing
 coverage is never implicit acceptance. Every assessment must also supply one
-or more bounded result fragments. The response schema makes the fragment
+or more bounded result fragments. A `semantic_body_v4` assessment returns
+`boundary_checks` explicitly. A satisfied criterion must check every boundary
+approved in its TaskBrief, with a distinct attributable fragment for each; a
+blocked absolute criterion may stop after one grounded counterexample. A
+criterion with no approved boundary must return an empty list, and a Reviewer
+cannot add or remove obligations. This makes entry coverage a controller-
+validated contract rather than a summary claim. The response schema makes the fragment
 structurally required and forbids model-supplied attempt, tool, or command IDs.
 Exact text is preferred; a keyed JSON fragment may differ only in RFC JSON
 whitespace outside quoted strings. An initial

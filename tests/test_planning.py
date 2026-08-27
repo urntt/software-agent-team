@@ -11,7 +11,7 @@ import pytest
 from pydantic import ValidationError
 
 import software_agent_team.planning as planning
-from software_agent_team.artifacts import AcceptanceCriterion
+from software_agent_team.artifacts import AcceptanceCriterion, ReviewBoundaryKind
 from software_agent_team.budgets import AgentBudget
 from software_agent_team.execution import ScriptedAgentExecutor
 from software_agent_team.integrity import canonical_model_sha256
@@ -267,6 +267,79 @@ def test_question_requires_suggestions_and_preserves_custom_answers() -> None:
     assert question is not None
     assert len(question.options) == 2
     assert question.allow_custom
+
+
+def test_absolute_criterion_requires_all_review_entry_boundaries() -> None:
+    body = proposal_body()
+    absolute = ProposedCriterion(
+        id="AC_LINK_SAFETY",
+        description="The scanner must not follow a symlink at any depth.",
+        verification="Challenge every entry boundary with symlink fixtures.",
+    )
+
+    tasks = (
+        body.tasks[0].model_copy(
+            update={
+                "acceptance_criteria": (
+                    *body.tasks[0].acceptance_criteria,
+                    absolute.id,
+                )
+            }
+        ),
+    )
+    incomplete = PlanningProposalBody.model_validate(
+        body.model_copy(
+            update={
+                "acceptance_criteria": (*body.acceptance_criteria, absolute),
+                "tasks": tasks,
+            }
+        )
+    )
+    with pytest.raises(PlanningError, match="must require top-level"):
+        preview_adaptive_proposal(
+            request(),
+            proposal(body=incomplete),
+            policy(),
+            created_at=FIXED_TIME,
+        )
+
+    complete = absolute.model_copy(
+        update={"review_boundaries": tuple(ReviewBoundaryKind)}
+    )
+    accepted = PlanningProposalBody.model_validate(
+        body.model_copy(
+            update={
+                "acceptance_criteria": (*body.acceptance_criteria, complete),
+                "tasks": tasks,
+            }
+        )
+    )
+
+    assert accepted.acceptance_criteria[-1].review_boundaries == tuple(
+        ReviewBoundaryKind
+    )
+    preview = preview_adaptive_proposal(
+        request(),
+        proposal(body=accepted),
+        policy(),
+        created_at=FIXED_TIME,
+    )
+    overview = render_planning_overview(preview)
+    assert (
+        "Review boundaries: top_level_input, nested_input, "
+        "alias_or_indirection, failure_path"
+    ) in overview
+
+    absolute_request = request().model_copy(
+        update={"source_request": "Build a scanner that must not follow symlinks."}
+    )
+    with pytest.raises(PlanningError, match="no proposed acceptance criterion"):
+        preview_adaptive_proposal(
+            absolute_request,
+            proposal(),
+            policy(),
+            created_at=FIXED_TIME,
+        )
 
 
 def test_response_normalizer_canonicalizes_only_safe_presentation_variants() -> None:
@@ -1264,6 +1337,7 @@ def test_dialogue_revision_structured_edit_and_approval_are_recoverable(
     assert all(call.timeout_seconds == 180 for call in executor.requests)
     assert "unqualified prohibition" in executor.requests[0].prompt
     assert "top-level input" in executor.requests[0].prompt
+    assert "`review_boundaries`" in executor.requests[0].prompt
     compact_prompt = " ".join(executor.requests[0].prompt.split())
     assert "do not repeat their definitions" in compact_prompt
     assert "A task may reference a listed profile" in compact_prompt
@@ -1274,6 +1348,18 @@ def test_dialogue_revision_structured_edit_and_approval_are_recoverable(
     assert "does not impose a hidden peer-only quality topology" in compact_prompt
     assert "assign every task that creates or modifies project code" in compact_prompt
     assert "quality-owned task may describe only inspection" in compact_prompt
+    schema_text = (
+        executor.requests[0]
+        .prompt.split(
+            "RESPONSE_SCHEMA_JSON\n",
+            1,
+        )[1]
+        .split("\n\nREPAIR_CONTEXT_JSON", 1)[0]
+    )
+    response_schema = json.loads(schema_text)
+    criterion_schema = response_schema["$defs"]["ProposedCriterion"]
+    assert "review_boundaries" in criterion_schema["required"]
+    assert "default" not in criterion_schema["properties"]["review_boundaries"]
 
     tampered = approved.model_dump(mode="json")
     tampered["team_plan"]["agents"][0]["timeout_seconds"] += 1

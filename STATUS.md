@@ -617,6 +617,20 @@ assertion failure, timeout semantics, and runtime preflight against image ID
 the complete 693-test offline suite passes. A fresh installed provider rerun is
 still required to verify the corrected revision and delivery path.
 
+Whole-result consistency alone does not prove that an absolute requirement was
+challenged at every relevant entry. Planning now makes that scope explicit:
+every proposed criterion returns `review_boundaries`, and a criterion whose
+description contains an unqualified prohibition or safety guarantee must list
+top-level input, nested input, alias or indirection, and failure path. The user
+sees these obligations in the overview, and the confirmed TaskBrief freezes
+them. `semantic_body_v4` requires explicit boundary checks; a satisfied
+assessment must ground every approved boundary with a distinct attributable
+fragment, while a blocked assessment may stop after one grounded
+counterexample. Controller validation rejects missing, duplicate, reused, or
+unapproved boundary claims. The complete 698-test offline suite passes. A fresh
+installed provider rerun remains required to verify the expanded Planning and
+Review contracts at the real provider boundary.
+
 The rehearsal sequence below concerns the predecessor guided fixed-team
 product path and is retained as defect and regression evidence. It proves the
 installer, isolated runtime, fixed compatibility controller, delivery, and

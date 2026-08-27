@@ -18,6 +18,8 @@ from software_agent_team.artifacts import (
     CommandEvidence,
     ImplementationPlan,
     PlanTask,
+    ReviewBoundaryCheck,
+    ReviewBoundaryKind,
     ReviewCriterionAssessment,
     ReviewCriterionStatus,
     ReviewFinding,
@@ -244,11 +246,18 @@ def _ground_review_tool_evidence(
         raise ValueError("review evidence attempts must be unique and ordered")
     if attempts[-1].tool_calls != telemetry.tool_calls:
         raise ValueError("review evidence chain does not end at the current attempt")
-    grounded_assessments: list[ReviewCriterionAssessment] = []
-    for assessment in body.criterion_assessments:
+
+    def resolve_claims(
+        claims: tuple[ReviewToolEvidenceClaim, ...],
+        *,
+        label: str,
+        status: ReviewCriterionStatus,
+    ) -> tuple[tuple[ReviewToolEvidenceReference, ...], tuple[str, ...]]:
+        """Bind one semantic claim collection to whole-result evidence."""
+
         observable_by_tool_call: dict[tuple[int, str], str] = {}
         matching_command_ids: set[str] = set()
-        for claim in assessment.tool_evidence:
+        for claim in claims:
             tool_matches = tuple(
                 (attempt.execution_attempt, call)
                 for attempt in attempts
@@ -263,20 +272,18 @@ def _ground_review_tool_evidence(
             )
             if not tool_matches and not command_matches:
                 raise ValueError(
-                    f"criterion {assessment.criterion_id} evidence fragment does "
-                    "not match any eligible review-chain tool result or "
-                    "deterministic command output"
+                    f"{label} evidence fragment does not match any eligible "
+                    "review-chain tool result or deterministic command output"
                 )
-            if assessment.status is ReviewCriterionStatus.SATISFIED:
+            if status is ReviewCriterionStatus.SATISFIED:
                 if failed_tools := tuple(
                     f"attempt {execution_attempt} {call.id}"
                     for execution_attempt, call in tool_matches
                     if _matched_tool_result_failed(call)
                 ):
                     raise ValueError(
-                        f"criterion {assessment.criterion_id} satisfied evidence "
-                        "selects an overall failed tool result: "
-                        + ", ".join(failed_tools)
+                        f"{label} satisfied evidence selects an overall failed "
+                        "tool result: " + ", ".join(failed_tools)
                     )
                 if failed_commands := tuple(
                     command.id
@@ -284,9 +291,8 @@ def _ground_review_tool_evidence(
                     if _matched_command_failed(command)
                 ):
                     raise ValueError(
-                        f"criterion {assessment.criterion_id} satisfied evidence "
-                        "selects a failed or timed-out deterministic command: "
-                        + ", ".join(failed_commands)
+                        f"{label} satisfied evidence selects a failed or timed-out "
+                        "deterministic command: " + ", ".join(failed_commands)
                     )
             for execution_attempt, match in tool_matches:
                 observable_by_tool_call.setdefault(
@@ -306,18 +312,48 @@ def _ground_review_tool_evidence(
             for call in attempt.tool_calls
             if (attempt.execution_attempt, call.id) in observable_by_tool_call
         )
+        command_ids = tuple(
+            command.id
+            for command in command_evidence
+            if command.id in matching_command_ids
+        )
+        return references, command_ids
+
+    grounded_assessments: list[ReviewCriterionAssessment] = []
+    for assessment in body.criterion_assessments:
+        references, command_ids = resolve_claims(
+            assessment.tool_evidence,
+            label=f"criterion {assessment.criterion_id}",
+            status=assessment.status,
+        )
+        boundary_checks = tuple(
+            ReviewBoundaryCheck(
+                boundary=boundary.boundary,
+                adversarial_check=boundary.adversarial_check,
+                command_evidence_ids=boundary_command_ids,
+                tool_evidence=boundary_references,
+            )
+            for boundary in assessment.boundary_checks
+            for boundary_references, boundary_command_ids in (
+                resolve_claims(
+                    boundary.tool_evidence,
+                    label=(
+                        f"criterion {assessment.criterion_id} boundary "
+                        f"{boundary.boundary.value}"
+                    ),
+                    status=assessment.status,
+                ),
+            )
+        )
         grounded_assessments.append(
             ReviewCriterionAssessment(
                 criterion_id=assessment.criterion_id,
                 status=assessment.status,
                 adversarial_check=assessment.adversarial_check,
                 evidence=assessment.evidence,
-                command_evidence_ids=tuple(
-                    command.id
-                    for command in command_evidence
-                    if command.id in matching_command_ids
-                ),
+                command_evidence_ids=command_ids,
                 tool_evidence=references,
+                boundary_checks=boundary_checks,
             )
         )
     grounded = tuple(grounded_assessments)
@@ -421,6 +457,24 @@ class ReviewToolEvidenceClaim(BaseModel):
         return cleaned
 
 
+class ReviewBoundaryCheckResponse(BaseModel):
+    """Model-visible evidence selector for one required entry boundary."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    boundary: ReviewBoundaryKind
+    adversarial_check: str = Field(min_length=1, max_length=1000)
+    tool_evidence: tuple[ReviewToolEvidenceClaim, ...] = Field(min_length=1)
+
+    @field_validator("adversarial_check")
+    @classmethod
+    def require_clean_adversarial_check(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("boundary adversarial check must not be blank")
+        return cleaned
+
+
 class ReviewCriterionAssessmentResponse(BaseModel):
     """Reviewer assessment with model-visible result-fragment selectors."""
 
@@ -431,6 +485,7 @@ class ReviewCriterionAssessmentResponse(BaseModel):
     adversarial_check: str = Field(min_length=1, max_length=2000)
     evidence: str = Field(min_length=1, max_length=2000)
     tool_evidence: tuple[ReviewToolEvidenceClaim, ...] = Field(min_length=1)
+    boundary_checks: tuple[ReviewBoundaryCheckResponse, ...] = ()
 
     @field_validator("adversarial_check", "evidence")
     @classmethod
@@ -441,6 +496,24 @@ class ReviewCriterionAssessmentResponse(BaseModel):
         if not cleaned:
             raise ValueError("criterion assessment text must not be blank")
         return cleaned
+
+    @field_validator("boundary_checks")
+    @classmethod
+    def require_unique_boundary_checks_and_observables(
+        cls,
+        values: tuple[ReviewBoundaryCheckResponse, ...],
+    ) -> tuple[ReviewBoundaryCheckResponse, ...]:
+        boundaries = [value.boundary for value in values]
+        if len(boundaries) != len(set(boundaries)):
+            raise ValueError("criterion boundary checks must be unique")
+        observables = [
+            claim.observable for value in values for claim in value.tool_evidence
+        ]
+        if len(observables) != len(set(observables)):
+            raise ValueError(
+                "criterion boundary checks require distinct evidence fragments"
+            )
+        return values
 
 
 class ReviewReportResponse(BaseModel):
@@ -973,6 +1046,44 @@ def parse_dynamic_agent_response(
                     "criterion assessments must exactly cover assigned review scope"
                     + (f" ({'; '.join(detail)})" if detail else "")
                 )
+            criteria_by_id = {
+                criterion.id: criterion for criterion in task_brief.acceptance_criteria
+            }
+            for assessment in body.criterion_assessments:
+                required_boundaries = set(
+                    criteria_by_id[assessment.criterion_id].review_boundaries
+                )
+                checked_boundaries = {
+                    check.boundary for check in assessment.boundary_checks
+                }
+                unexpected_boundaries = checked_boundaries - required_boundaries
+                if unexpected_boundaries:
+                    raise ValueError(
+                        f"criterion {assessment.criterion_id} checked unapproved "
+                        "Review boundaries: "
+                        + ", ".join(
+                            sorted(item.value for item in unexpected_boundaries)
+                        )
+                    )
+                if (
+                    assessment.status is ReviewCriterionStatus.SATISFIED
+                    and checked_boundaries != required_boundaries
+                ):
+                    missing_boundaries = required_boundaries - checked_boundaries
+                    raise ValueError(
+                        f"criterion {assessment.criterion_id} satisfied assessment "
+                        "must check every approved Review boundary: "
+                        + ", ".join(sorted(item.value for item in missing_boundaries))
+                    )
+                if (
+                    assessment.status is ReviewCriterionStatus.BLOCKED
+                    and required_boundaries
+                    and not checked_boundaries
+                ):
+                    raise ValueError(
+                        f"criterion {assessment.criterion_id} blocked assessment "
+                        "must ground at least one approved Review boundary"
+                    )
             unknown = {
                 criterion_id
                 for finding in body.findings

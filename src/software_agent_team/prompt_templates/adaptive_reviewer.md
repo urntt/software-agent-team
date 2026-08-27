@@ -49,7 +49,19 @@ integrity is compromised; then include the matching `termination_reason`.
 Return exactly one `criterion_assessments` entry for every assigned criterion.
 Each entry must name the concrete negative or boundary case you challenged and
 the observable source, documentation, deterministic-command, or sandbox-probe
-evidence for the result. It must also contain at least one `tool_evidence`
+evidence for the result. It must return `boundary_checks` explicitly. Use an
+empty array only when that criterion's TaskBrief `review_boundaries` is empty.
+For a satisfied assessment, return exactly one check for every approved
+boundary. Each check names the exact boundary, describes the concrete challenge,
+and supplies one or more evidence fragments that are distinct from every other
+boundary check in that criterion. Make a probe emit a separate marker such as
+`TOP_LEVEL_INPUT_OK` only after the corresponding assertion passes; one probe
+may emit multiple distinct markers. For a blocked assessment, ground at least
+the approved boundary that produced the counterexample; further testing may
+stop once that absolute claim is disproved. Never invent or add a boundary that
+was not approved in the TaskBrief.
+
+Each assessment must also contain at least one general `tool_evidence`
 reference to either a tool result from this invocation (or, during a controlled
 semantic repair, an earlier integrity-checked attempt in the same Reviewer
 chain) or controller-provided deterministic command stdout/stderr from this
@@ -79,7 +91,9 @@ satisfied from a summary claim or passing project-authored test alone.
 
 Adversarially challenge every unqualified prohibition or safety guarantee at
 all relevant entry boundaries: top-level user input, nested input, aliases or
-indirection, and failure paths. For every behavioral criterion, consider at
+indirection, and failure paths. These are controller-enforced obligations when
+listed in the TaskBrief, not a prose checklist you may summarize without
+evidence. For every behavioral criterion, consider at
 least one negative, empty, singleton, boundary, or invalid-input case relevant
 to its wording. Compare implementation, tests, README scope, and observed
 behavior; one concrete counterexample to an absolute claim is a blocking product

@@ -826,7 +826,7 @@ def test_dynamic_reviewer_repairs_a_zero_call_fabricated_tool_citation(
     assert len(reviewer_records) == 2
     assert isinstance(reviewer_records[0], AgentExecutionRecord)
     assert reviewer_records[0].tool_evidence_status is AgentToolEvidenceStatus.CAPTURED
-    assert reviewer_records[0].response_contract == "semantic_body_v3"
+    assert reviewer_records[0].response_contract == "semantic_body_v4"
     assert reviewer_records[0].tool_calls == ()
     assert "does not match any eligible review-chain tool result" in (
         reviewer_records[0].error or ""

@@ -702,7 +702,11 @@ def build_semantic_repair_request(
         capability_check = (
             "Recheck that criterion_assessments exactly cover the assigned scope, "
             "each assessment includes a concrete adversarial check and observable "
-            "evidence, and every blocked status maps to a blocking finding. If "
+            "evidence, `boundary_checks` exactly covers every TaskBrief Review "
+            "boundary for a satisfied criterion (or at least one disproved "
+            "approved boundary for a blocked criterion), every boundary check "
+            "uses a distinct attributable fragment, and every blocked status maps "
+            "to a blocking finding. If "
             "there is exactly one unscoped blocking finding, the controller binds "
             "it to all otherwise-uncovered blocked criteria; multiple findings "
             "require explicit criterion_ids. Repeat only tool checks whose evidence "
@@ -850,6 +854,29 @@ def render_dynamic_agent_prompt(
             raise AgentPromptError("dynamic Review response requirements are invalid")
         if "criterion_assessments" not in required:
             required.append("criterion_assessments")
+        definitions = response_schema.get("$defs")
+        assessment = (
+            definitions.get("ReviewCriterionAssessmentResponse")
+            if isinstance(definitions, dict)
+            else None
+        )
+        if not isinstance(assessment, dict):
+            raise AgentPromptError(
+                "dynamic Review response schema lacks assessment definition"
+            )
+        assessment_properties = assessment.get("properties")
+        if not isinstance(assessment_properties, dict) or not isinstance(
+            assessment_properties.get("boundary_checks"), dict
+        ):
+            raise AgentPromptError(
+                "dynamic Review response schema lacks boundary checks"
+            )
+        assessment_properties["boundary_checks"].pop("default", None)
+        assessment_required = assessment.setdefault("required", [])
+        if not isinstance(assessment_required, list):
+            raise AgentPromptError("dynamic Review assessment requirements are invalid")
+        if "boundary_checks" not in assessment_required:
+            assessment_required.append("boundary_checks")
     values = {
         "agent_id": agent.id,
         "agent_label": agent.label,

@@ -30,6 +30,7 @@ from software_agent_team.artifacts import (
     AcceptanceCriterion,
     AgentRole,
     ArtifactKind,
+    ReviewBoundaryKind,
     TaskBrief,
 )
 from software_agent_team.budgets import AgentBudget
@@ -439,6 +440,16 @@ class PlanningQuestion(BaseModel):
         return self
 
 
+_ALL_REVIEW_BOUNDARIES = tuple(ReviewBoundaryKind)
+_ABSOLUTE_GUARANTEE_PATTERN = re.compile(
+    r"(?:\bnever\b|\b(?:must|shall|may|can|does?|is|are)\s+not\b|"
+    r"\bcannot\b|"
+    r"\bunder\s+no\s+circumstances\b|\bat\s+any\s+(?:depth|level|time)\b|"
+    r"不得|禁止|永不|绝不|任何(?:层级|深度|情况下)?.{0,8}(?:不|无))",
+    flags=re.IGNORECASE,
+)
+
+
 class ProposedCriterion(BaseModel):
     """User-facing acceptance condition proposed during Planning."""
 
@@ -447,11 +458,22 @@ class ProposedCriterion(BaseModel):
     id: str = Field(pattern=r"^[A-Z][A-Z0-9_-]*$")
     description: str = Field(min_length=1, max_length=500)
     verification: str = Field(min_length=1, max_length=500)
+    review_boundaries: tuple[ReviewBoundaryKind, ...] = ()
 
     @field_validator("description", "verification")
     @classmethod
     def require_clean_text(cls, value: str) -> str:
         return _clean_text(value, label="acceptance criterion text")
+
+    @field_validator("review_boundaries")
+    @classmethod
+    def require_unique_review_boundaries(
+        cls,
+        values: tuple[ReviewBoundaryKind, ...],
+    ) -> tuple[ReviewBoundaryKind, ...]:
+        if len(values) != len(set(values)):
+            raise ValueError("proposed Review boundaries must be unique")
+        return values
 
 
 class ProposedAgent(BaseModel):
@@ -709,7 +731,6 @@ class PlanningProposalBody(BaseModel):
         criterion_ids = tuple(item.id for item in self.acceptance_criteria)
         if len(criterion_ids) != len(set(criterion_ids)):
             raise ValueError("proposal acceptance criterion IDs must be unique")
-
         agent_ids = tuple(agent.id for agent in self.agents)
         if len(agent_ids) != len(set(agent_ids)):
             raise ValueError("proposed Agent IDs must be unique")
@@ -801,6 +822,30 @@ class PlanningModelResponse(BaseModel):
         elif self.proposal is None or self.question is not None:
             raise ValueError("proposal responses require only proposal")
         return self
+
+
+def _planning_response_schema() -> dict[str, object]:
+    """Require explicit boundary declarations in every live proposal criterion."""
+
+    schema = PlanningModelResponse.model_json_schema()
+    definitions = schema.get("$defs")
+    if not isinstance(definitions, dict):
+        raise PlanningError("Planning response schema has no definitions")
+    criterion = definitions.get("ProposedCriterion")
+    if not isinstance(criterion, dict):
+        raise PlanningError("Planning response schema has no proposed criterion")
+    properties = criterion.get("properties")
+    if not isinstance(properties, dict) or not isinstance(
+        properties.get("review_boundaries"), dict
+    ):
+        raise PlanningError("Planning response schema has no Review boundaries")
+    properties["review_boundaries"].pop("default", None)
+    required = criterion.setdefault("required", [])
+    if not isinstance(required, list):
+        raise PlanningError("Planning criterion requirements are invalid")
+    if "review_boundaries" not in required:
+        required.append("review_boundaries")
+    return schema
 
 
 class AdaptiveImplementationPlan(BaseModel):
@@ -1353,6 +1398,27 @@ def preview_adaptive_proposal(
             f"proposal requires up to {planned_calls} planned Agent calls, but the "
             f"approved budget permits {policy.budget.max_calls}"
         )
+    incomplete_absolute_boundaries = tuple(
+        criterion.id
+        for criterion in body.acceptance_criteria
+        if _ABSOLUTE_GUARANTEE_PATTERN.search(criterion.description)
+        and set(criterion.review_boundaries) != set(_ALL_REVIEW_BOUNDARIES)
+    )
+    if incomplete_absolute_boundaries:
+        raise PlanningError(
+            "unqualified prohibitions and safety guarantees must require "
+            "top-level, nested, alias-or-indirection, and failure-path Review "
+            "boundaries: " + ", ".join(incomplete_absolute_boundaries)
+        )
+    if _ABSOLUTE_GUARANTEE_PATTERN.search(request.source_request) and not any(
+        set(criterion.review_boundaries) == set(_ALL_REVIEW_BOUNDARIES)
+        for criterion in body.acceptance_criteria
+    ):
+        raise PlanningError(
+            "the user request contains an unqualified prohibition or safety "
+            "guarantee, but no proposed acceptance criterion preserves all four "
+            "Review boundaries"
+        )
     profile_criterion_ids = {
         criterion.id for criterion in policy.profile_acceptance_criteria
     }
@@ -1611,7 +1677,13 @@ def render_planning_overview(preview: PlanningPreview) -> str:
         *(f"    - {item}" for item in brief.requirements),
         "  Acceptance criteria:",
         *(
-            f"    - {item.id}: {item.description} (verify: {item.verification})"
+            f"    - {item.id}: {item.description} (verify: {item.verification}; "
+            "Review boundaries: "
+            + (
+                ", ".join(boundary.value for boundary in item.review_boundaries)
+                or "none"
+            )
+            + ")"
             for item in brief.acceptance_criteria
         ),
         "  Implementation approach:",
@@ -2489,7 +2561,7 @@ class AdaptivePlanningCoordinator:
         return template.substitute(
             planning_context_json=json.dumps(context, ensure_ascii=False, indent=2),
             response_schema_json=json.dumps(
-                PlanningModelResponse.model_json_schema(),
+                _planning_response_schema(),
                 ensure_ascii=False,
                 indent=2,
             ),

@@ -14,6 +14,7 @@ from software_agent_team.artifacts import (
     ArtifactKind,
     CommandEvidence,
     HandoffStatus,
+    ReviewBoundaryKind,
     ReviewFinding,
     ReviewSeverity,
     TaskBrief,
@@ -33,6 +34,7 @@ from software_agent_team.prompting import (
 from software_agent_team.responses import (
     AgentArtifactResponseError,
     GroundedReviewReportResponse,
+    ReviewBoundaryCheckResponse,
     ReviewCriterionAssessmentResponse,
     ReviewReportResponse,
     ReviewToolEvidenceAttempt,
@@ -108,6 +110,16 @@ def task_brief() -> TaskBrief:
     )
 
 
+def boundary_task_brief() -> TaskBrief:
+    """Return a brief whose absolute link guarantee owns four obligations."""
+
+    brief = task_brief()
+    criterion = brief.acceptance_criteria[0].model_copy(
+        update={"review_boundaries": tuple(ReviewBoundaryKind)}
+    )
+    return brief.model_copy(update={"acceptance_criteria": [criterion]})
+
+
 def implementation_plan() -> AdaptiveImplementationPlan:
     return AdaptiveImplementationPlan(
         run_id="sat-dynamic-prompt",
@@ -130,8 +142,8 @@ def implementation_plan() -> AdaptiveImplementationPlan:
     )
 
 
-def team_plan() -> TeamPlan:
-    brief = task_brief()
+def team_plan(brief: TaskBrief | None = None) -> TeamPlan:
+    brief = brief or task_brief()
     plan = implementation_plan()
     return TeamPlan(
         plan_id="sat-dynamic-prompt-team-r1",
@@ -402,6 +414,8 @@ def test_review_prompt_requires_adversarial_absolute_claim_boundaries() -> None:
     assert "bounded foreground commands" in rendered
     assert "negative, empty, singleton, boundary" in rendered
     assert "passing substring from an overall failed result" in rendered
+    assert "return `boundary_checks` explicitly" in rendered
+    assert "distinct from every other" in rendered
     schema_text = rendered.split("RESPONSE_SCHEMA_JSON\n", 1)[1].split(
         "\n\nFINAL_RESPONSE_CONTRACT",
         1,
@@ -412,6 +426,14 @@ def test_review_prompt_requires_adversarial_absolute_claim_boundaries() -> None:
     assessment_schema = response_schema["$defs"]["ReviewCriterionAssessmentResponse"]
     assert "tool_evidence" in assessment_schema["required"]
     assert "default" not in assessment_schema["properties"]["tool_evidence"]
+    assert "boundary_checks" in assessment_schema["required"]
+    assert "default" not in assessment_schema["properties"]["boundary_checks"]
+    boundary_schema = response_schema["$defs"]["ReviewBoundaryCheckResponse"]
+    assert set(boundary_schema["required"]) == {
+        "boundary",
+        "adversarial_check",
+        "tool_evidence",
+    }
     claim_schema = response_schema["$defs"]["ReviewToolEvidenceClaim"]
     assert claim_schema["required"] == ["observable"]
     assert "tool_call_id" not in claim_schema["properties"]
@@ -879,6 +901,243 @@ def test_satisfied_review_accepts_a_successful_probe_terminal_marker() -> None:
     assert isinstance(parsed.body, GroundedReviewReportResponse)
     assert parsed.body.criterion_assessments[0].tool_evidence[0].tool_call_id == (
         "tool-001"
+    )
+
+
+def boundary_checks(
+    boundaries: tuple[ReviewBoundaryKind, ...] = tuple(ReviewBoundaryKind),
+) -> tuple[ReviewBoundaryCheckResponse, ...]:
+    """Return distinct model-visible evidence for approved entry boundaries."""
+
+    return tuple(
+        ReviewBoundaryCheckResponse(
+            boundary=boundary,
+            adversarial_check=f"Challenged {boundary.value} with a focused fixture.",
+            tool_evidence=(review_tool_claim(f"BOUNDARY_{index}_OK"),),
+        )
+        for index, boundary in enumerate(boundaries, start=1)
+    )
+
+
+def test_satisfied_review_requires_every_approved_boundary_with_distinct_evidence() -> (
+    None
+):
+    brief = boundary_task_brief()
+    plan = team_plan(brief)
+    assessment = ReviewCriterionAssessmentResponse(
+        criterion_id="AC_LINKS",
+        status="satisfied",
+        adversarial_check="Challenged every approved link entry boundary.",
+        evidence="All four assertion markers and the runner result were successful.",
+        tool_evidence=(review_tool_claim("GENERAL_BOUNDARY_PROBE_OK"),),
+        boundary_checks=boundary_checks(),
+    )
+    request, result = _review_result(
+        ReviewReportResponse(
+            verdict="accept",
+            criterion_assessments=(assessment,),
+            summary="Every approved boundary has attributable evidence.",
+        )
+    )
+    output = (
+        "GENERAL_BOUNDARY_PROBE_OK\n"
+        "BOUNDARY_1_OK\nBOUNDARY_2_OK\nBOUNDARY_3_OK\nBOUNDARY_4_OK\n"
+        'SAT_PROBE_RESULT_V1 {"exit_code":0,"timed_out":false}'
+    )
+    result = result.model_copy(
+        update={
+            "telemetry": result.telemetry.model_copy(
+                update={
+                    "tool_calls": (
+                        captured_tool_call(1, output, executable="sat-probe-run"),
+                    )
+                }
+            )
+        }
+    )
+
+    parsed = parse_dynamic_agent_response(
+        result,
+        request,
+        task_brief=brief,
+        team_plan=plan,
+        reviewed_criterion_ids=("AC_LINKS",),
+    )
+
+    assert isinstance(parsed.body, GroundedReviewReportResponse)
+    grounded = parsed.body.criterion_assessments[0]
+    assert tuple(check.boundary for check in grounded.boundary_checks) == tuple(
+        ReviewBoundaryKind
+    )
+    assert all(
+        check.tool_evidence[0].tool_call_id == "tool-001"
+        for check in grounded.boundary_checks
+    )
+
+    missing = assessment.model_copy(
+        update={"boundary_checks": boundary_checks(tuple(ReviewBoundaryKind)[:-1])}
+    )
+    _, missing_result = _review_result(
+        ReviewReportResponse(
+            verdict="accept",
+            criterion_assessments=(missing,),
+            summary="Claimed incomplete boundary coverage.",
+        )
+    )
+    missing_result = missing_result.model_copy(
+        update={
+            "telemetry": missing_result.telemetry.model_copy(
+                update={
+                    "tool_calls": (
+                        captured_tool_call(1, output, executable="sat-probe-run"),
+                    )
+                }
+            )
+        }
+    )
+    with pytest.raises(AgentArtifactResponseError, match="must check every"):
+        parse_dynamic_agent_response(
+            missing_result,
+            request,
+            task_brief=brief,
+            team_plan=plan,
+            reviewed_criterion_ids=("AC_LINKS",),
+        )
+
+
+def test_review_rejects_unapproved_or_duplicate_boundary_evidence() -> None:
+    duplicate = (
+        ReviewBoundaryCheckResponse(
+            boundary=ReviewBoundaryKind.TOP_LEVEL_INPUT,
+            adversarial_check="Checked the direct input.",
+            tool_evidence=(review_tool_claim("SAME_MARKER"),),
+        ),
+        ReviewBoundaryCheckResponse(
+            boundary=ReviewBoundaryKind.NESTED_INPUT,
+            adversarial_check="Checked nested input.",
+            tool_evidence=(review_tool_claim("SAME_MARKER"),),
+        ),
+    )
+    with pytest.raises(ValidationError, match="distinct evidence fragments"):
+        ReviewCriterionAssessmentResponse(
+            criterion_id="AC_LINKS",
+            status="satisfied",
+            adversarial_check="Claimed two boundaries.",
+            evidence="Reused one ambiguous marker.",
+            tool_evidence=(review_tool_claim(),),
+            boundary_checks=duplicate,
+        )
+
+    assessment = ReviewCriterionAssessmentResponse(
+        criterion_id="AC_LINKS",
+        status="satisfied",
+        adversarial_check="Added a boundary absent from the approved brief.",
+        evidence="The model cannot expand its own Review obligations.",
+        tool_evidence=(review_tool_claim("GENERAL_OK"),),
+        boundary_checks=boundary_checks((ReviewBoundaryKind.TOP_LEVEL_INPUT,)),
+    )
+    request, result = _review_result(
+        ReviewReportResponse(
+            verdict="accept",
+            criterion_assessments=(assessment,),
+            summary="Claimed an unapproved boundary.",
+        )
+    )
+    result = result.model_copy(
+        update={
+            "telemetry": result.telemetry.model_copy(
+                update={
+                    "tool_calls": (
+                        captured_tool_call(
+                            1,
+                            "GENERAL_OK\nBOUNDARY_1_OK",
+                            executable="python",
+                        ),
+                    )
+                }
+            )
+        }
+    )
+
+    with pytest.raises(AgentArtifactResponseError, match="unapproved Review"):
+        parse_dynamic_agent_response(
+            result,
+            request,
+            task_brief=task_brief(),
+            team_plan=team_plan(),
+            reviewed_criterion_ids=("AC_LINKS",),
+        )
+
+
+def test_blocked_absolute_criterion_may_stop_after_one_grounded_counterexample() -> (
+    None
+):
+    brief = boundary_task_brief()
+    plan = team_plan(brief)
+    counterexample = ReviewBoundaryCheckResponse(
+        boundary=ReviewBoundaryKind.TOP_LEVEL_INPUT,
+        adversarial_check="Used a top-level alias that bypassed the prohibition.",
+        tool_evidence=(review_tool_claim("TOP_LEVEL_COUNTEREXAMPLE"),),
+    )
+    assessment = ReviewCriterionAssessmentResponse(
+        criterion_id="AC_LINKS",
+        status="blocked",
+        adversarial_check="The first required boundary disproved the absolute claim.",
+        evidence="The runner preserved the failing assertion and counterexample.",
+        tool_evidence=(review_tool_claim("TOP_LEVEL_COUNTEREXAMPLE"),),
+        boundary_checks=(counterexample,),
+    )
+    request, result = _review_result(
+        ReviewReportResponse(
+            verdict="revise",
+            criterion_assessments=(assessment,),
+            findings=(
+                ReviewFinding(
+                    id="FINDING_TOP_LEVEL",
+                    severity=ReviewSeverity.HIGH,
+                    blocking=True,
+                    category="correctness",
+                    description="A top-level alias bypasses the absolute guarantee.",
+                    recommendation="Reject or resolve the alias before traversal.",
+                    criterion_ids=("AC_LINKS",),
+                ),
+            ),
+            summary="One grounded boundary counterexample requires revision.",
+        )
+    )
+    output = (
+        "TOP_LEVEL_COUNTEREXAMPLE\n"
+        'SAT_PROBE_RESULT_V1 {"exit_code":1,"timed_out":false}'
+    )
+    result = result.model_copy(
+        update={
+            "telemetry": result.telemetry.model_copy(
+                update={
+                    "tool_calls": (
+                        captured_tool_call(
+                            1,
+                            output,
+                            executable="sat-probe-run",
+                            failed=True,
+                        ),
+                    )
+                }
+            )
+        }
+    )
+
+    parsed = parse_dynamic_agent_response(
+        result,
+        request,
+        task_brief=brief,
+        team_plan=plan,
+        reviewed_criterion_ids=("AC_LINKS",),
+    )
+
+    assert isinstance(parsed.body, GroundedReviewReportResponse)
+    assert parsed.body.verdict.value == "revise"
+    assert parsed.body.criterion_assessments[0].boundary_checks[0].boundary is (
+        ReviewBoundaryKind.TOP_LEVEL_INPUT
     )
 
 

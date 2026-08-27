@@ -67,8 +67,9 @@ On first use, SAT guides you through:
    the result;
 7. One overview of requirements, acceptance criteria, Agent work assignments
    with their controller-derived write or read-only authority, proposed Agents,
-   dependencies, permissions, resolved model profiles and fallback authority,
-   timeouts, concurrency, iterations, and budgets; and
+   dependencies, permissions, explicit Review entry obligations for absolute
+   guarantees, resolved model profiles and fallback authority, timeouts,
+   concurrency, iterations, and budgets; and
 8. Approval, a natural-language revision request, a supported safe edit, or
    cancellation before any execution Agent is created.
 
