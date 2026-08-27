@@ -9,6 +9,8 @@ import sys
 import tomllib
 from pathlib import Path
 
+import pytest
+
 from software_agent_team.quality_gates import load_quality_gate_configuration
 
 REPOSITORY_ROOT = Path(__file__).parents[1]
@@ -314,6 +316,149 @@ def test_product_contract_accepts_a_present_bounded_uv_lock(
     result = run_validator(tmp_path)
 
     assert result.returncode == 0, result.stderr
+
+
+def test_product_contract_accepts_project_relative_uv_lock_sources(
+    tmp_path: Path,
+) -> None:
+    write_valid_project(tmp_path)
+    (tmp_path / ".gitignore").write_text(".venv/\n", encoding="utf-8")
+    vendor = tmp_path / "vendor"
+    vendor.mkdir()
+    (vendor / "example.whl").write_bytes(b"portable project artifact")
+    (tmp_path / "uv.lock").write_text(
+        """version = 1
+
+[[package]]
+name = "example"
+source = { editable = "." }
+wheels = [{ path = "vendor/example.whl" }]
+""",
+        encoding="utf-8",
+    )
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_product_contract_accepts_remote_uv_lock_sources(tmp_path: Path) -> None:
+    write_valid_project(tmp_path)
+    (tmp_path / ".gitignore").write_text(".venv/\n", encoding="utf-8")
+    (tmp_path / "uv.lock").write_text(
+        """version = 1
+
+[[package]]
+name = "example"
+source = { registry = "https://pypi.org/simple" }
+wheels = [{ url = "https://files.pythonhosted.org/example.whl" }]
+""",
+        encoding="utf-8",
+    )
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize(
+    "reference",
+    (
+        "/opt/software-agent-team/wheels/example.whl",
+        "file:///tmp/example.whl",
+        "C:\\sandbox\\example.whl",
+        "../shared/example.whl",
+    ),
+)
+def test_product_contract_rejects_non_portable_uv_lock_paths(
+    tmp_path: Path,
+    reference: str,
+) -> None:
+    write_valid_project(tmp_path)
+    (tmp_path / ".gitignore").write_text(".venv/\n", encoding="utf-8")
+    (tmp_path / "uv.lock").write_text(
+        "version = 1\n"
+        "[[package]]\n"
+        'name = "example"\n'
+        f"wheels = [{{ path = {json.dumps(reference)} }}]\n",
+        encoding="utf-8",
+    )
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode == 1
+    assert "non-portable local reference" in result.stderr
+
+
+def test_product_contract_rejects_missing_or_symlinked_local_lock_sources(
+    tmp_path: Path,
+) -> None:
+    write_valid_project(tmp_path)
+    (tmp_path / ".gitignore").write_text(".venv/\n", encoding="utf-8")
+    (tmp_path / "uv.lock").write_text(
+        'version = 1\nwheels = [{ path = "vendor/missing.whl" }]\n',
+        encoding="utf-8",
+    )
+
+    missing = run_validator(tmp_path)
+
+    assert missing.returncode == 1
+    assert "existing path inside the project" in missing.stderr
+
+    vendor = tmp_path / "vendor"
+    vendor.mkdir()
+    target = vendor / "real.whl"
+    target.write_bytes(b"wheel")
+    (vendor / "missing.whl").symlink_to(target.name)
+
+    symlink = run_validator(tmp_path)
+
+    assert symlink.returncode == 1
+    assert "cannot traverse a symlink" in symlink.stderr
+
+
+def test_product_contract_rejects_an_intermediate_symlink_in_lock_source(
+    tmp_path: Path,
+) -> None:
+    write_valid_project(tmp_path)
+    (tmp_path / ".gitignore").write_text(".venv/\n", encoding="utf-8")
+    real_vendor = tmp_path / "real-vendor"
+    real_vendor.mkdir()
+    (real_vendor / "example.whl").write_bytes(b"wheel")
+    (tmp_path / "vendor").symlink_to(real_vendor.name, target_is_directory=True)
+    (tmp_path / "uv.lock").write_text(
+        'version = 1\nwheels = [{ path = "vendor/example.whl" }]\n',
+        encoding="utf-8",
+    )
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode == 1
+    assert "cannot traverse a symlink" in result.stderr
+
+
+def test_product_contract_rejects_sandbox_only_uv_registry(
+    tmp_path: Path,
+) -> None:
+    write_valid_project(tmp_path)
+    (tmp_path / ".gitignore").write_text(".venv/\n", encoding="utf-8")
+    (tmp_path / "uv.lock").write_text(
+        """version = 1
+
+[[package]]
+name = "example"
+source = { registry = "/opt/software-agent-team/wheels" }
+wheels = [
+    { path = "/opt/software-agent-team/wheels/example.whl" },
+]
+""",
+        encoding="utf-8",
+    )
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode == 1
+    assert "non-portable local reference" in result.stderr
 
 
 def test_product_contract_rejects_a_symlinked_uv_lock(tmp_path: Path) -> None:

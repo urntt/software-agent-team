@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** Phase 3E implemented; sixteen fresh installed adaptive rehearsals have produced the first accepted strict-route Adaptive Planning and Dynamic Team delivery with independent post-delivery validation
+**Current milestone:** Phase 3E implemented; seventeen fresh installed adaptive rehearsals include one accepted strict-route Adaptive Planning delivery and one provider-backed foreground-control rehearsal; the latest protocol and portability repairs await a clean retry
 
 **Last updated:** August 27, 2026
 
@@ -50,7 +50,7 @@ validation also rejects a plan whose complete planned iterations cannot fit
 its call budget. Recovery
 verifies the exact TaskBrief binding, TeamPlan digest, fixed manifest version,
 fixed team digest, resolved Agent timeouts, and cross-file run metadata. The
-complete repository check passes with 610 offline tests.
+complete repository check passes with 720 offline tests.
 
 `RunEvent` is also an executable, append-only contract. Every current workflow
 progress update is persisted with a contiguous sequence, lifecycle revision,
@@ -733,9 +733,64 @@ tested duplicate grouping, exclusion, minimum size, invalid size, missing input,
 root and nested symlinks, symlink files, and post-command Git cleanliness.
 All thirteen checks passed, the delivered HEAD matched the controller's final
 commit, and terminal cleanup left zero containers or volumes. This establishes
-the current strict single-route ordinary product journey. Foreground controls,
-two authorized routes, durable process-restart recovery, and an
-independent-device demonstration remain separate evidence requirements.
+the strict single-route ordinary product journey at that revision. It did not
+exercise foreground controls, two authorized routes, durable process-restart
+recovery, or an independent-device demonstration.
+
+The seventeenth fresh-account run exercised the missing foreground interaction
+instead of treating controls as an operator-only test surface. The public
+installer and bare `sat` used
+`deepseek/deepseek-v4-flash-vision-exp`; Planning proposed and the user approved
+an `impl_agent -> integration_agent -> review_agent` DAG with maximum
+concurrency two and resolved timeouts of 1,350, 900, and 600 seconds. The
+scheduler correctly observed concurrency one because every Agent depended on
+the preceding writer. During the live run, the user switched to detailed
+visibility, queued project-specific guidance, paused before the first
+invocation, inspected `/controls`, and resumed. Every command acquired a
+controller revision, reached its safe applied boundary, appeared in the event
+stream, and the guidance reference reached all four subsequent invocation
+prompts. This supplies provider-backed evidence for guidance, visibility, and
+cooperative pause/resume without claiming that a process crash is resumable.
+
+Both writers completed a clean ten-file commit. All five deterministic gates
+passed and the generated suite passed 20 tests. Review then ended as
+`artifact_invalid` even though its final direct probe exited zero and emitted
+all required markers. The same `SCAN_NESTED_DUP_OK` source text also appeared
+inside traceback stderr from two earlier failed probes; the old whole-result
+substring rule bound those failures together with the successful emission and
+rejected the satisfied assessment. No result was delivered. Separately, an
+ordinary external clone proved the committed `uv.lock` contained fourteen
+references to `/opt/software-agent-team/wheels`, so exact `uv sync --dev`
+failed outside SAT's image. Independent behavior validation still passed all
+17 black-box checks after recording that setup failure, which proves useful
+implementation behavior but does not override the portability defect. The
+terminal display also silently clipped two completed Agent summaries at 500
+characters.
+
+The controller now treats direct-probe framing as a typed evidence channel. A
+satisfied claim may match child stdout and the terminal result, never traceback
+source text in child stderr. If the same marker appeared in a failed direct
+probe and was later emitted by a successful direct probe, the successful call
+supplies the claim while every failed call remains in telemetry. Persisted
+boundary checks now coherently accept command-only grounding and still reject a
+check with neither tool nor command evidence. Replaying the two exact archived
+Reviewer attempts now accepts all 13 assessments with zero findings; the
+`AC_SCAN` claim binds only successful attempt-one `tool-020` and attempt-two
+`tool-005`, not failed `tool-013` or `tool-003`.
+
+The generated-project contract also parses a committed lock before setup and
+rejects absolute, Windows-drive, `file:`, parent-directory, missing,
+symlinked, or private-wheelhouse dependency sources. The archived Round 17
+output is now rejected directly at
+`root.package[0].source.registry`, before same-image setup can mask the defect.
+Developer, Reviewer, seed, profile, and decision documentation all state that
+the offline wheelhouse is runtime infrastructure rather than delivery metadata.
+Finally, bounded scheduler event text ends at a word boundary when possible and
+uses an explicit `… [truncated]` suffix. The complete repository check passes
+720 tests. A new fresh-account provider run is required to verify accepted
+delivery and external setup under these repairs; two-route switching,
+process-restart recovery, and the independent-device demonstration remain
+separate evidence requirements.
 
 The rehearsal sequence below concerns the predecessor guided fixed-team
 product path and is retained as defect and regression evidence. It proves the
@@ -952,10 +1007,11 @@ accepted delivery commit itself was clean and all promised commands and user
 outcomes passed.
 
 This confirmed the predecessor Product Demo Slice on a fresh Linux account.
-The current product still supports small greenfield Python 3.12 projects and
-keeps the task-manager contract isolated to the advanced evaluation surface,
-but its new Adaptive Planning and Dynamic Team path requires its own fresh
-provider-backed rehearsal.
+At that point the Adaptive Planning and Dynamic Team path still required its
+own fresh provider-backed rehearsal; the adaptive evidence recorded earlier in
+this document has since satisfied that historical gap. The current product
+still supports small greenfield Python 3.12 projects and keeps the task-manager
+contract isolated to the advanced evaluation surface.
 
 The advanced `prepare-benchmark`, `preflight`, and `run` commands remain a
 separate evaluation surface and are not part of the expected product demo.
@@ -1128,8 +1184,8 @@ derived from the task.
 
 - An independent-device live demonstration of the activated Adaptive Planning
   and Dynamic Team journey;
-- A provider-backed rehearsal of foreground guidance and cooperative
-  pause/resume;
+- An accepted fresh-account provider delivery after the Round 17 Review-evidence
+  and lock-portability repairs;
 - Durable control recovery after a foreground process crash and a
   secondary-process control client;
 - A provider-backed run using two planned model routes and live switch
@@ -1153,10 +1209,10 @@ action succeeded after interruption.
 
 ## Next Milestone
 
-The next verification steps are focused live evidence for guidance,
-cooperative pause/resume, and two planned model routes, followed by the
-independent-device demonstration. Phase 3F then closes the remaining acceptance
-and usability defects. Fixed-topology comparison remains in Phase 4
+The next verification step is a fresh-account ordinary-user retry of the Round
+17 request under the corrected Review and lock contracts. Two planned model
+routes and the independent-device demonstration follow. Phase 3F then closes
+the remaining acceptance and usability defects. Fixed-topology comparison remains in Phase 4
 so it can serve as a controlled baseline rather than define the product's
 permanent role layout.
 The detailed sequence and acceptance criteria are in

@@ -191,7 +191,13 @@ integrity-checked result from an earlier attempt by the same Reviewer against
 the same immutable commit. SAT extracts and sanitizes those records itself and
 persists actual attempt-qualified tool IDs or command IDs. Repeated or
 overlapping selectors are deduplicated, while a fragment with no eligible match
-is rejected. A sole unscoped blocking finding is deterministically bound to the
+is rejected. For a satisfied direct `sat-probe-run` claim, only completely
+framed child stdout and the terminal result are positive evidence; unframed or
+partial output and traceback source text in child stderr cannot satisfy a
+claim. A later successful probe emission can
+replace an earlier failed probe match for that fragment without deleting the
+failed attempt from audit evidence. A sole unscoped blocking finding is
+deterministically bound to the
 otherwise-uncovered blocked criteria; ambiguous multiple-finding mappings are
 still rejected. The model never has to predict controller-owned IDs or repeat
 an unambiguous relationship solely for serialization. If re-verification fails
@@ -218,15 +224,22 @@ The generated Python profile requires README documentation of the exact setup,
 start, and test argv. The start command must be directly usable from the
 project root without extra arguments. A dedicated quality gate verifies all
 three exact commands from a fresh copy of the immutable commit; the ordinary
-clean-workspace pytest gate remains an independent check.
+clean-workspace pytest gate remains an independent check. A committed `uv.lock`
+must also be installable outside SAT's image: the profile rejects absolute,
+`file:`, parent-directory, missing project-relative, and private-wheelhouse
+sources before delivery.
 
 The activated adaptive path has passed a complete strict-route live-provider
 rehearsal in a fresh non-root Linux account. Public installation and bare
 `sat` produced a user-approved task-defined team, accepted all ten criteria,
 delivered a clean project, passed all exact project commands and thirteen
-independent post-delivery checks, and left no run-scoped container residue.
-This evidence does not yet prove foreground controls, a two-route switch, or
-an independent-device demonstration.
+independent post-delivery checks, and left no run-scoped container residue. A
+separate fresh-account provider rehearsal has exercised detailed visibility,
+prospective guidance, cooperative pause, `/controls`, and resume through the
+same ordinary foreground UI. That run deliberately remains failure evidence
+because it exposed the now-corrected Review-channel and lock-portability defects.
+An accepted retry, a two-route switch, and an independent-device demonstration
+remain pending.
 
 Read [`STATUS.md`](STATUS.md) for current evidence and known gaps, and
 [`VISION.md`](VISION.md) for product direction, architecture, scope, and the

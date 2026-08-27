@@ -63,8 +63,11 @@ The controller accepts an iteration only when all of the following agree:
    bounded fragment from an eligible Reviewer result or deterministic command
    output. The controller prefers exact text and permits only RFC JSON
    whitespace differences outside quoted strings for keyed JSON fragments. It
-   enriches the persisted assessment with every matching actual tool-call or
-   command ID. Blocked assessments and blocking findings must cover the same
+   enriches the persisted assessment with every protocol-eligible actual
+   tool-call or command ID. For a satisfied direct probe, only framed child
+   stdout and the terminal result are positive evidence; child stderr remains
+   available for blocked counterexamples. Blocked assessments and blocking
+   findings must cover the same
    criteria. A sole unscoped blocker is bound to otherwise-uncovered blocked
    criteria; multiple unscoped blockers remain invalid. The controller binds
    each Agent, commit, scope, and grounded
@@ -171,9 +174,14 @@ deterministic command stdout/stderr from the same immutable iteration; during
 its one controlled semantic repair, it may additionally search
 integrity-checked attempts from the same Reviewer, role stage, immutable commit,
 and invocation chain. The controller requires every fragment to occur in at
-least one eligible output, binds every matching `(execution_attempt,
-tool-00N)` identity and/or `CHECK_*` command ID, and deterministically
-deduplicates repeated or overlapping selectors. Evidence never crosses an
+least one eligible output and binds every protocol-eligible
+`(execution_attempt, tool-00N)` identity and/or `CHECK_*` command ID. A
+satisfied direct probe uses only its completely framed child stdout and terminal
+result; unframed or partial output and traceback source text in child stderr
+cannot establish success. When a failed direct probe and a later successful
+direct probe emit the same fragment, the successful emission is bound while the
+failed attempt remains in the execution record. Repeated or overlapping
+selectors are deterministically deduplicated. Evidence never crosses an
 Agent, stage, iteration, commit, or repair chain. A no-match selector uses or
 exhausts the one bounded semantic repair; multiple real matches do not.
 
@@ -454,8 +462,11 @@ projection. The projection retains a prefix, states the source character
 length, includes the SHA-256 of the complete cleaned summary, and points back
 to immutable artifact evidence. Scheduler state is bounded to 2,000 characters
 and downstream prompt context to 1,000; the source WorkResult, TestReport, or
-ReviewReport remains unchanged. Projection therefore cannot turn successful
-verified work into an artifact failure or spend a model repair call.
+ReviewReport remains unchanged. The separate 500-character terminal event
+projection normalizes whitespace, ends at a word boundary when possible, and
+adds `… [truncated]` instead of silently ending mid-sentence. Projection
+therefore cannot turn successful verified work into an artifact failure or
+spend a model repair call.
 
 For policy routing, `team-plan.json` freezes one primary route and an ordered,
 bounded fallback list for every Agent, plus the controller's attributable
@@ -505,8 +516,12 @@ when investigating it rather than editing artifacts in place.
   `user.name` and `user.email` values for the isolated clone.
 - A generated Python project must ignore its root setup environment and must
   either contain a bounded regular `uv.lock` in the accepted clean snapshot or
-  explicitly ignore that local lock artifact. This contract prevents the exact
-  documented setup command from silently dirtying first-use Git state; it does
+  explicitly ignore that local lock artifact. A committed lock is parsed before
+  setup and must not contain absolute or Windows-drive paths, `file:` sources,
+  parent-directory references, missing or symlinked project-local artifacts, or
+  SAT's private offline-wheelhouse location. This contract prevents the exact
+  documented setup command from silently dirtying first-use Git state and
+  prevents same-image setup from masking non-portable delivery metadata; it does
   not claim that an ignored lock provides dependency reproducibility.
 - Every run workspace is a self-contained clone with no remote and a detached
   HEAD. The Agent can commit inside its container without access to source Git
@@ -559,9 +574,15 @@ when investigating it rather than editing artifacts in place.
   traversal. Python probes run only through immutable `sat-probe-run`, which
   validates the owner-only file, executes its open descriptor with a fixed
   interpreter, limits runtime and output, and emits a terminal
-  `SAT_PROBE_RESULT_V1` marker. SAT rejects a satisfied assessment when any
-  matched tool result failed, matched deterministic command failed or timed
-  out, or matched probe marker reports failure. The image includes pinned `uv`
+  `SAT_PROBE_RESULT_V1` marker. The runner frames child stdout and stderr. For a
+  satisfied claim, only completely framed child stdout plus the terminal result
+  are eligible; missing or partial framing fails closed, and a marker string
+  repeated in traceback source text cannot look like a passing emission. A
+  later successful direct probe may supersede an earlier failed
+  direct-probe match for the same fragment, while both calls remain captured.
+  SAT otherwise rejects a satisfied assessment when a matched tool result
+  failed, a matched deterministic command failed or timed out, or no successful
+  probe marker exists. The image includes pinned `uv`
   for relevant bounded probes. The source mount
   remains read-only, and resulting
   criterion-by-criterion evidence is attributable rather than controller-owned

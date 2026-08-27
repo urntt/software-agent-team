@@ -817,7 +817,9 @@ def test_dynamic_reviewer_repairs_a_zero_call_fabricated_tool_citation(
     assert "deterministic command stdout/stderr from this immutable" in (
         reviewer_requests[1].prompt
     )
-    assert "the controller binds every match" in reviewer_requests[1].prompt
+    assert "the controller binds every protocol-eligible match" in (
+        reviewer_requests[1].prompt
+    )
     reviewer_records = [
         runner.artifact_store.load(reference)
         for reference in runner.execution_records

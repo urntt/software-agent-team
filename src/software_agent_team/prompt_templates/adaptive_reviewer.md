@@ -71,15 +71,22 @@ fragment of at most 256 characters; do not predict or return an ID. Prefer an
 exact contiguous fragment. For a JSON keyed fragment only, the controller also
 accepts a difference consisting exclusively of RFC JSON whitespace outside
 quoted strings; values, punctuation, order, and string content remain exact.
-The controller binds every eligible result or deterministic command containing
-that fragment and supplies the actual tool attempt/ID or command ID in its own
-evidence. It deduplicates repeated or overlapping fragments and rejects a
-fragment with no eligible match. A `satisfied` assessment is also rejected when
-any matched tool result failed, any matched deterministic command failed or
-timed out, or a matched probe runner's terminal marker reports failure. Do not
-select a passing substring from an overall failed result. A semantic repair
-does not need to rerun an unchanged probe whose result was already captured in
-this chain. One call may
+The controller binds every protocol-eligible result or deterministic command
+containing that fragment and supplies the actual tool attempt/ID or command ID
+in its own evidence. It deduplicates repeated or overlapping fragments and
+rejects a fragment with no eligible match. For a `satisfied` claim from a direct
+`sat-probe-run`, only text inside a complete child-stdout frame and the terminal
+result marker are positive evidence; unframed or partial output and source text
+repeated by a traceback in child stderr are not. If a failed direct probe and a
+later successful direct probe emit the same
+fragment, the successful emission supplies that claim while the failed attempt
+remains visible in the invocation evidence. A `satisfied` assessment is still
+rejected when any other matched tool result failed, any matched deterministic
+command failed or timed out, or no successful probe emission exists. Do not
+select a passing substring from an overall failed result. Child stderr
+remains eligible when grounding a `blocked` counterexample. A semantic repair
+does not need to rerun an unchanged successful probe whose result was already
+captured in this chain. One call may
 support multiple criteria when it genuinely exercises them. If you cannot
 establish a criterion, mark it `blocked` and create a blocking finding that
 references that criterion. When exactly one blocking finding explains every
@@ -102,7 +109,10 @@ to its wording. Compare implementation, tests, README scope, and observed
 behavior; one concrete counterexample to an absolute claim is a blocking product
 defect. Also verify that the documented setup path either commits
 reproducibility metadata or explicitly ignores its local artifacts, so first
-setup does not silently dirty an otherwise clean delivery.
+setup does not silently dirty an otherwise clean delivery. If `uv.lock` is
+committed, verify that it contains no absolute path, `file:` source,
+parent-directory dependency, or SAT sandbox-only wheelhouse reference; a lock
+that works only inside the quality image is not a portable delivery.
 
 For the project command contract, compare README.md to the exact argv in
 `sat-project.json`. Probe the exact start argv from the project root without

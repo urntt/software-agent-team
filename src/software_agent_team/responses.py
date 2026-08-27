@@ -112,7 +112,62 @@ def _observable_matches_output(observable: str, output: str) -> bool:
 
 
 _PROBE_RESULT_PREFIX = "SAT_PROBE_RESULT_V1 "
+_PROBE_STDOUT_BEGIN = "SAT_PROBE_STDOUT_BEGIN"
+_PROBE_STDOUT_END = "SAT_PROBE_STDOUT_END"
+_PROBE_STDERR_BEGIN = "SAT_PROBE_STDERR_BEGIN"
+_PROBE_STDERR_END = "SAT_PROBE_STDERR_END"
+_PROBE_EXECUTABLES = {"sat-probe-run", "/usr/local/bin/sat-probe-run"}
 _LEGACY_EXIT_MARKER = re.compile(r"^EXIT=(-?[0-9]+)$")
+
+
+def _is_direct_probe(call: AgentToolCallEvidence) -> bool:
+    """Return whether one captured call directly invoked the immutable runner."""
+
+    return call.executable in _PROBE_EXECUTABLES
+
+
+def _positive_probe_match_surface(call: AgentToolCallEvidence) -> str:
+    """Return only protocol-authorized positive evidence from one direct probe.
+
+    Direct probes admit child stdout and the terminal runner result, never child
+    stderr. Missing, ambiguous, or partial framing deliberately produces no
+    positive surface instead of guessing where a traceback ends. Historical
+    unframed records remain immutable audit evidence but are not reinterpreted
+    as proof under the current protocol.
+    """
+
+    if not _is_direct_probe(call):
+        return call.output_excerpt
+    lines = call.output_excerpt.splitlines()
+    frame_markers = (
+        _PROBE_STDOUT_BEGIN,
+        _PROBE_STDOUT_END,
+        _PROBE_STDERR_BEGIN,
+        _PROBE_STDERR_END,
+    )
+    if not any(line in frame_markers for line in lines):
+        return ""
+    positions = {
+        marker: tuple(index for index, line in enumerate(lines) if line == marker)
+        for marker in frame_markers
+    }
+    if any(len(indexes) != 1 for indexes in positions.values()):
+        return ""
+    result_indexes = tuple(
+        index
+        for index, line in enumerate(lines)
+        if line.startswith(_PROBE_RESULT_PREFIX)
+    )
+    if not result_indexes:
+        return ""
+    stdout_begin = positions[_PROBE_STDOUT_BEGIN][0]
+    stdout_end = positions[_PROBE_STDOUT_END][0]
+    stderr_begin = positions[_PROBE_STDERR_BEGIN][0]
+    stderr_end = positions[_PROBE_STDERR_END][0]
+    result_index = result_indexes[-1]
+    if not (stdout_begin < stdout_end < stderr_begin < stderr_end < result_index):
+        return ""
+    return "\n".join((*lines[stdout_begin + 1 : stdout_end], lines[result_index]))
 
 
 def _probe_result_failed(call: AgentToolCallEvidence) -> bool | None:
@@ -125,7 +180,7 @@ def _probe_result_failed(call: AgentToolCallEvidence) -> bool | None:
     direct runner invocation.
     """
 
-    if call.executable not in {"sat-probe-run", "/usr/local/bin/sat-probe-run"}:
+    if not _is_direct_probe(call):
         return None
     marker_lines = tuple(
         line
@@ -253,7 +308,7 @@ def _ground_review_tool_evidence(
         label: str,
         status: ReviewCriterionStatus,
     ) -> tuple[tuple[ReviewToolEvidenceReference, ...], tuple[str, ...]]:
-        """Bind one semantic claim collection to whole-result evidence."""
+        """Bind one semantic claim collection to protocol-eligible evidence."""
 
         observable_by_tool_call: dict[tuple[int, str], str] = {}
         matching_command_ids: set[str] = set()
@@ -262,7 +317,29 @@ def _ground_review_tool_evidence(
                 (attempt.execution_attempt, call)
                 for attempt in attempts
                 for call in attempt.tool_calls
-                if _observable_matches_output(claim.observable, call.output_excerpt)
+                if _observable_matches_output(
+                    claim.observable,
+                    (
+                        _positive_probe_match_surface(call)
+                        if status is ReviewCriterionStatus.SATISFIED
+                        else call.output_excerpt
+                    ),
+                )
+            )
+            ineligible_probe_matches = tuple(
+                (attempt.execution_attempt, call)
+                for attempt in attempts
+                for call in attempt.tool_calls
+                if status is ReviewCriterionStatus.SATISFIED
+                and _is_direct_probe(call)
+                and _observable_matches_output(
+                    claim.observable,
+                    call.output_excerpt,
+                )
+                and not _observable_matches_output(
+                    claim.observable,
+                    _positive_probe_match_surface(call),
+                )
             )
             command_matches = tuple(
                 command
@@ -271,19 +348,38 @@ def _ground_review_tool_evidence(
                 or _observable_matches_output(claim.observable, command.stderr_tail)
             )
             if not tool_matches and not command_matches:
+                if ineligible_probe_matches:
+                    raise ValueError(
+                        f"{label} satisfied evidence fragment is absent from "
+                        "protocol-eligible child stdout in a complete direct probe; "
+                        "rerun it and emit the fragment after the relevant assertion "
+                        "passes"
+                    )
                 raise ValueError(
                     f"{label} evidence fragment does not match any eligible "
                     "review-chain tool result or deterministic command output"
                 )
             if status is ReviewCriterionStatus.SATISFIED:
-                if failed_tools := tuple(
-                    f"attempt {execution_attempt} {call.id}"
-                    for execution_attempt, call in tool_matches
-                    if _matched_tool_result_failed(call)
-                ):
+                successful_probe_matches = tuple(
+                    match
+                    for match in tool_matches
+                    if _is_direct_probe(match[1])
+                    and not _matched_tool_result_failed(match[1])
+                )
+                if successful_probe_matches:
+                    tool_matches = tuple(
+                        match
+                        for match in tool_matches
+                        if not (
+                            _is_direct_probe(match[1])
+                            and _matched_tool_result_failed(match[1])
+                        )
+                    )
+                if any(_matched_tool_result_failed(call) for _, call in tool_matches):
                     raise ValueError(
                         f"{label} satisfied evidence selects an overall failed "
-                        "tool result: " + ", ".join(failed_tools)
+                        "tool result; rerun the direct probe successfully and cite "
+                        "a fragment emitted by child stdout"
                     )
                 if failed_commands := tuple(
                     command.id

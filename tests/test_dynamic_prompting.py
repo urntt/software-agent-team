@@ -92,6 +92,34 @@ def captured_tool_call(
     )
 
 
+def framed_probe_output(
+    *,
+    stdout: str = "",
+    stderr: str = "",
+    exit_code: int = 0,
+    timed_out: bool = False,
+) -> str:
+    """Render the immutable runner's framed child streams and terminal result."""
+
+    lines = ["SAT_PROBE_STDOUT_BEGIN"]
+    if stdout:
+        lines.append(stdout)
+    lines.extend(("SAT_PROBE_STDOUT_END", "SAT_PROBE_STDERR_BEGIN"))
+    if stderr:
+        lines.append(stderr)
+    lines.extend(
+        (
+            "SAT_PROBE_STDERR_END",
+            "SAT_PROBE_RESULT_V1 "
+            + json.dumps(
+                {"exit_code": exit_code, "timed_out": timed_out},
+                separators=(",", ":"),
+            ),
+        )
+    )
+    return "\n".join(lines)
+
+
 def task_brief() -> TaskBrief:
     return TaskBrief(
         run_id="sat-dynamic-prompt",
@@ -814,25 +842,36 @@ def test_satisfied_review_rejects_a_matching_failed_tool_result() -> None:
 
 
 @pytest.mark.parametrize(
-    ("executable", "output"),
+    ("executable", "output", "error"),
     (
-        ("cd", "expected paths found\nEXIT=1"),
+        ("cd", "expected paths found\nEXIT=1", "overall failed tool"),
         (
             "sat-probe-run",
-            "expected paths found\n"
-            'SAT_PROBE_RESULT_V1 {"exit_code":1,"timed_out":false}',
+            framed_probe_output(stdout="expected paths found", exit_code=1),
+            "overall failed tool",
         ),
         (
             "sat-probe-run",
-            "expected paths found\n"
-            'SAT_PROBE_RESULT_V1 {"exit_code":0,"timed_out":true}',
+            framed_probe_output(
+                stdout="expected paths found",
+                exit_code=0,
+                timed_out=True,
+            ),
+            "overall failed tool",
         ),
-        ("sat-probe-run", "expected paths found\nmissing terminal marker"),
+        (
+            "sat-probe-run",
+            "SAT_PROBE_STDOUT_BEGIN\nexpected paths found\n"
+            "SAT_PROBE_STDOUT_END\nSAT_PROBE_STDERR_BEGIN\n"
+            "SAT_PROBE_STDERR_END",
+            "protocol-eligible child stdout",
+        ),
     ),
 )
 def test_satisfied_review_rejects_shell_masked_or_invalid_probe_failure(
     executable: str,
     output: str,
+    error: str,
 ) -> None:
     assessment = ReviewCriterionAssessmentResponse(
         criterion_id="AC_LINKS",
@@ -860,7 +899,7 @@ def test_satisfied_review_rejects_shell_masked_or_invalid_probe_failure(
         }
     )
 
-    with pytest.raises(AgentArtifactResponseError, match="overall failed tool"):
+    with pytest.raises(AgentArtifactResponseError, match=error):
         parse_dynamic_agent_response(
             result,
             request,
@@ -885,9 +924,7 @@ def test_satisfied_review_accepts_a_successful_probe_terminal_marker() -> None:
             summary="The criterion has successful attributable evidence.",
         )
     )
-    output = (
-        'BROKEN_LINK_BOUNDARY_OK\nSAT_PROBE_RESULT_V1 {"exit_code":0,"timed_out":false}'
-    )
+    output = framed_probe_output(stdout="BROKEN_LINK_BOUNDARY_OK")
     result = result.model_copy(
         update={
             "telemetry": result.telemetry.model_copy(
@@ -914,6 +951,221 @@ def test_satisfied_review_accepts_a_successful_probe_terminal_marker() -> None:
     )
 
 
+def test_satisfied_review_rejects_unframed_direct_probe_output() -> None:
+    assessment = ReviewCriterionAssessmentResponse(
+        criterion_id="AC_LINKS",
+        status="satisfied",
+        adversarial_check="Claimed a direct probe without stream framing.",
+        evidence="Historical unframed output is not current positive evidence.",
+        tool_evidence=(review_tool_claim("UNFRAMED_PROBE_OK"),),
+    )
+    request, result = _review_result(
+        ReviewReportResponse(
+            verdict="accept",
+            criterion_assessments=(assessment,),
+            summary="Claimed an output outside the current probe protocol.",
+        )
+    )
+    output = 'UNFRAMED_PROBE_OK\nSAT_PROBE_RESULT_V1 {"exit_code":0,"timed_out":false}'
+    result = result.model_copy(
+        update={
+            "telemetry": result.telemetry.model_copy(
+                update={
+                    "tool_calls": (
+                        captured_tool_call(1, output, executable="sat-probe-run"),
+                    )
+                }
+            )
+        }
+    )
+
+    with pytest.raises(
+        AgentArtifactResponseError,
+        match="protocol-eligible child stdout",
+    ):
+        parse_dynamic_agent_response(
+            result,
+            request,
+            task_brief=task_brief(),
+            team_plan=team_plan(),
+            reviewed_criterion_ids=("AC_LINKS",),
+        )
+
+
+def test_satisfied_review_uses_successful_probe_emission_after_failed_attempts() -> (
+    None
+):
+    """A traceback source line must not poison a later successful direct probe."""
+
+    marker = "NESTED_DUPLICATE_OK"
+    assessment = ReviewCriterionAssessmentResponse(
+        criterion_id="AC_LINKS",
+        status="satisfied",
+        adversarial_check="Exercised nested duplicate handling with assertions.",
+        evidence="The final direct probe emitted the marker after all assertions.",
+        tool_evidence=(review_tool_claim(marker),),
+    )
+    request, result = _review_result(
+        ReviewReportResponse(
+            verdict="accept",
+            criterion_assessments=(assessment,),
+            summary="The successful direct probe establishes the criterion.",
+        )
+    )
+    prior_traceback = captured_tool_call(
+        1,
+        framed_probe_output(
+            stderr=(
+                "Traceback (most recent call last):\n"
+                f'  File "/tmp/probe.py", line 8, in <module>\n'
+                f'    print("{marker}")\nAssertionError'
+            ),
+            exit_code=1,
+        ),
+        executable="sat-probe-run",
+        failed=True,
+    )
+    same_attempt_failure = captured_tool_call(
+        3,
+        framed_probe_output(stdout=marker, exit_code=1),
+        executable="sat-probe-run",
+        failed=True,
+    )
+    successful = captured_tool_call(
+        5,
+        framed_probe_output(stdout=marker),
+        executable="sat-probe-run",
+    )
+    current_calls = (same_attempt_failure, successful)
+    result = result.model_copy(
+        update={
+            "telemetry": result.telemetry.model_copy(
+                update={"tool_calls": current_calls}
+            )
+        }
+    )
+
+    parsed = parse_dynamic_agent_response(
+        result,
+        request,
+        task_brief=task_brief(),
+        team_plan=team_plan(),
+        reviewed_criterion_ids=("AC_LINKS",),
+        review_tool_evidence_attempts=(
+            ReviewToolEvidenceAttempt(
+                execution_attempt=1,
+                tool_calls=(prior_traceback,),
+            ),
+            ReviewToolEvidenceAttempt(
+                execution_attempt=2,
+                tool_calls=current_calls,
+            ),
+        ),
+    )
+
+    assert isinstance(parsed.body, GroundedReviewReportResponse)
+    references = parsed.body.criterion_assessments[0].tool_evidence
+    assert [(item.execution_attempt, item.tool_call_id) for item in references] == [
+        (2, "tool-005")
+    ]
+
+
+def test_satisfied_review_rejects_a_fragment_seen_only_in_probe_stderr() -> None:
+    marker = "TRACEBACK_SOURCE_ONLY"
+    assessment = ReviewCriterionAssessmentResponse(
+        criterion_id="AC_LINKS",
+        status="satisfied",
+        adversarial_check="Attempted to exercise a boundary.",
+        evidence="Mistook a traceback source line for a successful emission.",
+        tool_evidence=(review_tool_claim(marker),),
+    )
+    request, result = _review_result(
+        ReviewReportResponse(
+            verdict="accept",
+            criterion_assessments=(assessment,),
+            summary="Claimed evidence that was never emitted on child stdout.",
+        )
+    )
+    call = captured_tool_call(
+        1,
+        framed_probe_output(
+            stderr=f'  print("{marker}")\nAssertionError',
+            exit_code=1,
+        ),
+        executable="sat-probe-run",
+        failed=True,
+    )
+    result = result.model_copy(
+        update={
+            "telemetry": result.telemetry.model_copy(update={"tool_calls": (call,)})
+        }
+    )
+
+    with pytest.raises(AgentArtifactResponseError, match="child stdout"):
+        parse_dynamic_agent_response(
+            result,
+            request,
+            task_brief=task_brief(),
+            team_plan=team_plan(),
+            reviewed_criterion_ids=("AC_LINKS",),
+        )
+
+
+def test_blocked_review_may_ground_a_counterexample_from_probe_stderr() -> None:
+    marker = "BROKEN_LINK_COUNTEREXAMPLE"
+    assessment = ReviewCriterionAssessmentResponse(
+        criterion_id="AC_LINKS",
+        status="blocked",
+        adversarial_check="Ran a negative fixture that disproved the criterion.",
+        evidence="The failed assertion preserved the concrete counterexample.",
+        tool_evidence=(review_tool_claim(marker),),
+    )
+    request, result = _review_result(
+        ReviewReportResponse(
+            verdict="revise",
+            criterion_assessments=(assessment,),
+            findings=(
+                ReviewFinding(
+                    id="FINDING_COUNTEREXAMPLE",
+                    severity=ReviewSeverity.HIGH,
+                    blocking=True,
+                    category="correctness",
+                    description="A broken-link fixture returned a passing status.",
+                    recommendation="Return a non-zero status for the fixture.",
+                    criterion_ids=("AC_LINKS",),
+                ),
+            ),
+            summary="A grounded counterexample requires revision.",
+        )
+    )
+    call = captured_tool_call(
+        1,
+        framed_probe_output(
+            stderr=f"AssertionError: {marker}",
+            exit_code=1,
+        ),
+        executable="sat-probe-run",
+        failed=True,
+    )
+    result = result.model_copy(
+        update={
+            "telemetry": result.telemetry.model_copy(update={"tool_calls": (call,)})
+        }
+    )
+
+    parsed = parse_dynamic_agent_response(
+        result,
+        request,
+        task_brief=task_brief(),
+        team_plan=team_plan(),
+        reviewed_criterion_ids=("AC_LINKS",),
+    )
+
+    assert isinstance(parsed.body, GroundedReviewReportResponse)
+    reference = parsed.body.criterion_assessments[0].tool_evidence[0]
+    assert reference.tool_call_id == "tool-001"
+
+
 def boundary_checks(
     boundaries: tuple[ReviewBoundaryKind, ...] = tuple(ReviewBoundaryKind),
 ) -> tuple[ReviewBoundaryCheckResponse, ...]:
@@ -926,6 +1178,63 @@ def boundary_checks(
             tool_evidence=(review_tool_claim(f"BOUNDARY_{index}_OK"),),
         )
         for index, boundary in enumerate(boundaries, start=1)
+    )
+
+
+def test_review_boundary_checks_allow_controller_command_only_grounding() -> None:
+    brief = boundary_task_brief()
+    plan = team_plan(brief)
+    assessment = ReviewCriterionAssessmentResponse(
+        criterion_id="AC_LINKS",
+        status="satisfied",
+        adversarial_check="Exercised every approved boundary with trusted commands.",
+        evidence="The same-iteration command emitted each distinct boundary marker.",
+        tool_evidence=(review_tool_claim("GENERAL_COMMAND_OK"),),
+        boundary_checks=boundary_checks(),
+    )
+    request, result = _review_result(
+        ReviewReportResponse(
+            verdict="accept",
+            criterion_assessments=(assessment,),
+            summary="Every boundary is grounded in controller command evidence.",
+        )
+    )
+    result = result.model_copy(
+        update={"telemetry": result.telemetry.model_copy(update={"tool_calls": ()})}
+    )
+    command = CommandEvidence(
+        id="CHECK_EXACT_PROJECT_COMMANDS",
+        argv=("python", "run_commands.py"),
+        exit_code=0,
+        duration_ms=12,
+        stdout_path="iterations/01/commands/exact.stdout.txt",
+        stderr_path="iterations/01/commands/exact.stderr.txt",
+        stdout_tail=(
+            "GENERAL_COMMAND_OK\n"
+            "BOUNDARY_1_OK\nBOUNDARY_2_OK\n"
+            "BOUNDARY_3_OK\nBOUNDARY_4_OK\n"
+        ),
+        summary="The exact project commands passed.",
+    )
+
+    parsed = parse_dynamic_agent_response(
+        result,
+        request,
+        task_brief=brief,
+        team_plan=plan,
+        reviewed_criterion_ids=("AC_LINKS",),
+        review_command_evidence=(command,),
+    )
+
+    assert isinstance(parsed.body, GroundedReviewReportResponse)
+    grounded = parsed.body.criterion_assessments[0]
+    assert grounded.command_evidence_ids == ("CHECK_EXACT_PROJECT_COMMANDS",)
+    assert grounded.tool_evidence == ()
+    assert len(grounded.boundary_checks) == 4
+    assert all(
+        check.command_evidence_ids == ("CHECK_EXACT_PROJECT_COMMANDS",)
+        and check.tool_evidence == ()
+        for check in grounded.boundary_checks
     )
 
 
@@ -949,10 +1258,11 @@ def test_satisfied_review_requires_every_approved_boundary_with_distinct_evidenc
             summary="Every approved boundary has attributable evidence.",
         )
     )
-    output = (
-        "GENERAL_BOUNDARY_PROBE_OK\n"
-        "BOUNDARY_1_OK\nBOUNDARY_2_OK\nBOUNDARY_3_OK\nBOUNDARY_4_OK\n"
-        'SAT_PROBE_RESULT_V1 {"exit_code":0,"timed_out":false}'
+    output = framed_probe_output(
+        stdout=(
+            "GENERAL_BOUNDARY_PROBE_OK\n"
+            "BOUNDARY_1_OK\nBOUNDARY_2_OK\nBOUNDARY_3_OK\nBOUNDARY_4_OK"
+        )
     )
     result = result.model_copy(
         update={

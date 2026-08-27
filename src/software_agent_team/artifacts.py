@@ -1066,7 +1066,7 @@ class ReviewBoundaryCheck(BaseModel):
     boundary: ReviewBoundaryKind
     adversarial_check: str = Field(min_length=1, max_length=1000)
     command_evidence_ids: tuple[str, ...] = ()
-    tool_evidence: tuple[ReviewToolEvidenceReference, ...] = Field(min_length=1)
+    tool_evidence: tuple[ReviewToolEvidenceReference, ...] = ()
 
     @field_validator("adversarial_check")
     @classmethod
@@ -1101,14 +1101,27 @@ class ReviewBoundaryCheck(BaseModel):
             raise ValueError("boundary tool-evidence references must be unique")
         return values
 
+    @model_validator(mode="after")
+    def require_grounded_evidence(self) -> Self:
+        """Allow command-only boundaries while rejecting an ungrounded check."""
+
+        if not self.command_evidence_ids and not self.tool_evidence:
+            raise ValueError(
+                "boundary checks require command or tool evidence references"
+            )
+        return self
+
     @model_serializer(mode="wrap")
-    def omit_empty_command_evidence(
+    def omit_empty_evidence(
         self,
         handler: SerializerFunctionWrapHandler,
     ) -> object:
         serialized = handler(self)
-        if isinstance(serialized, dict) and not self.command_evidence_ids:
-            serialized.pop("command_evidence_ids", None)
+        if isinstance(serialized, dict):
+            if not self.command_evidence_ids:
+                serialized.pop("command_evidence_ids", None)
+            if not self.tool_evidence:
+                serialized.pop("tool_evidence", None)
         return serialized
 
 

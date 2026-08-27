@@ -10,6 +10,7 @@ from software_agent_team.artifacts import (
     AgentExecutionRecord,
     HandoffEnvelope,
     HandoffStatus,
+    ReviewBoundaryCheck,
     ReviewBoundaryKind,
     ReviewReport,
     TaskBrief,
@@ -409,6 +410,24 @@ def test_review_assessments_exactly_cover_controller_scope() -> None:
     assert command_report.model_dump(mode="json")["criterion_assessments"][0][
         "command_evidence_ids"
     ] == ["CHECK_EXACT_PROJECT_COMMANDS"]
+
+
+def test_review_boundary_check_accepts_command_only_grounding() -> None:
+    check = ReviewBoundaryCheck(
+        boundary=ReviewBoundaryKind.FAILURE_PATH,
+        adversarial_check="Ran the exact controller-owned failure-path command.",
+        command_evidence_ids=("CHECK_EXACT_PROJECT_COMMANDS",),
+    )
+
+    serialized = check.model_dump(mode="json")
+
+    assert serialized["command_evidence_ids"] == ["CHECK_EXACT_PROJECT_COMMANDS"]
+    assert "tool_evidence" not in serialized
+    with pytest.raises(ValidationError, match="command or tool evidence"):
+        ReviewBoundaryCheck(
+            boundary=ReviewBoundaryKind.FAILURE_PATH,
+            adversarial_check="Claimed a check without attributable evidence.",
+        )
 
 
 def test_review_assessment_rejects_duplicate_tool_references() -> None:

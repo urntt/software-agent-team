@@ -39,6 +39,7 @@
     "Keep sat-project.json setup exactly [\"uv\", \"sync\", \"--dev\"] and test exactly [\"uv\", \"run\", \"pytest\"]; replace only the start placeholder with a project-specific argv beginning [\"uv\", \"run\"].",
     "Make the exact start argv directly usable from the project root without extra arguments or configuration edits; a CLI must include a safe default input or interactive flow and a service must start with a complete local configuration.",
     "Keep tests importable when CHECK_PROJECT_TESTS invokes pytest from the clean quality workspace before setup, including explicit pytest pythonpath configuration for a src layout, and also pass the exact post-setup command uv run pytest.",
+    "A committed uv.lock must be portable outside the SAT sandbox: do not record absolute paths, file: sources, parent-directory dependencies, or the runtime's private offline wheelhouse; otherwise preserve the supplied uv.lock ignore policy.",
     "Show the exact setup, start, and test shell commands in README.md; headings such as Installation, Usage, and Testing are valid and do not need the literal words setup or start."
   ],
   "assumptions": [

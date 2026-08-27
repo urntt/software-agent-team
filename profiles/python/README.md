@@ -59,9 +59,14 @@ regular file already present in the accepted clean snapshot or be explicitly
 ignored, so running the documented setup command does not silently introduce
 unexplained local state. The task-independent seed supplies the ignore policy;
 a generated project may instead commit a lock when its implementation and
-tests establish that as the reproducible choice. The validator asks Git to
-confirm that the explicit rules remain effective after applying later patterns
-or negations.
+tests establish that as the reproducible choice. A committed lock must be
+portable with the delivered repository: its TOML must not contain absolute or
+Windows drive paths, `file:` sources, parent-directory references, missing
+project-relative artifacts, symlinked local sources, or a registry/path that
+exists only in SAT's private offline wheelhouse. Remote registries and archives
+must use remote URLs. The validator asks Git to confirm that explicit ignore
+rules remain effective after applying later patterns or negations, and parses a
+committed lock before any same-image setup command can mask a host-local source.
 
 ## Evidence Boundary
 
@@ -72,7 +77,9 @@ committed regular files into fresh disposable scratch, and runs `uv sync
 --dev`, the exact test argv, and the exact start argv with network disabled.
 Untracked local files, an existing `.venv`, and the source repository's `.git`
 directory cannot satisfy that check. The runtime image contains a locked
-offline wheelhouse for setup and build dependencies.
+offline wheelhouse for setup and build dependencies. That wheelhouse is
+ephemeral controller infrastructure: it may satisfy the clean-copy command
+gate, but its private path must never become generated-project metadata.
 
 The ordinary pytest gate
 uses the console entry point, matching the `uv run pytest` command delivered to

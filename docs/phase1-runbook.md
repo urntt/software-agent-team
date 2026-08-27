@@ -315,8 +315,13 @@ Confirm all of the following before marking Phase 1 accepted:
   observable fragments that each match at least one eligible sanitized tool
   result or same-iteration deterministic command output. Exact text is
   preferred; keyed JSON permits only outside-string RFC JSON whitespace
-  differences. The persisted assessment contains every matching, deduplicated
-  controller-resolved tool or command ID; the model does not supply it.
+  differences. For a satisfied direct probe, only completely framed child stdout
+  and the terminal result are positive evidence; unframed or partial output and
+  traceback text in child stderr cannot satisfy the claim. A later successful
+  direct probe emission can replace an
+  earlier failed direct-probe match without removing the failed attempt from
+  audit evidence. The persisted assessment contains every protocol-eligible,
+  deduplicated controller-resolved tool or command ID; the model does not supply it.
   Session provenance is `captured`, tool calls and results pair exactly, and a
   zero-call or unmatched claim is never accepted as evidence of a probe.
 - Every handoff points to immutable artifact references with matching SHA-256

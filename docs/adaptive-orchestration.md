@@ -9,8 +9,9 @@ convergence, bare-`sat` activation, and configurable per-Agent progress are
 implemented and offline verified. A fresh public-install, bare-`sat`, strict
 single-route rehearsal has also completed accepted delivery and independent
 post-delivery validation. The foreground control channel is implemented and
-offline verified; its provider-backed rehearsal and durable process-restart
-recovery remain pending. Secret-free model profiles,
+offline verified; a separate provider-backed ordinary-user rehearsal has now
+applied detailed visibility, guidance, cooperative pause, `/controls`, and
+resume. Durable process-restart recovery remains pending. Secret-free model profiles,
 deterministic plan-time route resolution, route-specific runtime validation,
 and explicit provider-failure switching are implemented and offline verified;
 a provider-backed two-route rehearsal remains pending.
@@ -349,6 +350,9 @@ The controller appends structured events with:
 Events are evidence-backed status, not hidden chain-of-thought. An Agent may
 return a bounded status summary at defined checkpoints, but the controller
 labels its source and never turns free-form reasoning into authoritative state.
+An overlong terminal event summary ends at a word boundary when possible and
+uses an explicit `… [truncated]` suffix; the complete artifact summary remains
+available instead of being silently cut in the user display.
 
 ### `ControlCommand`
 
@@ -416,11 +420,11 @@ repair, the same Reviewer may also reuse integrity-checked results captured by
 an earlier attempt in that same role-stage, immutable-commit, and invocation
 chain. Deterministic command stdout/stderr from the same immutable iteration is
 also eligible. The controller requires every fragment to occur in at least one
-eligible output, enriches the persisted assessment with every matching actual
-attempt-qualified tool ID or command ID and available provenance, and deduplicates
-repeated or overlapping selectors. Evidence cannot cross an Agent, stage,
-iteration, commit, or repair chain. A zero match is invalid; multiple real
-matches are preserved instead of delegated back to model wording. Review may
+eligible output, enriches the persisted assessment with every protocol-eligible
+actual attempt-qualified tool ID or command ID and available provenance, and
+deduplicates repeated or overlapping selectors. Evidence cannot cross an Agent,
+stage, iteration, commit, or repair chain. A zero match is invalid; multiple
+real matches are preserved instead of delegated back to model wording. Review may
 run bounded foreground
 probes in the no-network sandbox against the read-only source and temporary
 fixtures. General write tools remain denied. Review creates a script or fixture
@@ -430,17 +434,24 @@ and path indirection, and returns an observable success or refusal. The
 Reviewer then invokes a Python probe only through the immutable
 `sat-probe-run` helper. It validates the owner-only probe, executes an immutable
 file descriptor with a fixed interpreter and project working directory, bounds
-time and output, and emits a terminal `SAT_PROBE_RESULT_V1` child result.
+time and output, frames child stdout separately from child stderr, and emits a
+terminal `SAT_PROBE_RESULT_V1` child result.
 Project mutation, complex interpreter invocations, background processes, and
-network remain unavailable. A satisfied assessment cannot select a positive
-substring from a matched failed tool result, failed or timed-out deterministic
-command, or failed probe marker. That self-directed evidence remains
+network remain unavailable. For a satisfied direct-probe claim, only framed
+child stdout and the terminal result are positive evidence; traceback source
+text in child stderr cannot establish success. If the same fragment was emitted
+by a failed direct probe and a later successful direct probe, the successful
+emission supplies the claim while both calls remain auditable. A satisfied
+assessment still cannot select a positive substring from any other matched
+failed tool result, failed or timed-out deterministic command, or a chain with
+no successful probe emission. That self-directed evidence remains
 attributable and is not
 relabeled as a controller deterministic gate. Documentation may state only the
 boundary established by the implementation and evidence. The generated-project
-contract separately checks that the README shows each exact manifest command
-and that documented first setup does not leave an unexplained root virtual
-environment or lock file in an otherwise clean delivery. A deterministic gate
+contract separately checks that the README shows each exact manifest command,
+that documented first setup does not leave an unexplained root virtual
+environment or lock file in an otherwise clean delivery, and that a committed
+lock contains no host- or sandbox-only dependency source. A deterministic gate
 copies clean committed files into fresh scratch, then executes exact setup,
 test, and start argv through the runtime's offline wheelhouse. Its start argv
 must work from the project root without appended arguments. Independent Review
@@ -710,13 +721,16 @@ runtime also contains pinned `uv` for relevant bounded probes. The OpenClaw adap
 each exact session turn, pairs actual tool calls and results, and persists only
 bounded sanitized records. Dynamic semantic repair may carry those records
 forward only within one Reviewer, role stage, immutable commit, and invocation
-chain. Every matching semantic fragment is bound to an attempt-qualified
-controller-owned tool ID; overlapping selectors are deduplicated, and zero-call
+chain. Every protocol-eligible semantic fragment is bound to an
+attempt-qualified controller-owned tool ID; overlapping selectors are
+deduplicated, and zero-call
 or absent Reviewer evidence is rejected. Complete Agent
 summaries remain immutable artifact evidence; the controller derives bounded
-scheduler and downstream-prompt projections with an
-explicit truncation marker, original length, and source-summary SHA-256 rather
-than failing a handoff or asking the model to regenerate known content. The
+scheduler-record and downstream-prompt projections with an explicit truncation
+marker, original length, and source-summary SHA-256 rather than failing a
+handoff or asking the model to regenerate known content. Its shorter terminal
+event projection also uses an explicit truncation suffix and a word boundary
+when available. The
 adaptive lifecycle coordinator crosses the authoritative snapshot
 boundary before the first quality Agent starts, aggregates every approved
 output, decides accept/revise/fail, binds prior blocking evidence to the next
@@ -809,8 +823,11 @@ auditable.
 **Implementation note:** the strict single-route ordinary-user subset now has
 provider-backed evidence from public installation through Planning, user
 approval, dynamic execution, evidence-backed Review, accepted delivery,
-independent project checks, and cleanup. The remaining exit evidence covers
-foreground interventions, a two-route run, and an independent supported device.
+independent project checks, and cleanup. A subsequent run supplies
+provider-backed foreground guidance and pause/resume evidence but exposed
+Review-protocol and generated-lock portability defects; their corrected clean
+retry remains pending. The remaining exit evidence also covers a two-route run
+and an independent supported device.
 
 ## Acceptance Criteria
 

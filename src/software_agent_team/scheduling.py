@@ -67,7 +67,16 @@ def _utc(value: datetime) -> datetime:
 
 def _safe_schedule_message(value: str) -> str:
     cleaned = " ".join(value.split())
-    return (cleaned or "Scheduler state changed.")[:500]
+    cleaned = cleaned or "Scheduler state changed."
+    limit = 500
+    suffix = " … [truncated]"
+    if len(cleaned) <= limit:
+        return cleaned
+    prefix = cleaned[: limit - len(suffix)].rstrip()
+    word_boundary = prefix.rfind(" ")
+    if word_boundary >= (limit - len(suffix)) // 2:
+        prefix = prefix[:word_boundary].rstrip()
+    return f"{prefix}{suffix}"
 
 
 class AgentRunOutcome(BaseModel):

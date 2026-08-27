@@ -9,8 +9,10 @@ import re
 import shlex
 import subprocess
 import sys
+import tomllib
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
+from urllib.parse import urlsplit
 
 MAX_MANIFEST_BYTES = 65_536
 MAX_LOCK_BYTES = 1_048_576
@@ -79,11 +81,114 @@ def require_setup_artifact_policy(repository: Path) -> None:
     require_effective_ignore(repository, ".venv/.sat-setup-probe", "root .venv")
     lock = repository / "uv.lock"
     if lock.exists() or lock.is_symlink():
-        require_regular_file(lock, "uv.lock", max_bytes=MAX_LOCK_BYTES)
+        content = require_regular_file(lock, "uv.lock", max_bytes=MAX_LOCK_BYTES)
+        require_portable_uv_lock(repository, content)
     elif not rules.intersection({"uv.lock", "/uv.lock"}):
         fail("uv.lock must be committed or explicitly excluded by .gitignore")
     else:
         require_effective_ignore(repository, "uv.lock", "uv.lock")
+
+
+def _require_portable_local_reference(
+    repository: Path,
+    value: object,
+    *,
+    label: str,
+) -> None:
+    """Require one lockfile-local source to remain inside the delivered project."""
+
+    if not isinstance(value, str) or not value or "\x00" in value:
+        fail(f"uv.lock {label} must be a non-empty path")
+    parsed = urlsplit(value)
+    path = PurePosixPath(value)
+    windows_path = PureWindowsPath(value)
+    if (
+        parsed.scheme.casefold() == "file"
+        or path.is_absolute()
+        or windows_path.is_absolute()
+        or bool(windows_path.drive)
+        or "\\" in value
+        or ".." in path.parts
+    ):
+        fail(f"uv.lock contains a non-portable local reference in {label}")
+    candidate = repository.joinpath(*path.parts)
+    cursor = repository
+    for part in path.parts:
+        cursor /= part
+        if cursor.is_symlink():
+            fail(f"uv.lock {label} cannot traverse a symlink")
+    try:
+        resolved = candidate.resolve(strict=True)
+        resolved.relative_to(repository)
+    except (OSError, ValueError):
+        fail(f"uv.lock {label} must reference an existing path inside the project")
+
+
+def _require_remote_lock_reference(value: object, *, label: str) -> None:
+    """Reject host-local values in lock fields that must identify remote sources."""
+
+    if not isinstance(value, str) or not value or "\x00" in value:
+        fail(f"uv.lock {label} must be a non-empty URL")
+    parsed = urlsplit(value)
+    path = PurePosixPath(value)
+    windows_path = PureWindowsPath(value)
+    if (
+        parsed.scheme.casefold() == "file"
+        or path.is_absolute()
+        or windows_path.is_absolute()
+        or bool(windows_path.drive)
+        or "\\" in value
+        or ".." in path.parts
+    ):
+        fail(f"uv.lock contains a non-portable local reference in {label}")
+    if label.endswith("registry") or label.endswith("url"):
+        if parsed.scheme.casefold() not in {"http", "https"} or not parsed.netloc:
+            fail(f"uv.lock {label} must use an HTTP(S) URL")
+    elif (
+        parsed.scheme.casefold()
+        not in {
+            "git",
+            "git+http",
+            "git+https",
+            "git+ssh",
+            "http",
+            "https",
+            "ssh",
+        }
+        or not parsed.netloc
+    ):
+        fail(f"uv.lock {label} must use a remote Git URL")
+
+
+def require_portable_uv_lock(repository: Path, content: bytes) -> None:
+    """Reject lock sources that only exist inside SAT's verification sandbox."""
+
+    try:
+        payload = tomllib.loads(content.decode("utf-8", errors="strict"))
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError):
+        fail("uv.lock must contain valid UTF-8 TOML")
+
+    local_keys = {"path", "editable", "directory", "virtual"}
+    remote_keys = {"registry", "url", "git"}
+
+    def inspect(value: object, location: str) -> None:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                child_location = f"{location}.{key}"
+                if key in local_keys:
+                    _require_portable_local_reference(
+                        repository,
+                        child,
+                        label=child_location,
+                    )
+                elif key in remote_keys:
+                    _require_remote_lock_reference(child, label=child_location)
+                inspect(child, child_location)
+        elif isinstance(value, list):
+            for index, child in enumerate(value):
+                inspect(child, f"{location}[{index}]")
+
+    inspect(payload, "root")
 
 
 def require_effective_ignore(repository: Path, relative_path: str, label: str) -> None:

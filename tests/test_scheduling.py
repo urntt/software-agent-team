@@ -506,7 +506,7 @@ def test_scheduler_bounds_multiline_agent_summaries_before_observer_delivery() -
     ) -> AgentRunOutcome:
         del upstream
         return successful_outcome(spec).model_copy(
-            update={"summary": "first line\n" + "x" * 1000}
+            update={"summary": "first line\n" + "completed evidence " * 100}
         )
 
     result = DagScheduler(clock=lambda: NOW).execute(plan, runner)
@@ -516,8 +516,11 @@ def test_scheduler_bounds_multiline_agent_summaries_before_observer_delivery() -
         if event.kind is ScheduleEventKind.AGENT_COMPLETED
     )
 
-    assert len(completed.message) == 500
+    assert len(completed.message) <= 500
     assert "\n" not in completed.message
+    assert completed.message.endswith(" … [truncated]")
+    visible = completed.message.removesuffix(" … [truncated]")
+    assert visible.endswith(("completed", "evidence"))
 
 
 class _ControlSequence:

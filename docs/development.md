@@ -111,7 +111,10 @@ dependencies. The product quality profile copies clean committed files into
 fresh executable tmpfs scratch, then runs the exact generated setup, test, and
 start argv with network disabled. The source and container root remain
 read-only, and the process remains non-root, capability-dropped, and
-resource-bounded. The image also installs the root-owned immutable
+resource-bounded. Before setup, the profile parses a committed `uv.lock` and
+rejects host- or sandbox-only local sources; the private wheelhouse may satisfy
+runtime resolution but its absolute path must never be committed into the
+generated project. The image also installs the root-owned immutable
 `sat-probe-write` helper. That command can atomically create only a new bounded
 `/tmp/sat-review-probe-*` `.py`, `.json`, or `.txt` direct child; it refuses
 overwrite and unsafe paths while the project mount and general write tools stay
@@ -119,7 +122,9 @@ read-only. Authored Python probes run only through `sat-probe-run`; it validates
 the owner-only file, executes its open descriptor with a fixed interpreter and
 project working directory, enforces a 30-second child timeout and bounded
 output, and emits `SAT_PROBE_RESULT_V1` as the authoritative terminal child
-result. Change either runtime capability and the policy image tag together; an
+result. Its explicit stdout/stderr frames let the controller exclude traceback
+source text from positive satisfied claims while preserving stderr for blocked
+counterexamples. Change either runtime capability and the policy image tag together; an
 old tag must not claim the newer probe capability.
 
 Use the Docker cgroup `--pids-limit` for the per-container process boundary.

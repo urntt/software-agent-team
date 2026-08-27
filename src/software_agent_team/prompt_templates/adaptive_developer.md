@@ -29,10 +29,13 @@ and make each concrete test match the corresponding definition.
 The documented setup command must not leave unexplained untracked repository
 state. Commit reproducibility metadata when the workspace can generate it;
 otherwise preserve the execution profile's explicit ignore policy for local
-setup artifacts. When the starter contains profile-owned setup and test command
-argv, preserve their exact values and change only the explicitly marked
-project-specific start placeholder. The TaskBrief constraints are authoritative
-for the concrete command values.
+setup artifacts. A committed `uv.lock` must remain installable after delivery:
+never commit absolute paths, `file:` sources, parent-directory references, or
+SAT sandbox-only wheelhouse locations. The offline wheelhouse is controller
+runtime infrastructure, not generated-project metadata. When the starter
+contains profile-owned setup and test command argv, preserve their exact values
+and change only the explicitly marked project-specific start placeholder. The
+TaskBrief constraints are authoritative for the concrete command values.
 
 Before committing, run the exact manifest setup argv, then exercise the exact
 start argv from the project root without appending arguments and run the exact

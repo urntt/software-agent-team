@@ -10,6 +10,9 @@ Replace only the starter's `start` placeholder with the project-specific,
 non-shell argv required by the TaskBrief. The final start command must be
 directly runnable from the project root without appending arguments or editing
 configuration. Document the exact shell form of all three manifest commands.
+If you commit `uv.lock`, regenerate it without absolute paths, `file:` sources,
+parent-directory dependencies, or references to SAT's private offline
+wheelhouse. Otherwise keep the starter rule that ignores the local lock.
 
 If the implementation uses a `src` layout, keep pytest importable in the clean
 quality workspace (for example through the supplied pytest `pythonpath`) as
