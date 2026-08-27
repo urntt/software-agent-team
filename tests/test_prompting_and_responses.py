@@ -679,6 +679,22 @@ def test_strict_parser_normalizes_presentation_prose_around_one_object() -> None
     assert parsed.body == semantic_body(plan())
 
 
+def test_strict_parser_accepts_argv_arrays_before_one_semantic_object() -> None:
+    response = (
+        "The setup contract now uses "
+        '["uv", "sync", "--dev"] and the test contract uses '
+        '["uv", "run", "pytest"].\n'
+        f"{json.dumps(plan().model_dump(mode='json'))}"
+    )
+
+    parsed = parse_scripted(
+        response,
+        execution_request(AgentRole.PLANNER, ArtifactKind.IMPLEMENTATION_PLAN),
+    )
+
+    assert parsed.body == semantic_body(plan())
+
+
 @pytest.mark.parametrize("suffix", ["}", "]", "]}", "}}]]"])
 def test_strict_parser_normalizes_bounded_redundant_closing_delimiters(
     suffix: str,
@@ -697,7 +713,6 @@ def test_strict_parser_normalizes_bounded_redundant_closing_delimiters(
     "suffix",
     [
         "}}]]}",
-        "] another value",
         ']{"objective":"competing"}',
     ],
 )
@@ -706,7 +721,10 @@ def test_strict_parser_rejects_unbounded_or_structured_closing_suffixes(
 ) -> None:
     response = f"{json.dumps(plan().model_dump(mode='json'))}{suffix}"
 
-    with pytest.raises(AgentArtifactResponseError, match="outside JSON structures"):
+    with pytest.raises(
+        AgentArtifactResponseError,
+        match="outside JSON object candidates",
+    ):
         parse_scripted(
             response,
             execution_request(AgentRole.PLANNER, ArtifactKind.IMPLEMENTATION_PLAN),
@@ -717,7 +735,6 @@ def test_strict_parser_rejects_unbounded_or_structured_closing_suffixes(
     "outside",
     [
         "A competing object follows: {}",
-        "A competing array follows: []",
         "A fence follows: ```text not json ```",
     ],
 )
@@ -726,7 +743,10 @@ def test_strict_parser_rejects_structured_content_outside_unfenced_object(
 ) -> None:
     response = f"{json.dumps(plan().model_dump(mode='json'))}\n{outside}"
 
-    with pytest.raises(AgentArtifactResponseError, match="outside JSON structures"):
+    with pytest.raises(
+        AgentArtifactResponseError,
+        match="outside JSON object candidates",
+    ):
         parse_scripted(
             response,
             execution_request(AgentRole.PLANNER, ArtifactKind.IMPLEMENTATION_PLAN),
@@ -737,7 +757,6 @@ def test_strict_parser_rejects_structured_content_outside_unfenced_object(
     "outside",
     [
         "A competing object follows: {}",
-        "A competing array follows: []",
         "A second fence follows:\n```text\nnot json\n```",
     ],
 )
@@ -746,7 +765,10 @@ def test_strict_parser_rejects_structured_content_outside_json_fence(
 ) -> None:
     fenced = f"```json\n{json.dumps(plan().model_dump(mode='json'))}\n```\n{outside}"
 
-    with pytest.raises(AgentArtifactResponseError, match="outside JSON structures"):
+    with pytest.raises(
+        AgentArtifactResponseError,
+        match="outside JSON object candidates",
+    ):
         parse_scripted(
             fenced,
             execution_request(AgentRole.PLANNER, ArtifactKind.IMPLEMENTATION_PLAN),
@@ -874,6 +896,43 @@ def test_strict_parser_rejects_failed_execution_before_reading_text() -> None:
             task_brief=task_brief(),
             team_roles=TEAM_ROLES,
             iteration_limit=2,
+        )
+
+
+@pytest.mark.parametrize(
+    "outside",
+    [
+        "A command array follows: []",
+        'The command is ["uv", "run", "pytest"].',
+        "] another presentation note",
+    ],
+)
+def test_strict_parser_accepts_non_object_json_arrays_outside_one_object(
+    outside: str,
+) -> None:
+    response = f"{json.dumps(plan().model_dump(mode='json'))}\n{outside}"
+
+    parsed = parse_scripted(
+        response,
+        execution_request(AgentRole.PLANNER, ArtifactKind.IMPLEMENTATION_PLAN),
+    )
+
+    assert parsed.body == semantic_body(plan())
+
+
+def test_strict_parser_rejects_an_array_containing_a_competing_object() -> None:
+    response = (
+        f"{json.dumps(plan().model_dump(mode='json'))}\n"
+        'A competing value follows: [{"objective":"other"}]'
+    )
+
+    with pytest.raises(
+        AgentArtifactResponseError,
+        match="outside JSON object candidates",
+    ):
+        parse_scripted(
+            response,
+            execution_request(AgentRole.PLANNER, ArtifactKind.IMPLEMENTATION_PLAN),
         )
 
 

@@ -217,6 +217,13 @@ def assemble_review_report(
     known = {criterion.id for criterion in task_brief.acceptance_criteria}
     if not set(reviewed_criteria).issubset(known):
         raise ArtifactAssemblyError("review scope references an unknown criterion")
+    assessments_by_id = {
+        assessment.criterion_id: assessment for assessment in body.criterion_assessments
+    }
+    if assessments_by_id and set(assessments_by_id) != set(reviewed_criteria):
+        raise ArtifactAssemblyError(
+            "review criterion assessments must exactly cover controller scope"
+        )
     return ReviewReport(
         run_id=task_brief.run_id,
         team_id=team_id,
@@ -227,6 +234,11 @@ def assemble_review_report(
         verdict=body.verdict,
         termination_reason=body.termination_reason,
         reviewed_criteria=reviewed_criteria,
+        criterion_assessments=(
+            tuple(assessments_by_id[criterion_id] for criterion_id in reviewed_criteria)
+            if assessments_by_id
+            else ()
+        ),
         findings=body.findings,
         summary=body.summary,
     )

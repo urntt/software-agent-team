@@ -93,7 +93,10 @@ def load_openclaw_template(
         if role in READ_ONLY_ROLES:
             if access != "ro":
                 raise ValueError(f"{role.value} must have read-only workspace access")
-            if not MUTATING_TOOLS.issubset(denied_tools):
+            required_denied = MUTATING_TOOLS - (
+                {"exec"} if role is AgentRole.REVIEWER else set()
+            )
+            if not required_denied.issubset(denied_tools):
                 raise ValueError(
                     f"{role.value} must deny filesystem and shell mutation tools"
                 )

@@ -674,8 +674,10 @@ def build_semantic_repair_request(
         )
     elif request.capability is AgentCapability.REVIEW:
         capability_check = (
-            "Recheck that verdict, findings, and criterion IDs agree with the "
-            "supplied immutable evidence. Use revise for correctable defects; fail "
+            "Recheck that criterion_assessments exactly cover the assigned scope, "
+            "each assessment includes a concrete adversarial check and observable "
+            "evidence, and every blocked status matches a blocking finding with "
+            "the same criterion ID. Use revise for correctable defects; fail "
             "requires a terminal safety or evidence-integrity reason."
         )
     else:
@@ -789,6 +791,21 @@ def render_dynamic_agent_prompt(
         raise AgentPromptError(
             f"no response model exists for {agent.expected_output.value}"
         )
+    response_schema = response_model.model_json_schema()
+    if agent.capability is AgentCapability.REVIEW:
+        properties = response_schema.get("properties")
+        if not isinstance(properties, dict) or not isinstance(
+            properties.get("criterion_assessments"), dict
+        ):
+            raise AgentPromptError(
+                "dynamic Review response schema lacks criterion assessments"
+            )
+        properties["criterion_assessments"].pop("default", None)
+        required = response_schema.setdefault("required", [])
+        if not isinstance(required, list):
+            raise AgentPromptError("dynamic Review response requirements are invalid")
+        if "criterion_assessments" not in required:
+            required.append("criterion_assessments")
     values = {
         "agent_id": agent.id,
         "agent_label": agent.label,
@@ -801,7 +818,7 @@ def render_dynamic_agent_prompt(
             sort_keys=True,
         ),
         "response_schema_json": json.dumps(
-            response_model.model_json_schema(),
+            response_schema,
             ensure_ascii=False,
             indent=2,
             sort_keys=True,

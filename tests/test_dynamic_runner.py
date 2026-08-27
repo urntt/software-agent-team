@@ -18,6 +18,7 @@ from software_agent_team.artifacts import (
     CommandEvidence,
     HandoffEnvelope,
     HandoffStatus,
+    ReviewCriterionAssessment,
     ReviewReport,
     TaskBrief,
     WorkResult,
@@ -277,6 +278,7 @@ class DynamicExecutor:
         mutate_reader: str | None = None,
         synchronize_quality: bool = False,
         provider_fail_once_for: str | None = None,
+        writer_presentation_arrays: bool = False,
         writer_summary: str = "Implemented and documented the greeting utility.",
     ) -> None:
         self.workspace = workspace
@@ -284,6 +286,7 @@ class DynamicExecutor:
         self.omit_model_for = omit_model_for
         self.mutate_reader = mutate_reader
         self.provider_fail_once_for = provider_fail_once_for
+        self.writer_presentation_arrays = writer_presentation_arrays
         self.writer_summary = writer_summary
         self.requests: list[AgentExecutionRequest] = []
         self._counts: dict[str, int] = {}
@@ -333,6 +336,11 @@ class DynamicExecutor:
                 completed_tasks=("TASK_BUILD",),
                 unresolved_issues=(),
             ).model_dump_json()
+            if self.writer_presentation_arrays:
+                response_text = (
+                    'Verified setup ["uv", "sync", "--dev"] and tests '
+                    f'["uv", "run", "pytest"].\n{response_text}'
+                )
             if self.invalid_writer_once and count == 1:
                 response_text = "not valid JSON"
         elif request.agent_id == "tester":
@@ -350,6 +358,19 @@ class DynamicExecutor:
             self._wait_for_quality_peer()
             response_text = ReviewReportResponse(
                 verdict="accept",
+                criterion_assessments=(
+                    ReviewCriterionAssessment(
+                        criterion_id="AC_REVIEW",
+                        status="satisfied",
+                        adversarial_check=(
+                            "Compared the documented return behavior with the "
+                            "implemented function."
+                        ),
+                        evidence=(
+                            "README.md and greeting.py describe the same string result."
+                        ),
+                    ),
+                ),
                 findings=(),
                 summary="The final commit satisfies the assigned review scope.",
             ).model_dump_json()
@@ -603,6 +624,32 @@ def test_dynamic_writer_semantic_repair_keeps_full_timeout_and_git_evidence(
     assert writer_records[0].error is not None
     assert isinstance(writer_records[1], AgentExecutionRecord)
     assert writer_records[1].response_artifact == runner.outputs["builder"]
+
+
+def test_dynamic_writer_argv_prose_does_not_spend_a_semantic_repair(
+    tmp_path: Path,
+) -> None:
+    runner, team_plan, executor, _, _ = runtime(
+        tmp_path,
+        executor_options={"writer_presentation_arrays": True},
+    )
+
+    result = DagScheduler().execute(team_plan, runner)
+
+    assert result.status is ScheduleStatus.COMPLETED
+    writer_requests = [
+        request for request in executor.requests if request.agent_id == "builder"
+    ]
+    assert len(writer_requests) == 1
+    writer_records = [
+        runner.artifact_store.load(reference)
+        for reference in runner.execution_records
+        if "/implement/builder-" in reference.path
+    ]
+    assert len(writer_records) == 1
+    assert isinstance(writer_records[0], AgentExecutionRecord)
+    assert writer_records[0].error is None
+    assert writer_records[0].response_artifact == runner.outputs["builder"]
 
 
 def test_dynamic_runner_switches_only_after_approved_provider_failure(

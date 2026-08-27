@@ -10,6 +10,7 @@ from software_agent_team.artifacts import (
     AgentExecutionRecord,
     HandoffEnvelope,
     HandoffStatus,
+    ReviewReport,
     TaskBrief,
 )
 
@@ -267,3 +268,63 @@ def test_launch_failure_can_lack_session_model_and_exit_code() -> None:
 
     assert record.exit_code is None
     assert record.model is None
+
+
+def valid_review_payload() -> dict[str, object]:
+    """Return a review with criterion-level adversarial evidence."""
+
+    return {
+        "run_id": "task-manager-001",
+        "team_id": "adaptive_team",
+        "producer": "quality_reviewer",
+        "created_at": datetime(2026, 8, 27, 12, 0, tzinfo=UTC),
+        "iteration": 1,
+        "input_commit": "d" * 40,
+        "verdict": "accept",
+        "reviewed_criteria": ["AC_PERSIST"],
+        "criterion_assessments": [
+            {
+                "criterion_id": "AC_PERSIST",
+                "status": "satisfied",
+                "adversarial_check": "Restarted the service after writing one task.",
+                "evidence": "The task remained visible after restart.",
+            }
+        ],
+        "summary": "The assigned criterion is satisfied.",
+    }
+
+
+def test_review_assessments_exactly_cover_controller_scope() -> None:
+    report = ReviewReport.model_validate(valid_review_payload())
+
+    assert report.criterion_assessments[0].criterion_id == "AC_PERSIST"
+
+    payload = valid_review_payload()
+    payload["reviewed_criteria"] = ["AC_PERSIST", "AC_OTHER"]
+    with pytest.raises(ValidationError, match="exactly cover"):
+        ReviewReport.model_validate(payload)
+
+
+def test_blocked_review_assessment_requires_matching_blocking_finding() -> None:
+    payload = valid_review_payload()
+    payload["verdict"] = "revise"
+    assessments = payload["criterion_assessments"]
+    assert isinstance(assessments, list)
+    assessments[0]["status"] = "blocked"
+
+    with pytest.raises(ValidationError, match="exactly match"):
+        ReviewReport.model_validate(payload)
+
+    payload["findings"] = [
+        {
+            "id": "FINDING_PERSISTENCE",
+            "severity": "high",
+            "blocking": True,
+            "category": "behavior",
+            "description": "The saved task disappeared after restart.",
+            "recommendation": "Persist tasks before reporting success.",
+            "criterion_ids": ["AC_PERSIST"],
+        }
+    ]
+    report = ReviewReport.model_validate(payload)
+    assert report.verdict.value == "revise"

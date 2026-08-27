@@ -554,6 +554,7 @@ class DynamicAgentRunner:
                             task_brief=self.task_brief,
                             team_plan=self.team_plan,
                             assigned_task_ids=assigned_task_ids,
+                            reviewed_criterion_ids=manual_scope,
                         )
                     except AgentArtifactResponseError as error:
                         record_error = self._error_detail(error)

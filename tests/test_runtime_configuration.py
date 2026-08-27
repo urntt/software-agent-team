@@ -293,6 +293,10 @@ def test_materialized_config_contains_only_approved_run_scoped_agents(
         for agent in agents
     )
     assert all("sessions_spawn" in agent["tools"]["deny"] for agent in agents)
+    reviewer = next(agent for agent in agents if agent["id"] == "quality_reviewer")
+    tester = next(agent for agent in agents if agent["id"] == "acceptance_tester")
+    assert "exec" not in reviewer["tools"]["deny"]
+    assert "exec" in tester["tools"]["deny"]
     assert "generalist_developer" not in {agent["id"] for agent in agents}
 
 

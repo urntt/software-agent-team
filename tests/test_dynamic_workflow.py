@@ -16,6 +16,7 @@ from software_agent_team.artifacts import (
     FinalStatus,
     IterationDecision,
     IterationRecord,
+    ReviewCriterionAssessment,
     ReviewFinding,
     ReviewSeverity,
     TaskBrief,
@@ -364,6 +365,20 @@ class AdaptiveExecutor:
             if self.always_revise or (self.revise_first and count == 1):
                 body = ReviewReportResponse(
                     verdict="revise",
+                    criterion_assessments=(
+                        ReviewCriterionAssessment(
+                            criterion_id="AC_REVIEW",
+                            status="blocked",
+                            adversarial_check=(
+                                "Compared the documented result type with the "
+                                "implemented return value."
+                            ),
+                            evidence=(
+                                "README.md omits the string result type exposed by "
+                                "greeting.py."
+                            ),
+                        ),
+                    ),
                     findings=(
                         ReviewFinding(
                             id="FINDING_DOCS",
@@ -381,6 +396,20 @@ class AdaptiveExecutor:
             else:
                 body = ReviewReportResponse(
                     verdict="accept",
+                    criterion_assessments=(
+                        ReviewCriterionAssessment(
+                            criterion_id="AC_REVIEW",
+                            status="satisfied",
+                            adversarial_check=(
+                                "Compared the documented result type with the "
+                                "implemented return value."
+                            ),
+                            evidence=(
+                                "README.md now documents the string returned by "
+                                "greeting.py."
+                            ),
+                        ),
+                    ),
                     summary="The final commit satisfies the review scope.",
                 ).model_dump_json()
         else:  # pragma: no cover - the fixture owns every Agent

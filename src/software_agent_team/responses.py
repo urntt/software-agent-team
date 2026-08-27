@@ -13,6 +13,8 @@ from software_agent_team.artifacts import (
     ArtifactKind,
     ImplementationPlan,
     PlanTask,
+    ReviewCriterionAssessment,
+    ReviewCriterionStatus,
     ReviewFinding,
     ReviewReport,
     ReviewTerminationReason,
@@ -127,6 +129,7 @@ class ReviewReportResponse(BaseModel):
         )
     )
     termination_reason: ReviewTerminationReason | None = None
+    criterion_assessments: tuple[ReviewCriterionAssessment, ...] = ()
     findings: tuple[ReviewFinding, ...] = ()
     summary: str = Field(min_length=1)
 
@@ -266,18 +269,23 @@ def _safe_json_detail(error: TypeError | ValueError) -> str:
     return "response could not be decoded as one JSON object"
 
 
-def _contains_json_structure(value: str) -> bool:
-    """Return whether text contains another decodable JSON object or array."""
+def _contains_json_object(value: str) -> bool:
+    """Return whether text contains another decodable JSON object candidate.
+
+    The response contract requires an object. A JSON array used to present an
+    argv sequence therefore cannot compete with the one semantic object. An
+    object nested inside an array remains detectable from its opening brace.
+    """
 
     decoder = json.JSONDecoder()
     for index, character in enumerate(value):
-        if character not in "[{":
+        if character != "{":
             continue
         try:
             parsed, _ = decoder.raw_decode(value, idx=index)
         except ValueError:
             continue
-        if isinstance(parsed, (dict, list)):
+        if isinstance(parsed, dict):
             return True
     return False
 
@@ -301,7 +309,7 @@ def _unwrap_single_json_fence(value: str) -> str:
         return value
 
     outside = "\n".join(lines[:opening] + lines[closing + 1 :]).strip()
-    if "```" in outside or _contains_json_structure(outside):
+    if "```" in outside or _contains_json_object(outside):
         return value
     return "\n".join(lines[opening + 1 : closing])
 
@@ -328,7 +336,11 @@ def _unwrap_single_json_object(value: str) -> str:
         # transport output remains in the execution evidence.
         suffix = ""
     outside = "\n".join(part for part in (prefix, suffix) if part)
-    if "```" in outside or any(character in outside for character in "{}[]"):
+    if (
+        "```" in outside
+        or any(character in outside for character in "{}")
+        or _contains_json_object(outside)
+    ):
         return value
     return stripped[opening:closing]
 
@@ -354,8 +366,8 @@ def parse_json_object_response(value: str) -> dict[str, object]:
             f"{_safe_json_detail(error)}. The response must contain exactly one "
             "unambiguous JSON object; a single json fence or presentation-only "
             "surrounding prose and a bounded redundant closing-delimiter suffix "
-            "are normalized, but multiple fences or outside JSON structures are "
-            "forbidden"
+            "are normalized, but multiple fences or outside JSON object "
+            "candidates are forbidden"
         ) from error
     if not isinstance(payload, dict):
         raise AgentArtifactResponseError("Agent response must be a JSON object")
@@ -396,7 +408,10 @@ def _validate_response_context(
             input_commit="0" * 40,
             verdict=body.verdict,
             termination_reason=body.termination_reason,
-            reviewed_criteria=(),
+            reviewed_criteria=tuple(
+                assessment.criterion_id for assessment in body.criterion_assessments
+            ),
+            criterion_assessments=body.criterion_assessments,
             findings=body.findings,
             summary=body.summary,
         )
@@ -482,6 +497,7 @@ def parse_dynamic_agent_response(
     task_brief: TaskBrief,
     team_plan: TeamPlan,
     assigned_task_ids: Collection[str] = (),
+    reviewed_criterion_ids: Collection[str] = (),
 ) -> ParsedAgentResponse:
     """Bind one semantic response to an approved run-scoped AgentSpec."""
 
@@ -559,6 +575,30 @@ def parse_dynamic_agent_response(
         elif isinstance(body, ReviewReportResponse):
             if body.verdict is ReviewVerdict.FAIL and body.termination_reason is None:
                 raise ValueError("failed reviews require a terminal review reason")
+            expected_review_scope = set(reviewed_criterion_ids)
+            unknown_scope = expected_review_scope - criterion_ids
+            if unknown_scope:
+                raise ValueError(
+                    "assigned review scope references unknown acceptance criteria: "
+                    f"{', '.join(sorted(unknown_scope))}"
+                )
+            assessed = [
+                assessment.criterion_id for assessment in body.criterion_assessments
+            ]
+            if len(assessed) != len(set(assessed)):
+                raise ValueError("criterion assessments must use unique criterion IDs")
+            if set(assessed) != expected_review_scope:
+                missing = sorted(expected_review_scope - set(assessed))
+                unexpected = sorted(set(assessed) - expected_review_scope)
+                detail = []
+                if missing:
+                    detail.append(f"missing: {', '.join(missing)}")
+                if unexpected:
+                    detail.append(f"outside scope: {', '.join(unexpected)}")
+                raise ValueError(
+                    "criterion assessments must exactly cover assigned review scope"
+                    + (f" ({'; '.join(detail)})" if detail else "")
+                )
             unknown = {
                 criterion_id
                 for finding in body.findings
@@ -569,6 +609,52 @@ def parse_dynamic_agent_response(
                 raise ValueError(
                     "review findings reference unknown acceptance criteria: "
                     f"{', '.join(sorted(unknown))}"
+                )
+            findings_without_scope = [
+                finding.id for finding in body.findings if not finding.criterion_ids
+            ]
+            if findings_without_scope:
+                raise ValueError(
+                    "review findings must reference assigned criteria: "
+                    f"{', '.join(findings_without_scope)}"
+                )
+            outside_scope = {
+                criterion_id
+                for finding in body.findings
+                for criterion_id in finding.criterion_ids
+                if criterion_id not in expected_review_scope
+            }
+            if outside_scope:
+                raise ValueError(
+                    "review findings reference criteria outside assigned scope: "
+                    f"{', '.join(sorted(outside_scope))}"
+                )
+            blocked_assessments = {
+                assessment.criterion_id
+                for assessment in body.criterion_assessments
+                if assessment.status is ReviewCriterionStatus.BLOCKED
+            }
+            blocking_findings = {
+                criterion_id
+                for finding in body.findings
+                if finding.blocking
+                for criterion_id in finding.criterion_ids
+            }
+            if blocked_assessments != blocking_findings:
+                raise ValueError(
+                    "blocked criterion assessments must exactly match blocking "
+                    "finding criteria"
+                )
+            if body.verdict is ReviewVerdict.ACCEPT and blocked_assessments:
+                raise ValueError(
+                    "accepted reviews require every criterion assessment satisfied"
+                )
+            if (
+                body.verdict in {ReviewVerdict.REVISE, ReviewVerdict.FAIL}
+                and not blocked_assessments
+            ):
+                raise ValueError(
+                    "non-accepted reviews require a blocked criterion assessment"
                 )
     except ValueError as error:
         raise AgentArtifactResponseError(

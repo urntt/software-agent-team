@@ -56,10 +56,14 @@ The controller accepts an iteration only when all of the following agree:
    while the overall Tester status is `passed` when no deterministic failure
    or blocker exists.
 4. Approved Review Agents evaluate their controller-supplied manual-review
-   scopes on the same immutable commit and return `accept` with no blocking
-   finding. The controller binds each Agent, commit, and scope into an
-   attributable `ReviewReport`; their combined scope must exactly cover the
-   manual criteria and finding IDs must remain unique across the iteration.
+   scopes on the same immutable commit. A Dynamic Reviewer must return exactly
+   one `criterion_assessments` entry for every assigned criterion, including a
+   concrete adversarial check, observable evidence, and `satisfied` or
+   `blocked` status. Every blocked assessment must map to a blocking finding
+   with the same criterion ID. The controller binds each Agent, commit, and
+   scope into an attributable `ReviewReport`; their combined scope must exactly
+   cover the manual criteria and finding IDs must remain unique across the
+   iteration.
 5. The controller, not either Agent, resolves pending criteria to `passed` in
    the final report.
 
@@ -67,10 +71,13 @@ Generic deterministic gates do not prove arbitrary task semantics. For an
 unqualified prohibition or safety guarantee, the Planning prompt requires
 acceptance intent across all relevant input boundaries, the implementation
 prompt requires focused boundary tests, and the Review prompt requires an
-adversarial counterexample search. The resulting judgment remains attributable
+adversarial counterexample search. A Dynamic Reviewer may run bounded
+foreground inspection or probe commands in its no-network sandbox against the
+read-only source and temporary fixtures. Its assessment remains attributable
 model evidence rather than a controller fact: a later concrete counterexample
 still invalidates acceptance and must be preserved as a product defect. The
-controller must never reinterpret a model's broad claim as deterministic proof.
+controller must never reinterpret a model's broad claim or self-authored test
+as deterministic proof.
 
 Reviewer severity and controller termination are separate concepts. Any
 correctable implementation defect, including a failed acceptance gate or a
@@ -148,16 +155,19 @@ unambiguous semantic JSON object in any of these forms:
   delimiters.
 
 Text outside a single explicit JSON fence is discarded only when it contains no
-other decodable JSON object or array and no other fence. Ordinary documentation
-notation there, such as `[project.scripts]`, Python-style argv examples, or
-braces around non-JSON text, does not create a competing JSON candidate. The
-stricter raw-object form continues to reject any structural delimiters in its
-surrounding prose. A closing-delimiter suffix is discarded only after the
-decoder has already recovered exactly one complete top-level object; raw
-transport output remains immutable evidence. The parser never guesses between
-multiple candidates. Duplicate keys, multiple objects, multiple fences,
-non-standard constants, unknown semantic fields, and invalid semantic content
-remain invalid.
+other decodable JSON object and no other fence. The response contract requires
+a top-level object, so a JSON argv array such as `["uv", "run", "pytest"]`
+cannot compete with that object and is presentation data. An array containing
+another decodable object is still rejected because the nested object is a real
+candidate. Ordinary documentation notation such as `[project.scripts]`,
+Python-style argv examples, or braces around non-JSON text likewise does not
+create a competing object. The raw-object form rejects object delimiters or a
+fence in surrounding prose while permitting contract-ineligible arrays. A
+closing-delimiter suffix is discarded only after the decoder has already
+recovered exactly one complete top-level object; raw transport output remains
+immutable evidence. The parser never guesses between multiple objects.
+Duplicate keys, multiple objects, multiple fences, non-standard constants,
+unknown semantic fields, and invalid semantic content remain invalid.
 
 One controlled repair may address only the semantic contract. It receives a
 bounded, value-free structural diagnostic, such as the duplicate key name,
@@ -425,8 +435,13 @@ when investigating it rather than editing artifacts in place.
 - Controlled Agents receive no ambient OpenClaw skills. Their explicit prompt,
   tool policy, and run-scoped repository are the complete execution boundary.
 - Clarification, Planning, Testing, and Review capabilities use read-only
-  permission profiles. Read-only Agents deny mutation and process tools and
-  inspect verified source through the read-only `/agent` mount.
+  permission profiles and inspect verified source through the read-only
+  `/agent` mount. They deny direct mutation, background-process, and
+  Agent-spawning tools. Review may run bounded foreground inspection or
+  adversarial probe commands against `/agent` and fixtures under the sandbox's
+  writable `/tmp`; the mount remains read-only, network is disabled, and the
+  resulting criterion-by-criterion evidence is attributable rather than
+  controller-owned deterministic command evidence.
 - Implementation and Integration capabilities may write only inside the
   assigned `/workspace` mount.
 - Every Agent denies Agent-spawning and one-shot model tools. Only the

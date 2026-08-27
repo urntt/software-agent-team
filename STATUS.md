@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** Phase 3E implemented; two fresh installed adaptive rehearsals exposed corrected Planning-path and downstream-summary projection defects, with a clean provider rerun next
+**Current milestone:** Phase 3E implemented; four fresh installed adaptive rehearsals have driven controller, transport, and semantic-review corrections, with a clean provider rerun next
 
 **Last updated:** August 27, 2026
 
@@ -50,7 +50,7 @@ validation also rejects a plan whose complete planned iterations cannot fit
 its call budget. Recovery
 verifies the exact TaskBrief binding, TeamPlan digest, fixed manifest version,
 fixed team digest, resolved Agent timeouts, and cross-file run metadata. The
-complete repository check passes with 590 offline tests.
+complete repository check passes with 598 offline tests.
 
 `RunEvent` is also an executable, append-only contract. Every current workflow
 progress update is persisted with a contiguous sequence, lifecycle revision,
@@ -302,6 +302,36 @@ to be either a bounded regular file in the accepted snapshot or explicitly
 ignored. These are task-independent corrections; no duplicate-finder-specific
 gate was added. A fresh installed run must confirm both changes before the
 adaptive journey is called successful.
+
+A fourth fresh-account adaptive rehearsal tested those changes through the
+public installer and bare `sat` with the same duplicate-finder request. Planning
+needed one bounded proposal repair, then the user approved one Implementation
+Agent followed by one independent Reviewer. Iteration one correctly reached the
+project-contract and pytest import failures. The Reviewer requested revision
+for those deterministic defects but supplied only a summary assertion of all
+14 criteria; it did not challenge the top-level symlink boundary or the
+implementation's singleton hash groups.
+
+The second Developer invocation committed a corrective revision and returned
+one complete valid semantic object after explanatory text containing JSON argv
+arrays. The old raw-object normalizer incorrectly treated those arrays as a
+second response candidate and spent a repair call. That repair contained
+unescaped quotation marks and was invalid JSON, so the controller stopped with
+`artifact_invalid`, delivered nothing, and removed all three run-scoped
+containers. Independent inspection of the preserved commit also confirmed
+that the root symlink and singleton-group defects remained and that the test
+argv still differed from the exact generated-project contract.
+
+The response boundary now treats non-object JSON arrays as presentation when
+there is exactly one semantic object, while still rejecting every additional
+object, including one nested in an array. Dynamic Review now requires an exact
+criterion-by-criterion assessment set with concrete adversarial checks and
+evidence; blocked assessments and blocking findings must reference the same
+criterion. Review can run bounded foreground probes against read-only source
+and `/tmp` fixtures in its no-network sandbox, without converting its
+self-directed result into controller-owned deterministic evidence. These are
+generic protocol and quality-boundary corrections. The full 598-test check
+passes; another fresh installed provider run remains required.
 
 The rehearsal sequence below concerns the predecessor guided fixed-team
 product path and is retained as defect and regression evidence. It proves the
@@ -585,6 +615,11 @@ The acceptance contract is
   semantic JSON response parsing, dynamic identity/task/route/timeout binding,
   controller assembly of persisted envelope, Git, test, and scope facts, and
   one independently timed semantic response repair;
+- Contract-aware response normalization that permits presentation argv arrays
+  around one semantic object while rejecting any additional object candidate;
+- Exact Dynamic Reviewer criterion assessments with adversarial checks,
+  observable attributable evidence, blocked-finding cross-binding, and bounded
+  no-network foreground probes against read-only source;
 - Concrete phase-artifact and Agent-telemetry contracts with contextual
   validation;
 - Immutable phase artifacts, handoffs, command output, Agent output, canonical

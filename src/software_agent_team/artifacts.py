@@ -77,6 +77,13 @@ class ReviewVerdict(StrEnum):
     FAIL = "fail"
 
 
+class ReviewCriterionStatus(StrEnum):
+    """Reviewer's explicit outcome for one assigned manual criterion."""
+
+    SATISFIED = "satisfied"
+    BLOCKED = "blocked"
+
+
 class ReviewTerminationReason(StrEnum):
     """Terminal review conditions that make another revision unsafe."""
 
@@ -791,6 +798,27 @@ class ReviewFinding(BaseModel):
         return self
 
 
+class ReviewCriterionAssessment(BaseModel):
+    """Attributable evidence and adversarial reasoning for one criterion."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    criterion_id: str = Field(min_length=1, pattern=r"^[A-Z][A-Z0-9_-]*$")
+    status: ReviewCriterionStatus
+    adversarial_check: str = Field(min_length=1, max_length=2000)
+    evidence: str = Field(min_length=1, max_length=2000)
+
+    @field_validator("adversarial_check", "evidence")
+    @classmethod
+    def require_clean_assessment_text(cls, value: str) -> str:
+        """Reject empty presentation-only evidence."""
+
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("criterion assessment text must not be blank")
+        return cleaned
+
+
 class ReviewReport(IterationArtifact):
     """Independent semantic review of one immutable implementation commit."""
 
@@ -812,6 +840,7 @@ class ReviewReport(IterationArtifact):
         ),
     )
     reviewed_criteria: tuple[str, ...] = ()
+    criterion_assessments: tuple[ReviewCriterionAssessment, ...] = ()
     findings: tuple[ReviewFinding, ...] = ()
     summary: str = Field(min_length=1)
 
@@ -832,12 +861,49 @@ class ReviewReport(IterationArtifact):
         finding_ids = [finding.id for finding in self.findings]
         if len(finding_ids) != len(set(finding_ids)):
             raise ValueError("review finding IDs must be unique")
+        assessment_ids = [
+            assessment.criterion_id for assessment in self.criterion_assessments
+        ]
+        if len(assessment_ids) != len(set(assessment_ids)):
+            raise ValueError("review criterion assessments must be unique")
+        if self.criterion_assessments and set(assessment_ids) != set(
+            self.reviewed_criteria
+        ):
+            raise ValueError(
+                "review criterion assessments must exactly cover review scope"
+            )
         blocking = [finding for finding in self.findings if finding.blocking]
+        blocked_criteria = {
+            assessment.criterion_id
+            for assessment in self.criterion_assessments
+            if assessment.status is ReviewCriterionStatus.BLOCKED
+        }
+        finding_blocked_criteria = {
+            criterion_id
+            for finding in blocking
+            for criterion_id in finding.criterion_ids
+        }
+        if self.criterion_assessments and blocked_criteria != finding_blocked_criteria:
+            raise ValueError(
+                "blocked criterion assessments must exactly match blocking findings"
+            )
         critical = [
             finding
             for finding in self.findings
             if finding.severity is ReviewSeverity.CRITICAL
         ]
+        if (
+            self.verdict is ReviewVerdict.ACCEPT
+            and self.criterion_assessments
+            and blocked_criteria
+        ):
+            raise ValueError("accepted reviews require every criterion to be satisfied")
+        if (
+            self.verdict in {ReviewVerdict.REVISE, ReviewVerdict.FAIL}
+            and self.criterion_assessments
+            and not blocked_criteria
+        ):
+            raise ValueError("non-accepted reviews require a blocked criterion")
         if self.verdict is ReviewVerdict.ACCEPT and blocking:
             raise ValueError("accepted reviews cannot contain blocking findings")
         if self.verdict is ReviewVerdict.REVISE and not blocking:

@@ -297,11 +297,18 @@ generic profile gates. Planning must turn every unqualified prohibition or
 safety guarantee into acceptance and test intent across relevant entry
 boundaries. Implementation must exercise top-level and nested inputs, aliases
 or indirection, and failure paths when they apply. Independent Review must
-adversarially challenge the same scope and block acceptance on one concrete
-counterexample. Documentation may state only the boundary established by the
-implementation and evidence. The generated-project contract separately checks
-that the documented first setup does not leave an unexplained root virtual
-environment or lock file in an otherwise clean delivery.
+adversarially challenge the same scope. A Dynamic Reviewer returns exactly one
+criterion assessment for every assigned criterion, with a concrete negative or
+boundary case and observable evidence. A blocked assessment and its blocking
+finding must reference the same criterion; missing coverage is an invalid
+response rather than implicit acceptance. Review may run bounded foreground
+probes in the no-network sandbox against the read-only source and temporary
+fixtures, but that self-directed evidence remains attributable and is not
+relabeled as a controller deterministic gate. Documentation may state only the
+boundary established by the implementation and evidence. The generated-project
+contract separately checks that the documented first setup does not leave an
+unexplained root virtual environment or lock file in an otherwise clean
+delivery.
 
 Existing fixed team manifests remain versioned evaluation fixtures. During
 migration they are compiled into the same `TeamPlan` contract so the repository

@@ -13,6 +13,7 @@ from software_agent_team.artifacts import (
     ArtifactKind,
     CommandEvidence,
     HandoffStatus,
+    ReviewCriterionAssessment,
     ReviewFinding,
     ReviewSeverity,
     TaskBrief,
@@ -31,6 +32,7 @@ from software_agent_team.prompting import (
 )
 from software_agent_team.responses import (
     AgentArtifactResponseError,
+    ReviewReportResponse,
     WorkResultResponse,
     parse_dynamic_agent_response,
 )
@@ -300,13 +302,192 @@ def test_quality_prompt_contains_read_only_evidence_not_write_authority() -> Non
 
 
 def test_review_prompt_requires_adversarial_absolute_claim_boundaries() -> None:
-    inputs = quality_inputs().model_copy(update={"agent_id": "quality_reviewer"})
+    inputs = quality_inputs().model_copy(
+        update={
+            "agent_id": "quality_reviewer",
+            "manual_review_criteria": ("AC_LINKS",),
+        }
+    )
 
     rendered = render_dynamic_agent_prompt(inputs)
 
     assert "top-level user input" in rendered
     assert "one concrete counterexample" in rendered
-    assert "first setup" in rendered
+    assert "silently dirty" in rendered
+    assert "criterion_assessments" in rendered
+    assert "bounded foreground commands" in rendered
+    assert "negative, empty, singleton, boundary" in rendered
+    schema_text = rendered.split("RESPONSE_SCHEMA_JSON\n", 1)[1].split(
+        "\n\nFINAL_RESPONSE_CONTRACT",
+        1,
+    )[0]
+    response_schema = json.loads(schema_text)
+    assert "criterion_assessments" in response_schema["required"]
+    assert "default" not in response_schema["properties"]["criterion_assessments"]
+
+
+def _review_result(response: ReviewReportResponse):
+    inputs = quality_inputs().model_copy(
+        update={
+            "agent_id": "quality_reviewer",
+            "manual_review_criteria": ("AC_LINKS",),
+        }
+    )
+    request = build_dynamic_agent_execution_request(inputs)
+    result = ScriptedAgentExecutor(
+        [
+            ScriptedAgentResponse(
+                text=response.model_dump_json(),
+                model="provider/model",
+            )
+        ],
+        clock=lambda: CREATED_AT,
+    ).execute(request)
+    return request, result
+
+
+def test_dynamic_review_response_requires_exact_criterion_assessments() -> None:
+    assessment = ReviewCriterionAssessment(
+        criterion_id="AC_LINKS",
+        status="satisfied",
+        adversarial_check="Ran the CLI against a missing local-link fixture.",
+        evidence="The CLI returned non-zero and named the broken link.",
+    )
+    request, result = _review_result(
+        ReviewReportResponse(
+            verdict="accept",
+            criterion_assessments=(assessment,),
+            summary="The assigned criterion is satisfied.",
+        )
+    )
+
+    parsed = parse_dynamic_agent_response(
+        result,
+        request,
+        task_brief=task_brief(),
+        team_plan=team_plan(),
+        reviewed_criterion_ids=("AC_LINKS",),
+    )
+
+    assert isinstance(parsed.body, ReviewReportResponse)
+    assert parsed.body.criterion_assessments == (assessment,)
+
+
+def test_dynamic_review_response_rejects_missing_or_unscoped_evidence() -> None:
+    request, result = _review_result(
+        ReviewReportResponse(
+            verdict="accept",
+            summary="Claimed the assigned criterion is satisfied.",
+        )
+    )
+    with pytest.raises(AgentArtifactResponseError, match="exactly cover"):
+        parse_dynamic_agent_response(
+            result,
+            request,
+            task_brief=task_brief(),
+            team_plan=team_plan(),
+            reviewed_criterion_ids=("AC_LINKS",),
+        )
+
+    request, result = _review_result(
+        ReviewReportResponse(
+            verdict="accept",
+            criterion_assessments=(
+                ReviewCriterionAssessment(
+                    criterion_id="AC_OTHER",
+                    status="satisfied",
+                    adversarial_check="Checked another behavior.",
+                    evidence="Observed another behavior.",
+                ),
+            ),
+            summary="Reviewed a criterion outside the assigned scope.",
+        )
+    )
+    with pytest.raises(AgentArtifactResponseError, match="outside scope"):
+        parse_dynamic_agent_response(
+            result,
+            request,
+            task_brief=task_brief(),
+            team_plan=team_plan(),
+            reviewed_criterion_ids=("AC_LINKS",),
+        )
+
+    request, result = _review_result(
+        ReviewReportResponse(
+            verdict="accept",
+            criterion_assessments=(
+                ReviewCriterionAssessment(
+                    criterion_id="AC_OTHER",
+                    status="satisfied",
+                    adversarial_check="Checked the assigned behavior.",
+                    evidence="Observed the assigned behavior.",
+                ),
+            ),
+            summary="Claimed an unknown assigned criterion is satisfied.",
+        )
+    )
+    with pytest.raises(AgentArtifactResponseError, match="unknown acceptance"):
+        parse_dynamic_agent_response(
+            result,
+            request,
+            task_brief=task_brief(),
+            team_plan=team_plan(),
+            reviewed_criterion_ids=("AC_OTHER",),
+        )
+
+
+def test_dynamic_review_response_binds_blocked_assessment_to_finding() -> None:
+    blocked = ReviewCriterionAssessment(
+        criterion_id="AC_LINKS",
+        status="blocked",
+        adversarial_check="Ran the CLI against a broken nested link.",
+        evidence="The command returned zero despite the broken link.",
+    )
+    request, result = _review_result(
+        ReviewReportResponse(
+            verdict="revise",
+            criterion_assessments=(blocked,),
+            findings=(
+                ReviewFinding(
+                    id="FINDING_LINK_EXIT",
+                    severity="high",
+                    blocking=True,
+                    category="behavior",
+                    description="Broken links do not produce a failing exit code.",
+                    recommendation="Return non-zero when any link is broken.",
+                    criterion_ids=("AC_LINKS",),
+                ),
+            ),
+            summary="One observed blocker requires revision.",
+        )
+    )
+
+    parsed = parse_dynamic_agent_response(
+        result,
+        request,
+        task_brief=task_brief(),
+        team_plan=team_plan(),
+        reviewed_criterion_ids=("AC_LINKS",),
+    )
+    assert isinstance(parsed.body, ReviewReportResponse)
+
+    missing_scope = parsed.body.model_copy(
+        update={
+            "findings": tuple(
+                finding.model_copy(update={"criterion_ids": ()})
+                for finding in parsed.body.findings
+            )
+        }
+    )
+    request, result = _review_result(missing_scope)
+    with pytest.raises(AgentArtifactResponseError, match="must reference"):
+        parse_dynamic_agent_response(
+            result,
+            request,
+            task_brief=task_brief(),
+            team_plan=team_plan(),
+            reviewed_criterion_ids=("AC_LINKS",),
+        )
 
 
 def test_dynamic_revision_requires_commit_bound_blocking_feedback() -> None:
