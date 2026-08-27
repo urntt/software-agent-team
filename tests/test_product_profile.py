@@ -81,6 +81,23 @@ def test_product_profile_is_separate_from_the_task_manager_evaluation() -> None:
     assert "task-manager" not in serialized
 
 
+def test_product_profile_exposes_fixed_command_ownership_to_planning() -> None:
+    configuration = load_quality_gate_configuration(
+        REPOSITORY_ROOT / "configs" / "product-policy.json",
+        PROFILE_ROOT / "quality.json",
+    )
+
+    command_constraint = next(
+        constraint
+        for constraint in configuration.task_brief.constraints
+        if "sat-project.json" in constraint
+    )
+
+    assert '["uv", "sync", "--dev"]' in command_constraint
+    assert '["uv", "run", "pytest"]' in command_constraint
+    assert "replace only the start placeholder" in command_constraint
+
+
 def test_product_test_gate_matches_the_delivered_pytest_entrypoint() -> None:
     configuration = load_quality_gate_configuration(
         REPOSITORY_ROOT / "configs" / "product-policy.json",

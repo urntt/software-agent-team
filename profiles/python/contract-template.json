@@ -35,7 +35,8 @@
   ],
   "constraints": [
     "Use the supplied local Python 3.12 execution profile.",
-    "Do not require runtime network access or credentials."
+    "Do not require runtime network access or credentials.",
+    "Keep sat-project.json setup exactly [\"uv\", \"sync\", \"--dev\"] and test exactly [\"uv\", \"run\", \"pytest\"]; replace only the start placeholder with a project-specific argv beginning [\"uv\", \"run\"]."
   ],
   "assumptions": [
     "This template defines criterion IDs; each product run supplies user-confirmed content."

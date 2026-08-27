@@ -258,6 +258,8 @@ def test_dynamic_prompt_is_compiled_from_the_approved_agent_spec() -> None:
     assert request.model == "provider/model"
     assert "top-level user input" in rendered
     assert "unqualified prohibition" in rendered
+    assert "profile-owned setup and test command" in rendered
+    assert "TaskBrief constraints are authoritative" in rendered
     assert "documented setup command" in rendered
     assert "explicit ignore policy" in rendered
 

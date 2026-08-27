@@ -26,7 +26,10 @@ document a broader guarantee than the implementation and tests establish.
 The documented setup command must not leave unexplained untracked repository
 state. Commit reproducibility metadata when the workspace can generate it;
 otherwise preserve the execution profile's explicit ignore policy for local
-setup artifacts.
+setup artifacts. When the starter contains profile-owned setup and test command
+argv, preserve their exact values and change only the explicitly marked
+project-specific start placeholder. The TaskBrief constraints are authoritative
+for the concrete command values.
 
 Use the repository's own configuration when running checks. Commit all relevant
 changes, leave the workspace clean, and report only assigned task IDs that are

@@ -50,7 +50,7 @@ validation also rejects a plan whose complete planned iterations cannot fit
 its call budget. Recovery
 verifies the exact TaskBrief binding, TeamPlan digest, fixed manifest version,
 fixed team digest, resolved Agent timeouts, and cross-file run metadata. The
-complete repository check passes with 598 offline tests.
+complete repository check passes with 599 offline tests.
 
 `RunEvent` is also an executable, append-only contract. Every current workflow
 progress update is persisted with a contiguous sequence, lifecycle revision,
@@ -330,8 +330,12 @@ evidence; blocked assessments and blocking findings must reference the same
 criterion. Review can run bounded foreground probes against read-only source
 and `/tmp` fixtures in its no-network sandbox, without converting its
 self-directed result into controller-owned deterministic evidence. These are
-generic protocol and quality-boundary corrections. The full 598-test check
-passes; another fresh installed provider run remains required.
+generic protocol and quality-boundary corrections. The Python profile now also
+places its fixed setup and test argv in the controller-owned Planning
+constraints, and both the starter guidance and implementation prompt require
+the writer to preserve them while replacing only the project-specific start
+placeholder. The full 599-test check passes; another fresh installed provider
+run remains required.
 
 The rehearsal sequence below concerns the predecessor guided fixed-team
 product path and is retained as defect and regression evidence. It proves the
