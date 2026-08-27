@@ -6,12 +6,16 @@ from collections.abc import Callable, Mapping
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from datetime import UTC, datetime
 from enum import StrEnum
-from time import monotonic
+from time import monotonic, sleep
 from typing import Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from software_agent_team.artifacts import ArtifactReference
+from software_agent_team.runtime_controls import (
+    RuntimeControlChannel,
+    RuntimeControlDecision,
+)
 from software_agent_team.teams import AgentSpec, PermissionProfile, TeamPlan
 
 
@@ -20,6 +24,7 @@ class AgentRunStatus(StrEnum):
 
     COMPLETED = "completed"
     FAILED = "failed"
+    INTERRUPTED = "interrupted"
 
 
 class ScheduledAgentState(StrEnum):
@@ -28,6 +33,8 @@ class ScheduledAgentState(StrEnum):
     COMPLETED = "completed"
     FAILED = "failed"
     SKIPPED = "skipped"
+    INTERRUPTED = "interrupted"
+    CANCELLED = "cancelled"
 
 
 class ScheduleStatus(StrEnum):
@@ -35,6 +42,8 @@ class ScheduleStatus(StrEnum):
 
     COMPLETED = "completed"
     FAILED = "failed"
+    CANCELLED = "cancelled"
+    CORRECTION_REQUESTED = "correction_requested"
 
 
 class ScheduleEventKind(StrEnum):
@@ -46,6 +55,8 @@ class ScheduleEventKind(StrEnum):
     AGENT_COMPLETED = "agent_completed"
     AGENT_FAILED = "agent_failed"
     AGENT_SKIPPED = "agent_skipped"
+    AGENT_INTERRUPTED = "agent_interrupted"
+    AGENT_CANCELLED = "agent_cancelled"
 
 
 def _utc(value: datetime) -> datetime:
@@ -123,7 +134,10 @@ class ScheduledAgentRecord(BaseModel):
     @model_validator(mode="after")
     def validate_state_evidence(self) -> Self:
         timing = (self.started_at, self.finished_at, self.duration_ms)
-        if self.state is ScheduledAgentState.SKIPPED:
+        if self.state in {
+            ScheduledAgentState.SKIPPED,
+            ScheduledAgentState.CANCELLED,
+        }:
             if any(value is not None for value in timing):
                 raise ValueError("skipped Agents cannot contain execution timing")
             if self.output is not None or self.evidence:
@@ -168,6 +182,7 @@ class ScheduleEvent(BaseModel):
         terminal = self.kind in {
             ScheduleEventKind.AGENT_COMPLETED,
             ScheduleEventKind.AGENT_FAILED,
+            ScheduleEventKind.AGENT_INTERRUPTED,
         }
         if terminal != (self.duration_ms is not None):
             raise ValueError("scheduler duration must match an executed terminal event")
@@ -199,7 +214,8 @@ class DagScheduleResult(BaseModel):
         if set(self.completion_order) != {
             record.agent_id
             for record in self.records
-            if record.state is not ScheduledAgentState.SKIPPED
+            if record.state
+            not in {ScheduledAgentState.SKIPPED, ScheduledAgentState.CANCELLED}
         }:
             raise ValueError("completion order must cover every executed Agent")
         failed = [
@@ -207,16 +223,29 @@ class DagScheduleResult(BaseModel):
             for record in self.records
             if record.state is ScheduledAgentState.FAILED
         ]
+        interrupted = [
+            record.agent_id
+            for record in self.records
+            if record.state is ScheduledAgentState.INTERRUPTED
+        ]
         if self.status is ScheduleStatus.COMPLETED:
-            if failed or self.failed_agent_id is not None:
+            if failed or interrupted or self.failed_agent_id is not None:
                 raise ValueError("completed schedules cannot contain failures")
             if any(
                 record.state is not ScheduledAgentState.COMPLETED
                 for record in self.records
             ):
                 raise ValueError("completed schedules require every Agent to complete")
-        elif not failed or self.failed_agent_id not in failed:
-            raise ValueError("failed schedule identity must name a failed Agent")
+        elif self.status is ScheduleStatus.FAILED:
+            if not (failed or interrupted) or self.failed_agent_id not in {
+                *failed,
+                *interrupted,
+            }:
+                raise ValueError("failed schedule identity must name a failed Agent")
+        elif self.failed_agent_id is not None:
+            raise ValueError("controlled stops cannot claim a failed Agent identity")
+        elif self.status is ScheduleStatus.CORRECTION_REQUESTED and interrupted:
+            raise ValueError("cooperative correction cannot interrupt an Agent")
         return self
 
 
@@ -253,10 +282,18 @@ class DagScheduler:
         clock: Clock = _system_clock,
         monotonic_clock: MonotonicClock = monotonic,
         observer: ScheduleObserver | None = None,
+        control_channel: RuntimeControlChannel | None = None,
+        control_poll_seconds: float = 0.1,
+        control_waiter: Callable[[float], None] = sleep,
     ) -> None:
+        if control_poll_seconds <= 0:
+            raise ValueError("control polling interval must be positive")
         self.clock = clock
         self.monotonic_clock = monotonic_clock
         self.observer = observer
+        self.control_channel = control_channel
+        self.control_poll_seconds = control_poll_seconds
+        self.control_waiter = control_waiter
 
     def execute(
         self,
@@ -282,6 +319,7 @@ class DagScheduler:
             tuple[AgentSpec, datetime, float],
         ] = {}
         first_failure: str | None = None
+        controlled_stop: RuntimeControlDecision | None = None
         max_observed_concurrency = 0
 
         def emit(
@@ -352,7 +390,29 @@ class DagScheduler:
         ready_announced: set[str] = set()
         with ThreadPoolExecutor(max_workers=team_plan.max_concurrency) as executor:
             while pending or active:
-                if first_failure is None:
+                decision = RuntimeControlDecision.CONTINUE
+                if self.control_channel is not None:
+                    decision = self.control_channel.poll(
+                        active_agent_ids=tuple(
+                            agent.id for agent, _, _ in active.values()
+                        ),
+                        pending_agent_ids=tuple(
+                            agent.id
+                            for agent in team_plan.agents
+                            if agent.id in pending
+                        ),
+                    )
+                    if decision in {
+                        RuntimeControlDecision.CANCEL,
+                        RuntimeControlDecision.CORRECT,
+                    }:
+                        controlled_stop = decision
+                launches_allowed = (
+                    first_failure is None
+                    and controlled_stop is None
+                    and decision is RuntimeControlDecision.CONTINUE
+                )
+                if launches_allowed:
                     ready = [
                         agent
                         for agent in team_plan.agents
@@ -397,13 +457,42 @@ class DagScheduler:
                             len(active),
                         )
                 if not active:
+                    if controlled_stop is not None:
+                        if self.control_channel is not None:
+                            decision = self.control_channel.poll(
+                                active_agent_ids=(),
+                                pending_agent_ids=tuple(
+                                    agent.id
+                                    for agent in team_plan.agents
+                                    if agent.id in pending
+                                ),
+                            )
+                            if decision in {
+                                RuntimeControlDecision.CANCEL,
+                                RuntimeControlDecision.CORRECT,
+                            }:
+                                controlled_stop = decision
+                        break
+                    if decision is RuntimeControlDecision.HOLD:
+                        self.control_waiter(self.control_poll_seconds)
+                        continue
                     if pending and first_failure is None:
                         raise RuntimeError(
                             "approved TeamPlan has no schedulable ready Agent"
                         )
                     break
 
-                finished, _ = wait(tuple(active), return_when=FIRST_COMPLETED)
+                finished, _ = wait(
+                    tuple(active),
+                    timeout=(
+                        self.control_poll_seconds
+                        if self.control_channel is not None
+                        else None
+                    ),
+                    return_when=FIRST_COMPLETED,
+                )
+                if not finished:
+                    continue
                 for future in sorted(
                     finished,
                     key=lambda item: plan_order[active[item][0].id],
@@ -421,11 +510,17 @@ class DagScheduler:
                         state = ScheduledAgentState.COMPLETED
                         event_kind = ScheduleEventKind.AGENT_COMPLETED
                         error = None
-                    else:
+                    elif outcome.status is AgentRunStatus.FAILED:
                         state = ScheduledAgentState.FAILED
                         event_kind = ScheduleEventKind.AGENT_FAILED
                         error = outcome.error
-                        if first_failure is None:
+                        if first_failure is None and controlled_stop is None:
+                            first_failure = agent.id
+                    else:
+                        state = ScheduledAgentState.INTERRUPTED
+                        event_kind = ScheduleEventKind.AGENT_INTERRUPTED
+                        error = outcome.error
+                        if first_failure is None and controlled_stop is None:
                             first_failure = agent.id
                     records[agent.id] = ScheduledAgentRecord(
                         agent_id=agent.id,
@@ -451,7 +546,18 @@ class DagScheduler:
                     )
 
         if pending:
-            reason = f"Not started after Agent {first_failure} failed."
+            if controlled_stop is RuntimeControlDecision.CANCEL:
+                reason = "Not started because the user cancelled the run."
+                skipped_state = ScheduledAgentState.CANCELLED
+                skipped_event = ScheduleEventKind.AGENT_CANCELLED
+            elif controlled_stop is RuntimeControlDecision.CORRECT:
+                reason = "Not started because replacement Planning was requested."
+                skipped_state = ScheduledAgentState.SKIPPED
+                skipped_event = ScheduleEventKind.AGENT_SKIPPED
+            else:
+                reason = f"Not started after Agent {first_failure} failed."
+                skipped_state = ScheduledAgentState.SKIPPED
+                skipped_event = ScheduleEventKind.AGENT_SKIPPED
             for agent in team_plan.agents:
                 if agent.id not in pending:
                     continue
@@ -460,13 +566,13 @@ class DagScheduler:
                     capability=agent.capability.value,
                     stage_id=agent.stage_id,
                     dependencies=agent.dependencies,
-                    state=ScheduledAgentState.SKIPPED,
+                    state=skipped_state,
                     timeout_seconds=agent.timeout_seconds,
                     summary=reason,
                     error=reason,
                 )
                 emit(
-                    ScheduleEventKind.AGENT_SKIPPED,
+                    skipped_event,
                     agent.id,
                     reason,
                     active_count=0,
@@ -478,7 +584,11 @@ class DagScheduler:
             plan_id=team_plan.plan_id,
             iteration=iteration,
             status=(
-                ScheduleStatus.COMPLETED
+                ScheduleStatus.CANCELLED
+                if controlled_stop is RuntimeControlDecision.CANCEL
+                else ScheduleStatus.CORRECTION_REQUESTED
+                if controlled_stop is RuntimeControlDecision.CORRECT
+                else ScheduleStatus.COMPLETED
                 if first_failure is None
                 else ScheduleStatus.FAILED
             ),
@@ -486,7 +596,7 @@ class DagScheduler:
             events=tuple(events),
             completion_order=tuple(completion_order),
             max_observed_concurrency=max_observed_concurrency,
-            failed_agent_id=first_failure,
+            failed_agent_id=None if controlled_stop is not None else first_failure,
         )
 
     @staticmethod

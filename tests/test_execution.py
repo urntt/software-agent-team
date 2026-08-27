@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import subprocess
+import threading
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -440,6 +442,82 @@ def test_openclaw_adapter_records_launch_failure() -> None:
     assert result.status is AgentExecutionStatus.LAUNCH_FAILED
     assert result.telemetry.exit_code is None
     assert "/opt/openclaw" in result.telemetry.stderr
+
+
+def test_default_openclaw_process_can_be_interrupted_by_agent_identity(
+    tmp_path: Path,
+) -> None:
+    binary = tmp_path / "slow-openclaw"
+    binary.write_text(
+        "#!/usr/bin/env python3\nimport time\ntime.sleep(30)\n",
+        encoding="utf-8",
+    )
+    binary.chmod(0o700)
+    executor = OpenClawSubprocessExecutor(
+        openclaw_binary=binary,
+        process_grace_seconds=1,
+    )
+    observed: dict[str, object] = {}
+
+    def run() -> None:
+        observed["result"] = executor.execute(request())
+
+    worker = threading.Thread(target=run)
+    worker.start()
+    interrupted = 0
+    for _ in range(100):
+        interrupted = executor.interrupt("planner")
+        if interrupted:
+            break
+        time.sleep(0.01)
+    worker.join(timeout=5)
+
+    assert interrupted == 1
+    assert not worker.is_alive()
+    result = observed["result"]
+    assert result.status is AgentExecutionStatus.INTERRUPTED
+    assert result.telemetry.interrupted
+    assert result.telemetry.timed_out is False
+    assert executor.interrupt("planner") == 0
+
+
+def test_interrupt_escalates_when_the_process_ignores_termination(
+    tmp_path: Path,
+) -> None:
+    ready = tmp_path / "ready"
+    binary = tmp_path / "stubborn-openclaw"
+    binary.write_text(
+        "#!/usr/bin/env python3\n"
+        "import signal\n"
+        "import time\n"
+        "from pathlib import Path\n"
+        "signal.signal(signal.SIGTERM, lambda *_: None)\n"
+        f"Path({str(ready)!r}).write_text('ready')\n"
+        "time.sleep(30)\n",
+        encoding="utf-8",
+    )
+    binary.chmod(0o700)
+    executor = OpenClawSubprocessExecutor(
+        openclaw_binary=binary,
+        process_grace_seconds=1,
+    )
+    observed: dict[str, object] = {}
+    worker = threading.Thread(
+        target=lambda: observed.setdefault("result", executor.execute(request()))
+    )
+    worker.start()
+    for _ in range(100):
+        if ready.exists():
+            break
+        time.sleep(0.01)
+    assert ready.exists()
+
+    assert executor.interrupt("planner") == 1
+    worker.join(timeout=5)
+
+    assert not worker.is_alive()
+    result = observed["result"]
+    assert result.status is AgentExecutionStatus.INTERRUPTED
 
 
 def test_stable_session_key_is_deterministic_and_phase_scoped() -> None:

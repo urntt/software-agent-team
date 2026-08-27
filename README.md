@@ -79,6 +79,26 @@ revision and termination decisions. On success, SAT reports the delivered
 directory and exact setup, run, and test commands. On failure, it preserves an
 auditable report instead of presenting unfinished work as successful.
 
+While execution is active, the same terminal accepts optional slash commands:
+
+```text
+/guide <agent|future|phase:name> <instruction>
+/correct <replacement requirement>
+/pause
+/resume
+/interrupt <active-agent-id>
+/cancel confirm
+/visibility <compact|standard|detailed>
+/controls
+/help
+```
+
+Guidance applies only to a future invocation. Correction stops at a safe
+checkpoint, preserves the superseded run, and opens a new Planning overview for
+approval. Pause is cooperative; interrupt and cancel are best effort for an
+active provider call, so already-incurred usage may remain billable. Cancel is
+terminal and never delivers partial work.
+
 ## Configure a Model
 
 The first `sat` launch includes guided setup. You can repeat setup or inspect
@@ -134,7 +154,10 @@ yet supported. Adaptive Planning, plan approval, task-defined execution, and
 delivery are integrated in the normal `sat` path and covered offline. The same
 append-only event stream now drives configurable per-Agent progress, including
 dependency, provider-wait, repair, terminal, route, duration, and budget facts.
-Active run controls and multiple model routes remain under development.
+The foreground control palette, live visibility changes, prospective guidance,
+replacement Planning, cooperative pause/resume, best-effort interruption, and
+terminal cancellation are integrated and covered offline. Durable resume after
+a process restart and multiple model routes remain under development.
 
 The earlier guided fixed-team path passed a complete live-provider rehearsal
 in a fresh non-root Linux account, including accepted delivery, exact project

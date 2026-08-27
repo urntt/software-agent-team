@@ -55,6 +55,22 @@ from software_agent_team.budgets import (
     AgentCallReservation,
     ModelPricing,
 )
+from software_agent_team.control_console import (
+    ControlConsoleError,
+    TerminalControlConsole,
+    control_help,
+    submit_control_line,
+)
+from software_agent_team.controls import (
+    ControlApplicationBoundary,
+    ControlCommand,
+    ControlCommandError,
+    ControlCommandStatus,
+    ControlCommandStore,
+    ControlCommandType,
+    ControlTarget,
+    ControlTargetKind,
+)
 from software_agent_team.dynamic_runner import (
     DynamicAgentRunner,
     DynamicAgentRunnerError,
@@ -129,6 +145,7 @@ from software_agent_team.prompting import (
     DynamicAgentPromptInputs,
     DynamicRevisionFeedback,
     DynamicUpstreamResult,
+    DynamicUserGuidance,
     build_agent_execution_request,
     build_dynamic_agent_execution_request,
     build_semantic_repair_request,
@@ -189,6 +206,10 @@ from software_agent_team.runtime_configuration import (
     materialize_run_configuration,
     persist_runtime_preflight,
     probe_sandbox_runtime,
+)
+from software_agent_team.runtime_controls import (
+    RuntimeControlChannel,
+    RuntimeControlDecision,
 )
 from software_agent_team.scheduling import (
     AgentRunOutcome,
@@ -273,6 +294,15 @@ __all__ = [
     "CapabilityTimeoutPolicy",
     "CheckStatus",
     "CommandEvidence",
+    "ControlApplicationBoundary",
+    "ControlCommand",
+    "ControlCommandError",
+    "ControlCommandStatus",
+    "ControlCommandStore",
+    "ControlCommandType",
+    "ControlConsoleError",
+    "ControlTarget",
+    "ControlTargetKind",
     "CriterionResult",
     "DagScheduleResult",
     "DagScheduler",
@@ -284,6 +314,7 @@ __all__ = [
     "DynamicQualityGateFactory",
     "DynamicRevisionFeedback",
     "DynamicUpstreamResult",
+    "DynamicUserGuidance",
     "DynamicWorkflowCoordinator",
     "DynamicWorkflowError",
     "DynamicWorkflowOutcome",
@@ -352,6 +383,8 @@ __all__ = [
     "RunStore",
     "RunTransition",
     "RuntimeConfigurationError",
+    "RuntimeControlChannel",
+    "RuntimeControlDecision",
     "RuntimePreflight",
     "SandboxImageInspection",
     "SandboxRuntimeProbe",
@@ -374,6 +407,7 @@ __all__ = [
     "TeamPlan",
     "TeamPlanOrigin",
     "TeamStage",
+    "TerminalControlConsole",
     "TerminationReason",
     "TestReport",
     "TestReportResponse",
@@ -393,6 +427,7 @@ __all__ = [
     "build_dynamic_agent_execution_request",
     "build_semantic_repair_request",
     "capability_for_legacy_role",
+    "control_help",
     "expected_output_for_capability",
     "has_model_compatibility",
     "inspect_openclaw_model",
@@ -419,6 +454,7 @@ __all__ = [
     "run_interactive_planning",
     "stable_agent_session_key",
     "stable_session_key",
+    "submit_control_line",
     "validate_artifact_context",
     "validate_verification_assignment",
     "validate_work_result_snapshot",

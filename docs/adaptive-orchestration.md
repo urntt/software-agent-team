@@ -6,8 +6,10 @@ controls, and model routing. Planning, run-scoped execution identity, prompts,
 runtime configuration, handoffs, telemetry, Agent-namespaced artifact
 persistence, deterministic DAG scheduling, multi-iteration lifecycle
 convergence, bare-`sat` activation, and configurable per-Agent progress are
-implemented and offline verified. Active controls and multi-model routing
-remain staged work.
+implemented and offline verified. The foreground control channel is also
+implemented and offline verified; its provider-backed rehearsal and durable
+process-restart recovery remain pending. Multi-model routing remains staged
+work.
 Current behavior and gaps remain authoritative in
 [`STATUS.md`](../STATUS.md); the completed guided baseline remains specified in
 [`product-demo-slice.md`](product-demo-slice.md).
@@ -342,9 +344,25 @@ changing an already approved plan.
 ## User Controls
 
 The controller owns a local authenticated control mailbox. The foreground TTY
-can expose a command palette; a later secondary `sat` process may submit the
-same commands to a running controller. Presentation may evolve, but these
-semantics remain stable:
+exposes the following line-mode palette after plan approval:
+
+```text
+/guide <agent|future|phase:name> <instruction>
+/correct <replacement requirement>
+/pause
+/resume
+/interrupt <active-agent-id>
+/cancel confirm
+/visibility <compact|standard|detailed>
+/controls
+/help
+```
+
+Each accepted command is written before the controller applies it. Request
+ordering uses a controller-assigned mailbox sequence rather than timestamp or
+random command-ID ordering. A later secondary `sat` process may submit the same
+contract, but that secondary-process interface is not implemented yet.
+Presentation may evolve, but these semantics remain stable:
 
 ### Guide
 
@@ -524,8 +542,17 @@ at least guidance and cooperative pause/resume without losing integrity.
 readiness, invocation and provider wait, bounded semantic repair, completion,
 failure, and blocked states with Agent dependencies, capability, stage, model,
 duration, evidence, and aggregate budget data. Configuration schema v5 selects
-compact, standard, or detailed terminal projection. Active control application
-and live visibility switching remain in this batch.
+compact, standard, or detailed terminal projection. The foreground palette can
+change that projection without changing execution. Its persisted runtime
+channel applies prospective guidance to the next invocation, drains active work
+for safe correction and pause checkpoints, resumes cooperatively, sends
+best-effort process-group termination for interrupt or cancel, and records
+provider-cost caveats. Correction produces a cancelled superseded-run report
+and starts a fresh Planning request with the user's correction preserved;
+cancel produces a terminal cancellation report and the existing exact-owned
+sandbox cleanup still runs. Offline unit and end-to-end tests cover these
+semantics. Provider-backed guidance/pause rehearsal, process-crash recovery,
+and a secondary-process control client remain in this batch.
 
 ### Batch 3E: Model Profiles and Routing
 

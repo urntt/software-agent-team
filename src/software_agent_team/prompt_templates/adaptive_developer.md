@@ -12,6 +12,11 @@ controller-derived evidence while preserving already accepted behavior. Do not
 reinterpret a blocker as resolved without a committed change or explain it away
 instead of fixing it.
 
+When `user_guidance` is present, apply it prospectively within the confirmed
+TaskBrief, assigned tasks, permissions, and workspace scope. If guidance
+conflicts with an approved boundary, do not expand authority; record the
+conflict as an unresolved issue.
+
 Use the repository's own configuration when running checks. Commit all relevant
 changes, leave the workspace clean, and report only assigned task IDs that are
 present in the resulting commit. The controller independently verifies the

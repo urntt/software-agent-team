@@ -26,6 +26,32 @@ from software_agent_team.user_configuration import (
 REPOSITORY_ROOT = Path(__file__).parents[1]
 
 
+def test_replacement_planning_request_preserves_scope_and_versions_correction() -> None:
+    original = cli.PlanningRequest(
+        run_id="sat-original",
+        project_name="link-checker",
+        source_request="Build a Markdown link checker.",
+        destination="/tmp/link-checker",
+        execution_profile=("A small Python project.",),
+        base_constraints=("Do not use network access.",),
+        model="provider/model",
+        authorization="user_confirmed",
+        authorized_at=datetime(2026, 8, 27, 12, 0, tzinfo=UTC),
+    )
+
+    replacement = cli._replacement_planning_request(
+        original,
+        run_id="sat-replacement",
+        correction_instruction="Support remote HTTPS links as well.",
+    )
+
+    assert replacement.run_id == "sat-replacement"
+    assert replacement.source_request == original.source_request
+    assert replacement.destination == original.destination
+    assert replacement.base_constraints[:-1] == original.base_constraints
+    assert "Support remote HTTPS links as well." in replacement.base_constraints[-1]
+
+
 def test_cli_no_command_requires_an_interactive_terminal(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -86,12 +112,19 @@ def test_cli_no_command_runs_the_guided_product_journey(
         observed["planning_kwargs"] = kwargs
         return approved
 
-    def fake_execute(supplied: object, options: object) -> SimpleNamespace:
+    def fake_execute(
+        supplied: object,
+        options: object,
+        **kwargs: object,
+    ) -> SimpleNamespace:
         observed["approved"] = supplied
         observed["options"] = options
+        observed["execution_kwargs"] = kwargs
         return SimpleNamespace(
             final_report=SimpleNamespace(path="final-report.json", sha256="a" * 64),
+            control_stop=None,
             record=SimpleNamespace(
+                run_id=observed["planning_request"].run_id,
                 phase=RunPhase.COMPLETED,
                 workspace=SimpleNamespace(workspace_path=str(workspace)),
                 current_commit="a" * 40,

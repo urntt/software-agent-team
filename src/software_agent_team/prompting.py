@@ -131,6 +131,23 @@ class DynamicRevisionFeedback(BaseModel):
         return self
 
 
+class DynamicUserGuidance(BaseModel):
+    """One persisted user instruction authorized for prospective Agent work."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    command_id: str = Field(pattern=r"^ctl-[a-z0-9][a-z0-9-]*$")
+    instruction: str = Field(min_length=1, max_length=2_000)
+
+    @field_validator("instruction")
+    @classmethod
+    def require_clean_instruction(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned or "\x00" in cleaned:
+            raise ValueError("dynamic user guidance must contain safe text")
+        return cleaned
+
+
 class DynamicAgentPromptInputs(BaseModel):
     """Validated minimum context for one approved run-scoped AgentSpec."""
 
@@ -147,6 +164,7 @@ class DynamicAgentPromptInputs(BaseModel):
     command_evidence: tuple[CommandEvidence, ...] = ()
     manual_review_criteria: tuple[str, ...] = ()
     revision_feedback: DynamicRevisionFeedback | None = None
+    user_guidance: tuple[DynamicUserGuidance, ...] = ()
 
     @field_validator("upstream_results")
     @classmethod
@@ -177,6 +195,17 @@ class DynamicAgentPromptInputs(BaseModel):
         if any(not value for value in cleaned) or len(cleaned) != len(set(cleaned)):
             raise ValueError("manual criterion IDs must be non-empty and unique")
         return cleaned
+
+    @field_validator("user_guidance")
+    @classmethod
+    def require_unique_guidance(
+        cls,
+        values: tuple[DynamicUserGuidance, ...],
+    ) -> tuple[DynamicUserGuidance, ...]:
+        command_ids = [value.command_id for value in values]
+        if len(command_ids) != len(set(command_ids)):
+            raise ValueError("dynamic prompt cannot repeat user guidance")
+        return values
 
     @model_validator(mode="after")
     def validate_dynamic_context(self) -> Self:
@@ -692,6 +721,10 @@ def _dynamic_prompt_context(inputs: DynamicAgentPromptInputs) -> dict[str, objec
     }
     if inputs.revision_feedback is not None:
         context["revision_feedback"] = inputs.revision_feedback.model_dump(mode="json")
+    if inputs.user_guidance:
+        context["user_guidance"] = [
+            item.model_dump(mode="json") for item in inputs.user_guidance
+        ]
     if agent.capability in {AgentCapability.TESTING, AgentCapability.REVIEW}:
         context["source_snapshot"] = {
             "access": "read_only",

@@ -97,6 +97,7 @@ class FinalStatus(StrEnum):
 
     COMPLETED = "completed"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 IMPLEMENTATION_ROLES = {

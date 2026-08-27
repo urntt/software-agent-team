@@ -11,6 +11,7 @@ import pytest
 
 from software_agent_team.artifacts import ArtifactKind, ArtifactReference
 from software_agent_team.budgets import AgentBudget
+from software_agent_team.runtime_controls import RuntimeControlDecision
 from software_agent_team.scheduling import (
     AgentRunOutcome,
     AgentRunStatus,
@@ -517,3 +518,145 @@ def test_scheduler_bounds_multiline_agent_summaries_before_observer_delivery() -
 
     assert len(completed.message) == 500
     assert "\n" not in completed.message
+
+
+class _ControlSequence:
+    """Small duck-typed scheduler control channel for deterministic tests."""
+
+    def __init__(self, *decisions: RuntimeControlDecision) -> None:
+        self.decisions = list(decisions)
+        self.checkpoints: list[tuple[tuple[str, ...], tuple[str, ...]]] = []
+
+    def poll(
+        self,
+        *,
+        active_agent_ids: tuple[str, ...],
+        pending_agent_ids: tuple[str, ...],
+    ) -> RuntimeControlDecision:
+        self.checkpoints.append((active_agent_ids, pending_agent_ids))
+        if self.decisions:
+            return self.decisions.pop(0)
+        return RuntimeControlDecision.CONTINUE
+
+
+def test_scheduler_does_not_launch_new_work_while_cooperatively_paused() -> None:
+    plan = team_plan(
+        (
+            agent("feature_builder", AgentCapability.IMPLEMENTATION),
+            agent(
+                "quality_auditor",
+                AgentCapability.TESTING,
+                dependencies=("feature_builder",),
+            ),
+        ),
+        max_concurrency=1,
+    )
+    controls = _ControlSequence(
+        RuntimeControlDecision.HOLD,
+        RuntimeControlDecision.CONTINUE,
+    )
+    waits: list[float] = []
+
+    result = DagScheduler(
+        clock=lambda: NOW,
+        control_channel=controls,  # type: ignore[arg-type]
+        control_poll_seconds=0.01,
+        control_waiter=waits.append,
+    ).execute(plan, lambda spec, upstream: successful_outcome(spec))
+
+    assert result.status is ScheduleStatus.COMPLETED
+    assert waits == [0.01]
+    assert controls.checkpoints[0] == (
+        (),
+        ("feature_builder", "quality_auditor"),
+    )
+
+
+def test_scheduler_cancellation_marks_every_unstarted_agent_cancelled() -> None:
+    plan = team_plan(
+        (
+            agent("feature_builder", AgentCapability.IMPLEMENTATION),
+            agent(
+                "quality_auditor",
+                AgentCapability.TESTING,
+                dependencies=("feature_builder",),
+            ),
+        ),
+        max_concurrency=1,
+    )
+    controls = _ControlSequence(RuntimeControlDecision.CANCEL)
+
+    result = DagScheduler(
+        clock=lambda: NOW,
+        control_channel=controls,  # type: ignore[arg-type]
+    ).execute(plan, lambda spec, upstream: successful_outcome(spec))
+
+    assert result.status is ScheduleStatus.CANCELLED
+    assert result.completion_order == ()
+    assert all(
+        record.state is ScheduledAgentState.CANCELLED for record in result.records
+    )
+    assert [event.kind for event in result.events][-2:] == [
+        ScheduleEventKind.AGENT_CANCELLED,
+        ScheduleEventKind.AGENT_CANCELLED,
+    ]
+
+
+def test_scheduler_correction_drains_started_work_and_skips_future_work() -> None:
+    plan = team_plan(
+        (
+            agent("feature_builder", AgentCapability.IMPLEMENTATION),
+            agent(
+                "quality_auditor",
+                AgentCapability.TESTING,
+                dependencies=("feature_builder",),
+            ),
+        ),
+        max_concurrency=1,
+    )
+    controls = _ControlSequence(
+        RuntimeControlDecision.CONTINUE,
+        RuntimeControlDecision.CORRECT,
+    )
+
+    result = DagScheduler(
+        clock=lambda: NOW,
+        control_channel=controls,  # type: ignore[arg-type]
+        control_poll_seconds=0.01,
+    ).execute(plan, lambda spec, upstream: successful_outcome(spec))
+
+    assert result.status is ScheduleStatus.CORRECTION_REQUESTED
+    assert result.records[0].state is ScheduledAgentState.COMPLETED
+    assert result.records[1].state is ScheduledAgentState.SKIPPED
+
+
+def test_scheduler_preserves_an_interrupted_agent_as_distinct_evidence() -> None:
+    plan = team_plan(
+        (
+            agent("feature_builder", AgentCapability.IMPLEMENTATION),
+            agent(
+                "quality_auditor",
+                AgentCapability.TESTING,
+                dependencies=("feature_builder",),
+            ),
+        ),
+        max_concurrency=1,
+    )
+
+    result = DagScheduler(clock=lambda: NOW).execute(
+        plan,
+        lambda spec, upstream: AgentRunOutcome(
+            agent_id=spec.id,
+            status=AgentRunStatus.INTERRUPTED,
+            summary="The invocation was interrupted.",
+            error="user interrupt",
+        ),
+    )
+
+    assert result.status is ScheduleStatus.FAILED
+    assert result.failed_agent_id == "feature_builder"
+    assert result.records[0].state is ScheduledAgentState.INTERRUPTED
+    assert result.records[1].state is ScheduledAgentState.SKIPPED
+    assert any(
+        event.kind is ScheduleEventKind.AGENT_INTERRUPTED for event in result.events
+    )

@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import subprocess
 import tempfile
+import threading
 import time
 from collections import deque
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -57,6 +59,7 @@ class AgentExecutionStatus(StrEnum):
     TIMED_OUT = "timed_out"
     INVALID_RESPONSE = "invalid_response"
     LAUNCH_FAILED = "launch_failed"
+    INTERRUPTED = "interrupted"
 
 
 def validate_role_artifact_kind(role: AgentRole, kind: ArtifactKind) -> None:
@@ -221,6 +224,7 @@ class AgentExecutionTelemetry(BaseModel):
     openclaw_duration_ms: int | None = Field(default=None, ge=0)
     exit_code: int | None = None
     timed_out: bool = False
+    interrupted: bool = False
     stdout: str = ""
     stderr: str = ""
     openclaw_run_id: str | None = None
@@ -288,6 +292,8 @@ class AgentExecutionTelemetry(BaseModel):
                 "timed-out Agent executions require no exit code or a zero "
                 "OpenClaw wrapper exit"
             )
+        if self.timed_out and self.interrupted:
+            raise ValueError("an Agent execution cannot be timed out and interrupted")
         return self
 
 
@@ -336,6 +342,13 @@ class AgentExecutionResult(BaseModel):
                 raise ValueError("timed-out result requires timed-out telemetry")
         elif self.telemetry.timed_out:
             raise ValueError("only timed-out results may contain timed-out telemetry")
+        if self.status is AgentExecutionStatus.INTERRUPTED:
+            if not self.telemetry.interrupted:
+                raise ValueError("interrupted result requires interrupted telemetry")
+        elif self.telemetry.interrupted:
+            raise ValueError(
+                "only interrupted results may contain interrupted telemetry"
+            )
         return self
 
 
@@ -491,6 +504,7 @@ def _parse_openclaw_payload(stdout: str) -> _OpenClawResponse:
 WallClock = Callable[[], datetime]
 MonotonicClock = Callable[[], float]
 ProcessRunner = Callable[..., subprocess.CompletedProcess[str]]
+ActiveProcess = tuple[AgentExecutionRequest, subprocess.Popen[str]]
 
 
 def _system_clock() -> datetime:
@@ -515,7 +529,7 @@ class OpenClawSubprocessExecutor:
         environment: Mapping[str, str] | None = None,
         local: bool = True,
         process_grace_seconds: int = 35,
-        runner: ProcessRunner = subprocess.run,
+        runner: ProcessRunner | None = None,
         clock: WallClock = _system_clock,
         monotonic: MonotonicClock = time.monotonic,
     ) -> None:
@@ -531,6 +545,9 @@ class OpenClawSubprocessExecutor:
         self.runner = runner
         self.clock = clock
         self.monotonic = monotonic
+        self._process_lock = threading.Lock()
+        self._active_processes: dict[str, ActiveProcess] = {}
+        self._interrupt_requests: set[str] = set()
 
     def execute(self, request: AgentExecutionRequest) -> AgentExecutionResult:
         """Run ``openclaw agent`` and retain all process and usage evidence."""
@@ -543,18 +560,25 @@ class OpenClawSubprocessExecutor:
             prompt_path.chmod(0o600)
             command = self._command(request, prompt_path)
             try:
-                completed = self.runner(
-                    list(command),
-                    check=False,
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    timeout=request.timeout_seconds + self.process_grace_seconds,
-                    shell=False,
-                    stdin=subprocess.DEVNULL,
-                    env=self._environment(),
-                )
+                if self.runner is None:
+                    completed, interrupted = self._run_interruptible_process(
+                        request,
+                        command,
+                    )
+                else:
+                    completed = self.runner(
+                        list(command),
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
+                        timeout=request.timeout_seconds + self.process_grace_seconds,
+                        shell=False,
+                        stdin=subprocess.DEVNULL,
+                        env=self._environment(),
+                    )
+                    interrupted = False
             except subprocess.TimeoutExpired as error:
                 return self._timeout_result(
                     request=request,
@@ -574,6 +598,16 @@ class OpenClawSubprocessExecutor:
 
         stdout = _decode_process_output(completed.stdout)
         stderr = _decode_process_output(completed.stderr)
+        if interrupted:
+            return self._interrupted_result(
+                request=request,
+                command=command,
+                started_at=started_at,
+                started_monotonic=started_monotonic,
+                exit_code=completed.returncode,
+                stdout=stdout,
+                stderr=stderr,
+            )
         if completed.returncode != 0:
             telemetry = self._telemetry(
                 request=request,
@@ -649,6 +683,125 @@ class OpenClawSubprocessExecutor:
             telemetry=telemetry,
         )
 
+    def interrupt(self, agent_id: str) -> int:
+        """Request best-effort termination of active calls for one Agent."""
+
+        with self._process_lock:
+            matches = [
+                (session_key, process)
+                for session_key, (request, process) in self._active_processes.items()
+                if request.agent_id == agent_id and process.poll() is None
+            ]
+            self._interrupt_requests.update(session_key for session_key, _ in matches)
+        for _, process in matches:
+            self._request_process_termination(process)
+        return len(matches)
+
+    def interrupt_all(self) -> int:
+        """Request best-effort termination of every active SAT-owned call."""
+
+        with self._process_lock:
+            matches = [
+                (session_key, process)
+                for session_key, (_, process) in self._active_processes.items()
+                if process.poll() is None
+            ]
+            self._interrupt_requests.update(session_key for session_key, _ in matches)
+        for _, process in matches:
+            self._request_process_termination(process)
+        return len(matches)
+
+    def _run_interruptible_process(
+        self,
+        request: AgentExecutionRequest,
+        command: tuple[str, ...],
+    ) -> tuple[subprocess.CompletedProcess[str], bool]:
+        """Run one process whose exact session may be interrupted by control input."""
+
+        process = subprocess.Popen(
+            list(command),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            shell=False,
+            stdin=subprocess.DEVNULL,
+            env=self._environment(),
+            start_new_session=os.name == "posix",
+        )
+        with self._process_lock:
+            self._active_processes[request.session_key] = (request, process)
+        timeout = request.timeout_seconds + self.process_grace_seconds
+        try:
+            try:
+                stdout, stderr = process.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired as error:
+                self._signal_process(process)
+                try:
+                    stdout, stderr = process.communicate(
+                        timeout=min(5, self.process_grace_seconds)
+                    )
+                except subprocess.TimeoutExpired:
+                    self._kill_process(process)
+                    stdout, stderr = process.communicate()
+                raise subprocess.TimeoutExpired(
+                    command,
+                    timeout,
+                    output=stdout or error.output,
+                    stderr=stderr or error.stderr,
+                ) from error
+        finally:
+            with self._process_lock:
+                self._active_processes.pop(request.session_key, None)
+                interrupted = request.session_key in self._interrupt_requests
+                self._interrupt_requests.discard(request.session_key)
+        return (
+            subprocess.CompletedProcess(
+                list(command),
+                process.returncode,
+                stdout=stdout,
+                stderr=stderr,
+            ),
+            interrupted,
+        )
+
+    @staticmethod
+    def _signal_process(process: subprocess.Popen[str]) -> None:
+        if process.poll() is not None:
+            return
+        try:
+            if os.name == "posix":
+                os.killpg(process.pid, signal.SIGTERM)
+            else:
+                process.terminate()
+        except (OSError, ProcessLookupError):
+            return
+
+    @staticmethod
+    def _kill_process(process: subprocess.Popen[str]) -> None:
+        if process.poll() is not None:
+            return
+        try:
+            if os.name == "posix":
+                os.killpg(process.pid, signal.SIGKILL)
+            else:
+                process.kill()
+        except (OSError, ProcessLookupError):
+            return
+
+    def _request_process_termination(self, process: subprocess.Popen[str]) -> None:
+        """Send termination now and bounded escalation if the process ignores it."""
+
+        self._signal_process(process)
+        escalation = threading.Timer(
+            min(5, self.process_grace_seconds),
+            self._kill_process,
+            args=(process,),
+        )
+        escalation.daemon = True
+        escalation.start()
+
     def _command(
         self,
         request: AgentExecutionRequest,
@@ -689,6 +842,7 @@ class OpenClawSubprocessExecutor:
         stdout: str,
         stderr: str,
         timed_out: bool = False,
+        interrupted: bool = False,
         payload: _OpenClawResponse | None = None,
     ) -> AgentExecutionTelemetry:
         finished_at = self.clock()
@@ -705,6 +859,7 @@ class OpenClawSubprocessExecutor:
             openclaw_duration_ms=None if payload is None else payload.duration_ms,
             exit_code=exit_code,
             timed_out=timed_out,
+            interrupted=interrupted,
             stdout=stdout,
             stderr=stderr,
             openclaw_run_id=None if payload is None else payload.openclaw_run_id,
@@ -736,6 +891,33 @@ class OpenClawSubprocessExecutor:
         return AgentExecutionResult(
             status=AgentExecutionStatus.TIMED_OUT,
             error=f"OpenClaw exceeded the process timeout of {error.timeout} seconds",
+            telemetry=telemetry,
+        )
+
+    def _interrupted_result(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        command: tuple[str, ...],
+        started_at: datetime,
+        started_monotonic: float,
+        exit_code: int | None,
+        stdout: str,
+        stderr: str,
+    ) -> AgentExecutionResult:
+        telemetry = self._telemetry(
+            request=request,
+            command=command,
+            started_at=started_at,
+            started_monotonic=started_monotonic,
+            exit_code=exit_code,
+            interrupted=True,
+            stdout=stdout,
+            stderr=stderr,
+        )
+        return AgentExecutionResult(
+            status=AgentExecutionStatus.INTERRUPTED,
+            error="Agent invocation was interrupted by user control",
             telemetry=telemetry,
         )
 

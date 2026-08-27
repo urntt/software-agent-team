@@ -21,7 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from software_agent_team.integrity import canonical_model_sha256
 from software_agent_team.run_control import RunPhase
 
-CONTROL_COMMAND_SCHEMA_VERSION = 1
+CONTROL_COMMAND_SCHEMA_VERSION = 2
 CONTROLS_DIRECTORY = "controls"
 CONTROL_ID_PATTERN = re.compile(r"^ctl-[a-z0-9][a-z0-9-]*$")
 CONTROL_REVISION_FILENAME_PATTERN = re.compile(r"^(?P<revision>[0-9]{6})\.json$")
@@ -141,6 +141,7 @@ class ControlCommand(BaseModel):
     )
     command_id: str = Field(pattern=r"^ctl-[a-z0-9][a-z0-9-]*$")
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
+    request_sequence: int = Field(ge=1)
     revision: int = Field(ge=1, le=99)
     requested_at: datetime
     updated_at: datetime
@@ -346,20 +347,28 @@ class ControlCommandStore:
     ) -> ControlCommand:
         """Persist one queued request without applying it to execution."""
 
-        requested_at = _require_utc(self.clock())
-        record = ControlCommand(
-            command_id=command_id or new_control_command_id(),
-            run_id=self.run_id,
-            revision=1,
-            requested_at=requested_at,
-            updated_at=requested_at,
-            command=command,
-            instruction=instruction,
-            target=target,
-            application_boundary=application_boundary,
-            status=ControlCommandStatus.QUEUED,
-        )
         with self._thread_lock, _exclusive_lock(self.controls_directory / ".lock"):
+            entries = self._validated_command_directories_unlocked()
+            histories = [self._load_unlocked(path.name) for path in entries]
+            sequences = sorted(history[0].request_sequence for history in histories)
+            if sequences != list(range(1, len(sequences) + 1)):
+                raise ControlCommandError(
+                    "control mailbox request sequences must be contiguous"
+                )
+            requested_at = _require_utc(self.clock())
+            record = ControlCommand(
+                command_id=command_id or new_control_command_id(),
+                run_id=self.run_id,
+                request_sequence=len(sequences) + 1,
+                revision=1,
+                requested_at=requested_at,
+                updated_at=requested_at,
+                command=command,
+                instruction=instruction,
+                target=target,
+                application_boundary=application_boundary,
+                status=ControlCommandStatus.QUEUED,
+            )
             command_directory = self.controls_directory / record.command_id
             if command_directory.exists():
                 raise ControlCommandError(
@@ -443,24 +452,36 @@ class ControlCommandStore:
         """Return the verified latest revision of every requested command."""
 
         with self._thread_lock, _exclusive_lock(self.controls_directory / ".lock"):
-            entries = sorted(
+            entries = self._validated_command_directories_unlocked()
+            command_ids = [path.name for path in entries]
+            latest = tuple(
+                self._load_unlocked(command_id)[-1] for command_id in command_ids
+            )
+            ordered = tuple(sorted(latest, key=lambda item: item.request_sequence))
+            if [item.request_sequence for item in ordered] != list(
+                range(1, len(ordered) + 1)
+            ):
+                raise ControlCommandError(
+                    "control mailbox request sequences must be contiguous"
+                )
+            return ordered
+
+    def _validated_command_directories_unlocked(self) -> tuple[Path, ...]:
+        entries = tuple(
+            sorted(
                 path
                 for path in self.controls_directory.iterdir()
                 if not path.name.startswith(".")
             )
-            for path in entries:
-                if (
-                    path.is_symlink()
-                    or not path.is_dir()
-                    or CONTROL_ID_PATTERN.fullmatch(path.name) is None
-                ):
-                    raise ControlCommandError(
-                        "control mailbox contains an invalid entry"
-                    )
-            command_ids = [path.name for path in entries]
-            return tuple(
-                self._load_unlocked(command_id)[-1] for command_id in command_ids
-            )
+        )
+        for path in entries:
+            if (
+                path.is_symlink()
+                or not path.is_dir()
+                or CONTROL_ID_PATTERN.fullmatch(path.name) is None
+            ):
+                raise ControlCommandError("control mailbox contains an invalid entry")
+        return entries
 
     def _load_unlocked(self, command_id: str) -> tuple[ControlCommand, ...]:
         command_directory = self.controls_directory / command_id
@@ -502,6 +523,7 @@ class ControlCommandStore:
                 immutable_fields = (
                     "command_id",
                     "run_id",
+                    "request_sequence",
                     "requested_at",
                     "requester",
                     "command",

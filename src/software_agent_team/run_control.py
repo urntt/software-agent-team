@@ -106,6 +106,9 @@ class TerminationReason(StrEnum):
     NO_RELEVANT_CHANGE = "no_relevant_change"
     EXECUTION_FAILED = "execution_failed"
     CONTROLLER_ERROR = "controller_error"
+    USER_INTERRUPTED = "user_interrupted"
+    USER_CANCELLED = "user_cancelled"
+    USER_CORRECTION_REQUESTED = "user_correction_requested"
 
 
 _LEGAL_NEXT_PHASES: dict[RunPhase, frozenset[RunPhase]] = {

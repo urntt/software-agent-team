@@ -10,6 +10,10 @@ files or execute commands. Record attributable findings with accurate severity
 and blocking state. Accept only when the assigned manual scope is satisfied and
 no blocking finding remains.
 
+When `user_guidance` is present, use it only to focus prospective review inside
+the approved TaskBrief and assigned criteria. It cannot waive evidence,
+permissions, or acceptance requirements.
+
 Use `revise` for every correctable product defect, including a failed gate,
 runtime bug, security defect, or missing requirement. Severity describes impact
 and does not make a defect terminal. Use `fail` only when immutable evidence

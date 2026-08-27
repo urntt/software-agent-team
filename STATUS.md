@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** Phase 3D per-Agent progress implemented and offline verified; active controls are next
+**Current milestone:** Phase 3D foreground controls implemented and offline verified; provider-backed rehearsal is next
 
 **Last updated:** August 27, 2026
 
@@ -50,7 +50,7 @@ validation also rejects a plan whose complete planned iterations cannot fit
 its call budget. Recovery
 verifies the exact TaskBrief binding, TeamPlan digest, fixed manifest version,
 fixed team digest, resolved Agent timeouts, and cross-file run metadata. The
-complete repository check passes with 532 offline tests.
+complete repository check passes with 554 offline tests.
 
 `RunEvent` is also an executable, append-only contract. Every current workflow
 progress update is persisted with a contiguous sequence, lifecycle revision,
@@ -67,10 +67,14 @@ the selected visibility without changing execution, and bare `sat` applies it
 to the product renderer; standard remains the default.
 
 `ControlCommand` and its controller-owned revision store define and preserve
-the request, target, safe application boundary, status, consequence, plan or
-lifecycle result, and provider-cost caveat for guide, correct, pause, resume,
-interrupt, and cancel. This is a persistence boundary, not a claim that the
-normal CLI can apply controls yet.
+the request, target, controller-assigned mailbox sequence, safe application
+boundary, status, consequence, plan or lifecycle result, and provider-cost
+caveat for guide, correct, pause, resume, interrupt, and cancel. The normal CLI
+now exposes those commands through a foreground slash-command palette. The
+dynamic scheduler polls the mailbox, stops new launches at cooperative
+boundaries, applies guidance to the next invocation, and requests best-effort
+termination only for exact SAT-owned OpenClaw process groups. Every receipt and
+resolution is correlated to its command revision and digest in `RunEvent`.
 
 The Phase 3B Planning engine is also implemented. A versioned `PlanningRequest`
 proves explicit model-work authorization before the first invocation. The
@@ -185,9 +189,13 @@ overview, prepares an execution source only after approval, materializes only
 the approved run-scoped Agents, executes the dynamic lifecycle, cleans both
 bootstrap and execution sandboxes, and uses the existing accepted-result
 delivery boundary. It cannot approve a dynamic plan and silently execute the
-old fixed team. Safe concurrent writers beyond the current serialized Git
-chain, safe plan amendment checkpoints, live visibility switching, and active
-control application remain pending.
+old fixed team. During execution it accepts live visibility changes,
+prospective guidance, cooperative pause/resume, best-effort Agent interruption,
+terminal cancellation, and requirement correction. A correction preserves the
+superseded run and opens a fresh Planning overview with a new run ID; it never
+mutates approved evidence in place. Safe concurrent writers beyond the current
+serialized Git chain, durable process-restart resume, and a secondary-process
+control client remain pending.
 
 ## Product Readiness Boundary
 
@@ -201,11 +209,11 @@ executes the approved TeamPlan and delivers only an accepted clean Git result
 with project-specific commands.
 
 The activated product path uses one strict selected model route and a
-user-configurable controller progress renderer. It has no active run-control
-input channel yet. Guide/correct/pause/resume/interrupt/cancel and multiple
-model routing described in
-[`docs/adaptive-orchestration.md`](docs/adaptive-orchestration.md) remain the
-next milestones rather than current capabilities.
+user-configurable controller progress renderer. Its active foreground control
+channel is implemented and offline verified, including cancellation and
+correction reports, one-shot guidance, safe pause/resume checkpoints, live
+visibility changes, process interruption, event correlation, and exact-owned
+cleanup. Multiple-model routing remains the next implementation milestone.
 
 This is not yet release-stable evidence. Two earlier WSL rehearsals completed
 managed installation or update, startup diagnostics, isolated provider setup,
@@ -457,8 +465,13 @@ The acceptance contract is
   safe summaries, aggregate budget snapshots, and renderer visibility
   filtering;
 - Versioned `ControlCommand` requests and terminal resolutions with typed
-  targets, command-specific safe boundaries, optimistic revisions, immutable
-  metadata, and predecessor-digest verification;
+  targets, controller-assigned mailbox order, command-specific safe boundaries,
+  optimistic revisions, immutable metadata, and predecessor-digest
+  verification;
+- Foreground plain-language run controls for prospective guidance, replacement
+  Planning, cooperative pause/resume, best-effort per-Agent interruption,
+  confirmed terminal cancellation, live visibility switching, exact command
+  consequences, provider-cost caveats, and cancelled final reports;
 - Versioned, explicitly authorized Adaptive Planning requests; strict
   question-or-proposal responses; high-value focused questions with suggested
   and custom answers; controller validation and bounded semantic repair;
@@ -591,10 +604,10 @@ derived from the task.
 - A fresh installed provider-backed rehearsal of the activated Adaptive
   Planning and Dynamic Team journey, followed by an independent-device live
   demonstration;
-- Changing progress visibility from a live control palette after a run has
-  started; saved compact, standard, and detailed selection is available;
-- User guidance, correction, pause, resume, interruption, and cancellation
-  through a controller-owned control channel;
+- A provider-backed rehearsal of foreground guidance and cooperative
+  pause/resume;
+- Durable control recovery after a foreground process crash and a
+  secondary-process control client;
 - Multiple secret-free model profiles, per-task/per-stage/per-Agent routing,
   authorized automatic resolution, or recorded runtime switching;
 - Generated-project execution profiles beyond the current local Python 3.12
@@ -614,10 +627,9 @@ action succeeded after interruption.
 
 ## Next Milestone
 
-The next Phase 3D batch applies guide, correct, pause, resume, interrupt, and
-cancel commands through the persisted controller channel, then completes live
-visibility switching. Phase 3E adds model profiles and routing. Fixed-topology
-comparison remains in Phase 4
+The next verification step is a provider-backed Phase 3D rehearsal of guidance
+and cooperative pause/resume. Phase 3E adds model profiles and routing.
+Fixed-topology comparison remains in Phase 4
 so it can serve as a controlled baseline rather than define the product's
 permanent role layout.
 The detailed sequence and acceptance criteria are in

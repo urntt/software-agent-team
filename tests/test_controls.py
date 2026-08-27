@@ -55,6 +55,8 @@ def test_guide_request_is_queued_without_applying_hidden_state(tmp_path: Path) -
     )
 
     assert requested.status is ControlCommandStatus.QUEUED
+    assert requested.schema_version == 2
+    assert requested.request_sequence == 1
     assert requested.revision == 1
     assert requested.consequence is None
     assert command_store.load(requested.command_id) == (requested,)
@@ -186,6 +188,28 @@ def test_duplicate_command_id_never_overwrites_a_request(tmp_path: Path) -> None
         command_store.request(**arguments)
 
     assert command_store.load(original.command_id) == (original,)
+
+
+def test_mailbox_sequence_preserves_request_order_when_timestamps_collide(
+    tmp_path: Path,
+) -> None:
+    command_store = store(tmp_path)
+    first = command_store.request(
+        command=ControlCommandType.PAUSE,
+        target=ControlTarget(kind=ControlTargetKind.RUN),
+        application_boundary=ControlApplicationBoundary.NEXT_SAFE_CHECKPOINT,
+        command_id="ctl-z-first",
+    )
+    second = command_store.request(
+        command=ControlCommandType.RESUME,
+        target=ControlTarget(kind=ControlTargetKind.RUN),
+        application_boundary=ControlApplicationBoundary.NEXT_SAFE_CHECKPOINT,
+        command_id="ctl-a-second",
+    )
+
+    assert first.requested_at == second.requested_at
+    assert (first.request_sequence, second.request_sequence) == (1, 2)
+    assert command_store.list_latest() == (first, second)
 
 
 def test_control_history_detects_tampering(tmp_path: Path) -> None:

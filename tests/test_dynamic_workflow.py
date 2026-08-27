@@ -21,6 +21,14 @@ from software_agent_team.artifacts import (
     TaskBrief,
 )
 from software_agent_team.budgets import AgentBudget, ModelPricing
+from software_agent_team.controls import (
+    ControlApplicationBoundary,
+    ControlCommandStatus,
+    ControlCommandStore,
+    ControlCommandType,
+    ControlTarget,
+    ControlTargetKind,
+)
 from software_agent_team.dynamic_workflow import (
     DynamicWorkflowCoordinator,
     DynamicWorkflowOutcome,
@@ -54,6 +62,7 @@ from software_agent_team.responses import (
     TestReportResponse as SemanticTestReportResponse,
 )
 from software_agent_team.run_control import RunPhase, TerminationReason
+from software_agent_team.runtime_controls import RuntimeControlDecision
 from software_agent_team.scheduling import ScheduleStatus
 from software_agent_team.teams import (
     AgentCapability,
@@ -410,6 +419,8 @@ def coordinator(
     approved: ApprovedPlanningResult,
     executor: AdaptiveExecutor,
     gates: RecordingQualityGateFactory,
+    *,
+    control_store_handler=None,
 ) -> DynamicWorkflowCoordinator:
     """Build the dynamic coordinator from test-owned boundaries."""
 
@@ -428,6 +439,7 @@ def coordinator(
         quality_gate_factory=gates,
         pricing_by_model={MODEL: ModelPricing(model=MODEL)},
         manual_review_criteria=manual,
+        control_store_handler=control_store_handler,
         clock=lambda: FIXED_TIME,
     )
 
@@ -634,3 +646,133 @@ def test_tester_only_dynamic_team_completes_without_review_artifact(
     assert isinstance(iteration, IterationRecord)
     assert iteration.review_reports == ()
     assert iteration.decision is IterationDecision.ACCEPT
+
+
+def test_dynamic_workflow_applies_guidance_to_the_next_agent_invocation(
+    tmp_path: Path,
+) -> None:
+    approved = approved_inputs(run_id="adaptive-guidance")
+    source = initialize_source(tmp_path)
+    executor = AdaptiveExecutor(tmp_path / "workspaces" / approved.task_brief.run_id)
+    gates = RecordingQualityGateFactory()
+
+    def queue_guidance(store: ControlCommandStore, team_plan: TeamPlan):
+        del team_plan
+        store.request(
+            command=ControlCommandType.GUIDE,
+            instruction="Expose only the greet function as public API.",
+            target=ControlTarget(
+                kind=ControlTargetKind.AGENT,
+                agent_id="builder",
+            ),
+            application_boundary=(ControlApplicationBoundary.BEFORE_NEXT_INVOCATION),
+            command_id="ctl-workflow-guide",
+        )
+
+    outcome = coordinator(
+        tmp_path,
+        approved,
+        executor,
+        gates,
+        control_store_handler=queue_guidance,
+    ).execute(approved, source_repository=source)
+
+    builder_request = next(
+        request for request in executor.requests if request.agent_id == "builder"
+    )
+    assert outcome.record.phase is RunPhase.COMPLETED
+    assert "Expose only the greet function as public API." in builder_request.prompt
+    assert "ctl-workflow-guide" in builder_request.prompt
+    control_events = [
+        event
+        for event in outcome.events
+        if event.control_command_id == "ctl-workflow-guide"
+    ]
+    assert [event.kind for event in control_events] == [
+        ProgressEventKind.CONTROL_RECEIVED,
+        ProgressEventKind.CONTROL_APPLIED,
+    ]
+
+
+def test_dynamic_workflow_cancellation_is_distinct_and_runs_control_cleanup(
+    tmp_path: Path,
+) -> None:
+    approved = approved_inputs(run_id="adaptive-cancel")
+    source = initialize_source(tmp_path)
+    executor = AdaptiveExecutor(tmp_path / "workspaces" / approved.task_brief.run_id)
+    gates = RecordingQualityGateFactory()
+    cleaned: list[bool] = []
+
+    def queue_cancel(store: ControlCommandStore, team_plan: TeamPlan):
+        del team_plan
+        store.request(
+            command=ControlCommandType.CANCEL,
+            target=ControlTarget(kind=ControlTargetKind.RUN),
+            application_boundary=ControlApplicationBoundary.IMMEDIATE,
+            command_id="ctl-workflow-cancel",
+        )
+        return lambda: cleaned.append(True)
+
+    outcome = coordinator(
+        tmp_path,
+        approved,
+        executor,
+        gates,
+        control_store_handler=queue_cancel,
+    ).execute(approved, source_repository=source)
+    _, report = load_report(tmp_path, outcome, approved)
+
+    assert outcome.record.phase is RunPhase.FAILED
+    assert outcome.record.termination_reason is TerminationReason.USER_CANCELLED
+    assert outcome.control_stop is RuntimeControlDecision.CANCEL
+    assert report.status is FinalStatus.CANCELLED
+    assert outcome.schedules[0].status is ScheduleStatus.CANCELLED
+    assert executor.requests == []
+    assert gates.calls == []
+    assert cleaned == [True]
+    assert outcome.events[-1].kind is ProgressEventKind.RUN_CANCELLED
+    store = ControlCommandStore(
+        tmp_path / "runs" / approved.task_brief.run_id,
+        run_id=approved.task_brief.run_id,
+        clock=lambda: FIXED_TIME,
+    )
+    assert store.load("ctl-workflow-cancel")[-1].status is (
+        ControlCommandStatus.APPLIED
+    )
+
+
+def test_dynamic_workflow_correction_preserves_instruction_for_replanning(
+    tmp_path: Path,
+) -> None:
+    approved = approved_inputs(run_id="adaptive-correct")
+    source = initialize_source(tmp_path)
+    executor = AdaptiveExecutor(tmp_path / "workspaces" / approved.task_brief.run_id)
+    gates = RecordingQualityGateFactory()
+
+    def queue_correction(store: ControlCommandStore, team_plan: TeamPlan):
+        del team_plan
+        store.request(
+            command=ControlCommandType.CORRECT,
+            instruction="Return a command-line utility instead.",
+            target=ControlTarget(kind=ControlTargetKind.RUN),
+            application_boundary=ControlApplicationBoundary.PLANNING_REVISION,
+            command_id="ctl-workflow-correct",
+        )
+
+    outcome = coordinator(
+        tmp_path,
+        approved,
+        executor,
+        gates,
+        control_store_handler=queue_correction,
+    ).execute(approved, source_repository=source)
+    _, report = load_report(tmp_path, outcome, approved)
+
+    assert outcome.control_stop is RuntimeControlDecision.CORRECT
+    assert outcome.correction_instruction == "Return a command-line utility instead."
+    assert outcome.record.termination_reason is (
+        TerminationReason.USER_CORRECTION_REQUESTED
+    )
+    assert report.status is FinalStatus.CANCELLED
+    assert outcome.schedules[0].status is ScheduleStatus.CORRECTION_REQUESTED
+    assert executor.requests == []

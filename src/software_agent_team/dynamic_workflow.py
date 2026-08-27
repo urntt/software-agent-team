@@ -27,6 +27,7 @@ from software_agent_team.artifacts import (
     resolve_acceptance_results,
 )
 from software_agent_team.budgets import AgentBudgetLedger, ModelPricing
+from software_agent_team.controls import ControlCommandStore
 from software_agent_team.dynamic_runner import (
     DynamicAgentRunner,
     DynamicAgentRunnerError,
@@ -69,6 +70,10 @@ from software_agent_team.run_control import (
     TerminationReason,
 )
 from software_agent_team.runtime_configuration import RuntimeConfigurationError
+from software_agent_team.runtime_controls import (
+    RuntimeControlChannel,
+    RuntimeControlDecision,
+)
 from software_agent_team.scheduling import (
     DagScheduler,
     DagScheduleResult,
@@ -95,6 +100,10 @@ class DynamicQualityGateFactory(Protocol):
 
 
 type RuntimeSetup = Callable[[GitWorkspace, Path], None]
+type ControlStoreCleanup = Callable[[], None]
+type ControlStoreHandler = Callable[
+    [ControlCommandStore, TeamPlan], ControlStoreCleanup | None
+]
 type Clock = Callable[[], datetime]
 
 
@@ -137,6 +146,8 @@ class DynamicWorkflowOutcome:
     handoffs: tuple[ArtifactReference, ...]
     events: tuple[RunEvent, ...]
     schedules: tuple[DagScheduleResult, ...]
+    control_stop: RuntimeControlDecision | None = None
+    correction_instruction: str | None = None
 
 
 @dataclass
@@ -147,6 +158,7 @@ class _DynamicWorkflowContext:
     event_journal: RunEventJournal
     run_directory: Path
     budget_ledger: AgentBudgetLedger
+    control_channel: RuntimeControlChannel
     execution_records: list[ArtifactReference] = field(default_factory=list)
     handoffs: list[ArtifactReference] = field(default_factory=list)
     iteration_records: list[ArtifactReference] = field(default_factory=list)
@@ -173,6 +185,7 @@ class DynamicWorkflowCoordinator:
         review_scope_by_agent: Mapping[str, tuple[str, ...]] | None = None,
         artifact_repair_limit: int = 1,
         progress_handler: ProgressHandler | None = None,
+        control_store_handler: ControlStoreHandler | None = None,
         clock: Clock = _system_clock,
     ) -> None:
         if artifact_repair_limit not in {0, 1}:
@@ -199,6 +212,7 @@ class DynamicWorkflowCoordinator:
         self.review_scope_by_agent = review_scope_by_agent
         self.artifact_repair_limit = artifact_repair_limit
         self.progress_handler = progress_handler
+        self.control_store_handler = control_store_handler
         self.clock = clock
 
     @staticmethod
@@ -246,6 +260,45 @@ class DynamicWorkflowCoordinator:
             current = controller.load(record.run_id)
             return current.event_count, current.event_head_sha256
 
+        control_store = ControlCommandStore(
+            run_directory,
+            run_id=record.run_id,
+            clock=self.clock,
+        )
+        event_journal = RunEventJournal(
+            run_directory,
+            run_id=record.run_id,
+            handler=self.progress_handler,
+            clock=self.clock,
+            anchor_writer=lambda event: controller.record_event_head(
+                event.run_id,
+                event_sequence=event.sequence,
+                event_sha256=self._event_digest(event),
+                occurred_at=event.occurred_at,
+            ),
+            anchor_reader=read_event_anchor,
+        )
+
+        def emit_control(event: ProgressEvent) -> None:
+            current = controller.load(record.run_id)
+            event_journal.append(
+                event,
+                lifecycle_revision=current.revision,
+                phase=current.phase,
+            )
+
+        interrupt_agent = getattr(self.executor, "interrupt", None)
+        interrupt_all = getattr(self.executor, "interrupt_all", None)
+        control_channel = RuntimeControlChannel(
+            store=control_store,
+            team_plan=team_plan,
+            interrupt_agent=(
+                interrupt_agent if callable(interrupt_agent) else lambda agent_id: 0
+            ),
+            interrupt_all=(interrupt_all if callable(interrupt_all) else lambda: 0),
+            phase_reader=lambda: controller.load(record.run_id).phase,
+            event_handler=emit_control,
+        )
         context = _DynamicWorkflowContext(
             approved=approved,
             controller=controller,
@@ -254,22 +307,12 @@ class DynamicWorkflowCoordinator:
                 task_brief=approved.task_brief,
                 team_plan=team_plan,
             ),
-            event_journal=RunEventJournal(
-                run_directory,
-                run_id=record.run_id,
-                handler=self.progress_handler,
-                clock=self.clock,
-                anchor_writer=lambda event: controller.record_event_head(
-                    event.run_id,
-                    event_sequence=event.sequence,
-                    event_sha256=self._event_digest(event),
-                    occurred_at=event.occurred_at,
-                ),
-                anchor_reader=read_event_anchor,
-            ),
+            event_journal=event_journal,
             run_directory=run_directory,
             budget_ledger=AgentBudgetLedger(team_plan.budget),
+            control_channel=control_channel,
         )
+        control_cleanup: ControlStoreCleanup | None = None
         self._emit(
             context,
             ProgressEvent(
@@ -281,6 +324,8 @@ class DynamicWorkflowCoordinator:
         )
 
         try:
+            if self.control_store_handler is not None:
+                control_cleanup = self.control_store_handler(control_store, team_plan)
             record = controller.advance(
                 record.run_id,
                 expected_revision=record.revision,
@@ -334,6 +379,9 @@ class DynamicWorkflowCoordinator:
                 reason=self._termination_reason(error),
                 detail=self._error_detail(error),
             )
+        finally:
+            if control_cleanup is not None:
+                control_cleanup()
 
     @staticmethod
     def _event_digest(event: RunEvent) -> str:
@@ -384,6 +432,7 @@ class DynamicWorkflowCoordinator:
                 input_commit=input_commit,
                 artifact_repair_limit=self.artifact_repair_limit,
                 revision_feedback=revision_feedback,
+                guidance_provider=context.control_channel.consume_guidance,
                 activity_handler=lambda event: self._emit(context, event),
                 clock=self.clock,
             )
@@ -466,12 +515,19 @@ class DynamicWorkflowCoordinator:
                     ),
                     ScheduleEventKind.AGENT_FAILED: ProgressEventKind.AGENT_FAILED,
                     ScheduleEventKind.AGENT_SKIPPED: ProgressEventKind.AGENT_SKIPPED,
+                    ScheduleEventKind.AGENT_INTERRUPTED: (
+                        ProgressEventKind.AGENT_INTERRUPTED
+                    ),
+                    ScheduleEventKind.AGENT_CANCELLED: (
+                        ProgressEventKind.AGENT_CANCELLED
+                    ),
                 }[event.kind]
                 route = team_plan.model_routes.get_route(agent.model_route_id)
                 executed = event.kind in {
                     ScheduleEventKind.AGENT_STARTED,
                     ScheduleEventKind.AGENT_COMPLETED,
                     ScheduleEventKind.AGENT_FAILED,
+                    ScheduleEventKind.AGENT_INTERRUPTED,
                 }
                 message = _safe_event_summary(
                     event.message,
@@ -514,6 +570,7 @@ class DynamicWorkflowCoordinator:
                 schedule = DagScheduler(
                     clock=self.clock,
                     observer=observe,
+                    control_channel=context.control_channel,
                 ).execute(
                     team_plan,
                     runner,
@@ -530,6 +587,28 @@ class DynamicWorkflowCoordinator:
 
             assert schedule is not None
             context.schedules.append(schedule)
+            if schedule.status is ScheduleStatus.CANCELLED:
+                return self._stop_by_user(
+                    context,
+                    record,
+                    reason=TerminationReason.USER_CANCELLED,
+                    detail="The user cancelled the run.",
+                    control_stop=RuntimeControlDecision.CANCEL,
+                )
+            if schedule.status is ScheduleStatus.CORRECTION_REQUESTED:
+                instruction = context.control_channel.correction_instruction
+                if instruction is None:
+                    raise DynamicWorkflowError(
+                        "correction stop omitted its replacement instruction"
+                    )
+                return self._stop_by_user(
+                    context,
+                    record,
+                    reason=TerminationReason.USER_CORRECTION_REQUESTED,
+                    detail="The user requested replacement Planning.",
+                    control_stop=RuntimeControlDecision.CORRECT,
+                    correction_instruction=instruction,
+                )
             if schedule.status is ScheduleStatus.FAILED:
                 if (
                     context.last_tests
@@ -1008,12 +1087,71 @@ class DynamicWorkflowCoordinator:
         )
         return self._outcome(context, record, reference, markdown)
 
+    def _stop_by_user(
+        self,
+        context: _DynamicWorkflowContext,
+        record: RunRecord,
+        *,
+        reason: TerminationReason,
+        detail: str,
+        control_stop: RuntimeControlDecision,
+        correction_instruction: str | None = None,
+    ) -> DynamicWorkflowOutcome:
+        report = FinalReport(
+            run_id=record.run_id,
+            team_id=record.team_id,
+            created_at=_utc(self.clock),
+            status=FinalStatus.CANCELLED,
+            termination_reason=reason.value,
+            final_commit=record.current_commit,
+            iterations=tuple(context.iteration_records),
+            acceptance_results=(),
+            unresolved_findings=(),
+            known_limitations=(),
+            summary=detail,
+        )
+        reference = context.artifact_store.write(
+            report,
+            description="Authoritative user-controlled terminal report.",
+        )
+        markdown = context.artifact_store.write_final_report_markdown(
+            reference,
+            self._render_report(context, record, report),
+        )
+        record = context.controller.fail(
+            record.run_id,
+            expected_revision=record.revision,
+            reason=reason,
+            detail=detail,
+            final_report=reference,
+        )
+        self._emit(
+            context,
+            ProgressEvent(
+                kind=ProgressEventKind.RUN_CANCELLED,
+                message=detail,
+                phase=RunPhase.FAILED,
+                iteration=record.current_iteration,
+            ),
+        )
+        return self._outcome(
+            context,
+            record,
+            reference,
+            markdown,
+            control_stop=control_stop,
+            correction_instruction=correction_instruction,
+        )
+
     @staticmethod
     def _outcome(
         context: _DynamicWorkflowContext,
         record: RunRecord,
         final_report: ArtifactReference,
         markdown: str,
+        *,
+        control_stop: RuntimeControlDecision | None = None,
+        correction_instruction: str | None = None,
     ) -> DynamicWorkflowOutcome:
         return DynamicWorkflowOutcome(
             record=context.controller.load(record.run_id),
@@ -1025,6 +1163,8 @@ class DynamicWorkflowCoordinator:
             handoffs=tuple(sorted(context.handoffs, key=lambda item: item.path)),
             events=context.event_journal.load(),
             schedules=tuple(context.schedules),
+            control_stop=control_stop,
+            correction_instruction=correction_instruction,
         )
 
     @staticmethod

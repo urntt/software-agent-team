@@ -25,6 +25,7 @@ from software_agent_team.prompting import (
     DynamicAgentPromptInputs,
     DynamicRevisionFeedback,
     DynamicUpstreamResult,
+    DynamicUserGuidance,
     build_dynamic_agent_execution_request,
     render_dynamic_agent_prompt,
 )
@@ -253,6 +254,23 @@ def test_dynamic_prompt_is_compiled_from_the_approved_agent_spec() -> None:
     assert request.expected_kind is ArtifactKind.WORK_RESULT
     assert request.timeout_seconds == 600
     assert request.model == "provider/model"
+
+
+def test_dynamic_prompt_includes_unique_persisted_user_guidance() -> None:
+    guidance = DynamicUserGuidance(
+        command_id="ctl-prompt-guide",
+        instruction="Keep error output concise and actionable.",
+    )
+    inputs = developer_inputs().model_copy(update={"user_guidance": (guidance,)})
+
+    rendered = render_dynamic_agent_prompt(inputs)
+
+    assert '"command_id": "ctl-prompt-guide"' in rendered
+    assert "Keep error output concise and actionable." in rendered
+    payload = inputs.model_dump(mode="json")
+    payload["user_guidance"].append(payload["user_guidance"][0])
+    with pytest.raises(ValidationError, match="repeat user guidance"):
+        DynamicAgentPromptInputs.model_validate(payload)
 
 
 def test_quality_prompt_requires_exact_completed_dependency_handoffs() -> None:

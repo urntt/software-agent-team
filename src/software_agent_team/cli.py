@@ -30,6 +30,8 @@ from software_agent_team.artifacts import (
 from software_agent_team.benchmark_seed import prepare_benchmark_seed
 from software_agent_team.budgets import ModelPricing
 from software_agent_team.configuration import validate_environment_configuration
+from software_agent_team.control_console import TerminalControlConsole
+from software_agent_team.controls import ControlCommandStore
 from software_agent_team.dynamic_workflow import (
     DynamicWorkflowCoordinator,
     DynamicWorkflowOutcome,
@@ -85,6 +87,7 @@ from software_agent_team.runtime_configuration import (
     materialize_run_configuration,
     persist_runtime_preflight,
 )
+from software_agent_team.runtime_controls import RuntimeControlDecision
 from software_agent_team.sandbox_lifecycle import cleanup_run_sandbox_containers
 from software_agent_team.teams import (
     AgentCapability,
@@ -709,6 +712,7 @@ def _execute_workflow(
             base_ref=options.base_ref,
         )
     except BaseException as error:
+        boundary.executor.interrupt_all()
         try:
             cleanup_run_sandbox_containers(
                 sandbox_binary=options.sandbox_binary,
@@ -744,6 +748,10 @@ def _execute_workflow(
 def _execute_dynamic_workflow(
     approved: ApprovedPlanningResult,
     options: _AdaptiveWorkflowLaunchOptions,
+    *,
+    control_store_handler: (
+        Callable[[ControlCommandStore, TeamPlan], Callable[[], None] | None] | None
+    ) = None,
 ) -> DynamicWorkflowOutcome:
     """Execute exactly one user-approved adaptive plan and clean its sandboxes."""
 
@@ -782,6 +790,7 @@ def _execute_dynamic_workflow(
         manual_review_criteria=manual_review_criteria,
         artifact_repair_limit=options.artifact_repair_limit,
         progress_handler=options.progress_handler,
+        control_store_handler=control_store_handler,
     )
 
     cleanup_arguments = {
@@ -801,6 +810,7 @@ def _execute_dynamic_workflow(
             base_ref=options.base_ref,
         )
     except BaseException as error:
+        boundary.executor.interrupt_all()
         try:
             cleanup_run_sandbox_containers(**cleanup_arguments)
         except Exception as cleanup_error:
@@ -1471,6 +1481,33 @@ def _render_product_outcome(
             print(f"    - {finding}")
 
 
+def _replacement_planning_request(
+    request: PlanningRequest,
+    *,
+    run_id: str,
+    correction_instruction: str,
+) -> PlanningRequest:
+    """Preserve the original request while recording one explicit correction."""
+
+    correction = (
+        "User correction that supersedes conflicting earlier requirements: "
+        f"{correction_instruction.strip()}"
+    )
+    constraints = request.base_constraints
+    if len(constraints) < 20:
+        constraints = (*constraints, correction)
+    else:
+        constraints = (*constraints[:-1], f"{constraints[-1]}\n{correction}")
+    return PlanningRequest(
+        **{
+            **request.model_dump(),
+            "run_id": run_id,
+            "base_constraints": constraints,
+            "authorized_at": datetime.now(UTC),
+        }
+    )
+
+
 def _run_product() -> int:
     """Run the primary diagnostics-to-delivery product journey."""
 
@@ -1515,54 +1552,97 @@ def _run_product() -> int:
         return 0
     planning_request, destination = request
 
-    approved = _run_product_planning(
-        planning_request,
-        source_repository=DEFAULT_PRODUCT_SEED,
-        state_paths=state_paths,
-        quality=quality,
-        configuration=configuration,
-    )
-    if approved is None:
-        return 0
-
-    source_repository = prepare_product_source(
-        seed=DEFAULT_PRODUCT_SEED,
-        state_paths=state_paths,
-        run_id=run_id,
-    )
     renderer = TerminalProgressRenderer(
         visibility=RunEventVisibility(configuration.progress_visibility),
     )
     try:
-        outcome = _execute_dynamic_workflow(
-            approved,
-            _AdaptiveWorkflowLaunchOptions(
-                source_repository=source_repository,
-                base_ref="HEAD",
-                teams=DEFAULT_TEAM_CONFIG,
-                openclaw=DEFAULT_OPENCLAW_CONFIG,
-                policy=DEFAULT_PRODUCT_POLICY,
-                quality_manifest=DEFAULT_PRODUCT_PROFILE,
-                runs_root=state_paths.runs,
-                workspaces_root=state_paths.workspaces,
-                openclaw_binary=DEFAULT_OPENCLAW_BINARY,
-                openclaw_state_dir=state_paths.openclaw,
-                sandbox_binary="docker",
-                model=configuration.model,
-                input_cost_per_million_usd=(configuration.input_cost_per_million_usd),
-                output_cost_per_million_usd=(configuration.output_cost_per_million_usd),
-                artifact_repair_limit=1,
-                progress_handler=renderer,
-            ),
-        )
+        while True:
+            approved = _run_product_planning(
+                planning_request,
+                source_repository=DEFAULT_PRODUCT_SEED,
+                state_paths=state_paths,
+                quality=quality,
+                configuration=configuration,
+            )
+            if approved is None:
+                return 0
+
+            run_id = planning_request.run_id
+            source_repository = prepare_product_source(
+                seed=DEFAULT_PRODUCT_SEED,
+                state_paths=state_paths,
+                run_id=run_id,
+            )
+
+            def start_controls(
+                store: ControlCommandStore,
+                team_plan: TeamPlan,
+            ) -> Callable[[], None]:
+                console = TerminalControlConsole(
+                    store=store,
+                    team_plan=team_plan,
+                    notice_handler=renderer.write_notice,
+                    visibility_handler=renderer.set_visibility,
+                )
+                console.start()
+                return console.close
+
+            outcome = _execute_dynamic_workflow(
+                approved,
+                _AdaptiveWorkflowLaunchOptions(
+                    source_repository=source_repository,
+                    base_ref="HEAD",
+                    teams=DEFAULT_TEAM_CONFIG,
+                    openclaw=DEFAULT_OPENCLAW_CONFIG,
+                    policy=DEFAULT_PRODUCT_POLICY,
+                    quality_manifest=DEFAULT_PRODUCT_PROFILE,
+                    runs_root=state_paths.runs,
+                    workspaces_root=state_paths.workspaces,
+                    openclaw_binary=DEFAULT_OPENCLAW_BINARY,
+                    openclaw_state_dir=state_paths.openclaw,
+                    sandbox_binary="docker",
+                    model=configuration.model,
+                    input_cost_per_million_usd=(
+                        configuration.input_cost_per_million_usd
+                    ),
+                    output_cost_per_million_usd=(
+                        configuration.output_cost_per_million_usd
+                    ),
+                    artifact_repair_limit=1,
+                    progress_handler=renderer,
+                ),
+                control_store_handler=start_controls,
+            )
+            report_path = (
+                state_paths.runs / outcome.record.run_id / outcome.final_report.path
+            )
+            report = _load_final_report(
+                report_path,
+                expected_sha256=outcome.final_report.sha256,
+            )
+            if outcome.control_stop is not RuntimeControlDecision.CORRECT:
+                break
+            instruction = outcome.correction_instruction
+            if instruction is None:
+                raise RuntimeError("replacement Planning omitted the correction")
+            _render_product_outcome(
+                outcome=outcome,
+                report=report,
+                report_path=report_path,
+                destination=None,
+            )
+            print(
+                "  Previous work and evidence were preserved but will not be delivered."
+            )
+            print("\nStarting replacement Planning from your corrected requirement.")
+            planning_request = _replacement_planning_request(
+                planning_request,
+                run_id=generate_product_run_id(),
+                correction_instruction=instruction,
+            )
     finally:
         renderer.close()
 
-    report_path = state_paths.runs / run_id / outcome.final_report.path
-    report = _load_final_report(
-        report_path,
-        expected_sha256=outcome.final_report.sha256,
-    )
     if outcome.record.phase is not RunPhase.COMPLETED:
         _render_product_outcome(
             outcome=outcome,

@@ -42,12 +42,20 @@ class ProgressEventKind(StrEnum):
     AGENT_RETRY = "agent_retry"
     AGENT_FAILED = "agent_failed"
     AGENT_SKIPPED = "agent_skipped"
+    AGENT_PAUSED = "agent_paused"
+    AGENT_RESUMED = "agent_resumed"
+    AGENT_INTERRUPTED = "agent_interrupted"
+    AGENT_CANCELLED = "agent_cancelled"
     SNAPSHOT_VERIFIED = "snapshot_verified"
     QUALITY_GATES_STARTED = "quality_gates_started"
     QUALITY_GATE_COMPLETED = "quality_gate_completed"
     DECISION_RECORDED = "decision_recorded"
+    CONTROL_RECEIVED = "control_received"
+    CONTROL_APPLIED = "control_applied"
+    CONTROL_REJECTED = "control_rejected"
     RUN_COMPLETED = "run_completed"
     RUN_FAILED = "run_failed"
+    RUN_CANCELLED = "run_cancelled"
 
 
 class RunEventCategory(StrEnum):
@@ -163,6 +171,26 @@ _EVENT_METADATA: dict[
         RunEventVisibility.STANDARD,
         AgentRunState.BLOCKED,
     ),
+    ProgressEventKind.AGENT_PAUSED: (
+        RunEventCategory.AGENT,
+        RunEventVisibility.STANDARD,
+        AgentRunState.PAUSED,
+    ),
+    ProgressEventKind.AGENT_RESUMED: (
+        RunEventCategory.AGENT,
+        RunEventVisibility.STANDARD,
+        AgentRunState.WAITING_DEPENDENCY,
+    ),
+    ProgressEventKind.AGENT_INTERRUPTED: (
+        RunEventCategory.AGENT,
+        RunEventVisibility.COMPACT,
+        AgentRunState.INTERRUPTED,
+    ),
+    ProgressEventKind.AGENT_CANCELLED: (
+        RunEventCategory.AGENT,
+        RunEventVisibility.STANDARD,
+        AgentRunState.CANCELLED,
+    ),
     ProgressEventKind.SNAPSHOT_VERIFIED: (
         RunEventCategory.GIT,
         RunEventVisibility.STANDARD,
@@ -183,12 +211,32 @@ _EVENT_METADATA: dict[
         RunEventVisibility.COMPACT,
         None,
     ),
+    ProgressEventKind.CONTROL_RECEIVED: (
+        RunEventCategory.DECISION,
+        RunEventVisibility.COMPACT,
+        None,
+    ),
+    ProgressEventKind.CONTROL_APPLIED: (
+        RunEventCategory.DECISION,
+        RunEventVisibility.COMPACT,
+        None,
+    ),
+    ProgressEventKind.CONTROL_REJECTED: (
+        RunEventCategory.DECISION,
+        RunEventVisibility.COMPACT,
+        None,
+    ),
     ProgressEventKind.RUN_COMPLETED: (
         RunEventCategory.LIFECYCLE,
         RunEventVisibility.COMPACT,
         None,
     ),
     ProgressEventKind.RUN_FAILED: (
+        RunEventCategory.LIFECYCLE,
+        RunEventVisibility.COMPACT,
+        None,
+    ),
+    ProgressEventKind.RUN_CANCELLED: (
         RunEventCategory.LIFECYCLE,
         RunEventVisibility.COMPACT,
         None,
@@ -202,6 +250,7 @@ _ATTEMPT_EVENT_KINDS = {
     ProgressEventKind.AGENT_COMPLETED,
     ProgressEventKind.AGENT_RETRY,
     ProgressEventKind.AGENT_FAILED,
+    ProgressEventKind.AGENT_INTERRUPTED,
 }
 
 
@@ -388,6 +437,13 @@ class RunEvent(BaseModel):
             ProgressEventKind.AGENT_INVOCATION_COMPLETED
         ):
             raise ValueError("only completed invocations record budget usage")
+        control_kinds = {
+            ProgressEventKind.CONTROL_RECEIVED,
+            ProgressEventKind.CONTROL_APPLIED,
+            ProgressEventKind.CONTROL_REJECTED,
+        }
+        if (self.kind in control_kinds) != (self.control_command_id is not None):
+            raise ValueError("RunEvent control identity does not match its kind")
         if (self.completed is None) != (self.total is None):
             raise ValueError("RunEvent gate progress requires completed and total")
         if self.completed is not None and self.completed > self.total:
@@ -683,6 +739,10 @@ class TerminalProgressRenderer:
             ProgressEventKind.AGENT_RETRY,
             ProgressEventKind.AGENT_FAILED,
             ProgressEventKind.AGENT_SKIPPED,
+            ProgressEventKind.AGENT_PAUSED,
+            ProgressEventKind.AGENT_RESUMED,
+            ProgressEventKind.AGENT_INTERRUPTED,
+            ProgressEventKind.AGENT_CANCELLED,
         }:
             self._stop_waiting(event)
 
@@ -696,18 +756,27 @@ class TerminalProgressRenderer:
             ProgressEventKind.AGENT_RETRY: "↻",
             ProgressEventKind.AGENT_FAILED: "✗",
             ProgressEventKind.AGENT_SKIPPED: "!",
+            ProgressEventKind.AGENT_PAUSED: "Ⅱ",
+            ProgressEventKind.AGENT_RESUMED: "▶",
+            ProgressEventKind.AGENT_INTERRUPTED: "■",
+            ProgressEventKind.AGENT_CANCELLED: "■",
             ProgressEventKind.SNAPSHOT_VERIFIED: "✓",
             ProgressEventKind.QUALITY_GATES_STARTED: "●",
             ProgressEventKind.QUALITY_GATE_COMPLETED: "✓",
             ProgressEventKind.DECISION_RECORDED: "✓",
+            ProgressEventKind.CONTROL_RECEIVED: "◆",
+            ProgressEventKind.CONTROL_APPLIED: "✓",
+            ProgressEventKind.CONTROL_REJECTED: "!",
             ProgressEventKind.RUN_COMPLETED: "✓",
             ProgressEventKind.RUN_FAILED: "✗",
+            ProgressEventKind.RUN_CANCELLED: "■",
         }[event.kind]
         self._print(f"{symbol} {event.summary}")
         self._print_details(event)
         if event.kind in {
             ProgressEventKind.RUN_COMPLETED,
             ProgressEventKind.RUN_FAILED,
+            ProgressEventKind.RUN_CANCELLED,
         }:
             self.close()
 
@@ -720,6 +789,20 @@ class TerminalProgressRenderer:
         for stop, thread in waiting:
             stop.set()
             thread.join(timeout=min(self.heartbeat_seconds, 0.2))
+
+    def set_visibility(self, visibility: RunEventVisibility | str) -> None:
+        """Change rendering detail without changing controller execution."""
+
+        resolved = RunEventVisibility(visibility)
+        with self._lock:
+            self.visibility = resolved
+
+    def write_notice(self, value: str) -> None:
+        """Print an interaction notice without racing a progress heartbeat."""
+
+        cleaned = " ".join(value.split())
+        if cleaned:
+            self._print(cleaned)
 
     def _key(self, event: RunEvent) -> tuple[str, int, int] | None:
         if event.agent_id is None or event.iteration is None or event.attempt is None:

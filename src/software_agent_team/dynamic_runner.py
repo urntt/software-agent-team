@@ -64,6 +64,7 @@ from software_agent_team.prompting import (
     DynamicAgentPromptInputs,
     DynamicRevisionFeedback,
     DynamicUpstreamResult,
+    DynamicUserGuidance,
     build_dynamic_agent_execution_request,
     build_semantic_repair_request,
 )
@@ -109,6 +110,9 @@ class DynamicAgentRunnerError(RuntimeError):
         self.reason = reason
 
 
+type GuidanceProvider = Callable[[str], tuple[DynamicUserGuidance, ...]]
+
+
 def _system_clock() -> datetime:
     return datetime.now(UTC)
 
@@ -150,6 +154,7 @@ class DynamicAgentRunner:
         input_commit: str | None = None,
         artifact_repair_limit: int = 1,
         revision_feedback: DynamicRevisionFeedback | None = None,
+        guidance_provider: GuidanceProvider | None = None,
         activity_handler: ProgressDraftHandler | None = None,
         clock: Callable[[], datetime] = _system_clock,
     ) -> None:
@@ -243,6 +248,7 @@ class DynamicAgentRunner:
         self.input_commit = verified_commit
         self.artifact_repair_limit = artifact_repair_limit
         self.revision_feedback = revision_feedback
+        self.guidance_provider = guidance_provider
         self.activity_handler = activity_handler
         self.clock = clock
 
@@ -404,7 +410,11 @@ class DynamicAgentRunner:
         safe_detail = detail[:2000]
         return AgentRunOutcome(
             agent_id=agent.id,
-            status=AgentRunStatus.FAILED,
+            status=(
+                AgentRunStatus.INTERRUPTED
+                if reason is TerminationReason.USER_INTERRUPTED
+                else AgentRunStatus.FAILED
+            ),
             evidence=evidence,
             summary=f"{agent.label} failed ({reason.value})."[:2000],
             error=safe_detail,
@@ -426,24 +436,34 @@ class DynamicAgentRunner:
                 if agent.capability is AgentCapability.REVIEW
                 else self.manual_review_criteria
             )
-        prompt_inputs = DynamicAgentPromptInputs(
-            task_brief=self.task_brief,
-            implementation_plan=self.implementation_plan,
-            team_plan=self.team_plan,
-            agent_id=agent.id,
-            iteration=self.iteration,
-            iteration_input_commit=self.input_commit,
-            input_commit=input_commit,
-            upstream_results=self._upstream_results(agent, upstream),
-            command_evidence=commands,
-            manual_review_criteria=manual_scope,
-            revision_feedback=self.revision_feedback,
+        upstream_results = self._upstream_results(agent, upstream)
+        assigned_task_ids = tuple(
+            task.id
+            for task in self.implementation_plan.tasks
+            if task.owner_agent_id == agent.id
         )
-        base_request = build_dynamic_agent_execution_request(prompt_inputs)
-        assigned_task_ids = tuple(task.id for task in prompt_inputs.assigned_tasks)
+        guidance_by_id: dict[str, DynamicUserGuidance] = {}
         previous_error = "Agent did not return a semantic response"
 
         for attempt in range(1, self.artifact_repair_limit + 2):
+            if self.guidance_provider is not None:
+                for guidance in self.guidance_provider(agent.id):
+                    guidance_by_id[guidance.command_id] = guidance
+            prompt_inputs = DynamicAgentPromptInputs(
+                task_brief=self.task_brief,
+                implementation_plan=self.implementation_plan,
+                team_plan=self.team_plan,
+                agent_id=agent.id,
+                iteration=self.iteration,
+                iteration_input_commit=self.input_commit,
+                input_commit=input_commit,
+                upstream_results=upstream_results,
+                command_evidence=commands,
+                manual_review_criteria=manual_scope,
+                revision_feedback=self.revision_feedback,
+                user_guidance=tuple(guidance_by_id.values()),
+            )
+            base_request = build_dynamic_agent_execution_request(prompt_inputs)
             request = (
                 base_request
                 if attempt == 1
@@ -459,6 +479,13 @@ class DynamicAgentRunner:
                 ),
                 attempt=attempt,
                 model=request.model,
+                references=tuple(
+                    RunEventReference(
+                        kind=RunEventReferenceKind.CONTROL_COMMAND,
+                        id=guidance.command_id,
+                    )
+                    for guidance in guidance_by_id.values()
+                ),
             )
             result = self._execute(request)
             response_reference: ArtifactReference | None = None
@@ -467,8 +494,12 @@ class DynamicAgentRunner:
             repairable = False
             failure: Exception | None = None
             try:
-                snapshot = self._verify_workspace_after_call(agent, input_commit)
                 self._validate_execution_result(result, request)
+                snapshot = (
+                    None
+                    if result.status is AgentExecutionStatus.INTERRUPTED
+                    else self._verify_workspace_after_call(agent, input_commit)
+                )
                 if result.status is not AgentExecutionStatus.COMPLETED:
                     record_error = result.error or (
                         f"Agent execution ended as {result.status.value}"
@@ -1120,6 +1151,8 @@ class DynamicAgentRunner:
     ) -> TerminationReason:
         if status is AgentExecutionStatus.TIMED_OUT:
             return TerminationReason.RESOURCE_LIMIT_REACHED
+        if status is AgentExecutionStatus.INTERRUPTED:
+            return TerminationReason.USER_INTERRUPTED
         if status in {
             AgentExecutionStatus.LAUNCH_FAILED,
             AgentExecutionStatus.PROVIDER_FAILED,

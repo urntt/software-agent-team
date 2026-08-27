@@ -274,9 +274,26 @@ isolated from controller execution and cannot erase the event.
 and `cancel` requests, typed targets, safe application boundaries, and the
 `queued`, `applied`, `rejected`, `superseded`, and `best_effort_failed` result
 states. The controller-owned store writes the request and terminal resolution
-as an immutable two-revision digest chain with optimistic concurrency. This is
-the persistence contract for the later interactive control channel; the
-current product CLI does not yet submit or apply these commands.
+as an immutable two-revision digest chain with optimistic concurrency. A
+controller-assigned request sequence preserves mailbox order even when clocks
+collide. The foreground product CLI now submits these commands through a
+line-mode palette. `RuntimeControlChannel` applies them only at controller
+checkpoints: guidance is consumed once by a future Agent invocation; pause and
+correction stop new launches and drain active work; resume withdraws or resumes
+a cooperative pause; interrupt and cancel request best-effort termination only
+for SAT-owned OpenClaw process groups. Received and resolved commands are
+correlated from the append-only event stream to the exact command revision and
+digest. Provider cost already incurred before termination is never presented
+as reversible.
+
+Correction and cancellation retain the run's existing artifacts and produce a
+machine-readable `cancelled` final report rather than converting partial work
+into delivery. A correction then creates a fresh Planning request and run ID,
+preserves the original request and destination, adds the explicit superseding
+requirement, and requires approval of the replacement overview. Foreground
+process-crash resume and a secondary-process control client remain deferred;
+recovery therefore never invents the application of a command that lacks a
+persisted terminal revision.
 
 The dynamic runtime keeps scheduling and invocation as separate controller
 responsibilities. `DagScheduler` decides readiness, actual launch order,
