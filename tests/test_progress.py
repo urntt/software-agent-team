@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 
+from software_agent_team.budgets import AgentBudgetUsage
 from software_agent_team.integrity import canonical_model_sha256
 from software_agent_team.progress import (
     ProgressEvent,
@@ -102,6 +103,74 @@ def test_progress_renderer_closes_multiple_independent_verifiers(
 
     assert "tester is working" in output.getvalue()
     assert "reviewer is working" in output.getvalue()
+
+
+def test_detailed_renderer_projects_agent_state_route_dependencies_and_budget(
+    tmp_path: Path,
+) -> None:
+    output = StringIO()
+    renderer = TerminalProgressRenderer(
+        output=output,
+        visibility=RunEventVisibility.DETAILED,
+        heartbeat_seconds=1,
+    )
+    event_journal = journal(tmp_path, handler=renderer)
+    common = {
+        "agent_id": "api_builder",
+        "iteration": 1,
+        "capability": "implementation",
+        "stage_id": "implement",
+        "model": "provider/model",
+        "dependency_ids": ("schema_builder",),
+    }
+    event_journal.append(
+        ProgressEvent(
+            kind=ProgressEventKind.AGENT_QUEUED,
+            message="API Builder queued after schema_builder.",
+            **common,
+        ),
+        lifecycle_revision=3,
+        phase=RunPhase.IMPLEMENTING,
+    )
+    event_journal.append(
+        ProgressEvent(
+            kind=ProgressEventKind.AGENT_WAITING_PROVIDER,
+            message="API Builder is waiting for provider/model",
+            attempt=1,
+            **common,
+        ),
+        lifecycle_revision=3,
+        phase=RunPhase.IMPLEMENTING,
+    )
+    event_journal.append(
+        ProgressEvent(
+            kind=ProgressEventKind.AGENT_INVOCATION_COMPLETED,
+            message="API Builder invocation 1 returned completed",
+            attempt=1,
+            duration_ms=250,
+            budget_usage=AgentBudgetUsage(
+                calls_started=1,
+                calls_completed=1,
+                active_calls=0,
+                input_tokens=120,
+                output_tokens=40,
+                agent_duration_ms=250,
+                known_estimated_cost_usd="0.01",
+                unpriced_calls=0,
+                unreported_token_calls=0,
+            ),
+            **common,
+        ),
+        lifecycle_revision=3,
+        phase=RunPhase.IMPLEMENTING,
+    )
+    renderer.close()
+
+    rendered = output.getvalue()
+    assert "state=queued" in rendered
+    assert "model=provider/model" in rendered
+    assert "dependencies=schema_builder" in rendered
+    assert "input=120 output=40" in rendered
 
 
 def test_journal_persists_a_contiguous_hash_chain(tmp_path: Path) -> None:

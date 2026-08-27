@@ -13,7 +13,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-USER_CONFIGURATION_SCHEMA_VERSION = 4
+USER_CONFIGURATION_SCHEMA_VERSION = 5
 USER_CONFIGURATION_ENVIRONMENT_VARIABLE = "SAT_CONFIG_PATH"
 
 
@@ -42,6 +42,7 @@ class UserConfiguration(BaseModel):
     )
     max_concurrency: int = Field(default=2, ge=1, le=16)
     stage_timeout_seconds: int | None = Field(default=None, ge=30, le=3600)
+    progress_visibility: Literal["compact", "standard", "detailed"] = "standard"
 
     @field_validator("model")
     @classmethod
@@ -57,6 +58,40 @@ class UserConfiguration(BaseModel):
 
     @model_validator(mode="after")
     def require_complete_price_pair(self) -> UserConfiguration:
+        if (self.input_cost_per_million_usd is None) != (
+            self.output_cost_per_million_usd is None
+        ):
+            raise ValueError("input and output prices must be configured together")
+        return self
+
+
+class _UserConfigurationV4(BaseModel):
+    """Validated product defaults before persisted progress visibility."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[4]
+    model: str = Field(min_length=1)
+    input_cost_per_million_usd: Decimal | None = Field(
+        default=None,
+        ge=0,
+        le=10_000,
+    )
+    output_cost_per_million_usd: Decimal | None = Field(
+        default=None,
+        ge=0,
+        le=10_000,
+    )
+    max_concurrency: int = Field(default=2, ge=1, le=16)
+    stage_timeout_seconds: int | None = Field(default=None, ge=30, le=3600)
+
+    @field_validator("model")
+    @classmethod
+    def require_clean_model(cls, value: str) -> str:
+        return UserConfiguration.require_clean_model(value)
+
+    @model_validator(mode="after")
+    def require_complete_price_pair(self) -> _UserConfigurationV4:
         if (self.input_cost_per_million_usd is None) != (
             self.output_cost_per_million_usd is None
         ):
@@ -242,6 +277,24 @@ def load_user_configuration(
             output_cost_per_million_usd=legacy.output_cost_per_million_usd,
             max_concurrency=legacy.verification_concurrency,
             stage_timeout_seconds=legacy.stage_timeout_seconds,
+        )
+    if payload.get("schema_version") == 4:
+        legacy = _UserConfigurationV4.model_validate(payload)
+        notice = (
+            "configuration schema v4 was loaded with standard progress visibility; "
+            "save configuration to persist another visibility level"
+        )
+        if on_migration is None:
+            warnings.warn(notice, UserWarning, stacklevel=2)
+        else:
+            on_migration(notice)
+        return UserConfiguration(
+            model=legacy.model,
+            input_cost_per_million_usd=legacy.input_cost_per_million_usd,
+            output_cost_per_million_usd=legacy.output_cost_per_million_usd,
+            max_concurrency=legacy.max_concurrency,
+            stage_timeout_seconds=legacy.stage_timeout_seconds,
+            progress_visibility="standard",
         )
     return UserConfiguration.model_validate(payload)
 

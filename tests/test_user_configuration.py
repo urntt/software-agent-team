@@ -22,6 +22,7 @@ def sample_configuration(**updates: object) -> UserConfiguration:
         "output_cost_per_million_usd": "1.50",
         "max_concurrency": 4,
         "stage_timeout_seconds": 900,
+        "progress_visibility": "detailed",
     }
     payload.update(updates)
     return UserConfiguration.model_validate(payload)
@@ -105,7 +106,7 @@ def test_v1_configuration_drops_the_legacy_timeout_with_a_notice(
         migrated = load_user_configuration(path)
 
     assert migrated is not None
-    assert migrated.schema_version == 4
+    assert migrated.schema_version == 5
     assert migrated.model == "provider/model"
     assert migrated.max_concurrency == 1
     assert migrated.stage_timeout_seconds is None
@@ -134,7 +135,7 @@ def test_v2_configuration_preserves_evaluation_defaults_with_a_notice(
         migrated = load_user_configuration(path)
 
     assert migrated is not None
-    assert migrated.schema_version == 4
+    assert migrated.schema_version == 5
     assert migrated.input_cost_per_million_usd == 1
     assert migrated.output_cost_per_million_usd == 2
     assert migrated.max_concurrency == 2
@@ -163,8 +164,35 @@ def test_v3_configuration_renames_verification_concurrency_with_a_notice(
         migrated = load_user_configuration(path)
 
     assert migrated is not None
-    assert migrated.schema_version == 4
+    assert migrated.schema_version == 5
     assert migrated.max_concurrency == 2
+
+
+def test_v4_configuration_defaults_to_standard_progress_with_a_notice(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 4,
+                "model": "provider/model",
+                "input_cost_per_million_usd": None,
+                "output_cost_per_million_usd": None,
+                "max_concurrency": 4,
+                "stage_timeout_seconds": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.warns(UserWarning, match="standard progress visibility"):
+        migrated = load_user_configuration(path)
+
+    assert migrated is not None
+    assert migrated.schema_version == 5
+    assert migrated.max_concurrency == 4
+    assert migrated.progress_visibility == "standard"
 
 
 def test_product_configuration_can_omit_local_price_estimates() -> None:
@@ -173,6 +201,13 @@ def test_product_configuration_can_omit_local_price_estimates() -> None:
     assert configuration.input_cost_per_million_usd is None
     assert configuration.output_cost_per_million_usd is None
     assert configuration.max_concurrency == 2
+    assert configuration.progress_visibility == "standard"
+
+    with pytest.raises(ValueError):
+        UserConfiguration(
+            model="provider/model",
+            progress_visibility="everything",
+        )
 
     with pytest.raises(ValueError, match="configured together"):
         UserConfiguration(

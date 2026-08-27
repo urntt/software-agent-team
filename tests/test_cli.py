@@ -67,7 +67,10 @@ def test_cli_no_command_runs_the_guided_product_journey(
     monkeypatch.setattr(
         cli,
         "_ensure_product_configuration",
-        lambda _state_paths: UserConfiguration(model="provider/model"),
+        lambda _state_paths: UserConfiguration(
+            model="provider/model",
+            progress_visibility="detailed",
+        ),
     )
     source = tmp_path / "prepared-source"
     source.mkdir()
@@ -138,6 +141,7 @@ def test_cli_no_command_runs_the_guided_product_journey(
     assert observed["approved"] is approved
     assert options.source_repository == source
     assert options.model == "provider/model"
+    assert options.progress_handler.visibility is cli.RunEventVisibility.DETAILED
     assert options.policy == cli.DEFAULT_PRODUCT_POLICY
     assert options.quality_manifest == cli.DEFAULT_PRODUCT_PROFILE
     output = capsys.readouterr().out
@@ -454,6 +458,8 @@ def test_cli_noninteractive_configuration_is_private_and_reconfigurable(
                 "1.75",
                 "--max-concurrency",
                 "4",
+                "--progress-visibility",
+                "detailed",
                 "--stage-timeout-seconds",
                 "1200",
             ]
@@ -464,6 +470,7 @@ def test_cli_noninteractive_configuration_is_private_and_reconfigurable(
     assert first is not None
     assert first.model == "provider/model-a"
     assert first.max_concurrency == 4
+    assert first.progress_visibility == "detailed"
 
     assert (
         main(
@@ -482,6 +489,7 @@ def test_cli_noninteractive_configuration_is_private_and_reconfigurable(
     assert second.input_cost_per_million_usd is None
     assert second.output_cost_per_million_usd is None
     assert second.max_concurrency == first.max_concurrency
+    assert second.progress_visibility == first.progress_visibility
     assert second.stage_timeout_seconds == first.stage_timeout_seconds
     output = capsys.readouterr().out
     assert "provider credentials: not stored by SAT" in output
@@ -514,6 +522,7 @@ def test_cli_interactive_configuration_prompts_for_first_run_defaults(
     assert configuration.input_cost_per_million_usd is None
     assert configuration.output_cost_per_million_usd is None
     assert configuration.max_concurrency == 2
+    assert configuration.progress_visibility == "standard"
     assert configuration.stage_timeout_seconds is None
 
 
@@ -584,7 +593,7 @@ def test_first_run_model_setup_keeps_credentials_and_prices_outside_sat(
     assert configured.model == "provider/model"
     assert configured.input_cost_per_million_usd is None
     payload = json.loads(path.read_text(encoding="utf-8"))
-    assert payload["schema_version"] == 4
+    assert payload["schema_version"] == 5
     assert "api_key" not in payload
 
 

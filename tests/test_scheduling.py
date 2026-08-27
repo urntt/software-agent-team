@@ -433,14 +433,28 @@ def test_scheduler_emits_ordered_observer_events() -> None:
     ).execute(plan, lambda spec, upstream: successful_outcome(spec))
 
     assert observed == list(result.events)
-    assert [event.sequence for event in observed] == [1, 2, 3, 4]
+    assert [event.sequence for event in observed] == list(range(1, 9))
     assert [event.kind for event in observed] == [
+        ScheduleEventKind.AGENT_QUEUED,
+        ScheduleEventKind.AGENT_QUEUED,
+        ScheduleEventKind.AGENT_READY,
         ScheduleEventKind.AGENT_STARTED,
         ScheduleEventKind.AGENT_COMPLETED,
+        ScheduleEventKind.AGENT_READY,
         ScheduleEventKind.AGENT_STARTED,
         ScheduleEventKind.AGENT_COMPLETED,
     ]
-    assert [event.active_count for event in observed] == [1, 0, 1, 0]
+    assert [event.active_count for event in observed] == [0, 0, 0, 1, 0, 0, 1, 0]
+    assert [event.duration_ms is not None for event in observed] == [
+        False,
+        False,
+        False,
+        False,
+        True,
+        False,
+        False,
+        True,
+    ]
 
 
 def test_scheduler_rejects_an_iteration_outside_the_approved_plan() -> None:
@@ -466,3 +480,40 @@ def test_scheduler_rejects_an_iteration_outside_the_approved_plan() -> None:
             lambda spec, upstream: successful_outcome(spec),
             iteration=2,
         )
+
+
+def test_scheduler_bounds_multiline_agent_summaries_before_observer_delivery() -> None:
+    plan = team_plan(
+        (
+            agent(
+                "feature_builder",
+                AgentCapability.IMPLEMENTATION,
+                scope="repository/feature",
+            ),
+            agent(
+                "quality_auditor",
+                AgentCapability.TESTING,
+                dependencies=("feature_builder",),
+            ),
+        ),
+        max_concurrency=1,
+    )
+
+    def runner(
+        spec: AgentSpec,
+        upstream: Mapping[str, AgentRunOutcome],
+    ) -> AgentRunOutcome:
+        del upstream
+        return successful_outcome(spec).model_copy(
+            update={"summary": "first line\n" + "x" * 1000}
+        )
+
+    result = DagScheduler(clock=lambda: NOW).execute(plan, runner)
+    completed = next(
+        event
+        for event in result.events
+        if event.kind is ScheduleEventKind.AGENT_COMPLETED
+    )
+
+    assert len(completed.message) == 500
+    assert "\n" not in completed.message

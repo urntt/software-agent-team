@@ -91,7 +91,8 @@ sat configure --show
 
 The normal wizard stores only the selected `provider/model` reference. Advanced
 configuration may also store secret-free prices, the adaptive maximum
-concurrency, or an explicit global invocation-timeout override. Provider
+concurrency, compact/standard/detailed progress visibility, or an explicit
+global invocation-timeout override. Provider
 credentials remain in SAT's isolated OpenClaw state or in an explicitly
 trusted caller environment; they are not written to the repository, generated
 project, run evidence, or SAT exports.
@@ -130,9 +131,10 @@ SAT is experimental software. The supported build path is currently limited
 to new, small Python 3.12 projects; existing-codebase modification, additional
 runtime profiles, interrupted-run resume, deployment, and publication are not
 yet supported. Adaptive Planning, plan approval, task-defined execution, and
-delivery are integrated in the normal `sat` path and covered offline. Rich
-configurable per-Agent progress, active run controls, and multiple model routes
-remain under development.
+delivery are integrated in the normal `sat` path and covered offline. The same
+append-only event stream now drives configurable per-Agent progress, including
+dependency, provider-wait, repair, terminal, route, duration, and budget facts.
+Active run controls and multiple model routes remain under development.
 
 The earlier guided fixed-team path passed a complete live-provider rehearsal
 in a fresh non-root Linux account, including accepted delivery, exact project

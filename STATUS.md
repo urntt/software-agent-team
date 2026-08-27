@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** Phase 3C adaptive product activation implemented and offline verified; Phase 3D progress and controls are next
+**Current milestone:** Phase 3D per-Agent progress implemented and offline verified; active controls are next
 
 **Last updated:** August 27, 2026
 
@@ -50,15 +50,21 @@ validation also rejects a plan whose complete planned iterations cannot fit
 its call budget. Recovery
 verifies the exact TaskBrief binding, TeamPlan digest, fixed manifest version,
 fixed team digest, resolved Agent timeouts, and cross-file run metadata. The
-complete repository check passes with 529 offline tests.
+complete repository check passes with 532 offline tests.
 
 `RunEvent` is also an executable, append-only contract. Every current workflow
 progress update is persisted with a contiguous sequence, lifecycle revision,
 phase, Agent identity when applicable, visibility class, and predecessor
 digest. `run.json` atomically anchors the latest event, so recovery detects
 missing, reordered, modified, or extra events, including a changed tail.
-Compact, standard, and detailed filtering consumes the same event contract;
-the current product launcher still selects the standard renderer.
+The dynamic scheduler and runner now project every approved Agent through
+queued, ready, running, provider-waiting, bounded-repair, completed, failed, or
+blocked transitions. Events include safe activity, dependencies, capability,
+stage, approved model, attempt and duration where applicable, invocation
+evidence, and aggregate budget snapshots. Compact, standard, and detailed
+filtering consumes the same event contract. Configuration schema v5 persists
+the selected visibility without changing execution, and bare `sat` applies it
+to the product renderer; standard remains the default.
 
 `ControlCommand` and its controller-owned revision store define and preserve
 the request, target, safe application boundary, status, consequence, plan or
@@ -180,8 +186,8 @@ the approved run-scoped Agents, executes the dynamic lifecycle, cleans both
 bootstrap and execution sandboxes, and uses the existing accepted-result
 delivery boundary. It cannot approve a dynamic plan and silently execute the
 old fixed team. Safe concurrent writers beyond the current serialized Git
-chain, safe plan amendment checkpoints, richer visibility, and active control
-application remain pending.
+chain, safe plan amendment checkpoints, live visibility switching, and active
+control application remain pending.
 
 ## Product Readiness Boundary
 
@@ -194,10 +200,10 @@ or safe edits, and creates an execution run only after exact approval. It then
 executes the approved TeamPlan and delivers only an accepted clean Git result
 with project-specific commands.
 
-The activated product path uses one strict selected model route, the standard
-controller progress renderer, and no active run-control input channel yet.
-Configurable per-Agent visibility, guide/correct/pause/resume/interrupt/cancel,
-and multiple model routing described in
+The activated product path uses one strict selected model route and a
+user-configurable controller progress renderer. It has no active run-control
+input channel yet. Guide/correct/pause/resume/interrupt/cancel and multiple
+model routing described in
 [`docs/adaptive-orchestration.md`](docs/adaptive-orchestration.md) remain the
 next milestones rather than current capabilities.
 
@@ -447,8 +453,9 @@ The acceptance contract is
   dependency waves, workspace scopes, model route, budget, and manifest
   provenance;
 - Versioned, hash-chained `RunEvent` persistence with run-state head anchoring,
-  controller lifecycle and Agent attribution, safe summaries, and renderer
-  visibility filtering;
+  controller lifecycle and Agent attribution, dependency and route metadata,
+  safe summaries, aggregate budget snapshots, and renderer visibility
+  filtering;
 - Versioned `ControlCommand` requests and terminal resolutions with typed
   targets, command-specific safe boundaries, optimistic revisions, immutable
   metadata, and predecessor-digest verification;
@@ -546,7 +553,9 @@ The acceptance contract is
   Planning evidence, confirmed TaskBrief and TeamPlan materialization, trusted
   source creation after approval, isolated workspaces, and write-once evidence;
 - Controller-backed role, elapsed-waiting, Git-snapshot, quality-gate,
-  independent-review, decision, revision, completion, and failure progress;
+  independent-review, decision, revision, completion, and failure progress,
+  plus adaptive Agent queue, readiness, provider wait, repair, duration,
+  dependency, route, budget, and terminal-state projection;
 - Accepted-result-only delivery through a same-parent staging directory into a
   new non-overwriting project child, followed by exact setup, start, and test
   commands from a validated project-owned argv manifest;
@@ -582,8 +591,8 @@ derived from the task.
 - A fresh installed provider-backed rehearsal of the activated Adaptive
   Planning and Dynamic Team journey, followed by an independent-device live
   demonstration;
-- Compact, standard, and detailed visibility backed by persisted per-Agent
-  events;
+- Changing progress visibility from a live control palette after a run has
+  started; saved compact, standard, and detailed selection is available;
 - User guidance, correction, pause, resume, interruption, and cancellation
   through a controller-owned control channel;
 - Multiple secret-free model profiles, per-task/per-stage/per-Agent routing,
@@ -605,10 +614,10 @@ action succeeded after interruption.
 
 ## Next Milestone
 
-The next Phase 3D batch projects richer run and per-Agent progress from the
-existing event contract and applies guide, correct, pause, resume, interrupt,
-and cancel commands through the persisted controller channel. Phase 3E then
-adds model profiles and routing. Fixed-topology comparison remains in Phase 4
+The next Phase 3D batch applies guide, correct, pause, resume, interrupt, and
+cancel commands through the persisted controller channel, then completes live
+visibility switching. Phase 3E adds model profiles and routing. Fixed-topology
+comparison remains in Phase 4
 so it can serve as a controlled baseline rather than define the product's
 permanent role layout.
 The detailed sequence and acceptance criteria are in

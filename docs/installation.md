@@ -180,12 +180,13 @@ SAT configuration is stored atomically with mode `0600` at:
 ${XDG_CONFIG_HOME:-$HOME/.config}/software-agent-team/config.json
 ```
 
-Schema version 4 stores the exact OpenClaw `provider/model` reference. It may
+Schema version 5 stores the exact OpenClaw `provider/model` reference. It may
 also contain optional secret-free prices, an adaptive `max_concurrency` from 1
-through 16, and an explicit global invocation-timeout override. The guided
-product flow writes only the model reference and uses the controller defaults
-for other fields. Existing schema-v3 `verification_concurrency` values migrate
-one way into `max_concurrency`.
+through 16, `compact`, `standard`, or `detailed` progress visibility, and an
+explicit global invocation-timeout override. The guided product flow writes
+only the model reference and uses the controller defaults for other fields.
+Existing schema-v3 `verification_concurrency` values migrate one way into
+`max_concurrency`; schema v4 defaults to `standard` visibility on load.
 
 The normal first-run wizard stores only the model in SAT configuration and uses
 checked-in runtime defaults. Credential entry and persistence remain owned by
@@ -224,11 +225,19 @@ Non-interactive configuration records the requested reference; the next
 `sat` launch validates its exact catalog/auth route before asking project
 questions. Interactive `sat configure` performs that validation before saving.
 
-Pricing, adaptive maximum concurrency, and timeout overrides are advanced
-configuration and are not part of normal first-use setup. For example,
-`sat configure --non-interactive --model provider/model --max-concurrency 4`
-sets a scheduling cap; dependency readiness and shared-workspace writer safety
-may reduce actual concurrency. Fixed-evaluation verification concurrency
+Pricing, adaptive maximum concurrency, progress visibility, and timeout
+overrides are advanced configuration and are not part of normal first-use
+setup. For example:
+
+```bash
+sat configure --non-interactive --model provider/model \
+  --max-concurrency 4 \
+  --progress-visibility detailed
+```
+
+This sets a scheduling cap and detailed progress; dependency readiness and
+shared-workspace writer safety may reduce actual concurrency. Fixed-evaluation
+verification concurrency
 remains a separate `sat run` option documented in the
 [`Phase 1 evaluation runbook`](phase1-runbook.md). When no trustworthy price is
 available, a product run reports estimated cost as unavailable rather than

@@ -491,6 +491,36 @@ def test_dynamic_workflow_accepts_one_iteration_with_live_lifecycle_order(
         if event.kind is ProgressEventKind.QUALITY_GATE_COMPLETED
     )
     assert quality_event.phase is RunPhase.VERIFYING
+    event_kinds = [event.kind for event in outcome.events]
+    assert event_kinds.count(ProgressEventKind.AGENT_QUEUED) == len(
+        approved.team_plan.agents
+    )
+    assert event_kinds.count(ProgressEventKind.AGENT_READY) == len(
+        approved.team_plan.agents
+    )
+    assert event_kinds.count(ProgressEventKind.AGENT_WAITING_PROVIDER) == len(
+        approved.team_plan.agents
+    )
+    assert event_kinds.count(ProgressEventKind.AGENT_INVOCATION_COMPLETED) == len(
+        approved.team_plan.agents
+    )
+    terminal_agent_events = [
+        event
+        for event in outcome.events
+        if event.kind is ProgressEventKind.AGENT_COMPLETED
+    ]
+    assert len(terminal_agent_events) == len(approved.team_plan.agents)
+    assert all(event.duration_ms is not None for event in terminal_agent_events)
+    assert all(
+        event.source.value == "agent_safe_summary" for event in terminal_agent_events
+    )
+    invocation_event = next(
+        event
+        for event in outcome.events
+        if event.kind is ProgressEventKind.AGENT_INVOCATION_COMPLETED
+    )
+    assert invocation_event.budget_usage is not None
+    assert invocation_event.model == MODEL
 
 
 def test_dynamic_workflow_revises_from_commit_bound_feedback_then_accepts(

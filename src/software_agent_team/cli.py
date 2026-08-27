@@ -64,6 +64,7 @@ from software_agent_team.progress import (
     ProgressEvent,
     ProgressEventKind,
     ProgressHandler,
+    RunEventVisibility,
     TerminalProgressRenderer,
 )
 from software_agent_team.quality_gates import (
@@ -182,6 +183,7 @@ def _print_configuration(configuration: UserConfiguration, path: Path) -> None:
         f"{output_cost if output_cost is not None else 'not configured'}"
     )
     print(f"maximum concurrent Agents: {configuration.max_concurrency}")
+    print(f"progress visibility: {configuration.progress_visibility}")
     timeout = configuration.stage_timeout_seconds
     print(
         "global Agent invocation timeout override (seconds): "
@@ -268,6 +270,7 @@ def _configure(args: argparse.Namespace) -> int:
                 args.input_cost_per_million_usd,
                 args.output_cost_per_million_usd,
                 args.max_concurrency,
+                args.progress_visibility,
                 supplied_timeout,
             )
         )
@@ -321,6 +324,9 @@ def _configure(args: argparse.Namespace) -> int:
         input_cost = current.input_cost_per_million_usd if same_model else None
         output_cost = current.output_cost_per_million_usd if same_model else None
         concurrency = current.max_concurrency if current is not None else 2
+        progress_visibility = (
+            current.progress_visibility if current is not None else "standard"
+        )
         timeout = current.stage_timeout_seconds if current is not None else None
     else:
         if not supplied:
@@ -356,6 +362,13 @@ def _configure(args: argparse.Namespace) -> int:
             if current
             else 2
         )
+        progress_visibility = (
+            args.progress_visibility
+            if args.progress_visibility is not None
+            else current.progress_visibility
+            if current
+            else "standard"
+        )
         timeout = (
             supplied_timeout
             if timeout_supplied
@@ -374,6 +387,7 @@ def _configure(args: argparse.Namespace) -> int:
         output_cost_per_million_usd=output_cost,
         max_concurrency=concurrency,
         stage_timeout_seconds=timeout,
+        progress_visibility=progress_visibility,
     )
     if interactive:
         inspection = _inspect_selected_model(
@@ -1173,6 +1187,9 @@ def _ensure_product_configuration(
             stage_timeout_seconds=(
                 current.stage_timeout_seconds if current is not None else None
             ),
+            progress_visibility=(
+                current.progress_visibility if current is not None else "standard"
+            ),
         )
     inspection = _inspect_selected_model(
         DEFAULT_OPENCLAW_BINARY,
@@ -1513,7 +1530,9 @@ def _run_product() -> int:
         state_paths=state_paths,
         run_id=run_id,
     )
-    renderer = TerminalProgressRenderer()
+    renderer = TerminalProgressRenderer(
+        visibility=RunEventVisibility(configuration.progress_visibility),
+    )
     try:
         outcome = _execute_dynamic_workflow(
             approved,
@@ -1626,6 +1645,14 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Maximum ready Agents the adaptive scheduler may run concurrently; "
             "shared-workspace writer safety can reduce actual concurrency."
+        ),
+    )
+    configure.add_argument(
+        "--progress-visibility",
+        choices=tuple(item.value for item in RunEventVisibility),
+        help=(
+            "Select compact, standard, or detailed controller-backed progress "
+            "without changing execution behavior."
         ),
     )
     configure_timeout = configure.add_mutually_exclusive_group()

@@ -19,10 +19,11 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from software_agent_team.artifacts import IterationDecision
+from software_agent_team.budgets import AgentBudgetUsage
 from software_agent_team.integrity import canonical_model_sha256
 from software_agent_team.run_control import RunPhase
 
-RUN_EVENT_SCHEMA_VERSION = 1
+RUN_EVENT_SCHEMA_VERSION = 2
 EVENTS_DIRECTORY = "events"
 EVENT_FILENAME_PATTERN = re.compile(r"^(?P<sequence>[0-9]{6})\.json$")
 
@@ -32,9 +33,15 @@ class ProgressEventKind(StrEnum):
 
     RUN_STARTED = "run_started"
     WORKSPACE_READY = "workspace_ready"
+    AGENT_QUEUED = "agent_queued"
+    AGENT_READY = "agent_ready"
     AGENT_STARTED = "agent_started"
+    AGENT_WAITING_PROVIDER = "agent_waiting_provider"
+    AGENT_INVOCATION_COMPLETED = "agent_invocation_completed"
     AGENT_COMPLETED = "agent_completed"
     AGENT_RETRY = "agent_retry"
+    AGENT_FAILED = "agent_failed"
+    AGENT_SKIPPED = "agent_skipped"
     SNAPSHOT_VERIFIED = "snapshot_verified"
     QUALITY_GATES_STARTED = "quality_gates_started"
     QUALITY_GATE_COMPLETED = "quality_gate_completed"
@@ -64,9 +71,18 @@ class RunEventVisibility(StrEnum):
 class AgentRunState(StrEnum):
     """Controller-observed state for one run-scoped Agent."""
 
+    QUEUED = "queued"
+    READY = "ready"
     RUNNING = "running"
+    WAITING_PROVIDER = "waiting_provider"
+    WAITING_DEPENDENCY = "waiting_dependency"
+    BLOCKED = "blocked"
+    PAUSED = "paused"
     COMPLETED = "completed"
     WAITING_REPAIR = "waiting_repair"
+    INTERRUPTED = "interrupted"
+    CANCELLED = "cancelled"
+    FAILED = "failed"
 
 
 class RunEventSource(StrEnum):
@@ -102,9 +118,29 @@ _EVENT_METADATA: dict[
         RunEventVisibility.STANDARD,
         None,
     ),
+    ProgressEventKind.AGENT_QUEUED: (
+        RunEventCategory.AGENT,
+        RunEventVisibility.STANDARD,
+        AgentRunState.QUEUED,
+    ),
+    ProgressEventKind.AGENT_READY: (
+        RunEventCategory.AGENT,
+        RunEventVisibility.STANDARD,
+        AgentRunState.READY,
+    ),
     ProgressEventKind.AGENT_STARTED: (
         RunEventCategory.AGENT,
         RunEventVisibility.STANDARD,
+        AgentRunState.RUNNING,
+    ),
+    ProgressEventKind.AGENT_WAITING_PROVIDER: (
+        RunEventCategory.AGENT,
+        RunEventVisibility.STANDARD,
+        AgentRunState.WAITING_PROVIDER,
+    ),
+    ProgressEventKind.AGENT_INVOCATION_COMPLETED: (
+        RunEventCategory.AGENT,
+        RunEventVisibility.DETAILED,
         AgentRunState.RUNNING,
     ),
     ProgressEventKind.AGENT_COMPLETED: (
@@ -116,6 +152,16 @@ _EVENT_METADATA: dict[
         RunEventCategory.AGENT,
         RunEventVisibility.COMPACT,
         AgentRunState.WAITING_REPAIR,
+    ),
+    ProgressEventKind.AGENT_FAILED: (
+        RunEventCategory.AGENT,
+        RunEventVisibility.COMPACT,
+        AgentRunState.FAILED,
+    ),
+    ProgressEventKind.AGENT_SKIPPED: (
+        RunEventCategory.AGENT,
+        RunEventVisibility.STANDARD,
+        AgentRunState.BLOCKED,
     ),
     ProgressEventKind.SNAPSHOT_VERIFIED: (
         RunEventCategory.GIT,
@@ -147,6 +193,15 @@ _EVENT_METADATA: dict[
         RunEventVisibility.COMPACT,
         None,
     ),
+}
+
+_ATTEMPT_EVENT_KINDS = {
+    ProgressEventKind.AGENT_STARTED,
+    ProgressEventKind.AGENT_WAITING_PROVIDER,
+    ProgressEventKind.AGENT_INVOCATION_COMPLETED,
+    ProgressEventKind.AGENT_COMPLETED,
+    ProgressEventKind.AGENT_RETRY,
+    ProgressEventKind.AGENT_FAILED,
 }
 
 
@@ -226,6 +281,17 @@ class RunEvent(BaseModel):
     iteration: int | None = Field(default=None, ge=1, le=99)
     attempt: int | None = Field(default=None, ge=1, le=99)
     duration_ms: int | None = Field(default=None, ge=0)
+    capability: str | None = Field(
+        default=None,
+        pattern=r"^[a-z][a-z0-9_]*$",
+    )
+    stage_id: str | None = Field(
+        default=None,
+        pattern=r"^[a-z][a-z0-9_]*$",
+    )
+    model: str | None = Field(default=None, min_length=1, max_length=300)
+    dependency_ids: tuple[str, ...] = ()
+    budget_usage: AgentBudgetUsage | None = None
     completed: int | None = Field(default=None, ge=0)
     total: int | None = Field(default=None, ge=1)
     changed_files: tuple[str, ...] = ()
@@ -270,6 +336,25 @@ class RunEvent(BaseModel):
                 )
         return values
 
+    @field_validator("model")
+    @classmethod
+    def require_clean_model(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("RunEvent model must not be blank")
+        return cleaned
+
+    @field_validator("dependency_ids")
+    @classmethod
+    def require_unique_dependencies(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        if len(values) != len(set(values)) or any(
+            re.fullmatch(r"[a-z][a-z0-9_]*", value) is None for value in values
+        ):
+            raise ValueError("RunEvent dependencies must be unique Agent IDs")
+        return values
+
     @model_validator(mode="after")
     def validate_event(self) -> Self:
         category, visibility, agent_state = _EVENT_METADATA[self.kind]
@@ -280,10 +365,29 @@ class RunEvent(BaseModel):
         if self.agent_state is not agent_state:
             raise ValueError("RunEvent Agent state does not match its kind")
         if agent_state is not None:
-            if self.agent_id is None or self.attempt is None:
-                raise ValueError("Agent events require an Agent ID and attempt")
-        elif self.agent_id is not None or self.attempt is not None:
-            raise ValueError("non-Agent events cannot claim an Agent attempt")
+            if self.agent_id is None:
+                raise ValueError("Agent events require an Agent ID")
+            if (self.kind in _ATTEMPT_EVENT_KINDS) != (self.attempt is not None):
+                raise ValueError("RunEvent attempt does not match its Agent event kind")
+        elif (
+            any(
+                value is not None
+                for value in (
+                    self.agent_id,
+                    self.attempt,
+                    self.capability,
+                    self.stage_id,
+                )
+            )
+            or self.model is not None
+            or self.dependency_ids
+            or self.budget_usage is not None
+        ):
+            raise ValueError("non-Agent events cannot claim Agent execution metadata")
+        if self.budget_usage is not None and self.kind is not (
+            ProgressEventKind.AGENT_INVOCATION_COMPLETED
+        ):
+            raise ValueError("only completed invocations record budget usage")
         if (self.completed is None) != (self.total is None):
             raise ValueError("RunEvent gate progress requires completed and total")
         if self.completed is not None and self.completed > self.total:
@@ -328,6 +432,11 @@ class ProgressEvent:
     iteration: int | None = None
     attempt: int | None = None
     duration_ms: int | None = None
+    capability: str | None = None
+    stage_id: str | None = None
+    model: str | None = None
+    dependency_ids: tuple[str, ...] = ()
+    budget_usage: AgentBudgetUsage | None = None
     completed: int | None = None
     total: int | None = None
     changed_files: tuple[str, ...] = ()
@@ -426,6 +535,11 @@ class RunEventJournal:
                 iteration=draft.iteration,
                 attempt=draft.attempt,
                 duration_ms=draft.duration_ms,
+                capability=draft.capability,
+                stage_id=draft.stage_id,
+                model=draft.model,
+                dependency_ids=draft.dependency_ids,
+                budget_usage=draft.budget_usage,
                 completed=draft.completed,
                 total=draft.total,
                 changed_files=draft.changed_files,
@@ -557,20 +671,31 @@ class TerminalProgressRenderer:
             > _VISIBILITY_RANK[self.visibility]
         ):
             return
-        if event.kind is ProgressEventKind.AGENT_STARTED:
+        if event.kind in {
+            ProgressEventKind.AGENT_STARTED,
+            ProgressEventKind.AGENT_WAITING_PROVIDER,
+        }:
             self._start_waiting(event)
+            self._print_details(event)
             return
         if event.kind in {
             ProgressEventKind.AGENT_COMPLETED,
             ProgressEventKind.AGENT_RETRY,
+            ProgressEventKind.AGENT_FAILED,
+            ProgressEventKind.AGENT_SKIPPED,
         }:
             self._stop_waiting(event)
 
         symbol = {
             ProgressEventKind.RUN_STARTED: "●",
             ProgressEventKind.WORKSPACE_READY: "✓",
+            ProgressEventKind.AGENT_QUEUED: "○",
+            ProgressEventKind.AGENT_READY: "→",
+            ProgressEventKind.AGENT_INVOCATION_COMPLETED: "·",
             ProgressEventKind.AGENT_COMPLETED: "✓",
             ProgressEventKind.AGENT_RETRY: "↻",
+            ProgressEventKind.AGENT_FAILED: "✗",
+            ProgressEventKind.AGENT_SKIPPED: "!",
             ProgressEventKind.SNAPSHOT_VERIFIED: "✓",
             ProgressEventKind.QUALITY_GATES_STARTED: "●",
             ProgressEventKind.QUALITY_GATE_COMPLETED: "✓",
@@ -579,6 +704,7 @@ class TerminalProgressRenderer:
             ProgressEventKind.RUN_FAILED: "✗",
         }[event.kind]
         self._print(f"{symbol} {event.summary}")
+        self._print_details(event)
         if event.kind in {
             ProgressEventKind.RUN_COMPLETED,
             ProgressEventKind.RUN_FAILED,
@@ -641,6 +767,38 @@ class TerminalProgressRenderer:
             elapsed = max(0, int(self.monotonic() - started))
             minutes, seconds = divmod(elapsed, 60)
             self._print(f"  {message} {minutes:02d}:{seconds:02d} elapsed")
+
+    def _print_details(self, event: RunEvent) -> None:
+        if self.visibility is not RunEventVisibility.DETAILED:
+            return
+        if event.agent_id is not None:
+            fields = [f"agent={event.agent_id}"]
+            if event.agent_state is not None:
+                fields.append(f"state={event.agent_state.value}")
+            if event.capability is not None:
+                fields.append(f"capability={event.capability}")
+            if event.stage_id is not None:
+                fields.append(f"stage={event.stage_id}")
+            if event.model is not None:
+                fields.append(f"model={event.model}")
+            if event.attempt is not None:
+                fields.append(f"attempt={event.attempt}")
+            if event.duration_ms is not None:
+                fields.append(f"duration_ms={event.duration_ms}")
+            dependencies = ",".join(event.dependency_ids) or "none"
+            fields.append(f"dependencies={dependencies}")
+            self._print("  " + " ".join(fields))
+        if event.budget_usage is not None:
+            usage = event.budget_usage
+            self._print(
+                "  budget "
+                f"calls={usage.calls_completed}/{usage.calls_started} "
+                f"active={usage.active_calls} input={usage.input_tokens} "
+                f"output={usage.output_tokens} "
+                f"duration_ms={usage.agent_duration_ms} "
+                f"known_cost_usd={usage.known_estimated_cost_usd} "
+                f"unpriced_calls={usage.unpriced_calls}"
+            )
 
     def _print(self, value: str) -> None:
         with self._lock:

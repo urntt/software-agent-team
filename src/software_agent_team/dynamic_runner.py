@@ -32,6 +32,7 @@ from software_agent_team.assembly import (
 from software_agent_team.budgets import (
     AgentBudgetExceeded,
     AgentBudgetLedger,
+    AgentBudgetUsage,
     ModelPricing,
 )
 from software_agent_team.execution import (
@@ -51,6 +52,13 @@ from software_agent_team.git_workspace import (
 from software_agent_team.integrity import canonical_model_sha256
 from software_agent_team.invocation import persist_agent_invocation
 from software_agent_team.planning import AdaptiveImplementationPlan
+from software_agent_team.progress import (
+    ProgressDraftHandler,
+    ProgressEvent,
+    ProgressEventKind,
+    RunEventReference,
+    RunEventReferenceKind,
+)
 from software_agent_team.prompting import (
     AgentPromptError,
     DynamicAgentPromptInputs,
@@ -142,6 +150,7 @@ class DynamicAgentRunner:
         input_commit: str | None = None,
         artifact_repair_limit: int = 1,
         revision_feedback: DynamicRevisionFeedback | None = None,
+        activity_handler: ProgressDraftHandler | None = None,
         clock: Callable[[], datetime] = _system_clock,
     ) -> None:
         if team_plan.origin is not TeamPlanOrigin.ADAPTIVE_PLANNING:
@@ -234,6 +243,7 @@ class DynamicAgentRunner:
         self.input_commit = verified_commit
         self.artifact_repair_limit = artifact_repair_limit
         self.revision_feedback = revision_feedback
+        self.activity_handler = activity_handler
         self.clock = clock
 
         self._state_lock = RLock()
@@ -440,6 +450,16 @@ class DynamicAgentRunner:
                 else build_semantic_repair_request(base_request, previous_error)
             )
             reservation = self.budget_ledger.reserve_call(agent.id)
+            self._emit_activity(
+                agent,
+                kind=ProgressEventKind.AGENT_WAITING_PROVIDER,
+                message=(
+                    f"{agent.label} is working through the approved "
+                    f"{request.model} runtime: {agent.responsibility}"
+                ),
+                attempt=attempt,
+                model=request.model,
+            )
             result = self._execute(request)
             response_reference: ArtifactReference | None = None
             ignored_fields: tuple[str, ...] = ()
@@ -508,6 +528,29 @@ class DynamicAgentRunner:
                 pricing=pricing,
             )
             self._record_execution_reference(agent.id, persisted.reference)
+            self._emit_activity(
+                agent,
+                kind=ProgressEventKind.AGENT_INVOCATION_COMPLETED,
+                message=(
+                    f"{agent.label} invocation {attempt} returned {result.status.value}"
+                ),
+                attempt=attempt,
+                model=request.model,
+                duration_ms=result.telemetry.duration_ms,
+                budget_usage=self.budget_ledger.snapshot(),
+                references=(
+                    RunEventReference(
+                        kind=RunEventReferenceKind.ARTIFACT,
+                        id=f"{agent.id}-invocation-{attempt}",
+                        path=persisted.reference.path,
+                        sha256=persisted.reference.sha256,
+                    ),
+                    RunEventReference(
+                        kind=RunEventReferenceKind.MODEL_ROUTE,
+                        id=agent.model_route_id,
+                    ),
+                ),
+            )
             if persisted.budget_error is not None:
                 raise DynamicAgentRunnerError(
                     persisted.budget_error,
@@ -522,6 +565,16 @@ class DynamicAgentRunner:
                 return response_reference
             previous_error = record_error or previous_error
             if repairable and attempt <= self.artifact_repair_limit:
+                self._emit_activity(
+                    agent,
+                    kind=ProgressEventKind.AGENT_RETRY,
+                    message=(
+                        f"{agent.label} response failed validation; "
+                        "starting one bounded repair"
+                    ),
+                    attempt=attempt,
+                    model=request.model,
+                )
                 continue
             if failure is not None:
                 if repairable:
@@ -535,6 +588,39 @@ class DynamicAgentRunner:
                 TerminationReason.EXECUTION_FAILED,
             )
         raise AssertionError("unreachable dynamic Agent repair state")
+
+    def _emit_activity(
+        self,
+        agent: AgentSpec,
+        *,
+        kind: ProgressEventKind,
+        message: str,
+        attempt: int,
+        model: str | None,
+        duration_ms: int | None = None,
+        budget_usage: AgentBudgetUsage | None = None,
+        references: tuple[RunEventReference, ...] = (),
+    ) -> None:
+        """Project one safe invocation checkpoint without changing runtime state."""
+
+        if self.activity_handler is None:
+            return
+        self.activity_handler(
+            ProgressEvent(
+                kind=kind,
+                message=(" ".join(message.split()) or "Agent activity changed")[:500],
+                agent_id=agent.id,
+                iteration=self.iteration,
+                attempt=attempt,
+                duration_ms=duration_ms,
+                capability=agent.capability.value,
+                stage_id=agent.stage_id,
+                model=model,
+                dependency_ids=agent.dependencies,
+                budget_usage=budget_usage,
+                references=references,
+            )
+        )
 
     def _execute(self, request: AgentExecutionRequest) -> AgentExecutionResult:
         started_at = _utc(self.clock)

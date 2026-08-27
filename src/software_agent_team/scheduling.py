@@ -40,6 +40,8 @@ class ScheduleStatus(StrEnum):
 class ScheduleEventKind(StrEnum):
     """User-safe scheduler transition emitted by the controller."""
 
+    AGENT_QUEUED = "agent_queued"
+    AGENT_READY = "agent_ready"
     AGENT_STARTED = "agent_started"
     AGENT_COMPLETED = "agent_completed"
     AGENT_FAILED = "agent_failed"
@@ -50,6 +52,11 @@ def _utc(value: datetime) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError("scheduler timestamps must include a timezone")
     return value.astimezone(UTC)
+
+
+def _safe_schedule_message(value: str) -> str:
+    cleaned = " ".join(value.split())
+    return (cleaned or "Scheduler state changed.")[:500]
 
 
 class AgentRunOutcome(BaseModel):
@@ -149,11 +156,22 @@ class ScheduleEvent(BaseModel):
     occurred_at: datetime
     active_count: int = Field(ge=0)
     message: str = Field(min_length=1, max_length=500)
+    duration_ms: int | None = Field(default=None, ge=0)
 
     @field_validator("occurred_at")
     @classmethod
     def require_utc_timestamp(cls, value: datetime) -> datetime:
         return _utc(value)
+
+    @model_validator(mode="after")
+    def require_terminal_duration(self) -> Self:
+        terminal = self.kind in {
+            ScheduleEventKind.AGENT_COMPLETED,
+            ScheduleEventKind.AGENT_FAILED,
+        }
+        if terminal != (self.duration_ms is not None):
+            raise ValueError("scheduler duration must match an executed terminal event")
+        return self
 
 
 class DagScheduleResult(BaseModel):
@@ -272,6 +290,7 @@ class DagScheduler:
             message: str,
             *,
             active_count: int,
+            duration_ms: int | None = None,
         ) -> None:
             event = ScheduleEvent(
                 sequence=len(events) + 1,
@@ -279,7 +298,8 @@ class DagScheduler:
                 agent_id=agent_id,
                 occurred_at=_utc(self.clock()),
                 active_count=active_count,
-                message=message,
+                message=_safe_schedule_message(message),
+                duration_ms=duration_ms,
             )
             events.append(event)
             if self.observer is not None:
@@ -317,6 +337,19 @@ class DagScheduler:
                 )
             return outcome
 
+        for agent in team_plan.agents:
+            dependency_summary = (
+                ", ".join(agent.dependencies) if agent.dependencies else "scheduler"
+            )
+            emit(
+                ScheduleEventKind.AGENT_QUEUED,
+                agent.id,
+                f"{agent.label} queued after {dependency_summary}: "
+                f"{agent.responsibility}",
+                active_count=0,
+            )
+
+        ready_announced: set[str] = set()
         with ThreadPoolExecutor(max_workers=team_plan.max_concurrency) as executor:
             while pending or active:
                 if first_failure is None:
@@ -326,6 +359,15 @@ class DagScheduler:
                         if agent.id in pending
                         and set(agent.dependencies).issubset(completed)
                     ]
+                    for agent in ready:
+                        if agent.id not in ready_announced:
+                            emit(
+                                ScheduleEventKind.AGENT_READY,
+                                agent.id,
+                                f"{agent.label} is ready: {agent.responsibility}",
+                                active_count=len(active),
+                            )
+                            ready_announced.add(agent.id)
                     for agent in ready:
                         if len(active) >= team_plan.max_concurrency:
                             break
@@ -341,7 +383,7 @@ class DagScheduler:
                         emit(
                             ScheduleEventKind.AGENT_STARTED,
                             agent.id,
-                            f"{agent.label} started.",
+                            f"{agent.label} started: {agent.responsibility}",
                             active_count=len(active) + 1,
                         )
                         future = executor.submit(invoke, agent, upstream)
@@ -405,6 +447,7 @@ class DagScheduler:
                         agent.id,
                         outcome.summary,
                         active_count=len(active),
+                        duration_ms=duration_ms,
                     )
 
         if pending:

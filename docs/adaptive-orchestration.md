@@ -5,9 +5,9 @@ task-defined Agent teams, interactive planning, observable execution, user
 controls, and model routing. Planning, run-scoped execution identity, prompts,
 runtime configuration, handoffs, telemetry, Agent-namespaced artifact
 persistence, deterministic DAG scheduling, multi-iteration lifecycle
-convergence, and bare-`sat` activation are implemented and offline verified.
-Richer progress projection, active controls, and multi-model routing remain
-staged work.
+convergence, bare-`sat` activation, and configurable per-Agent progress are
+implemented and offline verified. Active controls and multi-model routing
+remain staged work.
 Current behavior and gaps remain authoritative in
 [`STATUS.md`](../STATUS.md); the completed guided baseline remains specified in
 [`product-demo-slice.md`](product-demo-slice.md).
@@ -519,6 +519,13 @@ have a user-facing assignment editor.
 **Exit:** an offline end-to-end run demonstrates every command and visibility
 level with deterministic event evidence; an authorized live run demonstrates
 at least guidance and cooperative pause/resume without losing integrity.
+
+**Implementation note:** append-only events now project scheduler queue and
+readiness, invocation and provider wait, bounded semantic repair, completion,
+failure, and blocked states with Agent dependencies, capability, stage, model,
+duration, evidence, and aggregate budget data. Configuration schema v5 selects
+compact, standard, or detailed terminal projection. Active control application
+and live visibility switching remain in this batch.
 
 ### Batch 3E: Model Profiles and Routing
 

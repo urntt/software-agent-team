@@ -257,15 +257,18 @@ the frozen TaskBrief, TeamPlan, fixed-fixture provenance when applicable, and
 all cross-file digests before returning state.
 
 Every compatibility-workflow status update is first enriched into a versioned
-`RunEvent` with its run ID, contiguous sequence, UTC timestamp, lifecycle
+`RunEvent` stores its run ID, contiguous sequence, UTC timestamp, lifecycle
 revision, category, minimum visibility, phase, and attributable Agent attempt
-when applicable. Events are written as an append-only predecessor-digest
-chain. After each append, `run.json` atomically anchors the exact event count
-and latest digest; if anchoring fails, the unowned event file is removed before
-presentation code sees it. Recovery therefore detects missing, reordered,
-modified, or extra events, including tampering with the latest event. A
-renderer consumes this same persisted contract. Renderer failure is isolated
-from controller execution and cannot erase the event.
+when applicable. Dynamic events additionally record queue/readiness/provider
+wait/repair/terminal state, safe activity, dependencies, capability, stage,
+approved model, duration, invocation reference, and aggregate budget snapshot.
+Events are written as an append-only predecessor-digest chain. After each
+append, `run.json` atomically anchors the exact event count and latest digest;
+if anchoring fails, the unowned event file is removed before presentation code
+sees it. Recovery therefore detects missing, reordered, modified, or extra
+events, including tampering with the latest event. Compact, standard, and
+detailed renderers consume this same persisted contract. Renderer failure is
+isolated from controller execution and cannot erase the event.
 
 `ControlCommand` defines `guide`, `correct`, `pause`, `resume`, `interrupt`,
 and `cancel` requests, typed targets, safe application boundaries, and the

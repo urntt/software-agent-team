@@ -49,6 +49,9 @@ from software_agent_team.progress import (
     ProgressHandler,
     RunEvent,
     RunEventJournal,
+    RunEventReference,
+    RunEventReferenceKind,
+    RunEventSource,
 )
 from software_agent_team.prompting import DynamicRevisionFeedback
 from software_agent_team.quality_gates import (
@@ -114,6 +117,13 @@ def _unique_references(
     values: tuple[ArtifactReference, ...] | list[ArtifactReference],
 ) -> tuple[ArtifactReference, ...]:
     return tuple({reference.path: reference for reference in values}.values())
+
+
+def _safe_event_summary(value: str, *, fallback: str) -> str:
+    """Collapse bounded Agent output into one renderer-safe evidence summary."""
+
+    cleaned = " ".join(value.split())
+    return (cleaned or fallback)[:500]
 
 
 @dataclass(frozen=True)
@@ -374,6 +384,7 @@ class DynamicWorkflowCoordinator:
                 input_commit=input_commit,
                 artifact_repair_limit=self.artifact_repair_limit,
                 revision_feedback=revision_feedback,
+                activity_handler=lambda event: self._emit(context, event),
                 clock=self.clock,
             )
             snapshots: list[GitSnapshot] = []
@@ -446,28 +457,57 @@ class DynamicWorkflowCoordinator:
                             iteration=record.current_iteration,
                         ),
                     )
-                if event.kind is ScheduleEventKind.AGENT_STARTED:
-                    self._emit(
-                        context,
-                        ProgressEvent(
-                            kind=ProgressEventKind.AGENT_STARTED,
-                            message=f"{agent.label} is working",
-                            agent_id=agent.id,
-                            iteration=record.current_iteration,
-                            attempt=1,
+                event_kind = {
+                    ScheduleEventKind.AGENT_QUEUED: ProgressEventKind.AGENT_QUEUED,
+                    ScheduleEventKind.AGENT_READY: ProgressEventKind.AGENT_READY,
+                    ScheduleEventKind.AGENT_STARTED: ProgressEventKind.AGENT_STARTED,
+                    ScheduleEventKind.AGENT_COMPLETED: (
+                        ProgressEventKind.AGENT_COMPLETED
+                    ),
+                    ScheduleEventKind.AGENT_FAILED: ProgressEventKind.AGENT_FAILED,
+                    ScheduleEventKind.AGENT_SKIPPED: ProgressEventKind.AGENT_SKIPPED,
+                }[event.kind]
+                route = team_plan.model_routes.get_route(agent.model_route_id)
+                executed = event.kind in {
+                    ScheduleEventKind.AGENT_STARTED,
+                    ScheduleEventKind.AGENT_COMPLETED,
+                    ScheduleEventKind.AGENT_FAILED,
+                }
+                message = _safe_event_summary(
+                    event.message,
+                    fallback=f"{agent.label} changed scheduler state",
+                )
+                source = (
+                    RunEventSource.AGENT_SAFE_SUMMARY
+                    if event.kind
+                    in {
+                        ScheduleEventKind.AGENT_COMPLETED,
+                        ScheduleEventKind.AGENT_FAILED,
+                    }
+                    else RunEventSource.CONTROLLER
+                )
+                self._emit(
+                    context,
+                    ProgressEvent(
+                        kind=event_kind,
+                        message=message,
+                        agent_id=agent.id,
+                        iteration=record.current_iteration,
+                        attempt=1 if executed else None,
+                        duration_ms=event.duration_ms,
+                        capability=agent.capability.value,
+                        stage_id=agent.stage_id,
+                        model=route.model,
+                        dependency_ids=agent.dependencies,
+                        references=(
+                            RunEventReference(
+                                kind=RunEventReferenceKind.MODEL_ROUTE,
+                                id=agent.model_route_id,
+                            ),
                         ),
-                    )
-                elif event.kind is ScheduleEventKind.AGENT_COMPLETED:
-                    self._emit(
-                        context,
-                        ProgressEvent(
-                            kind=ProgressEventKind.AGENT_COMPLETED,
-                            message=f"{agent.label} completed its approved work",
-                            agent_id=agent.id,
-                            iteration=record.current_iteration,
-                            attempt=1,
-                        ),
-                    )
+                        source=source,
+                    ),
+                )
 
             schedule: DagScheduleResult | None = None
             try:
