@@ -224,6 +224,11 @@ The bare `sat` launcher uses the Adaptive Planning store before creating a run.
 Its request proves explicit model-work authorization. Every
 model invocation, including a rejected semantic response, becomes a write-once
 turn containing prompt and response digests plus bounded provider evidence.
+The turn preserves the exact raw response. When the controller infers an
+unambiguous missing question/proposal discriminator or canonicalizes a safe
+relative Planning path presentation, it stores the validated normalized body
+and an explicit field-level normalization list alongside that raw evidence.
+Unsafe, ambiguous, or permission-changing values remain validation failures.
 Turns form a predecessor-digest chain anchored by atomic `session.json` state.
 Proposal revisions are immutable and must match their source turn or a
 controller-owned structured edit. Approval binds the exact proposal, confirmed

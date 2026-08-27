@@ -265,6 +265,55 @@ def test_question_requires_suggestions_and_preserves_custom_answers() -> None:
     assert question.allow_custom
 
 
+def test_response_normalizer_canonicalizes_only_safe_presentation_variants() -> None:
+    payload = proposal_response().model_dump(mode="json")
+    payload.pop("kind")
+    payload["proposal"]["tasks"][0]["expected_paths"] = [
+        " tests/ ",
+        "./src//link_checker.py",
+    ]
+    payload["proposal"]["agents"][0]["workspace_scope"] = "repository/"
+    original = json.loads(json.dumps(payload))
+
+    normalized, changes = planning._normalize_planning_response_payload(payload)
+    parsed = PlanningModelResponse.model_validate(normalized)
+
+    assert payload == original
+    assert parsed.kind is PlanningResponseKind.PROPOSAL
+    assert parsed.proposal is not None
+    assert parsed.proposal.tasks[0].expected_paths == (
+        "tests",
+        "src/link_checker.py",
+    )
+    assert parsed.proposal.agents[0].workspace_scope == "repository"
+    assert changes == (
+        "inferred response kind as proposal",
+        "canonicalized proposal.tasks[0].expected_paths[0]",
+        "canonicalized proposal.tasks[0].expected_paths[1]",
+        "canonicalized proposal.agents[0].workspace_scope",
+    )
+
+
+def test_response_normalizer_leaves_unsafe_paths_for_strict_rejection() -> None:
+    payload = proposal_response().model_dump(mode="json")
+    payload["proposal"]["tasks"][0]["expected_paths"] = ["../secret/"]
+
+    normalized, changes = planning._normalize_planning_response_payload(payload)
+
+    assert normalized["proposal"]["tasks"][0]["expected_paths"] == ["../secret/"]
+    assert changes == ()
+    with pytest.raises(ValidationError, match="canonical safe relative POSIX paths"):
+        PlanningModelResponse.model_validate(normalized)
+
+
+def test_proposed_workspace_scope_cannot_repeat_the_destination_directory() -> None:
+    payload = proposal_response().model_dump(mode="json")
+    payload["proposal"]["agents"][0]["workspace_scope"] = "link-checker"
+
+    with pytest.raises(ValidationError, match="must start at repository"):
+        PlanningModelResponse.model_validate(payload)
+
+
 def test_proposal_compiles_to_complete_controller_owned_authority() -> None:
     preview = preview_adaptive_proposal(
         request(),
@@ -850,6 +899,7 @@ def test_store_detects_changed_append_only_turn_evidence(tmp_path: Path) -> None
     assert created is not None
     turn_path = tmp_path / "planning" / request().run_id / "turns" / "001.json"
     payload = json.loads(turn_path.read_text(encoding="utf-8"))
+    assert "response_normalizations" not in payload
     payload["user_message"] = "changed after persistence"
     turn_path.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(PlanningIntegrityError, match="head digest changed"):
@@ -993,6 +1043,43 @@ def test_invalid_complete_proposal_is_repaired_before_it_is_shown(
     assert rejected.validation_error is not None
     assert "must remain independent" in rejected.validation_error
     assert "previous_response_rejected" in executor.requests[1].prompt
+
+
+def test_safe_response_variants_do_not_consume_a_model_repair_call(
+    tmp_path: Path,
+) -> None:
+    payload = proposal_response().model_dump(mode="json")
+    payload.pop("kind")
+    payload["proposal"]["tasks"][0]["expected_paths"] = ["tests/"]
+    payload["proposal"]["agents"][0]["workspace_scope"] = "repository/"
+    raw_response = json.dumps(payload)
+    executor = ScriptedAgentExecutor([raw_response])
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(response_repair_limit=0),
+        clock=AdvancingClock(),
+    )
+
+    created = coordinator.start(
+        request(),
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+
+    assert created is not None
+    assert len(executor.requests) == 1
+    turn = store.load_turn(request().run_id, 1)
+    assert turn.response_text == raw_response
+    assert turn.parsed_response is not None
+    assert turn.parsed_response.proposal is not None
+    assert turn.parsed_response.proposal.tasks[0].expected_paths == ("tests",)
+    assert turn.parsed_response.proposal.agents[0].workspace_scope == "repository"
+    assert turn.response_normalizations == (
+        "inferred response kind as proposal",
+        "canonicalized proposal.tasks[0].expected_paths[0]",
+        "canonicalized proposal.agents[0].workspace_scope",
+    )
 
 
 def test_cancellation_stops_before_a_proposal_or_approval(tmp_path: Path) -> None:

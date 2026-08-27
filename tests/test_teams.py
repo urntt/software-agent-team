@@ -365,6 +365,14 @@ def test_agent_workspace_scope_must_be_canonical(scope: str) -> None:
         TeamPlan.model_validate(payload)
 
 
+def test_agent_workspace_scope_must_start_at_the_repository_authority() -> None:
+    payload = adaptive_payload()
+    payload["agents"][1]["workspace_scope"] = "src"
+
+    with pytest.raises(ValidationError, match="must start at repository"):
+        TeamPlan.model_validate(payload)
+
+
 def test_adaptive_plan_rejects_an_unauthorized_model_route() -> None:
     payload = adaptive_payload()
     payload["agents"][1]["model_route_id"] = "unapproved"

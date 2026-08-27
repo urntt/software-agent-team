@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** Phase 3E model profiles and controlled routing implemented and offline verified; provider-backed adaptive rehearsal is next
+**Current milestone:** Phase 3E model profiles and controlled routing implemented; the first installed adaptive rehearsal exposed one corrected Planning-normalization defect
 
 **Last updated:** August 27, 2026
 
@@ -50,7 +50,7 @@ validation also rejects a plan whose complete planned iterations cannot fit
 its call budget. Recovery
 verifies the exact TaskBrief binding, TeamPlan digest, fixed manifest version,
 fixed team digest, resolved Agent timeouts, and cross-file run metadata. The
-complete repository check passes with 577 offline tests.
+complete repository check passes with 582 offline tests.
 
 `RunEvent` is also an executable, append-only contract. Every current workflow
 progress update is persisted with a contiguous sequence, lifecycle revision,
@@ -242,6 +242,25 @@ request confirmation, internal run materialization, and the Planner stage.
 Both then reached a stopped Developer sandbox before any workspace tool could
 run, so no project was delivered. The second run was correctly classified as
 `dependency_unavailable` instead of a source-code failure.
+
+The first fresh installed rehearsal of the activated Adaptive Planning path
+used the public installer, a new non-root account, bare `sat`, and
+`deepseek/deepseek-v4-flash-vision-exp`. Device checks, configuration,
+provider smoke, ordinary request capture, authorization, and Planning preflight
+all passed. The Planner returned a task-defined proposal, but one expected
+directory was written as `tests/` and one Agent repeated the destination name
+as its workspace scope. The bounded repair corrected the permission scope but
+retained the harmless trailing slash, so strict validation stopped before any
+execution Agent or project workspace was created.
+
+SAT now canonicalizes only safe, unambiguous Planning path presentation and
+infers a missing response discriminator only when exactly one response body
+makes it certain. Raw output remains immutable, every normalized field is
+recorded, destination-shaped workspace scopes remain rejected, and unsafe or
+ambiguous values still follow strict repair/failure policy. The complete
+offline suite covers the observed response without consuming a repair call. A
+fresh installed provider-backed rerun remains required before this journey is
+called successful.
 
 The rehearsal sequence below concerns the predecessor guided fixed-team
 product path and is retained as defect and regression evidence. It proves the

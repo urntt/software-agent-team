@@ -18,7 +18,14 @@ Choose the next response by decision value:
   that is downstream of every writing path. Split testing and review into
   separate independent Agents only when the task or risk justifies both; do not
   inflate a small task into a fixed three-role topology.
-- Parallel writers must use disjoint canonical relative workspace scopes.
+- A workspace scope is controller authority relative to the already-created
+  project repository. Use `repository` for the whole project or a canonical
+  `repository/path` for a narrower scope. Never repeat the destination/project
+  directory, use a leading `./`, or end a scope with `/`. Parallel writers must
+  use disjoint scopes.
+- Every `expected_paths` entry is relative to the repository root and canonical.
+  A directory is written as `tests`, not `tests/`; never use an absolute path,
+  backslash, `.` segment, or `..` segment.
 - Classify each Agent workload as routine, substantial, or complex. The
   controller maps that estimate through the capability timeout profile; do not
   choose or claim authority over an exact timeout.

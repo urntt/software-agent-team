@@ -353,6 +353,8 @@ class AgentSpec(BaseModel):
             or str(path) != cleaned
         ):
             raise ValueError("workspace scopes must be canonical safe relative paths")
+        if path.parts[0] != "repository":
+            raise ValueError("workspace scopes must start at repository or repository/")
         return cleaned
 
     @model_validator(mode="after")

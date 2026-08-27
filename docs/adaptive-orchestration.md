@@ -139,6 +139,29 @@ Questions should be selected for decision value. The planner must not turn
 every implementation detail into a user prompt or silently decide a missing
 product requirement on the user's behalf.
 
+### Planning Response Boundary
+
+Planning responses remain strict, but harmless presentation differences are
+not treated as reasoning failures. Before schema validation, the controller
+may perform only these bounded, semantics-preserving normalizations:
+
+- Infer `kind` when exactly one non-null `question` or `proposal` body makes it
+  unambiguous;
+- Canonicalize safe relative `expected_paths` values such as `tests/` to
+  `tests`;
+- Canonicalize safe `workspace_scope` presentation such as `repository/` to
+  `repository`.
+
+The immutable turn retains the exact raw response and records every normalized
+field separately. Absolute paths, backslashes, parent traversal, ambiguous
+response bodies, unknown fields, and other semantic defects remain invalid.
+They may consume the one bounded semantic repair when policy permits it.
+
+Every workspace scope describes controller authority inside the generated
+repository: `repository` grants whole-project access and `repository/path`
+grants a narrower boundary. A destination or project directory name is not a
+workspace scope and is rejected rather than silently widened.
+
 ### Overview Before Execution
 
 The proposal shown before execution contains:
@@ -483,7 +506,10 @@ append-only turn and proposal store, natural-language revision, safe limit
 editor, complete overview, explicit approval evidence, and deterministic
 ordinary-user interaction test are implemented. Bare `sat` now activates this
 interaction together with Batch 3C, so an approved dynamic plan is the exact
-plan the controller executes.
+plan the controller executes. The Planning boundary also normalizes only
+unambiguous response-kind and safe relative-path presentation variants before
+strict validation, while preserving the raw response and recording each
+normalized field in the Planning turn.
 
 ### Batch 3C: Dynamic Team Runtime
 

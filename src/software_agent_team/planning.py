@@ -63,6 +63,8 @@ from software_agent_team.teams import (
 PLANNING_SCHEMA_VERSION = 2
 PLANNING_TEMPLATE = Path(__file__).with_name("prompt_templates") / "adaptive_planner.md"
 _MAX_EVIDENCE_TEXT = 1_000_000
+_MAX_RESPONSE_NORMALIZATIONS = 100
+_MAX_RESPONSE_NORMALIZATION_LENGTH = 200
 
 
 class PlanningError(RuntimeError):
@@ -149,6 +151,75 @@ def _safe_path(value: str) -> str:
     ):
         raise ValueError("paths must be canonical safe relative POSIX paths")
     return cleaned
+
+
+def _canonicalize_model_path(value: object) -> object:
+    """Normalize only unambiguous safe relative-path presentation variants."""
+
+    if not isinstance(value, str):
+        return value
+    cleaned = value.strip()
+    path = PurePosixPath(cleaned)
+    if (
+        not cleaned
+        or "\\" in cleaned
+        or path.is_absolute()
+        or path == PurePosixPath(".")
+        or ".." in path.parts
+    ):
+        return value
+    return str(path)
+
+
+def _normalize_planning_response_payload(
+    payload: dict[str, object],
+) -> tuple[dict[str, object], tuple[str, ...]]:
+    """Apply bounded semantic-preserving normalization before strict validation."""
+
+    normalized: dict[str, object] = json.loads(json.dumps(payload))
+    changes: list[str] = []
+    if "kind" not in normalized:
+        candidates = tuple(
+            name
+            for name in ("question", "proposal")
+            if normalized.get(name) is not None
+        )
+        if len(candidates) == 1:
+            normalized["kind"] = candidates[0]
+            changes.append(f"inferred response kind as {candidates[0]}")
+
+    proposal = normalized.get("proposal")
+    if not isinstance(proposal, dict):
+        return normalized, tuple(changes)
+    tasks = proposal.get("tasks")
+    if isinstance(tasks, list):
+        for task_index, task in enumerate(tasks):
+            if not isinstance(task, dict):
+                continue
+            paths = task.get("expected_paths")
+            if not isinstance(paths, list):
+                continue
+            for path_index, value in enumerate(paths):
+                canonical = _canonicalize_model_path(value)
+                if canonical != value:
+                    paths[path_index] = canonical
+                    changes.append(
+                        "canonicalized "
+                        f"proposal.tasks[{task_index}].expected_paths[{path_index}]"
+                    )
+    agents = proposal.get("agents")
+    if isinstance(agents, list):
+        for agent_index, agent in enumerate(agents):
+            if not isinstance(agent, dict) or "workspace_scope" not in agent:
+                continue
+            value = agent["workspace_scope"]
+            canonical = _canonicalize_model_path(value)
+            if canonical != value:
+                agent["workspace_scope"] = canonical
+                changes.append(
+                    f"canonicalized proposal.agents[{agent_index}].workspace_scope"
+                )
+    return normalized, tuple(changes)
 
 
 def _digest_text(value: str) -> str:
@@ -281,7 +352,14 @@ class ProposedAgent(BaseModel):
     capability: AgentCapability
     stage_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     dependencies: tuple[str, ...] = ()
-    workspace_scope: str = Field(min_length=1, max_length=200)
+    workspace_scope: str = Field(
+        min_length=1,
+        max_length=200,
+        description=(
+            "Use repository for whole-project access or repository/path for a "
+            "narrower canonical scope; never repeat the destination directory."
+        ),
+    )
     workload: AgentWorkload
 
     @field_validator("label", "responsibility", "rationale")
@@ -297,7 +375,10 @@ class ProposedAgent(BaseModel):
     @field_validator("workspace_scope")
     @classmethod
     def require_safe_scope(cls, value: str) -> str:
-        return _safe_path(value)
+        cleaned = _safe_path(value)
+        if PurePosixPath(cleaned).parts[0] != "repository":
+            raise ValueError("workspace scopes must start at repository or repository/")
+        return cleaned
 
     @model_validator(mode="after")
     def reject_bootstrap_capability(self) -> Self:
@@ -324,7 +405,13 @@ class ProposedTask(BaseModel):
     description: str = Field(min_length=1, max_length=500)
     dependencies: tuple[str, ...] = ()
     acceptance_criteria: tuple[str, ...] = Field(min_length=1)
-    expected_paths: tuple[str, ...] = ()
+    expected_paths: tuple[str, ...] = Field(
+        default=(),
+        description=(
+            "Canonical paths relative to the repository root; directory paths "
+            "must not end with a slash."
+        ),
+    )
 
     @field_validator("description")
     @classmethod
@@ -594,15 +681,32 @@ class PlanningTurn(BaseModel):
     response_text: str | None = Field(default=None, max_length=_MAX_EVIDENCE_TEXT)
     response_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     parsed_response: PlanningModelResponse | None = None
+    response_normalizations: tuple[str, ...] = Field(
+        default=(),
+        exclude_if=lambda values: not values,
+    )
     validation_error: str | None = Field(default=None, min_length=1, max_length=2000)
     execution: PlanningExecutionEvidence
+
+    @field_validator("response_normalizations")
+    @classmethod
+    def require_unique_normalizations(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        if len(values) > _MAX_RESPONSE_NORMALIZATIONS:
+            raise ValueError("too many Planning response normalizations")
+        if any(len(value) > _MAX_RESPONSE_NORMALIZATION_LENGTH for value in values):
+            raise ValueError("Planning response normalization entries are too long")
+        return _clean_unique(values, label="Planning response normalization")
 
     @model_validator(mode="after")
     def validate_evidence(self) -> Self:
         if _digest_text(self.prompt) != self.prompt_sha256:
             raise ValueError("Planning prompt digest does not match its content")
         if self.response_text is None:
-            if self.response_sha256 is not None or self.parsed_response is not None:
+            if (
+                self.response_sha256 is not None
+                or self.parsed_response is not None
+                or self.response_normalizations
+            ):
                 raise ValueError("missing response text cannot have parsed evidence")
         elif _digest_text(self.response_text) != self.response_sha256:
             raise ValueError("Planning response digest does not match its content")
@@ -1530,6 +1634,7 @@ class PlanningStore:
         prompt: str,
         result: AgentExecutionResult,
         parsed_response: PlanningModelResponse | None,
+        response_normalizations: tuple[str, ...],
         validation_error: str | None,
         now: datetime,
     ) -> PlanningTurn:
@@ -1554,6 +1659,7 @@ class PlanningStore:
                 None if response_text is None else _digest_text(response_text)
             ),
             parsed_response=parsed_response,
+            response_normalizations=response_normalizations,
             validation_error=validation_error,
             execution=PlanningExecutionEvidence(
                 status=result.status,
@@ -1903,6 +2009,7 @@ class AdaptivePlanningCoordinator:
             )
             result = self.executor.execute(execution_request)
             parsed: PlanningModelResponse | None = None
+            response_normalizations: tuple[str, ...] = ()
             validation_error: str | None = None
             if result.status is not AgentExecutionStatus.COMPLETED:
                 validation_error = (
@@ -1911,6 +2018,9 @@ class AdaptivePlanningCoordinator:
             else:
                 try:
                     payload = parse_json_object_response(result.response_text)
+                    payload, response_normalizations = (
+                        _normalize_planning_response_payload(payload)
+                    )
                     parsed = PlanningModelResponse.model_validate(payload)
                     if parsed.kind is PlanningResponseKind.PROPOSAL:
                         assert parsed.proposal is not None
@@ -1942,6 +2052,7 @@ class AdaptivePlanningCoordinator:
                 prompt=prompt,
                 result=result,
                 parsed_response=parsed,
+                response_normalizations=response_normalizations,
                 validation_error=validation_error,
                 now=self.clock(),
             )
