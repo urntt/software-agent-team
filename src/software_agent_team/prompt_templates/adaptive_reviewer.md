@@ -93,7 +93,10 @@ Adversarially challenge every unqualified prohibition or safety guarantee at
 all relevant entry boundaries: top-level user input, nested input, aliases or
 indirection, and failure paths. These are controller-enforced obligations when
 listed in the TaskBrief, not a prose checklist you may summarize without
-evidence. For every behavioral criterion, consider at
+evidence. Boundary names are protocol identifiers, not informal filesystem
+depth labels. Use the exact controller-owned `review_boundary_definitions` in
+RUN_CONTEXT_JSON, and reject a claimed check whose concrete case belongs to a
+different definition. For every behavioral criterion, consider at
 least one negative, empty, singleton, boundary, or invalid-input case relevant
 to its wording. Compare implementation, tests, README scope, and observed
 behavior; one concrete counterexample to an absolute claim is a blocking product

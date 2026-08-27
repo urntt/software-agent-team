@@ -8,6 +8,7 @@ from software_agent_team.artifact_store import (
     ExecutionOutputEvidence,
 )
 from software_agent_team.artifacts import (
+    REVIEW_BOUNDARY_DEFINITIONS,
     AcceptanceCriterion,
     AgentExecutionRecord,
     AgentRole,
@@ -41,6 +42,7 @@ from software_agent_team.artifacts import (
     TestReport,
     WorkResult,
     parse_phase_artifact,
+    review_boundary_definition_map,
     validate_artifact_context,
     validate_tool_evidence_collection,
 )
@@ -279,6 +281,7 @@ from software_agent_team.workflow import (
 __all__ = [
     "PHASE1_ITERATION_LIMIT",
     "PHASE1_TEAM_ID",
+    "REVIEW_BOUNDARY_DEFINITIONS",
     "AcceptanceCriterion",
     "AdaptiveImplementationPlan",
     "AdaptivePlanningCoordinator",
@@ -498,6 +501,7 @@ __all__ = [
     "render_planning_overview",
     "render_run_report",
     "resolve_model_route_plan",
+    "review_boundary_definition_map",
     "run_interactive_planning",
     "stable_agent_session_key",
     "stable_session_key",

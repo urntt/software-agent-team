@@ -220,17 +220,18 @@ def _exec_executable(tool_name: str, arguments: object) -> str | None:
         raise OpenClawSessionEvidenceError(
             "OpenClaw exec command is unavailable for attribution"
         )
+    lexer = shlex.shlex(command, posix=True)
+    lexer.whitespace_split = True
+    lexer.commenters = ""
     try:
-        tokens = shlex.split(command, posix=True)
-    except ValueError as error:
+        executable = next(
+            token for token in lexer if _ENVIRONMENT_ASSIGNMENT.match(token) is None
+        )
+    except (StopIteration, ValueError) as error:
         raise OpenClawSessionEvidenceError(
             "OpenClaw exec command cannot be attributed safely"
         ) from error
-    executable = next(
-        (token for token in tokens if _ENVIRONMENT_ASSIGNMENT.match(token) is None),
-        None,
-    )
-    if executable is None or len(executable) > 512 or "\x00" in executable:
+    if executable.startswith("#") or len(executable) > 512 or "\x00" in executable:
         raise OpenClawSessionEvidenceError(
             "OpenClaw exec command cannot be attributed safely"
         )

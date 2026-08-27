@@ -215,6 +215,21 @@ top-level input, nested input, alias or indirection, and failure path. These
 obligations are shown in the overview and become part of the confirmed
 TaskBrief; they cannot be silently weakened by the execution Reviewer.
 
+Boundary identifiers have controller-owned meanings; they are not casual labels
+that an Agent may reinterpret from filesystem depth:
+
+| Identifier | Protocol meaning |
+| --- | --- |
+| `top_level_input` | The primary input value, object, resource, or entry point selected or supplied directly by the user or upstream caller, before traversal, expansion, or decomposition. If a path or directory is selected as a root, the root itself is the top-level input; an immediate child inside it is already nested input. |
+| `nested_input` | An input discovered inside or below the primary input after traversal, expansion, or decomposition; both immediate children and deeper descendants qualify. |
+| `alias_or_indirection` | The same logical input reached through an alias, symlink, redirect, wrapper, reference, configuration indirection, or another non-canonical route. |
+| `failure_path` | A missing, malformed, invalid, inaccessible, unsupported, rejected, or otherwise failing input or operation; Review checks the observable failure behavior, not merely whether the process avoided a crash. |
+
+`artifacts.py` owns these exact definitions. Planning context, the approval
+overview, every runtime Agent context, and public documentation project the
+same mapping. A model response can choose relevant obligations and describe a
+concrete challenge, but it cannot redefine a boundary.
+
 The `tasks` collection records approved work intent for any runtime Agent.
 Implementation and integration Agents must each own at least one task, and
 their tasks—not quality-only tasks—must cover every Planner-owned acceptance

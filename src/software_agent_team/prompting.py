@@ -23,6 +23,7 @@ from software_agent_team.artifacts import (
     TaskBrief,
     TestReport,
     WorkResult,
+    review_boundary_definition_map,
     validate_artifact_context,
 )
 from software_agent_team.execution import (
@@ -564,6 +565,7 @@ def _prompt_context(inputs: AgentPromptInputs) -> dict[str, object]:
             ),
         },
         "task_brief": inputs.task_brief.model_dump(mode="json"),
+        "review_boundary_definitions": review_boundary_definition_map(),
     }
     if inputs.input_commit is not None:
         run = context["run"]
@@ -772,6 +774,7 @@ def _dynamic_prompt_context(inputs: DynamicAgentPromptInputs) -> dict[str, objec
             "model": route.model,
         },
         "task_brief": inputs.task_brief.model_dump(mode="json"),
+        "review_boundary_definitions": review_boundary_definition_map(),
         "implementation_intent": {
             "objective": inputs.implementation_plan.objective,
             "approach": list(inputs.implementation_plan.approach),

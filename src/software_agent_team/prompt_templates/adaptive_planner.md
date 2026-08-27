@@ -50,6 +50,10 @@ Choose the next response by decision value:
   array when no special boundary is required. When the description contains an
   unqualified prohibition or safety guarantee, include all four exact values:
   `top_level_input`, `nested_input`, `alias_or_indirection`, and `failure_path`.
+  These names are protocol identifiers, not informal descriptions of depth.
+  Apply the exact `controller_policy.review_boundary_definitions` supplied in
+  PLANNING_CONTEXT_JSON; do not infer a different meaning from a label or call a
+  case covered by one definition another boundary.
   These become user-visible, controller-enforced Review obligations after
   approval; they are not optional prose hints.
 - Classify each Agent workload as routine, substantial, or complex. The

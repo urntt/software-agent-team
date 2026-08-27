@@ -1,10 +1,12 @@
 """Validated contracts for requests, phase artifacts, and Agent handoffs."""
 
 import re
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
 from pathlib import PurePosixPath
+from types import MappingProxyType
 from typing import Literal, Self
 
 from pydantic import (
@@ -99,6 +101,44 @@ class ReviewBoundaryKind(StrEnum):
     NESTED_INPUT = "nested_input"
     ALIAS_OR_INDIRECTION = "alias_or_indirection"
     FAILURE_PATH = "failure_path"
+
+
+REVIEW_BOUNDARY_DEFINITIONS: Mapping[ReviewBoundaryKind, str] = MappingProxyType(
+    {
+        ReviewBoundaryKind.TOP_LEVEL_INPUT: (
+            "The primary input value, object, resource, or entry point selected or "
+            "supplied directly by the user or upstream caller, before traversal, "
+            "expansion, or decomposition. If a path or directory is selected as a "
+            "root, that root itself is the top-level input; every child inside it, "
+            "including an immediate first-level child, is nested input."
+        ),
+        ReviewBoundaryKind.NESTED_INPUT: (
+            "An input discovered inside or below the primary input after traversal, "
+            "expansion, or decomposition. Immediate children and deeper descendants "
+            "are both nested input."
+        ),
+        ReviewBoundaryKind.ALIAS_OR_INDIRECTION: (
+            "The same logical input reached through an alias, symlink, redirect, "
+            "wrapper, reference, configuration indirection, or another non-canonical "
+            "route rather than its direct primary form."
+        ),
+        ReviewBoundaryKind.FAILURE_PATH: (
+            "A missing, malformed, invalid, inaccessible, unsupported, rejected, or "
+            "otherwise failing input or operation for the same requirement. Review "
+            "must verify the observable failure behavior, not merely the absence of "
+            "a crash."
+        ),
+    }
+)
+
+
+def review_boundary_definition_map() -> dict[str, str]:
+    """Return the controller-owned boundary protocol as JSON-ready values."""
+
+    return {
+        boundary.value: definition
+        for boundary, definition in REVIEW_BOUNDARY_DEFINITIONS.items()
+    }
 
 
 class AgentToolCallOutcome(StrEnum):

@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** Phase 3E implemented; fourteen fresh installed adaptive rehearsals have driven controller, transport, progress, profile, and review-boundary corrections, with a clean provider rerun next
+**Current milestone:** Phase 3E implemented; fifteen fresh installed adaptive rehearsals have driven controller, transport, progress, profile, and review-boundary corrections, with the Round 15 evidence and boundary fixes awaiting a clean provider rerun
 
 **Last updated:** August 27, 2026
 
@@ -681,6 +681,30 @@ without a repair; focused Planning tests cover active-policy scoping, raw
 evidence, canonical materialization, and unchanged strict rejection outside
 that scope, and the complete repository check passes 702 tests. A new
 fresh-account provider run remains required before claiming end-to-end
+delivery success.
+
+That fresh-account run confirmed the profile-criterion normalization: after one
+ordinary syntax repair, the user approved a two-Agent `impl -> reviewer` plan,
+the writer produced a clean eight-file commit, and all five deterministic gates
+passed. The Reviewer completed 33 `exec` calls within its controller-resolved
+600-second timeout, but SAT rejected the entire session before assembling a
+Review because full-command `shlex.split` continued parsing text after a Bash
+`#` comment and encountered an unmatched quote in the shell-ignored suffix.
+Independent validation also proved the partial product still followed a
+symlink used as the user-selected root; the Reviewer had mislabeled symlinked
+children inside that root as `top_level_input` and returned a false `accept`.
+No delivery was created.
+
+Executable attribution now lazily consumes only leading environment assignments
+and the first executable, while preserving the complete argument digest and
+paired result. The same bounded replay captures all 33 archived calls; an
+unparseable executable prefix remains invalid. Review boundary identifiers now
+come from one immutable controller-owned definition mapping. Planning context,
+the user overview, implementation and quality prompts all state that the
+user-selected primary root itself is `top_level_input` and every child inside it
+is `nested_input`. Focused artifact, Planning, dynamic-prompt, and OpenClaw
+session-evidence tests pass, and the complete repository check passes 705 tests.
+A new fresh-account provider run remains required before claiming end-to-end
 delivery success.
 
 The rehearsal sequence below concerns the predecessor guided fixed-team

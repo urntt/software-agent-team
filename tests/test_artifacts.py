@@ -10,8 +10,10 @@ from software_agent_team.artifacts import (
     AgentExecutionRecord,
     HandoffEnvelope,
     HandoffStatus,
+    ReviewBoundaryKind,
     ReviewReport,
     TaskBrief,
+    review_boundary_definition_map,
 )
 
 
@@ -113,6 +115,24 @@ def test_confirmed_task_brief_is_accepted() -> None:
 
     assert task_brief.confirmed
     assert task_brief.acceptance_criteria[0].id == "AC_PERSIST"
+
+
+def test_review_boundary_protocol_has_controller_owned_exact_meanings() -> None:
+    definitions = review_boundary_definition_map()
+
+    assert tuple(definitions) == tuple(
+        boundary.value for boundary in ReviewBoundaryKind
+    )
+    assert "root itself is the top-level input" in definitions["top_level_input"]
+    assert (
+        "immediate first-level child, is nested input" in definitions["top_level_input"]
+    )
+    assert "Immediate children and deeper descendants" in definitions["nested_input"]
+    definitions["top_level_input"] = "mutated caller copy"
+    assert (
+        review_boundary_definition_map()["top_level_input"]
+        != definitions["top_level_input"]
+    )
 
 
 def test_confirmed_task_brief_cannot_retain_open_questions() -> None:

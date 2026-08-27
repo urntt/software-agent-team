@@ -32,6 +32,7 @@ from software_agent_team.artifacts import (
     ArtifactKind,
     ReviewBoundaryKind,
     TaskBrief,
+    review_boundary_definition_map,
 )
 from software_agent_team.budgets import AgentBudget
 from software_agent_team.execution import (
@@ -1734,10 +1735,32 @@ def render_planning_overview(preview: PlanningPreview) -> str:
             + ")"
             for item in brief.acceptance_criteria
         ),
-        "  Implementation approach:",
-        *(f"    - {item}" for item in implementation.approach),
-        "  Tasks:",
     ]
+    used_boundaries = tuple(
+        dict.fromkeys(
+            boundary
+            for criterion in brief.acceptance_criteria
+            for boundary in criterion.review_boundaries
+        )
+    )
+    if used_boundaries:
+        definitions = review_boundary_definition_map()
+        lines.extend(
+            (
+                "  Review boundary definitions:",
+                *(
+                    f"    - {boundary.value}: {definitions[boundary.value]}"
+                    for boundary in used_boundaries
+                ),
+            )
+        )
+    lines.extend(
+        (
+            "  Implementation approach:",
+            *(f"    - {item}" for item in implementation.approach),
+            "  Tasks:",
+        )
+    )
     for task in implementation.tasks:
         task_dependencies = ", ".join(task.dependencies) or "none"
         task_criteria = ", ".join(task.acceptance_criteria)
@@ -2545,6 +2568,7 @@ class AdaptivePlanningCoordinator:
                     criterion.model_dump(mode="json")
                     for criterion in self.policy.profile_acceptance_criteria
                 ],
+                "review_boundary_definitions": review_boundary_definition_map(),
                 "requires_independent_review_agent": (self.policy.require_review_agent),
                 "capability_timeout_profiles": {
                     capability.value: {

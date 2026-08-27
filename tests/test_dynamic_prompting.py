@@ -306,6 +306,12 @@ def test_dynamic_prompt_is_compiled_from_the_approved_agent_spec() -> None:
     assert request.timeout_seconds == 600
     assert request.model == "provider/model"
     assert "top-level user input" in rendered
+    assert '"review_boundary_definitions": {' in rendered
+    assert "root itself is the top-level input" in rendered
+    assert "immediate first-level child, is nested input" in rendered
+    assert "protocol identifiers, not informal filesystem depth labels" in " ".join(
+        rendered.split()
+    )
     assert "unqualified prohibition" in rendered
     assert "profile-owned setup and test command" in rendered
     assert "TaskBrief constraints are authoritative" in rendered
@@ -393,6 +399,10 @@ def test_review_prompt_requires_adversarial_absolute_claim_boundaries() -> None:
     compact = " ".join(rendered.split())
 
     assert "top-level user input" in rendered
+    assert '"review_boundary_definitions": {' in rendered
+    assert "root itself is the top-level input" in rendered
+    assert "immediate first-level child, is nested input" in rendered
+    assert "protocol identifiers, not informal filesystem depth labels" in compact
     assert "sat-probe-write /tmp/sat-review-probe-boundaries-7f3a.py" in rendered
     assert "sat-probe-run /tmp/sat-review-probe-<suffix>.py" in rendered
     assert "SAT_PROBE_RESULT_V1" in rendered

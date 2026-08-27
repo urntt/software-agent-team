@@ -269,6 +269,76 @@ def test_capture_keeps_only_the_executable_not_sensitive_exec_arguments(
     assert "/tmp/sat-review-probe-safe.py" not in serialized
 
 
+def test_capture_stops_after_an_attributable_exec_prefix(tmp_path: Path) -> None:
+    invocation = request()
+    command = (
+        "SAT_PRIVATE_VALUE=do-not-persist sat-probe-write "
+        "/tmp/sat-review-probe-safe.py --line pass "
+        "# the shell ignores this unmatched quote: '"
+    )
+    write_session_state(
+        tmp_path,
+        invocation=invocation,
+        records=[
+            session_record(),
+            user_record(invocation.prompt),
+            tool_call_record("current-call", command=command),
+            tool_result_record("current-call", output="created probe"),
+            assistant_record(),
+        ],
+    )
+
+    call = capture(tmp_path, invocation).tool_calls[0]
+
+    assert call.executable == "sat-probe-write"
+    assert call.outcome is AgentToolCallOutcome.SUCCEEDED
+    assert "do-not-persist" not in call.model_dump_json()
+    assert len(call.arguments_sha256) == 64
+
+
+def test_capture_rejects_an_unparseable_exec_prefix(tmp_path: Path) -> None:
+    invocation = request()
+    write_session_state(
+        tmp_path,
+        invocation=invocation,
+        records=[
+            session_record(),
+            user_record(invocation.prompt),
+            tool_call_record("current-call", command="'unterminated"),
+            tool_result_record(
+                "current-call",
+                output="shell syntax error",
+                exit_code=2,
+                is_error=True,
+            ),
+            assistant_record(),
+        ],
+    )
+
+    with pytest.raises(
+        OpenClawSessionEvidenceError,
+        match="exec command cannot be attributed safely",
+    ):
+        capture(tmp_path, invocation)
+
+    write_session_state(
+        tmp_path,
+        invocation=invocation,
+        records=[
+            session_record(),
+            user_record(invocation.prompt),
+            tool_call_record("comment-only", command="# no executable here"),
+            tool_result_record("comment-only", output=""),
+            assistant_record(),
+        ],
+    )
+    with pytest.raises(
+        OpenClawSessionEvidenceError,
+        match="exec command cannot be attributed safely",
+    ):
+        capture(tmp_path, invocation)
+
+
 def test_capture_normalizes_an_observable_failed_tool_result(tmp_path: Path) -> None:
     invocation = request()
     write_session_state(

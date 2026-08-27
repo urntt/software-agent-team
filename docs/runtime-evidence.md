@@ -243,7 +243,12 @@ normalizes success or failure from the result, hashes the external ID,
 canonical arguments, complete result, and transcript, and retains only a
 bounded output excerpt. For `exec`, it also records the direct executable token
 while discarding the full command and any leading environment-assignment
-values. Size and record-count limits apply before parsing.
+values. Executable attribution lazily consumes only leading assignments and the
+first executable token; it does not require an unpersisted shell suffix to
+satisfy a second parser's complete-command grammar. The complete canonical
+argument object is still hashed and the actual result remains authoritative. An
+unavailable, empty, NUL-containing, overlong, or unparseable executable prefix
+is invalid. Size and record-count limits apply before parsing.
 
 A complete session with zero tool calls is valid captured evidence, but it
 cannot satisfy a citation by itself. A missing, substituted, incomplete,

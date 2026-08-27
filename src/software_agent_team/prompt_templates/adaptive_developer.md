@@ -22,6 +22,9 @@ universal claim over all relevant entry boundaries. Check top-level user input,
 nested input, aliases or indirection, and failure paths rather than validating
 only the common happy path. Add focused tests for those boundaries. Never
 document a broader guarantee than the implementation and tests establish.
+Boundary names are protocol identifiers, not informal filesystem depth labels.
+Use the exact controller-owned `review_boundary_definitions` in RUN_CONTEXT_JSON,
+and make each concrete test match the corresponding definition.
 
 The documented setup command must not leave unexplained untracked repository
 state. Commit reproducibility metadata when the workspace can generate it;

@@ -329,6 +329,9 @@ def test_absolute_criterion_requires_all_review_entry_boundaries() -> None:
         "Review boundaries: top_level_input, nested_input, "
         "alias_or_indirection, failure_path"
     ) in overview
+    assert "Review boundary definitions:" in overview
+    assert "root itself is the top-level input" in overview
+    assert "immediate first-level child, is nested input" in overview
 
     absolute_request = request().model_copy(
         update={"source_request": "Build a scanner that must not follow symlinks."}
@@ -1438,6 +1441,23 @@ def test_dialogue_revision_structured_edit_and_approval_are_recoverable(
     assert "does not impose a hidden peer-only quality topology" in compact_prompt
     assert "assign every task that creates or modifies project code" in compact_prompt
     assert "quality-owned task may describe only inspection" in compact_prompt
+    assert "protocol identifiers, not informal descriptions of depth" in compact_prompt
+    planning_context_text = (
+        executor.requests[0]
+        .prompt.split("PLANNING_CONTEXT_JSON\n", 1)[1]
+        .split("\n\nRESPONSE_SCHEMA_JSON", 1)[0]
+    )
+    planning_context = json.loads(planning_context_text)
+    boundary_definitions = planning_context["controller_policy"][
+        "review_boundary_definitions"
+    ]
+    assert (
+        "root itself is the top-level input" in boundary_definitions["top_level_input"]
+    )
+    assert (
+        "Immediate children and deeper descendants"
+        in boundary_definitions["nested_input"]
+    )
     schema_text = (
         executor.requests[0]
         .prompt.split(

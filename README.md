@@ -68,8 +68,9 @@ On first use, SAT guides you through:
 7. One overview of requirements, acceptance criteria, Agent work assignments
    with their controller-derived write or read-only authority, proposed Agents,
    dependencies, permissions, explicit Review entry obligations for absolute
-   guarantees, resolved model profiles and fallback authority, timeout reasons,
-   concurrency, iterations, and budgets; and
+   guarantees and the exact meaning of each boundary, resolved model profiles
+   and fallback authority, timeout reasons, concurrency, iterations, and
+   budgets; and
 8. Approval, a natural-language revision request, a supported safe edit, or
    cancellation before any execution Agent is created.
 
@@ -175,6 +176,10 @@ explicit Review boundary obligation. Its project mount and general write tools
 remain read-only, while an immutable path-restricted helper can create a
 new bounded `/tmp/sat-review-probe-*` script or fixture without overwriting an
 existing file. The image also includes a locked offline Python wheelhouse.
+Review boundary names use one controller-owned protocol across Planning,
+approval, implementation, and Review. In particular, `top_level_input` is the
+primary input selected by the user or upstream caller; an immediate child
+inside that input is already `nested_input`, not another top-level case.
 Deterministic verification copies only clean committed files into fresh
 sandbox scratch and runs the generated project's exact setup, test, and start
 commands with no network. Reviewer criterion claims must cite actual Reviewer
@@ -193,6 +198,11 @@ an unambiguous relationship solely for serialization. If re-verification fails
 after a revision changed the commit, the terminal report keeps the prior
 finding unresolved while distinguishing its earlier evidence from the current,
 not-yet-independently-verified commit.
+For an `exec` tool call, SAT attributes only the leading environment assignments
+and first executable token, then stops parsing the unpersisted shell suffix. It
+still hashes the complete canonical arguments and records the real result, so a
+Bash-valid comment suffix cannot erase an otherwise attributable Review while
+an unavailable or malformed executable prefix remains an integrity failure.
 The foreground control palette, live visibility changes, prospective guidance,
 replacement Planning, cooperative pause/resume, best-effort interruption, and
 terminal cancellation are integrated and covered offline. Durable resume after
