@@ -60,11 +60,14 @@ The controller accepts an iteration only when all of the following agree:
    one `criterion_assessments` entry for every assigned criterion, including a
    concrete adversarial check, observable evidence, and `satisfied` or
    `blocked` status. Every semantic assessment also supplies at least one
-   distinctive fragment from a bounded result in that exact invocation. The
-   controller requires each fragment to identify exactly one sanitized tool
-   result and enriches the persisted assessment with its own tool-call ID.
-   Every blocked assessment must map to a blocking finding with the same
-   criterion ID. The controller binds each Agent, commit, scope, and grounded
+   bounded fragment from an eligible Reviewer result or deterministic command
+   output. The controller prefers exact text and permits only RFC JSON
+   whitespace differences outside quoted strings for keyed JSON fragments. It
+   enriches the persisted assessment with every matching actual tool-call or
+   command ID. Blocked assessments and blocking findings must cover the same
+   criteria. A sole unscoped blocker is bound to otherwise-uncovered blocked
+   criteria; multiple unscoped blockers remain invalid. The controller binds
+   each Agent, commit, scope, and grounded
    references into an attributable
    `ReviewReport`; their combined scope must exactly cover the manual criteria
    and finding IDs must remain unique across the iteration.
@@ -147,25 +150,32 @@ were ignored, and never lets them override authoritative values. Missing or
 incorrect controller-owned fields are therefore neither model-quality failures
 nor reasons to spend a repair call.
 
-Reviewer tool claims cross a separate grounding boundary. The response schema
-requires each criterion assessment to supply only small bounded exact
+Reviewer evidence claims cross a separate grounding boundary. The response
+schema requires each criterion assessment to supply only small bounded
 observable result fragments. It forbids the model from supplying or predicting
-a controller tool ID and does not ask it to echo a tool name, outcome, exit
-code, arguments, or digest. The fixed-fixture compatibility path searches only
-the current sanitized execution record. The adaptive path does the same on an
-initial response; during its one controlled semantic repair, it may also search
+a controller tool or command ID and does not ask it to echo a tool name,
+outcome, exit code, arguments, or digest. Exact text is preferred. A fallback
+comparison removes only RFC JSON whitespace outside quoted strings, and only
+for a keyed JSON fragment; values, punctuation, ordering, and string content
+remain exact. The fixed-fixture compatibility path searches the current
+sanitized execution record. The adaptive path also searches controller-owned
+deterministic command stdout/stderr from the same immutable iteration; during
+its one controlled semantic repair, it may additionally search
 integrity-checked attempts from the same Reviewer, role stage, immutable commit,
 and invocation chain. The controller requires every fragment to occur in at
-least one eligible result, binds every matching `(execution_attempt,
-tool-00N)` identity, and deterministically deduplicates repeated or overlapping
-selectors. Evidence never crosses an Agent, stage, iteration, commit, or repair
-chain. A no-match selector uses or exhausts the one bounded semantic repair;
-multiple real matches do not.
-Execution records label this grounded Reviewer shape `semantic_body_v2`; other
-current semantic bodies remain `semantic_body_v1`. Existing schema-v2 Review
-artifacts that predate attempt qualification are interpreted as attempt one and
-serialize without an invented field, preserving their canonical content and
-digests. Newly grounded references record the attempt explicitly.
+least one eligible output, binds every matching `(execution_attempt,
+tool-00N)` identity and/or `CHECK_*` command ID, and deterministically
+deduplicates repeated or overlapping selectors. Evidence never crosses an
+Agent, stage, iteration, commit, or repair chain. A no-match selector uses or
+exhausts the one bounded semantic repair; multiple real matches do not.
+
+Execution records label this grounded Reviewer shape `semantic_body_v3`; other
+current semantic bodies remain `semantic_body_v1`. `semantic_body_v2` remains
+valid historical evidence for the attempt-qualified tool-only contract.
+Existing schema-v2 Review artifacts that predate attempt qualification or
+command references serialize without invented fields, preserving their
+canonical content and digests. Newly grounded references record actual
+attempt-qualified tool IDs and command IDs explicitly.
 
 ## Semantic Response Boundary
 

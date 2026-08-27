@@ -494,7 +494,14 @@ class AgentExecutionRecord(BaseModel):
     stderr_path: str = Field(min_length=1)
     stdout_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     stderr_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    response_contract: Literal["semantic_body_v1", "semantic_body_v2"] | None = None
+    response_contract: (
+        Literal[
+            "semantic_body_v1",
+            "semantic_body_v2",
+            "semantic_body_v3",
+        ]
+        | None
+    ) = None
     controller_supplied_fields: tuple[str, ...] = ()
     ignored_controller_fields: tuple[str, ...] = ()
     tool_evidence_status: AgentToolEvidenceStatus = AgentToolEvidenceStatus.NOT_CAPTURED
@@ -985,6 +992,7 @@ class ReviewCriterionAssessment(BaseModel):
     status: ReviewCriterionStatus
     adversarial_check: str = Field(min_length=1, max_length=2000)
     evidence: str = Field(min_length=1, max_length=2000)
+    command_evidence_ids: tuple[str, ...] = ()
     tool_evidence: tuple[ReviewToolEvidenceReference, ...] = ()
 
     @field_validator("adversarial_check", "evidence")
@@ -996,6 +1004,22 @@ class ReviewCriterionAssessment(BaseModel):
         if not cleaned:
             raise ValueError("criterion assessment text must not be blank")
         return cleaned
+
+    @field_validator("command_evidence_ids")
+    @classmethod
+    def require_unique_command_evidence(
+        cls,
+        values: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        """Keep controller command references explicit and unambiguous."""
+
+        if len(values) != len(set(values)) or any(
+            re.fullmatch(r"CHECK_[A-Z0-9_]+", value) is None for value in values
+        ):
+            raise ValueError(
+                "criterion command-evidence references must be valid and unique"
+            )
+        return values
 
     @field_validator("tool_evidence")
     @classmethod
@@ -1011,6 +1035,18 @@ class ReviewCriterionAssessment(BaseModel):
         if len(identifiers) != len(set(identifiers)):
             raise ValueError("criterion tool-evidence references must be unique")
         return values
+
+    @model_serializer(mode="wrap")
+    def omit_empty_command_evidence(
+        self,
+        handler: SerializerFunctionWrapHandler,
+    ) -> object:
+        """Keep pre-v3 Review artifacts byte-stable when no command is bound."""
+
+        serialized = handler(self)
+        if isinstance(serialized, dict) and not self.command_evidence_ids:
+            serialized.pop("command_evidence_ids", None)
+        return serialized
 
 
 class ReviewReport(IterationArtifact):

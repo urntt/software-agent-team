@@ -581,6 +581,7 @@ class DynamicAgentRunner:
                                     else (current_review_evidence,)
                                 ),
                             ),
+                            review_command_evidence=commands,
                         )
                     except AgentArtifactResponseError as error:
                         record_error = self._error_detail(error)

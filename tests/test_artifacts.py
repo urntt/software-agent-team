@@ -366,6 +366,7 @@ def test_review_assessments_exactly_cover_controller_scope() -> None:
     assert report.criterion_assessments[0].criterion_id == "AC_PERSIST"
     assert report.criterion_assessments[0].tool_evidence[0].tool_call_id == ("tool-001")
     serialized = report.model_dump(mode="json")
+    assert "command_evidence_ids" not in serialized["criterion_assessments"][0]
     serialized_reference = serialized["criterion_assessments"][0]["tool_evidence"][0]
     assert "execution_attempt" not in serialized_reference
 
@@ -379,6 +380,15 @@ def test_review_assessments_exactly_cover_controller_scope() -> None:
         ]
         == 1
     )
+
+    with_command = valid_review_payload()
+    with_command["criterion_assessments"][0]["command_evidence_ids"] = [
+        "CHECK_EXACT_PROJECT_COMMANDS"
+    ]
+    command_report = ReviewReport.model_validate(with_command)
+    assert command_report.model_dump(mode="json")["criterion_assessments"][0][
+        "command_evidence_ids"
+    ] == ["CHECK_EXACT_PROJECT_COMMANDS"]
 
 
 def test_review_assessment_rejects_duplicate_tool_references() -> None:

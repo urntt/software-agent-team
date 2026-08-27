@@ -13,6 +13,7 @@ from software_agent_team.artifacts import (
     AgentToolCallEvidence,
     AgentToolEvidenceStatus,
     ArtifactKind,
+    CommandEvidence,
     ImplementationPlan,
     PlanTask,
     ReviewCriterionAssessment,
@@ -59,13 +60,100 @@ def _clean_unique_text(values: tuple[str, ...]) -> tuple[str, ...]:
     return cleaned
 
 
+def _json_whitespace_projection(value: str) -> str | None:
+    """Remove only RFC JSON whitespace outside strings from a keyed fragment."""
+
+    projected: list[str] = []
+    in_string = False
+    escaped = False
+    just_closed_string = False
+    saw_key_value = False
+    for character in value:
+        if in_string:
+            projected.append(character)
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+                just_closed_string = True
+            continue
+        if character == '"':
+            in_string = True
+            just_closed_string = False
+            projected.append(character)
+            continue
+        if character in " \t\r\n":
+            continue
+        if character == ":" and just_closed_string:
+            saw_key_value = True
+        projected.append(character)
+        just_closed_string = False
+    if in_string or escaped or not saw_key_value:
+        return None
+    return "".join(projected)
+
+
+def _observable_matches_output(observable: str, output: str) -> bool:
+    """Match exact text or one JSON-keyed whitespace-only presentation variant."""
+
+    if observable in output:
+        return True
+    projected_observable = _json_whitespace_projection(observable)
+    if projected_observable is None:
+        return False
+    projected_output = _json_whitespace_projection(output)
+    return projected_output is not None and projected_observable in projected_output
+
+
+def _bind_unambiguous_blocking_finding_scope(
+    findings: tuple[ReviewFinding, ...],
+    assessments: tuple[ReviewCriterionAssessment, ...],
+) -> tuple[ReviewFinding, ...]:
+    """Bind one unscoped blocker to the blocked criteria it uniquely explains.
+
+    The raw model response remains in execution evidence. This normalization only
+    removes redundant identifier repetition when there is exactly one possible
+    binding; ambiguous finding-to-criterion mappings remain invalid.
+    """
+
+    blocked_criteria = {
+        assessment.criterion_id
+        for assessment in assessments
+        if assessment.status is ReviewCriterionStatus.BLOCKED
+    }
+    scoped_blocking_criteria = {
+        criterion_id
+        for finding in findings
+        if finding.blocking and finding.criterion_ids
+        for criterion_id in finding.criterion_ids
+    }
+    unscoped_blocking_indexes = tuple(
+        index
+        for index, finding in enumerate(findings)
+        if finding.blocking and not finding.criterion_ids
+    )
+    uncovered_criteria = blocked_criteria - scoped_blocking_criteria
+    if len(unscoped_blocking_indexes) != 1 or not uncovered_criteria:
+        return findings
+
+    index = unscoped_blocking_indexes[0]
+    normalized = list(findings)
+    normalized[index] = findings[index].model_copy(
+        update={"criterion_ids": tuple(sorted(uncovered_criteria))}
+    )
+    return tuple(normalized)
+
+
 def _ground_review_tool_evidence(
     body: ReviewReportResponse,
     result: AgentExecutionResult,
     *,
     evidence_attempts: tuple[ReviewToolEvidenceAttempt, ...] = (),
+    command_evidence: tuple[CommandEvidence, ...] = (),
 ) -> GroundedReviewReportResponse:
-    """Bind fragments to matching results in one bounded Reviewer chain."""
+    """Bind fragments to eligible Reviewer results and deterministic commands."""
 
     if not body.criterion_assessments:
         return GroundedReviewReportResponse(
@@ -96,23 +184,32 @@ def _ground_review_tool_evidence(
     grounded_assessments: list[ReviewCriterionAssessment] = []
     for assessment in body.criterion_assessments:
         observable_by_tool_call: dict[tuple[int, str], str] = {}
+        matching_command_ids: set[str] = set()
         for claim in assessment.tool_evidence:
-            matches = tuple(
+            tool_matches = tuple(
                 (attempt.execution_attempt, call)
                 for attempt in attempts
                 for call in attempt.tool_calls
-                if claim.observable in call.output_excerpt
+                if _observable_matches_output(claim.observable, call.output_excerpt)
             )
-            if not matches:
+            command_matches = tuple(
+                command
+                for command in command_evidence
+                if _observable_matches_output(claim.observable, command.stdout_tail)
+                or _observable_matches_output(claim.observable, command.stderr_tail)
+            )
+            if not tool_matches and not command_matches:
                 raise ValueError(
                     f"criterion {assessment.criterion_id} evidence fragment does "
-                    "not match any eligible review-chain tool result"
+                    "not match any eligible review-chain tool result or "
+                    "deterministic command output"
                 )
-            for execution_attempt, match in matches:
+            for execution_attempt, match in tool_matches:
                 observable_by_tool_call.setdefault(
                     (execution_attempt, match.id),
                     claim.observable,
                 )
+            matching_command_ids.update(command.id for command in command_matches)
         references = tuple(
             ReviewToolEvidenceReference(
                 execution_attempt=attempt.execution_attempt,
@@ -131,14 +228,20 @@ def _ground_review_tool_evidence(
                 status=assessment.status,
                 adversarial_check=assessment.adversarial_check,
                 evidence=assessment.evidence,
+                command_evidence_ids=tuple(
+                    command.id
+                    for command in command_evidence
+                    if command.id in matching_command_ids
+                ),
                 tool_evidence=references,
             )
         )
+    grounded = tuple(grounded_assessments)
     return GroundedReviewReportResponse(
         verdict=body.verdict,
         termination_reason=body.termination_reason,
-        criterion_assessments=tuple(grounded_assessments),
-        findings=body.findings,
+        criterion_assessments=grounded,
+        findings=_bind_unambiguous_blocking_finding_scope(body.findings, grounded),
         summary=body.summary,
     )
 
@@ -668,6 +771,7 @@ def parse_dynamic_agent_response(
     assigned_task_ids: Collection[str] = (),
     reviewed_criterion_ids: Collection[str] = (),
     review_tool_evidence_attempts: tuple[ReviewToolEvidenceAttempt, ...] = (),
+    review_command_evidence: tuple[CommandEvidence, ...] = (),
 ) -> ParsedAgentResponse:
     """Bind one semantic response to an approved run-scoped AgentSpec."""
 
@@ -739,6 +843,7 @@ def parse_dynamic_agent_response(
                 body,
                 result,
                 evidence_attempts=review_tool_evidence_attempts,
+                command_evidence=review_command_evidence,
             )
         except (ValueError, ValidationError) as error:
             raise AgentArtifactResponseError(

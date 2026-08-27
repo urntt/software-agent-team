@@ -171,14 +171,19 @@ new bounded `/tmp/sat-review-probe-*` script or fixture without overwriting an
 existing file. The image also includes a locked offline Python wheelhouse.
 Deterministic verification copies only clean committed files into fresh
 sandbox scratch and runs the generated project's exact setup, test, and start
-commands with no network. Reviewer criterion claims must cite actual tool
-results. On the normal adaptive path, a bounded semantic repair may reuse an
+commands with no network. Reviewer criterion claims must cite actual Reviewer
+tool results or controller-owned deterministic command output from the same
+immutable iteration. Exact fragments are preferred; keyed JSON fragments also
+accept presentation-only RFC JSON whitespace differences outside quoted
+strings. On the normal adaptive path, a bounded semantic repair may reuse an
 integrity-checked result from an earlier attempt by the same Reviewer against
 the same immutable commit. SAT extracts and sanitizes those records itself and
-persists attempt-qualified tool IDs. Repeated or overlapping selectors are
-deduplicated, while a fragment with no eligible match is rejected; the model
-never has to predict a controller-owned attempt or tool ID or manufacture
-unique wording.
+persists actual attempt-qualified tool IDs or command IDs. Repeated or
+overlapping selectors are deduplicated, while a fragment with no eligible match
+is rejected. A sole unscoped blocking finding is deterministically bound to the
+otherwise-uncovered blocked criteria; ambiguous multiple-finding mappings are
+still rejected. The model never has to predict controller-owned IDs or repeat
+an unambiguous relationship solely for serialization.
 The foreground control palette, live visibility changes, prospective guidance,
 replacement Planning, cooperative pause/resume, best-effort interruption, and
 terminal cancellation are integrated and covered offline. Durable resume after

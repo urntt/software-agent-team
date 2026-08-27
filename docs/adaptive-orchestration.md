@@ -359,17 +359,22 @@ boundaries. Implementation must exercise top-level and nested inputs, aliases
 or indirection, and failure paths when they apply. Independent Review must
 adversarially challenge the same scope. A Dynamic Reviewer returns exactly one
 criterion assessment for every assigned criterion, with a concrete negative or
-boundary case and observable evidence. A blocked assessment and its blocking
-finding must reference the same criterion; missing coverage is an invalid
-response rather than implicit acceptance. Every assessment must also supply one
-or more bounded exact result fragments. The response schema makes the fragment
-structurally required and forbids model-supplied attempt or tool IDs. An initial
+boundary case and observable evidence. Blocked assessments and blocking
+findings must cover the same criteria. When exactly one unscoped blocking
+finding remains, the controller binds it to every otherwise-uncovered blocked
+criterion; multiple unscoped findings are ambiguous and invalid. Missing
+coverage is never implicit acceptance. Every assessment must also supply one
+or more bounded result fragments. The response schema makes the fragment
+structurally required and forbids model-supplied attempt, tool, or command IDs.
+Exact text is preferred; a keyed JSON fragment may differ only in RFC JSON
+whitespace outside quoted strings. An initial
 response uses its current invocation. During the one controlled semantic
 repair, the same Reviewer may also reuse integrity-checked results captured by
 an earlier attempt in that same role-stage, immutable-commit, and invocation
-chain. The controller requires every fragment to occur in at least one eligible
-sanitized result, enriches the persisted assessment with every matching
-attempt-qualified tool ID, identity, outcome, and hashes, and deduplicates
+chain. Deterministic command stdout/stderr from the same immutable iteration is
+also eligible. The controller requires every fragment to occur in at least one
+eligible output, enriches the persisted assessment with every matching actual
+attempt-qualified tool ID or command ID and available provenance, and deduplicates
 repeated or overlapping selectors. Evidence cannot cross an Agent, stage,
 iteration, commit, or repair chain. A zero match is invalid; multiple real
 matches are preserved instead of delegated back to model wording. Review may

@@ -123,7 +123,7 @@ def persist_agent_invocation(
         stdout_sha256=outputs.stdout_sha256,
         stderr_sha256=outputs.stderr_sha256,
         response_contract=(
-            "semantic_body_v2"
+            "semantic_body_v3"
             if request.expected_kind is ArtifactKind.REVIEW_REPORT
             else "semantic_body_v1"
         ),

@@ -43,20 +43,28 @@ Return exactly one `criterion_assessments` entry for every assigned criterion.
 Each entry must name the concrete negative or boundary case you challenged and
 the observable source, documentation, deterministic-command, or sandbox-probe
 evidence for the result. It must also contain at least one `tool_evidence`
-reference to a tool result from this invocation or, during a controlled
+reference to either a tool result from this invocation (or, during a controlled
 semantic repair, an earlier integrity-checked attempt in the same Reviewer
-chain. Controller-owned attempt and tool IDs are outside your response
-contract. For every reference, provide only a bounded exact result fragment of
-at most 256 characters; do not predict or return an attempt or tool-call ID.
-The controller binds every eligible result containing that fragment and
-supplies the execution attempt, tool ID, name, and outcome in its own evidence.
-It deduplicates repeated or overlapping fragments and rejects only a fragment
-that matches no eligible result. A semantic repair does not need to rerun an
+chain) or controller-provided deterministic command stdout/stderr from this
+immutable iteration. Controller-owned attempt, tool, and command IDs are outside
+your response contract. For every reference, provide only a bounded result
+fragment of at most 256 characters; do not predict or return an ID. Prefer an
+exact contiguous fragment. For a JSON keyed fragment only, the controller also
+accepts a difference consisting exclusively of RFC JSON whitespace outside
+quoted strings; values, punctuation, order, and string content remain exact.
+The controller binds every eligible result or deterministic command containing
+that fragment and supplies the actual tool attempt/ID or command ID in its own
+evidence. It deduplicates repeated or overlapping fragments and rejects a
+fragment with no eligible match. A semantic repair does not need to rerun an
 unchanged probe whose result was already captured in this chain. One call may
-support multiple criteria when it genuinely exercises them. If you cannot establish a
-criterion, mark it `blocked` and create a blocking finding that references that
-criterion. Never mark a criterion satisfied from a summary claim or passing
-project-authored test alone.
+support multiple criteria when it genuinely exercises them. If you cannot
+establish a criterion, mark it `blocked` and create a blocking finding that
+references that criterion. When exactly one blocking finding explains every
+otherwise-uncovered blocked criterion, you may omit its `criterion_ids`; the
+controller can bind that single unambiguous relationship. With multiple
+blocking findings, supply explicit `criterion_ids` so the controller never has
+to guess which defect explains which criterion. Never mark a criterion
+satisfied from a summary claim or passing project-authored test alone.
 
 Adversarially challenge every unqualified prohibition or safety guarantee at
 all relevant entry boundaries: top-level user input, nested input, aliases or

@@ -300,16 +300,19 @@ Confirm all of the following before marking Phase 1 accepted:
   compares their provider/model metadata using the canonical `provider/model`
   identity.
 - Every semantic execution record identifies `semantic_body_v1`, or
-  `semantic_body_v2` for a Reviewer response with current-invocation tool
-  citations. It lists the controller-supplied persisted fields, records any
+  `semantic_body_v3` for a grounded Reviewer response. Historical
+  `semantic_body_v2` records retain the attempt-qualified tool-only contract.
+  The record lists the controller-supplied persisted fields, records any
   redundant model-returned controller fields that were ignored, and records
   the resolved stage and remaining attempt timeouts. Missing or incorrect
   echoes of `kind`, Git facts, command evidence, status, criteria, or scope are
   not treated as semantic response failures.
-- Every Reviewer semantic criterion assessment supplies one or more exact
-  observable fragments that each match at least one result in that attempt's
-  sanitized tool record. The persisted assessment contains every matching,
-  deduplicated controller-resolved tool ID; the model does not supply it.
+- Every Reviewer semantic criterion assessment supplies one or more bounded
+  observable fragments that each match at least one eligible sanitized tool
+  result or same-iteration deterministic command output. Exact text is
+  preferred; keyed JSON permits only outside-string RFC JSON whitespace
+  differences. The persisted assessment contains every matching, deduplicated
+  controller-resolved tool or command ID; the model does not supply it.
   Session provenance is `captured`, tool calls and results pair exactly, and a
   zero-call or unmatched claim is never accepted as evidence of a probe.
 - Every handoff points to immutable artifact references with matching SHA-256

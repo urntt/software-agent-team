@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** Phase 3E implemented; nine fresh installed adaptive rehearsals have driven controller, transport, progress, profile, and review-boundary corrections, with a clean provider rerun next
+**Current milestone:** Phase 3E implemented; ten fresh installed adaptive rehearsals have driven controller, transport, progress, profile, and review-boundary corrections, with a clean provider rerun next
 
 **Last updated:** August 27, 2026
 
@@ -558,6 +558,40 @@ two archived Planning responses now compile unchanged with their proposed
 three-wave DAG. The complete 674-test offline suite passes. A new fresh
 installed provider rerun remains required.
 
+The next fresh-account run passed the public one-command installer, bare `sat`,
+device checks, isolated configuration, provider smoke, request capture,
+Planning authorization, bounded Planning repair, overview, and approval using
+the exact `deepseek/deepseek-v4-flash-vision-exp` route. The approved plan used
+one Implementation Agent followed by one Reviewer. Planning classified their
+workloads as `substantial` and `routine`; controller policy resolved those
+labels to 1,350-second and 600-second invocation timeouts and froze
+`max_concurrency=1`. The writer committed eight tracked files. Deterministic
+clean-copy verification then caught a real import failure in one subprocess
+test while the generated project's exact post-setup test command passed.
+
+The Reviewer performed 19 attributable read-only tool calls and returned the
+correct `revise` verdict, all 13 criterion assessments, and one blocking
+finding covering the import defect. The response was rejected because several
+compact JSON evidence fragments differed from pretty-printed results only in
+outside-string whitespace, three exact claims referred to controller command
+output rather than Reviewer tool output, and the sole finding omitted a
+redundant `criterion_ids` list. Its bounded repair returned prose instead of a
+semantic object, so the run correctly failed without delivery and terminal
+cleanup removed both run-scoped containers.
+
+Reviewer grounding contract `semantic_body_v3` now prefers exact fragments but
+permits only RFC JSON whitespace differences outside quoted strings for keyed
+JSON. It can bind same-iteration deterministic command stdout/stderr and
+persists the actual command IDs alongside attempt-qualified tool IDs. When one
+unscoped blocking finding uniquely explains all otherwise-uncovered blocked
+criteria, the controller binds that relationship; multiple unscoped findings
+remain invalid. Exact replay of the preserved first response now retains its
+`revise` verdict, resolves all 13 assessments, binds 11 tool references and 3
+command references, and scopes the finding to `AC_TESTS` and `AC_TESTSUITE`
+without another model call. The complete 677-test offline suite passes. A
+fresh installed provider rerun remains required to verify the complete
+revision loop and delivery path.
+
 The rehearsal sequence below concerns the predecessor guided fixed-team
 product path and is retained as defect and regression evidence. It proves the
 installer, isolated runtime, fixed compatibility controller, delivery, and
@@ -843,8 +877,9 @@ The acceptance contract is
 - Contract-aware response normalization that permits presentation argv arrays
   around one semantic object while rejecting any additional object candidate;
 - Exact Dynamic Reviewer criterion assessments with adversarial checks,
-  same-chain attempt-qualified result selectors and controller-resolved tool
-  IDs, blocked-finding cross-binding, and bounded no-network foreground probes
+  same-chain attempt-qualified result selectors, same-iteration deterministic
+  command selectors, controller-resolved tool and command IDs, unambiguous
+  blocked-finding scope binding, and bounded no-network foreground probes
   against read-only source;
 - Concrete phase-artifact and Agent-telemetry contracts with contextual
   validation;

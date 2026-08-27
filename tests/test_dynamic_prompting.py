@@ -543,6 +543,142 @@ def test_dynamic_review_response_rejects_an_unmatched_tool_claim() -> None:
         )
 
 
+def test_controller_matches_only_json_outside_string_whitespace_variants() -> None:
+    assessment = ReviewCriterionAssessmentResponse(
+        criterion_id="AC_LINKS",
+        status="satisfied",
+        adversarial_check="Exercised the keyed JSON boundary.",
+        evidence="The captured result preserved the exact value and structure.",
+        tool_evidence=(review_tool_claim('"result":"two words","paths":["a","b"]'),),
+    )
+    request, result = _review_result(
+        ReviewReportResponse(
+            verdict="accept",
+            criterion_assessments=(assessment,),
+            summary="The keyed JSON evidence is grounded.",
+        )
+    )
+    pretty_output = """{
+  "result": "two words",
+  "paths": [
+    "a",
+    "b"
+  ]
+}"""
+    result = result.model_copy(
+        update={
+            "telemetry": result.telemetry.model_copy(
+                update={"tool_calls": (captured_tool_call(1, pretty_output),)}
+            )
+        }
+    )
+
+    parsed = parse_dynamic_agent_response(
+        result,
+        request,
+        task_brief=task_brief(),
+        team_plan=team_plan(),
+        reviewed_criterion_ids=("AC_LINKS",),
+    )
+
+    assert isinstance(parsed.body, GroundedReviewReportResponse)
+    reference = parsed.body.criterion_assessments[0].tool_evidence[0]
+    assert reference.tool_call_id == "tool-001"
+    assert reference.observable == '"result":"two words","paths":["a","b"]'
+
+    for unsupported in (
+        '"result":"twowords","paths":["a","b"]',
+        '"result":"two words","paths":["b","a"]',
+        "result: two words paths: a b",
+    ):
+        changed = assessment.model_copy(
+            update={"tool_evidence": (review_tool_claim(unsupported),)}
+        )
+        _, changed_result = _review_result(
+            ReviewReportResponse(
+                verdict="accept",
+                criterion_assessments=(changed,),
+                summary="Claimed unsupported evidence.",
+            )
+        )
+        changed_result = changed_result.model_copy(
+            update={
+                "telemetry": changed_result.telemetry.model_copy(
+                    update={"tool_calls": (captured_tool_call(1, pretty_output),)}
+                )
+            }
+        )
+        with pytest.raises(AgentArtifactResponseError, match="does not match any"):
+            parse_dynamic_agent_response(
+                changed_result,
+                request,
+                task_brief=task_brief(),
+                team_plan=team_plan(),
+                reviewed_criterion_ids=("AC_LINKS",),
+            )
+
+
+def test_controller_binds_same_iteration_deterministic_command_output() -> None:
+    assessment = ReviewCriterionAssessmentResponse(
+        criterion_id="AC_LINKS",
+        status="satisfied",
+        adversarial_check="Checked the exact project start boundary.",
+        evidence="The controller-owned exact-command gate reached a clean start.",
+        tool_evidence=(review_tool_claim('"start":"exited_zero"'),),
+    )
+    request, result = _review_result(
+        ReviewReportResponse(
+            verdict="accept",
+            criterion_assessments=(assessment,),
+            summary="The same-iteration deterministic command is grounded.",
+        )
+    )
+    result = result.model_copy(
+        update={"telemetry": result.telemetry.model_copy(update={"tool_calls": ()})}
+    )
+    command = CommandEvidence(
+        id="CHECK_EXACT_PROJECT_COMMANDS",
+        argv=("python", "run_commands.py"),
+        criterion_ids=("AC_OTHER",),
+        exit_code=0,
+        duration_ms=12,
+        stdout_path="iterations/01/commands/exact.stdout.txt",
+        stderr_path="iterations/01/commands/exact.stderr.txt",
+        stdout_tail='{"setup": "passed", "start": "exited_zero"}',
+        summary="The exact project commands passed.",
+    )
+
+    parsed = parse_dynamic_agent_response(
+        result,
+        request,
+        task_brief=task_brief(),
+        team_plan=team_plan(),
+        reviewed_criterion_ids=("AC_LINKS",),
+        review_command_evidence=(command,),
+    )
+
+    assert isinstance(parsed.body, GroundedReviewReportResponse)
+    grounded = parsed.body.criterion_assessments[0]
+    assert grounded.command_evidence_ids == ("CHECK_EXACT_PROJECT_COMMANDS",)
+    assert grounded.tool_evidence == ()
+    assert grounded.model_dump(mode="json")["command_evidence_ids"] == [
+        "CHECK_EXACT_PROJECT_COMMANDS"
+    ]
+
+    unrelated = command.model_copy(
+        update={"stdout_tail": '{"setup": "passed", "start": "failed"}'}
+    )
+    with pytest.raises(AgentArtifactResponseError, match="does not match any"):
+        parse_dynamic_agent_response(
+            result,
+            request,
+            task_brief=task_brief(),
+            team_plan=team_plan(),
+            reviewed_criterion_ids=("AC_LINKS",),
+            review_command_evidence=(unrelated,),
+        )
+
+
 def test_dynamic_review_response_binds_every_matching_tool_result() -> None:
     assessment = ReviewCriterionAssessmentResponse(
         criterion_id="AC_LINKS",
@@ -906,6 +1042,45 @@ def test_dynamic_review_response_binds_blocked_assessment_to_finding() -> None:
         summary=parsed.body.summary,
     )
     request, result = _review_result(missing_scope)
+    rebound = parse_dynamic_agent_response(
+        result,
+        request,
+        task_brief=task_brief(),
+        team_plan=team_plan(),
+        reviewed_criterion_ids=("AC_LINKS",),
+    )
+    assert isinstance(rebound.body, GroundedReviewReportResponse)
+    assert rebound.body.findings[0].criterion_ids == ("AC_LINKS",)
+
+
+def test_dynamic_review_response_rejects_ambiguous_unscoped_blockers() -> None:
+    blocked = ReviewCriterionAssessmentResponse(
+        criterion_id="AC_LINKS",
+        status="blocked",
+        adversarial_check="Ran the CLI against a broken nested link.",
+        evidence="The command returned zero despite the broken link.",
+        tool_evidence=(review_tool_claim(),),
+    )
+    findings = tuple(
+        ReviewFinding(
+            id=f"FINDING_LINK_EXIT_{index}",
+            severity="high",
+            blocking=True,
+            category="behavior",
+            description=f"Candidate explanation {index} for the broken behavior.",
+            recommendation=f"Apply candidate correction {index}.",
+        )
+        for index in (1, 2)
+    )
+    request, result = _review_result(
+        ReviewReportResponse(
+            verdict="revise",
+            criterion_assessments=(blocked,),
+            findings=findings,
+            summary="Two blockers cannot be mapped without explicit criterion IDs.",
+        )
+    )
+
     with pytest.raises(AgentArtifactResponseError, match="must reference"):
         parse_dynamic_agent_response(
             result,
