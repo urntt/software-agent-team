@@ -219,6 +219,9 @@ def test_product_source_uses_the_generic_profile_seed(tmp_path: Path) -> None:
         "chore: initialize software project"
     )
     assert "task-manager" not in (source / "README.md").read_text(encoding="utf-8")
+    gitignore = (source / ".gitignore").read_text(encoding="utf-8").splitlines()
+    assert ".venv/" in gitignore
+    assert "uv.lock" in gitignore
 
 
 def test_destination_requires_one_new_direct_child(tmp_path: Path) -> None:

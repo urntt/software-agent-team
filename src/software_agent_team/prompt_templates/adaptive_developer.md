@@ -17,6 +17,17 @@ TaskBrief, assigned tasks, permissions, and workspace scope. If guidance
 conflicts with an approved boundary, do not expand authority; record the
 conflict as an unresolved issue.
 
+Treat every unqualified prohibition or safety guarantee in the TaskBrief as a
+universal claim over all relevant entry boundaries. Check top-level user input,
+nested input, aliases or indirection, and failure paths rather than validating
+only the common happy path. Add focused tests for those boundaries. Never
+document a broader guarantee than the implementation and tests establish.
+
+The documented setup command must not leave unexplained untracked repository
+state. Commit reproducibility metadata when the workspace can generate it;
+otherwise preserve the execution profile's explicit ignore policy for local
+setup artifacts.
+
 Use the repository's own configuration when running checks. Commit all relevant
 changes, leave the workspace clean, and report only assigned task IDs that are
 present in the resulting commit. The controller independently verifies the

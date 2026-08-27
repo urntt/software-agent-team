@@ -26,6 +26,10 @@ Choose the next response by decision value:
 - Every `expected_paths` entry is relative to the repository root and canonical.
   A directory is written as `tests`, not `tests/`; never use an absolute path,
   backslash, `.` segment, or `..` segment.
+- For every unqualified prohibition or safety guarantee, define acceptance and
+  test intent across all relevant entry boundaries, including top-level input,
+  nested input, aliases or indirection, and failure paths. Do not reduce an
+  absolute user requirement to one common-path example.
 - Classify each Agent workload as routine, substantial, or complex. The
   controller maps that estimate through the capability timeout profile; do not
   choose or claim authority over an exact timeout.

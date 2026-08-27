@@ -5,10 +5,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 from pathlib import Path
 
 MAX_MANIFEST_BYTES = 65_536
+MAX_LOCK_BYTES = 1_048_576
 EXPECTED_KEYS = {"schema_version", "setup", "start", "test"}
 
 
@@ -17,13 +19,66 @@ def fail(message: str) -> None:
     raise SystemExit(1)
 
 
-def require_regular_file(path: Path, label: str) -> bytes:
+def require_regular_file(
+    path: Path,
+    label: str,
+    *,
+    max_bytes: int = MAX_MANIFEST_BYTES,
+) -> bytes:
     if path.is_symlink() or not path.is_file():
         fail(f"{label} must be a regular file")
     content = path.read_bytes()
-    if len(content) > MAX_MANIFEST_BYTES:
+    if len(content) > max_bytes:
         fail(f"{label} is too large")
     return content
+
+
+def require_setup_artifact_policy(repository: Path) -> None:
+    """Keep the documented setup command from dirtying a clean delivery."""
+
+    gitignore = require_regular_file(
+        repository / ".gitignore",
+        ".gitignore",
+    ).decode("utf-8", errors="strict")
+    rules = {
+        line.strip()
+        for line in gitignore.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    }
+    if not rules.intersection({".venv", ".venv/", "/.venv", "/.venv/"}):
+        fail(".gitignore must exclude the root .venv setup directory")
+    require_effective_ignore(repository, ".venv/.sat-setup-probe", "root .venv")
+    lock = repository / "uv.lock"
+    if lock.exists() or lock.is_symlink():
+        require_regular_file(lock, "uv.lock", max_bytes=MAX_LOCK_BYTES)
+    elif not rules.intersection({"uv.lock", "/uv.lock"}):
+        fail("uv.lock must be committed or explicitly excluded by .gitignore")
+    else:
+        require_effective_ignore(repository, "uv.lock", "uv.lock")
+
+
+def require_effective_ignore(repository: Path, relative_path: str, label: str) -> None:
+    """Verify the checked-in rule wins after Git applies later negations."""
+
+    result = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repository),
+            "check-ignore",
+            "--no-index",
+            "--quiet",
+            "--",
+            relative_path,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 1:
+        fail(f".gitignore must effectively exclude {label}")
+    if result.returncode != 0:
+        fail(f"cannot verify the .gitignore setup policy for {label}")
 
 
 def validate_argv(value: object, label: str) -> tuple[str, ...]:
@@ -95,6 +150,7 @@ def validate(repository: Path) -> None:
     if test != ("uv", "run", "pytest"):
         fail("test must be: uv run pytest")
 
+    require_setup_artifact_policy(repository)
     require_regular_file(repository / "pyproject.toml", "pyproject.toml")
     readme = require_regular_file(repository / "README.md", "README.md").decode(
         "utf-8", errors="strict"

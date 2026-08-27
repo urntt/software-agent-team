@@ -41,6 +41,16 @@ These values are argv arrays rather than shell strings. SAT validates the file
 before delivery and renders its commands to the user. Setup and test remain
 fixed for reproducibility; `start` belongs to the generated project.
 
+The validated setup contract also protects the first-use repository state.
+The root `.venv` must be ignored. A root `uv.lock` must either be a bounded
+regular file already present in the accepted clean snapshot or be explicitly
+ignored, so running the documented setup command does not silently introduce
+unexplained local state. The task-independent seed supplies the ignore policy;
+a generated project may instead commit a lock when its implementation and
+tests establish that as the reproducible choice. The validator asks Git to
+confirm that the explicit rules remain effective after applying later patterns
+or negations.
+
 ## Evidence Boundary
 
 Deterministic gates validate the command/documentation contract, compile the

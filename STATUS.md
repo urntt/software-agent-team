@@ -50,7 +50,7 @@ validation also rejects a plan whose complete planned iterations cannot fit
 its call budget. Recovery
 verifies the exact TaskBrief binding, TeamPlan digest, fixed manifest version,
 fixed team digest, resolved Agent timeouts, and cross-file run metadata. The
-complete repository check passes with 583 offline tests.
+complete repository check passes with 590 offline tests.
 
 `RunEvent` is also an executable, append-only contract. Every current workflow
 progress update is persisted with a contiguous sequence, lifecycle revision,
@@ -273,8 +273,35 @@ deriving deterministic bounded projections for scheduler status and downstream
 prompt context. A truncated projection names the original character count and
 SHA-256 and states that full text remains in artifact evidence. A regression
 with a 4,045-character WorkResult completes both downstream quality Agents,
-while the stored WorkResult remains unchanged. Another fresh installed run is
-required before the complete adaptive journey is called successful.
+while the stored WorkResult remains unchanged.
+
+A third fresh installed adaptive run confirmed the complete controller path at
+that revision. Planning used one bounded repair, the user approved an
+Implementation Agent followed by an independent Review Agent, and two
+evidence-driven iterations completed. The first review correctly requested a
+README revision; the second accepted all controller evidence. SAT recorded
+11/11 criteria passed, delivered a clean 14-file commit, reported exact project
+commands, and removed all four run-scoped containers. The delivered setup and
+17 project tests passed, as did duplicate grouping, exclusion, minimum-size,
+and nested symlink fixtures.
+
+Independent post-delivery acceptance nevertheless found two product defects.
+Selecting a directory symlink as the top-level scan root followed its target,
+contradicting the unqualified request and README claim that symlinks were never
+followed. The model-authored tests covered nested symlinks but not that entry
+boundary, and independent Review did not challenge it. The documented setup
+also generated an untracked `uv.lock`, leaving first-use Git state unexplained.
+The controller's completed result is therefore retained as failed product
+acceptance rather than promoted to demonstration evidence.
+
+The shared quality prompts now require Planning, implementation, and independent
+Review to cover every relevant entry boundary of an unqualified prohibition or
+safety guarantee and to reject one concrete counterexample. The Python product
+contract also requires the root setup environment to be ignored and `uv.lock`
+to be either a bounded regular file in the accepted snapshot or explicitly
+ignored. These are task-independent corrections; no duplicate-finder-specific
+gate was added. A fresh installed run must confirm both changes before the
+adaptive journey is called successful.
 
 The rehearsal sequence below concerns the predecessor guided fixed-team
 product path and is retained as defect and regression evidence. It proves the

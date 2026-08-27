@@ -987,6 +987,8 @@ def test_dialogue_revision_structured_edit_and_approval_are_recoverable(
     assert len(executor.requests) == 3
     assert all(call.role.value == "clarifier" for call in executor.requests)
     assert all(call.timeout_seconds == 180 for call in executor.requests)
+    assert "unqualified prohibition" in executor.requests[0].prompt
+    assert "top-level input" in executor.requests[0].prompt
 
     tampered = approved.model_dump(mode="json")
     tampered["team_plan"]["agents"][0]["timeout_seconds"] += 1

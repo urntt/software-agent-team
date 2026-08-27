@@ -63,6 +63,15 @@ The controller accepts an iteration only when all of the following agree:
 5. The controller, not either Agent, resolves pending criteria to `passed` in
    the final report.
 
+Generic deterministic gates do not prove arbitrary task semantics. For an
+unqualified prohibition or safety guarantee, the Planning prompt requires
+acceptance intent across all relevant input boundaries, the implementation
+prompt requires focused boundary tests, and the Review prompt requires an
+adversarial counterexample search. The resulting judgment remains attributable
+model evidence rather than a controller fact: a later concrete counterexample
+still invalidates acceptance and must be preserved as a product defect. The
+controller must never reinterpret a model's broad claim as deterministic proof.
+
 Reviewer severity and controller termination are separate concepts. Any
 correctable implementation defect, including a failed acceptance gate or a
 critical-impact product bug, produces `revise` while the iteration budget
@@ -371,6 +380,11 @@ when investigating it rather than editing artifacts in place.
 
 - The source checkout must be clean, safe to materialize, and define local Git
   `user.name` and `user.email` values for the isolated clone.
+- A generated Python project must ignore its root setup environment and must
+  either contain a bounded regular `uv.lock` in the accepted clean snapshot or
+  explicitly ignore that local lock artifact. This contract prevents the exact
+  documented setup command from silently dirtying first-use Git state; it does
+  not claim that an ignored lock provides dependency reproducibility.
 - Every run workspace is a self-contained clone with no remote and a detached
   HEAD. The Agent can commit inside its container without access to source Git
   metadata.

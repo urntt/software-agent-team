@@ -16,6 +16,13 @@ PROFILE_ROOT = REPOSITORY_ROOT / "profiles" / "python"
 def write_valid_project(root: Path) -> None:
     """Create the smallest project accepted by the trusted profile validator."""
 
+    subprocess.run(
+        ["git", "init", "--quiet", str(root)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    (root / ".gitignore").write_text(".venv/\nuv.lock\n", encoding="utf-8")
     (root / "README.md").write_text(
         "# Link Checker\n\nSetup, start, test, and known limitations.\n",
         encoding="utf-8",
@@ -115,3 +122,78 @@ def test_product_contract_validator_rejects_the_starter_placeholder(
 
     assert result.returncode == 1
     assert "starter placeholder" in result.stderr
+
+
+def test_product_contract_requires_clean_setup_artifact_policy(
+    tmp_path: Path,
+) -> None:
+    write_valid_project(tmp_path)
+    (tmp_path / ".gitignore").write_text(".venv/\n", encoding="utf-8")
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode == 1
+    assert "uv.lock must be committed or explicitly excluded" in result.stderr
+
+
+def test_product_contract_accepts_a_present_bounded_uv_lock(
+    tmp_path: Path,
+) -> None:
+    write_valid_project(tmp_path)
+    (tmp_path / ".gitignore").write_text(".venv/\n", encoding="utf-8")
+    (tmp_path / "uv.lock").write_text("version = 1\n", encoding="utf-8")
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_product_contract_rejects_a_symlinked_uv_lock(tmp_path: Path) -> None:
+    write_valid_project(tmp_path)
+    (tmp_path / ".gitignore").write_text(".venv/\n", encoding="utf-8")
+    outside = tmp_path / "outside.lock"
+    outside.write_text("version = 1\n", encoding="utf-8")
+    (tmp_path / "uv.lock").symlink_to(outside)
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode == 1
+    assert "uv.lock must be a regular file" in result.stderr
+
+
+def test_product_contract_rejects_an_oversized_uv_lock(tmp_path: Path) -> None:
+    write_valid_project(tmp_path)
+    (tmp_path / ".gitignore").write_text(".venv/\n", encoding="utf-8")
+    (tmp_path / "uv.lock").write_bytes(b"x" * 1_048_577)
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode == 1
+    assert "uv.lock is too large" in result.stderr
+
+
+def test_product_contract_requires_the_setup_environment_to_be_ignored(
+    tmp_path: Path,
+) -> None:
+    write_valid_project(tmp_path)
+    (tmp_path / ".gitignore").write_text("uv.lock\n", encoding="utf-8")
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode == 1
+    assert "root .venv setup directory" in result.stderr
+
+
+def test_product_contract_rejects_a_negated_setup_ignore_rule(
+    tmp_path: Path,
+) -> None:
+    write_valid_project(tmp_path)
+    (tmp_path / ".gitignore").write_text(
+        ".venv/\nuv.lock\n!uv.lock\n",
+        encoding="utf-8",
+    )
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode == 1
+    assert ".gitignore must effectively exclude uv.lock" in result.stderr

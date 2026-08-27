@@ -254,6 +254,10 @@ def test_dynamic_prompt_is_compiled_from_the_approved_agent_spec() -> None:
     assert request.expected_kind is ArtifactKind.WORK_RESULT
     assert request.timeout_seconds == 600
     assert request.model == "provider/model"
+    assert "top-level user input" in rendered
+    assert "unqualified prohibition" in rendered
+    assert "documented setup command" in rendered
+    assert "explicit ignore policy" in rendered
 
 
 def test_dynamic_prompt_includes_unique_persisted_user_guidance() -> None:
@@ -293,6 +297,16 @@ def test_quality_prompt_contains_read_only_evidence_not_write_authority() -> Non
     assert '"id": "CHECK_TEST"' in rendered
     assert "Do not modify files or execute additional commands" in rendered
     assert "TASK_LINKS" in rendered
+
+
+def test_review_prompt_requires_adversarial_absolute_claim_boundaries() -> None:
+    inputs = quality_inputs().model_copy(update={"agent_id": "quality_reviewer"})
+
+    rendered = render_dynamic_agent_prompt(inputs)
+
+    assert "top-level user input" in rendered
+    assert "one concrete counterexample" in rendered
+    assert "first setup" in rendered
 
 
 def test_dynamic_revision_requires_commit_bound_blocking_feedback() -> None:

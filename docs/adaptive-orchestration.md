@@ -292,6 +292,17 @@ not create a model call. A team change requires a safe checkpoint, a new
 validated TeamPlan revision, budget authorization, and user confirmation when
 the change affects scope, cost, or delivery expectations.
 
+Task-specific quality remains semantic work rather than a claim made by the
+generic profile gates. Planning must turn every unqualified prohibition or
+safety guarantee into acceptance and test intent across relevant entry
+boundaries. Implementation must exercise top-level and nested inputs, aliases
+or indirection, and failure paths when they apply. Independent Review must
+adversarially challenge the same scope and block acceptance on one concrete
+counterexample. Documentation may state only the boundary established by the
+implementation and evidence. The generated-project contract separately checks
+that the documented first setup does not leave an unexplained root virtual
+environment or lock file in an otherwise clean delivery.
+
 Existing fixed team manifests remain versioned evaluation fixtures. During
 migration they are compiled into the same `TeamPlan` contract so the repository
 does not retain two lifecycle implementations.

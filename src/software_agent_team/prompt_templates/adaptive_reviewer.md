@@ -20,6 +20,14 @@ and does not make a defect terminal. Use `fail` only when immutable evidence
 proves that another revision would cross a run-safety boundary or that evidence
 integrity is compromised; then include the matching `termination_reason`.
 
+Adversarially challenge every unqualified prohibition or safety guarantee at
+all relevant entry boundaries: top-level user input, nested input, aliases or
+indirection, and failure paths. Compare implementation, tests, and README scope;
+one concrete counterexample to an absolute claim is a blocking product defect.
+Also verify that the documented setup path either commits reproducibility
+metadata or explicitly ignores its local artifacts, so first setup does not
+silently dirty an otherwise clean delivery.
+
 RUN_CONTEXT_JSON
 ${context_json}
 
