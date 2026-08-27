@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** Phase 3D foreground controls implemented and offline verified; provider-backed rehearsal is next
+**Current milestone:** Phase 3E model profiles and controlled routing implemented and offline verified; provider-backed adaptive rehearsal is next
 
 **Last updated:** August 27, 2026
 
@@ -50,7 +50,7 @@ validation also rejects a plan whose complete planned iterations cannot fit
 its call budget. Recovery
 verifies the exact TaskBrief binding, TeamPlan digest, fixed manifest version,
 fixed team digest, resolved Agent timeouts, and cross-file run metadata. The
-complete repository check passes with 554 offline tests.
+complete repository check passes with 577 offline tests.
 
 `RunEvent` is also an executable, append-only contract. Every current workflow
 progress update is persisted with a contiguous sequence, lifecycle revision,
@@ -62,9 +62,10 @@ queued, ready, running, provider-waiting, bounded-repair, completed, failed, or
 blocked transitions. Events include safe activity, dependencies, capability,
 stage, approved model, attempt and duration where applicable, invocation
 evidence, and aggregate budget snapshots. Compact, standard, and detailed
-filtering consumes the same event contract. Configuration schema v5 persists
-the selected visibility without changing execution, and bare `sat` applies it
-to the product renderer; standard remains the default.
+filtering consumes the same event contract. Configuration schema v6 persists
+the selected visibility together with secret-free model profiles and route
+policy without changing renderer semantics, and bare `sat` applies the selected
+visibility to the product renderer; standard remains the default.
 
 `ControlCommand` and its controller-owned revision store define and preserve
 the request, target, controller-assigned mailbox sequence, safe application
@@ -131,9 +132,11 @@ from every approved Reviewer. Split review scopes must exactly cover manual
 criteria, and finding identities must be unique across the iteration.
 
 Run configuration materialization emits only the approved AgentSpecs, clones
-their least-privilege capability profiles, disables model fallback, and binds
-every Agent to the verified workspace and selected route. Exact-label sandbox
-cleanup can derive all owned session identities from those AgentSpecs. Adaptive
+their least-privilege capability profiles, and binds every Agent to the
+verified workspace and its exact authorized route set. Strict evaluation
+disables fallback; policy routing can expose only the primary and ordered
+fallbacks already frozen for that Agent. Exact-label sandbox cleanup can derive
+all owned session identities from those AgentSpecs. Adaptive
 validation excludes the bootstrap Planning and Clarification capabilities from
 the runtime team, requires every writer to own work, and allows a small task to
 use one writer plus one independent quality Agent instead of imposing a hidden
@@ -144,7 +147,8 @@ evaluation fixtures retain their explicit dual-quality topology.
 The Phase 3C dynamic runner is now implemented behind the general DAG
 scheduler. The scheduler remains the only owner of readiness, launch order,
 bounded concurrency, and shared-Git writer exclusion. The runner invokes only
-the supplied approved `AgentSpec`, preserves its exact model and timeout,
+the supplied approved `AgentSpec`, preserves its exact authorized model set and
+timeout,
 allows at most one full-timeout semantic repair, accounts for every call in one
 thread-safe aggregate ledger, and persists raw output plus telemetry before a
 post-call budget rejection stops the schedule. Agents cannot create another
@@ -197,6 +201,20 @@ mutates approved evidence in place. Safe concurrent writers beyond the current
 serialized Git chain, durable process-restart resume, and a secondary-process
 control client remain pending.
 
+Phase 3E adds a single canonical source for secret-free model profiles and
+deterministic routing. The controller resolves Agent edit, stage override,
+capability override, default-profile support, then eligible-profile priority;
+the bootstrap Planner may describe capability needs but cannot authorize a
+model. The Planning overview exposes every primary route, selection reason,
+known pricing, and approved fallback before user approval. TeamPlan validation,
+run configuration, prompts, response telemetry, budget feasibility, and
+runtime preflight all bind those exact assignments. Only an attributable
+provider failure can advance to an explicitly approved fallback; the failed
+call and switch remain evidence and semantic repair stays a separate bounded
+mechanism. Offline routing and dynamic-runner tests cover both authorized and
+refused switches. A provider-backed run using two planned routes remains
+pending.
+
 ## Product Readiness Boundary
 
 The primary CLI now implements the adaptive Product Journey in code. A normal
@@ -208,12 +226,15 @@ or safe edits, and creates an execution run only after exact approval. It then
 executes the approved TeamPlan and delivers only an accepted clean Git result
 with project-specific commands.
 
-The activated product path uses one strict selected model route and a
-user-configurable controller progress renderer. Its active foreground control
-channel is implemented and offline verified, including cancellation and
+The normal first-use path starts with one strict selected model profile; an
+advanced user can configure multiple capability-authorized profiles and policy
+routing before Planning. The product path also uses a user-configurable
+controller progress renderer. Its active foreground control channel and model
+routing are implemented and offline verified, including cancellation and
 correction reports, one-shot guidance, safe pause/resume checkpoints, live
-visibility changes, process interruption, event correlation, and exact-owned
-cleanup. Multiple-model routing remains the next implementation milestone.
+visibility changes, process interruption, deterministic route resolution,
+explicit provider-failure switching, event correlation, and exact-owned
+cleanup.
 
 This is not yet release-stable evidence. Two earlier WSL rehearsals completed
 managed installation or update, startup diagnostics, isolated provider setup,
@@ -476,9 +497,10 @@ The acceptance contract is
   question-or-proposal responses; high-value focused questions with suggested
   and custom answers; controller validation and bounded semantic repair;
 - Task-defined proposal compilation into confirmed requirements, adaptive
-  implementation intent, least-privilege AgentSpecs, a strict model route,
-  dependency waves, qualitative per-Agent workload estimates,
-  controller-resolved per-Agent timeouts, and aggregate controller budgets;
+  implementation intent, least-privilege AgentSpecs, exact primary and
+  fallback model assignments, dependency waves, qualitative per-Agent workload
+  estimates, controller-resolved per-Agent timeouts, and aggregate controller
+  budgets;
 - Task-proportional Adaptive team validation with no bootstrap capability in
   the runtime team, exact task ownership and cross-Agent dependency alignment,
   and at least one downstream read-only quality path for every writer;
@@ -490,8 +512,8 @@ The acceptance contract is
   version-pinned local and Gateway JSON parsing, and canonical
   `provider/model` telemetry;
 - Sanitized OpenClaw Agent registry, permission checks, approved-Agent-only
-  run-scoped configuration, non-root identity, strict per-Agent model
-  selection, and offline preflight;
+  run-scoped configuration, non-root identity, exact per-Agent model-route
+  enforcement, and offline preflight across every authorized route;
 - A marked application-private OpenClaw binary plus explicit private config,
   credential, state, workspace, and Agent paths for every SAT invocation, with
   ambient OpenClaw settings neutralized and existing installations untouched;
@@ -556,8 +578,9 @@ The acceptance contract is
   OpenClaw, Docker daemon, Linux-container image, storage, and launcher
   visibility;
 - Integrated first-run and repeatable model configuration with private,
-  atomic, schema-versioned secret-free defaults, optional authorized provider
-  smoke checking, and no invented zero-cost estimate when prices are unknown;
+  atomic, schema-versioned secret-free profiles, deterministic route policy,
+  optional authorized provider smoke checking, and no invented zero-cost
+  estimate when prices are unknown;
 - Natural-language request capture, explicit Python execution-profile
   confirmation, destination validation, explicit Planning authorization,
   bounded clarification, complete overview, natural-language revision, safe
@@ -608,8 +631,10 @@ derived from the task.
   pause/resume;
 - Durable control recovery after a foreground process crash and a
   secondary-process control client;
-- Multiple secret-free model profiles, per-task/per-stage/per-Agent routing,
-  authorized automatic resolution, or recorded runtime switching;
+- A provider-backed run using two planned model routes and live switch
+  evidence;
+- Saved task/scenario-specific routing presets and empirically calibrated
+  quality/latency/cost-aware selection beyond declared capability and priority;
 - Generated-project execution profiles beyond the current local Python 3.12
   profile;
 - Semantic provider/auth validation beyond the explicitly authorized minimal
@@ -627,9 +652,11 @@ action succeeded after interruption.
 
 ## Next Milestone
 
-The next verification step is a provider-backed Phase 3D rehearsal of guidance
-and cooperative pause/resume. Phase 3E adds model profiles and routing.
-Fixed-topology comparison remains in Phase 4
+The next verification step is a fresh installed provider-backed adaptive
+rehearsal covering the ordinary product journey, followed by focused live
+evidence for guidance, cooperative pause/resume, and two planned model routes.
+Phase 3F then closes the acceptance and usability defects. Fixed-topology
+comparison remains in Phase 4
 so it can serve as a controlled baseline rather than define the product's
 permanent role layout.
 The detailed sequence and acceptance criteria are in

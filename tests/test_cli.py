@@ -2,6 +2,7 @@
 
 import json
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -11,12 +12,14 @@ import software_agent_team.cli as cli
 from software_agent_team.artifacts import AgentRole, TaskBrief
 from software_agent_team.benchmark_seed import prepare_benchmark_seed
 from software_agent_team.cli import main
+from software_agent_team.model_routing import ModelProfile
 from software_agent_team.run_control import RunPhase
 from software_agent_team.runtime_configuration import (
     OpenClawModelInspection,
     RuntimePreflight,
     SandboxImageInspection,
 )
+from software_agent_team.teams import AgentCapability, ModelRoutingMode
 from software_agent_team.user_configuration import (
     UserConfiguration,
     load_user_configuration,
@@ -205,7 +208,7 @@ def test_guided_request_reprompts_invalid_unicode_before_planning_authorization(
     collected = cli._collect_product_request(
         working_directory=tmp_path,
         run_id="sat-guided-unicode",
-        model="provider/model",
+        configuration=UserConfiguration(model="provider/model"),
         execution_profile=("A new Python project.",),
         base_constraints=("No runtime network access.",),
     )
@@ -384,7 +387,11 @@ def test_dynamic_product_launch_uses_approved_agents_and_manual_scope(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    route = SimpleNamespace(model="provider/model")
+    route = SimpleNamespace(
+        model="provider/model",
+        input_cost_per_million_usd=None,
+        output_cost_per_million_usd=None,
+    )
     agents = (SimpleNamespace(id="builder"), SimpleNamespace(id="reviewer"))
     team_plan = SimpleNamespace(
         model_routes=SimpleNamespace(routes=(route,)),
@@ -470,6 +477,112 @@ def test_dynamic_product_launch_uses_approved_agents_and_manual_scope(
     ]
 
 
+def test_dynamic_runtime_preflight_checks_every_approved_model_route(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    route_values = (
+        SimpleNamespace(model="provider/default"),
+        SimpleNamespace(model="provider/quality"),
+    )
+
+    class Routes:
+        default_route_id = "default"
+        routes = route_values
+
+        @staticmethod
+        def get_route(route_id: str) -> SimpleNamespace:
+            return route_values[0] if route_id == "default" else route_values[1]
+
+    team_plan = SimpleNamespace(model_routes=Routes())
+    options = cli._AdaptiveWorkflowLaunchOptions(
+        source_repository=tmp_path / "source",
+        base_ref="HEAD",
+        teams=cli.DEFAULT_TEAM_CONFIG,
+        openclaw=cli.DEFAULT_OPENCLAW_CONFIG,
+        policy=cli.DEFAULT_PRODUCT_POLICY,
+        quality_manifest=cli.DEFAULT_PRODUCT_PROFILE,
+        runs_root=tmp_path / "runs",
+        workspaces_root=tmp_path / "workspaces",
+        openclaw_binary=Path("/opt/openclaw"),
+        openclaw_state_dir=tmp_path / "openclaw",
+        sandbox_binary="docker",
+        model="provider/default",
+        input_cost_per_million_usd=None,
+        output_cost_per_million_usd=None,
+    )
+    monkeypatch.setattr(
+        cli,
+        "inspect_sandbox_image",
+        lambda **_kwargs: SandboxImageInspection(
+            sandbox_binary="/usr/bin/docker",
+            sandbox_version="Docker version test",
+            sandbox_image="sat-python-quality:phase1-v2",
+            sandbox_image_id=f"sha256:{'a' * 64}",
+            sandbox_image_present=True,
+        ),
+    )
+
+    def materialize(*args: object, **_kwargs: object) -> Path:
+        destination = args[1]
+        assert isinstance(destination, Path)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text("{}", encoding="utf-8")
+        return destination
+
+    monkeypatch.setattr(cli, "materialize_run_configuration", materialize)
+    monkeypatch.setattr(
+        cli,
+        "inspect_runtime_preflight",
+        lambda **kwargs: RuntimePreflight(
+            openclaw_binary="/opt/openclaw",
+            openclaw_version="OpenClaw test",
+            openclaw_state_dir=str(kwargs["openclaw_state_dir"]),
+            runtime_config=str(kwargs["runtime_config"]),
+            sandbox_binary="/usr/bin/docker",
+            sandbox_version="Docker version test",
+            sandbox_image="sat-python-quality:phase1-v2",
+            sandbox_image_id=f"sha256:{'a' * 64}",
+            config_valid=True,
+            sandbox_image_present=True,
+            sandbox_container_ready=True,
+            model="provider/default",
+            model_available=True,
+        ),
+    )
+    inspected: list[str] = []
+
+    def inspect_model(**kwargs: object) -> OpenClawModelInspection:
+        model = str(kwargs["model"])
+        inspected.append(model)
+        return OpenClawModelInspection(model=model, available=True)
+
+    monkeypatch.setattr(cli, "inspect_openclaw_model", inspect_model)
+    boundary = cli._prepare_runtime_boundary(
+        run_id="sat-routing-preflight",
+        options=options,
+        team_plan=team_plan,
+    )
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    run_directory = options.runs_root / "sat-routing-preflight"
+    run_directory.mkdir(parents=True)
+
+    boundary.runtime_setup(
+        SimpleNamespace(workspace_path=str(workspace)),
+        run_directory,
+    )
+
+    assert inspected == ["provider/quality"]
+    evidence = json.loads(
+        (run_directory / "runtime-preflight.json").read_text(encoding="utf-8")
+    )
+    assert [item["model"] for item in evidence["model_inspections"]] == [
+        "provider/default",
+        "provider/quality",
+    ]
+
+
 def test_cli_noninteractive_configuration_is_private_and_reconfigurable(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -526,6 +639,115 @@ def test_cli_noninteractive_configuration_is_private_and_reconfigurable(
     assert second.stage_timeout_seconds == first.stage_timeout_seconds
     output = capsys.readouterr().out
     assert "provider credentials: not stored by SAT" in output
+
+
+def test_cli_configures_auditable_adaptive_model_profiles(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    path = tmp_path / "config.json"
+    monkeypatch.setenv("SAT_CONFIG_PATH", str(path))
+    assert (
+        main(
+            [
+                "configure",
+                "--non-interactive",
+                "--model",
+                "provider/default",
+            ]
+        )
+        == 0
+    )
+
+    assert (
+        main(
+            [
+                "configure",
+                "--non-interactive",
+                "--add-model-profile",
+                "quality=provider/quality",
+                "--profile-capabilities",
+                "quality=testing,review",
+                "--profile-priority",
+                "quality=10",
+                "--profile-pricing",
+                "quality=0.25,1.00",
+                "--routing-mode",
+                "policy",
+                "--route-capability",
+                "testing=quality",
+                "--allow-provider-switch",
+                "--max-model-switches",
+                "1",
+            ]
+        )
+        == 0
+    )
+
+    configured = load_user_configuration(path)
+    assert configured is not None
+    assert configured.routing_mode.value == "policy"
+    assert tuple(profile.id for profile in configured.model_profiles) == (
+        "default",
+        "quality",
+    )
+    assert configured.capability_profile_overrides[AgentCapability.TESTING] == "quality"
+    assert configured.max_model_switches_per_agent == 1
+    assert configured.model_profiles[1].input_cost_per_million_usd == Decimal("0.25")
+
+    assert main(["configure", "--show"]) == 0
+    output = capsys.readouterr().out
+    assert "model routing: policy" in output
+    assert "quality: provider/quality" in output
+    assert "testing: quality" in output
+    assert "provider_failure" in output
+
+
+def test_cli_can_return_adaptive_routing_to_one_strict_profile(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "config.json"
+    monkeypatch.setenv("SAT_CONFIG_PATH", str(path))
+    save_user_configuration(
+        UserConfiguration.model_validate(
+            {
+                "model_profiles": (
+                    {
+                        "id": "default",
+                        "model": "provider/default",
+                        "capabilities": ("clarification", "planning"),
+                    },
+                    {
+                        "id": "quality",
+                        "model": "provider/quality",
+                        "capabilities": ("testing", "review"),
+                    },
+                ),
+                "routing_mode": "policy",
+                "default_model_profile_id": "default",
+            }
+        ),
+        path,
+    )
+
+    assert (
+        main(
+            [
+                "configure",
+                "--non-interactive",
+                "--clear-model-routing",
+            ]
+        )
+        == 0
+    )
+
+    configured = load_user_configuration(path)
+    assert configured is not None
+    assert configured.routing_mode.value == "strict"
+    assert tuple(profile.id for profile in configured.model_profiles) == ("default",)
+    assert configured.default_model_profile.capabilities == tuple(AgentCapability)
 
 
 def test_cli_interactive_configuration_prompts_for_first_run_defaults(
@@ -626,7 +848,7 @@ def test_first_run_model_setup_keeps_credentials_and_prices_outside_sat(
     assert configured.model == "provider/model"
     assert configured.input_cost_per_million_usd is None
     payload = json.loads(path.read_text(encoding="utf-8"))
-    assert payload["schema_version"] == 5
+    assert payload["schema_version"] == 6
     assert "api_key" not in payload
 
 
@@ -673,8 +895,59 @@ def test_saved_model_is_rechecked_before_the_product_questions(
         cli._ensure_product_configuration(state_paths)
 
     output = capsys.readouterr().out
-    assert "Saved model is not locally ready" in output
+    assert "Saved bootstrap model is not locally ready" in output
     assert "First-run model setup" in output
+
+
+def test_unavailable_optional_model_profile_warns_without_resetting_configuration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    configuration_path = tmp_path / "config.json"
+    monkeypatch.setenv("SAT_CONFIG_PATH", str(configuration_path))
+    capabilities = tuple(AgentCapability)
+    configured = UserConfiguration(
+        model_profiles=(
+            ModelProfile(
+                id="default",
+                model="provider/default",
+                capabilities=capabilities,
+            ),
+            ModelProfile(
+                id="optional",
+                model="provider/optional",
+                capabilities=(AgentCapability.TESTING,),
+            ),
+        ),
+        routing_mode=ModelRoutingMode.POLICY,
+    )
+    save_user_configuration(configured, configuration_path)
+    state_paths = cli.ProductStatePaths.below(tmp_path / "state")
+    cli.ensure_product_state(state_paths)
+    (state_paths.openclaw / "openclaw.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        cli,
+        "_inspect_selected_model",
+        lambda _binary, model, **_kwargs: OpenClawModelInspection(
+            model=model,
+            available=model == "provider/default",
+            error=None if model == "provider/default" else "route unavailable",
+        ),
+    )
+    monkeypatch.setattr(
+        "builtins.input",
+        lambda _prompt: pytest.fail("optional profile must not restart setup"),
+    )
+
+    result = cli._ensure_product_configuration(state_paths)
+
+    assert result == configured
+    assert load_user_configuration(configuration_path) == configured
+    output = capsys.readouterr().out
+    assert "Optional model profiles are not locally ready" in output
+    assert "provider/optional: route unavailable" in output
+    assert "First-run model setup" not in output
 
 
 def test_provider_smoke_uses_the_selected_model_without_exposing_output(

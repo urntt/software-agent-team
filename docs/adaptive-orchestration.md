@@ -8,8 +8,10 @@ persistence, deterministic DAG scheduling, multi-iteration lifecycle
 convergence, bare-`sat` activation, and configurable per-Agent progress are
 implemented and offline verified. The foreground control channel is also
 implemented and offline verified; its provider-backed rehearsal and durable
-process-restart recovery remain pending. Multi-model routing remains staged
-work.
+process-restart recovery remain pending. Secret-free model profiles,
+deterministic plan-time route resolution, route-specific runtime validation,
+and explicit provider-failure switching are implemented and offline verified;
+a provider-backed two-route rehearsal remains pending.
 Current behavior and gaps remain authoritative in
 [`STATUS.md`](../STATUS.md); the completed guided baseline remains specified in
 [`product-demo-slice.md`](product-demo-slice.md).
@@ -405,23 +407,30 @@ partial workspace as an accepted delivery.
 Users can maintain multiple secret-free model profiles while credentials stay
 inside SAT's isolated provider boundary. Route resolution uses this precedence:
 
-1. An explicit per-Agent override approved in the current TeamPlan;
-2. A phase or required-capability override;
-3. A task or scenario profile;
-4. The user default;
-5. An authorized deterministic `auto` policy.
+1. An explicit per-Agent profile edit approved in the current TeamPlan;
+2. A configured stage override;
+3. A configured Agent-capability override;
+4. The default profile when it is authorized for that capability;
+5. The lowest numeric priority among remaining capability-authorized profiles,
+   with saved profile order as a deterministic tie-breaker.
 
-`auto` is a controller policy, not an unconstrained model decision. It filters
-for available authorized candidates and required capabilities, then ranks them
-by the user's quality, latency, and cost preferences. A model may recommend a
-route, but the controller resolves and records it.
+The final step is controller-owned deterministic selection, not an
+unconstrained model decision or an unverified quality claim. The bootstrap
+Planner describes capability and workload needs but cannot add model fields or
+authorize a route. The user may inspect and edit the effective per-Agent
+profile in the Planning overview; the controller then validates and freezes
+the exact primary and fallback assignments.
 
-Before every invocation, SAT records the canonical provider/model, resolution
-rule, required capabilities, price source when available, and remaining
-budget. Runtime switching is allowed only when the TeamPlan explicitly lists
-the candidate and condition, such as provider unavailability or a verified
-capability mismatch. The UI announces the switch and its consequence. There is
-no silent fallback.
+Before execution, SAT verifies the bootstrap model and every route authorized
+by the approved TeamPlan through its isolated OpenClaw catalog/auth boundary.
+Every invocation records the canonical provider/model, route reference,
+resolution source and reason, known price, telemetry, and remaining budget.
+Runtime switching is currently permitted only after an attributable
+`provider_failure`, only when the approved Agent assignment lists a next route,
+and only up to the configured per-Agent switch limit. The failed invocation is
+persisted and budget-accounted before the UI announces the switch and its
+possible provider-cost consequence. Semantic response repair is a separate
+bounded mechanism. There is no silent fallback.
 
 Controlled evaluation mode remains stricter: one canonical model and price
 table are pinned for the run, switching is disabled, and topology trials remain
@@ -541,7 +550,7 @@ at least guidance and cooperative pause/resume without losing integrity.
 **Implementation note:** append-only events now project scheduler queue and
 readiness, invocation and provider wait, bounded semantic repair, completion,
 failure, and blocked states with Agent dependencies, capability, stage, model,
-duration, evidence, and aggregate budget data. Configuration schema v5 selects
+duration, evidence, and aggregate budget data. Configuration schema v6 selects
 compact, standard, or detailed terminal projection. The foreground palette can
 change that projection without changing execution. Its persisted runtime
 channel applies prospective guidance to the next invocation, drains active work
@@ -566,6 +575,15 @@ and a secondary-process control client remain in this batch.
 provider, budget rejection, authorized switch, refused switch, and strict
 evaluation behavior; one authorized run uses two planned routes without silent
 fallback.
+
+**Implementation note:** configuration schema v6 now owns the secret-free
+profiles and route policy. Planning resolves and displays an exact assignment
+for every Agent, preflight checks every approved model, prompts and response
+validation bind the active route, and the runtime records or refuses provider
+switches at the controller boundary. Offline tests cover precedence,
+capability mismatch, unavailable routes, fallback call-budget rejection,
+authorized and refused switching, and strict-mode compatibility. The
+provider-backed two-route exit run remains pending.
 
 ### Batch 3F: Product Acceptance and Experiment Handoff
 

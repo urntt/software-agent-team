@@ -38,6 +38,7 @@ from software_agent_team.dynamic_workflow import (
 )
 from software_agent_team.execution import OpenClawSubprocessExecutor
 from software_agent_team.git_workspace import GitWorkspace, GitWorkspaceManager
+from software_agent_team.model_routing import ModelProfile
 from software_agent_team.openclaw_runtime import isolated_openclaw_environment
 from software_agent_team.paths import user_state_root
 from software_agent_team.planning import (
@@ -79,6 +80,7 @@ from software_agent_team.run_control import RunPhase
 from software_agent_team.runtime_configuration import (
     OpenClawModelInspection,
     RuntimeConfigurationError,
+    RuntimePreflight,
     has_model_compatibility,
     inspect_openclaw_model,
     inspect_runtime_preflight,
@@ -91,6 +93,8 @@ from software_agent_team.runtime_controls import RuntimeControlDecision
 from software_agent_team.sandbox_lifecycle import cleanup_run_sandbox_containers
 from software_agent_team.teams import (
     AgentCapability,
+    ModelRoutingMode,
+    ModelSwitchCondition,
     TeamManifest,
     TeamPlan,
     load_team_manifest,
@@ -173,17 +177,47 @@ class _RuntimeBoundary:
 
 
 def _print_configuration(configuration: UserConfiguration, path: Path) -> None:
-    input_cost = configuration.input_cost_per_million_usd
-    output_cost = configuration.output_cost_per_million_usd
     print(f"configuration: {path}")
-    print(f"model: {configuration.model}")
-    print(
-        "input cost per million tokens (USD): "
-        f"{input_cost if input_cost is not None else 'not configured'}"
+    print(f"model routing: {configuration.routing_mode.value}")
+    print(f"default model profile: {configuration.default_model_profile_id}")
+    print("model profiles:")
+    for profile in configuration.model_profiles:
+        capabilities = ", ".join(item.value for item in profile.capabilities)
+        pricing = (
+            "pricing not configured"
+            if profile.input_cost_per_million_usd is None
+            else (
+                f"${profile.input_cost_per_million_usd} input / "
+                f"${profile.output_cost_per_million_usd} output per million tokens"
+            )
+        )
+        default = (
+            " [default]" if profile.id == configuration.default_model_profile_id else ""
+        )
+        print(
+            f"  - {profile.id}{default}: {profile.model}; priority "
+            f"{profile.priority}; {capabilities}; {pricing}"
+        )
+    if configuration.capability_profile_overrides:
+        print("capability routes:")
+        for capability, profile_id in sorted(
+            configuration.capability_profile_overrides.items(),
+            key=lambda item: item[0].value,
+        ):
+            print(f"  - {capability.value}: {profile_id}")
+    if configuration.stage_profile_overrides:
+        print("stage routes:")
+        for stage_id, profile_id in sorted(
+            configuration.stage_profile_overrides.items()
+        ):
+            print(f"  - {stage_id}: {profile_id}")
+    switches = ", ".join(
+        condition.value for condition in configuration.authorized_switch_conditions
     )
+    print(f"authorized model switches: {switches or 'none'}")
     print(
-        "output cost per million tokens (USD): "
-        f"{output_cost if output_cost is not None else 'not configured'}"
+        "maximum model switches per Agent: "
+        f"{configuration.max_model_switches_per_agent}"
     )
     print(f"maximum concurrent Agents: {configuration.max_concurrency}")
     print(f"progress visibility: {configuration.progress_visibility}")
@@ -259,6 +293,222 @@ def _prompt_product_text(
         return response
 
 
+def _split_configuration_assignment(value: str, *, label: str) -> tuple[str, str]:
+    left, separator, right = value.partition("=")
+    if (
+        not separator
+        or not left
+        or not right
+        or left != left.strip()
+        or right != right.strip()
+    ):
+        raise ValueError(f"{label} must use NAME=VALUE")
+    return left, right
+
+
+def _replace_profile(
+    profiles: list[ModelProfile],
+    profile_id: str,
+    **updates: object,
+) -> None:
+    for index, profile in enumerate(profiles):
+        if profile.id == profile_id:
+            profiles[index] = ModelProfile.model_validate(
+                {**profile.model_dump(mode="json"), **updates}
+            )
+            return
+    raise ValueError(f"unknown model profile: {profile_id}")
+
+
+def _configured_model_fields(
+    *,
+    current: UserConfiguration | None,
+    model: str,
+    input_cost: Decimal | None,
+    output_cost: Decimal | None,
+    args: argparse.Namespace,
+) -> dict[str, object]:
+    """Apply advanced profile flags without retaining duplicate scalar models."""
+
+    preserve = current is not None and model == current.model
+    if preserve:
+        profiles = list(current.model_profiles)
+        default_profile_id = current.default_model_profile_id
+        routing_mode = current.routing_mode
+        capability_overrides = dict(current.capability_profile_overrides)
+        stage_overrides = dict(current.stage_profile_overrides)
+        switch_conditions = current.authorized_switch_conditions
+        max_switches = current.max_model_switches_per_agent
+        _replace_profile(
+            profiles,
+            default_profile_id,
+            input_cost_per_million_usd=input_cost,
+            output_cost_per_million_usd=output_cost,
+        )
+    else:
+        profiles = [
+            ModelProfile(
+                id="default",
+                model=model,
+                capabilities=tuple(AgentCapability),
+                input_cost_per_million_usd=input_cost,
+                output_cost_per_million_usd=output_cost,
+            )
+        ]
+        default_profile_id = "default"
+        routing_mode = ModelRoutingMode.STRICT
+        capability_overrides = {}
+        stage_overrides = {}
+        switch_conditions = ()
+        max_switches = 0
+
+    if args.clear_model_routing:
+        default = next(
+            profile for profile in profiles if profile.id == default_profile_id
+        )
+        profiles = [
+            ModelProfile.model_validate(
+                {
+                    **default.model_dump(mode="json"),
+                    "capabilities": tuple(AgentCapability),
+                }
+            )
+        ]
+        capability_overrides = {}
+        stage_overrides = {}
+        switch_conditions = ()
+        max_switches = 0
+        routing_mode = ModelRoutingMode.STRICT
+
+    existing_ids = {profile.id for profile in profiles}
+    for value in args.add_model_profile:
+        profile_id, profile_model = _split_configuration_assignment(
+            value,
+            label="--add-model-profile",
+        )
+        if profile_id in existing_ids:
+            raise ValueError(f"model profile already exists: {profile_id}")
+        profiles.append(
+            ModelProfile(
+                id=profile_id,
+                model=profile_model,
+                capabilities=tuple(AgentCapability),
+            )
+        )
+        existing_ids.add(profile_id)
+
+    for profile_id in args.remove_model_profile:
+        if profile_id == default_profile_id:
+            raise ValueError("cannot remove the default model profile")
+        if profile_id not in existing_ids:
+            raise ValueError(f"unknown model profile: {profile_id}")
+        profiles = [profile for profile in profiles if profile.id != profile_id]
+        existing_ids.remove(profile_id)
+        capability_overrides = {
+            capability: selected
+            for capability, selected in capability_overrides.items()
+            if selected != profile_id
+        }
+        stage_overrides = {
+            stage: selected
+            for stage, selected in stage_overrides.items()
+            if selected != profile_id
+        }
+
+    for value in args.profile_capabilities:
+        profile_id, raw_capabilities = _split_configuration_assignment(
+            value,
+            label="--profile-capabilities",
+        )
+        try:
+            capabilities = tuple(
+                AgentCapability(item.strip())
+                for item in raw_capabilities.split(",")
+                if item.strip()
+            )
+        except ValueError as error:
+            raise ValueError(
+                f"unknown Agent capability in --profile-capabilities: {value}"
+            ) from error
+        if not capabilities:
+            raise ValueError("--profile-capabilities requires at least one capability")
+        _replace_profile(profiles, profile_id, capabilities=capabilities)
+
+    for value in args.profile_priority:
+        profile_id, raw_priority = _split_configuration_assignment(
+            value,
+            label="--profile-priority",
+        )
+        if not raw_priority.isdigit():
+            raise ValueError("--profile-priority requires a positive integer")
+        _replace_profile(profiles, profile_id, priority=int(raw_priority))
+
+    for value in args.profile_pricing:
+        profile_id, raw_prices = _split_configuration_assignment(
+            value,
+            label="--profile-pricing",
+        )
+        parts = [part.strip() for part in raw_prices.split(",")]
+        if len(parts) != 2:
+            raise ValueError("--profile-pricing requires INPUT,OUTPUT")
+        try:
+            profile_input, profile_output = (Decimal(part) for part in parts)
+        except Exception as error:
+            raise ValueError("--profile-pricing requires decimal prices") from error
+        _replace_profile(
+            profiles,
+            profile_id,
+            input_cost_per_million_usd=profile_input,
+            output_cost_per_million_usd=profile_output,
+        )
+
+    if args.default_model_profile is not None:
+        default_profile_id = args.default_model_profile
+    if args.routing_mode is not None:
+        routing_mode = ModelRoutingMode(args.routing_mode)
+
+    for capability_name in args.clear_capability_route:
+        capability_overrides.pop(AgentCapability(capability_name), None)
+    for value in args.route_capability:
+        capability_name, profile_id = _split_configuration_assignment(
+            value,
+            label="--route-capability",
+        )
+        capability_overrides[AgentCapability(capability_name)] = profile_id
+    for stage_id in args.clear_stage_route:
+        stage_overrides.pop(stage_id, None)
+    for value in args.route_stage:
+        stage_id, profile_id = _split_configuration_assignment(
+            value,
+            label="--route-stage",
+        )
+        stage_overrides[stage_id] = profile_id
+
+    if args.allow_provider_switch:
+        switch_conditions = (ModelSwitchCondition.PROVIDER_FAILURE,)
+        max_switches = args.max_model_switches or 1
+    elif args.disable_provider_switch:
+        switch_conditions = ()
+        max_switches = 0
+    elif args.max_model_switches is not None:
+        if not switch_conditions:
+            raise ValueError(
+                "--max-model-switches requires --allow-provider-switch or an "
+                "existing switch policy"
+            )
+        max_switches = args.max_model_switches
+
+    return {
+        "model_profiles": tuple(profiles),
+        "default_model_profile_id": default_profile_id,
+        "routing_mode": routing_mode,
+        "capability_profile_overrides": capability_overrides,
+        "stage_profile_overrides": stage_overrides,
+        "authorized_switch_conditions": switch_conditions,
+        "max_model_switches_per_agent": max_switches,
+    }
+
+
 def _configure(args: argparse.Namespace) -> int:
     """Create or replace non-secret user run defaults."""
 
@@ -278,6 +528,30 @@ def _configure(args: argparse.Namespace) -> int:
             )
         )
         or timeout_supplied
+        or any(
+            (
+                args.add_model_profile,
+                args.remove_model_profile,
+                args.profile_capabilities,
+                args.profile_priority,
+                args.profile_pricing,
+                args.route_capability,
+                args.clear_capability_route,
+                args.route_stage,
+                args.clear_stage_route,
+            )
+        )
+        or any(
+            value is not None
+            for value in (
+                args.default_model_profile,
+                args.routing_mode,
+                args.max_model_switches,
+            )
+        )
+        or args.allow_provider_switch
+        or args.disable_provider_switch
+        or args.clear_model_routing
     )
     if args.show:
         if supplied:
@@ -384,24 +658,38 @@ def _configure(args: argparse.Namespace) -> int:
                 "first-time non-interactive configuration requires --model"
             )
 
-    configuration = UserConfiguration(
+    model_fields = _configured_model_fields(
+        current=current,
         model=model,
-        input_cost_per_million_usd=input_cost,
-        output_cost_per_million_usd=output_cost,
+        input_cost=input_cost,
+        output_cost=output_cost,
+        args=args,
+    )
+    configuration = UserConfiguration(
+        **model_fields,
         max_concurrency=concurrency,
         stage_timeout_seconds=timeout,
         progress_visibility=progress_visibility,
     )
     if interactive:
-        inspection = _inspect_selected_model(
-            DEFAULT_OPENCLAW_BINARY,
-            configuration.model,
-            state_dir=state_paths.openclaw,
-            config_path=openclaw_config,
+        inspections = tuple(
+            _inspect_selected_model(
+                DEFAULT_OPENCLAW_BINARY,
+                profile.model,
+                state_dir=state_paths.openclaw,
+                config_path=openclaw_config,
+            )
+            for profile in configuration.model_profiles
         )
-        if not inspection.available:
+        if unavailable := tuple(
+            inspection for inspection in inspections if not inspection.available
+        ):
             raise RuntimeConfigurationError(
-                f"selected model is not locally ready: {inspection.error}"
+                "selected model configuration is not locally ready: "
+                + "; ".join(
+                    f"{inspection.model}: {inspection.error}"
+                    for inspection in unavailable
+                )
             )
     save_user_configuration(configuration, path)
     print("configuration saved")
@@ -611,6 +899,32 @@ def _prepare_runtime_boundary(
                 ).model
             ),
         )
+        if team_plan is not None:
+            inspections: list[OpenClawModelInspection] = []
+            for route in team_plan.model_routes.routes:
+                if route.model == preflight.model:
+                    inspections.append(
+                        OpenClawModelInspection(
+                            model=route.model,
+                            available=preflight.model_available is True,
+                            error=preflight.model_error,
+                        )
+                    )
+                else:
+                    inspections.append(
+                        inspect_openclaw_model(
+                            openclaw_binary=options.openclaw_binary,
+                            openclaw_state_dir=options.openclaw_state_dir,
+                            config_path=runtime_path,
+                            model=route.model,
+                        )
+                    )
+            preflight = RuntimePreflight.model_validate(
+                {
+                    **preflight.model_dump(mode="json"),
+                    "model_inspections": tuple(inspections),
+                }
+            )
         persist_runtime_preflight(
             preflight,
             run_directory / "runtime-preflight.json",
@@ -625,7 +939,16 @@ def _prepare_runtime_boundary(
                 f"{preflight.sandbox_container_error or 'none'}, "
                 f"model={preflight.model or 'none'}, "
                 f"model_available={preflight.model_available}, "
-                f"model_error={preflight.model_error or 'none'}"
+                f"model_error={preflight.model_error or 'none'}, "
+                "unavailable_routes="
+                + (
+                    ",".join(
+                        inspection.model
+                        for inspection in preflight.model_inspections
+                        if not inspection.available
+                    )
+                    or "none"
+                )
             )
 
     def gate_factory(
@@ -764,16 +1087,8 @@ def _execute_dynamic_workflow(
     pricing_by_model = {
         route.model: ModelPricing(
             model=route.model,
-            input_cost_per_million_usd=(
-                options.input_cost_per_million_usd
-                if route.model == options.model
-                else None
-            ),
-            output_cost_per_million_usd=(
-                options.output_cost_per_million_usd
-                if route.model == options.model
-                else None
-            ),
+            input_cost_per_million_usd=route.input_cost_per_million_usd,
+            output_cost_per_million_usd=route.output_cost_per_million_usd,
         )
         for route in team_plan.model_routes.routes
     }
@@ -1145,18 +1460,46 @@ def _ensure_product_configuration(
             "SAT OpenClaw configuration must not be a symbolic link"
         )
     if current is not None and openclaw_config.is_file():
-        inspection = _inspect_selected_model(
+        default_profile = current.default_model_profile
+        default_inspection = _inspect_selected_model(
             DEFAULT_OPENCLAW_BINARY,
-            current.model,
+            default_profile.model,
             state_dir=state_paths.openclaw,
             config_path=openclaw_config,
         )
-        if inspection.available:
-            print(f"✓ Model configuration: {current.model}")
+        if default_inspection.available:
+            additional_inspections = tuple(
+                _inspect_selected_model(
+                    DEFAULT_OPENCLAW_BINARY,
+                    profile.model,
+                    state_dir=state_paths.openclaw,
+                    config_path=openclaw_config,
+                )
+                for profile in current.model_profiles
+                if profile.id != default_profile.id
+            )
+            print(f"✓ Bootstrap model: {default_profile.model}")
+            unavailable_optional = tuple(
+                item for item in additional_inspections if not item.available
+            )
+            if unavailable_optional:
+                print(
+                    "! Optional model profiles are not locally ready; a plan "
+                    "that selects them will stop at run preflight:"
+                )
+                for inspection in unavailable_optional:
+                    print(f"  {inspection.model}: {inspection.error}")
+                print("  Run 'sat configure' to update model routing.")
+            elif additional_inspections:
+                print(
+                    f"✓ Additional model profiles: {len(additional_inspections)} ready"
+                )
+            for profile in current.model_profiles:
+                print(f"  {profile.id}: {profile.model}")
             print(f"✓ Isolated OpenClaw state: {state_paths.openclaw}")
             return current
-        print(f"! Saved model is not locally ready: {current.model}")
-        print(f"  {inspection.error}")
+        print("! Saved bootstrap model is not locally ready:")
+        print(f"  {default_inspection.model}: {default_inspection.error}")
 
     print("\nFirst-run model setup")
     print("SAT uses an isolated OpenClaw runtime and private provider state.")
@@ -1201,15 +1544,27 @@ def _ensure_product_configuration(
                 current.progress_visibility if current is not None else "standard"
             ),
         )
-    inspection = _inspect_selected_model(
-        DEFAULT_OPENCLAW_BINARY,
-        configuration.model,
-        state_dir=state_paths.openclaw,
-        config_path=openclaw_config,
+    inspections = tuple(
+        _inspect_selected_model(
+            DEFAULT_OPENCLAW_BINARY,
+            profile.model,
+            state_dir=state_paths.openclaw,
+            config_path=openclaw_config,
+        )
+        for profile in configuration.model_profiles
     )
-    if not inspection.available:
+    unavailable = tuple(item for item in inspections if not item.available)
+    if unavailable:
+        if len(unavailable) == 1:
+            inspection = unavailable[0]
+            raise RuntimeConfigurationError(
+                f"selected model is not locally ready: {inspection.error}"
+            )
         raise RuntimeConfigurationError(
-            f"selected model is not locally ready: {inspection.error}"
+            "selected model profiles are not locally ready: "
+            + "; ".join(
+                f"{inspection.model}: {inspection.error}" for inspection in unavailable
+            )
         )
     save_user_configuration(configuration, path)
     print(f"✓ Saved secret-free model configuration to {path}")
@@ -1231,7 +1586,7 @@ def _collect_product_request(
     *,
     working_directory: Path,
     run_id: str,
-    model: str,
+    configuration: UserConfiguration,
     execution_profile: tuple[str, ...],
     base_constraints: tuple[str, ...],
 ) -> tuple[PlanningRequest, Path] | None:
@@ -1275,7 +1630,10 @@ def _collect_product_request(
     print("\nPlanning authorization")
     print(f"  Request: {source_request}")
     print(f"  Destination: {destination}")
-    print(f"  Model: {model}")
+    print(f"  Planning model: {configuration.model}")
+    print(f"  Runtime model routing: {configuration.routing_mode.value}")
+    for profile in configuration.model_profiles:
+        print(f"    - {profile.id}: {profile.model}")
     print("  Planning may ask focused questions before proposing a team.")
     print("  No execution Agent is created until you approve the full overview.")
     print("  Multiple model requests may be made and may incur provider usage.")
@@ -1293,7 +1651,7 @@ def _collect_product_request(
         destination=str(destination),
         execution_profile=execution_profile,
         base_constraints=base_constraints,
-        model=model,
+        model=configuration.model,
         authorization="user_confirmed",
         authorized_at=datetime.now(UTC),
     )
@@ -1337,6 +1695,7 @@ def _product_planning_policy(
             AgentCapability.TESTING: adaptive_timeout(AgentRole.TESTER),
             AgentCapability.REVIEW: adaptive_timeout(AgentRole.REVIEWER),
         },
+        model_routing=configuration.model_routing_policy(),
         profile_acceptance_criteria=quality.task_brief.acceptance_criteria,
         require_review_agent=True,
     )
@@ -1544,7 +1903,7 @@ def _run_product() -> int:
     request = _collect_product_request(
         working_directory=working_directory,
         run_id=run_id,
-        model=configuration.model,
+        configuration=configuration,
         execution_profile=execution_profile,
         base_constraints=tuple(quality.task_brief.constraints),
     )
@@ -1718,6 +2077,107 @@ def build_parser() -> argparse.ArgumentParser:
     configure.add_argument("--model")
     configure.add_argument("--input-cost-per-million-usd", type=Decimal)
     configure.add_argument("--output-cost-per-million-usd", type=Decimal)
+    configure.add_argument(
+        "--add-model-profile",
+        action="append",
+        default=[],
+        metavar="ID=PROVIDER/MODEL",
+        help="Add one secret-free model profile; repeat for multiple profiles.",
+    )
+    configure.add_argument(
+        "--remove-model-profile",
+        action="append",
+        default=[],
+        metavar="ID",
+        help="Remove a non-default model profile and its saved routes.",
+    )
+    configure.add_argument(
+        "--profile-capabilities",
+        action="append",
+        default=[],
+        metavar="ID=CAPABILITY,...",
+        help=(
+            "Declare which SAT capabilities a profile is authorized to serve; "
+            "repeat as needed."
+        ),
+    )
+    configure.add_argument(
+        "--profile-priority",
+        action="append",
+        default=[],
+        metavar="ID=INTEGER",
+        help="Set deterministic auto-selection priority (smaller is preferred).",
+    )
+    configure.add_argument(
+        "--profile-pricing",
+        action="append",
+        default=[],
+        metavar="ID=INPUT,OUTPUT",
+        help="Set optional USD prices per million tokens for one profile.",
+    )
+    configure.add_argument(
+        "--default-model-profile",
+        metavar="ID",
+        help="Select the profile used for bootstrap Planning and default routing.",
+    )
+    configure.add_argument(
+        "--routing-mode",
+        choices=tuple(mode.value for mode in ModelRoutingMode),
+        help="Use strict pinning or approved deterministic policy routing.",
+    )
+    configure.add_argument(
+        "--route-capability",
+        action="append",
+        default=[],
+        metavar="CAPABILITY=PROFILE",
+        help="Set an explicit profile for one Agent capability; repeat as needed.",
+    )
+    configure.add_argument(
+        "--clear-capability-route",
+        action="append",
+        default=[],
+        choices=tuple(capability.value for capability in AgentCapability),
+        metavar="CAPABILITY",
+        help="Remove one saved capability-specific route.",
+    )
+    configure.add_argument(
+        "--route-stage",
+        action="append",
+        default=[],
+        metavar="STAGE=PROFILE",
+        help="Set an explicit profile for a planned stage ID.",
+    )
+    configure.add_argument(
+        "--clear-stage-route",
+        action="append",
+        default=[],
+        metavar="STAGE",
+        help="Remove one saved stage-specific route.",
+    )
+    provider_switch = configure.add_mutually_exclusive_group()
+    provider_switch.add_argument(
+        "--allow-provider-switch",
+        action="store_true",
+        help=(
+            "Authorize bounded fallback only after an attributable provider failure."
+        ),
+    )
+    provider_switch.add_argument(
+        "--disable-provider-switch",
+        action="store_true",
+        help="Remove provider-failure switch authorization.",
+    )
+    configure.add_argument(
+        "--max-model-switches",
+        type=int,
+        choices=(1, 2, 3),
+        help="Maximum approved fallback advances per Agent.",
+    )
+    configure.add_argument(
+        "--clear-model-routing",
+        action="store_true",
+        help="Return to one strict default profile and remove all route overrides.",
+    )
     configure.add_argument(
         "--max-concurrency",
         type=int,

@@ -66,8 +66,8 @@ On first use, SAT guides you through:
 6. A bounded conversation containing only questions that can materially change
    the result;
 7. One overview of requirements, acceptance criteria, implementation tasks,
-   proposed Agents, dependencies, permissions, model, timeouts, concurrency,
-   iterations, and budgets; and
+   proposed Agents, dependencies, permissions, resolved model profiles and
+   fallback authority, timeouts, concurrency, iterations, and budgets; and
 8. Approval, a natural-language revision request, a supported safe edit, or
    cancellation before any execution Agent is created.
 
@@ -109,17 +109,23 @@ sat configure
 sat configure --show
 ```
 
-The normal wizard stores only the selected `provider/model` reference. Advanced
-configuration may also store secret-free prices, the adaptive maximum
-concurrency, compact/standard/detailed progress visibility, or an explicit
-global invocation-timeout override. Provider
-credentials remain in SAT's isolated OpenClaw state or in an explicitly
-trusted caller environment; they are not written to the repository, generated
-project, run evidence, or SAT exports.
+The normal wizard stores one selected `provider/model` as a strict default
+profile. Advanced configuration can add secret-free model profiles, declare
+the Agent capabilities each profile may serve, choose deterministic stage or
+capability routes, and explicitly authorize a bounded switch after an
+attributable provider failure. It can also store per-profile prices, the
+adaptive maximum concurrency, compact/standard/detailed progress visibility,
+or an explicit global invocation-timeout override. Use
+`sat configure --help` for the complete advanced interface.
 
-Before asking for a project or starting an Agent, SAT checks that its isolated
-runtime recognizes the exact selected model and has a local catalog/auth route
-for it. This check does not generate content. An optional provider smoke check
+Provider credentials remain in SAT's isolated OpenClaw state or in an
+explicitly trusted caller environment; they are not written to the repository,
+generated project, run evidence, model profiles, or SAT exports.
+
+Before asking for a project, SAT checks that its isolated runtime recognizes
+the bootstrap model. Before starting an Agent, run preflight checks every model
+route authorized by the approved TeamPlan, with a local catalog/auth route for
+each. These checks do not generate content. An optional provider smoke check
 remains a separate, explicitly authorized action because it can incur usage.
 
 See the [installation and configuration guide](docs/installation.md) for
@@ -157,7 +163,11 @@ dependency, provider-wait, repair, terminal, route, duration, and budget facts.
 The foreground control palette, live visibility changes, prospective guidance,
 replacement Planning, cooperative pause/resume, best-effort interruption, and
 terminal cancellation are integrated and covered offline. Durable resume after
-a process restart and multiple model routes remain under development.
+a process restart remains under development. Secret-free multi-model profiles,
+deterministic plan-time route resolution, per-Agent route inspection, and an
+explicit provider-failure fallback are implemented and covered offline. A
+fresh provider-backed adaptive rehearsal, including a run with two authorized
+routes, remains required before claiming demonstration readiness for that path.
 
 The earlier guided fixed-team path passed a complete live-provider rehearsal
 in a fresh non-root Linux account, including accepted delivery, exact project

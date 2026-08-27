@@ -6,12 +6,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 import software_agent_team.runtime_configuration as runtime_configuration
 from software_agent_team.budgets import AgentBudget
 from software_agent_team.configuration import READ_ONLY_ROLES, WRITE_ROLES
 from software_agent_team.runtime_configuration import (
+    OpenClawModelInspection,
     RuntimeConfigurationError,
+    RuntimePreflight,
     has_model_compatibility,
     inspect_openclaw_model,
     inspect_runtime_preflight,
@@ -24,8 +27,11 @@ from software_agent_team.teams import (
     AgentCapability,
     AgentSpec,
     ModelRoute,
+    ModelRouteAssignment,
     ModelRoutePlan,
+    ModelRouteSelectionSource,
     ModelRoutingMode,
+    ModelSwitchCondition,
     PermissionProfile,
     PlanApprovalSource,
     TeamPlan,
@@ -37,6 +43,73 @@ REPOSITORY_ROOT = Path(__file__).parents[1]
 TEAM_CONFIG = REPOSITORY_ROOT / "configs" / "teams.json"
 OPENCLAW_TEMPLATE = REPOSITORY_ROOT / "configs" / "openclaw.example.json5"
 DEEPSEEK_VISION_MODEL = "deepseek/deepseek-v4-flash-vision-exp"
+
+
+def runtime_preflight(**updates: object) -> RuntimePreflight:
+    values: dict[str, object] = {
+        "openclaw_binary": "/opt/openclaw",
+        "openclaw_version": "OpenClaw test",
+        "openclaw_state_dir": "/tmp/openclaw",
+        "runtime_config": "/tmp/openclaw.runtime.json",
+        "sandbox_binary": "/usr/bin/docker",
+        "sandbox_version": "Docker version test",
+        "sandbox_image": "sat-agent:test",
+        "sandbox_image_id": f"sha256:{'a' * 64}",
+        "config_valid": True,
+        "sandbox_image_present": True,
+        "sandbox_container_ready": True,
+        "model": "provider/default",
+        "model_available": True,
+    }
+    values.update(updates)
+    return RuntimePreflight.model_validate(values)
+
+
+def test_runtime_preflight_requires_every_approved_model_route() -> None:
+    ready = runtime_preflight(
+        model_inspections=(
+            OpenClawModelInspection(model="provider/default", available=True),
+            OpenClawModelInspection(model="provider/quality", available=True),
+        )
+    )
+    unavailable = ready.model_copy(
+        update={
+            "model_inspections": (
+                OpenClawModelInspection(model="provider/default", available=True),
+                OpenClawModelInspection(
+                    model="provider/quality",
+                    available=False,
+                    error="route unavailable",
+                ),
+            )
+        }
+    )
+
+    assert ready.ready
+    assert not unavailable.ready
+
+
+def test_runtime_preflight_binds_aggregate_routes_to_bootstrap_evidence() -> None:
+    with pytest.raises(ValidationError, match="include the bootstrap model"):
+        runtime_preflight(
+            model_inspections=(
+                OpenClawModelInspection(
+                    model="provider/quality",
+                    available=True,
+                ),
+            )
+        )
+
+    with pytest.raises(ValidationError, match="differs from primary"):
+        runtime_preflight(
+            model_inspections=(
+                OpenClawModelInspection(
+                    model="provider/default",
+                    available=False,
+                    error="route unavailable",
+                ),
+            )
+        )
 
 
 def adaptive_team_plan() -> TeamPlan:
@@ -324,6 +397,61 @@ def test_materialized_config_registers_the_pinned_deepseek_vision_model(
             "maxTokens"
         ]
         == 16_384
+    )
+    assert "apiKey" not in destination.read_text(encoding="utf-8")
+
+
+def test_dynamic_config_registers_compatibility_for_an_authorized_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    destination = tmp_path / "run" / "openclaw.runtime.json"
+    strict_plan = adaptive_team_plan()
+    model_routes = ModelRoutePlan(
+        mode=ModelRoutingMode.POLICY,
+        default_route_id="default",
+        routes=(
+            ModelRoute(id="default", model="provider/model"),
+            ModelRoute(id="fallback", model=DEEPSEEK_VISION_MODEL),
+        ),
+        assignments=tuple(
+            ModelRouteAssignment(
+                agent_id=agent.id,
+                primary_route_id="default",
+                fallback_route_ids=("fallback",),
+                selection_source=ModelRouteSelectionSource.DEFAULT_PROFILE,
+                reason="The default profile supports this Agent capability.",
+            )
+            for agent in strict_plan.agents
+        ),
+        authorized_switch_conditions=(ModelSwitchCondition.PROVIDER_FAILURE,),
+    )
+    plan = TeamPlan.model_validate(
+        {
+            **strict_plan.model_dump(mode="json"),
+            "model_routes": model_routes.model_dump(mode="json"),
+        }
+    )
+
+    materialize_run_configuration(
+        OPENCLAW_TEMPLATE,
+        destination,
+        manifest=load_team_manifest(TEAM_CONFIG),
+        team_plan=plan,
+        workspace=workspace,
+        sandbox_image="sat-agent:phase1",
+        sandbox_user="1000:1000",
+    )
+
+    payload = json.loads(destination.read_text(encoding="utf-8"))
+    registered = payload["models"]["providers"]["deepseek"]["models"]
+    assert [model["id"] for model in registered] == ["deepseek-v4-flash-vision-exp"]
+    assert all(
+        agent["model"] == {"primary": "provider/model", "fallbacks": []}
+        for agent in payload["agents"]["list"]
     )
     assert "apiKey" not in destination.read_text(encoding="utf-8")
 

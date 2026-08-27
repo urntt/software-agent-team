@@ -373,6 +373,17 @@ def test_adaptive_plan_rejects_an_unauthorized_model_route() -> None:
         TeamPlan.model_validate(payload)
 
 
+def test_model_routes_reject_ambiguous_duplicate_provider_models() -> None:
+    payload = adaptive_payload()
+    payload["model_routes"]["mode"] = "policy"
+    payload["model_routes"]["routes"].append(
+        {"id": "alias", "model": payload["model_routes"]["routes"][0]["model"]}
+    )
+
+    with pytest.raises(ValidationError, match="distinct provider/models"):
+        TeamPlan.model_validate(payload)
+
+
 def test_adaptive_plan_keeps_testing_and_review_independent() -> None:
     payload = adaptive_payload()
     reviewer = next(item for item in payload["agents"] if item["id"] == "reviewer")

@@ -40,6 +40,7 @@ from software_agent_team.execution import (
 from software_agent_team.git_workspace import GitWorkspace, GitWorkspaceManager
 from software_agent_team.integrity import canonical_model_sha256
 from software_agent_team.planning import AdaptiveImplementationPlan, ProposedTask
+from software_agent_team.progress import ProgressEvent, ProgressEventKind
 from software_agent_team.responses import (
     ReviewReportResponse,
     WorkResultResponse,
@@ -57,8 +58,11 @@ from software_agent_team.teams import (
     AgentCapability,
     AgentSpec,
     ModelRoute,
+    ModelRouteAssignment,
     ModelRoutePlan,
+    ModelRouteSelectionSource,
     ModelRoutingMode,
+    ModelSwitchCondition,
     PermissionProfile,
     PlanApprovalSource,
     TeamPlan,
@@ -271,11 +275,13 @@ class DynamicExecutor:
         omit_model_for: str | None = None,
         mutate_reader: str | None = None,
         synchronize_quality: bool = False,
+        provider_fail_once_for: str | None = None,
     ) -> None:
         self.workspace = workspace
         self.invalid_writer_once = invalid_writer_once
         self.omit_model_for = omit_model_for
         self.mutate_reader = mutate_reader
+        self.provider_fail_once_for = provider_fail_once_for
         self.requests: list[AgentExecutionRequest] = []
         self._counts: dict[str, int] = {}
         self._lock = threading.Lock()
@@ -286,8 +292,29 @@ class DynamicExecutor:
             self.requests.append(request)
             count = self._counts.get(request.agent_id, 0) + 1
             self._counts[request.agent_id] = count
+        if self.provider_fail_once_for == request.agent_id and count == 1:
+            return AgentExecutionResult(
+                status=AgentExecutionStatus.PROVIDER_FAILED,
+                error="scripted provider failure",
+                telemetry=AgentExecutionTelemetry(
+                    role=None,
+                    agent_id=request.agent_id,
+                    capability=request.capability,
+                    session_key=request.session_key,
+                    command=("fake-agent", request.agent_id),
+                    started_at=FIXED_TIME,
+                    finished_at=FIXED_TIME,
+                    duration_ms=10,
+                    exit_code=0,
+                    stdout="",
+                    stderr="scripted provider failure",
+                    session_id=f"session-{request.agent_id}",
+                    provider="test",
+                    model=request.model,
+                ),
+            )
         if request.agent_id == "builder":
-            if count == 1:
+            if not (self.workspace / "greeting.py").exists():
                 (self.workspace / "greeting.py").write_text(
                     "def greet(name: str) -> str:\n    return f'Hello, {name}!'\n",
                     encoding="utf-8",
@@ -373,6 +400,7 @@ def runtime(
     run_budget: AgentBudget | None = None,
     writer_scope: str = "repository",
     executor_options: dict[str, object] | None = None,
+    model_switching: bool = False,
 ) -> tuple[DynamicAgentRunner, TeamPlan, DynamicExecutor, FakeQualityGate, Path]:
     """Prepare a real isolated workspace and dynamic runner."""
 
@@ -381,6 +409,34 @@ def runtime(
         run_budget=run_budget,
         writer_scope=writer_scope,
     )
+    if model_switching:
+        assignments = tuple(
+            ModelRouteAssignment(
+                agent_id=agent.id,
+                primary_route_id="default",
+                fallback_route_ids=("fallback",),
+                selection_source=ModelRouteSelectionSource.DEFAULT_PROFILE,
+                reason="Test-authorized default with one provider fallback.",
+            )
+            for agent in team_plan.agents
+        )
+        team_plan = TeamPlan.model_validate(
+            {
+                **team_plan.model_dump(mode="json"),
+                "model_routes": ModelRoutePlan(
+                    mode=ModelRoutingMode.POLICY,
+                    default_route_id="default",
+                    routes=(
+                        ModelRoute(id="default", model=MODEL),
+                        ModelRoute(id="fallback", model="test/fallback-model"),
+                    ),
+                    assignments=assignments,
+                    authorized_switch_conditions=(
+                        ModelSwitchCondition.PROVIDER_FAILURE,
+                    ),
+                ).model_dump(mode="json"),
+            }
+        )
     source = initialize_source(tmp_path)
     manager = GitWorkspaceManager(
         tmp_path / "workspaces",
@@ -412,7 +468,10 @@ def runtime(
         executor=executor,
         quality_gate=quality_gate,
         budget_ledger=AgentBudgetLedger(team_plan.budget),
-        pricing_by_model={MODEL: ModelPricing(model=MODEL)},
+        pricing_by_model={
+            route.model: ModelPricing(model=route.model)
+            for route in team_plan.model_routes.routes
+        },
         manual_review_criteria=("AC_REVIEW",),
         clock=lambda: FIXED_TIME,
     )
@@ -505,6 +564,68 @@ def test_dynamic_writer_semantic_repair_keeps_full_timeout_and_git_evidence(
     assert writer_records[0].error is not None
     assert isinstance(writer_records[1], AgentExecutionRecord)
     assert writer_records[1].response_artifact == runner.outputs["builder"]
+
+
+def test_dynamic_runner_switches_only_after_approved_provider_failure(
+    tmp_path: Path,
+) -> None:
+    runner, team_plan, executor, _, _ = runtime(
+        tmp_path,
+        model_switching=True,
+        executor_options={"provider_fail_once_for": "builder"},
+    )
+    events: list[ProgressEvent] = []
+    runner.activity_handler = events.append
+
+    result = DagScheduler().execute(team_plan, runner)
+
+    assert result.status is ScheduleStatus.COMPLETED
+    builder_requests = [
+        request for request in executor.requests if request.agent_id == "builder"
+    ]
+    assert [request.model for request in builder_requests] == [
+        MODEL,
+        "test/fallback-model",
+    ]
+    builder_records = [
+        runner.artifact_store.load(reference)
+        for reference in runner.execution_records
+        if "/implement/builder-" in reference.path
+    ]
+    assert len(builder_records) == 2
+    assert isinstance(builder_records[0], AgentExecutionRecord)
+    assert builder_records[0].error == "scripted provider failure"
+    assert isinstance(builder_records[1], AgentExecutionRecord)
+    assert builder_records[1].model == "test/fallback-model"
+    switch = next(
+        event
+        for event in events
+        if event.kind is ProgressEventKind.MODEL_ROUTE_SWITCHED
+    )
+    assert switch.agent_id == "builder"
+    assert switch.model == "test/fallback-model"
+    assert "may be billable" in switch.message
+    assert tuple(reference.id for reference in switch.references) == (
+        "default",
+        "fallback",
+    )
+
+
+def test_dynamic_runner_refuses_unapproved_provider_fallback(
+    tmp_path: Path,
+) -> None:
+    runner, team_plan, executor, _, _ = runtime(
+        tmp_path,
+        executor_options={"provider_fail_once_for": "builder"},
+    )
+
+    result = DagScheduler().execute(team_plan, runner)
+
+    assert result.status is ScheduleStatus.FAILED
+    assert [request.model for request in executor.requests] == [MODEL]
+    assert runner.termination_reasons["builder"] is (
+        TerminationReason.DEPENDENCY_UNAVAILABLE
+    )
 
 
 def test_dynamic_runner_creates_controller_test_evidence_without_tester(

@@ -528,11 +528,18 @@ def parse_dynamic_agent_response(
         raise AgentArtifactResponseError(
             "dynamic request differs from the approved AgentSpec"
         )
-    route = team_plan.model_routes.get_route(agent.model_route_id)
-    if request.timeout_seconds != agent.timeout_seconds or request.model != route.model:
+    authorized_route_ids = team_plan.model_routes.authorized_route_ids(agent.id)
+    authorized_routes = tuple(
+        team_plan.model_routes.get_route(route_id) for route_id in authorized_route_ids
+    )
+    matching_routes = tuple(
+        route for route in authorized_routes if route.model == request.model
+    )
+    if request.timeout_seconds != agent.timeout_seconds or len(matching_routes) != 1:
         raise AgentArtifactResponseError(
             "dynamic request timeout or model differs from the approved AgentSpec"
         )
+    route = matching_routes[0]
     if result.telemetry.model != route.model:
         raise AgentArtifactResponseError(
             "execution telemetry model differs from the approved AgentSpec"

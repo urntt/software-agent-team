@@ -157,6 +157,10 @@ class DynamicAgentPromptInputs(BaseModel):
     implementation_plan: AdaptiveImplementationPlan
     team_plan: TeamPlan
     agent_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
+    active_model_route_id: str | None = Field(
+        default=None,
+        pattern=r"^[a-z][a-z0-9_]*$",
+    )
     iteration: int = Field(ge=1, le=3)
     iteration_input_commit: str = Field(pattern=COMMIT_PATTERN)
     input_commit: str = Field(pattern=COMMIT_PATTERN)
@@ -238,6 +242,9 @@ class DynamicAgentPromptInputs(BaseModel):
                 "dynamic revision feedback does not match the iteration input commit"
             )
         agent = self.team_plan.get_agent(self.agent_id)
+        route_id = self.active_model_route_id or agent.model_route_id
+        if route_id not in self.team_plan.model_routes.authorized_route_ids(agent.id):
+            raise ValueError("dynamic prompt model route is not authorized for Agent")
         if agent.capability not in DYNAMIC_CAPABILITY_TEMPLATES:
             raise ValueError("Agent capability has no dynamic prompt contract")
         upstream_ids = {item.agent_id for item in self.upstream_results}
@@ -289,6 +296,12 @@ class DynamicAgentPromptInputs(BaseModel):
             for task in self.implementation_plan.tasks
             if task.owner_agent_id == self.agent_id
         )
+
+    @property
+    def model_route_id(self) -> str:
+        """Return the primary or explicitly activated approved route."""
+
+        return self.active_model_route_id or self.agent.model_route_id
 
 
 type PromptArtifact = (
@@ -683,6 +696,7 @@ def build_semantic_repair_request(
 
 def _dynamic_prompt_context(inputs: DynamicAgentPromptInputs) -> dict[str, object]:
     agent = inputs.agent
+    route = inputs.team_plan.model_routes.get_route(inputs.model_route_id)
     context: dict[str, object] = {
         "run": {
             "run_id": inputs.task_brief.run_id,
@@ -704,6 +718,8 @@ def _dynamic_prompt_context(inputs: DynamicAgentPromptInputs) -> dict[str, objec
             "permission_profile": agent.permission_profile.value,
             "workspace_scope": agent.workspace_scope,
             "dependencies": list(agent.dependencies),
+            "model_route_id": route.id,
+            "model": route.model,
         },
         "task_brief": inputs.task_brief.model_dump(mode="json"),
         "implementation_intent": {
@@ -812,7 +828,7 @@ def build_dynamic_agent_execution_request(
     """Bind one approved AgentSpec, route, timeout, and prompt to execution."""
 
     agent = inputs.agent
-    route = inputs.team_plan.model_routes.get_route(agent.model_route_id)
+    route = inputs.team_plan.model_routes.get_route(inputs.model_route_id)
     return AgentExecutionRequest(
         run_id=inputs.task_brief.run_id,
         team_id=inputs.team_plan.team_id,

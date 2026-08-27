@@ -38,6 +38,7 @@ class ProgressEventKind(StrEnum):
     AGENT_STARTED = "agent_started"
     AGENT_WAITING_PROVIDER = "agent_waiting_provider"
     AGENT_INVOCATION_COMPLETED = "agent_invocation_completed"
+    MODEL_ROUTE_SWITCHED = "model_route_switched"
     AGENT_COMPLETED = "agent_completed"
     AGENT_RETRY = "agent_retry"
     AGENT_FAILED = "agent_failed"
@@ -151,6 +152,11 @@ _EVENT_METADATA: dict[
         RunEventVisibility.DETAILED,
         AgentRunState.RUNNING,
     ),
+    ProgressEventKind.MODEL_ROUTE_SWITCHED: (
+        RunEventCategory.AGENT,
+        RunEventVisibility.COMPACT,
+        AgentRunState.WAITING_PROVIDER,
+    ),
     ProgressEventKind.AGENT_COMPLETED: (
         RunEventCategory.AGENT,
         RunEventVisibility.STANDARD,
@@ -247,6 +253,7 @@ _ATTEMPT_EVENT_KINDS = {
     ProgressEventKind.AGENT_STARTED,
     ProgressEventKind.AGENT_WAITING_PROVIDER,
     ProgressEventKind.AGENT_INVOCATION_COMPLETED,
+    ProgressEventKind.MODEL_ROUTE_SWITCHED,
     ProgressEventKind.AGENT_COMPLETED,
     ProgressEventKind.AGENT_RETRY,
     ProgressEventKind.AGENT_FAILED,
@@ -752,6 +759,7 @@ class TerminalProgressRenderer:
             ProgressEventKind.AGENT_QUEUED: "○",
             ProgressEventKind.AGENT_READY: "→",
             ProgressEventKind.AGENT_INVOCATION_COMPLETED: "·",
+            ProgressEventKind.MODEL_ROUTE_SWITCHED: "⇄",
             ProgressEventKind.AGENT_COMPLETED: "✓",
             ProgressEventKind.AGENT_RETRY: "↻",
             ProgressEventKind.AGENT_FAILED: "✗",

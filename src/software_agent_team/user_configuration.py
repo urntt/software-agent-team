@@ -13,7 +13,14 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-USER_CONFIGURATION_SCHEMA_VERSION = 5
+from software_agent_team.model_routing import ModelProfile, ModelRoutingPolicy
+from software_agent_team.teams import (
+    AgentCapability,
+    ModelRoutingMode,
+    ModelSwitchCondition,
+)
+
+USER_CONFIGURATION_SCHEMA_VERSION = 6
 USER_CONFIGURATION_ENVIRONMENT_VARIABLE = "SAT_CONFIG_PATH"
 
 
@@ -21,14 +28,12 @@ class UserConfigurationError(ValueError):
     """Raised when user-local configuration cannot be loaded safely."""
 
 
-class UserConfiguration(BaseModel):
-    """Non-secret defaults applied when equivalent CLI flags are omitted."""
+class _UserConfigurationV5(BaseModel):
+    """Validated product defaults before multiple model profiles."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[USER_CONFIGURATION_SCHEMA_VERSION] = (
-        USER_CONFIGURATION_SCHEMA_VERSION
-    )
+    schema_version: Literal[5] = 5
     model: str = Field(min_length=1)
     input_cost_per_million_usd: Decimal | None = Field(
         default=None,
@@ -57,12 +62,110 @@ class UserConfiguration(BaseModel):
         return cleaned
 
     @model_validator(mode="after")
-    def require_complete_price_pair(self) -> UserConfiguration:
+    def require_complete_price_pair(self) -> _UserConfigurationV5:
         if (self.input_cost_per_million_usd is None) != (
             self.output_cost_per_million_usd is None
         ):
             raise ValueError("input and output prices must be configured together")
         return self
+
+
+class UserConfiguration(BaseModel):
+    """Non-secret model profiles and product defaults for live SAT runs."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[USER_CONFIGURATION_SCHEMA_VERSION] = (
+        USER_CONFIGURATION_SCHEMA_VERSION
+    )
+    model_profiles: tuple[ModelProfile, ...] = Field(min_length=1, max_length=16)
+    default_model_profile_id: str = Field(
+        default="default",
+        pattern=r"^[a-z][a-z0-9_]*$",
+    )
+    routing_mode: ModelRoutingMode = ModelRoutingMode.STRICT
+    capability_profile_overrides: dict[AgentCapability, str] = Field(
+        default_factory=dict
+    )
+    stage_profile_overrides: dict[str, str] = Field(default_factory=dict)
+    authorized_switch_conditions: tuple[ModelSwitchCondition, ...] = ()
+    max_model_switches_per_agent: int = Field(default=0, ge=0, le=3)
+    max_concurrency: int = Field(default=2, ge=1, le=16)
+    stage_timeout_seconds: int | None = Field(default=None, ge=30, le=3600)
+    progress_visibility: Literal["compact", "standard", "detailed"] = "standard"
+
+    @model_validator(mode="before")
+    @classmethod
+    def expand_single_model_input(cls, value: object) -> object:
+        """Accept the former constructor shape without persisting duplicate fields."""
+
+        if not isinstance(value, dict) or "model_profiles" in value:
+            return value
+        if "model" not in value:
+            return value
+        payload = dict(value)
+        model = payload.pop("model")
+        input_cost = payload.pop("input_cost_per_million_usd", None)
+        output_cost = payload.pop("output_cost_per_million_usd", None)
+        payload["model_profiles"] = (
+            {
+                "id": "default",
+                "model": model,
+                "capabilities": tuple(
+                    capability.value for capability in AgentCapability
+                ),
+                "input_cost_per_million_usd": input_cost,
+                "output_cost_per_million_usd": output_cost,
+            },
+        )
+        payload.setdefault("default_model_profile_id", "default")
+        payload.setdefault("routing_mode", ModelRoutingMode.STRICT.value)
+        return payload
+
+    @model_validator(mode="after")
+    def validate_model_routing(self) -> UserConfiguration:
+        self.model_routing_policy()
+        return self
+
+    @property
+    def default_model_profile(self) -> ModelProfile:
+        """Return the authoritative profile used for bootstrap Planning."""
+
+        for profile in self.model_profiles:
+            if profile.id == self.default_model_profile_id:
+                return profile
+        raise ValueError("default model profile is not configured")
+
+    @property
+    def model(self) -> str:
+        """Return the bootstrap model derived from the default profile."""
+
+        return self.default_model_profile.model
+
+    @property
+    def input_cost_per_million_usd(self) -> Decimal | None:
+        """Return the default profile's optional input price."""
+
+        return self.default_model_profile.input_cost_per_million_usd
+
+    @property
+    def output_cost_per_million_usd(self) -> Decimal | None:
+        """Return the default profile's optional output price."""
+
+        return self.default_model_profile.output_cost_per_million_usd
+
+    def model_routing_policy(self) -> ModelRoutingPolicy:
+        """Compile the saved fields into the controller's routing contract."""
+
+        return ModelRoutingPolicy(
+            mode=self.routing_mode,
+            profiles=self.model_profiles,
+            default_profile_id=self.default_model_profile_id,
+            capability_profile_overrides=self.capability_profile_overrides,
+            stage_profile_overrides=self.stage_profile_overrides,
+            authorized_switch_conditions=self.authorized_switch_conditions,
+            max_switches_per_agent=self.max_model_switches_per_agent,
+        )
 
 
 class _UserConfigurationV4(BaseModel):
@@ -88,7 +191,7 @@ class _UserConfigurationV4(BaseModel):
     @field_validator("model")
     @classmethod
     def require_clean_model(cls, value: str) -> str:
-        return UserConfiguration.require_clean_model(value)
+        return _UserConfigurationV5.require_clean_model(value)
 
     @model_validator(mode="after")
     def require_complete_price_pair(self) -> _UserConfigurationV4:
@@ -122,7 +225,7 @@ class _UserConfigurationV3(BaseModel):
     @field_validator("model")
     @classmethod
     def require_clean_model(cls, value: str) -> str:
-        return UserConfiguration.require_clean_model(value)
+        return _UserConfigurationV5.require_clean_model(value)
 
     @model_validator(mode="after")
     def require_complete_price_pair(self) -> _UserConfigurationV3:
@@ -148,7 +251,7 @@ class _UserConfigurationV2(BaseModel):
     @field_validator("model")
     @classmethod
     def require_clean_model(cls, value: str) -> str:
-        return UserConfiguration.require_clean_model(value)
+        return _UserConfigurationV5.require_clean_model(value)
 
 
 class _UserConfigurationV1(BaseModel):
@@ -166,7 +269,7 @@ class _UserConfigurationV1(BaseModel):
     @field_validator("model")
     @classmethod
     def require_clean_model(cls, value: str) -> str:
-        return UserConfiguration.require_clean_model(value)
+        return _UserConfigurationV5.require_clean_model(value)
 
 
 def user_configuration_path(
@@ -295,6 +398,24 @@ def load_user_configuration(
             max_concurrency=legacy.max_concurrency,
             stage_timeout_seconds=legacy.stage_timeout_seconds,
             progress_visibility="standard",
+        )
+    if payload.get("schema_version") == 5:
+        legacy = _UserConfigurationV5.model_validate(payload)
+        notice = (
+            "configuration schema v5 was migrated to one strict default model "
+            "profile; add profiles explicitly to enable adaptive routing"
+        )
+        if on_migration is None:
+            warnings.warn(notice, UserWarning, stacklevel=2)
+        else:
+            on_migration(notice)
+        return UserConfiguration(
+            model=legacy.model,
+            input_cost_per_million_usd=legacy.input_cost_per_million_usd,
+            output_cost_per_million_usd=legacy.output_cost_per_million_usd,
+            max_concurrency=legacy.max_concurrency,
+            stage_timeout_seconds=legacy.stage_timeout_seconds,
+            progress_visibility=legacy.progress_visibility,
         )
     return UserConfiguration.model_validate(payload)
 

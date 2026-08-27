@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from software_agent_team.configuration import load_openclaw_template
 from software_agent_team.openclaw_runtime import isolated_openclaw_environment
@@ -143,6 +143,47 @@ class RuntimePreflight(BaseModel):
     model: str | None = Field(default=None, min_length=1)
     model_available: bool | None = None
     model_error: str | None = Field(default=None, max_length=1000)
+    model_inspections: tuple[OpenClawModelInspection, ...] = ()
+
+    @field_validator("model_inspections")
+    @classmethod
+    def require_unique_model_inspections(
+        cls,
+        values: tuple[OpenClawModelInspection, ...],
+    ) -> tuple[OpenClawModelInspection, ...]:
+        models = [inspection.model for inspection in values]
+        if len(models) != len(set(models)):
+            raise ValueError("runtime preflight model inspections must be unique")
+        return values
+
+    @model_validator(mode="after")
+    def bind_bootstrap_model_inspection(self) -> RuntimePreflight:
+        """Keep the aggregate route evidence consistent with the primary fields."""
+
+        if not self.model_inspections:
+            return self
+        if self.model is None:
+            raise ValueError("model inspections require a bootstrap model")
+        primary = next(
+            (
+                inspection
+                for inspection in self.model_inspections
+                if inspection.model == self.model
+            ),
+            None,
+        )
+        if primary is None:
+            raise ValueError(
+                "runtime preflight inspections must include the bootstrap model"
+            )
+        if (
+            primary.available is not self.model_available
+            or primary.error != self.model_error
+        ):
+            raise ValueError(
+                "bootstrap model inspection differs from primary preflight evidence"
+            )
+        return self
 
     @property
     def ready(self) -> bool:
@@ -156,6 +197,7 @@ class RuntimePreflight(BaseModel):
             and self.sandbox_container_error is None
             and (self.model is None or self.model_available is True)
             and self.model_error is None
+            and all(inspection.available for inspection in self.model_inspections)
         )
 
 
@@ -795,6 +837,9 @@ def materialize_run_configuration(
     if model is not None:
         defaults["model"] = {"primary": model, "fallbacks": []}
         _apply_model_compatibility(payload, model)
+    if team_plan is not None:
+        for route in team_plan.model_routes.routes:
+            _apply_model_compatibility(payload, route.model)
     sandbox = defaults["sandbox"]
     sandbox["scope"] = "session"
     docker = sandbox.setdefault("docker", {})
@@ -877,7 +922,6 @@ def materialize_run_configuration(
             )
             route = team_plan.model_routes.get_route(spec.model_route_id)
             agent["model"] = {"primary": route.model, "fallbacks": []}
-            _apply_model_compatibility(payload, route.model)
             dynamic_agents.append(agent)
         agents["list"] = dynamic_agents
 

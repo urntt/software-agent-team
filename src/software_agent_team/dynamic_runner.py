@@ -89,6 +89,7 @@ from software_agent_team.scheduling import (
 from software_agent_team.teams import (
     AgentCapability,
     AgentSpec,
+    ModelSwitchCondition,
     PermissionProfile,
     TeamPlan,
     TeamPlanOrigin,
@@ -444,8 +445,17 @@ class DynamicAgentRunner:
         )
         guidance_by_id: dict[str, DynamicUserGuidance] = {}
         previous_error = "Agent did not return a semantic response"
+        repair_detail: str | None = None
+        semantic_repairs = 0
+        attempt = 1
+        route_ids = self.team_plan.model_routes.authorized_route_ids(agent.id)
+        route_index = 0
+        provider_switching = ModelSwitchCondition.PROVIDER_FAILURE in (
+            self.team_plan.model_routes.authorized_switch_conditions
+        )
 
-        for attempt in range(1, self.artifact_repair_limit + 2):
+        while True:
+            route_id = route_ids[route_index]
             if self.guidance_provider is not None:
                 for guidance in self.guidance_provider(agent.id):
                     guidance_by_id[guidance.command_id] = guidance
@@ -454,6 +464,7 @@ class DynamicAgentRunner:
                 implementation_plan=self.implementation_plan,
                 team_plan=self.team_plan,
                 agent_id=agent.id,
+                active_model_route_id=route_id,
                 iteration=self.iteration,
                 iteration_input_commit=self.input_commit,
                 input_commit=input_commit,
@@ -466,8 +477,8 @@ class DynamicAgentRunner:
             base_request = build_dynamic_agent_execution_request(prompt_inputs)
             request = (
                 base_request
-                if attempt == 1
-                else build_semantic_repair_request(base_request, previous_error)
+                if repair_detail is None
+                else build_semantic_repair_request(base_request, repair_detail)
             )
             reservation = self.budget_ledger.reserve_call(agent.id)
             self._emit_activity(
@@ -578,7 +589,7 @@ class DynamicAgentRunner:
                     ),
                     RunEventReference(
                         kind=RunEventReferenceKind.MODEL_ROUTE,
-                        id=agent.model_route_id,
+                        id=route_id,
                     ),
                 ),
             )
@@ -594,8 +605,44 @@ class DynamicAgentRunner:
                     )
                     self._finish_writer(agent, input_commit, work.output_commit)
                 return response_reference
+            if (
+                result.status is AgentExecutionStatus.PROVIDER_FAILED
+                and provider_switching
+                and route_index + 1 < len(route_ids)
+                and isinstance(failure, DynamicAgentRunnerError)
+                and failure.reason is TerminationReason.DEPENDENCY_UNAVAILABLE
+            ):
+                previous_route = route_id
+                route_index += 1
+                route_id = route_ids[route_index]
+                next_route = self.team_plan.model_routes.get_route(route_id)
+                attempt += 1
+                self._emit_activity(
+                    agent,
+                    kind=ProgressEventKind.MODEL_ROUTE_SWITCHED,
+                    message=(
+                        f"{agent.label} provider route {previous_route} failed; "
+                        f"switching to the explicitly approved {route_id} profile. "
+                        "The failed call remains recorded and may be billable."
+                    ),
+                    attempt=attempt,
+                    model=next_route.model,
+                    references=(
+                        RunEventReference(
+                            kind=RunEventReferenceKind.MODEL_ROUTE,
+                            id=previous_route,
+                        ),
+                        RunEventReference(
+                            kind=RunEventReferenceKind.MODEL_ROUTE,
+                            id=route_id,
+                        ),
+                    ),
+                )
+                continue
             previous_error = record_error or previous_error
-            if repairable and attempt <= self.artifact_repair_limit:
+            if repairable and semantic_repairs < self.artifact_repair_limit:
+                semantic_repairs += 1
+                repair_detail = previous_error
                 self._emit_activity(
                     agent,
                     kind=ProgressEventKind.AGENT_RETRY,
@@ -606,6 +653,7 @@ class DynamicAgentRunner:
                     attempt=attempt,
                     model=request.model,
                 )
+                attempt += 1
                 continue
             if failure is not None:
                 if repairable:
@@ -618,7 +666,6 @@ class DynamicAgentRunner:
                 previous_error,
                 TerminationReason.EXECUTION_FAILED,
             )
-        raise AssertionError("unreachable dynamic Agent repair state")
 
     def _emit_activity(
         self,

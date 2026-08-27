@@ -38,6 +38,12 @@ from software_agent_team.execution import (
     AgentExecutor,
 )
 from software_agent_team.integrity import canonical_model_sha256
+from software_agent_team.model_routing import (
+    ModelProfile,
+    ModelRoutingError,
+    ModelRoutingPolicy,
+    resolve_model_route_plan,
+)
 from software_agent_team.responses import (
     AgentArtifactResponseError,
     parse_json_object_response,
@@ -46,7 +52,6 @@ from software_agent_team.teams import (
     AgentCapability,
     AgentSpec,
     ModelRoute,
-    ModelRoutePlan,
     ModelRoutingMode,
     PlanApprovalSource,
     TeamPlan,
@@ -98,6 +103,7 @@ class StructuredEditKind(StrEnum):
     MAX_CONCURRENCY = "max_concurrency"
     ITERATION_LIMIT = "iteration_limit"
     AGENT_TIMEOUT = "agent_timeout"
+    AGENT_MODEL = "agent_model"
 
 
 class AgentWorkload(StrEnum):
@@ -628,6 +634,7 @@ class PlanningProposal(BaseModel):
     change_request: str | None = Field(default=None, min_length=1, max_length=2000)
     body: PlanningProposalBody
     timeout_overrides_seconds: dict[str, int] = Field(default_factory=dict)
+    model_profile_overrides: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("created_at")
     @classmethod
@@ -641,6 +648,8 @@ class PlanningProposal(BaseModel):
                 raise ValueError("model proposal requires its source turn")
             if self.timeout_overrides_seconds:
                 raise ValueError("model proposals cannot authorize timeout overrides")
+            if self.model_profile_overrides:
+                raise ValueError("model proposals cannot authorize model overrides")
         elif self.source_turn_sequence is not None:
             raise ValueError("structured edit cannot claim a model turn")
         known_agents = {agent.id for agent in self.body.agents}
@@ -650,6 +659,17 @@ class PlanningProposal(BaseModel):
                 "timeout overrides reference unknown Agents: "
                 + ", ".join(sorted(unknown_agents))
             )
+        unknown_model_agents = set(self.model_profile_overrides) - known_agents
+        if unknown_model_agents:
+            raise ValueError(
+                "model overrides reference unknown Agents: "
+                + ", ".join(sorted(unknown_model_agents))
+            )
+        if any(
+            re.fullmatch(r"[a-z][a-z0-9_]*", profile_id) is None
+            for profile_id in self.model_profile_overrides.values()
+        ):
+            raise ValueError("model overrides require safe profile IDs")
         if any(
             not 30 <= seconds <= 3600
             for seconds in self.timeout_overrides_seconds.values()
@@ -704,18 +724,32 @@ class StructuredPlanEdit(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     kind: StructuredEditKind
-    value: int = Field(ge=1, le=3600)
+    value: int | str
     agent_id: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_]*$")
 
     @model_validator(mode="after")
     def require_target(self) -> Self:
-        if self.kind is StructuredEditKind.AGENT_TIMEOUT:
-            if self.agent_id is None or self.value < 30:
-                raise ValueError(
-                    "Agent timeout edit requires an Agent and at least 30s"
-                )
+        if self.kind in {
+            StructuredEditKind.AGENT_TIMEOUT,
+            StructuredEditKind.AGENT_MODEL,
+        }:
+            if self.agent_id is None:
+                raise ValueError("Agent-specific edits require an Agent target")
         elif self.agent_id is not None:
-            raise ValueError("only Agent timeout edits accept an Agent target")
+            raise ValueError("only Agent-specific edits accept an Agent target")
+        if self.kind is StructuredEditKind.AGENT_MODEL:
+            if (
+                not isinstance(self.value, str)
+                or re.fullmatch(r"[a-z][a-z0-9_]*", self.value) is None
+            ):
+                raise ValueError("Agent model edits require a safe profile ID")
+            return self
+        if not isinstance(self.value, int):
+            raise ValueError("numeric plan edits require an integer")
+        if not 1 <= self.value <= 3600:
+            raise ValueError("numeric plan edits must be within 1..3600")
+        if self.kind is StructuredEditKind.AGENT_TIMEOUT and self.value < 30:
+            raise ValueError("Agent timeout edit requires an Agent and at least 30s")
         if self.kind is StructuredEditKind.ITERATION_LIMIT and self.value > 3:
             raise ValueError("iteration limit cannot exceed three")
         if self.kind is StructuredEditKind.MAX_CONCURRENCY and self.value > 16:
@@ -824,6 +858,7 @@ class PlanningPolicy(BaseModel):
     max_review_agents: int = Field(default=16, ge=1, le=16)
     budget: AgentBudget
     capability_timeouts: dict[AgentCapability, CapabilityTimeoutPolicy]
+    model_routing: ModelRoutingPolicy | None = None
     profile_acceptance_criteria: tuple[AcceptanceCriterion, ...] = ()
     require_review_agent: bool = False
 
@@ -1047,6 +1082,35 @@ def preview_adaptive_proposal(
         assumptions=body.assumptions,
     )
 
+    routing_policy = policy.model_routing or ModelRoutingPolicy(
+        mode=ModelRoutingMode.STRICT,
+        profiles=(
+            ModelProfile(
+                id="default",
+                model=request.model,
+                capabilities=tuple(AgentCapability),
+            ),
+        ),
+        default_profile_id="default",
+    )
+    if routing_policy.get_profile(routing_policy.default_profile_id).model != (
+        request.model
+    ):
+        raise PlanningError(
+            "Planning request model differs from the routing policy bootstrap model"
+        )
+    try:
+        model_routes = resolve_model_route_plan(
+            routing_policy,
+            body.agents,
+            agent_profile_overrides=proposal.model_profile_overrides,
+        )
+    except ModelRoutingError as error:
+        raise PlanningError(str(error)) from error
+    assignments = {
+        assignment.agent_id: assignment for assignment in model_routes.assignments
+    }
+
     agents = []
     timeout_resolutions = []
     for proposed in body.agents:
@@ -1085,7 +1149,7 @@ def preview_adaptive_proposal(
                 stage_id=proposed.stage_id,
                 dependencies=proposed.dependencies,
                 expected_output=expected_output_for_capability(proposed.capability),
-                model_route_id="default",
+                model_route_id=assignments[proposed.id].primary_route_id,
                 timeout_seconds=resolved_timeout,
                 workspace_scope=proposed.workspace_scope,
             )
@@ -1101,11 +1165,7 @@ def preview_adaptive_proposal(
         approval_source=PlanApprovalSource.USER,
         created_at=created_at,
         agents=tuple(agents),
-        model_routes=ModelRoutePlan(
-            mode=ModelRoutingMode.STRICT,
-            default_route_id="default",
-            routes=(ModelRoute(id="default", model=request.model),),
-        ),
+        model_routes=model_routes,
         budget=policy.budget,
         iteration_limit=body.iteration_limit,
         max_concurrency=body.max_concurrency,
@@ -1132,10 +1192,13 @@ def apply_structured_edit(
 
     body = proposal.body
     timeout_overrides = dict(proposal.timeout_overrides_seconds)
+    model_overrides = dict(proposal.model_profile_overrides)
     if edit.kind is StructuredEditKind.MAX_CONCURRENCY:
+        assert isinstance(edit.value, int)
         body = body.model_copy(update={"max_concurrency": edit.value})
         description = f"Set maximum concurrency to {edit.value}."
     elif edit.kind is StructuredEditKind.ITERATION_LIMIT:
+        assert isinstance(edit.value, int)
         body = body.model_copy(
             update={
                 "iteration_limit": edit.value,
@@ -1143,12 +1206,20 @@ def apply_structured_edit(
             }
         )
         description = f"Set iteration limit to {edit.value}."
-    else:
+    elif edit.kind is StructuredEditKind.AGENT_TIMEOUT:
         if edit.agent_id not in {agent.id for agent in body.agents}:
             raise PlanningError(f"unknown Agent for timeout edit: {edit.agent_id}")
         assert edit.agent_id is not None
+        assert isinstance(edit.value, int)
         timeout_overrides[edit.agent_id] = edit.value
         description = f"Set {edit.agent_id} timeout to {edit.value} seconds."
+    else:
+        if edit.agent_id not in {agent.id for agent in body.agents}:
+            raise PlanningError(f"unknown Agent for model edit: {edit.agent_id}")
+        assert edit.agent_id is not None
+        assert isinstance(edit.value, str)
+        model_overrides[edit.agent_id] = edit.value
+        description = f"Set {edit.agent_id} model profile to {edit.value}."
     body = PlanningProposalBody.model_validate(body.model_dump(mode="json"))
     return PlanningProposal(
         run_id=proposal.run_id,
@@ -1158,6 +1229,18 @@ def apply_structured_edit(
         change_request=description,
         body=body,
         timeout_overrides_seconds=timeout_overrides,
+        model_profile_overrides=model_overrides,
+    )
+
+
+def _render_model_pricing(route: ModelRoute) -> str:
+    """Render one secret-free route price without inventing a zero estimate."""
+
+    if route.input_cost_per_million_usd is None:
+        return "not configured"
+    return (
+        f"${route.input_cost_per_million_usd} input / "
+        f"${route.output_cost_per_million_usd} output per million tokens"
     )
 
 
@@ -1196,6 +1279,11 @@ def render_planning_overview(preview: PlanningPreview) -> str:
     for agent in plan.agents:
         dependencies = ", ".join(agent.dependencies) or "none"
         route = plan.model_routes.get_route(agent.model_route_id)
+        assignment = plan.model_routes.get_assignment(agent.id)
+        fallback_routes = tuple(
+            plan.model_routes.get_route(route_id)
+            for route_id in assignment.fallback_route_ids
+        )
         timeout = resolutions[agent.id]
         timeout_source = (
             f"controller policy from {timeout.workload.value} workload"
@@ -1211,7 +1299,20 @@ def render_planning_overview(preview: PlanningPreview) -> str:
                 f"      dependencies: {dependencies}",
                 f"      permission: {agent.permission_profile.value}",
                 f"      workspace: {agent.workspace_scope}",
-                f"      model: {route.model}",
+                f"      model: {route.model} (profile {route.id}; "
+                f"{assignment.selection_source.value})",
+                f"      model reason: {assignment.reason}",
+                "      authorized fallback profiles: "
+                + (
+                    ", ".join(
+                        f"{fallback.id}: {fallback.model} "
+                        f"(pricing: {_render_model_pricing(fallback)})"
+                        for fallback in fallback_routes
+                    )
+                    if fallback_routes
+                    else "none"
+                ),
+                f"      model pricing: {_render_model_pricing(route)}",
                 f"      workload: {timeout.workload.value}",
                 f"      timeout: {agent.timeout_seconds} seconds ({timeout_source}; "
                 f"allowed {timeout.default_seconds}..{timeout.ceiling_seconds})",
@@ -1224,6 +1325,16 @@ def render_planning_overview(preview: PlanningPreview) -> str:
             f"    - execution order: {waves}",
             f"    - maximum parallel Agents: {plan.max_concurrency}",
             f"    - implementation iterations: {plan.iteration_limit}",
+            f"    - model routing: {plan.model_routes.mode.value}",
+            "    - authorized model switches: "
+            + (
+                ", ".join(
+                    condition.value
+                    for condition in plan.model_routes.authorized_switch_conditions
+                )
+                if plan.model_routes.authorized_switch_conditions
+                else "none"
+            ),
             f"    - model calls: {plan.budget.max_calls}",
             f"    - input tokens: {plan.budget.max_input_tokens}",
             f"    - output tokens: {plan.budget.max_output_tokens}",
@@ -1889,6 +2000,32 @@ class AdaptivePlanningCoordinator:
                     AgentCapability.TESTING.value,
                     AgentCapability.REVIEW.value,
                 ],
+                "model_routing": (
+                    {
+                        "mode": self.policy.model_routing.mode.value,
+                        "profiles": [
+                            {
+                                "id": profile.id,
+                                "model": profile.model,
+                                "eligible_agent_capabilities": [
+                                    capability.value
+                                    for capability in profile.capabilities
+                                ],
+                            }
+                            for profile in self.policy.model_routing.profiles
+                        ],
+                        "instruction": (
+                            "Describe capability and workload needs only. The "
+                            "controller resolves model profiles; do not add model "
+                            "fields to the proposal."
+                        ),
+                    }
+                    if self.policy.model_routing is not None
+                    else {
+                        "mode": ModelRoutingMode.STRICT.value,
+                        "instruction": "All runtime Agents use the pinned model.",
+                    }
+                ),
             },
         }
         repair = (
@@ -1964,14 +2101,18 @@ def _read_positive_integer(
 def _read_structured_edit(
     proposal: PlanningProposal,
     *,
+    model_routing: ModelRoutingPolicy | None,
     read: InputReader,
     write: OutputWriter,
 ) -> StructuredPlanEdit | None:
+    allow_model_edit = model_routing is not None and len(model_routing.profiles) > 1
     write("")
     write("Safe plan edits")
     write("  1. Maximum parallel Agents")
     write("  2. Implementation iteration limit")
     write("  3. One Agent timeout")
+    if allow_model_edit:
+        write("  4. One Agent model profile")
     write("  x. Return to overview")
     while True:
         choice = read("Edit: ").strip().casefold()
@@ -2021,7 +2162,32 @@ def _read_structured_edit(
                     value=value,
                 )
             )
-        write("Choose 1, 2, 3, or x.")
+        if choice == "4" and allow_model_edit:
+            assert model_routing is not None
+            write("Runtime Agents:")
+            for agent in proposal.body.agents:
+                write(f"  - {agent.id}: {agent.capability.value}")
+            agent_id = read("Agent ID: ").strip()
+            if not agent_id:
+                write("Agent ID must not be blank.")
+                continue
+            write("Configured model profiles:")
+            for profile in model_routing.profiles:
+                capabilities = ", ".join(
+                    capability.value for capability in profile.capabilities
+                )
+                write(f"  - {profile.id}: {profile.model} ({capabilities})")
+            profile_id = read("Model profile ID: ").strip()
+            if not profile_id:
+                write("Model profile ID must not be blank.")
+                continue
+            return StructuredPlanEdit(
+                kind=StructuredEditKind.AGENT_MODEL,
+                agent_id=agent_id,
+                value=profile_id,
+            )
+        choices = "1, 2, 3, 4, or x" if allow_model_edit else "1, 2, 3, or x"
+        write(f"Choose {choices}.")
 
 
 def run_interactive_planning(
@@ -2089,7 +2255,12 @@ def run_interactive_planning(
             continue
         if choice in {"e", "edit"}:
             try:
-                edit = _read_structured_edit(proposal, read=read, write=write)
+                edit = _read_structured_edit(
+                    proposal,
+                    model_routing=coordinator.policy.model_routing,
+                    read=read,
+                    write=write,
+                )
                 if edit is not None:
                     proposal = coordinator.structured_edit(request, proposal, edit)
             except (PlanningError, ValidationError, ValueError) as error:

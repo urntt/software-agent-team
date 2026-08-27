@@ -106,7 +106,7 @@ def test_v1_configuration_drops_the_legacy_timeout_with_a_notice(
         migrated = load_user_configuration(path)
 
     assert migrated is not None
-    assert migrated.schema_version == 5
+    assert migrated.schema_version == 6
     assert migrated.model == "provider/model"
     assert migrated.max_concurrency == 1
     assert migrated.stage_timeout_seconds is None
@@ -135,7 +135,7 @@ def test_v2_configuration_preserves_evaluation_defaults_with_a_notice(
         migrated = load_user_configuration(path)
 
     assert migrated is not None
-    assert migrated.schema_version == 5
+    assert migrated.schema_version == 6
     assert migrated.input_cost_per_million_usd == 1
     assert migrated.output_cost_per_million_usd == 2
     assert migrated.max_concurrency == 2
@@ -164,7 +164,7 @@ def test_v3_configuration_renames_verification_concurrency_with_a_notice(
         migrated = load_user_configuration(path)
 
     assert migrated is not None
-    assert migrated.schema_version == 5
+    assert migrated.schema_version == 6
     assert migrated.max_concurrency == 2
 
 
@@ -190,7 +190,7 @@ def test_v4_configuration_defaults_to_standard_progress_with_a_notice(
         migrated = load_user_configuration(path)
 
     assert migrated is not None
-    assert migrated.schema_version == 5
+    assert migrated.schema_version == 6
     assert migrated.max_concurrency == 4
     assert migrated.progress_visibility == "standard"
 
@@ -214,6 +214,49 @@ def test_product_configuration_can_omit_local_price_estimates() -> None:
             model="provider/model",
             input_cost_per_million_usd="1",
         )
+
+
+def test_v5_configuration_migrates_to_one_strict_profile(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 5,
+                "model": "provider/model",
+                "input_cost_per_million_usd": "1",
+                "output_cost_per_million_usd": "2",
+                "max_concurrency": 3,
+                "stage_timeout_seconds": None,
+                "progress_visibility": "compact",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.warns(UserWarning, match="strict default model profile"):
+        migrated = load_user_configuration(path)
+
+    assert migrated is not None
+    assert migrated.schema_version == 6
+    assert migrated.model == "provider/model"
+    assert migrated.default_model_profile.id == "default"
+    assert migrated.routing_mode.value == "strict"
+    assert migrated.max_concurrency == 3
+    assert migrated.progress_visibility == "compact"
+
+
+def test_current_configuration_persists_profiles_as_single_source_of_truth(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "config.json"
+    save_user_configuration(sample_configuration(), path)
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+
+    assert payload["schema_version"] == 6
+    assert payload["model_profiles"][0]["model"] == "provider/model"
+    assert "model" not in payload
+    assert "input_cost_per_million_usd" not in payload
 
 
 def test_user_configuration_refuses_a_symbolic_link(tmp_path: Path) -> None:

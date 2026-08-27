@@ -3,6 +3,7 @@
 import json
 from collections.abc import Mapping
 from datetime import UTC, datetime
+from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
 from typing import Literal, Self
@@ -69,6 +70,23 @@ class ModelRoutingMode(StrEnum):
     POLICY = "policy"
 
 
+class ModelSwitchCondition(StrEnum):
+    """User-authorized reason for advancing to an approved fallback route."""
+
+    PROVIDER_FAILURE = "provider_failure"
+
+
+class ModelRouteSelectionSource(StrEnum):
+    """Attributable precedence rule that selected one Agent's primary route."""
+
+    STRICT_PIN = "strict_pin"
+    AGENT_OVERRIDE = "agent_override"
+    STAGE_OVERRIDE = "stage_override"
+    CAPABILITY_OVERRIDE = "capability_override"
+    DEFAULT_PROFILE = "default_profile"
+    AUTO_CAPABILITY = "auto_capability"
+
+
 _CAPABILITY_OUTPUTS = {
     AgentCapability.CLARIFICATION: ArtifactKind.CLARIFICATION_RECORD,
     AgentCapability.PLANNING: ArtifactKind.IMPLEMENTATION_PLAN,
@@ -122,6 +140,17 @@ class ModelRoute(BaseModel):
     id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     model: str = Field(min_length=3)
     required_capabilities: tuple[str, ...] = ()
+    eligible_capabilities: tuple[AgentCapability, ...] = tuple(AgentCapability)
+    input_cost_per_million_usd: Decimal | None = Field(
+        default=None,
+        ge=0,
+        le=10_000,
+    )
+    output_cost_per_million_usd: Decimal | None = Field(
+        default=None,
+        ge=0,
+        le=10_000,
+    )
 
     @field_validator("model")
     @classmethod
@@ -144,6 +173,55 @@ class ModelRoute(BaseModel):
     def require_unique_capabilities(cls, values: tuple[str, ...]) -> tuple[str, ...]:
         return _clean_unique_text(values, label="model capability")
 
+    @field_validator("eligible_capabilities")
+    @classmethod
+    def require_unique_eligible_capabilities(
+        cls,
+        values: tuple[AgentCapability, ...],
+    ) -> tuple[AgentCapability, ...]:
+        if not values or len(values) != len(set(values)):
+            raise ValueError("eligible model capabilities must be non-empty and unique")
+        return values
+
+    @model_validator(mode="after")
+    def require_complete_price_pair(self) -> Self:
+        if (self.input_cost_per_million_usd is None) != (
+            self.output_cost_per_million_usd is None
+        ):
+            raise ValueError("model route input and output prices belong together")
+        return self
+
+
+class ModelRouteAssignment(BaseModel):
+    """Exact approved primary and fallback routes for one runtime Agent."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    agent_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
+    primary_route_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
+    fallback_route_ids: tuple[str, ...] = ()
+    selection_source: ModelRouteSelectionSource
+    reason: str = Field(min_length=1, max_length=500)
+
+    @field_validator("fallback_route_ids")
+    @classmethod
+    def require_unique_fallbacks(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        return _clean_unique_text(values, label="fallback model route")
+
+    @field_validator("reason")
+    @classmethod
+    def require_clean_reason(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("model route selection reason must not be blank")
+        return cleaned
+
+    @model_validator(mode="after")
+    def reject_primary_as_fallback(self) -> Self:
+        if self.primary_route_id in self.fallback_route_ids:
+            raise ValueError("primary model route cannot also be a fallback")
+        return self
+
 
 class ModelRoutePlan(BaseModel):
     """Approved model candidates and switching policy for one TeamPlan."""
@@ -153,27 +231,55 @@ class ModelRoutePlan(BaseModel):
     mode: ModelRoutingMode
     default_route_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     routes: tuple[ModelRoute, ...] = Field(min_length=1)
-    authorized_switch_conditions: tuple[str, ...] = ()
+    assignments: tuple[ModelRouteAssignment, ...] = ()
+    authorized_switch_conditions: tuple[ModelSwitchCondition, ...] = ()
 
     @field_validator("authorized_switch_conditions")
     @classmethod
     def require_unique_switch_conditions(
         cls,
-        values: tuple[str, ...],
-    ) -> tuple[str, ...]:
-        return _clean_unique_text(values, label="model switch condition")
+        values: tuple[ModelSwitchCondition, ...],
+    ) -> tuple[ModelSwitchCondition, ...]:
+        if len(values) != len(set(values)):
+            raise ValueError("model switch conditions must be unique")
+        return values
 
     @model_validator(mode="after")
     def validate_routes(self) -> Self:
         route_ids = [route.id for route in self.routes]
         if len(route_ids) != len(set(route_ids)):
             raise ValueError("model route IDs must be unique")
+        route_models = [route.model for route in self.routes]
+        if len(route_models) != len(set(route_models)):
+            raise ValueError("model routes must identify distinct provider/models")
         if self.default_route_id not in route_ids:
             raise ValueError("default model route must reference an authorized route")
+        assignment_agents = [assignment.agent_id for assignment in self.assignments]
+        if len(assignment_agents) != len(set(assignment_agents)):
+            raise ValueError("model route assignments must identify unique Agents")
+        known_routes = set(route_ids)
+        for assignment in self.assignments:
+            referenced = {
+                assignment.primary_route_id,
+                *assignment.fallback_route_ids,
+            }
+            if unknown := referenced - known_routes:
+                raise ValueError(
+                    f"Agent {assignment.agent_id} references unknown model routes: "
+                    + ", ".join(sorted(unknown))
+                )
         if self.mode is ModelRoutingMode.STRICT and (
             len(self.routes) != 1 or self.authorized_switch_conditions
         ):
             raise ValueError("strict model routing requires one route and no switches")
+        if self.mode is ModelRoutingMode.STRICT and any(
+            assignment.fallback_route_ids for assignment in self.assignments
+        ):
+            raise ValueError("strict model routing cannot assign fallback routes")
+        if any(assignment.fallback_route_ids for assignment in self.assignments) and (
+            not self.authorized_switch_conditions
+        ):
+            raise ValueError("fallback routes require an authorized switch condition")
         return self
 
     def get_route(self, route_id: str) -> ModelRoute:
@@ -183,6 +289,22 @@ class ModelRoutePlan(BaseModel):
             if route.id == route_id:
                 return route
         raise ValueError(f"unknown model route: {route_id}")
+
+    def get_assignment(self, agent_id: str) -> ModelRouteAssignment:
+        """Return one approved Agent assignment or reject missing route evidence."""
+
+        for assignment in self.assignments:
+            if assignment.agent_id == agent_id:
+                return assignment
+        raise ValueError(f"missing model route assignment for Agent: {agent_id}")
+
+    def authorized_route_ids(self, agent_id: str) -> tuple[str, ...]:
+        """Return the exact ordered routes one Agent may use during this run."""
+
+        if not self.assignments and self.mode is ModelRoutingMode.STRICT:
+            return (self.default_route_id,)
+        assignment = self.get_assignment(agent_id)
+        return (assignment.primary_route_id, *assignment.fallback_route_ids)
 
 
 class AgentSpec(BaseModel):
@@ -375,6 +497,40 @@ class TeamPlan(BaseModel):
                 "Agent model routes are not authorized: "
                 f"{', '.join(sorted(unknown_routes))}"
             )
+        for agent in self.agents:
+            route = self.model_routes.get_route(agent.model_route_id)
+            if agent.capability not in route.eligible_capabilities:
+                raise ValueError(
+                    f"model route {route.id} is not eligible for Agent "
+                    f"{agent.id} ({agent.capability.value})"
+                )
+        if self.model_routes.mode is ModelRoutingMode.POLICY:
+            assignments = {
+                assignment.agent_id: assignment
+                for assignment in self.model_routes.assignments
+            }
+            if set(assignments) != known_agents:
+                missing = known_agents - set(assignments)
+                unknown = set(assignments) - known_agents
+                raise ValueError(
+                    "policy model assignments must exactly cover TeamPlan Agents "
+                    f"(missing: {', '.join(sorted(missing)) or 'none'}; "
+                    f"unknown: {', '.join(sorted(unknown)) or 'none'})"
+                )
+            for agent in self.agents:
+                assignment = assignments[agent.id]
+                if assignment.primary_route_id != agent.model_route_id:
+                    raise ValueError(
+                        f"Agent {agent.id} primary model assignment differs from "
+                        "its AgentSpec"
+                    )
+                for fallback_id in assignment.fallback_route_ids:
+                    fallback = self.model_routes.get_route(fallback_id)
+                    if agent.capability not in fallback.eligible_capabilities:
+                        raise ValueError(
+                            f"fallback model route {fallback.id} is not eligible for "
+                            f"Agent {agent.id} ({agent.capability.value})"
+                        )
         if self.max_concurrency > len(self.agents):
             raise ValueError("TeamPlan concurrency cannot exceed its Agent count")
         if len(self.agents) > self.budget.max_calls:
@@ -386,6 +542,20 @@ class TeamPlan(BaseModel):
             raise ValueError(
                 "TeamPlan planned Agent invocations exceed the run call budget"
             )
+        if self.origin is TeamPlanOrigin.ADAPTIVE_PLANNING:
+            fallback_calls = (
+                sum(
+                    len(assignment.fallback_route_ids)
+                    for assignment in self.model_routes.assignments
+                )
+                * self.iteration_limit
+            )
+            planned_calls = len(self.agents) * self.iteration_limit + fallback_calls
+            if planned_calls > self.budget.max_calls:
+                raise ValueError(
+                    "TeamPlan primary and authorized fallback invocations exceed "
+                    "the run call budget"
+                )
 
         implementation_agents = {
             agent.id

@@ -9,10 +9,12 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+import software_agent_team.planning as planning
 from software_agent_team.artifacts import AcceptanceCriterion
 from software_agent_team.budgets import AgentBudget
 from software_agent_team.execution import ScriptedAgentExecutor
 from software_agent_team.integrity import canonical_model_sha256
+from software_agent_team.model_routing import ModelProfile, ModelRoutingPolicy
 from software_agent_team.planning import (
     AdaptivePlanningCoordinator,
     AgentWorkload,
@@ -43,6 +45,9 @@ from software_agent_team.planning import (
 )
 from software_agent_team.teams import (
     AgentCapability,
+    ModelRouteSelectionSource,
+    ModelRoutingMode,
+    ModelSwitchCondition,
     PermissionProfile,
     TeamPlanOrigin,
 )
@@ -301,6 +306,193 @@ def test_proposal_compiles_to_complete_controller_owned_authority() -> None:
     assert "model calls: 14" in overview
     assert "cumulative Agent time: 7200 seconds" in overview
     assert "estimated cost ceiling: $25" in overview
+
+
+def test_controller_resolves_visible_per_agent_model_routes_before_approval() -> None:
+    default = ModelProfile(
+        id="default",
+        model="provider/model",
+        capabilities=(
+            AgentCapability.CLARIFICATION,
+            AgentCapability.PLANNING,
+            AgentCapability.IMPLEMENTATION,
+            AgentCapability.TESTING,
+            AgentCapability.REVIEW,
+        ),
+        input_cost_per_million_usd="0.50",
+        output_cost_per_million_usd="1.50",
+    )
+    quality = ModelProfile(
+        id="quality",
+        model="provider/quality",
+        capabilities=(AgentCapability.TESTING, AgentCapability.REVIEW),
+        priority=10,
+    )
+    routing = ModelRoutingPolicy(
+        mode=ModelRoutingMode.POLICY,
+        profiles=(default, quality),
+        default_profile_id="default",
+        capability_profile_overrides={AgentCapability.TESTING: "quality"},
+        authorized_switch_conditions=(ModelSwitchCondition.PROVIDER_FAILURE,),
+        max_switches_per_agent=1,
+    )
+
+    preview = preview_adaptive_proposal(
+        request(),
+        proposal(),
+        policy(model_routing=routing),
+        created_at=FIXED_TIME,
+    )
+
+    assignments = {
+        assignment.agent_id: assignment
+        for assignment in preview.team_plan.model_routes.assignments
+    }
+    assert assignments["cli_developer"].primary_route_id == "default"
+    assert assignments["acceptance_tester"].primary_route_id == "quality"
+    assert (
+        assignments["acceptance_tester"].selection_source
+        is ModelRouteSelectionSource.CAPABILITY_OVERRIDE
+    )
+    assert assignments["quality_reviewer"].primary_route_id == "default"
+    overview = render_planning_overview(preview)
+    assert "provider/quality (profile quality; capability_override)" in overview
+    assert "model reason:" in overview
+    assert "model pricing: not configured" in overview
+    assert "$0.50 input / $1.50 output per million tokens" in overview
+    assert (
+        "authorized fallback profiles: default: provider/model "
+        "(pricing: $0.50 input / $1.50 output per million tokens)"
+    ) in overview
+    assert "model routing: policy" in overview
+
+
+def test_user_can_override_one_agent_model_without_editing_plan_json() -> None:
+    routing = ModelRoutingPolicy(
+        mode=ModelRoutingMode.POLICY,
+        profiles=(
+            ModelProfile(
+                id="default",
+                model="provider/model",
+                capabilities=tuple(AgentCapability),
+            ),
+            ModelProfile(
+                id="quality",
+                model="provider/quality",
+                capabilities=(AgentCapability.TESTING, AgentCapability.REVIEW),
+            ),
+        ),
+        default_profile_id="default",
+    )
+    edited = apply_structured_edit(
+        proposal(),
+        StructuredPlanEdit(
+            kind=StructuredEditKind.AGENT_MODEL,
+            agent_id="quality_reviewer",
+            value="quality",
+        ),
+        created_at=FIXED_TIME + timedelta(seconds=1),
+    )
+
+    preview = preview_adaptive_proposal(
+        request(),
+        edited,
+        policy(model_routing=routing),
+        created_at=edited.created_at,
+    )
+
+    assignment = preview.team_plan.model_routes.get_assignment("quality_reviewer")
+    assert assignment.primary_route_id == "quality"
+    assert assignment.selection_source is ModelRouteSelectionSource.AGENT_OVERRIDE
+    assert edited.model_profile_overrides == {"quality_reviewer": "quality"}
+
+
+def test_single_profile_plan_editor_does_not_offer_a_hidden_model_option() -> None:
+    strict_routing = ModelRoutingPolicy(
+        mode=ModelRoutingMode.STRICT,
+        profiles=(
+            ModelProfile(
+                id="default",
+                model="provider/model",
+                capabilities=tuple(AgentCapability),
+            ),
+        ),
+        default_profile_id="default",
+    )
+    answers = iter(("4", "x"))
+    output: list[str] = []
+
+    edit = planning._read_structured_edit(
+        proposal(),
+        model_routing=strict_routing,
+        read=lambda _prompt: next(answers),
+        write=output.append,
+    )
+
+    assert edit is None
+    assert "  4. One Agent model profile" not in output
+    assert "Choose 1, 2, 3, or x." in output
+
+
+def test_planning_rejects_missing_model_capability_and_fallback_overbudget() -> None:
+    missing_testing = ModelRoutingPolicy(
+        mode=ModelRoutingMode.POLICY,
+        profiles=(
+            ModelProfile(
+                id="default",
+                model="provider/model",
+                capabilities=(
+                    AgentCapability.CLARIFICATION,
+                    AgentCapability.PLANNING,
+                    AgentCapability.IMPLEMENTATION,
+                    AgentCapability.REVIEW,
+                ),
+            ),
+        ),
+        default_profile_id="default",
+    )
+    with pytest.raises(PlanningError, match="no authorized model profile"):
+        preview_adaptive_proposal(
+            request(),
+            proposal(),
+            policy(model_routing=missing_testing),
+            created_at=FIXED_TIME,
+        )
+
+    switching = ModelRoutingPolicy(
+        mode=ModelRoutingMode.POLICY,
+        profiles=(
+            ModelProfile(
+                id="default",
+                model="provider/model",
+                capabilities=tuple(AgentCapability),
+                priority=1,
+            ),
+            ModelProfile(
+                id="fallback",
+                model="provider/fallback",
+                capabilities=tuple(AgentCapability),
+                priority=2,
+            ),
+        ),
+        default_profile_id="default",
+        authorized_switch_conditions=(ModelSwitchCondition.PROVIDER_FAILURE,),
+        max_switches_per_agent=1,
+    )
+    constrained_budget = AgentBudget(
+        max_calls=10,
+        max_input_tokens=1_000_000,
+        max_output_tokens=200_000,
+        max_agent_duration_seconds=7_200,
+        max_estimated_cost_usd="25",
+    )
+    with pytest.raises(ValueError, match="fallback invocations exceed"):
+        preview_adaptive_proposal(
+            request(),
+            proposal(),
+            policy(model_routing=switching, budget=constrained_budget),
+            created_at=FIXED_TIME,
+        )
 
 
 def test_controller_resolves_workload_classes_without_model_timeout_authority() -> None:

@@ -128,9 +128,10 @@ back to the installer.
 After the user confirms a build and before the first Agent call, the run
 preflight repeats the restricted container and tool-execution probe against the
 exact immutable image ID recorded for that run. It also verifies that the
-exact selected `provider/model` resolves through the run-scoped catalog and
-SAT's isolated auth route. These checks catch a stale container or unresolved
-model before spending provider tokens.
+bootstrap `provider/model` and every route authorized by the approved TeamPlan
+resolve through the run-scoped catalog and SAT's isolated auth boundary. These
+checks catch a stale container or unresolved primary or fallback route before
+spending provider tokens.
 
 OpenClaw keeps role sandboxes alive for session reuse by default. SAT's run
 sessions are unique and immutable, so SAT removes the exact run-scoped role
@@ -149,7 +150,8 @@ On the first configured run, SAT then:
 4. Checks that the exact selection has a local catalog/auth route without
    generating content, and gives a corrective configuration path when it does
    not;
-5. Saves only that model reference in SAT configuration;
+5. Saves that model as one strict secret-free default profile in SAT
+   configuration;
 6. Offers one explicit minimal provider smoke check, disabled by default;
 7. Asks what the user wants to build;
 8. States the current small-project Python 3.12 execution profile and asks the
@@ -180,17 +182,24 @@ SAT configuration is stored atomically with mode `0600` at:
 ${XDG_CONFIG_HOME:-$HOME/.config}/software-agent-team/config.json
 ```
 
-Schema version 5 stores the exact OpenClaw `provider/model` reference. It may
-also contain optional secret-free prices, an adaptive `max_concurrency` from 1
-through 16, `compact`, `standard`, or `detailed` progress visibility, and an
-explicit global invocation-timeout override. The guided product flow writes
-only the model reference and uses the controller defaults for other fields.
-Existing schema-v3 `verification_concurrency` values migrate one way into
-`max_concurrency`; schema v4 defaults to `standard` visibility on load.
+Schema version 6 stores one or more secret-free model profiles, the default
+bootstrap profile, strict or policy routing, optional capability and stage
+overrides, and the only currently supported runtime switch condition:
+`provider_failure`. A profile contains a canonical OpenClaw `provider/model`,
+its authorized SAT Agent capabilities, deterministic integer priority, and an
+optional paired price table. It never contains a credential.
 
-The normal first-run wizard stores only the model in SAT configuration and uses
-checked-in runtime defaults. Credential entry and persistence remain owned by
-OpenClaw, but its state is isolated at:
+The same configuration may contain an adaptive `max_concurrency` from 1
+through 16, `compact`, `standard`, or `detailed` progress visibility, and an
+explicit global invocation-timeout override. The guided first-use flow writes
+one strict default profile and uses controller defaults for other fields.
+Existing schema-v1 through schema-v5 values migrate one way into schema 6;
+the former scalar model and price fields become the default profile rather
+than a second source of truth.
+
+The normal first-run wizard stores only one strict default model profile in SAT
+configuration and uses checked-in runtime defaults. Credential entry and
+persistence remain owned by OpenClaw, but its state is isolated at:
 
 ```text
 ${SAT_STATE_ROOT:-${XDG_STATE_HOME:-$HOME/.local/state}/software-agent-team}/openclaw/
@@ -224,10 +233,14 @@ sat configure --non-interactive --model provider/model
 Non-interactive configuration records the requested reference; the next
 `sat` launch validates its exact catalog/auth route before asking project
 questions. Interactive `sat configure` performs that validation before saving.
+Normal startup blocks only when the default bootstrap profile is unavailable.
+It warns about an unavailable optional profile without deleting or resetting
+the saved policy; if Planning selects that profile, run preflight stops before
+the first execution Agent call.
 
-Pricing, adaptive maximum concurrency, progress visibility, and timeout
-overrides are advanced configuration and are not part of normal first-use
-setup. For example:
+Pricing, additional model profiles, route policy, adaptive maximum concurrency,
+progress visibility, and timeout overrides are advanced configuration and are
+not part of normal first-use setup. For example:
 
 ```bash
 sat configure --non-interactive --model provider/model \
@@ -242,6 +255,29 @@ remains a separate `sat run` option documented in the
 [`Phase 1 evaluation runbook`](phase1-runbook.md). When no trustworthy price is
 available, a product run reports estimated cost as unavailable rather than
 inventing `$0.00`.
+
+An advanced policy-routing example is:
+
+```bash
+sat configure --non-interactive \
+  --routing-mode policy \
+  --add-model-profile fast=provider/fast-model \
+  --profile-capabilities fast=implementation,integration,testing,review \
+  --profile-priority fast=10 \
+  --route-capability implementation=fast \
+  --allow-provider-switch \
+  --max-model-switches 1
+```
+
+The default profile continues to serve bootstrap clarification and Planning.
+For each runtime Agent, the controller resolves Agent edit, stage override,
+capability override, default-profile support, then lowest numeric eligible
+priority. The Planning overview exposes the resulting primary route, reason,
+fallback list, and pricing before approval. A fallback is not a silent retry:
+it must be in that Agent's approved assignment, is used only after an
+attributable provider failure, consumes the run call budget, and is recorded
+with the failed call and possible cost consequence. `--clear-model-routing`
+returns configuration to one strict default profile.
 
 Set an absolute `SAT_CONFIG_PATH` only when the configuration location must be
 overridden. Keep the same value set for later `sat` and `sat-uninstall`

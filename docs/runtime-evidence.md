@@ -240,11 +240,11 @@ to reference their actual Planner artifact, and recovery rejects a transition
 whose evidence form or digest differs from the frozen TeamPlan origin.
 
 `runtime-preflight.json` records the private OpenClaw and Docker identities,
-configuration validity, the exact selected model and local availability result,
-image presence and immutable ID, restricted-container tool execution and
-liveness, and any non-secret model or container probe error. A run is ready
-only when the configuration, exact model route, image identity, and container
-execution checks all pass.
+configuration validity, the bootstrap model and every TeamPlan-authorized
+model's local availability result, image presence and immutable ID,
+restricted-container tool execution and liveness, and any non-secret model or
+container probe error. A run is ready only when the configuration, every exact
+model route, image identity, and container execution checks all pass.
 
 Phase artifacts and captured process output are write-once. `team-plan.json`
 freezes Agent identities, responsibilities, dependency waves, workspace and
@@ -257,11 +257,12 @@ the frozen TaskBrief, TeamPlan, fixed-fixture provenance when applicable, and
 all cross-file digests before returning state.
 
 Every compatibility-workflow status update is first enriched into a versioned
-`RunEvent` stores its run ID, contiguous sequence, UTC timestamp, lifecycle
+`RunEvent`. It stores its run ID, contiguous sequence, UTC timestamp, lifecycle
 revision, category, minimum visibility, phase, and attributable Agent attempt
 when applicable. Dynamic events additionally record queue/readiness/provider
 wait/repair/terminal state, safe activity, dependencies, capability, stage,
-approved model, duration, invocation reference, and aggregate budget snapshot.
+approved model, route-switch references, duration, invocation reference, and
+aggregate budget snapshot.
 Events are written as an append-only predecessor-digest chain. After each
 append, `run.json` atomically anchors the exact event count and latest digest;
 if anchoring fails, the unowned event file is removed before presentation code
@@ -310,6 +311,15 @@ post-call budget rejection are persisted together. Missing model, provider, or
 token evidence is never treated as zero usage or success. A repair is permitted
 only for a semantic-body failure, receives the same approved invocation
 timeout, and remains bounded by the aggregate call and resource budgets.
+
+For policy routing, `team-plan.json` freezes one primary route and an ordered,
+bounded fallback list for every Agent, plus the controller's attributable
+selection source and reason. Prompts and response validation bind the active
+route. Only an execution classified as an attributable provider failure may
+advance to the next explicitly approved fallback, and only when the TeamPlan
+authorizes `provider_failure`. The failed invocation, usage, route reference,
+switch event, next route, and possible billable consequence remain evidence.
+Semantic response repair does not itself authorize a route switch.
 
 Writers are serialized for the current single-clone Git backend. The
 controller verifies their clean input commit, descendant output commit,
@@ -408,10 +418,11 @@ when investigating it rather than editing artifacts in place.
   reused, reconfigured, stopped, upgraded, downgraded, or uninstalled by SAT.
 - Runtime configuration is run-scoped, secret-free, mode `0600`, and ignored
   by Git.
-- A selected model must appear exactly once as available in OpenClaw's
-  configured local model view before Agent execution. This inspection does not
-  generate content. `runtime-preflight.json` persists the selected model,
-  availability result, and a bounded non-secret error.
+- The bootstrap model and every TeamPlan-authorized primary or fallback model
+  must appear exactly once as available in OpenClaw's configured local model
+  view before Agent execution. This inspection does not generate content.
+  `runtime-preflight.json` persists every inspected model, availability result,
+  and bounded non-secret error.
 - A reviewed compatibility catalog may add routing and model metadata absent
   from the pinned OpenClaw release. It cannot contain a credential or silently
   select a fallback. When a trusted caller credential variable is available,
@@ -423,10 +434,12 @@ when investigating it rather than editing artifacts in place.
   may live in its private OpenClaw-owned state or come from trusted caller
   environment variables; Agents never receive provider credentials or
   unrelated host data.
-- Model identity is frozen for a run and runtime fallback is disabled. A
-  successful call must report the selected canonical `provider/model` and
-  integer input/output token counts; missing or different telemetry fails the
-  run.
+- Every Agent's authorized model set and order are frozen for a run. Strict
+  evaluation disables fallback. A policy run may advance only through its
+  explicit `provider_failure` fallback list and records the change; any other
+  model is rejected. A successful call must report the active canonical
+  `provider/model` and integer input/output token counts; missing or different
+  telemetry fails the run.
 - Retrieved content and generated repository instructions are untrusted input.
 
 ## Resource and Cost Boundary
