@@ -313,7 +313,11 @@ adversarially challenge the same scope. A Dynamic Reviewer returns exactly one
 criterion assessment for every assigned criterion, with a concrete negative or
 boundary case and observable evidence. A blocked assessment and its blocking
 finding must reference the same criterion; missing coverage is an invalid
-response rather than implicit acceptance. Review may run bounded foreground
+response rather than implicit acceptance. Every assessment must also cite a
+controller-numbered tool result from that exact invocation and an exact bounded
+result fragment. The response schema makes that citation structurally required;
+the controller derives tool identity, outcome, and hashes instead of requiring
+the model to echo known facts. Review may run bounded foreground
 probes in the no-network sandbox against the read-only source and temporary
 fixtures. General write tools remain denied. Review creates a script or fixture
 only through the immutable `sat-probe-write` helper, which accepts a new bounded
@@ -590,8 +594,11 @@ controller-derived criterion-scope floor. The Reviewer runtime keeps project
 source read-only and denies the general write tool. Its immutable
 `sat-probe-write` command provides the bounded `/tmp` probe-authoring capability
 that actually exists in the foreground execution surface; the runtime also
-contains the pinned `uv` needed to exercise generated-project commands. Complete Agent
-summaries remain immutable artifact evidence; the
+contains the pinned `uv` needed to exercise generated-project commands. The
+OpenClaw adapter validates the current session turn, pairs actual tool calls and
+results, persists only bounded sanitized records, and rejects zero-call or
+mismatched Reviewer citations. Complete Agent summaries remain immutable
+artifact evidence; the
 controller derives bounded scheduler and downstream-prompt projections with an
 explicit truncation marker, original length, and source-summary SHA-256 rather
 than failing a handoff or asking the model to regenerate known content. The
@@ -713,7 +720,10 @@ The adaptive-orchestration milestone is complete only when:
     topology comparisons remain reproducible.
 12. Approved plan revisions, events, controls, routes, artifacts, and Git facts
     form one integrity-checked report.
-13. Offline tests cover success, correction, pause/recovery, interruption,
+13. Reviewer criterion claims are bound to attributable current-invocation tool
+    records; fabricated, stale, mismatched, or unavailable tool evidence cannot
+    pass as accepted Review.
+14. Offline tests cover success, correction, pause/recovery, interruption,
     cancellation, invalid plans, routing failures, and non-TTY output, followed
     by at least one explicitly authorized provider-backed acceptance run.
 

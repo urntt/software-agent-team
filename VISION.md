@@ -68,7 +68,8 @@ A completed or failed run produces:
 - Structured planning, implementation, test, review, and decision artifacts;
 - The approved team/model plan, its revisions, and Agent-creation records;
 - An ordered progress and user-control event record;
-- Real command output and exit codes from deterministic quality gates;
+- Real command output and exit codes from deterministic quality gates and
+  bounded attributable Agent tool evidence;
 - Model, usage, duration, retry, and error telemetry;
 - A final machine-readable record and human-readable report;
 - An explicit termination reason.
@@ -178,8 +179,10 @@ when code, usability evidence, or controlled experiments justify a replacement.
   deterministic command evidence, and fixed review scope.
 - Git owns source history.
 - Persisted artifacts own cross-Agent communication.
-- OpenClaw session history is diagnostic state, not a reproducibility
-  dependency.
+- Raw OpenClaw session history remains private runtime state and is not a
+  persisted reproducibility dependency. During an invocation, the controller
+  may validate the exact current session turn and persist only bounded,
+  sanitized tool-call/result records plus transcript provenance.
 - Execution Agents cannot spawn additional model calls. The controller is the sole
   authority for Agent invocation, accounting, and ordering.
 - A fixed bootstrap Planning capability may propose requirements,
@@ -288,6 +291,7 @@ Each concept has one authoritative owner.
 | Frozen evaluation fixture and task-specific acceptance | `benchmarks/task_manager/` and `configs/run-policy.json` |
 | Shared quality-manifest validation and execution | `src/software_agent_team/quality_gates.py` |
 | Agent process invocation and telemetry parsing | `src/software_agent_team/execution.py` |
+| Pinned OpenClaw current-turn tool-evidence extraction and sanitization | `src/software_agent_team/openclaw_session_evidence.py` |
 | CLI commands, guided request and Planning activation, and runtime option resolution | `src/software_agent_team/cli.py` |
 | Product diagnostics, trusted source preparation, and safe delivery | `src/software_agent_team/product.py` |
 | User-local product state path | `src/software_agent_team/paths.py` |
@@ -427,7 +431,7 @@ change in the same controlled trial.
 | Run fixed Docker quality gates before Agent judgment | Reproducible command evidence is stronger than claimed test results and keeps generated code isolated from the host. |
 | Resolve the sandbox tag to one local image ID per run | Both Agent sandboxes and quality gates execute the same immutable image even if a mutable local tag is later reassigned. |
 | Assemble persisted artifacts in the controller | Models should produce planning, implementation summaries, evidence analysis, and review judgment. Known identity, Git, command, status, criterion, and scope facts must come from authoritative controller state instead of requiring an exact model echo. |
-| Require criterion-by-criterion adversarial Review evidence | A summary verdict can skip a boundary while still claiming complete coverage. Every Dynamic Reviewer must assess its exact assigned scope with a concrete negative or boundary check and observable evidence; blocked assessments and findings are cross-bound. Bounded foreground probes may exercise immutable source in the no-network sandbox, but remain attributable model evidence rather than controller-owned deterministic gates. |
+| Require criterion-by-criterion adversarial Review evidence | A summary verdict can skip a boundary while still claiming complete coverage. Every Dynamic Reviewer must assess its exact assigned scope with a concrete negative or boundary check and observable evidence; blocked assessments and findings are cross-bound. Each assessment must cite a controller-numbered tool result from that exact invocation and a matching bounded output fragment. SAT derives tool identity, the direct `exec` executable without its possibly sensitive arguments, arguments/result hashes, outcome, and transcript provenance from its isolated OpenClaw session instead of trusting or requiring the model to echo known facts. Bounded foreground probes may exercise immutable source in the no-network sandbox, but remain attributable model evidence rather than controller-owned deterministic gates. |
 | Give Reviewer the minimum coherent probe capability | Source remains read-only and network, background processes, project edits, general write tools, and Agent spawning remain denied. The immutable runtime exposes `sat-probe-write`, which atomically creates only a new size-bounded `/tmp/sat-review-probe-*` script or fixture, rejects overwrite and path indirection, and supports simple foreground execution. The pinned runtime also includes `uv` so exact generated-project commands are observable instead of merely promised. |
 | Treat contract-ineligible JSON arrays as presentation around one semantic object | Agent responses must contain one top-level object. An argv array in explanatory text cannot satisfy or compete with that contract, so rejecting it wastes a repair call and can create a secondary failure. The parser still rejects any additional object, including one nested in an array, and preserves raw transport output. |
 | Separate transport payload count from semantic object count | OpenClaw may emit a valid semantic response and an ancillary visible tool diagnostic as separate payloads. SAT preserves raw payload evidence, combines visible text in order, and lets the strict parser accept only one unambiguous object; multiple object candidates remain invalid. |

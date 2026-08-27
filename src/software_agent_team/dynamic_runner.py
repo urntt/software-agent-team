@@ -13,6 +13,7 @@ from pydantic import ValidationError
 
 from software_agent_team.artifact_store import ArtifactStore, ArtifactStoreError
 from software_agent_team.artifacts import (
+    AgentToolEvidenceStatus,
     ArtifactKind,
     ArtifactReference,
     CommandEvidence,
@@ -801,6 +802,18 @@ class DynamicAgentRunner:
                 sandbox_error,
                 TerminationReason.DEPENDENCY_UNAVAILABLE,
             )
+        if request.capability is AgentCapability.REVIEW:
+            if telemetry.tool_evidence_status is AgentToolEvidenceStatus.INVALID:
+                raise DynamicAgentRunnerError(
+                    "Reviewer session evidence failed integrity validation: "
+                    f"{telemetry.tool_evidence_error or 'unknown session error'}",
+                    TerminationReason.SAFETY_BOUNDARY_CROSSED,
+                )
+            if telemetry.tool_evidence_status is not AgentToolEvidenceStatus.CAPTURED:
+                raise DynamicAgentRunnerError(
+                    "Reviewer execution omitted attributable session tool evidence",
+                    TerminationReason.DEPENDENCY_UNAVAILABLE,
+                )
 
     def _assemble_response(
         self,

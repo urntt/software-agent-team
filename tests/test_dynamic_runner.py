@@ -14,12 +14,14 @@ from software_agent_team.artifact_store import ArtifactStore
 from software_agent_team.artifacts import (
     AcceptanceCriterion,
     AgentExecutionRecord,
+    AgentToolCallEvidence,
+    AgentToolEvidenceStatus,
     ArtifactKind,
     CommandEvidence,
     HandoffEnvelope,
     HandoffStatus,
-    ReviewCriterionAssessment,
     ReviewReport,
+    ReviewToolEvidenceReference,
     TaskBrief,
     WorkResult,
 )
@@ -44,6 +46,7 @@ from software_agent_team.integrity import canonical_model_sha256
 from software_agent_team.planning import AdaptiveImplementationPlan, ProposedTask
 from software_agent_team.progress import ProgressEvent, ProgressEventKind
 from software_agent_team.responses import (
+    ReviewCriterionAssessmentResponse,
     ReviewReportResponse,
     WorkResultResponse,
 )
@@ -73,6 +76,32 @@ from software_agent_team.teams import (
 
 FIXED_TIME = datetime(2026, 8, 26, 12, 0, tzinfo=UTC)
 MODEL = "test/provider-model"
+
+
+def review_tool_reference() -> ReviewToolEvidenceReference:
+    """Reference the fake executor's attributable read result."""
+
+    return ReviewToolEvidenceReference(
+        tool_call_id="tool-001",
+        observable="fake-review-observation",
+    )
+
+
+def review_tool_call() -> AgentToolCallEvidence:
+    """Return the fake executor's sanitized read record."""
+
+    output = b"fake-review-observation"
+    return AgentToolCallEvidence(
+        id="tool-001",
+        tool_name="read",
+        external_call_sha256=hashlib.sha256(b"fake-review-call").hexdigest(),
+        arguments_sha256=hashlib.sha256(b'{"path":"/agent"}').hexdigest(),
+        outcome="succeeded",
+        is_error=False,
+        output_sha256=hashlib.sha256(output).hexdigest(),
+        output_bytes=len(output),
+        output_excerpt=output.decode("utf-8"),
+    )
 
 
 def git(repository: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -278,6 +307,8 @@ class DynamicExecutor:
         mutate_reader: str | None = None,
         synchronize_quality: bool = False,
         provider_fail_once_for: str | None = None,
+        zero_review_tool_calls_once: bool = False,
+        invalid_review_evidence: bool = False,
         writer_presentation_arrays: bool = False,
         writer_summary: str = "Implemented and documented the greeting utility.",
     ) -> None:
@@ -286,6 +317,8 @@ class DynamicExecutor:
         self.omit_model_for = omit_model_for
         self.mutate_reader = mutate_reader
         self.provider_fail_once_for = provider_fail_once_for
+        self.zero_review_tool_calls_once = zero_review_tool_calls_once
+        self.invalid_review_evidence = invalid_review_evidence
         self.writer_presentation_arrays = writer_presentation_arrays
         self.writer_summary = writer_summary
         self.requests: list[AgentExecutionRequest] = []
@@ -359,7 +392,7 @@ class DynamicExecutor:
             response_text = ReviewReportResponse(
                 verdict="accept",
                 criterion_assessments=(
-                    ReviewCriterionAssessment(
+                    ReviewCriterionAssessmentResponse(
                         criterion_id="AC_REVIEW",
                         status="satisfied",
                         adversarial_check=(
@@ -369,6 +402,7 @@ class DynamicExecutor:
                         evidence=(
                             "README.md and greeting.py describe the same string result."
                         ),
+                        tool_evidence=(review_tool_reference(),),
                     ),
                 ),
                 findings=(),
@@ -388,6 +422,13 @@ class DynamicExecutor:
         request: AgentExecutionRequest,
         response_text: str,
     ) -> AgentExecutionResult:
+        is_review = request.capability is AgentCapability.REVIEW
+        omit_review_call = (
+            is_review
+            and self.zero_review_tool_calls_once
+            and self._counts[request.agent_id] == 1
+        )
+        invalid_review_evidence = is_review and self.invalid_review_evidence
         return AgentExecutionResult(
             status=AgentExecutionStatus.COMPLETED,
             response_text=response_text,
@@ -412,6 +453,31 @@ class DynamicExecutor:
                     input_tokens=10,
                     output_tokens=5,
                     total_tokens=15,
+                ),
+                tool_evidence_status=(
+                    AgentToolEvidenceStatus.INVALID
+                    if invalid_review_evidence
+                    else (
+                        AgentToolEvidenceStatus.CAPTURED
+                        if is_review
+                        else AgentToolEvidenceStatus.NOT_CAPTURED
+                    )
+                ),
+                session_transcript_sha256=(
+                    "d" * 64 if is_review and not invalid_review_evidence else None
+                ),
+                session_record_count=(
+                    3 if is_review and not invalid_review_evidence else None
+                ),
+                tool_calls=(
+                    ()
+                    if omit_review_call or invalid_review_evidence
+                    else ((review_tool_call(),) if is_review else ())
+                ),
+                tool_evidence_error=(
+                    "session transcript identity mismatch"
+                    if invalid_review_evidence
+                    else None
                 ),
             ),
         )
@@ -624,6 +690,69 @@ def test_dynamic_writer_semantic_repair_keeps_full_timeout_and_git_evidence(
     assert writer_records[0].error is not None
     assert isinstance(writer_records[1], AgentExecutionRecord)
     assert writer_records[1].response_artifact == runner.outputs["builder"]
+
+
+def test_dynamic_reviewer_repairs_a_zero_call_fabricated_tool_citation(
+    tmp_path: Path,
+) -> None:
+    runner, team_plan, executor, _, _ = runtime(
+        tmp_path,
+        executor_options={"zero_review_tool_calls_once": True},
+    )
+
+    result = DagScheduler().execute(team_plan, runner)
+
+    assert result.status is ScheduleStatus.COMPLETED
+    reviewer_requests = [
+        request for request in executor.requests if request.agent_id == "reviewer"
+    ]
+    assert len(reviewer_requests) == 2
+    assert [request.timeout_seconds for request in reviewer_requests] == [47, 47]
+    assert "CONTROLLED_RESPONSE_REPAIR" in reviewer_requests[1].prompt
+    assert "tool_evidence may cite only calls made in this invocation" in (
+        reviewer_requests[1].prompt
+    )
+    reviewer_records = [
+        runner.artifact_store.load(reference)
+        for reference in runner.execution_records
+        if "/verify/reviewer-" in reference.path
+    ]
+    assert len(reviewer_records) == 2
+    assert isinstance(reviewer_records[0], AgentExecutionRecord)
+    assert reviewer_records[0].tool_evidence_status is AgentToolEvidenceStatus.CAPTURED
+    assert reviewer_records[0].response_contract == "semantic_body_v2"
+    assert reviewer_records[0].tool_calls == ()
+    assert "unknown tool call tool-001" in (reviewer_records[0].error or "")
+    assert isinstance(reviewer_records[1], AgentExecutionRecord)
+    assert len(reviewer_records[1].tool_calls) == 1
+    assert reviewer_records[1].response_artifact == runner.outputs["reviewer"]
+
+
+def test_dynamic_reviewer_session_integrity_failure_is_not_semantically_repaired(
+    tmp_path: Path,
+) -> None:
+    runner, team_plan, executor, _, _ = runtime(
+        tmp_path,
+        executor_options={"invalid_review_evidence": True},
+    )
+
+    result = DagScheduler().execute(team_plan, runner)
+
+    assert result.status is ScheduleStatus.FAILED
+    reviewer_requests = [
+        request for request in executor.requests if request.agent_id == "reviewer"
+    ]
+    assert len(reviewer_requests) == 1
+    reviewer_record = next(
+        runner.artifact_store.load(reference)
+        for reference in runner.execution_records
+        if "/verify/reviewer-" in reference.path
+    )
+    assert isinstance(reviewer_record, AgentExecutionRecord)
+    assert reviewer_record.tool_evidence_status is AgentToolEvidenceStatus.INVALID
+    assert reviewer_record.tool_evidence_error == "session transcript identity mismatch"
+    assert "failed integrity validation" in (reviewer_record.error or "")
+    assert "reviewer" not in runner.outputs
 
 
 def test_dynamic_writer_argv_prose_does_not_spend_a_semantic_repair(

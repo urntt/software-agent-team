@@ -299,12 +299,17 @@ Confirm all of the following before marking Phase 1 accepted:
   The adapter normalizes the pinned OpenClaw local and Gateway JSON forms and
   compares their provider/model metadata using the canonical `provider/model`
   identity.
-- Every semantic execution record identifies `semantic_body_v1`, lists the
-  controller-supplied persisted fields, records any redundant model-returned
-  controller fields that were ignored, and records the resolved stage and
-  remaining attempt timeouts. Missing or incorrect echoes of `kind`, Git facts,
-  command evidence, status, criteria, or scope are not treated as semantic
-  response failures.
+- Every semantic execution record identifies `semantic_body_v1`, or
+  `semantic_body_v2` for a Reviewer response with current-invocation tool
+  citations. It lists the controller-supplied persisted fields, records any
+  redundant model-returned controller fields that were ignored, and records
+  the resolved stage and remaining attempt timeouts. Missing or incorrect
+  echoes of `kind`, Git facts, command evidence, status, criteria, or scope are
+  not treated as semantic response failures.
+- Every Reviewer criterion assessment cites a tool ID and exact observable
+  fragment present in that attempt's sanitized tool record. Session provenance
+  is `captured`, tool calls and results pair exactly, and a zero-call turn is
+  never accepted as evidence of a probe.
 - Every handoff points to immutable artifact references with matching SHA-256
   digests.
 - All fixed quality gates passed, every acceptance criterion has a result, and

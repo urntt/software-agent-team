@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 from software_agent_team.artifacts import (
     AgentRole,
+    AgentToolEvidenceStatus,
     ArtifactKind,
     ImplementationPlan,
     PlanTask,
@@ -18,6 +19,7 @@ from software_agent_team.artifacts import (
     ReviewFinding,
     ReviewReport,
     ReviewTerminationReason,
+    ReviewToolEvidenceReference,
     ReviewVerdict,
     TaskBrief,
     validate_artifact_context,
@@ -42,6 +44,43 @@ def _clean_unique_text(values: tuple[str, ...]) -> tuple[str, ...]:
     if len(cleaned) != len(set(cleaned)):
         raise ValueError("response text values must be unique")
     return cleaned
+
+
+def _validate_review_tool_evidence(
+    body: ReviewReportResponse,
+    result: AgentExecutionResult,
+) -> None:
+    """Bind every manual assessment to a current controller-captured tool result."""
+
+    if not body.criterion_assessments:
+        return
+    telemetry = result.telemetry
+    if telemetry.tool_evidence_status is AgentToolEvidenceStatus.INVALID:
+        raise ValueError(
+            "review tool evidence is invalid: "
+            f"{telemetry.tool_evidence_error or 'unknown session error'}"
+        )
+    if telemetry.tool_evidence_status is not AgentToolEvidenceStatus.CAPTURED:
+        raise ValueError("review tool evidence was not captured")
+    calls = {item.id: item for item in telemetry.tool_calls}
+    for assessment in body.criterion_assessments:
+        if not assessment.tool_evidence:
+            raise ValueError(
+                f"criterion {assessment.criterion_id} must cite at least one "
+                "current tool result"
+            )
+        for reference in assessment.tool_evidence:
+            call = calls.get(reference.tool_call_id)
+            if call is None:
+                raise ValueError(
+                    f"criterion {assessment.criterion_id} references unknown "
+                    f"tool call {reference.tool_call_id}"
+                )
+            if reference.observable not in call.output_excerpt:
+                raise ValueError(
+                    f"tool call {reference.tool_call_id} does not contain the "
+                    "cited observable"
+                )
 
 
 class ImplementationPlanResponse(BaseModel):
@@ -117,6 +156,12 @@ class TestReportResponse(BaseModel):
         return cleaned
 
 
+class ReviewCriterionAssessmentResponse(ReviewCriterionAssessment):
+    """Reviewer assessment with a required current-invocation citation."""
+
+    tool_evidence: tuple[ReviewToolEvidenceReference, ...] = Field(min_length=1)
+
+
 class ReviewReportResponse(BaseModel):
     """Reviewer's semantic verdict; immutable commit and scope are controller-owned."""
 
@@ -129,7 +174,7 @@ class ReviewReportResponse(BaseModel):
         )
     )
     termination_reason: ReviewTerminationReason | None = None
-    criterion_assessments: tuple[ReviewCriterionAssessment, ...] = ()
+    criterion_assessments: tuple[ReviewCriterionAssessmentResponse, ...] = ()
     findings: tuple[ReviewFinding, ...] = ()
     summary: str = Field(min_length=1)
 
@@ -483,6 +528,8 @@ def parse_agent_response(
             team_roles=team_roles,
             iteration_limit=iteration_limit,
         )
+        if isinstance(parsed.body, ReviewReportResponse):
+            _validate_review_tool_evidence(parsed.body, result)
     except (ValueError, ValidationError) as error:
         raise AgentArtifactResponseError(
             f"Agent semantic response is invalid: {_safe_validation_detail(error)}"
@@ -599,6 +646,7 @@ def parse_dynamic_agent_response(
                     "criterion assessments must exactly cover assigned review scope"
                     + (f" ({'; '.join(detail)})" if detail else "")
                 )
+            _validate_review_tool_evidence(body, result)
             unknown = {
                 criterion_id
                 for finding in body.findings

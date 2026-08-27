@@ -9,6 +9,8 @@ from pathlib import Path
 from software_agent_team.artifact_store import ArtifactStore
 from software_agent_team.artifacts import (
     AcceptanceCriterion,
+    AgentToolCallEvidence,
+    AgentToolEvidenceStatus,
     ArtifactKind,
     CheckStatus,
     CommandEvidence,
@@ -16,9 +18,9 @@ from software_agent_team.artifacts import (
     FinalStatus,
     IterationDecision,
     IterationRecord,
-    ReviewCriterionAssessment,
     ReviewFinding,
     ReviewSeverity,
+    ReviewToolEvidenceReference,
     TaskBrief,
 )
 from software_agent_team.budgets import AgentBudget, ModelPricing
@@ -56,6 +58,7 @@ from software_agent_team.progress import (
     ProgressEventKind,
 )
 from software_agent_team.responses import (
+    ReviewCriterionAssessmentResponse,
     ReviewReportResponse,
     WorkResultResponse,
 )
@@ -79,6 +82,31 @@ from software_agent_team.teams import (
 
 FIXED_TIME = datetime(2026, 8, 26, 12, 0, tzinfo=UTC)
 MODEL = "test/provider-model"
+
+
+def review_tool_reference() -> ReviewToolEvidenceReference:
+    """Reference the adaptive fixture's attributable read observation."""
+
+    return ReviewToolEvidenceReference(
+        tool_call_id="tool-001",
+        observable="adaptive-review-observation",
+    )
+
+
+def review_tool_call() -> AgentToolCallEvidence:
+    """Return the adaptive fixture's sanitized read result."""
+
+    return AgentToolCallEvidence(
+        id="tool-001",
+        tool_name="read",
+        external_call_sha256="a" * 64,
+        arguments_sha256="b" * 64,
+        outcome="succeeded",
+        is_error=False,
+        output_sha256="c" * 64,
+        output_bytes=27,
+        output_excerpt="adaptive-review-observation",
+    )
 
 
 def git(repository: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -366,7 +394,7 @@ class AdaptiveExecutor:
                 body = ReviewReportResponse(
                     verdict="revise",
                     criterion_assessments=(
-                        ReviewCriterionAssessment(
+                        ReviewCriterionAssessmentResponse(
                             criterion_id="AC_REVIEW",
                             status="blocked",
                             adversarial_check=(
@@ -377,6 +405,7 @@ class AdaptiveExecutor:
                                 "README.md omits the string result type exposed by "
                                 "greeting.py."
                             ),
+                            tool_evidence=(review_tool_reference(),),
                         ),
                     ),
                     findings=(
@@ -397,7 +426,7 @@ class AdaptiveExecutor:
                 body = ReviewReportResponse(
                     verdict="accept",
                     criterion_assessments=(
-                        ReviewCriterionAssessment(
+                        ReviewCriterionAssessmentResponse(
                             criterion_id="AC_REVIEW",
                             status="satisfied",
                             adversarial_check=(
@@ -408,12 +437,14 @@ class AdaptiveExecutor:
                                 "README.md now documents the string returned by "
                                 "greeting.py."
                             ),
+                            tool_evidence=(review_tool_reference(),),
                         ),
                     ),
                     summary="The final commit satisfies the review scope.",
                 ).model_dump_json()
         else:  # pragma: no cover - the fixture owns every Agent
             raise AssertionError(f"unexpected Agent: {request.agent_id}")
+        is_review = request.capability is AgentCapability.REVIEW
         return AgentExecutionResult(
             status=AgentExecutionStatus.COMPLETED,
             response_text=body,
@@ -439,6 +470,14 @@ class AdaptiveExecutor:
                     output_tokens=5,
                     total_tokens=15,
                 ),
+                tool_evidence_status=(
+                    AgentToolEvidenceStatus.CAPTURED
+                    if is_review
+                    else AgentToolEvidenceStatus.NOT_CAPTURED
+                ),
+                session_transcript_sha256=("d" * 64 if is_review else None),
+                session_record_count=(3 if is_review else None),
+                tool_calls=((review_tool_call(),) if is_review else ()),
             ),
         )
 

@@ -24,6 +24,13 @@ artifact. Record attributable findings with accurate severity and blocking
 status. Accept only when every assigned manual criterion was reviewed and no
 blocking finding remains.
 
+Every criterion assessment must cite at least one actual tool result from this
+invocation in `tool_evidence`. The controller numbers calls in execution order
+as `tool-001`, `tool-002`, and so on. Provide one distinctive exact output
+fragment of at most 256 characters. The controller already owns the tool name
+and outcome, so do not echo them. Missing calls or output fragments are
+rejected; prose claims do not replace these references.
+
 Verdicts describe what the controller may safely do next. Use `revise` for
 every correctable implementation defect, including a failed quality gate,
 missing requirement, runtime bug, security defect in generated source, or a

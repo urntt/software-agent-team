@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from software_agent_team.artifact_store import ArtifactStore
 from software_agent_team.artifacts import (
     AgentExecutionRecord,
+    ArtifactKind,
     ArtifactReference,
 )
 from software_agent_team.budgets import (
@@ -121,9 +122,18 @@ def persist_agent_invocation(
         stderr_path=outputs.stderr_path,
         stdout_sha256=outputs.stdout_sha256,
         stderr_sha256=outputs.stderr_sha256,
-        response_contract="semantic_body_v1",
+        response_contract=(
+            "semantic_body_v2"
+            if request.expected_kind is ArtifactKind.REVIEW_REPORT
+            else "semantic_body_v1"
+        ),
         controller_supplied_fields=controller_supplied_fields,
         ignored_controller_fields=ignored_controller_fields,
+        tool_evidence_status=telemetry.tool_evidence_status,
+        session_transcript_sha256=telemetry.session_transcript_sha256,
+        session_record_count=telemetry.session_record_count,
+        tool_calls=telemetry.tool_calls,
+        tool_evidence_error=telemetry.tool_evidence_error,
         stage_timeout_seconds=stage_timeout_seconds,
         remaining_timeout_seconds=remaining_timeout_seconds,
         response_artifact=response_reference,

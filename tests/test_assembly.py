@@ -9,7 +9,7 @@ from software_agent_team.artifacts import (
     ArtifactKind,
     CheckStatus,
     CommandEvidence,
-    ReviewCriterionAssessment,
+    ReviewToolEvidenceReference,
     ReviewVerdict,
     TaskBrief,
 )
@@ -22,6 +22,7 @@ from software_agent_team.assembly import (
 )
 from software_agent_team.git_workspace import GitSnapshot
 from software_agent_team.responses import (
+    ReviewCriterionAssessmentResponse,
     ReviewReportResponse,
     WorkResultResponse,
 )
@@ -292,11 +293,17 @@ def test_review_report_binds_dynamic_reviewer_and_controller_scope() -> None:
     body = ReviewReportResponse(
         verdict=ReviewVerdict.ACCEPT,
         criterion_assessments=(
-            ReviewCriterionAssessment(
+            ReviewCriterionAssessmentResponse(
                 criterion_id="AC_DOCUMENTATION",
                 status="satisfied",
                 adversarial_check="Checked a clean first-use setup path.",
                 evidence="README documents the validated setup and run commands.",
+                tool_evidence=(
+                    ReviewToolEvidenceReference(
+                        tool_call_id="tool-001",
+                        observable="README setup command",
+                    ),
+                ),
             ),
         ),
         summary="The usage documentation is clear and executable.",
@@ -342,11 +349,17 @@ def test_review_report_rejects_wrong_capability_or_scope(
     body = ReviewReportResponse(
         verdict=ReviewVerdict.ACCEPT,
         criterion_assessments=(
-            ReviewCriterionAssessment(
+            ReviewCriterionAssessmentResponse(
                 criterion_id="AC_DOCUMENTATION",
                 status="satisfied",
                 adversarial_check="Checked the documented setup path.",
                 evidence="The public README provides the required commands.",
+                tool_evidence=(
+                    ReviewToolEvidenceReference(
+                        tool_call_id="tool-001",
+                        observable="README commands",
+                    ),
+                ),
             ),
         ),
         summary="Claimed review result.",

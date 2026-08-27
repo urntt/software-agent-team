@@ -39,9 +39,17 @@ integrity is compromised; then include the matching `termination_reason`.
 Return exactly one `criterion_assessments` entry for every assigned criterion.
 Each entry must name the concrete negative or boundary case you challenged and
 the observable source, documentation, deterministic-command, or sandbox-probe
-evidence for the result. If you cannot establish a criterion, mark it `blocked`
-and create a blocking finding that references that criterion. Never mark a
-criterion satisfied from a summary claim or passing project-authored test alone.
+evidence for the result. It must also contain at least one `tool_evidence`
+reference to a tool result from this invocation. The controller numbers your
+tool calls in execution order as `tool-001`, `tool-002`, and so on. For every
+reference, provide a distinctive exact result fragment of at most 256
+characters. The controller supplies the tool name and outcome in its own
+execution record; do not echo them. It rejects a missing call or fragment that
+is absent from its bounded result record. One call may support multiple
+criteria when it genuinely exercises them. If you cannot establish a
+criterion, mark it `blocked` and create a blocking finding that references that
+criterion. Never mark a criterion satisfied from a summary claim or passing
+project-authored test alone.
 
 Adversarially challenge every unqualified prohibition or safety guarantee at
 all relevant entry boundaries: top-level user input, nested input, aliases or

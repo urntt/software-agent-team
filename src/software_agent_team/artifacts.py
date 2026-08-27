@@ -84,6 +84,21 @@ class ReviewCriterionStatus(StrEnum):
     BLOCKED = "blocked"
 
 
+class AgentToolCallOutcome(StrEnum):
+    """Controller-normalized outcome of one attributable Agent tool call."""
+
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+
+
+class AgentToolEvidenceStatus(StrEnum):
+    """Collection state for sanitized OpenClaw session tool evidence."""
+
+    NOT_CAPTURED = "not_captured"
+    CAPTURED = "captured"
+    INVALID = "invalid"
+
+
 class ReviewTerminationReason(StrEnum):
     """Terminal review conditions that make another revision unsafe."""
 
@@ -306,6 +321,123 @@ class IterationArtifact(PhaseArtifact):
     iteration: int = Field(ge=1, le=3)
 
 
+class AgentToolCallEvidence(BaseModel):
+    """Sanitized controller record of one OpenClaw tool call and result."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: str = Field(pattern=r"^tool-[0-9]{3}$")
+    tool_name: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,63}$")
+    executable: str | None = Field(default=None, min_length=1, max_length=512)
+    external_call_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    arguments_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    outcome: AgentToolCallOutcome
+    is_error: bool
+    reported_status: str | None = Field(
+        default=None,
+        pattern=r"^[a-z][a-z0-9_-]{0,63}$",
+    )
+    exit_code: int | None = None
+    duration_ms: int | None = Field(default=None, ge=0)
+    output_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    output_bytes: int = Field(ge=0, le=1_048_576)
+    output_excerpt: str = Field(default="", max_length=4096)
+
+    @field_validator("executable")
+    @classmethod
+    def require_clean_executable(cls, value: str | None) -> str | None:
+        """Keep the direct executable inspectable without accepting whitespace."""
+
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned or cleaned != value or "\x00" in cleaned:
+            raise ValueError("tool evidence executable must be clean text")
+        return cleaned
+
+    @field_validator("output_excerpt")
+    @classmethod
+    def reject_nul_excerpt(cls, value: str) -> str:
+        """Keep persisted output excerpts text-safe."""
+
+        if "\x00" in value:
+            raise ValueError("tool output excerpts must not contain NUL")
+        return value
+
+    @model_validator(mode="after")
+    def validate_outcome(self) -> Self:
+        """Keep the normalized outcome consistent with concrete result fields."""
+
+        reported_failure = self.reported_status in {
+            "cancelled",
+            "error",
+            "failed",
+            "timed_out",
+            "timeout",
+        }
+        if self.outcome is AgentToolCallOutcome.SUCCEEDED and (
+            self.is_error or self.exit_code not in {None, 0} or reported_failure
+        ):
+            raise ValueError("successful tool evidence cannot report an error")
+        if self.outcome is AgentToolCallOutcome.FAILED and (
+            not self.is_error and self.exit_code in {None, 0} and not reported_failure
+        ):
+            raise ValueError("failed tool evidence requires an observable failure")
+        if (self.tool_name == "exec") != (self.executable is not None):
+            raise ValueError("only exec tool evidence requires an executable")
+        return self
+
+
+class ReviewToolEvidenceReference(BaseModel):
+    """Reviewer citation bound to one controller-recorded tool result."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    tool_call_id: str = Field(pattern=r"^tool-[0-9]{3}$")
+    observable: str = Field(min_length=1, max_length=256)
+
+    @field_validator("observable")
+    @classmethod
+    def require_clean_observable(cls, value: str) -> str:
+        """Require a small exact result fragment that the controller can match."""
+
+        cleaned = value.strip()
+        if not cleaned or "\x00" in cleaned:
+            raise ValueError("tool evidence observables must be nonblank text")
+        return cleaned
+
+
+def validate_tool_evidence_collection(
+    *,
+    status: AgentToolEvidenceStatus,
+    transcript_sha256: str | None,
+    record_count: int | None,
+    tool_calls: tuple[AgentToolCallEvidence, ...],
+    error: str | None,
+) -> None:
+    """Validate one complete, absent, or rejected tool-evidence collection."""
+
+    identifiers = [item.id for item in tool_calls]
+    expected = [f"tool-{index:03d}" for index in range(1, len(tool_calls) + 1)]
+    if identifiers != expected:
+        raise ValueError("tool evidence IDs must be contiguous and ordered")
+    if status is AgentToolEvidenceStatus.NOT_CAPTURED:
+        if transcript_sha256 is not None or record_count is not None or tool_calls:
+            raise ValueError("uncaptured tool evidence cannot contain session records")
+        if error is not None:
+            raise ValueError("uncaptured tool evidence cannot contain an error")
+    elif status is AgentToolEvidenceStatus.CAPTURED:
+        if transcript_sha256 is None or record_count is None:
+            raise ValueError("captured tool evidence requires transcript provenance")
+        if error is not None:
+            raise ValueError("captured tool evidence cannot contain an error")
+    elif status is AgentToolEvidenceStatus.INVALID:
+        if error is None:
+            raise ValueError("invalid tool evidence requires an error")
+        if tool_calls:
+            raise ValueError("invalid tool evidence cannot expose partial tool calls")
+
+
 class AgentExecutionRecord(BaseModel):
     """Controller-recorded telemetry for one bounded Agent invocation."""
 
@@ -338,9 +470,17 @@ class AgentExecutionRecord(BaseModel):
     stderr_path: str = Field(min_length=1)
     stdout_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     stderr_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    response_contract: Literal["semantic_body_v1"] | None = None
+    response_contract: Literal["semantic_body_v1", "semantic_body_v2"] | None = None
     controller_supplied_fields: tuple[str, ...] = ()
     ignored_controller_fields: tuple[str, ...] = ()
+    tool_evidence_status: AgentToolEvidenceStatus = AgentToolEvidenceStatus.NOT_CAPTURED
+    session_transcript_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    session_record_count: int | None = Field(default=None, ge=1, le=4096)
+    tool_calls: tuple[AgentToolCallEvidence, ...] = ()
+    tool_evidence_error: str | None = Field(default=None, min_length=1, max_length=2000)
     stage_timeout_seconds: int | None = Field(default=None, ge=1, le=3600)
     remaining_timeout_seconds: int | None = Field(default=None, ge=1, le=3600)
     response_artifact: ArtifactReference | None = None
@@ -360,7 +500,14 @@ class AgentExecutionRecord(BaseModel):
 
         return _require_safe_relative_path(value)
 
-    @field_validator("session_key", "session_id", "model", "provider", "error")
+    @field_validator(
+        "session_key",
+        "session_id",
+        "model",
+        "provider",
+        "tool_evidence_error",
+        "error",
+    )
     @classmethod
     def reject_blank_optional_text(cls, value: str | None) -> str | None:
         """Reject whitespace-only runtime identifiers and errors."""
@@ -411,6 +558,13 @@ class AgentExecutionRecord(BaseModel):
             self.controller_supplied_fields or self.ignored_controller_fields
         ):
             raise ValueError("response binding fields require a response contract")
+        validate_tool_evidence_collection(
+            status=self.tool_evidence_status,
+            transcript_sha256=self.session_transcript_sha256,
+            record_count=self.session_record_count,
+            tool_calls=self.tool_calls,
+            error=self.tool_evidence_error,
+        )
         if self.timed_out:
             if self.exit_code not in {None, 0}:
                 raise ValueError(
@@ -807,6 +961,7 @@ class ReviewCriterionAssessment(BaseModel):
     status: ReviewCriterionStatus
     adversarial_check: str = Field(min_length=1, max_length=2000)
     evidence: str = Field(min_length=1, max_length=2000)
+    tool_evidence: tuple[ReviewToolEvidenceReference, ...] = ()
 
     @field_validator("adversarial_check", "evidence")
     @classmethod
@@ -817,6 +972,19 @@ class ReviewCriterionAssessment(BaseModel):
         if not cleaned:
             raise ValueError("criterion assessment text must not be blank")
         return cleaned
+
+    @field_validator("tool_evidence")
+    @classmethod
+    def require_unique_tool_evidence(
+        cls,
+        values: tuple[ReviewToolEvidenceReference, ...],
+    ) -> tuple[ReviewToolEvidenceReference, ...]:
+        """Keep controller tool references unambiguous within one criterion."""
+
+        identifiers = [value.tool_call_id for value in values]
+        if len(identifiers) != len(set(identifiers)):
+            raise ValueError("criterion tool-evidence references must be unique")
+        return values
 
 
 class ReviewReport(IterationArtifact):

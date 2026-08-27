@@ -59,11 +59,13 @@ The controller accepts an iteration only when all of the following agree:
    scopes on the same immutable commit. A Dynamic Reviewer must return exactly
    one `criterion_assessments` entry for every assigned criterion, including a
    concrete adversarial check, observable evidence, and `satisfied` or
-   `blocked` status. Every blocked assessment must map to a blocking finding
-   with the same criterion ID. The controller binds each Agent, commit, and
-   scope into an attributable `ReviewReport`; their combined scope must exactly
-   cover the manual criteria and finding IDs must remain unique across the
-   iteration.
+   `blocked` status. Every assessment also cites at least one
+   controller-numbered tool call from that exact invocation and a distinctive
+   fragment present in its bounded result record. Every blocked assessment must
+   map to a blocking finding with the same criterion ID. The controller binds
+   each Agent, commit, scope, and validated citations into an attributable
+   `ReviewReport`; their combined scope must exactly cover the manual criteria
+   and finding IDs must remain unique across the iteration.
 5. The controller, not either Agent, resolves pending criteria to `passed` in
    the final report.
 
@@ -143,6 +145,16 @@ were ignored, and never lets them override authoritative values. Missing or
 incorrect controller-owned fields are therefore neither model-quality failures
 nor reasons to spend a repair call.
 
+Reviewer tool claims cross a separate grounding boundary. The response schema
+requires each criterion assessment to supply only a current-invocation
+`tool-00N` citation and a small exact observable result fragment. It does not
+ask the model to echo a tool name, outcome, exit code, arguments, or digest.
+The controller resolves those known facts from its own sanitized execution
+record, rejects unknown call IDs or absent fragments, and uses the existing one
+bounded semantic repair for a structurally valid but ungrounded citation.
+Execution records label this grounded Reviewer shape `semantic_body_v2`; other
+current semantic bodies remain `semantic_body_v1`.
+
 ## Semantic Response Boundary
 
 Transport normalization is deterministic. The controller accepts one
@@ -187,6 +199,27 @@ If a model returns controller-owned fields, they are ignored and recorded in
 the execution record. Missing or incorrect echoes such as `kind`, commit
 hashes, test status, command lists, criterion identifiers, or review scope do
 not trigger repair.
+
+For an isolated OpenClaw invocation, SAT reads the session index and exact
+session ID returned by the pinned runtime, verifies direct non-symlink paths,
+requires a complete UTF-8 JSONL transcript, finds the latest user record that
+exactly matches the current prompt, and stops at the next user turn. Tool calls
+and results in that segment must pair one-to-one by the external call ID and
+tool name. SAT then assigns stable invocation-local IDs in execution order,
+normalizes success or failure from the result, hashes the external ID,
+canonical arguments, complete result, and transcript, and retains only a
+bounded output excerpt. For `exec`, it also records the direct executable token
+while discarding the full command and any leading environment-assignment
+values. Size and record-count limits apply before parsing.
+
+A complete session with zero tool calls is valid captured evidence, but it
+cannot satisfy a citation. A missing, substituted, incomplete, malformed, or
+unpaired session is invalid runtime evidence and stops Review at the safety
+boundary rather than spending a semantic repair. A semantic repair may cite
+only calls repeated in that repair invocation. Raw OpenClaw session JSONL is
+never copied into run artifacts; the sanitized records, transcript SHA-256,
+and current-turn record count make the accepted claim auditable without making
+raw session history a later replay dependency.
 
 ## Persisted Run Evidence
 
@@ -347,10 +380,14 @@ handoffs; it cannot create Agents, edit the DAG, or extend a timeout.
 Each invocation reserves aggregate call capacity atomically before launch and
 records reported tokens, duration, and known price after completion. Raw
 stdout/stderr, telemetry, the semantic response reference when valid, and any
-post-call budget rejection are persisted together. Missing model, provider, or
-token evidence is never treated as zero usage or success. A repair is permitted
-only for a semantic-body failure, receives the same approved invocation
-timeout, and remains bounded by the aggregate call and resource budgets.
+post-call budget rejection are persisted together. When session collection is
+active, the same `AgentExecutionRecord` stores its collection status,
+transcript digest, current-turn record count, ordered sanitized tool records,
+and any bounded integrity error. Missing model, provider, token, or required
+Reviewer tool evidence is never treated as zero usage or success. A repair is
+permitted only for a semantic-body failure, receives the same approved
+invocation timeout, and remains bounded by the aggregate call and resource
+budgets.
 
 Agent-authored summaries are complete immutable artifact evidence and are not
 forced to guess a hidden downstream display limit. When a summary exceeds the

@@ -408,13 +408,35 @@ matching `/tmp/sat-review-probe-*` with `.py`, `.json`, or `.txt`, enforces line
 and total-size limits, creates with mode `0600`, and rejects overwrite,
 symlinks, nesting, traversal, and partial-write residue. Reviewer explicitly
 denies the nonexistent general `write` tool and uses the helper through its
-available foreground `exec` surface. The full 629-test suite passes. A
+available foreground `exec` surface. The full 653-test suite passes. A
 restricted non-root, no-network, read-only-root container probe also confirmed
 root-owned helper mode `0555`, caller-owned output mode `0600`, direct Python
 execution, refusal of overwrite, symlink, and `/agent` targets, read-only
 project enforcement, and terminal container removal. A fresh installed
-provider authority probe and complete adaptive run remain required before this
-journey is demonstration ready.
+provider authority probe then exposed a separate evidence-grounding defect:
+the Reviewer returned a structurally valid accepted report claiming helper,
+Python, Git, and boundary checks, while its exact attributable current session
+contained zero tool calls and zero tool results. The semantic parser previously
+validated criterion coverage and prose but had no controller-owned link from a
+claim to an actual OpenClaw tool record. That accepted-looking response is
+failure evidence and does not verify the helper or Review path.
+
+The OpenClaw execution adapter now validates the returned session ID against
+SAT's isolated session index, extracts only the latest exact current-prompt
+turn, pairs tool calls and results one-to-one, and persists bounded sanitized
+records with invocation-local IDs, hashes, outcomes, excerpts, and transcript
+provenance. Raw session JSONL is not copied into run artifacts. Dynamic Review
+response schema now requires every criterion assessment to cite a current
+`tool-00N` record and a matching observable fragment; the model does not echo
+controller-owned tool identity or outcome. For `exec`, SAT records only the
+direct executable plus a hash of the complete arguments, so helper/Python/Git
+paths remain inspectable without persisting possible environment-assignment
+values or the full command. A captured zero-call turn therefore cannot support
+an accepted claim, stale or mismatched citations enter the one bounded semantic
+repair, and invalid session provenance stops at the safety boundary without
+another provider call. A repeat fresh installed provider authority probe and
+complete adaptive run remain required before this journey is demonstration
+ready.
 
 The rehearsal sequence below concerns the predecessor guided fixed-team
 product path and is retained as defect and regression evidence. It proves the
@@ -701,8 +723,9 @@ The acceptance contract is
 - Contract-aware response normalization that permits presentation argv arrays
   around one semantic object while rejecting any additional object candidate;
 - Exact Dynamic Reviewer criterion assessments with adversarial checks,
-  observable attributable evidence, blocked-finding cross-binding, and bounded
-  no-network foreground probes against read-only source;
+  current-invocation tool citations and matching result fragments,
+  blocked-finding cross-binding, and bounded no-network foreground probes
+  against read-only source;
 - Concrete phase-artifact and Agent-telemetry contracts with contextual
   validation;
 - Immutable phase artifacts, handoffs, command output, Agent output, canonical

@@ -13,9 +13,9 @@ from software_agent_team.artifacts import (
     ArtifactKind,
     CommandEvidence,
     HandoffStatus,
-    ReviewCriterionAssessment,
     ReviewFinding,
     ReviewSeverity,
+    ReviewToolEvidenceReference,
     TaskBrief,
 )
 from software_agent_team.budgets import AgentBudget
@@ -32,6 +32,7 @@ from software_agent_team.prompting import (
 )
 from software_agent_team.responses import (
     AgentArtifactResponseError,
+    ReviewCriterionAssessmentResponse,
     ReviewReportResponse,
     WorkResultResponse,
     parse_dynamic_agent_response,
@@ -51,6 +52,15 @@ from software_agent_team.teams import (
 CREATED_AT = datetime(2026, 8, 26, 12, 0, tzinfo=UTC)
 INPUT_COMMIT = "1" * 40
 OUTPUT_COMMIT = "2" * 40
+
+
+def review_tool_reference() -> ReviewToolEvidenceReference:
+    """Reference the scripted adapter's explicit review observation."""
+
+    return ReviewToolEvidenceReference(
+        tool_call_id="tool-001",
+        observable="scripted-review-observation",
+    )
 
 
 def task_brief() -> TaskBrief:
@@ -344,9 +354,12 @@ def test_review_prompt_requires_adversarial_absolute_claim_boundaries() -> None:
     response_schema = json.loads(schema_text)
     assert "criterion_assessments" in response_schema["required"]
     assert "default" not in response_schema["properties"]["criterion_assessments"]
+    assessment_schema = response_schema["$defs"]["ReviewCriterionAssessmentResponse"]
+    assert "tool_evidence" in assessment_schema["required"]
+    assert "default" not in assessment_schema["properties"]["tool_evidence"]
 
 
-def _review_result(response: ReviewReportResponse):
+def _review_result(response: ReviewReportResponse | str):
     inputs = quality_inputs().model_copy(
         update={
             "agent_id": "quality_reviewer",
@@ -357,7 +370,11 @@ def _review_result(response: ReviewReportResponse):
     result = ScriptedAgentExecutor(
         [
             ScriptedAgentResponse(
-                text=response.model_dump_json(),
+                text=(
+                    response.model_dump_json()
+                    if isinstance(response, ReviewReportResponse)
+                    else response
+                ),
                 model="provider/model",
             )
         ],
@@ -367,11 +384,12 @@ def _review_result(response: ReviewReportResponse):
 
 
 def test_dynamic_review_response_requires_exact_criterion_assessments() -> None:
-    assessment = ReviewCriterionAssessment(
+    assessment = ReviewCriterionAssessmentResponse(
         criterion_id="AC_LINKS",
         status="satisfied",
         adversarial_check="Ran the CLI against a missing local-link fixture.",
         evidence="The CLI returned non-zero and named the broken link.",
+        tool_evidence=(review_tool_reference(),),
     )
     request, result = _review_result(
         ReviewReportResponse(
@@ -391,6 +409,110 @@ def test_dynamic_review_response_requires_exact_criterion_assessments() -> None:
 
     assert isinstance(parsed.body, ReviewReportResponse)
     assert parsed.body.criterion_assessments == (assessment,)
+
+
+@pytest.mark.parametrize(
+    ("reference", "error"),
+    [
+        (
+            ReviewToolEvidenceReference(
+                tool_call_id="tool-002",
+                observable="scripted-review-observation",
+            ),
+            "unknown tool call tool-002",
+        ),
+        (
+            ReviewToolEvidenceReference(
+                tool_call_id="tool-001",
+                observable="fabricated observation",
+            ),
+            "does not contain the cited observable",
+        ),
+    ],
+)
+def test_dynamic_review_response_rejects_ungrounded_tool_claims(
+    reference: ReviewToolEvidenceReference,
+    error: str,
+) -> None:
+    assessment = ReviewCriterionAssessmentResponse(
+        criterion_id="AC_LINKS",
+        status="satisfied",
+        adversarial_check="Ran the CLI against a missing local-link fixture.",
+        evidence="Claimed an observation that must be controller-bound.",
+        tool_evidence=(reference,),
+    )
+    request, result = _review_result(
+        ReviewReportResponse(
+            verdict="accept",
+            criterion_assessments=(assessment,),
+            summary="Claimed the assigned criterion is satisfied.",
+        )
+    )
+
+    with pytest.raises(AgentArtifactResponseError, match=error):
+        parse_dynamic_agent_response(
+            result,
+            request,
+            task_brief=task_brief(),
+            team_plan=team_plan(),
+            reviewed_criterion_ids=("AC_LINKS",),
+        )
+
+
+def test_dynamic_review_response_structurally_requires_tool_evidence() -> None:
+    response = {
+        "verdict": "accept",
+        "termination_reason": None,
+        "criterion_assessments": [
+            {
+                "criterion_id": "AC_LINKS",
+                "status": "satisfied",
+                "adversarial_check": "Claimed to run a missing-link probe.",
+                "evidence": "Claimed the CLI returned non-zero.",
+            }
+        ],
+        "findings": [],
+        "summary": "Claimed the assigned criterion is satisfied.",
+    }
+    request, result = _review_result(json.dumps(response))
+
+    with pytest.raises(AgentArtifactResponseError, match="tool_evidence"):
+        parse_dynamic_agent_response(
+            result,
+            request,
+            task_brief=task_brief(),
+            team_plan=team_plan(),
+            reviewed_criterion_ids=("AC_LINKS",),
+        )
+
+
+def test_dynamic_review_response_rejects_a_citation_when_no_tool_was_called() -> None:
+    assessment = ReviewCriterionAssessmentResponse(
+        criterion_id="AC_LINKS",
+        status="satisfied",
+        adversarial_check="Claimed to run a missing-link probe.",
+        evidence="Claimed the CLI returned non-zero.",
+        tool_evidence=(review_tool_reference(),),
+    )
+    request, result = _review_result(
+        ReviewReportResponse(
+            verdict="accept",
+            criterion_assessments=(assessment,),
+            summary="Claimed the assigned criterion is satisfied.",
+        )
+    )
+    result = result.model_copy(
+        update={"telemetry": result.telemetry.model_copy(update={"tool_calls": ()})}
+    )
+
+    with pytest.raises(AgentArtifactResponseError, match="unknown tool call tool-001"):
+        parse_dynamic_agent_response(
+            result,
+            request,
+            task_brief=task_brief(),
+            team_plan=team_plan(),
+            reviewed_criterion_ids=("AC_LINKS",),
+        )
 
 
 def test_dynamic_review_response_rejects_missing_or_unscoped_evidence() -> None:
@@ -413,11 +535,12 @@ def test_dynamic_review_response_rejects_missing_or_unscoped_evidence() -> None:
         ReviewReportResponse(
             verdict="accept",
             criterion_assessments=(
-                ReviewCriterionAssessment(
+                ReviewCriterionAssessmentResponse(
                     criterion_id="AC_OTHER",
                     status="satisfied",
                     adversarial_check="Checked another behavior.",
                     evidence="Observed another behavior.",
+                    tool_evidence=(review_tool_reference(),),
                 ),
             ),
             summary="Reviewed a criterion outside the assigned scope.",
@@ -436,11 +559,12 @@ def test_dynamic_review_response_rejects_missing_or_unscoped_evidence() -> None:
         ReviewReportResponse(
             verdict="accept",
             criterion_assessments=(
-                ReviewCriterionAssessment(
+                ReviewCriterionAssessmentResponse(
                     criterion_id="AC_OTHER",
                     status="satisfied",
                     adversarial_check="Checked the assigned behavior.",
                     evidence="Observed the assigned behavior.",
+                    tool_evidence=(review_tool_reference(),),
                 ),
             ),
             summary="Claimed an unknown assigned criterion is satisfied.",
@@ -457,11 +581,12 @@ def test_dynamic_review_response_rejects_missing_or_unscoped_evidence() -> None:
 
 
 def test_dynamic_review_response_binds_blocked_assessment_to_finding() -> None:
-    blocked = ReviewCriterionAssessment(
+    blocked = ReviewCriterionAssessmentResponse(
         criterion_id="AC_LINKS",
         status="blocked",
         adversarial_check="Ran the CLI against a broken nested link.",
         evidence="The command returned zero despite the broken link.",
+        tool_evidence=(review_tool_reference(),),
     )
     request, result = _review_result(
         ReviewReportResponse(

@@ -202,6 +202,7 @@ src/software_agent_team/
   git_workspace.py             Standalone clones and snapshot verification
   integrity.py                 Canonical persisted-model integrity digest
   invocation.py                Controller-owned call accounting and evidence
+  openclaw_session_evidence.py Pinned current-turn tool-evidence extraction
   openclaw_runtime.py          Private OpenClaw path and environment isolation
   paths.py                     User-local product state resolution
   planning.py                  Adaptive dialogue, proposals, approval, and evidence

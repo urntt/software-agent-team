@@ -677,8 +677,12 @@ def build_semantic_repair_request(
             "Recheck that criterion_assessments exactly cover the assigned scope, "
             "each assessment includes a concrete adversarial check and observable "
             "evidence, and every blocked status matches a blocking finding with "
-            "the same criterion ID. Use revise for correctable defects; fail "
-            "requires a terminal safety or evidence-integrity reason."
+            "the same criterion ID. Repeat any tool checks needed for this repair; "
+            "tool_evidence may cite only calls made in this invocation, numbered "
+            "tool-001 onward in execution order, with a matching observable output "
+            "fragment; do not echo controller-owned tool names or outcomes. Use "
+            "revise for correctable defects; fail requires a terminal safety or "
+            "evidence-integrity reason."
         )
     else:
         capability_check = "Recheck every field against the supplied run evidence."

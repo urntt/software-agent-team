@@ -209,6 +209,66 @@ def test_execution_record_preserves_response_binding_and_stage_budget() -> None:
     assert record.remaining_timeout_seconds == 275
 
 
+def test_execution_record_preserves_sanitized_tool_session_evidence() -> None:
+    payload = valid_execution_payload()
+    payload.update(
+        {
+            "tool_evidence_status": "captured",
+            "session_transcript_sha256": "d" * 64,
+            "session_record_count": 4,
+            "tool_calls": [
+                {
+                    "id": "tool-001",
+                    "tool_name": "exec",
+                    "executable": "sat-probe-write",
+                    "external_call_sha256": "e" * 64,
+                    "arguments_sha256": "f" * 64,
+                    "outcome": "succeeded",
+                    "is_error": False,
+                    "reported_status": "completed",
+                    "exit_code": 0,
+                    "duration_ms": 17,
+                    "output_sha256": "1" * 64,
+                    "output_bytes": 11,
+                    "output_excerpt": "BOUNDARY_OK",
+                }
+            ],
+        }
+    )
+
+    record = AgentExecutionRecord.model_validate(payload)
+
+    assert record.session_record_count == 4
+    assert record.tool_calls[0].id == "tool-001"
+    assert record.tool_calls[0].output_excerpt == "BOUNDARY_OK"
+
+
+@pytest.mark.parametrize(
+    "updates",
+    [
+        {
+            "tool_evidence_status": "captured",
+            "session_record_count": 2,
+        },
+        {
+            "tool_evidence_status": "invalid",
+        },
+        {
+            "tool_evidence_status": "not_captured",
+            "session_transcript_sha256": "d" * 64,
+        },
+    ],
+)
+def test_execution_record_rejects_incoherent_tool_evidence(
+    updates: dict[str, object],
+) -> None:
+    payload = valid_execution_payload()
+    payload.update(updates)
+
+    with pytest.raises(ValidationError, match="tool evidence"):
+        AgentExecutionRecord.model_validate(payload)
+
+
 def test_execution_record_rejects_incoherent_response_binding_or_timeout() -> None:
     payload = valid_execution_payload()
     payload.update(
@@ -288,6 +348,12 @@ def valid_review_payload() -> dict[str, object]:
                 "status": "satisfied",
                 "adversarial_check": "Restarted the service after writing one task.",
                 "evidence": "The task remained visible after restart.",
+                "tool_evidence": [
+                    {
+                        "tool_call_id": "tool-001",
+                        "observable": "task remained visible",
+                    }
+                ],
             }
         ],
         "summary": "The assigned criterion is satisfied.",
@@ -298,6 +364,18 @@ def test_review_assessments_exactly_cover_controller_scope() -> None:
     report = ReviewReport.model_validate(valid_review_payload())
 
     assert report.criterion_assessments[0].criterion_id == "AC_PERSIST"
+    assert report.criterion_assessments[0].tool_evidence[0].tool_call_id == ("tool-001")
+
+
+def test_review_assessment_rejects_duplicate_tool_references() -> None:
+    payload = valid_review_payload()
+    assessments = payload["criterion_assessments"]
+    assert isinstance(assessments, list)
+    references = assessments[0]["tool_evidence"]
+    references.append(deepcopy(references[0]))
+
+    with pytest.raises(ValidationError, match="references must be unique"):
+        ReviewReport.model_validate(payload)
 
     payload = valid_review_payload()
     payload["reviewed_criteria"] = ["AC_PERSIST", "AC_OTHER"]

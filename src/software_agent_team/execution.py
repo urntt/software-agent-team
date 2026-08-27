@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import signal
@@ -20,8 +21,17 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from software_agent_team.artifacts import (
     AgentRole,
+    AgentToolCallEvidence,
+    AgentToolCallOutcome,
+    AgentToolEvidenceStatus,
     ArtifactKind,
     PhaseArtifact,
+    validate_tool_evidence_collection,
+)
+from software_agent_team.openclaw_session_evidence import (
+    CapturedOpenClawToolEvidence,
+    OpenClawSessionEvidenceError,
+    capture_openclaw_tool_evidence,
 )
 from software_agent_team.teams import (
     AgentCapability,
@@ -232,6 +242,14 @@ class AgentExecutionTelemetry(BaseModel):
     provider: str | None = None
     model: str | None = None
     usage: AgentTokenUsage | None = None
+    tool_evidence_status: AgentToolEvidenceStatus = AgentToolEvidenceStatus.NOT_CAPTURED
+    session_transcript_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    session_record_count: int | None = Field(default=None, ge=1, le=4096)
+    tool_calls: tuple[AgentToolCallEvidence, ...] = ()
+    tool_evidence_error: str | None = Field(default=None, min_length=1, max_length=2000)
 
     @model_validator(mode="before")
     @classmethod
@@ -266,6 +284,7 @@ class AgentExecutionTelemetry(BaseModel):
         "session_id",
         "provider",
         "model",
+        "tool_evidence_error",
     )
     @classmethod
     def clean_optional_text(cls, value: str | None) -> str | None:
@@ -294,6 +313,13 @@ class AgentExecutionTelemetry(BaseModel):
             )
         if self.timed_out and self.interrupted:
             raise ValueError("an Agent execution cannot be timed out and interrupted")
+        validate_tool_evidence_collection(
+            status=self.tool_evidence_status,
+            transcript_sha256=self.session_transcript_sha256,
+            record_count=self.session_record_count,
+            tool_calls=self.tool_calls,
+            error=self.tool_evidence_error,
+        )
         return self
 
 
@@ -642,6 +668,10 @@ class OpenClawSubprocessExecutor:
                 telemetry=telemetry,
             )
 
+        captured_tools, tool_evidence_error = self._capture_tool_evidence(
+            request,
+            payload,
+        )
         telemetry = self._telemetry(
             request=request,
             command=command,
@@ -652,6 +682,8 @@ class OpenClawSubprocessExecutor:
             stderr=stderr,
             payload=payload,
             timed_out=payload.declared_timeout,
+            captured_tools=captured_tools,
+            tool_evidence_error=tool_evidence_error,
         )
         if payload.declared_timeout:
             return AgentExecutionResult(
@@ -836,6 +868,32 @@ class OpenClawSubprocessExecutor:
             return None
         return {**os.environ, **self.environment}
 
+    def _capture_tool_evidence(
+        self,
+        request: AgentExecutionRequest,
+        payload: _OpenClawResponse,
+    ) -> tuple[CapturedOpenClawToolEvidence | None, str | None]:
+        """Read the exact session turn when SAT supplied an isolated state root."""
+
+        if self.environment is None:
+            return None, None
+        state_value = self.environment.get("OPENCLAW_STATE_DIR")
+        if state_value is None:
+            return None, None
+        if payload.session_id is None:
+            return None, "OpenClaw omitted the session ID required for tool evidence"
+        try:
+            captured = capture_openclaw_tool_evidence(
+                state_dir=Path(state_value),
+                agent_id=request.agent_id,
+                session_key=request.session_key,
+                session_id=payload.session_id,
+                prompt=request.prompt,
+            )
+        except OpenClawSessionEvidenceError as error:
+            return None, str(error)
+        return captured, None
+
     def _telemetry(
         self,
         *,
@@ -849,6 +907,8 @@ class OpenClawSubprocessExecutor:
         timed_out: bool = False,
         interrupted: bool = False,
         payload: _OpenClawResponse | None = None,
+        captured_tools: CapturedOpenClawToolEvidence | None = None,
+        tool_evidence_error: str | None = None,
     ) -> AgentExecutionTelemetry:
         finished_at = self.clock()
         elapsed = max(0, round((self.monotonic() - started_monotonic) * 1000))
@@ -872,6 +932,23 @@ class OpenClawSubprocessExecutor:
             provider=None if payload is None else payload.provider,
             model=None if payload is None else payload.model,
             usage=None if payload is None else payload.usage,
+            tool_evidence_status=(
+                AgentToolEvidenceStatus.INVALID
+                if tool_evidence_error is not None
+                else (
+                    AgentToolEvidenceStatus.CAPTURED
+                    if captured_tools is not None
+                    else AgentToolEvidenceStatus.NOT_CAPTURED
+                )
+            ),
+            session_transcript_sha256=(
+                None if captured_tools is None else captured_tools.transcript_sha256
+            ),
+            session_record_count=(
+                None if captured_tools is None else captured_tools.record_count
+            ),
+            tool_calls=(() if captured_tools is None else captured_tools.tool_calls),
+            tool_evidence_error=tool_evidence_error,
         )
 
     def _timeout_result(
@@ -963,6 +1040,7 @@ class ScriptedAgentResponse(BaseModel):
     usage: AgentTokenUsage | None = None
     duration_ms: int = Field(default=0, ge=0)
     stderr: str = ""
+    tool_calls: tuple[AgentToolCallEvidence, ...] = ()
 
     @field_validator("text", "model", "provider")
     @classmethod
@@ -975,6 +1053,23 @@ class ScriptedAgentResponse(BaseModel):
 
 
 type ScriptedInput = ScriptedAgentResponse | AgentExecutionResult | PhaseArtifact | str
+
+
+def _scripted_review_tool_call() -> AgentToolCallEvidence:
+    """Return explicit synthetic tool evidence for the offline scripted adapter."""
+
+    output = b"scripted-review-observation"
+    return AgentToolCallEvidence(
+        id="tool-001",
+        tool_name="read",
+        external_call_sha256=hashlib.sha256(b"scripted-tool-001").hexdigest(),
+        arguments_sha256=hashlib.sha256(b'{"path":"/agent"}').hexdigest(),
+        outcome=AgentToolCallOutcome.SUCCEEDED,
+        is_error=False,
+        output_sha256=hashlib.sha256(output).hexdigest(),
+        output_bytes=len(output),
+        output_excerpt=output.decode("utf-8"),
+    )
 
 
 class ScriptedAgentExecutor:
@@ -1021,6 +1116,18 @@ class ScriptedAgentExecutor:
             response = ScriptedAgentResponse(text=scripted)
 
         now = self.clock()
+        review_tool_calls = (
+            response.tool_calls or (_scripted_review_tool_call(),)
+            if request.capability is AgentCapability.REVIEW
+            else ()
+        )
+        transcript_sha256 = (
+            hashlib.sha256(
+                f"{request.session_key}\n{request.prompt}\n{response.text}".encode()
+            ).hexdigest()
+            if request.capability is AgentCapability.REVIEW
+            else None
+        )
         telemetry = AgentExecutionTelemetry(
             role=request.role,
             agent_id=request.agent_id,
@@ -1040,6 +1147,16 @@ class ScriptedAgentExecutor:
             provider=response.provider,
             model=response.model,
             usage=response.usage,
+            tool_evidence_status=(
+                AgentToolEvidenceStatus.CAPTURED
+                if request.capability is AgentCapability.REVIEW
+                else AgentToolEvidenceStatus.NOT_CAPTURED
+            ),
+            session_transcript_sha256=transcript_sha256,
+            session_record_count=(
+                3 if request.capability is AgentCapability.REVIEW else None
+            ),
+            tool_calls=review_tool_calls,
         )
         return AgentExecutionResult(
             status=AgentExecutionStatus.COMPLETED,
