@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** Phase 3E implemented; nineteen fresh installed adaptive rehearsals include one accepted strict-route Adaptive Planning delivery and one provider-backed foreground-control rehearsal; the latest delivery-boundary, Review-recovery, and cold model-inspection repairs await a clean retry
+**Current milestone:** Phase 3E implemented; twenty fresh installed adaptive rehearsals include two accepted strict-route Adaptive Planning deliveries and one provider-backed foreground-control rehearsal; the latest delivery-boundary, Review-recovery, and cold model-inspection repairs are live-validated
 
 **Last updated:** August 27, 2026
 
@@ -847,8 +847,38 @@ and reports an exact safe timeout that states no provider request was made.
 Planning wraps that diagnostic with the failed phase and confirms that no Agent
 started. Simulated cold-catalog, timeout-safety, visible-status, and no-state
 regressions pass 66 focused tests; the complete repository check passes 728
-tests. A fresh ordinary-user provider retry remains required before this repair
-is considered live-validated.
+tests. At that point, a fresh ordinary-user provider retry was still required
+before the repair could be considered live-validated.
+
+The twentieth fresh-account run supplied that live validation at public commit
+`cb5a11e`. A new unprivileged user installed with the documented one-command
+bootstrap and then invoked only bare `sat`. Installation, device diagnostics,
+isolated secret-free model setup, the explicitly authorized provider smoke,
+request capture, execution-profile and destination confirmation, both visible
+90-second-bound local model checks, and Planning runtime preflight all passed.
+The Round 19 startup boundary no longer failed or sat silently.
+
+Planning used one bounded repair after the first proposal made its revision
+flag inconsistent with the one-iteration plan. The user then approved a
+task-derived `duplicate_impl -> reviewer` DAG with concurrency one and
+controller-resolved 1,350/600-second timeouts. The writer committed eight
+changed files. All five deterministic gates and 28 project tests passed. The
+Reviewer's first complete response contained an invalid JSON escape; one
+94.3-second bounded repair safely reused the same Agent, stage, immutable
+commit, and captured invocation-chain evidence. Independent Review accepted
+all eleven criteria with zero findings, and SAT delivered clean commit
+`62c3c50c46f1093715f9ce735a42d5f2fb441533` after removing two run-scoped
+containers.
+
+Independent ordinary-user validation then reran the exact setup, test, and
+start commands. Setup succeeded, all 28 tests passed, start returned valid
+JSON, and separate fixtures passed recursive duplicate grouping, wildcard
+exclude, minimum size, nested-symlink exclusion, root-symlink rejection, and
+file-root rejection checks without traceback. The project remained clean and
+matched the controller's final commit. The complete evidence was archived
+before an exact inventory-based cleanup removed the fresh account, state, and
+temporary resources while preserving the shared image and historical
+UID-reuse paths.
 
 The rehearsal sequence below concerns the predecessor guided fixed-team
 product path and is retained as defect and regression evidence. It proves the
@@ -1242,9 +1272,6 @@ derived from the task.
 
 - An independent-device live demonstration of the activated Adaptive Planning
   and Dynamic Team journey;
-- An accepted fresh-account provider delivery after the Round 18
-  delivery-boundary and Review-recovery repairs and the Round 19 cold
-  model-inspection repair;
 - Durable control recovery after a foreground process crash and a
   secondary-process control client;
 - A provider-backed run using two planned model routes and live switch
@@ -1268,10 +1295,10 @@ action succeeded after interruption.
 
 ## Next Milestone
 
-The next verification step is a fresh-account ordinary-user retry under the
-corrected delivery, Review, and local model-inspection contracts. Two planned
-model routes and the independent-device demonstration follow. Phase 3F then closes
-the remaining acceptance and usability defects. Fixed-topology comparison remains in Phase 4
+The next verification steps are the independent-device demonstration and a
+provider-backed run using two planned model routes with live switch evidence.
+Phase 3F then closes the remaining acceptance and usability defects.
+Fixed-topology comparison remains in Phase 4
 so it can serve as a controlled baseline rather than define the product's
 permanent role layout.
 The detailed sequence and acceptance criteria are in
