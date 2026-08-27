@@ -455,11 +455,13 @@ when investigating it rather than editing artifacts in place.
   `/agent` mount. They deny direct mutation, background-process, and
   Agent-spawning tools. Review may run bounded foreground inspection or
   adversarial probe commands against `/agent` and fixtures under the sandbox's
-  writable `/tmp`; its write tool may create uniquely named temporary scripts,
-  while `edit`, `apply_patch`, background processes, project writes, and
-  network stay denied. Simple `python /tmp/name.py` invocations pass the command
-  preflight, and the image includes pinned `uv` for exact post-setup manifest
-  commands. The source mount remains read-only, and resulting
+  writable `/tmp`; the general `write`, `edit`, and `apply_patch` tools stay
+  denied. The immutable `sat-probe-write` executable accepts only a new bounded
+  canonical direct child matching `/tmp/sat-review-probe-*`, creates it
+  atomically with mode `0600`, and rejects overwrite, symlinks, nesting, and
+  traversal. Simple direct probe invocations pass command preflight, and the
+  image includes pinned `uv` for exact post-setup manifest commands. The source
+  mount remains read-only, and resulting
   criterion-by-criterion evidence is attributable rather than controller-owned
   deterministic command evidence.
 - Implementation and Integration capabilities may write only inside the

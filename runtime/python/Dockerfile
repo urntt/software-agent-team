@@ -9,6 +9,11 @@ COPY requirements.lock /opt/software-agent-team/requirements.lock
 RUN python -m pip install --no-cache-dir --requirement \
     /opt/software-agent-team/requirements.lock
 
+COPY sat_probe_write.py /usr/local/bin/sat-probe-write
+
+RUN chown 0:0 /usr/local/bin/sat-probe-write \
+    && chmod 0555 /usr/local/bin/sat-probe-write
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 

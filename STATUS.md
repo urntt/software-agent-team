@@ -364,9 +364,8 @@ one semantic response object, stops hidden lifecycle heartbeats when the exact
 Agent terminates, renders gate outcomes truthfully, and shows bounded Planning
 heartbeats and repair checkpoints. Review scope supplies a controller-owned
 timeout floor, so 6–10 criteria resolve to at least 450 seconds and 11 or more
-to 600 seconds under the current policy. Review may create uniquely named
-scripts only under `/tmp` and run them directly against read-only source; the
-pinned quality image now includes `uv` for the exact generated commands.
+to 600 seconds under the current policy. The pinned quality image includes
+`uv` for the exact generated commands.
 
 The Python profile now accepts ordinary documentation headings but requires
 the exact setup, direct no-extra-argument start, and test commands. It requires
@@ -387,15 +386,35 @@ on modifying files and a final prohibition on mutating tools both conflicted
 with the middle instruction to use the write tool for `/tmp` probe scripts.
 The live session never used write and instead spent tool turns on heredoc
 commands that deterministic preflight correctly rejected. The prompt now says
-that project source is read-only while uniquely named `/tmp` probe scripts or
-fixtures are the sole file-mutation exception, and it asks the Reviewer to
-consolidate related probes rather than repeat commands. The provider-backed
+that project source is read-only, and it asks the Reviewer to consolidate
+related probes rather than repeat commands. The provider-backed
 11-criterion timeout at the substantial allowance now maps 11 or more criteria
 to the existing complex allowance. The separate 10-criterion timeout only
 proved that routine was insufficient, so 10 remains substantial; this does not
 change coding, testing, smaller Review, call-count, or total-duration budgets.
-The full 610-test suite passes. A fresh installed provider run remains required
-before this adaptive journey is demonstration ready.
+
+A subsequent provider-backed authority probe found that the prompt-only change
+still described an impossible tool boundary. The pinned OpenClaw runtime omits
+the general `write` tool whenever a sandbox filesystem root exists, so removing
+`write` from the deny list cannot expose it. The Reviewer completed semantically
+through foreground `exec`, but its attributable session contained 11 `exec`
+calls, zero `write` calls, rejected heredoc attempts, and a false final claim
+that the requested write path had been used. That probe is failure evidence,
+not a successful capability verification.
+
+The runtime image is therefore versioned to `phase1-v4` and contains the
+immutable `sat-probe-write` helper. It accepts only canonical direct children
+matching `/tmp/sat-review-probe-*` with `.py`, `.json`, or `.txt`, enforces line
+and total-size limits, creates with mode `0600`, and rejects overwrite,
+symlinks, nesting, traversal, and partial-write residue. Reviewer explicitly
+denies the nonexistent general `write` tool and uses the helper through its
+available foreground `exec` surface. The full 629-test suite passes. A
+restricted non-root, no-network, read-only-root container probe also confirmed
+root-owned helper mode `0555`, caller-owned output mode `0600`, direct Python
+execution, refusal of overwrite, symlink, and `/agent` targets, read-only
+project enforcement, and terminal container removal. A fresh installed
+provider authority probe and complete adaptive run remain required before this
+journey is demonstration ready.
 
 The rehearsal sequence below concerns the predecessor guided fixed-team
 product path and is retained as defect and regression evidence. It proves the

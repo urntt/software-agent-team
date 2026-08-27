@@ -137,13 +137,16 @@ Dockerfile change:
 
 ```bash
 docker build \
-  --tag sat-python-quality:phase1-v3 \
+  --tag sat-python-quality:phase1-v4 \
   runtime/python
 ```
 
 Do not substitute an unrecorded tag or allow an implicit registry pull. Both
 Agent execution and quality gates use the locally built image, with external
-network access disabled inside their containers.
+network access disabled inside their containers. This image version adds the
+immutable `sat-probe-write` command used by read-only Reviewers to create only
+new bounded `/tmp/sat-review-probe-*` scripts or fixtures; it does not expose a
+general write tool or project mutation.
 
 ## 3. Prepare the Benchmark Source
 

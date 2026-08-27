@@ -30,7 +30,16 @@ def test_runtime_image_uses_content_pinned_base_and_dependency_lock() -> None:
         dockerfile
     )
     assert "pip install --no-cache-dir --requirement" in dockerfile
+    assert "COPY sat_probe_write.py /usr/local/bin/sat-probe-write" in dockerfile
+    assert "chown 0:0 /usr/local/bin/sat-probe-write" in dockerfile
+    assert "chmod 0555 /usr/local/bin/sat-probe-write" in dockerfile
     assert 'CMD ["sleep", "infinity"]' in dockerfile
+
+    helper = (RUNTIME_ROOT / "sat_probe_write.py").read_text(encoding="utf-8")
+    assert helper.startswith("#!/usr/local/bin/python\n")
+    assert 'TMP_DIRECTORY = "/tmp"' in helper
+    assert "os.O_EXCL" in helper
+    assert "os.O_NOFOLLOW" in helper
 
 
 def test_runtime_dependency_lock_contains_only_exact_unique_versions() -> None:

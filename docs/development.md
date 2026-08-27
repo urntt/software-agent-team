@@ -94,7 +94,7 @@ Build the exact image named by both product and evaluation policies with:
 
 ```bash
 docker build \
-  --tag sat-python-quality:phase1-v3 \
+  --tag sat-python-quality:phase1-v4 \
   runtime/python
 ```
 
@@ -107,8 +107,12 @@ container start alone is not sufficient runtime evidence.
 
 The image includes the exact `uv` pinned in `runtime/python/requirements.in` so
 a read-only Reviewer can exercise generated-project manifest commands after
-the Developer's documented setup. Change that pin and the policy image tag
-together; an old tag must not claim the newer probe capability.
+the Developer's documented setup. It also installs the root-owned immutable
+`sat-probe-write` helper. That command can atomically create only a new bounded
+`/tmp/sat-review-probe-*` `.py`, `.json`, or `.txt` direct child; it refuses
+overwrite and unsafe paths while the project mount and general write tools stay
+read-only. Change either runtime capability and the policy image tag together;
+an old tag must not claim the newer probe capability.
 
 Use the Docker cgroup `--pids-limit` for the per-container process boundary.
 Do not add an `nproc` ulimit as a duplicate control: `RLIMIT_NPROC` can count

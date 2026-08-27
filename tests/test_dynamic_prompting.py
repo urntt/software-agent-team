@@ -319,11 +319,13 @@ def test_review_prompt_requires_adversarial_absolute_claim_boundaries() -> None:
     compact = " ".join(rendered.split())
 
     assert "top-level user input" in rendered
-    assert "python /tmp/<name>.py" in rendered
+    assert "sat-probe-write /tmp/sat-review-probe-boundaries-7f3a.py" in rendered
     assert "Do not use `python -c`" in rendered
     assert "project access is read-only" in compact
     assert "Do not modify source or project files" in compact
-    assert "sole file-mutation exception" in rendered
+    assert "write tool and general file-mutation tools are unavailable" in compact
+    assert "helper reports success" in compact
+    assert "shell redirection" in compact
     assert "covers related criteria" in rendered
     assert "Do not modify\nfiles" not in rendered
     assert "call mutating tools" not in rendered

@@ -98,7 +98,7 @@
         name: "Reviewer",
         workspace: "${SOFTWARE_AGENT_TEAM_ROOT}/openclaw/workspaces/reviewer",
         tools: {
-          deny: ["edit", "apply_patch", "process", "sessions_spawn", "sessions_yield", "subagents", "llm_task"],
+          deny: ["write", "edit", "apply_patch", "process", "sessions_spawn", "sessions_yield", "subagents", "llm_task"],
         },
       },
     ],

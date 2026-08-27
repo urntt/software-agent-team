@@ -473,8 +473,11 @@ def test_reviewer_prompt_receives_work_and_command_evidence_in_parallel() -> Non
     assert '"deterministic_command_evidence": [' in rendered
     assert '"root": "/agent"' in rendered
     assert "mounted read-only at `/agent`" in compact
-    assert "python /tmp/<name>.py" in compact
-    assert "do not use `python -c`" in compact
+    assert "sat-probe-write /tmp/sat-review-probe-boundaries-7f3a.py" in compact
+    assert "write tool and general file-mutation tools are unavailable" in compact
+    assert "never overwrites" in compact
+    assert "Do not use `python -c`" in compact
+    assert "shell redirection" in compact
     assert "Use `revise` for\nevery correctable implementation defect" in rendered
     assert "Never\nuse `fail` merely because a deterministic command failed" in rendered
     assert '"termination_reason"' in rendered

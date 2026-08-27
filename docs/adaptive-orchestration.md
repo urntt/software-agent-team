@@ -315,11 +315,14 @@ boundary case and observable evidence. A blocked assessment and its blocking
 finding must reference the same criterion; missing coverage is an invalid
 response rather than implicit acceptance. Review may run bounded foreground
 probes in the no-network sandbox against the read-only source and temporary
-fixtures. Review may create uniquely named probe scripts only under writable
-`/tmp` and invoke them with a simple foreground command such as
-`python /tmp/probe.py`; project mutation, complex interpreter invocations,
-background processes, and network remain unavailable. That self-directed
-evidence remains attributable and is not
+fixtures. General write tools remain denied. Review creates a script or fixture
+only through the immutable `sat-probe-write` helper, which accepts a new bounded
+canonical direct child matching `/tmp/sat-review-probe-*`, rejects overwrite
+and path indirection, and returns an observable success or refusal. The
+Reviewer may then invoke the exact created path with a simple foreground
+command; project mutation, complex interpreter invocations, background
+processes, and network remain unavailable. That self-directed evidence remains
+attributable and is not
 relabeled as a controller deterministic gate. Documentation may state only the
 boundary established by the implementation and evidence. The generated-project
 contract separately checks that the README shows each exact manifest command
@@ -584,9 +587,10 @@ budget, execution record, and durable handoffs. Quality gates are shared once
 per immutable iteration, and every quality Agent must be downstream of every
 writer. Reviewer timeouts take the higher of Planner workload and the
 controller-derived criterion-scope floor. The Reviewer runtime keeps project
-source read-only but makes the write-tool exception explicit and permits it
-only for uniquely named `/tmp` probe scripts or fixtures; the runtime contains
-the pinned `uv` needed to exercise generated-project commands. Complete Agent
+source read-only and denies the general write tool. Its immutable
+`sat-probe-write` command provides the bounded `/tmp` probe-authoring capability
+that actually exists in the foreground execution surface; the runtime also
+contains the pinned `uv` needed to exercise generated-project commands. Complete Agent
 summaries remain immutable artifact evidence; the
 controller derives bounded scheduler and downstream-prompt projections with an
 explicit truncation marker, original length, and source-summary SHA-256 rather

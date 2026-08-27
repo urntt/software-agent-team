@@ -164,7 +164,7 @@ if [[ "$*" == "sync --locked" ]]; then
   chmod 755 .venv/bin/sat
 elif [[ "${1:-}" == "run" && "${2:-}" == "--frozen" && \
         "${3:-}" == "python" && "${4:-}" == "-c" ]]; then
-  echo sat-python-quality:phase1-v3
+  echo sat-python-quality:phase1-v4
 elif [[ "${1:-}" == "run" && "${2:-}" == "--frozen" && \
         "${3:-}" == "python" && "${4:-}" == "-" ]]; then
   cat >/dev/null
@@ -249,7 +249,7 @@ def test_installer_prepares_cli_image_and_checks_idempotently(tmp_path: Path) ->
     assert "install: uninstall=sat-uninstall" in first.stdout
     docker_calls = docker_log.read_text(encoding="utf-8")
     assert "info" in docker_calls
-    assert "build --pull=false --tag sat-python-quality:phase1-v3 runtime/python" in (
+    assert "build --pull=false --tag sat-python-quality:phase1-v4 runtime/python" in (
         docker_calls
     )
     assert "image inspect --format {{.Id}}" in docker_calls
