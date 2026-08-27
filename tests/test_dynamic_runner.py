@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import subprocess
 import threading
 from datetime import UTC, datetime
@@ -276,12 +277,14 @@ class DynamicExecutor:
         mutate_reader: str | None = None,
         synchronize_quality: bool = False,
         provider_fail_once_for: str | None = None,
+        writer_summary: str = "Implemented and documented the greeting utility.",
     ) -> None:
         self.workspace = workspace
         self.invalid_writer_once = invalid_writer_once
         self.omit_model_for = omit_model_for
         self.mutate_reader = mutate_reader
         self.provider_fail_once_for = provider_fail_once_for
+        self.writer_summary = writer_summary
         self.requests: list[AgentExecutionRequest] = []
         self._counts: dict[str, int] = {}
         self._lock = threading.Lock()
@@ -326,7 +329,7 @@ class DynamicExecutor:
                 git(self.workspace, "add", "greeting.py", "README.md")
                 git(self.workspace, "commit", "-m", "feat: add greeting utility")
             response_text = WorkResultResponse(
-                summary="Implemented and documented the greeting utility.",
+                summary=self.writer_summary,
                 completed_tasks=("TASK_BUILD",),
                 unresolved_issues=(),
             ).model_dump_json()
@@ -534,6 +537,42 @@ def test_dynamic_runner_executes_writer_then_parallel_quality_on_one_commit(
     usage = runner.budget_ledger.snapshot()
     assert usage.calls_started == usage.calls_completed == 3
     assert usage.active_calls == 0
+
+
+def test_dynamic_runner_projects_long_artifact_summaries_without_failing_handoff(
+    tmp_path: Path,
+) -> None:
+    writer_summary = "Implemented the complete requested behavior.\n" + "x" * 4_000
+    runner, team_plan, executor, quality_gate, _ = runtime(
+        tmp_path,
+        executor_options={"writer_summary": writer_summary},
+    )
+
+    result = DagScheduler().execute(team_plan, runner)
+
+    assert result.status is ScheduleStatus.COMPLETED
+    assert quality_gate.calls == 1
+    assert len(executor.requests) == 3
+    work = runner.artifact_store.load(runner.outputs["builder"])
+    assert isinstance(work, WorkResult)
+    assert work.summary == writer_summary
+    writer_record = next(
+        record for record in result.records if record.agent_id == "builder"
+    )
+    assert len(writer_record.summary) <= 2_000
+    assert "Controller projection" in writer_record.summary
+    digest = hashlib.sha256(writer_summary.encode()).hexdigest()
+    quality_requests = [
+        request
+        for request in executor.requests
+        if request.agent_id in {"tester", "reviewer"}
+    ]
+    assert len(quality_requests) == 2
+    assert all(
+        "truncated from 4045 characters" in item.prompt for item in quality_requests
+    )
+    assert all(f"source sha256={digest}" in item.prompt for item in quality_requests)
+    assert all(writer_summary not in item.prompt for item in quality_requests)
 
 
 def test_dynamic_writer_semantic_repair_keeps_full_timeout_and_git_evidence(

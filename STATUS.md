@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** Phase 3E model profiles and controlled routing implemented; the first installed adaptive rehearsal exposed one corrected Planning-normalization defect
+**Current milestone:** Phase 3E implemented; two fresh installed adaptive rehearsals exposed corrected Planning-path and downstream-summary projection defects, with a clean provider rerun next
 
 **Last updated:** August 27, 2026
 
@@ -50,7 +50,7 @@ validation also rejects a plan whose complete planned iterations cannot fit
 its call budget. Recovery
 verifies the exact TaskBrief binding, TeamPlan digest, fixed manifest version,
 fixed team digest, resolved Agent timeouts, and cross-file run metadata. The
-complete repository check passes with 582 offline tests.
+complete repository check passes with 583 offline tests.
 
 `RunEvent` is also an executable, append-only contract. Every current workflow
 progress update is persisted with a contiguous sequence, lifecycle revision,
@@ -258,9 +258,23 @@ infers a missing response discriminator only when exactly one response body
 makes it certain. Raw output remains immutable, every normalized field is
 recorded, destination-shaped workspace scopes remain rejected, and unsafe or
 ambiguous values still follow strict repair/failure policy. The complete
-offline suite covers the observed response without consuming a repair call. A
-fresh installed provider-backed rerun remains required before this journey is
-called successful.
+offline suite covers the observed response without consuming a repair call.
+
+A second fresh installed provider-backed run confirmed that fix: its Planning
+response passed on the first call, the user approved one task-defined
+Implementation Agent followed by one independent Review Agent, and the writer
+completed a clean seven-file commit. The controller verified the commit and
+entered verification, but stopped before the Review provider call because the
+1,172-character immutable WorkResult summary exceeded a separate 1,000-
+character downstream prompt field. No destination was delivered.
+
+The controller now keeps complete Agent summaries in immutable artifacts while
+deriving deterministic bounded projections for scheduler status and downstream
+prompt context. A truncated projection names the original character count and
+SHA-256 and states that full text remains in artifact evidence. A regression
+with a 4,045-character WorkResult completes both downstream quality Agents,
+while the stored WorkResult remains unchanged. Another fresh installed run is
+required before the complete adaptive journey is called successful.
 
 The rehearsal sequence below concerns the predecessor guided fixed-team
 product path and is retained as defect and regression evidence. It proves the

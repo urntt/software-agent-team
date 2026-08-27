@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import PurePosixPath
@@ -109,6 +110,28 @@ class DynamicAgentRunnerError(RuntimeError):
     def __init__(self, detail: str, reason: TerminationReason) -> None:
         super().__init__(detail)
         self.reason = reason
+
+
+_SCHEDULER_SUMMARY_LIMIT = 2_000
+_UPSTREAM_SUMMARY_LIMIT = 1_000
+
+
+def _bounded_artifact_summary(value: str, *, limit: int) -> str:
+    """Project complete artifact text into an attributable bounded context."""
+
+    cleaned = value.strip()
+    if len(cleaned) <= limit:
+        return cleaned
+    digest = hashlib.sha256(cleaned.encode()).hexdigest()
+    marker = (
+        "\n[Controller projection: source summary truncated from "
+        f"{len(cleaned)} characters; source sha256={digest}; full text remains "
+        "in immutable artifact evidence.]"
+    )
+    if len(marker) >= limit:
+        raise ValueError("artifact summary projection limit is too small")
+    prefix = cleaned[: limit - len(marker)].rstrip()
+    return f"{prefix}{marker}"
 
 
 type GuidanceProvider = Callable[[str], tuple[DynamicUserGuidance, ...]]
@@ -381,7 +404,10 @@ class DynamicAgentRunner:
                 status=AgentRunStatus.COMPLETED,
                 output=output,
                 evidence=evidence,
-                summary=summary,
+                summary=_bounded_artifact_summary(
+                    summary,
+                    limit=_SCHEDULER_SUMMARY_LIMIT,
+                ),
             )
         except Exception as error:
             reason = self._classify_exception(error)
@@ -1017,7 +1043,10 @@ class DynamicAgentRunner:
                 DynamicUpstreamResult(
                     agent_id=dependency,
                     status=HandoffStatus.COMPLETED,
-                    summary=artifact.summary,
+                    summary=_bounded_artifact_summary(
+                        artifact.summary,
+                        limit=_UPSTREAM_SUMMARY_LIMIT,
+                    ),
                     output_commit=(
                         artifact.output_commit
                         if isinstance(artifact, WorkResult)

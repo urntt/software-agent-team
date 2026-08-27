@@ -540,7 +540,11 @@ The dynamic runner now binds each scheduler-approved Agent to its exact model,
 timeout, prompt, semantic repair limit, Git or read-only boundary, aggregate
 budget, execution record, and durable handoffs. Quality gates are shared once
 per immutable iteration, and every quality Agent must be downstream of every
-writer. The adaptive lifecycle coordinator crosses the authoritative snapshot
+writer. Complete Agent summaries remain immutable artifact evidence; the
+controller derives bounded scheduler and downstream-prompt projections with an
+explicit truncation marker, original length, and source-summary SHA-256 rather
+than failing a handoff or asking the model to regenerate known content. The
+adaptive lifecycle coordinator crosses the authoritative snapshot
 boundary before the first quality Agent starts, aggregates every approved
 output, decides accept/revise/fail, binds prior blocking evidence to the next
 iteration's starting commit, stops an unchanged repeated blocker, and writes

@@ -317,6 +317,16 @@ token evidence is never treated as zero usage or success. A repair is permitted
 only for a semantic-body failure, receives the same approved invocation
 timeout, and remains bounded by the aggregate call and resource budgets.
 
+Agent-authored summaries are complete immutable artifact evidence and are not
+forced to guess a hidden downstream display limit. When a summary exceeds the
+bounded scheduler or Agent-prompt field, the controller derives a deterministic
+projection. The projection retains a prefix, states the source character
+length, includes the SHA-256 of the complete cleaned summary, and points back
+to immutable artifact evidence. Scheduler state is bounded to 2,000 characters
+and downstream prompt context to 1,000; the source WorkResult, TestReport, or
+ReviewReport remains unchanged. Projection therefore cannot turn successful
+verified work into an artifact failure or spend a model repair call.
+
 For policy routing, `team-plan.json` freezes one primary route and an ordered,
 bounded fallback list for every Agent, plus the controller's attributable
 selection source and reason. Prompts and response validation bind the active
