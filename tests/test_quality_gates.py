@@ -400,7 +400,7 @@ def test_docker_argv_enforces_every_isolation_limit(
     mounts = [argv[index + 1] for index, value in enumerate(argv) if value == "--mount"]
     assert len(mounts) == 2
     assert all(value.endswith(",readonly") for value in mounts)
-    assert argv[-4:] == ("sat-python-quality:phase1-v2", *invocation.argv)
+    assert argv[-4:] == ("sat-python-quality:phase1-v3", *invocation.argv)
 
 
 def test_runner_defaults_to_docker(configuration, run_paths: tuple[Path, Path]) -> None:

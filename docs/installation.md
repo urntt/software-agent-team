@@ -73,7 +73,8 @@ The installation then:
 - Synchronizes the locked SAT environment;
 - Builds and resolves the pinned sandbox image, then starts a restricted probe,
   executes a Python tool helper inside it, verifies that it remains alive, and
-  removes it;
+  removes it; the image also contains the pinned `uv` used by bounded Reviewer
+  probes of generated-project commands;
 - Runs focused offline configuration and CLI installation checks;
 - Creates `$HOME/.local/bin/sat` and `$HOME/.local/bin/sat-uninstall` without
   overwriting unrelated commands;
@@ -160,7 +161,8 @@ On the first configured run, SAT then:
 10. Shows the request, destination, exact model, and provider-usage consequence;
 11. Requires explicit authorization before model-backed Planning;
 12. Uses a read-only bootstrap Planning capability for bounded material
-    clarification;
+    clarification, with elapsed model-wait heartbeats and visible response
+    validation or bounded repair;
 13. Shows one complete requirements, implementation, Dynamic Team, dependency,
     permission, model, timeout, concurrency, iteration, and budget overview;
 14. Lets the user approve, request a natural-language revision, make a supported

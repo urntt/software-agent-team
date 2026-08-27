@@ -671,15 +671,20 @@ class OpenClawSubprocessExecutor:
                 error="OpenClaw returned an error reply payload",
                 telemetry=telemetry,
             )
-        if len(payload.visible_texts) != 1:
+        if not payload.visible_texts:
             return AgentExecutionResult(
                 status=AgentExecutionStatus.INVALID_RESPONSE,
-                error="OpenClaw must return exactly one visible text payload",
+                error="OpenClaw must return at least one visible text payload",
                 telemetry=telemetry,
             )
         return AgentExecutionResult(
             status=AgentExecutionStatus.COMPLETED,
-            response_text=payload.visible_texts[0],
+            # OpenClaw may emit a semantic answer and a separate, user-visible
+            # tool diagnostic. Preserve their order and let the strict response
+            # parser decide whether the combined text contains exactly one
+            # unambiguous semantic object. Raw payload boundaries remain in
+            # telemetry.stdout for audit.
+            response_text="\n\n".join(payload.visible_texts),
             telemetry=telemetry,
         )
 

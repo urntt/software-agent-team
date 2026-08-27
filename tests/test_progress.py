@@ -105,6 +105,108 @@ def test_progress_renderer_closes_multiple_independent_verifiers(
     assert "reviewer is working" in output.getvalue()
 
 
+def test_hidden_invocation_checkpoint_stops_standard_heartbeat(
+    tmp_path: Path,
+) -> None:
+    output = StringIO()
+    renderer = TerminalProgressRenderer(output=output, heartbeat_seconds=0.01)
+    event_journal = journal(tmp_path, handler=renderer)
+    event_journal.append(
+        ProgressEvent(
+            kind=ProgressEventKind.AGENT_WAITING_PROVIDER,
+            message="Builder is waiting for provider/model",
+            agent_id="builder",
+            iteration=1,
+            attempt=2,
+        ),
+        lifecycle_revision=3,
+        phase=RunPhase.IMPLEMENTING,
+    )
+    time.sleep(0.025)
+    event_journal.append(
+        ProgressEvent(
+            kind=ProgressEventKind.AGENT_INVOCATION_COMPLETED,
+            message="Builder invocation 2 returned completed",
+            agent_id="builder",
+            iteration=1,
+            attempt=2,
+            duration_ms=25,
+        ),
+        lifecycle_revision=3,
+        phase=RunPhase.IMPLEMENTING,
+    )
+    rendered_at_completion = output.getvalue()
+    time.sleep(0.025)
+    renderer.close()
+
+    assert "builder is waiting for the model" in rendered_at_completion
+    assert output.getvalue() == rendered_at_completion
+
+
+def test_scheduler_terminal_event_stops_every_repair_attempt_heartbeat(
+    tmp_path: Path,
+) -> None:
+    output = StringIO()
+    renderer = TerminalProgressRenderer(output=output, heartbeat_seconds=0.01)
+    event_journal = journal(tmp_path, handler=renderer)
+    event_journal.append(
+        ProgressEvent(
+            kind=ProgressEventKind.AGENT_WAITING_PROVIDER,
+            message="Builder is waiting after repair",
+            agent_id="builder",
+            iteration=1,
+            attempt=2,
+        ),
+        lifecycle_revision=3,
+        phase=RunPhase.IMPLEMENTING,
+    )
+    time.sleep(0.025)
+    event_journal.append(
+        ProgressEvent(
+            kind=ProgressEventKind.AGENT_COMPLETED,
+            message="Builder completed",
+            agent_id="builder",
+            iteration=1,
+            attempt=1,
+            duration_ms=50,
+        ),
+        lifecycle_revision=4,
+        phase=RunPhase.SNAPSHOTTING,
+    )
+    rendered_at_completion = output.getvalue()
+    time.sleep(0.025)
+    renderer.close()
+
+    assert output.getvalue() == rendered_at_completion
+
+
+def test_progress_renderer_distinguishes_failed_and_passing_quality_gates(
+    tmp_path: Path,
+) -> None:
+    output = StringIO()
+    renderer = TerminalProgressRenderer(output=output)
+    event_journal = journal(tmp_path, handler=renderer)
+    for completed, kind, state in (
+        (1, ProgressEventKind.QUALITY_GATE_FAILED, "failed"),
+        (2, ProgressEventKind.QUALITY_GATE_PASSED, "passed"),
+    ):
+        event_journal.append(
+            ProgressEvent(
+                kind=kind,
+                message=f"Quality gate {completed}/2 CHECK_{completed}: {state}",
+                iteration=1,
+                completed=completed,
+                total=2,
+            ),
+            lifecycle_revision=5,
+            phase=RunPhase.VERIFYING,
+        )
+
+    rendered = output.getvalue()
+    assert "✗ Quality gate 1/2 CHECK_1: failed" in rendered
+    assert "✓ Quality gate 2/2 CHECK_2: passed" in rendered
+
+
 def test_detailed_renderer_projects_agent_state_route_dependencies_and_budget(
     tmp_path: Path,
 ) -> None:

@@ -6,6 +6,8 @@ import hashlib
 import json
 import os
 import re
+import threading
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -114,6 +116,117 @@ class AgentWorkload(StrEnum):
     ROUTINE = "routine"
     SUBSTANTIAL = "substantial"
     COMPLEX = "complex"
+
+
+class PlanningActivityKind(StrEnum):
+    """User-safe checkpoints around one blocking Planning invocation."""
+
+    WAITING_MODEL = "waiting_model"
+    RESPONSE_RECEIVED = "response_received"
+    REPAIR_SCHEDULED = "repair_scheduled"
+    RESPONSE_VALIDATED = "response_validated"
+
+
+@dataclass(frozen=True)
+class PlanningActivity:
+    """Ephemeral Planning progress without exposing prompts or reasoning."""
+
+    kind: PlanningActivityKind
+    attempt: int
+    maximum_attempts: int
+    model: str
+    duration_ms: int | None = None
+    execution_status: AgentExecutionStatus | None = None
+
+
+PlanningActivityHandler = Callable[[PlanningActivity], None]
+
+
+class TerminalPlanningProgress:
+    """Show bounded Planning wait heartbeats and validation checkpoints."""
+
+    def __init__(
+        self,
+        *,
+        write: Callable[[str], None] = print,
+        heartbeat_seconds: float = 10.0,
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> None:
+        if heartbeat_seconds <= 0:
+            raise ValueError("Planning heartbeat must be positive")
+        self.write = write
+        self.heartbeat_seconds = heartbeat_seconds
+        self.monotonic = monotonic
+        self._lock = threading.Lock()
+        self._waiting: tuple[threading.Event, threading.Thread] | None = None
+
+    def __call__(self, activity: PlanningActivity) -> None:
+        if activity.kind is PlanningActivityKind.WAITING_MODEL:
+            self.close()
+            self._print(
+                "● Planning is waiting for "
+                f"{activity.model} (attempt {activity.attempt}/"
+                f"{activity.maximum_attempts})"
+            )
+            stop = threading.Event()
+            started = self.monotonic()
+            thread = threading.Thread(
+                target=self._heartbeat,
+                args=(stop, started, activity),
+                name="sat-planning-progress",
+                daemon=True,
+            )
+            with self._lock:
+                self._waiting = (stop, thread)
+            thread.start()
+            return
+
+        self.close()
+        if activity.kind is PlanningActivityKind.RESPONSE_RECEIVED:
+            duration = 0 if activity.duration_ms is None else activity.duration_ms
+            status = (
+                "unknown"
+                if activity.execution_status is None
+                else activity.execution_status.value
+            )
+            self._print(
+                f"→ Planning response received in {duration / 1000:.1f}s ({status})"
+            )
+        elif activity.kind is PlanningActivityKind.REPAIR_SCHEDULED:
+            self._print(
+                "↻ Planning response did not satisfy the plan contract; "
+                f"starting bounded repair {activity.attempt + 1}/"
+                f"{activity.maximum_attempts}"
+            )
+        else:
+            self._print("✓ Planning response validated")
+
+    def close(self) -> None:
+        with self._lock:
+            waiting = self._waiting
+            self._waiting = None
+        if waiting is not None:
+            waiting[0].set()
+            waiting[1].join(timeout=min(self.heartbeat_seconds, 0.2))
+
+    def _heartbeat(
+        self,
+        stop: threading.Event,
+        started: float,
+        activity: PlanningActivity,
+    ) -> None:
+        while not stop.wait(self.heartbeat_seconds):
+            elapsed = max(0, int(self.monotonic() - started))
+            minutes, seconds = divmod(elapsed, 60)
+            self._print(
+                "  Planning is still waiting for the model "
+                f"(attempt {activity.attempt}/{activity.maximum_attempts}): "
+                f"{minutes:02d}:{seconds:02d} elapsed"
+            )
+
+    def _print(self, value: str) -> None:
+        with self._lock:
+            self.write(value)
 
 
 def _utc(value: datetime) -> datetime:
@@ -894,8 +1007,14 @@ class AgentTimeoutResolution(BaseModel):
     workload: AgentWorkload
     default_seconds: int = Field(ge=30, le=3600)
     ceiling_seconds: int = Field(ge=30, le=3600)
+    minimum_seconds: int | None = Field(default=None, ge=30, le=3600)
+    scope_criterion_count: int | None = Field(default=None, ge=1, le=100)
     resolved_seconds: int = Field(ge=30, le=3600)
-    source: Literal["policy_workload", "user_override"]
+    source: Literal[
+        "policy_workload",
+        "policy_scope_floor",
+        "user_override",
+    ]
 
     @model_validator(mode="after")
     def require_valid_resolution(self) -> Self:
@@ -903,12 +1022,25 @@ class AgentTimeoutResolution(BaseModel):
             default_seconds=self.default_seconds,
             ceiling_seconds=self.ceiling_seconds,
         )
-        if not self.default_seconds <= self.resolved_seconds <= self.ceiling_seconds:
+        minimum = self.minimum_seconds or self.default_seconds
+        if not self.default_seconds <= minimum <= self.ceiling_seconds:
+            raise ValueError("timeout minimum must remain inside its policy envelope")
+        if self.scope_criterion_count is None and minimum != self.default_seconds:
+            raise ValueError("a raised timeout minimum requires review scope evidence")
+        if self.scope_criterion_count is not None and self.minimum_seconds is None:
+            raise ValueError("review scope evidence requires an explicit minimum")
+        if not minimum <= self.resolved_seconds <= self.ceiling_seconds:
             raise ValueError("resolved timeout must remain inside its policy envelope")
-        if self.source == "policy_workload" and self.resolved_seconds != policy.resolve(
-            self.workload
+        workload_seconds = policy.resolve(self.workload)
+        if self.source == "policy_workload":
+            if self.resolved_seconds != workload_seconds or workload_seconds < minimum:
+                raise ValueError("policy timeout does not match the workload mapping")
+        elif self.source == "policy_scope_floor" and (
+            self.scope_criterion_count is None
+            or minimum <= workload_seconds
+            or self.resolved_seconds != minimum
         ):
-            raise ValueError("policy timeout does not match the workload mapping")
+            raise ValueError("scope timeout does not match its controller floor")
         return self
 
 
@@ -960,6 +1092,8 @@ class PlanningPolicy(BaseModel):
     max_agents: int = Field(default=8, ge=2, le=16)
     max_concurrency: int = Field(default=4, ge=1, le=16)
     max_review_agents: int = Field(default=16, ge=1, le=16)
+    review_substantial_criterion_threshold: int = Field(default=6, ge=2, le=99)
+    review_complex_criterion_threshold: int = Field(default=13, ge=3, le=100)
     budget: AgentBudget
     capability_timeouts: dict[AgentCapability, CapabilityTimeoutPolicy]
     model_routing: ModelRoutingPolicy | None = None
@@ -994,6 +1128,24 @@ class PlanningPolicy(BaseModel):
         if len(identifiers) != len(set(identifiers)):
             raise ValueError("profile acceptance criterion IDs must be unique")
         return values
+
+    @model_validator(mode="after")
+    def require_ordered_review_scope_thresholds(self) -> Self:
+        if (
+            self.review_substantial_criterion_threshold
+            >= self.review_complex_criterion_threshold
+        ):
+            raise ValueError("review scope timeout thresholds must be ordered")
+        return self
+
+    def review_scope_workload(self, criterion_count: int) -> AgentWorkload:
+        """Classify the minimum Reviewer workload from its exact scope size."""
+
+        if criterion_count >= self.review_complex_criterion_threshold:
+            return AgentWorkload.COMPLEX
+        if criterion_count >= self.review_substantial_criterion_threshold:
+            return AgentWorkload.SUBSTANTIAL
+        return AgentWorkload.ROUTINE
 
 
 class PlanningPreview(BaseModel):
@@ -1219,18 +1371,35 @@ def preview_adaptive_proposal(
     timeout_resolutions = []
     for proposed in body.agents:
         timeout_policy = policy.capability_timeouts[proposed.capability]
+        scope_criterion_count = (
+            len(task_brief.acceptance_criteria)
+            if proposed.capability is AgentCapability.REVIEW
+            else None
+        )
+        minimum_timeout = timeout_policy.default_seconds
+        if scope_criterion_count is not None:
+            minimum_timeout = timeout_policy.resolve(
+                policy.review_scope_workload(scope_criterion_count)
+            )
         override = proposal.timeout_overrides_seconds.get(proposed.id)
         if override is not None and not (
-            timeout_policy.default_seconds <= override <= timeout_policy.ceiling_seconds
+            minimum_timeout <= override <= timeout_policy.ceiling_seconds
         ):
             raise PlanningError(
                 f"Agent {proposed.id} timeout override {override}s is outside the "
                 f"{proposed.capability.value} policy envelope of "
-                f"{timeout_policy.default_seconds}.."
+                f"{minimum_timeout}.."
                 f"{timeout_policy.ceiling_seconds}s"
             )
-        resolved_timeout = (
-            timeout_policy.resolve(proposed.workload) if override is None else override
+        workload_timeout = timeout_policy.resolve(proposed.workload)
+        policy_timeout = max(workload_timeout, minimum_timeout)
+        resolved_timeout = policy_timeout if override is None else override
+        resolution_source = (
+            "user_override"
+            if override is not None
+            else "policy_scope_floor"
+            if minimum_timeout > workload_timeout
+            else "policy_workload"
         )
         timeout_resolutions.append(
             AgentTimeoutResolution(
@@ -1238,8 +1407,10 @@ def preview_adaptive_proposal(
                 workload=proposed.workload,
                 default_seconds=timeout_policy.default_seconds,
                 ceiling_seconds=timeout_policy.ceiling_seconds,
+                minimum_seconds=minimum_timeout,
+                scope_criterion_count=scope_criterion_count,
                 resolved_seconds=resolved_timeout,
-                source=("policy_workload" if override is None else "user_override"),
+                source=resolution_source,
             )
         )
         agents.append(
@@ -1389,11 +1560,16 @@ def render_planning_overview(preview: PlanningPreview) -> str:
             for route_id in assignment.fallback_route_ids
         )
         timeout = resolutions[agent.id]
-        timeout_source = (
-            f"controller policy from {timeout.workload.value} workload"
-            if timeout.source == "policy_workload"
-            else "user override"
-        )
+        if timeout.source == "policy_workload":
+            timeout_source = f"controller policy from {timeout.workload.value} workload"
+        elif timeout.source == "policy_scope_floor":
+            timeout_source = (
+                "controller review-scope floor for "
+                f"{timeout.scope_criterion_count} criteria"
+            )
+        else:
+            timeout_source = "user override"
+        minimum_timeout = timeout.minimum_seconds or timeout.default_seconds
         lines.extend(
             (
                 f"    - {agent.id} ({agent.label})",
@@ -1419,7 +1595,7 @@ def render_planning_overview(preview: PlanningPreview) -> str:
                 f"      model pricing: {_render_model_pricing(route)}",
                 f"      workload: {timeout.workload.value}",
                 f"      timeout: {agent.timeout_seconds} seconds ({timeout_source}; "
-                f"allowed {timeout.default_seconds}..{timeout.ceiling_seconds})",
+                f"allowed {minimum_timeout}..{timeout.ceiling_seconds})",
             )
         )
     waves = " -> ".join(" + ".join(wave) for wave in plan.execution_waves())
@@ -1813,6 +1989,7 @@ class AdaptivePlanningCoordinator:
         request: PlanningRequest,
         *,
         answer_question: QuestionAnswerer,
+        activity_handler: PlanningActivityHandler | None = None,
     ) -> PlanningProposal | None:
         """Ask only high-value questions, then persist one validated proposal."""
 
@@ -1826,6 +2003,7 @@ class AdaptivePlanningCoordinator:
                 user_message=user_message,
                 transcript=transcript,
                 current_proposal=None,
+                activity_handler=activity_handler,
             )
             response = invocation.response
             if response.kind is PlanningResponseKind.PROPOSAL:
@@ -1865,6 +2043,7 @@ class AdaptivePlanningCoordinator:
         change_request: str,
         *,
         answer_question: QuestionAnswerer,
+        activity_handler: PlanningActivityHandler | None = None,
     ) -> PlanningProposal | None:
         """Use natural language to produce a complete replacement revision."""
 
@@ -1881,6 +2060,7 @@ class AdaptivePlanningCoordinator:
                 transcript=transcript,
                 current_proposal=proposal,
                 change_request=change_request,
+                activity_handler=activity_handler,
             )
             response = invocation.response
             if response.kind is PlanningResponseKind.PROPOSAL:
@@ -1987,9 +2167,11 @@ class AdaptivePlanningCoordinator:
         transcript: list[dict[str, object]],
         current_proposal: PlanningProposal | None,
         change_request: str | None = None,
+        activity_handler: PlanningActivityHandler | None = None,
     ) -> _Invocation:
         previous_error: str | None = None
-        for attempt in range(1, self.policy.response_repair_limit + 2):
+        maximum_attempts = self.policy.response_repair_limit + 1
+        for attempt in range(1, maximum_attempts + 1):
             prompt = self._prompt(
                 request,
                 transcript=transcript,
@@ -2007,7 +2189,27 @@ class AdaptivePlanningCoordinator:
                 timeout_seconds=self.policy.planning_timeout_seconds,
                 model=request.model,
             )
+            self._emit_activity(
+                activity_handler,
+                PlanningActivity(
+                    kind=PlanningActivityKind.WAITING_MODEL,
+                    attempt=attempt,
+                    maximum_attempts=maximum_attempts,
+                    model=request.model,
+                ),
+            )
             result = self.executor.execute(execution_request)
+            self._emit_activity(
+                activity_handler,
+                PlanningActivity(
+                    kind=PlanningActivityKind.RESPONSE_RECEIVED,
+                    attempt=attempt,
+                    maximum_attempts=maximum_attempts,
+                    model=request.model,
+                    duration_ms=result.telemetry.duration_ms,
+                    execution_status=result.status,
+                ),
+            )
             parsed: PlanningModelResponse | None = None
             response_normalizations: tuple[str, ...] = ()
             validation_error: str | None = None
@@ -2057,13 +2259,44 @@ class AdaptivePlanningCoordinator:
                 now=self.clock(),
             )
             if parsed is not None:
+                self._emit_activity(
+                    activity_handler,
+                    PlanningActivity(
+                        kind=PlanningActivityKind.RESPONSE_VALIDATED,
+                        attempt=attempt,
+                        maximum_attempts=maximum_attempts,
+                        model=request.model,
+                    ),
+                )
                 return _Invocation(response=parsed, turn=turn)
             previous_error = validation_error
             if attempt > self.policy.response_repair_limit:
                 raise PlanningError(
                     f"Planning response remained invalid: {validation_error}"
                 )
+            self._emit_activity(
+                activity_handler,
+                PlanningActivity(
+                    kind=PlanningActivityKind.REPAIR_SCHEDULED,
+                    attempt=attempt,
+                    maximum_attempts=maximum_attempts,
+                    model=request.model,
+                ),
+            )
         raise AssertionError("unreachable Planning repair state")
+
+    @staticmethod
+    def _emit_activity(
+        handler: PlanningActivityHandler | None,
+        activity: PlanningActivity,
+    ) -> None:
+        if handler is None:
+            return
+        try:
+            handler(activity)
+        except Exception:
+            # Ephemeral terminal rendering cannot change persisted Planning.
+            return
 
     def _prompt(
         self,
@@ -2104,6 +2337,21 @@ class AdaptivePlanningCoordinator:
                         "complex_seconds": timeout.ceiling_seconds,
                     }
                     for capability, timeout in self.policy.capability_timeouts.items()
+                },
+                "review_scope_timeout_floor": {
+                    "routine_below_criteria": (
+                        self.policy.review_substantial_criterion_threshold
+                    ),
+                    "substantial_from_criteria": (
+                        self.policy.review_substantial_criterion_threshold
+                    ),
+                    "complex_from_criteria": (
+                        self.policy.review_complex_criterion_threshold
+                    ),
+                    "instruction": (
+                        "The controller may raise Reviewer timeout from exact "
+                        "criterion scope; the Planner still proposes only workload."
+                    ),
                 },
                 "runtime_capabilities": [
                     AgentCapability.IMPLEMENTATION.value,
@@ -2311,9 +2559,17 @@ def run_interactive_planning(
     """Run the user-facing clarification, overview, revision, and approval loop."""
 
     answer_question = _interactive_question_answerer(read=read, write=write)
+    progress = TerminalPlanningProgress(write=write)
     write("")
     write("Planning started. No runtime Agent has been created yet.")
-    proposal = coordinator.start(request, answer_question=answer_question)
+    try:
+        proposal = coordinator.start(
+            request,
+            answer_question=answer_question,
+            activity_handler=progress,
+        )
+    finally:
+        progress.close()
     if proposal is None:
         write("Planning cancelled; no runtime Agent was created.")
         return None
@@ -2355,10 +2611,13 @@ def run_interactive_planning(
                     proposal,
                     change,
                     answer_question=answer_question,
+                    activity_handler=progress,
                 )
             except PlanningError as error:
                 write(f"Plan was not changed: {error}")
                 continue
+            finally:
+                progress.close()
             if revised is None:
                 write("Planning cancelled; no runtime Agent was created.")
                 return None

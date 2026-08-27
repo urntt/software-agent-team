@@ -467,11 +467,14 @@ def test_reviewer_prompt_receives_work_and_command_evidence_in_parallel() -> Non
             command_evidence=commands(),
         )
     )
+    compact = " ".join(rendered.split())
 
     assert '"work_result": {' in rendered
     assert '"deterministic_command_evidence": [' in rendered
     assert '"root": "/agent"' in rendered
-    assert "read-only at\n`/agent`" in rendered
+    assert "mounted read-only at `/agent`" in compact
+    assert "python /tmp/<name>.py" in compact
+    assert "do not use `python -c`" in compact
     assert "Use `revise` for\nevery correctable implementation defect" in rendered
     assert "Never\nuse `fail` merely because a deterministic command failed" in rendered
     assert '"termination_reason"' in rendered
@@ -669,6 +672,20 @@ def test_strict_parser_normalizes_presentation_prose_around_one_object() -> None
         "I verified the commit and changed paths.\n"
         f"{json.dumps(plan().model_dump(mode='json'))}\n"
         "This is the requested artifact."
+    )
+
+    parsed = parse_scripted(
+        response,
+        execution_request(AgentRole.PLANNER, ArtifactKind.IMPLEMENTATION_PLAN),
+    )
+
+    assert parsed.body == semantic_body(plan())
+
+
+def test_strict_parser_accepts_ancillary_tool_diagnostic_after_one_object() -> None:
+    response = (
+        f"{json.dumps(plan().model_dump(mode='json'))}\n\n"
+        "⚠️ ✍️ Write: to /tmp/placeholder (2 chars) failed"
     )
 
     parsed = parse_scripted(

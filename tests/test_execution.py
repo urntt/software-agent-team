@@ -271,10 +271,13 @@ def test_openclaw_adapter_qualifies_nested_provider_model_id() -> None:
         (
             json.dumps(
                 {
-                    "payloads": [{"text": "one"}, {"text": "two"}],
+                    "payloads": [
+                        {"text": "thinking", "isReasoning": True},
+                        {"text": "comment", "isCommentary": True},
+                    ],
                 }
             ),
-            "exactly one visible",
+            "at least one visible",
         ),
         (
             json.dumps(
@@ -301,9 +304,12 @@ def test_openclaw_adapter_rejects_invalid_protocol_response(
     assert result.telemetry.exit_code == 0
 
 
-def test_openclaw_adapter_preserves_metadata_for_an_invalid_reply_count() -> None:
+def test_openclaw_adapter_combines_visible_payloads_and_preserves_metadata() -> None:
     envelope = json.loads(openclaw_result())
-    envelope["payloads"] = [{"text": "one"}, {"text": "two"}]
+    envelope["payloads"] = [
+        {"text": '{"kind":"implementation_plan"}'},
+        {"text": "⚠️ ✍️ Write: to /tmp/placeholder (2 chars) failed"},
+    ]
 
     def runner(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(
@@ -315,7 +321,11 @@ def test_openclaw_adapter_preserves_metadata_for_an_invalid_reply_count() -> Non
 
     result = executor_with_clocks(runner).execute(request())
 
-    assert result.status is AgentExecutionStatus.INVALID_RESPONSE
+    assert result.status is AgentExecutionStatus.COMPLETED
+    assert result.response_text == (
+        '{"kind":"implementation_plan"}\n\n'
+        "⚠️ ✍️ Write: to /tmp/placeholder (2 chars) failed"
+    )
     assert result.telemetry.provider == "test-provider"
     assert result.telemetry.model == "test-provider/test-model"
     assert result.telemetry.usage is not None

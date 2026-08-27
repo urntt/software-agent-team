@@ -50,6 +50,8 @@ class ProgressEventKind(StrEnum):
     SNAPSHOT_VERIFIED = "snapshot_verified"
     QUALITY_GATES_STARTED = "quality_gates_started"
     QUALITY_GATE_COMPLETED = "quality_gate_completed"
+    QUALITY_GATE_PASSED = "quality_gate_passed"
+    QUALITY_GATE_FAILED = "quality_gate_failed"
     DECISION_RECORDED = "decision_recorded"
     CONTROL_RECEIVED = "control_received"
     CONTROL_APPLIED = "control_applied"
@@ -208,6 +210,16 @@ _EVENT_METADATA: dict[
         None,
     ),
     ProgressEventKind.QUALITY_GATE_COMPLETED: (
+        RunEventCategory.QUALITY_GATE,
+        RunEventVisibility.STANDARD,
+        None,
+    ),
+    ProgressEventKind.QUALITY_GATE_PASSED: (
+        RunEventCategory.QUALITY_GATE,
+        RunEventVisibility.STANDARD,
+        None,
+    ),
+    ProgressEventKind.QUALITY_GATE_FAILED: (
         RunEventCategory.QUALITY_GATE,
         RunEventVisibility.STANDARD,
         None,
@@ -455,7 +467,11 @@ class RunEvent(BaseModel):
             raise ValueError("RunEvent gate progress requires completed and total")
         if self.completed is not None and self.completed > self.total:
             raise ValueError("RunEvent completed count cannot exceed its total")
-        if self.kind is ProgressEventKind.QUALITY_GATE_COMPLETED:
+        if self.kind in {
+            ProgressEventKind.QUALITY_GATE_COMPLETED,
+            ProgressEventKind.QUALITY_GATE_PASSED,
+            ProgressEventKind.QUALITY_GATE_FAILED,
+        }:
             if self.completed is None:
                 raise ValueError("completed quality gates require progress counts")
         elif self.completed is not None:
@@ -729,10 +745,34 @@ class TerminalProgressRenderer:
     def __call__(self, event: RunEvent) -> None:
         """Render one persisted event and manage its elapsed-time heartbeat."""
 
-        if (
+        visible = not (
             _VISIBILITY_RANK[event.minimum_visibility]
             > _VISIBILITY_RANK[self.visibility]
-        ):
+        )
+        if event.kind is ProgressEventKind.AGENT_INVOCATION_COMPLETED:
+            # Invocation checkpoints are detailed-only, but they must stop a
+            # standard-visibility provider heartbeat even when hidden.
+            self._stop_waiting(event)
+        elif event.kind in {
+            ProgressEventKind.AGENT_COMPLETED,
+            ProgressEventKind.AGENT_FAILED,
+            ProgressEventKind.AGENT_SKIPPED,
+            ProgressEventKind.AGENT_INTERRUPTED,
+            ProgressEventKind.AGENT_CANCELLED,
+        }:
+            # Scheduler terminal events currently identify the scheduling
+            # attempt, while bounded semantic repair may have advanced the
+            # invocation attempt. A terminal Agent state ends every heartbeat
+            # for that Agent and iteration.
+            self._stop_agent_waiting(event)
+        elif event.kind in {
+            ProgressEventKind.AGENT_RETRY,
+            ProgressEventKind.AGENT_PAUSED,
+            ProgressEventKind.AGENT_RESUMED,
+        }:
+            self._stop_waiting(event)
+
+        if not visible:
             return
         if event.kind in {
             ProgressEventKind.AGENT_STARTED,
@@ -741,18 +781,6 @@ class TerminalProgressRenderer:
             self._start_waiting(event)
             self._print_details(event)
             return
-        if event.kind in {
-            ProgressEventKind.AGENT_COMPLETED,
-            ProgressEventKind.AGENT_RETRY,
-            ProgressEventKind.AGENT_FAILED,
-            ProgressEventKind.AGENT_SKIPPED,
-            ProgressEventKind.AGENT_PAUSED,
-            ProgressEventKind.AGENT_RESUMED,
-            ProgressEventKind.AGENT_INTERRUPTED,
-            ProgressEventKind.AGENT_CANCELLED,
-        }:
-            self._stop_waiting(event)
-
         symbol = {
             ProgressEventKind.RUN_STARTED: "●",
             ProgressEventKind.WORKSPACE_READY: "✓",
@@ -771,6 +799,8 @@ class TerminalProgressRenderer:
             ProgressEventKind.SNAPSHOT_VERIFIED: "✓",
             ProgressEventKind.QUALITY_GATES_STARTED: "●",
             ProgressEventKind.QUALITY_GATE_COMPLETED: "✓",
+            ProgressEventKind.QUALITY_GATE_PASSED: "✓",
+            ProgressEventKind.QUALITY_GATE_FAILED: "✗",
             ProgressEventKind.DECISION_RECORDED: "✓",
             ProgressEventKind.CONTROL_RECEIVED: "◆",
             ProgressEventKind.CONTROL_APPLIED: "✓",
@@ -827,7 +857,7 @@ class TerminalProgressRenderer:
         started = self.monotonic()
         thread = threading.Thread(
             target=self._heartbeat,
-            args=(stop, started, event.summary),
+            args=(stop, started, self._heartbeat_summary(event)),
             name=f"sat-progress-{event.agent_id}",
             daemon=True,
         )
@@ -847,6 +877,27 @@ class TerminalProgressRenderer:
         if waiting is not None:
             waiting[0].set()
             waiting[1].join(timeout=min(self.heartbeat_seconds, 0.2))
+
+    def _stop_agent_waiting(self, event: RunEvent) -> None:
+        if event.agent_id is None or event.iteration is None:
+            return
+        with self._lock:
+            keys = tuple(
+                key
+                for key in self._waiting
+                if key[:2] == (event.agent_id, event.iteration)
+            )
+            waiting = tuple(self._waiting.pop(key) for key in keys)
+        for stop, thread in waiting:
+            stop.set()
+            thread.join(timeout=min(self.heartbeat_seconds, 0.2))
+
+    @staticmethod
+    def _heartbeat_summary(event: RunEvent) -> str:
+        assert event.agent_id is not None
+        if event.kind is ProgressEventKind.AGENT_WAITING_PROVIDER:
+            return f"{event.agent_id} is waiting for the model"
+        return f"{event.agent_id} is working"
 
     def _heartbeat(
         self,

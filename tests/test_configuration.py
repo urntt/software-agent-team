@@ -35,10 +35,13 @@ def test_openclaw_permissions_match_role_responsibilities() -> None:
 
     for role in READ_ONLY_ROLES:
         assert "sandbox" not in agents[role.value]
-        assert {"write", "edit", "apply_patch", "process"}.issubset(
-            agents[role.value]["tools"]["deny"]
+        required_denied = {"edit", "apply_patch", "process"} | (
+            set() if role is AgentRole.REVIEWER else {"write"}
         )
-    assert "exec" not in agents[AgentRole.REVIEWER.value]["tools"]["deny"]
+        assert required_denied.issubset(agents[role.value]["tools"]["deny"])
+    reviewer_denied = agents[AgentRole.REVIEWER.value]["tools"]["deny"]
+    assert "exec" not in reviewer_denied
+    assert "write" not in reviewer_denied
     for role in READ_ONLY_ROLES - {AgentRole.REVIEWER}:
         assert "exec" in agents[role.value]["tools"]["deny"]
 

@@ -14,13 +14,13 @@
     },
     {
       "id": "AC_RUNNABLE",
-      "description": "The project supplies a validated setup, start, and test command contract.",
-      "verification": "Run CHECK_PROJECT_CONTRACT."
+      "description": "The project supplies a validated setup, start, and test command contract, and its exact start command is directly runnable from the project root without additional arguments or edits.",
+      "verification": "Run CHECK_PROJECT_CONTRACT, then independently probe the exact start argv with no appended arguments."
     },
     {
       "id": "AC_TESTS",
-      "description": "The project's automated pytest suite passes.",
-      "verification": "Run CHECK_PROJECT_TESTS."
+      "description": "The project's automated pytest suite is importable from the clean quality workspace and passes through the documented post-setup command.",
+      "verification": "Run CHECK_PROJECT_TESTS and verify the exact uv run pytest command after setup."
     },
     {
       "id": "AC_QUALITY",
@@ -29,14 +29,17 @@
     },
     {
       "id": "AC_DOCUMENTATION",
-      "description": "The README explains setup, start, tests, and known limitations.",
+      "description": "The README explains setup, usage, tests, and known limitations and shows the exact setup, start, and test commands from sat-project.json.",
       "verification": "Run CHECK_PROJECT_CONTRACT and independent review."
     }
   ],
   "constraints": [
     "Use the supplied local Python 3.12 execution profile.",
     "Do not require runtime network access or credentials.",
-    "Keep sat-project.json setup exactly [\"uv\", \"sync\", \"--dev\"] and test exactly [\"uv\", \"run\", \"pytest\"]; replace only the start placeholder with a project-specific argv beginning [\"uv\", \"run\"]."
+    "Keep sat-project.json setup exactly [\"uv\", \"sync\", \"--dev\"] and test exactly [\"uv\", \"run\", \"pytest\"]; replace only the start placeholder with a project-specific argv beginning [\"uv\", \"run\"].",
+    "Make the exact start argv directly usable from the project root without extra arguments or configuration edits; a CLI must include a safe default input or interactive flow and a service must start with a complete local configuration.",
+    "Keep tests importable when CHECK_PROJECT_TESTS invokes pytest from the clean quality workspace before setup, including explicit pytest pythonpath configuration for a src layout, and also pass the exact post-setup command uv run pytest.",
+    "Show the exact setup, start, and test shell commands in README.md; headings such as Installation, Usage, and Testing are valid and do not need the literal words setup or start."
   ],
   "assumptions": [
     "This template defines criterion IDs; each product run supplies user-confirmed content."

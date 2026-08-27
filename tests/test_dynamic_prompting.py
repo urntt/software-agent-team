@@ -262,6 +262,10 @@ def test_dynamic_prompt_is_compiled_from_the_approved_agent_spec() -> None:
     assert "TaskBrief constraints are authoritative" in rendered
     assert "documented setup command" in rendered
     assert "explicit ignore policy" in rendered
+    assert "without appending arguments" in rendered
+    assert "clean-workspace pytest entrypoint" in rendered
+    assert "pytest's import path" in rendered
+    assert "exact shell form" in rendered
 
 
 def test_dynamic_prompt_includes_unique_persisted_user_guidance() -> None:
@@ -312,10 +316,16 @@ def test_review_prompt_requires_adversarial_absolute_claim_boundaries() -> None:
     )
 
     rendered = render_dynamic_agent_prompt(inputs)
+    compact = " ".join(rendered.split())
 
     assert "top-level user input" in rendered
+    assert "python /tmp/<name>.py" in rendered
+    assert "Do not use `python -c`" in rendered
     assert "one concrete counterexample" in rendered
     assert "silently dirty" in rendered
+    assert "exact start argv" in rendered
+    assert "without adding arguments" in compact
+    assert "clean-workspace pytest evidence" in rendered
     assert "criterion_assessments" in rendered
     assert "bounded foreground commands" in rendered
     assert "negative, empty, singleton, boundary" in rendered

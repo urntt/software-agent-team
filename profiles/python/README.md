@@ -41,6 +41,15 @@ These values are argv arrays rather than shell strings. SAT validates the file
 before delivery and renders its commands to the user. Setup and test remain
 fixed for reproducibility; `start` belongs to the generated project.
 
+The exact `start` argv must be directly usable from the project root without
+extra arguments or configuration edits. A CLI therefore needs a safe default
+input or interactive flow; a local service needs a complete startup command.
+Independent Review probes that exact argv because static manifest validation
+cannot infer whether a project entry point has required positional arguments.
+README headings may use ordinary terms such as Installation, Usage, and
+Testing, but the document must show the exact shell form of every manifest
+command.
+
 The validated setup contract also protects the first-use repository state.
 The root `.venv` must be ignored. A root `uv.lock` must either be a bounded
 regular file already present in the accepted clean snapshot or be explicitly
@@ -58,6 +67,11 @@ Python source, run Ruff, and run the generated pytest suite. The pytest gate
 uses the console entry point, matching the `uv run pytest` command delivered to
 the user; it must not substitute `python -m pytest`, which changes import-path
 behavior and can hide a project that fails from a fresh user environment.
+The gate runs in the clean quality workspace before user setup. Projects using
+a `src` layout must therefore declare the pytest import path (the seed includes
+`pythonpath = [".", "src"]`) instead of depending on an editable install that
+happens to exist. Review may additionally verify the exact documented
+post-setup command so both controller evidence and the ordinary user path agree.
 User-specific behavior is also assigned to independent review because no
 task-independent test suite can prove an arbitrary request. A passing profile
 therefore means the bounded controller evidence and review accepted the result;

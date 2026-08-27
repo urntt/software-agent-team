@@ -160,6 +160,13 @@ yet supported. Adaptive Planning, plan approval, task-defined execution, and
 delivery are integrated in the normal `sat` path and covered offline. The same
 append-only event stream now drives configurable per-Agent progress, including
 dependency, provider-wait, repair, terminal, route, duration, and budget facts.
+Planning model waits also show elapsed heartbeats, response validation, and a
+bounded-repair transition. Provider heartbeats stop on hidden completion
+events as well as terminal Agent state, and failed quality gates render as
+failures rather than successful check marks. Reviewer timeout has a
+controller-derived criterion-scope floor, while its read-only sandbox permits
+only temporary `/tmp` probe scripts and includes the pinned `uv` required to
+exercise exact project commands.
 The foreground control palette, live visibility changes, prospective guidance,
 replacement Planning, cooperative pause/resume, best-effort interruption, and
 terminal cancellation are integrated and covered offline. Durable resume after
@@ -168,6 +175,11 @@ deterministic plan-time route resolution, per-Agent route inspection, and an
 explicit provider-failure fallback are implemented and covered offline. A
 fresh provider-backed adaptive rehearsal, including a run with two authorized
 routes, remains required before claiming demonstration readiness for that path.
+
+The generated Python profile requires README documentation of the exact setup,
+start, and test argv. The start command must be directly usable from the
+project root without extra arguments, and pytest must work in both the clean
+quality workspace and the documented post-setup flow.
 
 The earlier guided fixed-team path passed a complete live-provider rehearsal
 in a fresh non-root Linux account, including accepted delivery, exact project

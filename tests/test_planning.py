@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -20,6 +21,8 @@ from software_agent_team.planning import (
     AgentWorkload,
     ApprovedPlanningResult,
     CapabilityTimeoutPolicy,
+    PlanningActivity,
+    PlanningActivityKind,
     PlanningError,
     PlanningIntegrityError,
     PlanningModelResponse,
@@ -38,6 +41,7 @@ from software_agent_team.planning import (
     ProposedTask,
     StructuredEditKind,
     StructuredPlanEdit,
+    TerminalPlanningProgress,
     apply_structured_edit,
     preview_adaptive_proposal,
     render_planning_overview,
@@ -575,6 +579,67 @@ def test_controller_resolves_workload_classes_without_model_timeout_authority() 
     assert "timeout_seconds" not in proposal_response().model_dump_json()
 
 
+def test_controller_raises_reviewer_timeout_floor_from_exact_scope() -> None:
+    profile_criteria = tuple(
+        AcceptanceCriterion(
+            id=f"AC_PROFILE_{index}",
+            description=f"The project satisfies profile condition {index}.",
+            verification=f"Verify profile condition {index} independently.",
+        )
+        for index in range(1, 5)
+    )
+    configured = policy(profile_acceptance_criteria=profile_criteria)
+
+    preview = preview_adaptive_proposal(
+        request(),
+        proposal(),
+        configured,
+        created_at=FIXED_TIME,
+    )
+
+    reviewer = preview.team_plan.get_agent("quality_reviewer")
+    resolution = next(
+        item
+        for item in preview.timeout_resolutions
+        if item.agent_id == "quality_reviewer"
+    )
+    assert len(preview.task_brief.acceptance_criteria) == 6
+    assert reviewer.timeout_seconds == 270
+    assert resolution.source == "policy_scope_floor"
+    assert resolution.workload is AgentWorkload.ROUTINE
+    assert resolution.minimum_seconds == 270
+    assert resolution.scope_criterion_count == 6
+    assert "controller review-scope floor for 6 criteria" in (
+        render_planning_overview(preview)
+    )
+    assert "allowed 270..300" in render_planning_overview(preview)
+
+    too_short = proposal().model_copy(
+        update={"timeout_overrides_seconds": {"quality_reviewer": 250}}
+    )
+    with pytest.raises(PlanningError, match=r"policy envelope of 270\.\.300s"):
+        preview_adaptive_proposal(
+            request(),
+            too_short,
+            configured,
+            created_at=FIXED_TIME,
+        )
+
+
+def test_review_scope_timeout_thresholds_are_deterministic_and_ordered() -> None:
+    configured = policy()
+
+    assert configured.review_scope_workload(5) is AgentWorkload.ROUTINE
+    assert configured.review_scope_workload(6) is AgentWorkload.SUBSTANTIAL
+    assert configured.review_scope_workload(12) is AgentWorkload.SUBSTANTIAL
+    assert configured.review_scope_workload(13) is AgentWorkload.COMPLEX
+    with pytest.raises(ValidationError, match="thresholds must be ordered"):
+        policy(
+            review_substantial_criterion_threshold=13,
+            review_complex_criterion_threshold=13,
+        )
+
+
 def test_controller_adds_profile_criteria_without_model_echo() -> None:
     profile_criterion = AcceptanceCriterion(
         id="AC_PROFILE",
@@ -1007,6 +1072,40 @@ def test_dialogue_revision_structured_edit_and_approval_are_recoverable(
         ApprovedPlanningResult.model_validate(tampered_resolution)
 
 
+def test_store_loads_approval_written_before_scope_timeout_evidence(
+    tmp_path: Path,
+) -> None:
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=ScriptedAgentExecutor([response(proposal_response())]),
+        store=store,
+        policy=policy(),
+        clock=AdvancingClock(),
+    )
+    created = coordinator.start(
+        request(),
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+    assert created is not None
+    coordinator.approve(request(), created)
+
+    approval_path = tmp_path / "planning" / request().run_id / "approvals" / "001.json"
+    payload = json.loads(approval_path.read_text(encoding="utf-8"))
+    for resolution in payload["timeout_resolutions"]:
+        resolution.pop("minimum_seconds")
+        resolution.pop("scope_criterion_count")
+    approval_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    session = store.load_session(request().run_id)
+    loaded = store.load_approval(request().run_id, 1)
+
+    assert session.status is PlanningSessionStatus.APPROVED
+    assert all(item.minimum_seconds is None for item in loaded.timeout_resolutions)
+    assert all(
+        item.scope_criterion_count is None for item in loaded.timeout_resolutions
+    )
+
+
 def test_invalid_complete_proposal_is_repaired_before_it_is_shown(
     tmp_path: Path,
 ) -> None:
@@ -1032,10 +1131,12 @@ def test_invalid_complete_proposal_is_repaired_before_it_is_shown(
         policy=policy(response_repair_limit=1),
         clock=AdvancingClock(),
     )
+    activities: list[PlanningActivity] = []
 
     created = coordinator.start(
         request(),
         answer_question=lambda _question: pytest.fail("unexpected question"),
+        activity_handler=activities.append,
     )
 
     assert created is not None
@@ -1045,6 +1146,52 @@ def test_invalid_complete_proposal_is_repaired_before_it_is_shown(
     assert rejected.validation_error is not None
     assert "must remain independent" in rejected.validation_error
     assert "previous_response_rejected" in executor.requests[1].prompt
+    assert [activity.kind for activity in activities] == [
+        PlanningActivityKind.WAITING_MODEL,
+        PlanningActivityKind.RESPONSE_RECEIVED,
+        PlanningActivityKind.REPAIR_SCHEDULED,
+        PlanningActivityKind.WAITING_MODEL,
+        PlanningActivityKind.RESPONSE_RECEIVED,
+        PlanningActivityKind.RESPONSE_VALIDATED,
+    ]
+    assert [
+        (activity.attempt, activity.maximum_attempts) for activity in activities
+    ] == [(1, 2), (1, 2), (1, 2), (2, 2), (2, 2), (2, 2)]
+
+
+def test_terminal_planning_progress_shows_heartbeat_and_stops_cleanly() -> None:
+    output: list[str] = []
+    progress = TerminalPlanningProgress(
+        write=output.append,
+        heartbeat_seconds=0.01,
+    )
+    progress(
+        PlanningActivity(
+            kind=PlanningActivityKind.WAITING_MODEL,
+            attempt=1,
+            maximum_attempts=2,
+            model="provider/model",
+        )
+    )
+    time.sleep(0.025)
+    progress(
+        PlanningActivity(
+            kind=PlanningActivityKind.RESPONSE_RECEIVED,
+            attempt=1,
+            maximum_attempts=2,
+            model="provider/model",
+            duration_ms=25,
+            execution_status=planning.AgentExecutionStatus.COMPLETED,
+        )
+    )
+    rendered_at_completion = tuple(output)
+    time.sleep(0.025)
+    progress.close()
+
+    assert any("Planning is waiting for provider/model" in line for line in output)
+    assert any("still waiting for the model" in line for line in output)
+    assert any("response received in 0.0s (completed)" in line for line in output)
+    assert tuple(output) == rendered_at_completion
 
 
 def test_safe_response_variants_do_not_consume_a_model_repair_call(
@@ -1149,6 +1296,8 @@ def test_ordinary_user_can_answer_revise_edit_and_approve_without_json(
     assert approved.team_plan.max_concurrency == 1
     rendered = "\n".join(output)
     assert "Planning question" in rendered
+    assert "Planning is waiting for provider/model" in rendered
+    assert "Planning response validated" in rendered
     assert "Custom answer" in rendered
     assert "Planning overview" in rendered
     assert "Runtime Agents" in rendered

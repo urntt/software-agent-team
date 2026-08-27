@@ -966,7 +966,11 @@ def _prepare_runtime_boundary(
             state = "passed" if passed else "failed"
             event_handler(
                 ProgressEvent(
-                    kind=ProgressEventKind.QUALITY_GATE_COMPLETED,
+                    kind=(
+                        ProgressEventKind.QUALITY_GATE_PASSED
+                        if passed
+                        else ProgressEventKind.QUALITY_GATE_FAILED
+                    ),
                     message=(f"Quality gate {completed}/{total} {command.id}: {state}"),
                     phase=RunPhase.VERIFYING,
                     iteration=iteration,

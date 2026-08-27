@@ -94,7 +94,7 @@ Build the exact image named by both product and evaluation policies with:
 
 ```bash
 docker build \
-  --tag sat-python-quality:phase1-v2 \
+  --tag sat-python-quality:phase1-v3 \
   runtime/python
 ```
 
@@ -104,6 +104,11 @@ diagnostic default. `scripts/install.sh` and live-run preflight both start a
 no-network, read-only-root probe, execute a Python helper inside it, inspect its
 state, and remove it. A successful `docker build`, image lookup, or momentary
 container start alone is not sufficient runtime evidence.
+
+The image includes the exact `uv` pinned in `runtime/python/requirements.in` so
+a read-only Reviewer can exercise generated-project manifest commands after
+the Developer's documented setup. Change that pin and the policy image tag
+together; an old tag must not claim the newer probe capability.
 
 Use the Docker cgroup `--pids-limit` for the per-container process boundary.
 Do not add an `nproc` ulimit as a duplicate control: `RLIMIT_NPROC` can count

@@ -31,6 +31,16 @@ argv, preserve their exact values and change only the explicitly marked
 project-specific start placeholder. The TaskBrief constraints are authoritative
 for the concrete command values.
 
+Before committing, run the exact manifest setup argv, then exercise the exact
+start argv from the project root without appending arguments and run the exact
+post-setup `uv run pytest` command. A CLI must provide a safe default input or
+an interactive flow; a service command must contain the complete local startup
+configuration. Also run the clean-workspace pytest entrypoint described by the
+profile. For a `src` layout, configure pytest's import path explicitly rather
+than relying on an editable install left behind by setup. README.md must show
+the exact shell form of the manifest setup, start, and test argv; Installation,
+Usage, and Testing headings are acceptable.
+
 Use the repository's own configuration when running checks. Commit all relevant
 changes, leave the workspace clean, and report only assigned task IDs that are
 present in the resulting commit. The controller independently verifies the

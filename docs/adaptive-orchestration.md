@@ -75,7 +75,7 @@ unowned model choices. Responsibility is divided explicitly:
 | Agent number, labels, responsibilities, and capabilities | Bootstrap Planning derives them from the task and explains each one | User approves or revises the overview | Controller creates only approved `AgentSpec` entries |
 | Dependencies and possible parallel waves | Bootstrap Planning proposes a DAG | User approves it; policy supplies safe limits | Controller validates acyclicity and schedules only ready nodes |
 | Maximum concurrency | Bootstrap Planning proposes a bounded value | User may edit it; policy caps it | Controller decides which ready Agents actually start without exceeding the cap |
-| Per-Agent invocation timeout | Bootstrap Planning classifies workload as routine, substantial, or complex; it does not choose seconds | Capability policy maps that class into a default-to-ceiling envelope; the user may set an exact advanced override only inside it | Controller freezes, passes, and enforces the exact resolved timeout for every invocation |
+| Per-Agent invocation timeout | Bootstrap Planning classifies workload as routine, substantial, or complex; it does not choose seconds | Capability policy maps that class into a default-to-ceiling envelope; exact Review scope may raise the minimum; the user may set an exact advanced override only inside the effective envelope | Controller freezes, passes, and enforces the exact resolved timeout for every invocation |
 | Call, token, duration, iteration, and cost budgets | Product policy supplies the safe envelope; Planning works within it | User sees and approves the effective limits | Controller rejects over-budget plans and stops further launches when a limit is reached |
 | Model route | Planning may recommend task needs; configured profiles and routing policy provide candidates | User approves effective routes and switch conditions | Controller resolves and records the authorized route; there is no silent fallback |
 | Replanning or team changes during execution | User correction or an Agent recommendation may request a change | Material changes require a new validated revision and user confirmation | Controller applies a revision only at a safe checkpoint |
@@ -89,9 +89,13 @@ For the current product profile, `routine` maps to the checked-in capability
 default, `complex` maps to twice that default capped at 3,600 seconds, and
 `substantial` maps to their integer midpoint. Coding and integration therefore
 resolve to 900, 1,350, or 1,800 seconds; testing and review resolve to 300, 450,
-or 600 seconds. An explicit global timeout override collapses all three classes
-to that one user-selected value. This mapping is controller policy, is shown in
-the overview, and never comes from an execution Agent.
+or 600 seconds. Review scope independently supplies a minimum: fewer than six
+criteria is routine, six through twelve is substantial, and thirteen or more
+is complex. The controller uses the higher of the Planner estimate and this
+scope floor. An explicit global timeout override collapses all three workload
+classes to one value but cannot undercut an applicable scope floor. Every
+resolution and reason is shown in the overview and never comes from an
+execution Agent.
 
 ## Planned User Journey
 
@@ -157,6 +161,13 @@ field separately. Absolute paths, backslashes, parent traversal, ambiguous
 response bodies, unknown fields, and other semantic defects remain invalid.
 They may consume the one bounded semantic repair when policy permits it.
 
+OpenClaw may deliver the semantic response and an ancillary tool diagnostic as
+separate visible payloads. The execution boundary preserves their original
+payloads in raw telemetry and combines the visible text in order for strict
+semantic parsing. One unambiguous top-level object plus presentation-only text
+is valid; two object candidates remain ambiguous and are rejected. Transport
+payload count is therefore not mistaken for semantic object count.
+
 Every workspace scope describes controller authority inside the generated
 repository: `repository` grants whole-project access and `repository/path`
 grants a narrower boundary. A destination or project directory name is not a
@@ -185,8 +196,9 @@ same controller validation.
 
 Approval freezes version one of the run contract, including the workload,
 policy envelope, resolution source, and exact timeout selected for every
-Agent. Later corrections create a new version; they never mutate an already
-referenced plan in place.
+Agent. A Reviewer resolution also records its criterion count and effective
+minimum when scope policy applies. Later corrections create a new version;
+they never mutate an already referenced plan in place.
 
 ## Versioned Contracts
 
@@ -303,12 +315,20 @@ boundary case and observable evidence. A blocked assessment and its blocking
 finding must reference the same criterion; missing coverage is an invalid
 response rather than implicit acceptance. Review may run bounded foreground
 probes in the no-network sandbox against the read-only source and temporary
-fixtures, but that self-directed evidence remains attributable and is not
+fixtures. Review may create uniquely named probe scripts only under writable
+`/tmp` and invoke them with a simple foreground command such as
+`python /tmp/probe.py`; project mutation, complex interpreter invocations,
+background processes, and network remain unavailable. That self-directed
+evidence remains attributable and is not
 relabeled as a controller deterministic gate. Documentation may state only the
 boundary established by the implementation and evidence. The generated-project
-contract separately checks that the documented first setup does not leave an
-unexplained root virtual environment or lock file in an otherwise clean
-delivery.
+contract separately checks that the README shows each exact manifest command
+and that documented first setup does not leave an unexplained root virtual
+environment or lock file in an otherwise clean delivery. Its start argv must
+work from the project root without appended arguments, and its tests must be
+importable in the clean quality workspace as well as pass after documented
+setup; independent Review probes runtime behavior that static validation
+cannot infer.
 
 Existing fixed team manifests remain versioned evaluation fixtures. During
 migration they are compiled into the same `TeamPlan` contract so the repository
@@ -528,6 +548,10 @@ plan the controller executes. The Planning boundary also normalizes only
 unambiguous response-kind and safe relative-path presentation variants before
 strict validation, while preserving the raw response and recording each
 normalized field in the Planning turn.
+Blocking model waits emit a concise heartbeat every ten seconds, record when a
+response returns, show contract validation, and explicitly announce the one
+bounded repair. These messages expose elapsed time and controller state, not
+prompts or hidden reasoning.
 
 ### Batch 3C: Dynamic Team Runtime
 
@@ -558,7 +582,11 @@ The dynamic runner now binds each scheduler-approved Agent to its exact model,
 timeout, prompt, semantic repair limit, Git or read-only boundary, aggregate
 budget, execution record, and durable handoffs. Quality gates are shared once
 per immutable iteration, and every quality Agent must be downstream of every
-writer. Complete Agent summaries remain immutable artifact evidence; the
+writer. Reviewer timeouts take the higher of Planner workload and the
+controller-derived criterion-scope floor. The Reviewer runtime keeps source
+read-only but permits `/tmp` probe-script creation and contains the pinned `uv`
+needed to exercise generated-project commands. Complete Agent summaries remain
+immutable artifact evidence; the
 controller derives bounded scheduler and downstream-prompt projections with an
 explicit truncation marker, original length, and source-summary SHA-256 rather
 than failing a handoff or asking the model to regenerate known content. The
@@ -608,7 +636,11 @@ provider-cost caveats. Correction produces a cancelled superseded-run report
 and starts a fresh Planning request with the user's correction preserved;
 cancel produces a terminal cancellation report and the existing exact-owned
 sandbox cleanup still runs. Offline unit and end-to-end tests cover these
-semantics. Provider-backed guidance/pause rehearsal, process-crash recovery,
+semantics. Heartbeat lifecycle is independent of visibility filtering, hidden
+invocation-completed events stop provider waits, and an Agent terminal state
+closes every repaired attempt. Gate events distinguish pass from failure in
+their symbols instead of marking every completed command with a check mark.
+Provider-backed guidance/pause rehearsal, process-crash recovery,
 and a secondary-process control client remain in this batch.
 
 ### Batch 3E: Model Profiles and Routing

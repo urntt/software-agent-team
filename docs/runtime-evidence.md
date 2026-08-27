@@ -169,6 +169,13 @@ immutable evidence. The parser never guesses between multiple objects.
 Duplicate keys, multiple objects, multiple fences, non-standard constants,
 unknown semantic fields, and invalid semantic content remain invalid.
 
+OpenClaw transport may contain more than one visible payload when a semantic
+answer is followed by an ancillary tool diagnostic. SAT retains the raw JSON
+envelope and payload boundaries in telemetry, concatenates visible text in
+order, and applies the object rules above to the combined presentation. It
+therefore accepts one semantic object plus non-object diagnostic text but still
+rejects two competing objects. Payload count alone is not a semantic verdict.
+
 One controlled repair may address only the semantic contract. It receives a
 bounded, value-free structural diagnostic, such as the duplicate key name,
 while the immutable execution record retains the raw provider output. The
@@ -253,9 +260,10 @@ Proposal revisions are immutable and must match their source turn or a
 controller-owned structured edit. Approval binds the exact proposal, confirmed
 TaskBrief, adaptive implementation plan, and TeamPlan digests. It also stores
 each Agent's workload class, allowed timeout envelope, resolution source, and
-exact resolved seconds, then revalidates those seconds against the TeamPlan at
-the execution boundary. The bootstrap Planner cannot create Agents or change
-lifecycle state.
+exact resolved seconds. Reviewer resolutions also bind the exact criterion
+count and controller-derived minimum when scope raises the floor. The approval
+then revalidates those seconds against the TeamPlan at the execution boundary.
+The bootstrap Planner cannot create Agents or change lifecycle state.
 
 When an adaptive run enters implementation, its lifecycle transition binds the
 approved adaptive implementation-plan digest directly. It does not manufacture
@@ -287,6 +295,14 @@ when applicable. Dynamic events additionally record queue/readiness/provider
 wait/repair/terminal state, safe activity, dependencies, capability, stage,
 approved model, route-switch references, duration, invocation reference, and
 aggregate budget snapshot.
+Heartbeat lifecycle follows controller state even when the ending event is
+hidden by the selected visibility: an invocation-completed checkpoint stops
+provider waiting, and a terminal Agent event closes every semantic-repair
+attempt for that Agent. Quality-gate events encode passed versus failed
+completion so terminal renderers do not use a success mark merely because a
+command finished. Pre-execution Planning uses the same user-safe principle for
+ephemeral elapsed heartbeats, response receipt, validation, and bounded repair;
+the immutable Planning turn remains the authoritative evidence.
 Events are written as an append-only predecessor-digest chain. After each
 append, `run.json` atomically anchors the exact event count and latest digest;
 if anchoring fails, the unowned event file is removed before presentation code
@@ -439,9 +455,13 @@ when investigating it rather than editing artifacts in place.
   `/agent` mount. They deny direct mutation, background-process, and
   Agent-spawning tools. Review may run bounded foreground inspection or
   adversarial probe commands against `/agent` and fixtures under the sandbox's
-  writable `/tmp`; the mount remains read-only, network is disabled, and the
-  resulting criterion-by-criterion evidence is attributable rather than
-  controller-owned deterministic command evidence.
+  writable `/tmp`; its write tool may create uniquely named temporary scripts,
+  while `edit`, `apply_patch`, background processes, project writes, and
+  network stay denied. Simple `python /tmp/name.py` invocations pass the command
+  preflight, and the image includes pinned `uv` for exact post-setup manifest
+  commands. The source mount remains read-only, and resulting
+  criterion-by-criterion evidence is attributable rather than controller-owned
+  deterministic command evidence.
 - Implementation and Integration capabilities may write only inside the
   assigned `/workspace` mount.
 - Every Agent denies Agent-spawning and one-shot model tools. Only the
@@ -494,10 +514,14 @@ when investigating it rather than editing artifacts in place.
   measured workloads. Adaptive Planning supplies only a routine, substantial,
   or complex workload class. Product policy deterministically resolves that
   class inside a capability-specific default-to-ceiling envelope; a direct user
-  timeout override must remain inside the same envelope. The resulting
+  timeout override must remain inside the effective envelope. Reviewer scope
+  independently maps fewer than 6, 6–12, or 13+ criteria to a routine,
+  substantial, or complex minimum; the controller uses the higher of that
+  floor and Planner workload. The resulting
   Adaptive TeamPlan freezes the exact timeout for each run-scoped Agent. A
   global CLI or saved timeout override collapses every Adaptive envelope to one
-  explicit value and is an experimental variable.
+  explicit value but cannot undercut the scope floor; it remains an
+  experimental variable.
 - Without a global override, the product envelope uses the checked-in
   capability timeout as its default and twice that value, capped at 3,600
   seconds, as its ceiling. Routine selects the default, complex selects the

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 from software_agent_team.quality_gates import load_quality_gate_configuration
@@ -24,7 +25,24 @@ def write_valid_project(root: Path) -> None:
     )
     (root / ".gitignore").write_text(".venv/\nuv.lock\n", encoding="utf-8")
     (root / "README.md").write_text(
-        "# Link Checker\n\nSetup, start, test, and known limitations.\n",
+        """# Link Checker
+
+## Installation
+
+`uv sync --dev`
+
+## Usage
+
+`uv run link-checker .`
+
+## Testing
+
+`uv run pytest`
+
+## Known limitations
+
+Local files only.
+""",
         encoding="utf-8",
     )
     (root / "pyproject.toml").write_text(
@@ -70,7 +88,7 @@ def test_product_profile_is_separate_from_the_task_manager_evaluation() -> None:
 
     assert configuration.policy.id == "product_python_v1"
     assert configuration.manifest.id == "python_product_v1"
-    assert configuration.policy.sandbox.image == "sat-python-quality:phase1-v2"
+    assert configuration.policy.sandbox.image == "sat-python-quality:phase1-v3"
     serialized = json.dumps(
         {
             "policy": configuration.policy.model_dump(mode="json"),
@@ -96,6 +114,14 @@ def test_product_profile_exposes_fixed_command_ownership_to_planning() -> None:
     assert '["uv", "sync", "--dev"]' in command_constraint
     assert '["uv", "run", "pytest"]' in command_constraint
     assert "replace only the start placeholder" in command_constraint
+    assert any(
+        "directly usable from the project root" in constraint
+        for constraint in configuration.task_brief.constraints
+    )
+    assert any(
+        "clean quality workspace before setup" in constraint
+        for constraint in configuration.task_brief.constraints
+    )
 
 
 def test_product_test_gate_matches_the_delivered_pytest_entrypoint() -> None:
@@ -114,6 +140,13 @@ def test_product_test_gate_matches_the_delivered_pytest_entrypoint() -> None:
 
     assert project_contract["test"] == ["uv", "run", "pytest"]
     assert gate.argv == ("pytest", "-q", "-p", "no:cacheprovider")
+    seed_configuration = tomllib.loads(
+        (PROFILE_ROOT / "seed" / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    assert seed_configuration["tool"]["pytest"]["ini_options"]["pythonpath"] == [
+        ".",
+        "src",
+    ]
 
 
 def test_product_contract_validator_accepts_project_specific_commands(
@@ -139,6 +172,35 @@ def test_product_contract_validator_rejects_the_starter_placeholder(
 
     assert result.returncode == 1
     assert "starter placeholder" in result.stderr
+
+
+def test_product_contract_accepts_ordinary_documentation_headings(
+    tmp_path: Path,
+) -> None:
+    write_valid_project(tmp_path)
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    readme = (tmp_path / "README.md").read_text(encoding="utf-8").casefold()
+    assert "setup" not in readme
+    assert "start" not in readme
+
+
+def test_product_contract_requires_each_exact_manifest_command(
+    tmp_path: Path,
+) -> None:
+    write_valid_project(tmp_path)
+    readme = (tmp_path / "README.md").read_text(encoding="utf-8")
+    (tmp_path / "README.md").write_text(
+        readme.replace("`uv run link-checker .`", "`uv run link-checker --help`"),
+        encoding="utf-8",
+    )
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode == 1
+    assert "missing exact command guidance for: start" in result.stderr
 
 
 def test_product_contract_requires_clean_setup_artifact_policy(

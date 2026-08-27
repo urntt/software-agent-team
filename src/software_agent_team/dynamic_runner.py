@@ -511,8 +511,8 @@ class DynamicAgentRunner:
                 agent,
                 kind=ProgressEventKind.AGENT_WAITING_PROVIDER,
                 message=(
-                    f"{agent.label} is working through the approved "
-                    f"{request.model} runtime: {agent.responsibility}"
+                    f"{agent.label} is waiting for the approved {request.model} "
+                    f"model (attempt {attempt})"
                 ),
                 attempt=attempt,
                 model=request.model,

@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -12,6 +14,23 @@ from pathlib import Path
 MAX_MANIFEST_BYTES = 65_536
 MAX_LOCK_BYTES = 1_048_576
 EXPECTED_KEYS = {"schema_version", "setup", "start", "test"}
+
+
+def documents_exact_command(readme: str, argv: tuple[str, ...]) -> bool:
+    """Recognize one exact shell command without accepting a longer variant."""
+
+    candidates: set[str] = set(re.findall(r"`([^`\r\n]+)`", readme))
+    for line in readme.splitlines():
+        candidate = line.strip().strip("`").strip()
+        if candidate.startswith("$ "):
+            candidate = candidate[2:].strip()
+        candidates.add(candidate)
+    rendered = {" ".join(argv), shlex.join(argv)}
+    return not candidates.isdisjoint(rendered)
+
+
+def documents_concept(readme: str, patterns: tuple[str, ...]) -> bool:
+    return any(re.search(pattern, readme, flags=re.IGNORECASE) for pattern in patterns)
 
 
 def fail(message: str) -> None:
@@ -155,13 +174,29 @@ def validate(repository: Path) -> None:
     readme = require_regular_file(repository / "README.md", "README.md").decode(
         "utf-8", errors="strict"
     )
+    guidance_patterns = {
+        "setup": (r"\bsetup\b", r"\binstall(?:ation|ing)?\b"),
+        "start": (r"\bstart(?:up|ing)?\b", r"\brun(?:ning)?\b", r"\busage\b"),
+        "test": (r"\btests?\b", r"\btesting\b"),
+        "limitation": (r"\blimitations?\b", r"\bknown issues?\b"),
+    }
     missing = {
-        word
-        for word in ("setup", "start", "test", "limitation")
-        if word not in readme.lower()
+        label
+        for label, patterns in guidance_patterns.items()
+        if not documents_concept(readme, patterns)
     }
     if missing:
         fail(f"README.md is missing guidance for: {', '.join(sorted(missing))}")
+    undocumented_commands = {
+        label
+        for label, argv in (("setup", setup), ("start", start), ("test", test))
+        if not documents_exact_command(readme, argv)
+    }
+    if undocumented_commands:
+        fail(
+            "README.md is missing exact command guidance for: "
+            + ", ".join(sorted(undocumented_commands))
+        )
     tests = repository / "tests"
     if tests.is_symlink() or not tests.is_dir() or not any(tests.rglob("test_*.py")):
         fail("tests must contain at least one test_*.py file")

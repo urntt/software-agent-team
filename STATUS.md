@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** Phase 3E implemented; four fresh installed adaptive rehearsals have driven controller, transport, and semantic-review corrections, with a clean provider rerun next
+**Current milestone:** Phase 3E implemented; five fresh installed adaptive rehearsals have driven controller, transport, progress, profile, and review-boundary corrections, with a clean provider rerun next
 
 **Last updated:** August 27, 2026
 
@@ -50,7 +50,7 @@ validation also rejects a plan whose complete planned iterations cannot fit
 its call budget. Recovery
 verifies the exact TaskBrief binding, TeamPlan digest, fixed manifest version,
 fixed team digest, resolved Agent timeouts, and cross-file run metadata. The
-complete repository check passes with 599 offline tests.
+complete repository check passes with 609 offline tests.
 
 `RunEvent` is also an executable, append-only contract. Every current workflow
 progress update is persisted with a contiguous sequence, lifecycle revision,
@@ -334,8 +334,46 @@ generic protocol and quality-boundary corrections. The Python profile now also
 places its fixed setup and test argv in the controller-owned Planning
 constraints, and both the starter guidance and implementation prompt require
 the writer to preserve them while replacing only the project-specific start
-placeholder. The full 599-test check passes; another fresh installed provider
-run remains required.
+placeholder.
+
+A fifth fresh-account rehearsal used the public installer, bare `sat`, and the
+same model. Planning needed one bounded repair after the first proposal gave a
+quality task to the writer, then the user approved one Implementation Agent
+followed by one independent Reviewer. The writer returned one valid semantic
+WorkResult plus a separately visible OpenClaw tool warning. The old transport
+adapter incorrectly required exactly one visible text payload and requested a
+semantic repair even though only one response object existed. The repair
+succeeded and deterministic verification began.
+
+That rehearsal exposed three independent controller defects. README headings
+such as `Usage` did not satisfy a validator that looked for the literal word
+`start`; clean-tree pytest could not import the generated src-layout package
+even though the post-setup command passed 24 tests; and the progress renderer
+showed success symbols for failed gates. The Reviewer then had read-only source
+and foreground execution but no coherent way to create a temporary probe
+script. OpenClaw rejected its attempted inline interpreter command, and the
+routine 300-second timeout expired while it was responsible for all ten
+criteria. SAT delivered nothing and terminal cleanup completed.
+
+Independent inspection also found that the preserved candidate mishandled a
+top-level directory symlink, returned success for a missing path, and required
+an undocumented extra operand on its nominal start command. These remain
+product-specific failure evidence; the resulting corrections are generic.
+SAT now aggregates all visible transport text in order while requiring exactly
+one semantic response object, stops hidden lifecycle heartbeats when the exact
+Agent terminates, renders gate outcomes truthfully, and shows bounded Planning
+heartbeats and repair checkpoints. Review scope supplies a controller-owned
+timeout floor, so 6–12 criteria resolve to at least 450 seconds and 13 or more
+to 600 seconds under the current policy. Review may create uniquely named
+scripts only under `/tmp` and run them directly against read-only source; the
+pinned quality image now includes `uv` for the exact generated commands.
+
+The Python profile now accepts ordinary documentation headings but requires
+the exact setup, direct no-extra-argument start, and test commands. It requires
+both clean-tree and post-setup pytest to work, including explicit src-layout
+import configuration. The full 609-test check passes. Another fresh installed
+provider run remains required before this adaptive journey is demonstration
+ready.
 
 The rehearsal sequence below concerns the predecessor guided fixed-team
 product path and is retained as defect and regression evidence. It proves the
