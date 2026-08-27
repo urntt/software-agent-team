@@ -104,6 +104,15 @@ cross-plan bindings at its execution boundary, so mutated approved inputs
 cannot be substituted before runtime.
 The bootstrap Planner still cannot create an Agent or advance run state.
 
+Planning criterion ownership is now explicit. The response schema requires
+every Planner-defined criterion to have implementation-task coverage and
+accepts only stable criterion-ID syntax. The policy-aware preview separately
+allows task bindings to profile criterion IDs supplied in the current context,
+continues to reject unknown IDs and echoed profile definitions, and preserves
+valid bindings in the approved implementation plan. Dynamic prompt validation
+rechecks those task references against the exact controller-materialized
+TaskBrief rather than trusting a standalone model response.
+
 The first Phase 3C runtime boundary is also implemented. Dynamic execution
 requests and telemetry use an approved run-scoped Agent ID and capability;
 fixed-role identity remains compatibility metadata only for the existing

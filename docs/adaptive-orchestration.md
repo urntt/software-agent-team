@@ -173,13 +173,28 @@ repository: `repository` grants whole-project access and `repository/path`
 grants a narrower boundary. A destination or project directory name is not a
 workspace scope and is rejected rather than silently widened.
 
+Acceptance criteria have two distinct owners. The Planner defines
+task-specific criteria and must bind every one of them to at least one
+implementation task. The execution profile defines fixed criteria whose text
+and verification contract remain controller-owned; the Planner must not echo
+those definitions, but an implementation task may reference a profile
+criterion ID supplied in the current Planning context when the task materially
+implements or verifies it. Context-free response validation checks ID syntax
+and complete coverage of Planner-owned criteria. The policy-aware controller
+preview then resolves every task reference against the union of proposal and
+current profile IDs. It rejects any other ID before an overview is shown and
+preserves valid profile bindings when it materializes the TaskBrief and
+implementation plan. A profile criterion need not be forced onto a task merely
+because it exists.
+
 ### Overview Before Execution
 
 The proposal shown before execution contains:
 
 1. The requested outcome and explicit non-goals;
 2. Success conditions, constraints, and unresolved assumptions;
-3. The implementation approach and major deliverables;
+3. The implementation approach, major deliverables, and each task's criterion
+   bindings and dependencies;
 4. The proposed Agents, why each exists, and what each owns;
 5. Agent dependencies, expected handoffs, and independent quality coverage;
 6. Permission and workspace boundaries in plain language;
@@ -286,6 +301,9 @@ After user approval, the controller validates all of the following before an
 Agent is created:
 
 - Schema and TaskBrief consistency;
+- Complete task coverage of Planner-owned criteria, controller ownership of
+  profile criterion definitions, and no task reference outside their known
+  union;
 - Acyclic dependencies and at least one terminal delivery path;
 - Unique writable ownership or an explicit integration protocol;
 - Permission profiles compatible with each responsibility;

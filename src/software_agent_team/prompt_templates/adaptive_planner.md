@@ -33,11 +33,15 @@ Choose the next response by decision value:
 - Classify each Agent workload as routine, substantial, or complex. The
   controller maps that estimate through the capability timeout profile; do not
   choose or claim authority over an exact timeout.
-- Every acceptance criterion must be covered by at least one implementation
-  task. Use stable uppercase criterion IDs and TASK_ task IDs.
+- Every acceptance criterion you define must be covered by at least one
+  implementation task. Use stable uppercase criterion IDs and TASK_ task IDs.
 - The controller policy may list profile_acceptance_criteria. Those criteria
-  are added deterministically after your response: do not repeat their IDs in
-  acceptance_criteria or task coverage. Propose only task-specific outcomes.
+  are added deterministically after your response: do not repeat their
+  definitions in acceptance_criteria. A task may reference a listed profile
+  criterion ID when that task materially implements or verifies the fixed
+  contract. Every task criterion reference must be either one you define or a
+  listed profile criterion; do not invent another ID. You do not need to force
+  every profile criterion onto a task.
 - When requires_independent_review_agent is true, include at least one
   downstream Agent with the review capability. A testing-only Agent cannot
   accept criteria assigned to independent review. Do not exceed

@@ -326,6 +326,31 @@ def test_quality_prompt_requires_exact_completed_dependency_handoffs() -> None:
         DynamicAgentPromptInputs.model_validate(payload)
 
 
+def test_dynamic_prompt_rejects_unknown_task_criterion_reference() -> None:
+    plan = implementation_plan()
+    tasks = (
+        plan.tasks[0].model_copy(
+            update={"acceptance_criteria": ("AC_LINKS", "AC_UNKNOWN")}
+        ),
+    )
+    changed_plan = plan.model_copy(update={"tasks": tasks})
+    changed_team = team_plan().model_copy(
+        update={
+            "implementation_plan_sha256": canonical_model_sha256(changed_plan),
+        }
+    )
+    payload = developer_inputs().model_dump(mode="json")
+    payload["implementation_plan"] = changed_plan.model_dump(mode="json")
+    payload["team_plan"] = changed_team.model_dump(mode="json")
+
+    with pytest.raises(
+        ValidationError,
+        match="dynamic implementation plan tasks reference unknown acceptance "
+        "criteria: AC_UNKNOWN",
+    ):
+        DynamicAgentPromptInputs.model_validate(payload)
+
+
 def test_quality_prompt_contains_read_only_evidence_not_write_authority() -> None:
     rendered = render_dynamic_agent_prompt(quality_inputs())
 

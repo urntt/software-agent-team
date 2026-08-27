@@ -302,6 +302,17 @@ count and controller-derived minimum when scope raises the floor. The approval
 then revalidates those seconds against the TeamPlan at the execution boundary.
 The bootstrap Planner cannot create Agents or change lifecycle state.
 
+Task-criterion binding is context-aware without transferring profile ownership
+to the model. A proposal must cover every criterion it defines. It may also
+bind a task to a profile criterion ID explicitly supplied by the current
+controller policy, while the controller remains the sole source of that
+criterion's description and verification contract. Before persisting a valid
+proposal, the controller rejects task references outside the union of those two
+sets, materializes profile criteria into the confirmed TaskBrief, and preserves
+the task bindings in the adaptive implementation plan. Prompt construction
+rechecks every persisted task reference against the exact TaskBrief bound by
+the approved TeamPlan.
+
 When an adaptive run enters implementation, its lifecycle transition binds the
 approved adaptive implementation-plan digest directly. It does not manufacture
 a fixed-role `ImplementationPlan` artifact. Fixed compatibility runs continue

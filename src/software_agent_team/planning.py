@@ -8,7 +8,7 @@ import os
 import re
 import threading
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -531,10 +531,20 @@ class ProposedTask(BaseModel):
     def require_clean_description(cls, value: str) -> str:
         return _clean_text(value, label="task description")
 
-    @field_validator("dependencies", "acceptance_criteria")
+    @field_validator("dependencies")
     @classmethod
-    def require_clean_ids(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+    def require_clean_dependencies(cls, values: tuple[str, ...]) -> tuple[str, ...]:
         return _clean_unique(values, label="task reference")
+
+    @field_validator("acceptance_criteria")
+    @classmethod
+    def require_criterion_ids(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        cleaned = _clean_unique(values, label="task acceptance criterion")
+        if any(re.fullmatch(r"[A-Z][A-Z0-9_-]*", value) is None for value in cleaned):
+            raise ValueError(
+                "task acceptance criteria must use stable uppercase criterion IDs"
+            )
+        return cleaned
 
     @field_validator("expected_paths")
     @classmethod
@@ -573,6 +583,20 @@ def _validate_dag(
 
     for node in nodes:
         visit(node)
+
+
+def validate_task_criterion_references(
+    tasks: tuple[ProposedTask, ...],
+    known_criterion_ids: Collection[str],
+) -> None:
+    """Reject task bindings outside a controller-known criterion contract."""
+
+    covered = {criterion for task in tasks for criterion in task.acceptance_criteria}
+    unknown = covered - set(known_criterion_ids)
+    if unknown:
+        raise ValueError(
+            "tasks reference unknown acceptance criteria: " + ", ".join(sorted(unknown))
+        )
 
 
 class PlanningProposalBody(BaseModel):
@@ -700,12 +724,11 @@ class PlanningProposalBody(BaseModel):
             criterion for task in self.tasks for criterion in task.acceptance_criteria
         }
         expected = set(criterion_ids)
-        if covered != expected:
-            missing = ", ".join(sorted(expected - covered)) or "none"
-            unknown = ", ".join(sorted(covered - expected)) or "none"
+        missing = expected - covered
+        if missing:
             raise ValueError(
-                "task acceptance coverage differs from the proposal "
-                f"(missing: {missing}; unknown: {unknown})"
+                "tasks do not cover proposal acceptance criteria: "
+                + ", ".join(sorted(missing))
             )
         if self.max_concurrency > len(self.agents):
             raise ValueError("proposal concurrency cannot exceed its Agent count")
@@ -1295,6 +1318,13 @@ def preview_adaptive_proposal(
             "proposal repeats controller-owned profile criteria: "
             + ", ".join(sorted(collisions))
         )
+    try:
+        validate_task_criterion_references(
+            body.tasks,
+            proposed_criterion_ids | profile_criterion_ids,
+        )
+    except ValueError as error:
+        raise PlanningError(str(error)) from error
     if policy.require_review_agent and not any(
         agent.capability is AgentCapability.REVIEW for agent in body.agents
     ):
@@ -1542,12 +1572,18 @@ def render_planning_overview(preview: PlanningPreview) -> str:
         "  Implementation approach:",
         *(f"    - {item}" for item in implementation.approach),
         "  Tasks:",
-        *(
-            f"    - {task.id} -> {task.owner_agent_id}: {task.description}"
-            for task in implementation.tasks
-        ),
-        "  Runtime Agents:",
     ]
+    for task in implementation.tasks:
+        task_dependencies = ", ".join(task.dependencies) or "none"
+        task_criteria = ", ".join(task.acceptance_criteria)
+        lines.extend(
+            (
+                f"    - {task.id} -> {task.owner_agent_id}: {task.description}",
+                f"      acceptance: {task_criteria}",
+                f"      dependencies: {task_dependencies}",
+            )
+        )
+    lines.append("  Runtime Agents:")
     resolutions = {
         resolution.agent_id: resolution for resolution in preview.timeout_resolutions
     }

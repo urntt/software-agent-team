@@ -703,6 +703,89 @@ def test_controller_adds_profile_criteria_without_model_echo() -> None:
     }
 
 
+def test_controller_preserves_known_profile_criterion_task_bindings(
+    tmp_path: Path,
+) -> None:
+    profile_criterion = AcceptanceCriterion(
+        id="AC_PROFILE",
+        description="The project satisfies the fixed runtime contract.",
+        verification="Run the profile contract gate.",
+    )
+    payload = proposal_response().model_dump(mode="json")
+    payload["proposal"]["tasks"][0]["acceptance_criteria"].append("AC_PROFILE")
+
+    parsed = PlanningModelResponse.model_validate(payload)
+
+    assert parsed.proposal is not None
+    configured = policy(profile_acceptance_criteria=(profile_criterion,))
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=ScriptedAgentExecutor([response(parsed)]),
+        store=store,
+        policy=configured,
+        clock=AdvancingClock(),
+    )
+    created = coordinator.start(
+        request(),
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+
+    assert created is not None
+    approved = coordinator.approve(request(), created)
+    preview = preview_adaptive_proposal(
+        request(),
+        created,
+        configured,
+        created_at=FIXED_TIME,
+    )
+    assert [criterion.id for criterion in preview.task_brief.acceptance_criteria] == [
+        "AC_SCAN",
+        "AC_REPORT",
+        "AC_PROFILE",
+    ]
+    assert preview.implementation_plan.tasks[0].acceptance_criteria == (
+        "AC_SCAN",
+        "AC_REPORT",
+        "AC_PROFILE",
+    )
+    assert "acceptance: AC_SCAN, AC_REPORT, AC_PROFILE" in render_planning_overview(
+        preview
+    )
+    assert approved.implementation_plan.tasks == preview.implementation_plan.tasks
+    assert store.load_session(request().run_id).status is PlanningSessionStatus.APPROVED
+    assert store.load_session(request().run_id).turn_count == 1
+
+
+def test_controller_rejects_unknown_task_criterion_after_contextual_parse() -> None:
+    payload = proposal_response().model_dump(mode="json")
+    payload["proposal"]["tasks"][0]["acceptance_criteria"].append("AC_UNKNOWN")
+
+    parsed = PlanningModelResponse.model_validate(payload)
+
+    assert parsed.proposal is not None
+    with pytest.raises(
+        PlanningError,
+        match="tasks reference unknown acceptance criteria: AC_UNKNOWN",
+    ):
+        preview_adaptive_proposal(
+            request(),
+            proposal(body=parsed.proposal),
+            policy(),
+            created_at=FIXED_TIME,
+        )
+
+
+def test_proposal_owned_criteria_still_require_task_coverage() -> None:
+    payload = proposal_response().model_dump(mode="json")
+    payload["proposal"]["tasks"][0]["acceptance_criteria"] = ["AC_SCAN"]
+
+    with pytest.raises(
+        ValidationError,
+        match="tasks do not cover proposal acceptance criteria: AC_REPORT",
+    ):
+        PlanningModelResponse.model_validate(payload)
+
+
 def test_controller_rejects_profile_criterion_echo_and_missing_reviewer() -> None:
     profile_criterion = AcceptanceCriterion(
         id="AC_PROFILE",
@@ -1089,6 +1172,9 @@ def test_dialogue_revision_structured_edit_and_approval_are_recoverable(
     assert all(call.timeout_seconds == 180 for call in executor.requests)
     assert "unqualified prohibition" in executor.requests[0].prompt
     assert "top-level input" in executor.requests[0].prompt
+    compact_prompt = " ".join(executor.requests[0].prompt.split())
+    assert "do not repeat their definitions" in compact_prompt
+    assert "A task may reference a listed profile" in compact_prompt
 
     tampered = approved.model_dump(mode="json")
     tampered["team_plan"]["agents"][0]["timeout_seconds"] += 1

@@ -30,7 +30,11 @@ from software_agent_team.execution import (
     validate_role_artifact_kind,
 )
 from software_agent_team.integrity import canonical_model_sha256
-from software_agent_team.planning import AdaptiveImplementationPlan, ProposedTask
+from software_agent_team.planning import (
+    AdaptiveImplementationPlan,
+    ProposedTask,
+    validate_task_criterion_references,
+)
 from software_agent_team.responses import RESPONSE_BODY_MODELS
 from software_agent_team.teams import (
     AgentCapability,
@@ -227,6 +231,13 @@ class DynamicAgentPromptInputs(BaseModel):
             self.team_plan.implementation_plan_sha256
         ):
             raise ValueError("TeamPlan does not bind the implementation plan")
+        try:
+            validate_task_criterion_references(
+                self.implementation_plan.tasks,
+                {criterion.id for criterion in self.task_brief.acceptance_criteria},
+            )
+        except ValueError as error:
+            raise ValueError(f"dynamic implementation plan {error}") from error
         if self.iteration > self.team_plan.iteration_limit:
             raise ValueError("dynamic prompt iteration exceeds the TeamPlan")
         if self.iteration == 1:
