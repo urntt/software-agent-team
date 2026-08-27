@@ -25,10 +25,9 @@ compatibility metadata and must match that identity when present. Dynamic
 requests bind the exact approved AgentSpec output contract, model route,
 per-invocation timeout, deterministic session key, and assigned task IDs;
 mismatched response or telemetry context is rejected before it can become
-evidence. Shared controller-owned assembly now binds dynamic implementation,
-test, and review semantics to verified facts. The runtime adapter that launches
-those requests through the general DAG scheduler remains staged work, as
-recorded in `STATUS.md`.
+evidence. Shared controller-owned assembly binds dynamic implementation, test,
+and review semantics to verified facts, and the normal product launcher now
+executes those requests through the general DAG scheduler.
 
 The controller assembles every persisted phase artifact from two distinct
 sources:
@@ -71,11 +70,11 @@ allows it. Reviewer `fail` requires an explicit terminal reason proving that a
 run safety or evidence-integrity boundary makes another Developer revision
 unsafe.
 
-Iteration limits belong to the launch policy, not the model. The frozen Phase 1
-evaluation uses two implementation iterations for comparability. The normal
-product flow may use the function-specialized team's explicit limit of three so
-it can address a distinct blocker revealed only after the first revision. The
-controller still stops on acceptance, repeated blockers without measurable
+Iteration limits belong to approved controller policy, not to an execution
+Agent. The frozen Phase 1 evaluation uses two implementation iterations for
+comparability. Adaptive Planning may propose one through three iterations; the
+user sees and approves the exact limit before the controller creates the team.
+The controller still stops on acceptance, repeated blockers without measurable
 progress, no relevant Git change, safety or evidence failure, resource limits,
 or iteration exhaustion.
 
@@ -221,15 +220,18 @@ the same output kind from claiming the same immutable path. On every write and
 load, the store checks producer identity, stage membership, capability, and
 handoff endpoints against the approved `TeamPlan`.
 
-The Adaptive Planning store is implemented but is not yet selected by the bare
-`sat` launcher. Its request proves explicit model-work authorization. Every
+The bare `sat` launcher uses the Adaptive Planning store before creating a run.
+Its request proves explicit model-work authorization. Every
 model invocation, including a rejected semantic response, becomes a write-once
 turn containing prompt and response digests plus bounded provider evidence.
 Turns form a predecessor-digest chain anchored by atomic `session.json` state.
 Proposal revisions are immutable and must match their source turn or a
 controller-owned structured edit. Approval binds the exact proposal, confirmed
-TaskBrief, adaptive implementation plan, and TeamPlan digests; the bootstrap
-Planner cannot create Agents or change lifecycle state.
+TaskBrief, adaptive implementation plan, and TeamPlan digests. It also stores
+each Agent's workload class, allowed timeout envelope, resolution source, and
+exact resolved seconds, then revalidates those seconds against the TeamPlan at
+the execution boundary. The bootstrap Planner cannot create Agents or change
+lifecycle state.
 
 When an adaptive run enters implementation, its lifecycle transition binds the
 approved adaptive implementation-plan digest directly. It does not manufacture
@@ -298,8 +300,9 @@ per immutable iteration, and all TestReports and ReviewReports bind to that
 same commit. Completed dependency and terminal handoffs retain both phase and
 execution references. `DynamicWorkflowCoordinator` records the aggregate
 snapshot before starting quality work, resolves each iteration, binds blocking
-evidence to a bounded revision, and writes terminal evidence. Bare-`sat`
-activation remains staged work.
+evidence to a bounded revision, and writes terminal evidence. Bare `sat` passes
+the exact approved Planning result through this path and then uses the existing
+accepted-result delivery boundary.
 
 The controller supports explicit recovery of an isolated clone created
 immediately before a crash. The current `sat run` command intentionally starts
@@ -411,9 +414,17 @@ when investigating it rather than editing artifacts in place.
 - CPU, memory, process, open-file, tmpfs, captured command-output, wall-clock,
   iteration, and Agent-invocation limits are mandatory before live runs.
 - Checked-in capability defaults and fixed-role compatibility timeouts reflect
-  measured workloads. An Adaptive TeamPlan freezes the approved timeout for
-  each run-scoped Agent. A global CLI or saved timeout override is an explicit
-  experimental variable.
+  measured workloads. Adaptive Planning supplies only a routine, substantial,
+  or complex workload class. Product policy deterministically resolves that
+  class inside a capability-specific default-to-ceiling envelope; a direct user
+  timeout override must remain inside the same envelope. The resulting
+  Adaptive TeamPlan freezes the exact timeout for each run-scoped Agent. A
+  global CLI or saved timeout override collapses every Adaptive envelope to one
+  explicit value and is an experimental variable.
+- Without a global override, the product envelope uses the checked-in
+  capability timeout as its default and twice that value, capped at 3,600
+  seconds, as its ceiling. Routine selects the default, complex selects the
+  ceiling, and substantial selects their integer midpoint.
 - An initial semantic response and its optional one-call repair each receive
   the resolved Agent timeout. A repair must regenerate the complete response;
   it is not given an arbitrary remainder from the first call. The run-wide

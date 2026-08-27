@@ -14,7 +14,6 @@ from software_agent_team.product import (
     DiagnosticState,
     ProductFlowError,
     ProductStatePaths,
-    build_product_task_brief,
     deliver_product_workspace,
     ensure_product_state,
     generate_product_run_id,
@@ -110,6 +109,7 @@ def test_product_state_is_private_and_rejects_a_symlink(tmp_path: Path) -> None:
             paths.runs,
             paths.workspaces,
             paths.sources,
+            paths.planning,
             paths.openclaw,
         )
     )
@@ -120,6 +120,7 @@ def test_product_state_is_private_and_rejects_a_symlink(tmp_path: Path) -> None:
             paths.runs,
             paths.workspaces,
             paths.sources,
+            paths.planning,
             paths.openclaw,
         )
     )
@@ -148,63 +149,13 @@ def test_product_state_refuses_to_adopt_an_unowned_nonempty_root(
     assert root.stat().st_mode & 0o777 == 0o755
 
 
-def test_run_id_and_task_brief_are_independent_of_the_evaluation_fixture() -> None:
+def test_product_run_id_is_independent_of_the_evaluation_fixture() -> None:
     run_id = generate_product_run_id(
         clock=lambda: datetime(2026, 8, 24, 12, 34, 56, tzinfo=UTC),
         random_suffix=lambda: "a1b2c3d4",
     )
 
-    brief = build_product_task_brief(
-        run_id=run_id,
-        project_name="link-checker",
-        source_request="  Build   a CLI that checks Markdown links. ",
-        success_conditions=(
-            "Exit non-zero for broken local links",
-            "Print the source file and line number",
-        ),
-        user_constraints=("Use only the standard library at runtime",),
-    )
-
     assert run_id == "sat-20260824-123456-a1b2c3d4"
-    assert brief.run_id == run_id
-    assert brief.title == "Link Checker"
-    assert brief.source_request == "Build a CLI that checks Markdown links."
-    assert "Exit non-zero" in brief.acceptance_criteria[0].description
-    assert "standard library" in brief.constraints[-1]
-    assert {criterion.id for criterion in brief.acceptance_criteria} == {
-        "AC_REQUEST",
-        "AC_RUNNABLE",
-        "AC_TESTS",
-        "AC_QUALITY",
-        "AC_DOCUMENTATION",
-    }
-    serialized = brief.model_dump_json()
-    assert "task-manager" not in serialized
-    assert brief.confirmed
-
-
-@pytest.mark.parametrize(
-    ("field", "overrides"),
-    [
-        ("software request", {"source_request": "\udce5broken"}),
-        ("project name", {"project_name": "\udce5broken"}),
-        ("success condition", {"success_conditions": ("\udce5broken",)}),
-        ("constraint", {"user_constraints": ("\udce5broken",)}),
-    ],
-)
-def test_product_task_brief_rejects_invalid_terminal_unicode(
-    field: str,
-    overrides: dict[str, object],
-) -> None:
-    arguments: dict[str, object] = {
-        "run_id": "sat-unicode-test",
-        "project_name": "unicode-test",
-        "source_request": "Build a Unicode-safe CLI",
-    }
-    arguments.update(overrides)
-
-    with pytest.raises(ProductFlowError, match=field):
-        build_product_task_brief(**arguments)  # type: ignore[arg-type]
 
 
 def test_project_commands_are_loaded_from_the_generated_project(tmp_path: Path) -> None:

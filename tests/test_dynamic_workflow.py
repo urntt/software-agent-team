@@ -35,6 +35,8 @@ from software_agent_team.execution import (
 from software_agent_team.integrity import canonical_model_sha256
 from software_agent_team.planning import (
     AdaptiveImplementationPlan,
+    AgentTimeoutResolution,
+    AgentWorkload,
     ApprovedPlanningResult,
     PlanningApproval,
     ProposedTask,
@@ -229,6 +231,17 @@ def approved_inputs(
         task_brief_sha256=canonical_model_sha256(brief),
         implementation_plan_sha256=canonical_model_sha256(implementation),
         team_plan_sha256=canonical_model_sha256(team),
+        timeout_resolutions=tuple(
+            AgentTimeoutResolution(
+                agent_id=agent.id,
+                workload=AgentWorkload.ROUTINE,
+                default_seconds=agent.timeout_seconds,
+                ceiling_seconds=agent.timeout_seconds,
+                resolved_seconds=agent.timeout_seconds,
+                source="policy_workload",
+            )
+            for agent in team.agents
+        ),
     )
     return ApprovedPlanningResult(
         task_brief=brief,

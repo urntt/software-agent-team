@@ -10,11 +10,11 @@ The specification derives from the product and architecture decisions in
 [`VISION.md`](../VISION.md). Current implementation and rehearsal status belong
 only to [`STATUS.md`](../STATUS.md).
 
-This document remains the completed baseline acceptance contract. The planned
-multi-round Planning dialogue, task-defined Agent teams, configurable per-Agent
-progress, live user controls, and model routing extend this journey without
-retrospectively changing its completion criteria. Their target contract is
-[`adaptive-orchestration.md`](adaptive-orchestration.md).
+This document owns the ordinary installation-to-delivery acceptance contract.
+The detailed Planning, Dynamic Team, progress, control, and routing contracts
+are defined in
+[`adaptive-orchestration.md`](adaptive-orchestration.md); this document states
+how those capabilities must appear to a normal user.
 
 ## User Journey Contract
 
@@ -27,9 +27,10 @@ start the computer
 → run `sat`
 → follow automatic diagnostics and first-run configuration
 → answer "What would you like to build?"
-→ answer bounded clarification questions
-→ confirm a concise requirements summary
-→ watch attributable stage summaries and progress
+→ authorize model-backed Planning
+→ answer only material clarification questions
+→ review and approve or revise one complete plan overview
+→ watch attributable run and Agent progress
 → receive a runnable result, verification status, and next commands
 ```
 
@@ -47,9 +48,10 @@ Running `sat` with no subcommand is the primary product entry point. It owns:
 
 - Startup diagnostics;
 - First-run provider and model guidance;
-- Request collection and bounded clarification;
-- Requirements confirmation;
+- Request collection and explicit Planning authorization;
+- Bounded clarification, proposal revision, and plan approval;
 - Internal run preparation;
+- Task-defined Agent creation and deterministic scheduling;
 - Progress rendering;
 - Delivery and failure summaries.
 
@@ -132,9 +134,9 @@ repository, generated project, run artifacts, logs, exports, or terminal echo;
 OpenClaw stores them only in SAT's private OpenClaw state unless they are
 inherited from the trusted caller environment.
 
-Pricing overrides, verification concurrency, role-invocation timeouts, repair
-limits, policy files, and team selection remain advanced evaluation options.
-They are not first-run questions. The controller uses checked-in safe defaults
+Pricing overrides, adaptive maximum concurrency, invocation-timeout overrides,
+repair limits, policy files, and model routing remain advanced settings. They
+are not first-run questions. The controller uses checked-in safe defaults
 unless the user deliberately enters an advanced mode.
 
 ## Request, Clarification, and Confirmation
@@ -149,15 +151,22 @@ The user may answer in ordinary language. SAT then:
 
 1. States the installed execution-profile boundary: a small local Python 3.12
    project whose checks run without network access;
-2. Asks for semicolon-separated success conditions and optional constraints;
-3. Builds acceptance criteria and requirements from those confirmed inputs;
-4. Shows a concise structured summary in user language;
-5. Requires explicit confirmation before a model-backed build begins.
+2. Asks for one new direct child project directory;
+3. Shows the request, destination, exact model, and provider-usage consequence;
+4. Requires explicit authorization before model-backed Planning begins;
+5. Lets the read-only bootstrap Planning capability ask only questions whose
+   answers can materially change requirements, acceptance, architecture, team
+   composition, dependencies, permissions, budget, or model use;
+6. Presents one complete overview containing requirements, acceptance criteria,
+   implementation tasks, proposed Agents and rationales, dependencies,
+   permissions, workspace scopes, model, controller-resolved timeouts,
+   execution waves, concurrency, iterations, and budgets; and
+7. Lets the user approve, request a natural-language replacement, make a
+   supported safe edit, or cancel before any execution Agent is created.
 
 Each interactive answer must be valid terminal Unicode. An undecodable answer
-is rejected at its prompt and collected again; it must never reach TaskBrief
-validation or start a run. At the optional-constraints prompt, `none` and `n/a`
-mean that no additional constraint was supplied.
+is rejected at its prompt and collected again; it must never reach Planning
+evidence validation or start a run.
 
 The runtime-profile boundary must be stated honestly. A request that requires
 another language, platform, hosted dependency, credential, or unsupported
@@ -169,15 +178,19 @@ the primary greenfield flow.
 
 ## Internal Materialization
 
-After confirmation, the controller automatically and atomically:
+After plan approval, the controller automatically and atomically:
 
 - Generates a unique internal run ID;
-- Persists the confirmed TaskBrief;
-- Selects the default team, product policy, and Python quality profile;
+- Persists the authorized request, append-only Planning turns, immutable plan
+  revisions, exact approval with per-Agent timeout rationale, confirmed
+  TaskBrief, implementation intent, and approved TeamPlan;
+- Creates only the approved run-scoped AgentSpecs; it does not select a fixed
+  product team;
 - Creates a fresh isolated source baseline and run workspace;
 - Verifies that no existing evidence or user file will be overwritten,
   including when a destination appears while the build is running;
-- Records the exact model, policy, source, and environment identity.
+- Records the exact model routes, controller-resolved timeouts, policy, source,
+  and environment identity.
 
 Write-once evidence and fresh source isolation remain mandatory. The UX change
 removes manual preparation; it does not weaken provenance or overwrite
@@ -193,7 +206,7 @@ partial workspace as a successful delivery.
 
 The deterministic controller emits user-safe events. The terminal displays:
 
-- The current phase and role;
+- The current lifecycle phase and every approved Agent's attributable state;
 - Completed phase summaries;
 - Elapsed time while waiting for a provider response;
 - Verified Git snapshot summaries;
@@ -202,22 +215,21 @@ The deterministic controller emits user-safe events. The terminal displays:
 - Revision reasons and iteration count;
 - Budget or provider failures in plain language.
 
-The normal product policy permits the initial implementation and at most two
-evidence-driven revisions. A third implementation iteration is available only
-inside the existing controller loop; it does not add a user prompt or retry a
-run in place, and non-convergence rules still stop repeated blockers or a
-revision with no relevant change. The advanced frozen evaluation path keeps its
-separate two-iteration comparison limit.
+The approved plan permits between one and three implementation iterations.
+Revision is enabled only when the approved limit exceeds one. Controller
+evidence, rather than an Agent request by itself, decides whether another
+iteration is justified; repeated blockers, no relevant Git change, terminal
+failures, and budget exhaustion still stop the run. The advanced frozen
+evaluation path keeps its separate two-iteration comparison limit.
 
 For example:
 
 ```text
-✓ Requirements confirmed
-✓ Implementation plan created
-● Developer is implementing... 02:14 elapsed
+✓ Plan approved: 3 execution Agents, maximum concurrency 2
+● api_builder is implementing... 02:14 elapsed
 ✓ Git snapshot verified: 8 files changed
-● Running quality gates... 3/4 passed
-● Independent review in progress...
+● acceptance_tester is verifying the approved commit...
+● quality_reviewer is reviewing the approved commit...
 ↻ Revision requested: deletion needs an explicit confirmation step
 ✓ Revision verified
 ✓ Project completed
@@ -263,7 +275,7 @@ SAT never retries a failed run in place, overwrites immutable evidence, or
 claims that an interrupted external action succeeded. When automatic resume is
 unavailable, the CLI must clearly distinguish a new run from recovery.
 Before returning control to the terminal, SAT removes the exact run-scoped
-OpenClaw role containers, including any child process still running inside
+OpenClaw Agent containers, including any child process still running inside
 them. Cleanup is required for success and also runs after workflow failure or
 interruption; it must not target another OpenClaw installation.
 
@@ -283,13 +295,15 @@ The Product Demo Slice is complete only when all of the following are true:
    configuration without requiring another SAT subcommand.
 5. The normal user is not asked for prices, concurrency, timeouts, repair
    limits, team IDs, policy paths, run IDs, or JSON files.
-6. SAT asks what to build, performs bounded clarification, shows a requirements
-   summary, and requires confirmation before model-backed work.
-7. SAT generates every internal identifier, TaskBrief, source baseline, run
-   path, and workspace automatically without weakening write-once evidence.
-8. The terminal shows controller-backed phase changes, summaries, elapsed
-   waiting time, gate progress, review, and revision information throughout the
-   build.
+6. SAT asks what to build, obtains authorization before Planning, performs
+   bounded clarification, and lets the user revise or approve a complete plan
+   before an execution Agent is created.
+7. SAT generates every internal identifier, Planning record, TaskBrief,
+   TeamPlan, source baseline, run path, and workspace automatically without
+   weakening write-once evidence.
+8. The terminal shows controller-backed phase changes, per-Agent states and
+   summaries, elapsed waiting time, gate progress, review, and revision
+   information throughout the build.
 9. Success returns a clean runnable project, exact start/test commands, quality
    results, limitations, and report paths.
 10. A terminal workflow outcome leaves no live or stopped OpenClaw role
@@ -297,9 +311,9 @@ The Product Demo Slice is complete only when all of the following are true:
     outside SAT-owned state and workspace paths.
 11. Failure returns an honest terminal result and preserved evidence without
    presenting a partial project as accepted.
-12. The complete journey is covered by offline interaction tests and rehearsed
-    from a fresh supported environment with one explicitly authorized provider
-    run.
+12. The complete adaptive journey is covered by offline interaction tests and
+    rehearsed from a fresh supported environment with one explicitly authorized
+    provider run.
 
 Implementation progress and the next rehearsal step are maintained in
 [`STATUS.md`](../STATUS.md); the development sequence and exit criteria are

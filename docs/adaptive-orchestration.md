@@ -4,8 +4,9 @@ This contributor-facing specification defines the product contract for
 task-defined Agent teams, interactive planning, observable execution, user
 controls, and model routing. Planning, run-scoped execution identity, prompts,
 runtime configuration, handoffs, telemetry, Agent-namespaced artifact
-persistence, deterministic DAG scheduling, and multi-iteration lifecycle
-convergence are implemented. Bare-`sat` activation and active controls remain
+persistence, deterministic DAG scheduling, multi-iteration lifecycle
+convergence, and bare-`sat` activation are implemented and offline verified.
+Richer progress projection, active controls, and multi-model routing remain
 staged work.
 Current behavior and gaps remain authoritative in
 [`STATUS.md`](../STATUS.md); the completed guided baseline remains specified in
@@ -70,7 +71,7 @@ unowned model choices. Responsibility is divided explicitly:
 | Agent number, labels, responsibilities, and capabilities | Bootstrap Planning derives them from the task and explains each one | User approves or revises the overview | Controller creates only approved `AgentSpec` entries |
 | Dependencies and possible parallel waves | Bootstrap Planning proposes a DAG | User approves it; policy supplies safe limits | Controller validates acyclicity and schedules only ready nodes |
 | Maximum concurrency | Bootstrap Planning proposes a bounded value | User may edit it; policy caps it | Controller decides which ready Agents actually start without exceeding the cap |
-| Per-Agent invocation timeout | Bootstrap Planning estimates workload and expected duration; it does not authorize a timeout | Capability policy resolves a safe default and ceiling; the user may edit the advanced value within that envelope | Controller freezes, passes, and enforces the exact resolved timeout for every invocation |
+| Per-Agent invocation timeout | Bootstrap Planning classifies workload as routine, substantial, or complex; it does not choose seconds | Capability policy maps that class into a default-to-ceiling envelope; the user may set an exact advanced override only inside it | Controller freezes, passes, and enforces the exact resolved timeout for every invocation |
 | Call, token, duration, iteration, and cost budgets | Product policy supplies the safe envelope; Planning works within it | User sees and approves the effective limits | Controller rejects over-budget plans and stops further launches when a limit is reached |
 | Model route | Planning may recommend task needs; configured profiles and routing policy provide candidates | User approves effective routes and switch conditions | Controller resolves and records the authorized route; there is no silent fallback |
 | Replanning or team changes during execution | User correction or an Agent recommendation may request a change | Material changes require a new validated revision and user confirmation | Controller applies a revision only at a safe checkpoint |
@@ -79,6 +80,14 @@ The Planner therefore proposes semantic organization and workload estimates,
 the user authorizes material choices, policy resolves the allowed operational
 envelope, and the controller owns validation, creation, scheduling, timeouts,
 lifecycle, evidence, and cleanup.
+
+For the current product profile, `routine` maps to the checked-in capability
+default, `complex` maps to twice that default capped at 3,600 seconds, and
+`substantial` maps to their integer midpoint. Coding and integration therefore
+resolve to 900, 1,350, or 1,800 seconds; testing and review resolve to 300, 450,
+or 600 seconds. An explicit global timeout override collapses all three classes
+to that one user-selected value. This mapping is controller policy, is shown in
+the overview, and never comes from an execution Agent.
 
 ## Planned User Journey
 
@@ -147,8 +156,10 @@ preferences. Raw system prompts, arbitrary tool grants, and direct policy-file
 editing remain an advanced contributor surface. Even advanced changes pass the
 same controller validation.
 
-Approval freezes version one of the run contract. Later corrections create a
-new version; they never mutate an already referenced plan in place.
+Approval freezes version one of the run contract, including the workload,
+policy envelope, resolution source, and exact timeout selected for every
+Agent. Later corrections create a new version; they never mutate an already
+referenced plan in place.
 
 ## Versioned Contracts
 
@@ -167,7 +178,8 @@ A `TeamPlan` binds one confirmed TaskBrief and ImplementationPlan to:
 - Independent verification and review coverage;
 - Aggregate iteration and resource budgets;
 - A `ModelRoutePlan`;
-- The user approval record and planner proposal evidence.
+- The user approval record, controller timeout resolutions, and planner
+  proposal evidence.
 
 ### `AgentSpec`
 
@@ -442,9 +454,9 @@ and approve a complete validated TeamPlan without editing an internal file.
 **Implementation note:** the versioned request, question/proposal response,
 append-only turn and proposal store, natural-language revision, safe limit
 editor, complete overview, explicit approval evidence, and deterministic
-ordinary-user interaction test are implemented. The bare `sat` launcher will
-activate this interaction together with Batch 3C so it never approves a dynamic
-team and then executes a different fixed team.
+ordinary-user interaction test are implemented. Bare `sat` now activates this
+interaction together with Batch 3C, so an approved dynamic plan is the exact
+plan the controller executes.
 
 ### Batch 3C: Dynamic Team Runtime
 
@@ -461,8 +473,8 @@ boundary.
 
 **Implementation note:** run-scoped Agent identity and capability telemetry,
 approved-Agent-only OpenClaw configuration, AgentSpec-derived prompt and
-response contracts, exact model/timeout binding, and AgentSpec-derived cleanup
-selection are implemented. Adaptive plans may use one downstream independent
+response contracts, exact model and controller-resolved-timeout binding, and
+AgentSpec-derived cleanup selection are implemented. Adaptive plans may use one downstream independent
 quality Agent for a small task; separate testing and review Agents remain an
 explicit justified choice rather than a hidden minimum topology. Controller
 artifact/handoff attribution, bounded DAG dispatch, shared controller-owned
@@ -480,8 +492,19 @@ boundary before the first quality Agent starts, aggregates every approved
 output, decides accept/revise/fail, binds prior blocking evidence to the next
 iteration's starting commit, stops an unchanged repeated blocker, and writes
 the same integrity-checked final evidence and human report as the compatibility
-workflow. Safe plan amendment checkpoints and bare `sat` activation remain in
-this batch.
+workflow. Bare `sat` now authorizes Planning, creates its read-only bootstrap
+runtime, presents the complete overview, materializes only an approved
+source/run, executes the approved Dynamic Team, delivers only acceptance, and
+cleans bootstrap and runtime sandboxes. Safe plan amendment checkpoints remain
+in this batch.
+
+The current single-clone Git backend serializes every writer and excludes
+readers while a writer is active; independently ready read-only quality Agents
+may run concurrently up to the approved cap. Product configuration now owns an
+adaptive `max_concurrency` value from 1 through 16 rather than reusing the old
+fixed-fixture verification setting. The active product profile currently
+permits one Reviewer because multiple Reviewer acceptance scopes do not yet
+have a user-facing assignment editor.
 
 ### Batch 3D: Observable and Controllable Execution
 

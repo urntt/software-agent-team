@@ -18,6 +18,7 @@ task_state_root="${SAT_STATE_ROOT:-$task_xdg_state_root/software-agent-team}"
 task_runs_root="$task_state_root/runs"
 task_workspaces_root="$task_state_root/workspaces"
 task_sources_root="$task_state_root/sources"
+task_planning_root="$task_state_root/planning"
 task_provider_state_root="$task_state_root/openclaw"
 task_state_marker="$task_state_root/.sat-state-v1"
 task_runtime_root="$task_root/.sat"
@@ -53,7 +54,8 @@ Options:
                     PATH must be an absolute path that does not already exist.
   --keep-config     Preserve saved SAT configuration (default).
   --purge-config    Delete saved SAT configuration after an optional export.
-  --keep-data       Preserve generated runs, workspaces, and sources (default).
+  --keep-data       Preserve runs, workspaces, sources, and Planning evidence
+                    (default).
   --purge-data      Delete generated data after an optional export.
   --keep-provider-state
                     Preserve SAT's isolated OpenClaw credentials and sessions
@@ -223,7 +225,7 @@ if [[ "$task_assume_yes" == "0" ]]; then
     task_config_policy="purge"
   fi
   if [[ "$task_data_policy_explicit" == "0" ]] && \
-    ask_yes_no "Delete generated runs, workspaces, and sources after export?"; then
+    ask_yes_no "Delete runs, workspaces, sources, and Planning evidence after export?"; then
     task_data_policy="purge"
   fi
   if [[ "$task_provider_policy_explicit" == "0" ]] && \
@@ -269,6 +271,7 @@ export_user_state() {
   local task_runs_exported="no"
   local task_workspaces_exported="no"
   local task_sources_exported="no"
+  local task_planning_exported="no"
   if [[ -f "$task_config_path" ]]; then
     mkdir -m 700 -- "$task_export_to/configuration"
     cp -p -- "$task_config_path" "$task_export_to/configuration/config.json"
@@ -289,6 +292,11 @@ export_user_state() {
     cp -a -- "$task_sources_root" "$task_export_to/data/sources"
     task_sources_exported="yes"
   fi
+  if [[ -d "$task_planning_root" ]]; then
+    mkdir -p -m 700 -- "$task_export_to/data"
+    cp -a -- "$task_planning_root" "$task_export_to/data/planning"
+    task_planning_exported="yes"
+  fi
   {
     echo "Software Agent Team uninstall export"
     echo "created_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -296,6 +304,7 @@ export_user_state() {
     echo "runs=$task_runs_exported"
     echo "workspaces=$task_workspaces_exported"
     echo "sources=$task_sources_exported"
+    echo "planning=$task_planning_exported"
     echo "provider_credentials=excluded"
     echo "custom_run_roots=excluded"
   } > "$task_export_to/EXPORT.txt"
@@ -314,6 +323,7 @@ if [[ -n "$task_export_to" || "$task_data_policy" == "purge" || \
   validate_state_ownership
   [[ ! -L "$task_state_root" && ! -L "$task_runs_root" && \
     ! -L "$task_workspaces_root" && ! -L "$task_sources_root" && \
+    ! -L "$task_planning_root" && \
     ! -L "$task_provider_state_root" ]] || \
     fail "refusing to export or delete symbolic-link SAT state directories"
 fi
@@ -331,10 +341,11 @@ else
 fi
 
 if [[ "$task_data_policy" == "purge" ]]; then
-  rm -rf -- "$task_runs_root" "$task_workspaces_root" "$task_sources_root"
-  echo "uninstall: deleted generated runs, workspaces, and sources"
+  rm -rf -- "$task_runs_root" "$task_workspaces_root" "$task_sources_root" \
+    "$task_planning_root"
+  echo "uninstall: deleted runs, workspaces, sources, and Planning evidence"
 else
-  echo "uninstall: preserved generated runs, workspaces, and sources"
+  echo "uninstall: preserved runs, workspaces, sources, and Planning evidence"
 fi
 
 if [[ "$task_provider_policy" == "purge" ]]; then

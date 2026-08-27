@@ -9,12 +9,15 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from software_agent_team.artifacts import AcceptanceCriterion
 from software_agent_team.budgets import AgentBudget
 from software_agent_team.execution import ScriptedAgentExecutor
 from software_agent_team.integrity import canonical_model_sha256
 from software_agent_team.planning import (
     AdaptivePlanningCoordinator,
+    AgentWorkload,
     ApprovedPlanningResult,
+    CapabilityTimeoutPolicy,
     PlanningError,
     PlanningIntegrityError,
     PlanningModelResponse,
@@ -89,11 +92,23 @@ def policy(**updates: object) -> PlanningPolicy:
             max_agent_duration_seconds=7_200,
             max_estimated_cost_usd="25",
         ),
-        "capability_timeout_ceiling_seconds": {
-            AgentCapability.IMPLEMENTATION: 900,
-            AgentCapability.INTEGRATION: 900,
-            AgentCapability.TESTING: 300,
-            AgentCapability.REVIEW: 300,
+        "capability_timeouts": {
+            AgentCapability.IMPLEMENTATION: CapabilityTimeoutPolicy(
+                default_seconds=600,
+                ceiling_seconds=900,
+            ),
+            AgentCapability.INTEGRATION: CapabilityTimeoutPolicy(
+                default_seconds=600,
+                ceiling_seconds=900,
+            ),
+            AgentCapability.TESTING: CapabilityTimeoutPolicy(
+                default_seconds=240,
+                ceiling_seconds=300,
+            ),
+            AgentCapability.REVIEW: CapabilityTimeoutPolicy(
+                default_seconds=240,
+                ceiling_seconds=300,
+            ),
         },
     }
     values.update(updates)
@@ -147,7 +162,7 @@ def proposal_body(*, title: str = "Markdown Link Checker") -> PlanningProposalBo
                 capability=AgentCapability.IMPLEMENTATION,
                 stage_id="implement",
                 workspace_scope="repository",
-                timeout_seconds=600,
+                workload=AgentWorkload.ROUTINE,
             ),
             ProposedAgent(
                 id="acceptance_tester",
@@ -158,7 +173,7 @@ def proposal_body(*, title: str = "Markdown Link Checker") -> PlanningProposalBo
                 stage_id="verify",
                 dependencies=("cli_developer",),
                 workspace_scope="repository",
-                timeout_seconds=240,
+                workload=AgentWorkload.ROUTINE,
             ),
             ProposedAgent(
                 id="quality_reviewer",
@@ -169,7 +184,7 @@ def proposal_body(*, title: str = "Markdown Link Checker") -> PlanningProposalBo
                 stage_id="verify",
                 dependencies=("cli_developer",),
                 workspace_scope="repository",
-                timeout_seconds=240,
+                workload=AgentWorkload.ROUTINE,
             ),
         ),
         iteration_limit=2,
@@ -288,6 +303,128 @@ def test_proposal_compiles_to_complete_controller_owned_authority() -> None:
     assert "estimated cost ceiling: $25" in overview
 
 
+def test_controller_resolves_workload_classes_without_model_timeout_authority() -> None:
+    body = proposal_body()
+    workloads = {
+        "cli_developer": AgentWorkload.COMPLEX,
+        "acceptance_tester": AgentWorkload.SUBSTANTIAL,
+        "quality_reviewer": AgentWorkload.ROUTINE,
+    }
+    agents = tuple(
+        agent.model_copy(update={"workload": workloads[agent.id]})
+        for agent in body.agents
+    )
+
+    preview = preview_adaptive_proposal(
+        request(),
+        proposal(body=body.model_copy(update={"agents": agents})),
+        policy(),
+        created_at=FIXED_TIME,
+    )
+
+    assert {agent.id: agent.timeout_seconds for agent in preview.team_plan.agents} == {
+        "cli_developer": 900,
+        "acceptance_tester": 270,
+        "quality_reviewer": 240,
+    }
+    assert all(
+        resolution.source == "policy_workload"
+        for resolution in preview.timeout_resolutions
+    )
+    assert "timeout_seconds" not in proposal_response().model_dump_json()
+
+
+def test_controller_adds_profile_criteria_without_model_echo() -> None:
+    profile_criterion = AcceptanceCriterion(
+        id="AC_PROFILE",
+        description="The project satisfies the fixed runtime contract.",
+        verification="Run the profile contract gate.",
+    )
+    configured = policy(
+        profile_acceptance_criteria=(profile_criterion,),
+        require_review_agent=True,
+    )
+
+    preview = preview_adaptive_proposal(
+        request(),
+        proposal(),
+        configured,
+        created_at=FIXED_TIME,
+    )
+
+    assert [criterion.id for criterion in preview.task_brief.acceptance_criteria] == [
+        "AC_SCAN",
+        "AC_REPORT",
+        "AC_PROFILE",
+    ]
+    assert "AC_PROFILE" not in {
+        criterion.id for criterion in proposal().body.acceptance_criteria
+    }
+
+
+def test_controller_rejects_profile_criterion_echo_and_missing_reviewer() -> None:
+    profile_criterion = AcceptanceCriterion(
+        id="AC_PROFILE",
+        description="The project satisfies the fixed runtime contract.",
+        verification="Run the profile contract gate.",
+    )
+    configured = policy(
+        profile_acceptance_criteria=(profile_criterion,),
+        require_review_agent=True,
+    )
+    body = proposal_body()
+    echoed = ProposedCriterion(
+        id="AC_PROFILE",
+        description=profile_criterion.description,
+        verification=profile_criterion.verification,
+    )
+    echoed_tasks = (
+        body.tasks[0].model_copy(
+            update={
+                "acceptance_criteria": (
+                    *body.tasks[0].acceptance_criteria,
+                    "AC_PROFILE",
+                )
+            }
+        ),
+    )
+    echoed_body = PlanningProposalBody.model_validate(
+        body.model_copy(
+            update={
+                "acceptance_criteria": (*body.acceptance_criteria, echoed),
+                "tasks": echoed_tasks,
+            }
+        )
+    )
+    with pytest.raises(PlanningError, match="controller-owned profile criteria"):
+        preview_adaptive_proposal(
+            request(),
+            proposal(body=echoed_body),
+            configured,
+            created_at=FIXED_TIME,
+        )
+
+    without_reviewer = PlanningProposalBody.model_validate(
+        body.model_copy(
+            update={
+                "agents": tuple(
+                    agent
+                    for agent in body.agents
+                    if agent.capability is not AgentCapability.REVIEW
+                ),
+                "max_concurrency": 1,
+            }
+        )
+    )
+    with pytest.raises(PlanningError, match="requires an independent review Agent"):
+        preview_adaptive_proposal(
+            request(),
+            proposal(body=without_reviewer),
+            configured,
+            created_at=FIXED_TIME,
+        )
+
+
 def test_small_task_may_use_one_independent_quality_agent() -> None:
     body = proposal_body()
     agents = tuple(agent for agent in body.agents if agent.id != "acceptance_tester")
@@ -320,7 +457,7 @@ def test_proposal_rejects_an_implementation_agent_without_tasks() -> None:
         capability=AgentCapability.IMPLEMENTATION,
         stage_id="implement",
         workspace_scope="repository/docs",
-        timeout_seconds=300,
+        workload=AgentWorkload.ROUTINE,
     )
     agents = tuple(
         agent.model_copy(
@@ -345,7 +482,7 @@ def test_cross_agent_task_dependencies_require_matching_agent_dependencies() -> 
         capability=AgentCapability.IMPLEMENTATION,
         stage_id="implement",
         workspace_scope="repository/tests",
-        timeout_seconds=300,
+        workload=AgentWorkload.ROUTINE,
     )
     agents = tuple(
         agent.model_copy(
@@ -382,7 +519,7 @@ def test_proposal_cannot_split_final_commit_coverage_across_quality_agents() -> 
         capability=AgentCapability.IMPLEMENTATION,
         stage_id="implement",
         workspace_scope="repository/tests",
-        timeout_seconds=300,
+        workload=AgentWorkload.ROUTINE,
     )
     agents = tuple(
         agent.model_copy(
@@ -432,14 +569,16 @@ def test_controller_rejects_quality_dependency_and_timeout_policy_violations() -
             created_at=FIXED_TIME,
         )
 
-    excessive = tuple(
-        agent.model_copy(update={"timeout_seconds": 301})
-        if agent.id == "acceptance_tester"
-        else agent
-        for agent in proposal_body().agents
+    invalid = apply_structured_edit(
+        proposal(),
+        StructuredPlanEdit(
+            kind=StructuredEditKind.AGENT_TIMEOUT,
+            agent_id="acceptance_tester",
+            value=301,
+        ),
+        created_at=FIXED_TIME + timedelta(seconds=1),
     )
-    invalid = proposal(body=proposal_body().model_copy(update={"agents": excessive}))
-    with pytest.raises(PlanningError, match="testing policy ceiling of 300s"):
+    with pytest.raises(PlanningError, match=r"policy envelope of 240\.\.300s"):
         preview_adaptive_proposal(
             request(),
             invalid,
@@ -472,12 +611,33 @@ def test_structured_edits_create_valid_revisions_without_internal_json() -> None
         StructuredPlanEdit(kind=StructuredEditKind.ITERATION_LIMIT, value=1),
         created_at=FIXED_TIME + timedelta(seconds=2),
     )
+    timeout = apply_structured_edit(
+        iteration,
+        StructuredPlanEdit(
+            kind=StructuredEditKind.AGENT_TIMEOUT,
+            agent_id="cli_developer",
+            value=750,
+        ),
+        created_at=FIXED_TIME + timedelta(seconds=3),
+    )
 
     assert concurrency.revision == 2
     assert concurrency.source is PlanningProposalSource.STRUCTURED_EDIT
     assert concurrency.body.max_concurrency == 1
     assert iteration.body.iteration_limit == 1
     assert not iteration.body.revision_enabled
+    assert timeout.timeout_overrides_seconds == {"cli_developer": 750}
+    assert (
+        preview_adaptive_proposal(
+            request(),
+            timeout,
+            policy(),
+            created_at=FIXED_TIME,
+        )
+        .team_plan.get_agent("cli_developer")
+        .timeout_seconds
+        == 750
+    )
 
 
 def test_store_detects_changed_append_only_turn_evidence(tmp_path: Path) -> None:
@@ -573,6 +733,10 @@ def test_dialogue_revision_structured_edit_and_approval_are_recoverable(
     assert approved.approval.team_plan_sha256 == canonical_model_sha256(
         approved.team_plan
     )
+    assert {
+        resolution.agent_id: resolution.resolved_seconds
+        for resolution in approved.approval.timeout_resolutions
+    } == {agent.id: agent.timeout_seconds for agent in approved.team_plan.agents}
     session = store.load_session(request().run_id)
     assert session.status is PlanningSessionStatus.APPROVED
     assert session.turn_count == 3
@@ -586,6 +750,17 @@ def test_dialogue_revision_structured_edit_and_approval_are_recoverable(
     tampered["team_plan"]["agents"][0]["timeout_seconds"] += 1
     with pytest.raises(ValidationError, match="does not bind the supplied TeamPlan"):
         ApprovedPlanningResult.model_validate(tampered)
+
+    tampered_resolution = approved.model_dump(mode="json")
+    resolution = tampered_resolution["approval"]["timeout_resolutions"][0]
+    resolution["source"] = "user_override"
+    resolution["resolved_seconds"] = (
+        resolution["default_seconds"]
+        if resolution["resolved_seconds"] != resolution["default_seconds"]
+        else resolution["ceiling_seconds"]
+    )
+    with pytest.raises(ValidationError, match="do not match the TeamPlan"):
+        ApprovedPlanningResult.model_validate(tampered_resolution)
 
 
 def test_invalid_complete_proposal_is_repaired_before_it_is_shown(

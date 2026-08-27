@@ -1,8 +1,8 @@
 # Project Status
 
-**Current milestone:** Phase 3C adaptive lifecycle convergence implemented; bare-`sat` activation is next
+**Current milestone:** Phase 3C adaptive product activation implemented and offline verified; Phase 3D progress and controls are next
 
-**Last updated:** August 26, 2026
+**Last updated:** August 27, 2026
 
 This document records what the repository implements now, what evidence
 supports that claim, and what remains unavailable. It does not redefine the
@@ -50,7 +50,7 @@ validation also rejects a plan whose complete planned iterations cannot fit
 its call budget. Recovery
 verifies the exact TaskBrief binding, TeamPlan digest, fixed manifest version,
 fixed team digest, resolved Agent timeouts, and cross-file run metadata. The
-complete repository check passes with 524 offline tests.
+complete repository check passes with 529 offline tests.
 
 `RunEvent` is also an executable, append-only contract. Every current workflow
 progress update is persisted with a contiguous sequence, lifecycle revision,
@@ -73,15 +73,19 @@ two or three suggestions and a custom-answer path, or one complete proposal.
 Strict proposal validation covers requirements, acceptance criteria,
 implementation tasks, task ownership, dynamic Agent responsibilities,
 dependencies, workspace scopes, independent quality coverage, concurrency,
-iterations, per-Agent timeouts, the configured model route, and controller
-budgets before the proposal is shown.
+iterations, per-Agent workload classes, the configured model route, and
+controller budgets before the proposal is shown. The Planner does not
+authorize seconds: controller policy maps routine, substantial, or complex
+workload into a capability-specific default-to-ceiling timeout envelope.
 
 The ordinary-user interaction supports free-form answers, natural-language
 replacement revisions, safe edits to maximum concurrency, iteration count, and
 individual Agent timeouts, cancellation, a complete plain-language overview,
 and explicit approval. `PlanningStore` persists the authorized request,
 hash-chained model turns including rejected response evidence, immutable
-proposal revisions, and the exact approval digests. Approval promotes the
+proposal revisions, exact approval digests, and the controller's per-Agent
+timeout resolutions with workload class, policy envelope, source, and final
+seconds. Approval promotes the
 validated preview into an authorized confirmed `TaskBrief`, adaptive
 implementation plan, and executable `TeamPlan`.
 The resulting `ApprovedPlanningResult` revalidates those exact digests and
@@ -168,32 +172,34 @@ end-to-end tests cover one-pass acceptance, evidence-driven revision followed
 by acceptance, unchanged-blocker termination, pre-snapshot Agent failure, and
 a valid Tester-only quality topology.
 
-The Planning interaction and its adaptive execution backend are offline
-verified but are not yet activated by bare `sat`: activation remains atomic so
-SAT never presents a dynamic plan and then silently executes the old fixed
-team. Safe concurrent writers beyond the current serialized Git chain, safe
-plan amendment checkpoints, richer visibility, and active control application
-remain pending.
+The Planning interaction and adaptive execution backend are now activated
+atomically by bare `sat`. The normal launcher creates one read-only bootstrap
+runtime, preserves Planning evidence separately, presents the validated
+overview, prepares an execution source only after approval, materializes only
+the approved run-scoped Agents, executes the dynamic lifecycle, cleans both
+bootstrap and execution sandboxes, and uses the existing accepted-result
+delivery boundary. It cannot approve a dynamic plan and silently execute the
+old fixed team. Safe concurrent writers beyond the current serialized Git
+chain, safe plan amendment checkpoints, richer visibility, and active control
+application remain pending.
 
 ## Product Readiness Boundary
 
-The primary CLI now implements the Product Demo Slice in code. A normal user
-runs `sat`; SAT checks the device, guides model configuration, asks what to
-build, explains and confirms the installed Python execution profile, collects
-success conditions and constraints, chooses a new project destination,
-generates a request-specific run ID, TaskBrief, trusted source, workspace, and
-evidence roots, shows controller-derived progress, and delivers only an
-accepted clean Git result with project-specific commands.
+The primary CLI now implements the adaptive Product Journey in code. A normal
+user runs `sat`; SAT checks the device, guides model configuration, asks what
+to build, confirms the installed Python execution profile and destination,
+obtains explicit Planning authorization, conducts bounded clarification,
+shows the complete task-defined team and controller limits, supports revision
+or safe edits, and creates an execution run only after exact approval. It then
+executes the approved TeamPlan and delivers only an accepted clean Git result
+with project-specific commands.
 
-This implemented path still uses bounded fixed prompts and the
-`function_specialized` evaluation fixture, now compiled into a frozen
-run-scoped `TeamPlan`; it uses one selected model for the run,
-controller-backed stage progress, and no interactive run-control channel. The
-activation of the implemented multi-round Planning dialogue and adaptive
-execution, per-Agent visibility levels, live user controls, and model routing
-described in
-[`docs/adaptive-orchestration.md`](docs/adaptive-orchestration.md) are the next
-milestone, not current capabilities.
+The activated product path uses one strict selected model route, the standard
+controller progress renderer, and no active run-control input channel yet.
+Configurable per-Agent visibility, guide/correct/pause/resume/interrupt/cancel,
+and multiple model routing described in
+[`docs/adaptive-orchestration.md`](docs/adaptive-orchestration.md) remain the
+next milestones rather than current capabilities.
 
 This is not yet release-stable evidence. Two earlier WSL rehearsals completed
 managed installation or update, startup diagnostics, isolated provider setup,
@@ -201,6 +207,12 @@ request confirmation, internal run materialization, and the Planner stage.
 Both then reached a stopped Developer sandbox before any workspace tool could
 run, so no project was delivered. The second run was correctly classified as
 `dependency_unavailable` instead of a source-code failure.
+
+The rehearsal sequence below concerns the predecessor guided fixed-team
+product path and is retained as defect and regression evidence. It proves the
+installer, isolated runtime, fixed compatibility controller, delivery, and
+cleanup boundaries at the named revisions; it does not prove the newly
+activated Adaptive Planning and Dynamic Team journey.
 
 The exported execution record identified the stopped container, and a
 read-only Docker postmortem established the root cause: PID 1 exited in 72 ms
@@ -306,13 +318,12 @@ SQLite database because the parent data directory did not exist. With the
 hard-coded two-iteration limit exhausted, SAT correctly failed without
 delivery even though the second iteration had measurable progress.
 
-The workflow iteration limit is now an explicit controller input bounded by the
-team manifest. The advanced frozen evaluation remains at two iterations for
-comparability; bare `sat` uses the manifest's three-iteration limit, allowing a
-second evidence-driven revision without asking the user for an internal policy
-choice. Repeated blockers, no-change revisions, resource limits, and all safety
-or evidence-integrity stops remain unchanged. The complete 400-test offline
-suite passes.
+At that revision, the workflow iteration limit became an explicit controller
+input bounded by the team manifest. The advanced frozen evaluation remains at
+two iterations for comparability. The current adaptive product path instead
+uses the one-to-three iteration limit shown in and approved with each TeamPlan.
+Repeated blockers, no-change revisions, resource limits, and all safety or
+evidence-integrity stops remain unchanged.
 
 A fifth rehearsal began with another fresh non-root Linux account and the
 public one-command installer at revision `a4c929d`. The user then invoked only
@@ -411,11 +422,11 @@ delivered project were clear. The setup command generated an untracked
 accepted delivery commit itself was clean and all promised commands and user
 outcomes passed.
 
-This confirms the complete Product Demo Slice on a fresh Linux account. The
-current product supports small greenfield Python 3.12 projects; its bounded
-clarification records explicit user input and is not yet an adaptive
-requirements Agent. The task-manager contract remains isolated to the
-advanced evaluation surface.
+This confirmed the predecessor Product Demo Slice on a fresh Linux account.
+The current product still supports small greenfield Python 3.12 projects and
+keeps the task-manager contract isolated to the advanced evaluation surface,
+but its new Adaptive Planning and Dynamic Team path requires its own fresh
+provider-backed rehearsal.
 
 The advanced `prepare-benchmark`, `preflight`, and `run` commands remain a
 separate evaluation surface and are not part of the expected product demo.
@@ -446,7 +457,8 @@ The acceptance contract is
   and custom answers; controller validation and bounded semantic repair;
 - Task-defined proposal compilation into confirmed requirements, adaptive
   implementation intent, least-privilege AgentSpecs, a strict model route,
-  dependency waves, per-Agent timeouts, and aggregate controller budgets;
+  dependency waves, qualitative per-Agent workload estimates,
+  controller-resolved per-Agent timeouts, and aggregate controller budgets;
 - Task-proportional Adaptive team validation with no bootstrap capability in
   the runtime team, exact task ownership and cross-Agent dependency alignment,
   and at least one downstream read-only quality path for every writer;
@@ -507,9 +519,10 @@ The acceptance contract is
   execution, including post-call usage retention and explicit unpriced or
   missing-token counters;
 - Checked-in capability defaults and fixed-role compatibility invocation
-  timeouts, approved per-Agent Adaptive timeouts, optional global override,
-  frozen resolved run policy, and configuration-schema migration from the
-  former scalar timeout;
+  timeouts, workload-to-timeout policy envelopes, user-attributable exact
+  overrides inside those envelopes, frozen resolved run policy, an adaptive
+  1..16 concurrency setting, and configuration-schema migrations from the
+  former scalar timeout and verification-only concurrency;
 - Explicit completed and failed terminal outcomes with machine-readable and
   human-readable reports;
 - Remote one-command Linux/WSL bootstrap into an owned user-local application
@@ -526,19 +539,20 @@ The acceptance contract is
   atomic, schema-versioned secret-free defaults, optional authorized provider
   smoke checking, and no invented zero-cost estimate when prices are unknown;
 - Natural-language request capture, explicit Python execution-profile
-  confirmation, user-provided success conditions and constraints, dynamic
-  TaskBrief construction, concise destination confirmation, and authorization
-  before model calls;
-- Automatic private user-state roots, collision-resistant run IDs, confirmed
-  TaskBrief materialization, trusted source creation, isolated workspaces, and
-  write-once evidence;
+  confirmation, destination validation, explicit Planning authorization,
+  bounded clarification, complete overview, natural-language revision, safe
+  edits, and exact approval before execution Agents;
+- Automatic private user-state roots, collision-resistant run IDs, separate
+  Planning evidence, confirmed TaskBrief and TeamPlan materialization, trusted
+  source creation after approval, isolated workspaces, and write-once evidence;
 - Controller-backed role, elapsed-waiting, Git-snapshot, quality-gate,
   independent-review, decision, revision, completion, and failure progress;
 - Accepted-result-only delivery through a same-parent staging directory into a
   new non-overwriting project child, followed by exact setup, start, and test
   commands from a validated project-owned argv manifest;
 - Guided one-command uninstall with preservation defaults, pre-removal export,
-  separate configuration/data/private-provider-state purge choices,
+  separate configuration/data/private-provider-state purge choices, Planning
+  evidence preservation/export/purge,
   managed-application removal, and preservation of every other OpenClaw
   installation;
 - Offline end-to-end coverage for success, revision, response repair,
@@ -552,11 +566,10 @@ The acceptance contract is
 The configuration owns membership and initial stage ordering; the Python
 controller owns dynamic revision and termination decisions.
 
-These manifests are fixed evaluation fixtures. The current product path also
-uses `function_specialized`, but it no longer passes that definition directly
-to run control: SAT compiles it into the same `TeamPlan` contract that adaptive
-teams will use. The target product design derives that plan from the task
-instead of selecting a fixture.
+These manifests are fixed evaluation fixtures. Explicit `sat run` compiles the
+selected fixture into the same `TeamPlan` contract used by the controller. The
+normal product path does not select one of these fixtures: its approved plan is
+derived from the task.
 
 | Configuration | Purpose | Implementation status |
 | --- | --- | --- |
@@ -566,10 +579,9 @@ instead of selecting a fixture.
 
 ## Not Yet Available or Completed
 
-- An independent fresh-device rehearsal and live demonstration outside the
-  development host;
-- Bare-`sat` activation of the implemented Planning dialogue and adaptive
-  lifecycle as one ordinary-user path;
+- A fresh installed provider-backed rehearsal of the activated Adaptive
+  Planning and Dynamic Team journey, followed by an independent-device live
+  demonstration;
 - Compact, standard, and detailed visibility backed by persisted per-Agent
   events;
 - User guidance, correction, pause, resume, interruption, and cancellation
@@ -593,12 +605,12 @@ action succeeded after interruption.
 
 ## Next Milestone
 
-The next Phase 3C batch activates the completed Planning interaction and
-adaptive runtime together in bare `sat`, including runtime setup, cleanup, and
-accepted-result delivery through the existing product boundary. Later Phase 3
-batches add richer progress and controls, then model routing. Fixed-topology
-comparison moves to Phase 4 so it can remain a controlled baseline rather than
-defining the product's permanent role layout.
+The next Phase 3D batch projects richer run and per-Agent progress from the
+existing event contract and applies guide, correct, pause, resume, interrupt,
+and cancel commands through the persisted controller channel. Phase 3E then
+adds model profiles and routing. Fixed-topology comparison remains in Phase 4
+so it can serve as a controlled baseline rather than define the product's
+permanent role layout.
 The detailed sequence and acceptance criteria are in
 [`docs/adaptive-orchestration.md`](docs/adaptive-orchestration.md).
 

@@ -1,4 +1,4 @@
-"""Primary product-flow diagnostics, request materialization, and delivery."""
+"""Primary product-flow diagnostics, source preparation, and delivery."""
 
 from __future__ import annotations
 
@@ -20,7 +20,6 @@ from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from software_agent_team.artifacts import AcceptanceCriterion, TaskBrief
 from software_agent_team.benchmark_seed import prepare_seed_repository
 
 MINIMUM_FREE_BYTES = 1_073_741_824
@@ -31,7 +30,6 @@ AT_FDCWD = -100
 RENAME_NOREPLACE = 1
 PROJECT_MANIFEST_NAME = "sat-project.json"
 _MAX_PROJECT_MANIFEST_BYTES = 65_536
-_MAX_REQUEST_ITEMS = 10
 
 
 class ProductFlowError(RuntimeError):
@@ -142,6 +140,7 @@ class ProductStatePaths:
     runs: Path
     workspaces: Path
     sources: Path
+    planning: Path
     openclaw: Path
 
     @classmethod
@@ -151,6 +150,7 @@ class ProductStatePaths:
             runs=root / "runs",
             workspaces=root / "workspaces",
             sources=root / "sources",
+            planning=root / "planning",
             openclaw=root / "openclaw",
         )
 
@@ -183,7 +183,13 @@ def ensure_product_state(paths: ProductStatePaths) -> None:
         marker.chmod(0o600)
 
     paths.root.chmod(0o700)
-    for path in (paths.runs, paths.workspaces, paths.sources, paths.openclaw):
+    for path in (
+        paths.runs,
+        paths.workspaces,
+        paths.sources,
+        paths.planning,
+        paths.openclaw,
+    ):
         path.mkdir(exist_ok=True, mode=0o700)
         if path.is_symlink() or not path.is_dir():
             raise ProductFlowError(f"SAT state path must be a real directory: {path}")
@@ -497,129 +503,6 @@ def validate_project_destination(parent: Path, project_name: str) -> Path:
             f"{destination}"
         )
     return destination
-
-
-def build_product_task_brief(
-    *,
-    run_id: str,
-    project_name: str,
-    source_request: str,
-    success_conditions: Sequence[str] = (),
-    user_constraints: Sequence[str] = (),
-) -> TaskBrief:
-    """Build a confirmed brief directly from the user's product request."""
-
-    def require_valid_unicode(value: str, *, label: str) -> str:
-        try:
-            value.encode("utf-8", errors="strict")
-        except UnicodeEncodeError as error:
-            raise ProductFlowError(
-                f"{label} contains invalid terminal text; enter it again"
-            ) from error
-        return value
-
-    require_valid_unicode(project_name, label="project name")
-    require_valid_unicode(source_request, label="software request")
-    request = " ".join(source_request.split())
-    if not request:
-        raise ProductFlowError("the software request must not be blank")
-    if len(request) > 2000:
-        raise ProductFlowError("the software request must be at most 2000 characters")
-
-    def clean_items(values: Sequence[str], *, label: str) -> tuple[str, ...]:
-        checked = tuple(require_valid_unicode(value, label=label) for value in values)
-        cleaned = tuple(" ".join(value.split()) for value in checked if value.strip())
-        if len(cleaned) > _MAX_REQUEST_ITEMS:
-            raise ProductFlowError(
-                f"{label} must contain at most {_MAX_REQUEST_ITEMS} items"
-            )
-        if any(len(value) > 500 for value in cleaned):
-            raise ProductFlowError(f"each {label} item must be at most 500 characters")
-        if len(cleaned) != len(set(cleaned)):
-            raise ProductFlowError(f"{label} items must be unique")
-        return cleaned
-
-    conditions = clean_items(success_conditions, label="success condition")
-    constraints = clean_items(user_constraints, label="constraint")
-    confirmed_outcomes = conditions or (request,)
-    outcome_text = "; ".join(confirmed_outcomes)
-    requirements = [
-        f"Implement the confirmed software request exactly as stated: {request}",
-        *(f"Satisfy this confirmed success condition: {item}" for item in conditions),
-        (
-            "Provide automated pytest coverage for the implemented behavior and "
-            "the project-specific entry point."
-        ),
-        "Provide a README with setup, start, test, and known-limitation guidance.",
-        (
-            "Provide sat-project.json with schema_version 1 and argv arrays named "
-            "setup, start, and test. Use ['uv', 'sync', '--dev'] for setup, a "
-            "project-specific non-shell ['uv', 'run', ...] command for start, and "
-            "['uv', 'run', 'pytest'] for test."
-        ),
-    ]
-    return TaskBrief(
-        run_id=run_id,
-        title=project_name.replace("-", " ").replace("_", " ").strip().title(),
-        source_request=request,
-        requirements=requirements,
-        acceptance_criteria=[
-            AcceptanceCriterion(
-                id="AC_REQUEST",
-                description=(
-                    "The delivered project satisfies the confirmed user outcomes: "
-                    f"{outcome_text}"
-                ),
-                verification=(
-                    "Inspect the immutable implementation and its automated tests "
-                    "during independent review."
-                ),
-            ),
-            AcceptanceCriterion(
-                id="AC_RUNNABLE",
-                description=(
-                    "The project supplies a validated, project-specific non-shell "
-                    "setup, start, and test command contract."
-                ),
-                verification="Run CHECK_PROJECT_CONTRACT.",
-            ),
-            AcceptanceCriterion(
-                id="AC_TESTS",
-                description="The project's automated pytest suite passes.",
-                verification="Run CHECK_PROJECT_TESTS.",
-            ),
-            AcceptanceCriterion(
-                id="AC_QUALITY",
-                description="The Python source compiles and passes the pinned linter.",
-                verification="Run CHECK_COMPILE and CHECK_LINT.",
-            ),
-            AcceptanceCriterion(
-                id="AC_DOCUMENTATION",
-                description=(
-                    "The README explains setup, start, tests, and known limitations."
-                ),
-                verification="Run CHECK_PROJECT_CONTRACT and independent review.",
-            ),
-        ],
-        constraints=[
-            "Use the supplied local Python 3.12 execution profile.",
-            (
-                "Do not require credentials, hosted services, an external database, "
-                "or network access after dependency installation."
-            ),
-            (
-                "Keep all source, tests, configuration, and documentation in the "
-                "repository."
-            ),
-            *constraints,
-        ],
-        assumptions=[
-            "This is a new greenfield project delivered for local execution.",
-            "The supplied profile dependencies are available in the quality sandbox.",
-        ],
-        open_questions=[],
-        confirmed=True,
-    )
 
 
 def prepare_product_source(

@@ -223,6 +223,54 @@ def test_materialized_config_contains_only_approved_run_scoped_agents(
     assert "generalist_developer" not in {agent["id"] for agent in agents}
 
 
+def test_bootstrap_runtime_contains_only_the_selected_read_only_capability(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    destination = tmp_path / "planning" / "openclaw.runtime.json"
+
+    materialize_run_configuration(
+        OPENCLAW_TEMPLATE,
+        destination,
+        manifest=load_team_manifest(TEAM_CONFIG),
+        workspace=workspace,
+        sandbox_image="sat-agent:phase1",
+        sandbox_user="1000:1000",
+        model="provider/model",
+        bootstrap_capability=AgentCapability.CLARIFICATION,
+    )
+
+    payload = json.loads(destination.read_text(encoding="utf-8"))
+    agents = payload["agents"]["list"]
+    assert [agent["id"] for agent in agents] == ["clarifier"]
+    assert agents[0]["default"] is True
+    assert agents[0]["workspace"] == str(workspace.resolve())
+    assert agents[0]["sandbox"]["workspaceAccess"] == "ro"
+    assert agents[0]["model"] == {
+        "primary": "provider/model",
+        "fallbacks": [],
+    }
+    assert "generalist_developer" not in json.dumps(agents)
+
+
+def test_bootstrap_runtime_cannot_mix_with_an_approved_team(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    with pytest.raises(RuntimeConfigurationError, match="cannot mix"):
+        materialize_run_configuration(
+            OPENCLAW_TEMPLATE,
+            tmp_path / "runtime.json",
+            manifest=load_team_manifest(TEAM_CONFIG),
+            workspace=workspace,
+            sandbox_image="sat-agent:phase1",
+            sandbox_user="1000:1000",
+            team_plan=adaptive_team_plan(),
+            bootstrap_capability=AgentCapability.CLARIFICATION,
+        )
+
+
 def test_dynamic_materialization_rejects_model_outside_the_team_plan(
     tmp_path: Path,
 ) -> None:

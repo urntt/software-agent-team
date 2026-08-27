@@ -9,9 +9,10 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -29,14 +30,26 @@ from software_agent_team.artifacts import (
 from software_agent_team.benchmark_seed import prepare_benchmark_seed
 from software_agent_team.budgets import ModelPricing
 from software_agent_team.configuration import validate_environment_configuration
+from software_agent_team.dynamic_workflow import (
+    DynamicWorkflowCoordinator,
+    DynamicWorkflowOutcome,
+)
 from software_agent_team.execution import OpenClawSubprocessExecutor
 from software_agent_team.git_workspace import GitWorkspace, GitWorkspaceManager
 from software_agent_team.openclaw_runtime import isolated_openclaw_environment
 from software_agent_team.paths import user_state_root
+from software_agent_team.planning import (
+    AdaptivePlanningCoordinator,
+    ApprovedPlanningResult,
+    CapabilityTimeoutPolicy,
+    PlanningPolicy,
+    PlanningRequest,
+    PlanningStore,
+    run_interactive_planning,
+)
 from software_agent_team.product import (
     ProductFlowError,
     ProductStatePaths,
-    build_product_task_brief,
     deliver_product_workspace,
     ensure_product_state,
     generate_product_run_id,
@@ -55,6 +68,7 @@ from software_agent_team.progress import (
 )
 from software_agent_team.quality_gates import (
     DockerSandboxBackend,
+    QualityGateConfiguration,
     QualityGateRunner,
     load_quality_gate_configuration,
 )
@@ -71,7 +85,12 @@ from software_agent_team.runtime_configuration import (
     persist_runtime_preflight,
 )
 from software_agent_team.sandbox_lifecycle import cleanup_run_sandbox_containers
-from software_agent_team.teams import load_team_manifest
+from software_agent_team.teams import (
+    AgentCapability,
+    TeamManifest,
+    TeamPlan,
+    load_team_manifest,
+)
 from software_agent_team.user_configuration import (
     UserConfiguration,
     load_user_configuration,
@@ -94,12 +113,11 @@ DEFAULT_RUNS_ROOT = DEFAULT_STATE_ROOT / "runs"
 DEFAULT_WORKSPACES_ROOT = DEFAULT_STATE_ROOT / "workspaces"
 DEFAULT_OPENCLAW_BINARY = PROJECT_ROOT / ".sat" / "openclaw" / "bin" / "openclaw"
 EVALUATION_ITERATION_LIMIT = 2
-PRODUCT_ITERATION_LIMIT = 3
 
 
 @dataclass(frozen=True)
-class _WorkflowLaunchOptions:
-    """Resolved internal inputs shared by product and evaluation launches."""
+class _RuntimeLaunchOptions:
+    """Resolved machine and provider inputs shared by runtime launchers."""
 
     source_repository: Path
     base_ref: str
@@ -115,11 +133,39 @@ class _WorkflowLaunchOptions:
     model: str
     input_cost_per_million_usd: Decimal | None
     output_cost_per_million_usd: Decimal | None
+
+
+@dataclass(frozen=True)
+class _WorkflowLaunchOptions(_RuntimeLaunchOptions):
+    """Compatibility-only options for a fixed evaluation workflow."""
+
     stage_timeout_seconds: int | None
     artifact_repair_limit: int
     iteration_limit: int
     verification_concurrency: int
     progress_handler: ProgressHandler | None = None
+
+
+@dataclass(frozen=True)
+class _AdaptiveWorkflowLaunchOptions(_RuntimeLaunchOptions):
+    """Resolved inputs for one user-approved dynamic workflow."""
+
+    artifact_repair_limit: int = 1
+    progress_handler: ProgressHandler | None = None
+
+
+@dataclass(frozen=True)
+class _RuntimeBoundary:
+    """One frozen sandbox, runtime setup callback, and quality-gate factory."""
+
+    configuration: QualityGateConfiguration
+    manifest: TeamManifest
+    executor: OpenClawSubprocessExecutor
+    runtime_setup: Callable[[GitWorkspace, Path], None]
+    quality_gate_factory: Callable[
+        [Path, Path, ProgressDraftHandler],
+        QualityGateRunner,
+    ]
 
 
 def _print_configuration(configuration: UserConfiguration, path: Path) -> None:
@@ -135,7 +181,7 @@ def _print_configuration(configuration: UserConfiguration, path: Path) -> None:
         "output cost per million tokens (USD): "
         f"{output_cost if output_cost is not None else 'not configured'}"
     )
-    print(f"verification concurrency: {configuration.verification_concurrency}")
+    print(f"maximum concurrent Agents: {configuration.max_concurrency}")
     timeout = configuration.stage_timeout_seconds
     print(
         "global Agent invocation timeout override (seconds): "
@@ -221,7 +267,7 @@ def _configure(args: argparse.Namespace) -> int:
                 args.model,
                 args.input_cost_per_million_usd,
                 args.output_cost_per_million_usd,
-                args.verification_concurrency,
+                args.max_concurrency,
                 supplied_timeout,
             )
         )
@@ -274,7 +320,7 @@ def _configure(args: argparse.Namespace) -> int:
         same_model = current is not None and model == current.model
         input_cost = current.input_cost_per_million_usd if same_model else None
         output_cost = current.output_cost_per_million_usd if same_model else None
-        concurrency = current.verification_concurrency if current is not None else 1
+        concurrency = current.max_concurrency if current is not None else 2
         timeout = current.stage_timeout_seconds if current is not None else None
     else:
         if not supplied:
@@ -304,11 +350,11 @@ def _configure(args: argparse.Namespace) -> int:
             input_cost = None
             output_cost = None
         concurrency = (
-            args.verification_concurrency
-            if args.verification_concurrency is not None
-            else current.verification_concurrency
+            args.max_concurrency
+            if args.max_concurrency is not None
+            else current.max_concurrency
             if current
-            else 1
+            else 2
         )
         timeout = (
             supplied_timeout
@@ -326,7 +372,7 @@ def _configure(args: argparse.Namespace) -> int:
         model=model,
         input_cost_per_million_usd=input_cost,
         output_cost_per_million_usd=output_cost,
-        verification_concurrency=concurrency,
+        max_concurrency=concurrency,
         stage_timeout_seconds=timeout,
     )
     if interactive:
@@ -483,11 +529,13 @@ def _preflight(args: argparse.Namespace) -> int:
     return 0 if result.ready else 2
 
 
-def _execute_workflow(
-    task_brief: TaskBrief,
-    options: _WorkflowLaunchOptions,
-) -> WorkflowOutcome:
-    """Execute one confirmed brief through the shared deterministic engine."""
+def _prepare_runtime_boundary(
+    *,
+    run_id: str,
+    options: _RuntimeLaunchOptions,
+    team_plan: TeamPlan | None = None,
+) -> _RuntimeBoundary:
+    """Freeze one runtime image and build shared execution callbacks."""
 
     manifest = load_team_manifest(options.teams)
     configuration = load_quality_gate_configuration(
@@ -503,7 +551,7 @@ def _execute_workflow(
             "the configured sandbox image is not present locally"
         )
     frozen_sandbox_image = sandbox_inspection.sandbox_image_id
-    runtime_path = options.runs_root / task_brief.run_id / "openclaw.runtime.json"
+    runtime_path = options.runs_root / run_id / "openclaw.runtime.json"
     openclaw_environment = isolated_openclaw_environment(
         state_dir=options.openclaw_state_dir,
         config_path=runtime_path,
@@ -528,7 +576,8 @@ def _execute_workflow(
             sandbox_pids_limit=limits.pids,
             sandbox_open_files=limits.open_files,
             sandbox_tmpfs_mb=limits.writable_tmpfs_mb,
-            model=options.model,
+            model=options.model if team_plan is None else None,
+            team_plan=team_plan,
         )
         preflight = inspect_runtime_preflight(
             openclaw_binary=options.openclaw_binary,
@@ -537,7 +586,13 @@ def _execute_workflow(
             sandbox_binary=options.sandbox_binary,
             sandbox_image=configuration.policy.sandbox.image,
             expected_sandbox_image_id=frozen_sandbox_image,
-            expected_model=options.model,
+            expected_model=(
+                options.model
+                if team_plan is None
+                else team_plan.model_routes.get_route(
+                    team_plan.model_routes.default_route_id
+                ).model
+            ),
         )
         persist_runtime_preflight(
             preflight,
@@ -589,19 +644,41 @@ def _execute_workflow(
             result_handler=report_gate,
         )
 
+    return _RuntimeBoundary(
+        configuration=configuration,
+        manifest=manifest,
+        executor=executor,
+        runtime_setup=runtime_setup,
+        quality_gate_factory=gate_factory,
+    )
+
+
+def _execute_workflow(
+    task_brief: TaskBrief,
+    options: _WorkflowLaunchOptions,
+) -> WorkflowOutcome:
+    """Execute one fixed evaluation brief through the compatibility engine."""
+
+    boundary = _prepare_runtime_boundary(
+        run_id=task_brief.run_id,
+        options=options,
+    )
+    configuration = boundary.configuration
+    manifest = boundary.manifest
+
     coordinator = WorkflowCoordinator(
         manifest=manifest,
         runs_root=options.runs_root,
         workspaces_root=options.workspaces_root,
-        executor=executor,
-        quality_gate_factory=gate_factory,
+        executor=boundary.executor,
+        quality_gate_factory=boundary.quality_gate_factory,
         budget=configuration.policy.agent_budget,
         pricing=ModelPricing(
             model=options.model,
             input_cost_per_million_usd=options.input_cost_per_million_usd,
             output_cost_per_million_usd=options.output_cost_per_million_usd,
         ),
-        runtime_setup=runtime_setup,
+        runtime_setup=boundary.runtime_setup,
         manual_review_criteria=configuration.manifest.manual_review_criteria,
         role_timeout_seconds=configuration.policy.agent_stage_timeouts_seconds,
         stage_timeout_seconds=options.stage_timeout_seconds,
@@ -643,6 +720,80 @@ def _execute_workflow(
         iteration_limit=options.iteration_limit,
         roles=cleanup_roles,
     )
+    print(
+        "runtime cleanup: "
+        f"removed {len(cleanup.removed)} run-scoped Agent sandbox container(s)"
+    )
+    return outcome
+
+
+def _execute_dynamic_workflow(
+    approved: ApprovedPlanningResult,
+    options: _AdaptiveWorkflowLaunchOptions,
+) -> DynamicWorkflowOutcome:
+    """Execute exactly one user-approved adaptive plan and clean its sandboxes."""
+
+    team_plan = approved.team_plan
+    boundary = _prepare_runtime_boundary(
+        run_id=approved.task_brief.run_id,
+        options=options,
+        team_plan=team_plan,
+    )
+    pricing_by_model = {
+        route.model: ModelPricing(
+            model=route.model,
+            input_cost_per_million_usd=(
+                options.input_cost_per_million_usd
+                if route.model == options.model
+                else None
+            ),
+            output_cost_per_million_usd=(
+                options.output_cost_per_million_usd
+                if route.model == options.model
+                else None
+            ),
+        )
+        for route in team_plan.model_routes.routes
+    }
+    manual_review_criteria = tuple(
+        criterion.id for criterion in approved.task_brief.acceptance_criteria
+    )
+    coordinator = DynamicWorkflowCoordinator(
+        runs_root=options.runs_root,
+        workspaces_root=options.workspaces_root,
+        executor=boundary.executor,
+        quality_gate_factory=boundary.quality_gate_factory,
+        pricing_by_model=pricing_by_model,
+        runtime_setup=boundary.runtime_setup,
+        manual_review_criteria=manual_review_criteria,
+        artifact_repair_limit=options.artifact_repair_limit,
+        progress_handler=options.progress_handler,
+    )
+
+    cleanup_arguments = {
+        "sandbox_binary": options.sandbox_binary,
+        "run_id": approved.task_brief.run_id,
+        "openclaw_state_dir": options.openclaw_state_dir,
+        "workspace_dir": (options.workspaces_root / approved.task_brief.run_id).resolve(
+            strict=False
+        ),
+        "iteration_limit": team_plan.iteration_limit,
+        "agents": team_plan.agents,
+    }
+    try:
+        outcome = coordinator.execute(
+            approved,
+            source_repository=options.source_repository,
+            base_ref=options.base_ref,
+        )
+    except BaseException as error:
+        try:
+            cleanup_run_sandbox_containers(**cleanup_arguments)
+        except Exception as cleanup_error:
+            error.add_note(f"run-scoped sandbox cleanup also failed: {cleanup_error}")
+        raise
+
+    cleanup = cleanup_run_sandbox_containers(**cleanup_arguments)
     print(
         "runtime cleanup: "
         f"removed {len(cleanup.removed)} run-scoped Agent sandbox container(s)"
@@ -700,7 +851,7 @@ def _run_workflow(args: argparse.Namespace) -> int:
     concurrency = (
         args.verification_concurrency
         if args.verification_concurrency is not None
-        else user_configuration.verification_concurrency
+        else min(user_configuration.max_concurrency, 2)
         if user_configuration is not None
         else 2
     )
@@ -1018,9 +1169,7 @@ def _ensure_product_configuration(
     else:
         configuration = UserConfiguration(
             model=model,
-            verification_concurrency=(
-                current.verification_concurrency if current is not None else 1
-            ),
+            max_concurrency=(current.max_concurrency if current is not None else 2),
             stage_timeout_seconds=(
                 current.stage_timeout_seconds if current is not None else None
             ),
@@ -1055,8 +1204,11 @@ def _collect_product_request(
     *,
     working_directory: Path,
     run_id: str,
-) -> tuple[TaskBrief, Path] | None:
-    """Collect and confirm one user-owned request for the current runtime profile."""
+    model: str,
+    execution_profile: tuple[str, ...],
+    base_constraints: tuple[str, ...],
+) -> tuple[PlanningRequest, Path] | None:
+    """Collect the direct inputs and authorization required before Planning."""
 
     print("\nWhat would you like to build?")
     source_request = _prompt_product_text(
@@ -1067,9 +1219,8 @@ def _collect_product_request(
     )
 
     print("\nCurrent execution profile")
-    print("  A small greenfield Python 3.12 project.")
-    print("  Web apps, CLI tools, and local automation are supported.")
-    print("  The quality sandbox has no network access or external services.")
+    for item in execution_profile:
+        print(f"  {item}")
     if not _prompt_yes_no(
         "Build your request with this execution profile?",
         default=True,
@@ -1078,24 +1229,6 @@ def _collect_product_request(
             "No build was started. This release will not silently change your request."
         )
         return None
-
-    success_text = _prompt_product_text(
-        "Success conditions (separate multiple items with semicolons) "
-        "[use the request as written]: ",
-        label="success conditions",
-    )
-    constraint_text = _prompt_product_text(
-        "Additional constraints (separate multiple items with semicolons) [none]: ",
-        label="additional constraints",
-    )
-    if constraint_text.casefold() in {"none", "n/a"}:
-        constraint_text = ""
-    success_conditions = tuple(
-        item.strip() for item in success_text.split(";") if item.strip()
-    )
-    constraints = tuple(
-        item.strip() for item in constraint_text.split(";") if item.strip()
-    )
 
     while True:
         project_name = _prompt_product_text(
@@ -1112,34 +1245,170 @@ def _collect_product_request(
             print(f"That project directory cannot be used: {error}")
             continue
         break
-    task_brief = build_product_task_brief(
-        run_id=run_id,
-        project_name=project_name,
-        source_request=source_request,
-        success_conditions=success_conditions,
-        user_constraints=constraints,
-    )
-    print("\nRequirements summary")
-    print(f"  Request: {task_brief.source_request}")
-    print("  Profile: local Python 3.12 project")
-    print("  Success conditions:")
-    for item in success_conditions or (task_brief.source_request,):
-        print(f"    - {item}")
-    if constraints:
-        print("  Additional constraints:")
-        for item in constraints:
-            print(f"    - {item}")
+    print("\nPlanning authorization")
+    print(f"  Request: {source_request}")
     print(f"  Destination: {destination}")
-    print("  Verification: project contract, compile, lint, tests, and review")
-    print("  Provider: multiple model requests may be made")
+    print(f"  Model: {model}")
+    print("  Planning may ask focused questions before proposing a team.")
+    print("  No execution Agent is created until you approve the full overview.")
+    print("  Multiple model requests may be made and may incur provider usage.")
     print("  SAT cannot determine your organization's model or Docker policy.")
     if not _prompt_yes_no(
-        "Start the model-backed build with these requirements?",
+        "Start model-backed Planning for this request?",
         default=False,
     ):
         print("Build cancelled; no model request was made.")
         return None
-    return task_brief, destination
+    planning_request = PlanningRequest(
+        run_id=run_id,
+        project_name=project_name,
+        source_request=source_request,
+        destination=str(destination),
+        execution_profile=execution_profile,
+        base_constraints=base_constraints,
+        model=model,
+        authorization="user_confirmed",
+        authorized_at=datetime.now(UTC),
+    )
+    return planning_request, destination
+
+
+def _product_planning_policy(
+    quality: QualityGateConfiguration,
+    configuration: UserConfiguration,
+) -> PlanningPolicy:
+    """Compile product profile limits into the bootstrap Planning authority."""
+
+    role_timeouts = quality.policy.agent_stage_timeouts_seconds
+
+    def timeout(role: AgentRole) -> int:
+        return configuration.stage_timeout_seconds or role_timeouts[role]
+
+    def adaptive_timeout(role: AgentRole) -> CapabilityTimeoutPolicy:
+        default = timeout(role)
+        ceiling = (
+            default
+            if configuration.stage_timeout_seconds is not None
+            else min(3600, default * 2)
+        )
+        return CapabilityTimeoutPolicy(
+            default_seconds=default,
+            ceiling_seconds=ceiling,
+        )
+
+    return PlanningPolicy(
+        planning_timeout_seconds=timeout(AgentRole.PLANNER),
+        max_agents=min(8, quality.policy.agent_budget.max_calls),
+        max_concurrency=configuration.max_concurrency,
+        max_review_agents=1,
+        budget=quality.policy.agent_budget,
+        capability_timeouts={
+            AgentCapability.IMPLEMENTATION: adaptive_timeout(
+                AgentRole.GENERALIST_DEVELOPER
+            ),
+            AgentCapability.INTEGRATION: adaptive_timeout(AgentRole.INTEGRATOR),
+            AgentCapability.TESTING: adaptive_timeout(AgentRole.TESTER),
+            AgentCapability.REVIEW: adaptive_timeout(AgentRole.REVIEWER),
+        },
+        profile_acceptance_criteria=quality.task_brief.acceptance_criteria,
+        require_review_agent=True,
+    )
+
+
+def _run_product_planning(
+    request: PlanningRequest,
+    *,
+    source_repository: Path,
+    state_paths: ProductStatePaths,
+    quality: QualityGateConfiguration,
+    configuration: UserConfiguration,
+) -> ApprovedPlanningResult | None:
+    """Run one isolated bootstrap Planning session and clean its sandbox."""
+
+    manifest = load_team_manifest(DEFAULT_TEAM_CONFIG)
+    inspection = inspect_sandbox_image(
+        sandbox_binary="docker",
+        sandbox_image=quality.policy.sandbox.image,
+    )
+    if not inspection.ready or inspection.sandbox_image_id is None:
+        raise RuntimeConfigurationError(
+            "the configured sandbox image is not present locally"
+        )
+    limits = quality.policy.limits
+    with tempfile.TemporaryDirectory(
+        prefix=".planning-runtime-",
+        dir=state_paths.root,
+    ) as temporary:
+        runtime_path = Path(temporary) / "openclaw.runtime.json"
+        materialize_run_configuration(
+            DEFAULT_OPENCLAW_CONFIG,
+            runtime_path,
+            manifest=manifest,
+            workspace=source_repository,
+            sandbox_image=inspection.sandbox_image_id,
+            sandbox_memory_mb=limits.memory_mb,
+            sandbox_cpus=limits.cpu_cores,
+            sandbox_pids_limit=limits.pids,
+            sandbox_open_files=limits.open_files,
+            sandbox_tmpfs_mb=limits.writable_tmpfs_mb,
+            model=configuration.model,
+            bootstrap_capability=AgentCapability.CLARIFICATION,
+        )
+        preflight = inspect_runtime_preflight(
+            openclaw_binary=DEFAULT_OPENCLAW_BINARY,
+            openclaw_state_dir=state_paths.openclaw,
+            runtime_config=runtime_path,
+            sandbox_binary="docker",
+            sandbox_image=quality.policy.sandbox.image,
+            expected_sandbox_image_id=inspection.sandbox_image_id,
+            expected_model=configuration.model,
+        )
+        if not preflight.ready:
+            raise RuntimeConfigurationError(
+                "Planning runtime preflight failed: "
+                f"config_valid={preflight.config_valid}, "
+                f"sandbox_container_ready={preflight.sandbox_container_ready}, "
+                "sandbox_container_error="
+                f"{preflight.sandbox_container_error or 'none'}, "
+                f"model_available={preflight.model_available}, "
+                f"model_error={preflight.model_error or 'none'}"
+            )
+        print("✓ Planning runtime: isolated workspace, sandbox, and model ready")
+        executor = OpenClawSubprocessExecutor(
+            openclaw_binary=DEFAULT_OPENCLAW_BINARY,
+            environment=isolated_openclaw_environment(
+                state_dir=state_paths.openclaw,
+                config_path=runtime_path,
+            ),
+            local=True,
+        )
+        coordinator = AdaptivePlanningCoordinator(
+            executor=executor,
+            store=PlanningStore(state_paths.planning),
+            policy=_product_planning_policy(quality, configuration),
+        )
+        cleanup_arguments = {
+            "sandbox_binary": "docker",
+            "run_id": request.run_id,
+            "openclaw_state_dir": state_paths.openclaw,
+            "workspace_dir": source_repository.resolve(strict=False),
+            "iteration_limit": 1,
+            "roles": (AgentRole.CLARIFIER,),
+        }
+        try:
+            approved = run_interactive_planning(coordinator, request)
+        except BaseException as error:
+            try:
+                cleanup_run_sandbox_containers(**cleanup_arguments)
+            except Exception as cleanup_error:
+                error.add_note(f"Planning sandbox cleanup also failed: {cleanup_error}")
+            raise
+        cleanup = cleanup_run_sandbox_containers(**cleanup_arguments)
+        print(
+            "Planning cleanup: "
+            f"removed {len(cleanup.removed)} bootstrap sandbox container(s)"
+        )
+        return approved
 
 
 def _load_final_report(path: Path, *, expected_sha256: str) -> FinalReport:
@@ -1155,7 +1424,7 @@ def _load_final_report(path: Path, *, expected_sha256: str) -> FinalReport:
 
 def _render_product_outcome(
     *,
-    outcome: WorkflowOutcome,
+    outcome: WorkflowOutcome | DynamicWorkflowOutcome,
     report: FinalReport,
     report_path: Path,
     destination: Path | None,
@@ -1213,13 +1482,31 @@ def _run_product() -> int:
     ensure_product_state(state_paths)
     configuration = _ensure_product_configuration(state_paths)
     run_id = generate_product_run_id()
+    execution_profile = (
+        "A new, small Python 3.12 project.",
+        "Web apps, CLI tools, and local automation are supported.",
+        "Deterministic verification has no network or external services.",
+    )
     request = _collect_product_request(
         working_directory=working_directory,
         run_id=run_id,
+        model=configuration.model,
+        execution_profile=execution_profile,
+        base_constraints=tuple(quality.task_brief.constraints),
     )
     if request is None:
         return 0
-    task_brief, destination = request
+    planning_request, destination = request
+
+    approved = _run_product_planning(
+        planning_request,
+        source_repository=DEFAULT_PRODUCT_SEED,
+        state_paths=state_paths,
+        quality=quality,
+        configuration=configuration,
+    )
+    if approved is None:
+        return 0
 
     source_repository = prepare_product_source(
         seed=DEFAULT_PRODUCT_SEED,
@@ -1228,9 +1515,9 @@ def _run_product() -> int:
     )
     renderer = TerminalProgressRenderer()
     try:
-        outcome = _execute_workflow(
-            task_brief,
-            _WorkflowLaunchOptions(
+        outcome = _execute_dynamic_workflow(
+            approved,
+            _AdaptiveWorkflowLaunchOptions(
                 source_repository=source_repository,
                 base_ref="HEAD",
                 teams=DEFAULT_TEAM_CONFIG,
@@ -1245,10 +1532,7 @@ def _run_product() -> int:
                 model=configuration.model,
                 input_cost_per_million_usd=(configuration.input_cost_per_million_usd),
                 output_cost_per_million_usd=(configuration.output_cost_per_million_usd),
-                stage_timeout_seconds=configuration.stage_timeout_seconds,
                 artifact_repair_limit=1,
-                iteration_limit=PRODUCT_ITERATION_LIMIT,
-                verification_concurrency=configuration.verification_concurrency,
                 progress_handler=renderer,
             ),
         )
@@ -1336,9 +1620,13 @@ def build_parser() -> argparse.ArgumentParser:
     configure.add_argument("--input-cost-per-million-usd", type=Decimal)
     configure.add_argument("--output-cost-per-million-usd", type=Decimal)
     configure.add_argument(
-        "--verification-concurrency",
+        "--max-concurrency",
         type=int,
-        choices=(1, 2),
+        choices=tuple(range(1, 17)),
+        help=(
+            "Maximum ready Agents the adaptive scheduler may run concurrently; "
+            "shared-workspace writer safety can reduce actual concurrency."
+        ),
     )
     configure_timeout = configure.add_mutually_exclusive_group()
     configure_timeout.add_argument(

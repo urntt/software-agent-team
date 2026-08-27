@@ -56,6 +56,11 @@ def prepare_installation(
     )
     (state / "sources/example").mkdir(parents=True)
     (state / "sources/example/README.md").write_text("seed\n", encoding="utf-8")
+    (state / "planning/example").mkdir(parents=True)
+    (state / "planning/example/session.json").write_text(
+        "planning evidence\n",
+        encoding="utf-8",
+    )
     (state / "openclaw/credentials").mkdir(parents=True)
     (state / "openclaw/credentials/provider.json").write_text(
         "private SAT credential state\n",
@@ -143,13 +148,16 @@ def test_uninstaller_preserves_configuration_and_generated_data_by_default(
     assert (state / "runs/example/final-report.md").is_file()
     assert (state / "workspaces/example/result.py").is_file()
     assert (state / "sources/example/README.md").is_file()
+    assert (state / "planning/example/session.json").is_file()
     assert (state / "openclaw/credentials/provider.json").is_file()
     assert (Path(environment["HOME"]) / ".openclaw/openclaw.json").read_text(
         encoding="utf-8"
     ) == "existing user OpenClaw\n"
     assert (checkout / "scripts/uninstall.sh").is_file()
     assert "preserved SAT configuration" in completed.stdout
-    assert "preserved generated runs, workspaces, and sources" in completed.stdout
+    assert (
+        "preserved runs, workspaces, sources, and Planning evidence" in completed.stdout
+    )
     assert "development checkout preserved" in completed.stdout
 
 
@@ -174,6 +182,7 @@ def test_uninstaller_exports_before_explicit_purge(tmp_path: Path) -> None:
     assert not (state / "runs").exists()
     assert not (state / "workspaces").exists()
     assert not (state / "sources").exists()
+    assert not (state / "planning").exists()
     assert (state / "openclaw/credentials/provider.json").is_file()
     assert not (checkout / ".venv").exists()
     assert not (install_bin / "sat").exists()
@@ -181,11 +190,13 @@ def test_uninstaller_exports_before_explicit_purge(tmp_path: Path) -> None:
     assert (export / "data/runs/example/final-report.md").is_file()
     assert (export / "data/workspaces/example/result.py").is_file()
     assert (export / "data/sources/example/README.md").is_file()
+    assert (export / "data/planning/example/session.json").is_file()
     manifest = (export / "EXPORT.txt").read_text(encoding="utf-8")
     assert "configuration=yes" in manifest
     assert "runs=yes" in manifest
     assert "workspaces=yes" in manifest
     assert "sources=yes" in manifest
+    assert "planning=yes" in manifest
     assert "provider_credentials=excluded" in manifest
     assert "exported preserved state" in completed.stdout
 

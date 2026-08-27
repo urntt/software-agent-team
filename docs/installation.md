@@ -154,20 +154,23 @@ On the first configured run, SAT then:
 7. Asks what the user wants to build;
 8. States the current small-project Python 3.12 execution profile and asks the
    user to confirm that runtime boundary;
-9. Collects explicit success conditions and optional constraints;
-10. Asks for one new direct child project directory;
-11. Generates and shows the request, acceptance, destination, and verification
-   summary;
-12. Requires explicit confirmation before any build Agent call.
+9. Asks for one new direct child project directory;
+10. Shows the request, destination, exact model, and provider-usage consequence;
+11. Requires explicit authorization before model-backed Planning;
+12. Uses a read-only bootstrap Planning capability for bounded material
+    clarification;
+13. Shows one complete requirements, implementation, Dynamic Team, dependency,
+    permission, model, timeout, concurrency, iteration, and budget overview;
+14. Lets the user approve, request a natural-language revision, make a supported
+    safe edit, or cancel before any execution Agent is created.
 
-Interactive text is validated before it enters a TaskBrief. If the terminal
+Interactive text is validated before it enters Planning evidence. If the terminal
 supplies an invalid Unicode byte sequence, SAT explains the affected field and
 asks for that answer again instead of exposing a schema-validation traceback.
-Entering `none` or `n/a` at the optional-constraints prompt is treated the same
-as leaving it blank.
 
-Declining either the profile or build confirmation exits without starting a
-build.
+Declining the profile or Planning authorization exits without a model request.
+Cancelling Planning preserves its evidence but creates no execution run or
+delivered project.
 
 ## Saved Configuration
 
@@ -177,9 +180,12 @@ SAT configuration is stored atomically with mode `0600` at:
 ${XDG_CONFIG_HOME:-$HOME/.config}/software-agent-team/config.json
 ```
 
-Schema version 3 stores the exact OpenClaw `provider/model` reference and may
-also contain optional evaluation-only defaults. The guided product flow writes
-only the model reference.
+Schema version 4 stores the exact OpenClaw `provider/model` reference. It may
+also contain optional secret-free prices, an adaptive `max_concurrency` from 1
+through 16, and an explicit global invocation-timeout override. The guided
+product flow writes only the model reference and uses the controller defaults
+for other fields. Existing schema-v3 `verification_concurrency` values migrate
+one way into `max_concurrency`.
 
 The normal first-run wizard stores only the model in SAT configuration and uses
 checked-in runtime defaults. Credential entry and persistence remain owned by
@@ -218,11 +224,15 @@ Non-interactive configuration records the requested reference; the next
 `sat` launch validates its exact catalog/auth route before asking project
 questions. Interactive `sat configure` performs that validation before saving.
 
-Pricing, verification-concurrency, and timeout configuration belong to the
-controlled evaluation surface and are documented in the
-[`Phase 1 evaluation runbook`](phase1-runbook.md). They are not part of normal
-first-use setup. When no trustworthy price is available, a product run reports
-estimated cost as unavailable rather than inventing `$0.00`.
+Pricing, adaptive maximum concurrency, and timeout overrides are advanced
+configuration and are not part of normal first-use setup. For example,
+`sat configure --non-interactive --model provider/model --max-concurrency 4`
+sets a scheduling cap; dependency readiness and shared-workspace writer safety
+may reduce actual concurrency. Fixed-evaluation verification concurrency
+remains a separate `sat run` option documented in the
+[`Phase 1 evaluation runbook`](phase1-runbook.md). When no trustworthy price is
+available, a product run reports estimated cost as unavailable rather than
+inventing `$0.00`.
 
 Set an absolute `SAT_CONFIG_PATH` only when the configuration location must be
 overridden. Keep the same value set for later `sat` and `sat-uninstall`
@@ -236,12 +246,13 @@ Internal product data lives beneath:
 ${XDG_STATE_HOME:-$HOME/.local/state}/software-agent-team/
 ```
 
-Its separate `runs/`, `workspaces/`, `sources/`, and `openclaw/` directories
-contain write-once evidence, isolated Agent clones, trusted seed repositories,
-and SAT's isolated OpenClaw state. Use an absolute `SAT_STATE_ROOT` only for a
-deliberate state-location override. SAT creates an exact ownership marker and
-refuses to adopt an existing unowned directory, so an override cannot make an
-arbitrary OpenClaw or user directory eligible for writes, export, or purge.
+Its separate `planning/`, `runs/`, `workspaces/`, `sources/`, and `openclaw/`
+directories contain write-once Planning and run evidence, isolated Agent
+clones, trusted seed repositories, and SAT's isolated OpenClaw state. Use an
+absolute `SAT_STATE_ROOT` only for a deliberate state-location override. SAT
+creates an exact ownership marker and refuses to adopt an existing unowned
+directory, so an override cannot make an arbitrary OpenClaw or user directory
+eligible for writes, export, or purge.
 
 SAT generates every run ID and internal path after confirmation. The model
 works only in the isolated workspace. A completed, accepted workspace is copied
@@ -283,7 +294,7 @@ private OpenClaw binary. It also removes the exact marked managed application
 directory, or preserves a development checkout. By default it preserves:
 
 - SAT configuration;
-- Generated runs, workspaces, and trusted sources;
+- Planning evidence, generated runs, workspaces, and trusted sources;
 - SAT's isolated OpenClaw provider configuration, credentials, and sessions;
 - Every OpenClaw installation and profile outside SAT;
 - uv and its managed Python installation;
@@ -297,8 +308,9 @@ sat-uninstall --export-to "$HOME/sat-backup" --yes
 
 The new absolute destination must not already exist and must be outside both
 the application and SAT state. The export can contain
-`configuration/config.json`, `data/runs/`, `data/workspaces/`,
-`data/sources/`, and `EXPORT.txt`. Provider credentials remain excluded.
+`configuration/config.json`, `data/planning/`, `data/runs/`,
+`data/workspaces/`, `data/sources/`, and `EXPORT.txt`. Provider credentials
+remain excluded.
 
 Deletion requires explicit purge flags and may follow the same export:
 

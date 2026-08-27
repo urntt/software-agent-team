@@ -20,7 +20,7 @@ def sample_configuration(**updates: object) -> UserConfiguration:
         "model": "provider/model",
         "input_cost_per_million_usd": "0.50",
         "output_cost_per_million_usd": "1.50",
-        "verification_concurrency": 1,
+        "max_concurrency": 4,
         "stage_timeout_seconds": 900,
     }
     payload.update(updates)
@@ -67,11 +67,11 @@ def test_user_configuration_rejects_unknown_or_malformed_values(
     path.write_text(
         json.dumps(
             {
-                "schema_version": 2,
+                "schema_version": 4,
                 "model": "provider/model",
                 "input_cost_per_million_usd": "1",
                 "output_cost_per_million_usd": "2",
-                "verification_concurrency": 3,
+                "max_concurrency": 17,
                 "stage_timeout_seconds": 600,
                 "api_key": "must-not-be-supported",
             }
@@ -105,9 +105,9 @@ def test_v1_configuration_drops_the_legacy_timeout_with_a_notice(
         migrated = load_user_configuration(path)
 
     assert migrated is not None
-    assert migrated.schema_version == 3
+    assert migrated.schema_version == 4
     assert migrated.model == "provider/model"
-    assert migrated.verification_concurrency == 1
+    assert migrated.max_concurrency == 1
     assert migrated.stage_timeout_seconds is None
     assert json.loads(path.read_text(encoding="utf-8"))["schema_version"] == 1
 
@@ -134,11 +134,37 @@ def test_v2_configuration_preserves_evaluation_defaults_with_a_notice(
         migrated = load_user_configuration(path)
 
     assert migrated is not None
-    assert migrated.schema_version == 3
+    assert migrated.schema_version == 4
     assert migrated.input_cost_per_million_usd == 1
     assert migrated.output_cost_per_million_usd == 2
-    assert migrated.verification_concurrency == 2
+    assert migrated.max_concurrency == 2
     assert migrated.stage_timeout_seconds == 900
+
+
+def test_v3_configuration_renames_verification_concurrency_with_a_notice(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "model": "provider/model",
+                "input_cost_per_million_usd": None,
+                "output_cost_per_million_usd": None,
+                "verification_concurrency": 2,
+                "stage_timeout_seconds": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.warns(UserWarning, match="max_concurrency"):
+        migrated = load_user_configuration(path)
+
+    assert migrated is not None
+    assert migrated.schema_version == 4
+    assert migrated.max_concurrency == 2
 
 
 def test_product_configuration_can_omit_local_price_estimates() -> None:
@@ -146,7 +172,7 @@ def test_product_configuration_can_omit_local_price_estimates() -> None:
 
     assert configuration.input_cost_per_million_usd is None
     assert configuration.output_cost_per_million_usd is None
-    assert configuration.verification_concurrency == 1
+    assert configuration.max_concurrency == 2
 
     with pytest.raises(ValueError, match="configured together"):
         UserConfiguration(

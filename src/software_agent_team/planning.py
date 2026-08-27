@@ -55,7 +55,7 @@ from software_agent_team.teams import (
     permission_for_capability,
 )
 
-PLANNING_SCHEMA_VERSION = 1
+PLANNING_SCHEMA_VERSION = 2
 PLANNING_TEMPLATE = Path(__file__).with_name("prompt_templates") / "adaptive_planner.md"
 _MAX_EVIDENCE_TEXT = 1_000_000
 
@@ -98,6 +98,14 @@ class StructuredEditKind(StrEnum):
     MAX_CONCURRENCY = "max_concurrency"
     ITERATION_LIMIT = "iteration_limit"
     AGENT_TIMEOUT = "agent_timeout"
+
+
+class AgentWorkload(StrEnum):
+    """Planner-owned qualitative workload estimate for one runtime Agent."""
+
+    ROUTINE = "routine"
+    SUBSTANTIAL = "substantial"
+    COMPLEX = "complex"
 
 
 def _utc(value: datetime) -> datetime:
@@ -268,7 +276,7 @@ class ProposedAgent(BaseModel):
     stage_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     dependencies: tuple[str, ...] = ()
     workspace_scope: str = Field(min_length=1, max_length=200)
-    timeout_seconds: int = Field(ge=30, le=3600)
+    workload: AgentWorkload
 
     @field_validator("label", "responsibility", "rationale")
     @classmethod
@@ -619,6 +627,7 @@ class PlanningProposal(BaseModel):
     source_turn_sequence: int | None = Field(default=None, ge=1, le=999)
     change_request: str | None = Field(default=None, min_length=1, max_length=2000)
     body: PlanningProposalBody
+    timeout_overrides_seconds: dict[str, int] = Field(default_factory=dict)
 
     @field_validator("created_at")
     @classmethod
@@ -630,30 +639,23 @@ class PlanningProposal(BaseModel):
         if self.source is PlanningProposalSource.MODEL:
             if self.source_turn_sequence is None:
                 raise ValueError("model proposal requires its source turn")
+            if self.timeout_overrides_seconds:
+                raise ValueError("model proposals cannot authorize timeout overrides")
         elif self.source_turn_sequence is not None:
             raise ValueError("structured edit cannot claim a model turn")
+        known_agents = {agent.id for agent in self.body.agents}
+        unknown_agents = set(self.timeout_overrides_seconds) - known_agents
+        if unknown_agents:
+            raise ValueError(
+                "timeout overrides reference unknown Agents: "
+                + ", ".join(sorted(unknown_agents))
+            )
+        if any(
+            not 30 <= seconds <= 3600
+            for seconds in self.timeout_overrides_seconds.values()
+        ):
+            raise ValueError("timeout overrides must be within 30..3600s")
         return self
-
-
-class PlanningApproval(BaseModel):
-    """Explicit user authorization for one exact proposal and compiled plan."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    schema_version: Literal[PLANNING_SCHEMA_VERSION] = PLANNING_SCHEMA_VERSION
-    run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
-    revision: int = Field(ge=1, le=99)
-    approved_at: datetime
-    confirmation: Literal["user_approved"]
-    proposal_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    task_brief_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    implementation_plan_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    team_plan_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-
-    @field_validator("approved_at")
-    @classmethod
-    def require_timestamp(cls, value: datetime) -> datetime:
-        return _utc(value)
 
 
 class PlanningSession(BaseModel):
@@ -721,6 +723,93 @@ class StructuredPlanEdit(BaseModel):
         return self
 
 
+class CapabilityTimeoutPolicy(BaseModel):
+    """Controller-owned timeout envelope for one adaptive capability."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    default_seconds: int = Field(ge=30, le=3600)
+    ceiling_seconds: int = Field(ge=30, le=3600)
+
+    @model_validator(mode="after")
+    def require_ordered_envelope(self) -> Self:
+        if self.default_seconds > self.ceiling_seconds:
+            raise ValueError("timeout default cannot exceed its ceiling")
+        return self
+
+    def resolve(self, workload: AgentWorkload) -> int:
+        """Map a qualitative estimate to a deterministic policy value."""
+
+        if workload is AgentWorkload.ROUTINE:
+            return self.default_seconds
+        if workload is AgentWorkload.COMPLEX:
+            return self.ceiling_seconds
+        return self.default_seconds + (self.ceiling_seconds - self.default_seconds) // 2
+
+
+class AgentTimeoutResolution(BaseModel):
+    """Explain how the controller resolved one approved invocation timeout."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    agent_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
+    workload: AgentWorkload
+    default_seconds: int = Field(ge=30, le=3600)
+    ceiling_seconds: int = Field(ge=30, le=3600)
+    resolved_seconds: int = Field(ge=30, le=3600)
+    source: Literal["policy_workload", "user_override"]
+
+    @model_validator(mode="after")
+    def require_valid_resolution(self) -> Self:
+        policy = CapabilityTimeoutPolicy(
+            default_seconds=self.default_seconds,
+            ceiling_seconds=self.ceiling_seconds,
+        )
+        if not self.default_seconds <= self.resolved_seconds <= self.ceiling_seconds:
+            raise ValueError("resolved timeout must remain inside its policy envelope")
+        if self.source == "policy_workload" and self.resolved_seconds != policy.resolve(
+            self.workload
+        ):
+            raise ValueError("policy timeout does not match the workload mapping")
+        return self
+
+
+class PlanningApproval(BaseModel):
+    """Explicit user authorization for one exact proposal and compiled plan."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[PLANNING_SCHEMA_VERSION] = PLANNING_SCHEMA_VERSION
+    run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
+    revision: int = Field(ge=1, le=99)
+    approved_at: datetime
+    confirmation: Literal["user_approved"]
+    proposal_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    task_brief_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    implementation_plan_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    team_plan_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    timeout_resolutions: tuple[AgentTimeoutResolution, ...] = Field(
+        min_length=2,
+        max_length=16,
+    )
+
+    @field_validator("approved_at")
+    @classmethod
+    def require_timestamp(cls, value: datetime) -> datetime:
+        return _utc(value)
+
+    @field_validator("timeout_resolutions")
+    @classmethod
+    def require_unique_timeout_agents(
+        cls,
+        values: tuple[AgentTimeoutResolution, ...],
+    ) -> tuple[AgentTimeoutResolution, ...]:
+        agent_ids = [resolution.agent_id for resolution in values]
+        if len(agent_ids) != len(set(agent_ids)):
+            raise ValueError("timeout resolutions must identify unique Agents")
+        return values
+
+
 class PlanningPolicy(BaseModel):
     """Controller limits around dialogue and adaptive proposal compilation."""
 
@@ -732,15 +821,18 @@ class PlanningPolicy(BaseModel):
     planning_timeout_seconds: int = Field(default=180, ge=1, le=3600)
     max_agents: int = Field(default=8, ge=2, le=16)
     max_concurrency: int = Field(default=4, ge=1, le=16)
+    max_review_agents: int = Field(default=16, ge=1, le=16)
     budget: AgentBudget
-    capability_timeout_ceiling_seconds: dict[AgentCapability, int]
+    capability_timeouts: dict[AgentCapability, CapabilityTimeoutPolicy]
+    profile_acceptance_criteria: tuple[AcceptanceCriterion, ...] = ()
+    require_review_agent: bool = False
 
-    @field_validator("capability_timeout_ceiling_seconds")
+    @field_validator("capability_timeouts")
     @classmethod
     def require_runtime_capabilities(
         cls,
-        values: dict[AgentCapability, int],
-    ) -> dict[AgentCapability, int]:
+        values: dict[AgentCapability, CapabilityTimeoutPolicy],
+    ) -> dict[AgentCapability, CapabilityTimeoutPolicy]:
         required = {
             AgentCapability.IMPLEMENTATION,
             AgentCapability.INTEGRATION,
@@ -751,8 +843,17 @@ class PlanningPolicy(BaseModel):
             raise ValueError(
                 "Planning policy requires every runtime capability timeout"
             )
-        if any(not 30 <= timeout <= 3600 for timeout in values.values()):
-            raise ValueError("capability timeout ceilings must be within 30..3600s")
+        return values
+
+    @field_validator("profile_acceptance_criteria")
+    @classmethod
+    def require_unique_profile_criteria(
+        cls,
+        values: tuple[AcceptanceCriterion, ...],
+    ) -> tuple[AcceptanceCriterion, ...]:
+        identifiers = [criterion.id for criterion in values]
+        if len(identifiers) != len(set(identifiers)):
+            raise ValueError("profile acceptance criterion IDs must be unique")
         return values
 
 
@@ -766,6 +867,7 @@ class PlanningPreview(BaseModel):
     task_brief: TaskBrief
     implementation_plan: AdaptiveImplementationPlan
     team_plan: TeamPlan
+    timeout_resolutions: tuple[AgentTimeoutResolution, ...]
 
 
 class ApprovedPlanningResult(BaseModel):
@@ -830,6 +932,25 @@ class ApprovedPlanningResult(BaseModel):
             raise ValueError(
                 "Planning approval does not bind the supplied " + ", ".join(mismatched)
             )
+        agents_by_id = {agent.id: agent for agent in self.team_plan.agents}
+        resolutions_by_id = {
+            resolution.agent_id: resolution
+            for resolution in self.approval.timeout_resolutions
+        }
+        if set(resolutions_by_id) != set(agents_by_id):
+            raise ValueError(
+                "Planning approval timeout resolutions do not cover the TeamPlan Agents"
+            )
+        mismatched_timeouts = [
+            agent_id
+            for agent_id, resolution in resolutions_by_id.items()
+            if resolution.resolved_seconds != agents_by_id[agent_id].timeout_seconds
+        ]
+        if mismatched_timeouts:
+            raise ValueError(
+                "Planning approval timeout resolutions do not match the TeamPlan for "
+                + ", ".join(sorted(mismatched_timeouts))
+            )
         return self
 
 
@@ -873,6 +994,30 @@ def preview_adaptive_proposal(
             f"proposal requires up to {planned_calls} planned Agent calls, but the "
             f"approved budget permits {policy.budget.max_calls}"
         )
+    profile_criterion_ids = {
+        criterion.id for criterion in policy.profile_acceptance_criteria
+    }
+    proposed_criterion_ids = {criterion.id for criterion in body.acceptance_criteria}
+    collisions = profile_criterion_ids & proposed_criterion_ids
+    if collisions:
+        raise PlanningError(
+            "proposal repeats controller-owned profile criteria: "
+            + ", ".join(sorted(collisions))
+        )
+    if policy.require_review_agent and not any(
+        agent.capability is AgentCapability.REVIEW for agent in body.agents
+    ):
+        raise PlanningError(
+            "this execution profile requires an independent review Agent"
+        )
+    review_count = sum(
+        agent.capability is AgentCapability.REVIEW for agent in body.agents
+    )
+    if review_count > policy.max_review_agents:
+        raise PlanningError(
+            f"proposal has {review_count} review Agents; this profile permits "
+            f"{policy.max_review_agents}"
+        )
 
     constraints = tuple(dict.fromkeys((*request.base_constraints, *body.constraints)))
     task_brief = TaskBrief(
@@ -883,7 +1028,8 @@ def preview_adaptive_proposal(
         acceptance_criteria=[
             AcceptanceCriterion.model_validate(item.model_dump(mode="json"))
             for item in body.acceptance_criteria
-        ],
+        ]
+        + list(policy.profile_acceptance_criteria),
         constraints=list(constraints),
         assumptions=list(body.assumptions),
         open_questions=[],
@@ -902,13 +1048,32 @@ def preview_adaptive_proposal(
     )
 
     agents = []
+    timeout_resolutions = []
     for proposed in body.agents:
-        ceiling = policy.capability_timeout_ceiling_seconds[proposed.capability]
-        if proposed.timeout_seconds > ceiling:
+        timeout_policy = policy.capability_timeouts[proposed.capability]
+        override = proposal.timeout_overrides_seconds.get(proposed.id)
+        if override is not None and not (
+            timeout_policy.default_seconds <= override <= timeout_policy.ceiling_seconds
+        ):
             raise PlanningError(
-                f"Agent {proposed.id} timeout {proposed.timeout_seconds}s exceeds "
-                f"the {proposed.capability.value} policy ceiling of {ceiling}s"
+                f"Agent {proposed.id} timeout override {override}s is outside the "
+                f"{proposed.capability.value} policy envelope of "
+                f"{timeout_policy.default_seconds}.."
+                f"{timeout_policy.ceiling_seconds}s"
             )
+        resolved_timeout = (
+            timeout_policy.resolve(proposed.workload) if override is None else override
+        )
+        timeout_resolutions.append(
+            AgentTimeoutResolution(
+                agent_id=proposed.id,
+                workload=proposed.workload,
+                default_seconds=timeout_policy.default_seconds,
+                ceiling_seconds=timeout_policy.ceiling_seconds,
+                resolved_seconds=resolved_timeout,
+                source=("policy_workload" if override is None else "user_override"),
+            )
+        )
         agents.append(
             AgentSpec(
                 id=proposed.id,
@@ -921,7 +1086,7 @@ def preview_adaptive_proposal(
                 dependencies=proposed.dependencies,
                 expected_output=expected_output_for_capability(proposed.capability),
                 model_route_id="default",
-                timeout_seconds=proposed.timeout_seconds,
+                timeout_seconds=resolved_timeout,
                 workspace_scope=proposed.workspace_scope,
             )
         )
@@ -953,6 +1118,7 @@ def preview_adaptive_proposal(
         task_brief=task_brief,
         implementation_plan=implementation_plan,
         team_plan=team_plan,
+        timeout_resolutions=tuple(timeout_resolutions),
     )
 
 
@@ -965,6 +1131,7 @@ def apply_structured_edit(
     """Create one new proposal revision through a bounded safe edit."""
 
     body = proposal.body
+    timeout_overrides = dict(proposal.timeout_overrides_seconds)
     if edit.kind is StructuredEditKind.MAX_CONCURRENCY:
         body = body.model_copy(update={"max_concurrency": edit.value})
         description = f"Set maximum concurrency to {edit.value}."
@@ -977,16 +1144,10 @@ def apply_structured_edit(
         )
         description = f"Set iteration limit to {edit.value}."
     else:
-        matched = False
-        agents = []
-        for agent in body.agents:
-            if agent.id == edit.agent_id:
-                agent = agent.model_copy(update={"timeout_seconds": edit.value})
-                matched = True
-            agents.append(agent)
-        if not matched:
+        if edit.agent_id not in {agent.id for agent in body.agents}:
             raise PlanningError(f"unknown Agent for timeout edit: {edit.agent_id}")
-        body = body.model_copy(update={"agents": tuple(agents)})
+        assert edit.agent_id is not None
+        timeout_overrides[edit.agent_id] = edit.value
         description = f"Set {edit.agent_id} timeout to {edit.value} seconds."
     body = PlanningProposalBody.model_validate(body.model_dump(mode="json"))
     return PlanningProposal(
@@ -996,6 +1157,7 @@ def apply_structured_edit(
         source=PlanningProposalSource.STRUCTURED_EDIT,
         change_request=description,
         body=body,
+        timeout_overrides_seconds=timeout_overrides,
     )
 
 
@@ -1028,9 +1190,18 @@ def render_planning_overview(preview: PlanningPreview) -> str:
         ),
         "  Runtime Agents:",
     ]
+    resolutions = {
+        resolution.agent_id: resolution for resolution in preview.timeout_resolutions
+    }
     for agent in plan.agents:
         dependencies = ", ".join(agent.dependencies) or "none"
         route = plan.model_routes.get_route(agent.model_route_id)
+        timeout = resolutions[agent.id]
+        timeout_source = (
+            f"controller policy from {timeout.workload.value} workload"
+            if timeout.source == "policy_workload"
+            else "user override"
+        )
         lines.extend(
             (
                 f"    - {agent.id} ({agent.label})",
@@ -1041,7 +1212,9 @@ def render_planning_overview(preview: PlanningPreview) -> str:
                 f"      permission: {agent.permission_profile.value}",
                 f"      workspace: {agent.workspace_scope}",
                 f"      model: {route.model}",
-                f"      timeout: {agent.timeout_seconds} seconds",
+                f"      workload: {timeout.workload.value}",
+                f"      timeout: {agent.timeout_seconds} seconds ({timeout_source}; "
+                f"allowed {timeout.default_seconds}..{timeout.ceiling_seconds})",
             )
         )
     waves = " -> ".join(" + ".join(wave) for wave in plan.execution_waves())
@@ -1564,6 +1737,7 @@ class AdaptivePlanningCoordinator:
                 preview.implementation_plan
             ),
             team_plan_sha256=canonical_model_sha256(preview.team_plan),
+            timeout_resolutions=preview.timeout_resolutions,
         )
         self.store.approve(approval, now=approved_at)
         return ApprovedPlanningResult(
@@ -1693,11 +1867,21 @@ class AdaptivePlanningCoordinator:
                 "maximum_concurrency": self.policy.max_concurrency,
                 "maximum_iterations": 3,
                 "maximum_agent_calls": self.policy.budget.max_calls,
-                "capability_timeout_ceilings_seconds": {
-                    capability.value: timeout
-                    for capability, timeout in (
-                        self.policy.capability_timeout_ceiling_seconds.items()
-                    )
+                "maximum_review_agents": self.policy.max_review_agents,
+                "profile_acceptance_criteria": [
+                    criterion.model_dump(mode="json")
+                    for criterion in self.policy.profile_acceptance_criteria
+                ],
+                "requires_independent_review_agent": (self.policy.require_review_agent),
+                "capability_timeout_profiles": {
+                    capability.value: {
+                        "routine_seconds": timeout.default_seconds,
+                        "substantial_seconds": timeout.resolve(
+                            AgentWorkload.SUBSTANTIAL
+                        ),
+                        "complex_seconds": timeout.ceiling_seconds,
+                    }
+                    for capability, timeout in self.policy.capability_timeouts.items()
                 },
                 "runtime_capabilities": [
                     AgentCapability.IMPLEMENTATION.value,
@@ -1820,7 +2004,7 @@ def _read_structured_edit(
         if choice == "3":
             write("Runtime Agents:")
             for agent in proposal.body.agents:
-                write(f"  - {agent.id}: {agent.timeout_seconds} seconds")
+                write(f"  - {agent.id}: {agent.workload.value} workload")
             agent_id = read("Agent ID: ").strip()
             if not agent_id:
                 write("Agent ID must not be blank.")

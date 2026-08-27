@@ -1,6 +1,7 @@
 """Tests for the unified foundation CLI."""
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -52,8 +53,6 @@ def test_cli_no_command_runs_the_guided_product_journey(
         (
             "Build a CLI that checks Markdown links.",
             "yes",
-            "Exit non-zero for broken links; print file and line",
-            "Use the standard library at runtime",
             "link-checker",
             "yes",
         )
@@ -77,8 +76,15 @@ def test_cli_no_command_runs_the_guided_product_journey(
     workspace = tmp_path / "workspace"
     workspace.mkdir()
 
-    def fake_execute(task_brief: object, options: object) -> SimpleNamespace:
-        observed["task_brief"] = task_brief
+    approved = SimpleNamespace(task_brief=SimpleNamespace(run_id="approved-run"))
+
+    def fake_planning(request: object, **kwargs: object) -> object:
+        observed["planning_request"] = request
+        observed["planning_kwargs"] = kwargs
+        return approved
+
+    def fake_execute(supplied: object, options: object) -> SimpleNamespace:
+        observed["approved"] = supplied
         observed["options"] = options
         return SimpleNamespace(
             final_report=SimpleNamespace(path="final-report.json", sha256="a" * 64),
@@ -89,7 +95,15 @@ def test_cli_no_command_runs_the_guided_product_journey(
             ),
         )
 
-    monkeypatch.setattr(cli, "_execute_workflow", fake_execute)
+    monkeypatch.setattr(cli, "_run_product_planning", fake_planning)
+    monkeypatch.setattr(cli, "_execute_dynamic_workflow", fake_execute)
+    monkeypatch.setattr(
+        cli,
+        "_execute_workflow",
+        lambda *_args, **_kwargs: pytest.fail(
+            "bare sat must not use the fixed evaluation workflow"
+        ),
+    )
     monkeypatch.setattr(
         cli,
         "_load_final_report",
@@ -113,26 +127,29 @@ def test_cli_no_command_runs_the_guided_product_journey(
 
     assert main([]) == 0
 
-    brief = observed["task_brief"]
+    planning_request = observed["planning_request"]
     options = observed["options"]
-    assert brief.source_request == "Build a CLI that checks Markdown links."
-    assert brief.title == "Link Checker"
-    assert "broken links" in brief.acceptance_criteria[0].description
+    assert planning_request.source_request == (
+        "Build a CLI that checks Markdown links."
+    )
+    assert planning_request.project_name == "link-checker"
+    assert planning_request.authorization == "user_confirmed"
+    assert planning_request.model == "provider/model"
+    assert observed["approved"] is approved
     assert options.source_repository == source
     assert options.model == "provider/model"
     assert options.policy == cli.DEFAULT_PRODUCT_POLICY
     assert options.quality_manifest == cli.DEFAULT_PRODUCT_PROFILE
-    assert options.iteration_limit == 3
     output = capsys.readouterr().out
     assert "What would you like to build?" in output
     assert "task-management" not in output
-    assert "Requirements summary" in output
+    assert "Planning authorization" in output
     assert "Next commands" in output
     assert "link-checker ." in output
     assert str(tmp_path / "link-checker") in output
 
 
-def test_guided_request_reprompts_invalid_unicode_and_treats_none_as_empty(
+def test_guided_request_reprompts_invalid_unicode_before_planning_authorization(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -142,8 +159,6 @@ def test_guided_request_reprompts_invalid_unicode_and_treats_none_as_empty(
             "\udce5broken request",
             "Build a local timer",
             "yes",
-            "Start and stop the timer",
-            "none",
             "timer",
             "yes",
         )
@@ -153,14 +168,269 @@ def test_guided_request_reprompts_invalid_unicode_and_treats_none_as_empty(
     collected = cli._collect_product_request(
         working_directory=tmp_path,
         run_id="sat-guided-unicode",
+        model="provider/model",
+        execution_profile=("A new Python project.",),
+        base_constraints=("No runtime network access.",),
     )
 
     assert collected is not None
-    brief, destination = collected
-    assert brief.source_request == "Build a local timer"
-    assert "none" not in brief.constraints
+    request, destination = collected
+    assert request.source_request == "Build a local timer"
+    assert request.base_constraints == ("No runtime network access.",)
+    assert request.authorization == "user_confirmed"
     assert destination == tmp_path / "timer"
     assert "Invalid terminal text in software request" in capsys.readouterr().out
+
+
+def test_product_planning_uses_one_bootstrap_agent_and_cleans_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_paths = cli.ProductStatePaths.below(tmp_path / "state")
+    cli.ensure_product_state(state_paths)
+    planning_workspace = tmp_path / "profile-seed"
+    planning_workspace.mkdir()
+    request = cli.PlanningRequest(
+        run_id="sat-product-planning",
+        project_name="link-checker",
+        source_request="Build a Markdown link checker.",
+        destination=str(tmp_path / "link-checker"),
+        execution_profile=("A new Python project.",),
+        base_constraints=("No runtime network access.",),
+        model="provider/model",
+        authorization="user_confirmed",
+        authorized_at=datetime(2026, 8, 26, 12, 0, tzinfo=UTC),
+    )
+    quality = cli.load_quality_gate_configuration(
+        cli.DEFAULT_PRODUCT_POLICY,
+        cli.DEFAULT_PRODUCT_PROFILE,
+    )
+    configuration = UserConfiguration(
+        model="provider/model",
+        max_concurrency=4,
+    )
+    observed: dict[str, object] = {}
+    runtime_paths: list[Path] = []
+    approved = object()
+
+    monkeypatch.setattr(
+        cli,
+        "inspect_sandbox_image",
+        lambda **kwargs: SandboxImageInspection(
+            sandbox_binary="/usr/bin/docker",
+            sandbox_version="Docker version test",
+            sandbox_image=str(kwargs["sandbox_image"]),
+            sandbox_image_id=f"sha256:{'a' * 64}",
+            sandbox_image_present=True,
+        ),
+    )
+
+    def fake_materialize(*args: object, **kwargs: object) -> Path:
+        destination = args[1]
+        assert isinstance(destination, Path)
+        runtime_paths.append(destination)
+        observed["materialize"] = kwargs
+        destination.write_text("{}\n", encoding="utf-8")
+        return destination
+
+    monkeypatch.setattr(cli, "materialize_run_configuration", fake_materialize)
+    monkeypatch.setattr(
+        cli,
+        "inspect_runtime_preflight",
+        lambda **kwargs: RuntimePreflight(
+            openclaw_binary="/opt/openclaw",
+            openclaw_version="OpenClaw test",
+            openclaw_state_dir=str(kwargs["openclaw_state_dir"]),
+            runtime_config=str(kwargs["runtime_config"]),
+            sandbox_binary="/usr/bin/docker",
+            sandbox_version="Docker version test",
+            sandbox_image=quality.policy.sandbox.image,
+            sandbox_image_id=f"sha256:{'a' * 64}",
+            config_valid=True,
+            sandbox_image_present=True,
+            sandbox_container_ready=True,
+            model="provider/model",
+            model_available=True,
+        ),
+    )
+
+    def fake_interactive(coordinator: object, supplied: object) -> object:
+        observed["coordinator"] = coordinator
+        observed["request"] = supplied
+        return approved
+
+    monkeypatch.setattr(cli, "run_interactive_planning", fake_interactive)
+    cleanup_calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        cli,
+        "cleanup_run_sandbox_containers",
+        lambda **kwargs: cleanup_calls.append(kwargs) or SimpleNamespace(removed=()),
+    )
+
+    result = cli._run_product_planning(
+        request,
+        source_repository=planning_workspace,
+        state_paths=state_paths,
+        quality=quality,
+        configuration=configuration,
+    )
+
+    assert result is approved
+    assert observed["request"] == request
+    materialize = observed["materialize"]
+    assert materialize["bootstrap_capability"] is cli.AgentCapability.CLARIFICATION
+    assert materialize["workspace"] == planning_workspace
+    assert materialize["model"] == "provider/model"
+    coordinator = observed["coordinator"]
+    assert coordinator.store.root == state_paths.planning
+    assert coordinator.policy.max_concurrency == 4
+    assert coordinator.policy.max_review_agents == 1
+    assert coordinator.policy.require_review_agent
+    assert coordinator.policy.planning_timeout_seconds == 180
+    implementation_timeout = coordinator.policy.capability_timeouts[
+        cli.AgentCapability.IMPLEMENTATION
+    ]
+    testing_timeout = coordinator.policy.capability_timeouts[
+        cli.AgentCapability.TESTING
+    ]
+    assert (
+        implementation_timeout.default_seconds,
+        implementation_timeout.ceiling_seconds,
+    ) == (900, 1800)
+    assert (testing_timeout.default_seconds, testing_timeout.ceiling_seconds) == (
+        300,
+        600,
+    )
+    assert {item.id for item in coordinator.policy.profile_acceptance_criteria} == {
+        "AC_REQUEST",
+        "AC_RUNNABLE",
+        "AC_TESTS",
+        "AC_QUALITY",
+        "AC_DOCUMENTATION",
+    }
+    assert cleanup_calls == [
+        {
+            "sandbox_binary": "docker",
+            "run_id": request.run_id,
+            "openclaw_state_dir": state_paths.openclaw,
+            "workspace_dir": planning_workspace,
+            "iteration_limit": 1,
+            "roles": (AgentRole.CLARIFIER,),
+        }
+    ]
+    assert len(runtime_paths) == 1
+    assert not runtime_paths[0].exists()
+
+
+def test_product_global_timeout_override_is_an_exact_controller_policy() -> None:
+    quality = cli.load_quality_gate_configuration(
+        cli.DEFAULT_PRODUCT_POLICY,
+        cli.DEFAULT_PRODUCT_PROFILE,
+    )
+
+    policy = cli._product_planning_policy(
+        quality,
+        UserConfiguration(
+            model="provider/model",
+            stage_timeout_seconds=1200,
+        ),
+    )
+
+    assert policy.planning_timeout_seconds == 1200
+    assert {
+        (timeout.default_seconds, timeout.ceiling_seconds)
+        for timeout in policy.capability_timeouts.values()
+    } == {(1200, 1200)}
+
+
+def test_dynamic_product_launch_uses_approved_agents_and_manual_scope(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    route = SimpleNamespace(model="provider/model")
+    agents = (SimpleNamespace(id="builder"), SimpleNamespace(id="reviewer"))
+    team_plan = SimpleNamespace(
+        model_routes=SimpleNamespace(routes=(route,)),
+        agents=agents,
+        iteration_limit=2,
+    )
+    task_brief = SimpleNamespace(
+        run_id="sat-dynamic-product",
+        acceptance_criteria=(
+            SimpleNamespace(id="AC_USER"),
+            SimpleNamespace(id="AC_TESTS"),
+        ),
+    )
+    approved = SimpleNamespace(task_brief=task_brief, team_plan=team_plan)
+    options = cli._AdaptiveWorkflowLaunchOptions(
+        source_repository=tmp_path / "source",
+        base_ref="HEAD",
+        teams=cli.DEFAULT_TEAM_CONFIG,
+        openclaw=cli.DEFAULT_OPENCLAW_CONFIG,
+        policy=cli.DEFAULT_PRODUCT_POLICY,
+        quality_manifest=cli.DEFAULT_PRODUCT_PROFILE,
+        runs_root=tmp_path / "runs",
+        workspaces_root=tmp_path / "workspaces",
+        openclaw_binary=Path("/opt/openclaw"),
+        openclaw_state_dir=tmp_path / "openclaw",
+        sandbox_binary="docker",
+        model="provider/model",
+        input_cost_per_million_usd=None,
+        output_cost_per_million_usd=None,
+    )
+    observed: dict[str, object] = {}
+    boundary = SimpleNamespace(
+        executor=object(),
+        quality_gate_factory=object(),
+        runtime_setup=object(),
+    )
+
+    def fake_boundary(**kwargs: object) -> object:
+        observed["boundary"] = kwargs
+        return boundary
+
+    class FakeDynamicCoordinator:
+        def __init__(self, **kwargs: object) -> None:
+            observed["coordinator"] = kwargs
+
+        def execute(self, supplied: object, **kwargs: object) -> object:
+            observed["approved"] = supplied
+            observed["execute"] = kwargs
+            return "dynamic-outcome"
+
+    monkeypatch.setattr(cli, "_prepare_runtime_boundary", fake_boundary)
+    monkeypatch.setattr(cli, "DynamicWorkflowCoordinator", FakeDynamicCoordinator)
+    cleanup_calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        cli,
+        "cleanup_run_sandbox_containers",
+        lambda **kwargs: cleanup_calls.append(kwargs) or SimpleNamespace(removed=()),
+    )
+
+    outcome = cli._execute_dynamic_workflow(approved, options)
+
+    assert outcome == "dynamic-outcome"
+    assert observed["boundary"]["team_plan"] is team_plan
+    coordinator = observed["coordinator"]
+    assert coordinator["manual_review_criteria"] == ("AC_USER", "AC_TESTS")
+    assert set(coordinator["pricing_by_model"]) == {"provider/model"}
+    assert observed["approved"] is approved
+    assert observed["execute"] == {
+        "source_repository": options.source_repository,
+        "base_ref": "HEAD",
+    }
+    assert cleanup_calls == [
+        {
+            "sandbox_binary": "docker",
+            "run_id": task_brief.run_id,
+            "openclaw_state_dir": options.openclaw_state_dir,
+            "workspace_dir": (options.workspaces_root / task_brief.run_id).resolve(
+                strict=False
+            ),
+            "iteration_limit": 2,
+            "agents": agents,
+        }
+    ]
 
 
 def test_cli_noninteractive_configuration_is_private_and_reconfigurable(
@@ -182,8 +452,8 @@ def test_cli_noninteractive_configuration_is_private_and_reconfigurable(
                 "0.25",
                 "--output-cost-per-million-usd",
                 "1.75",
-                "--verification-concurrency",
-                "1",
+                "--max-concurrency",
+                "4",
                 "--stage-timeout-seconds",
                 "1200",
             ]
@@ -193,7 +463,7 @@ def test_cli_noninteractive_configuration_is_private_and_reconfigurable(
     first = load_user_configuration(path)
     assert first is not None
     assert first.model == "provider/model-a"
-    assert first.verification_concurrency == 1
+    assert first.max_concurrency == 4
 
     assert (
         main(
@@ -211,7 +481,7 @@ def test_cli_noninteractive_configuration_is_private_and_reconfigurable(
     assert second.model == "provider/model-b"
     assert second.input_cost_per_million_usd is None
     assert second.output_cost_per_million_usd is None
-    assert second.verification_concurrency == first.verification_concurrency
+    assert second.max_concurrency == first.max_concurrency
     assert second.stage_timeout_seconds == first.stage_timeout_seconds
     output = capsys.readouterr().out
     assert "provider credentials: not stored by SAT" in output
@@ -243,7 +513,7 @@ def test_cli_interactive_configuration_prompts_for_first_run_defaults(
     assert configuration.model == "provider/model"
     assert configuration.input_cost_per_million_usd is None
     assert configuration.output_cost_per_million_usd is None
-    assert configuration.verification_concurrency == 1
+    assert configuration.max_concurrency == 2
     assert configuration.stage_timeout_seconds is None
 
 
@@ -314,7 +584,7 @@ def test_first_run_model_setup_keeps_credentials_and_prices_outside_sat(
     assert configured.model == "provider/model"
     assert configured.input_cost_per_million_usd is None
     payload = json.loads(path.read_text(encoding="utf-8"))
-    assert payload["schema_version"] == 3
+    assert payload["schema_version"] == 4
     assert "api_key" not in payload
 
 
@@ -982,7 +1252,7 @@ def test_cli_run_uses_saved_defaults_when_flags_are_omitted(
             model="provider/saved-model",
             input_cost_per_million_usd="0.75",
             output_cost_per_million_usd="2.25",
-            verification_concurrency=1,
+            max_concurrency=1,
             stage_timeout_seconds=1800,
         ),
         configuration_path,

@@ -288,8 +288,8 @@ Each concept has one authoritative owner.
 | Frozen evaluation fixture and task-specific acceptance | `benchmarks/task_manager/` and `configs/run-policy.json` |
 | Shared quality-manifest validation and execution | `src/software_agent_team/quality_gates.py` |
 | Agent process invocation and telemetry parsing | `src/software_agent_team/execution.py` |
-| CLI commands and runtime option resolution | `src/software_agent_team/cli.py` |
-| Product diagnostics, supported request materialization, and safe delivery | `src/software_agent_team/product.py` |
+| CLI commands, guided request and Planning activation, and runtime option resolution | `src/software_agent_team/cli.py` |
+| Product diagnostics, trusted source preparation, and safe delivery | `src/software_agent_team/product.py` |
 | User-local product state path | `src/software_agent_team/paths.py` |
 | User-local default schema and persistence | `src/software_agent_team/user_configuration.py` |
 | Managed bootstrap, installation, and uninstallation execution | `scripts/bootstrap.sh`, `scripts/install.sh`, and `scripts/uninstall.sh` |
@@ -313,7 +313,7 @@ list.
 
 ### Product Default: Task-Defined Team
 
-The target product flow uses a bootstrap Planning session to propose a
+The product flow uses a bootstrap Planning session to propose a
 run-scoped TeamPlan from the confirmed task. The user reviews and may revise
 the plan; the deterministic controller validates and creates its Agents. The
 number and names of execution roles therefore vary with the work, while
@@ -428,7 +428,7 @@ change in the same controlled trial.
 | Resolve the sandbox tag to one local image ID per run | Both Agent sandboxes and quality gates execute the same immutable image even if a mutable local tag is later reassigned. |
 | Assemble persisted artifacts in the controller | Models should produce planning, implementation summaries, evidence analysis, and review judgment. Known identity, Git, command, status, criterion, and scope facts must come from authoritative controller state instead of requiring an exact model echo. |
 | Allow one semantic-response repair per role stage and bounded implementation revisions | A small bounded loop can correct genuinely invalid semantic content or implementation defects without hiding non-convergence, time, or cost. The frozen Phase 1 evaluation remains one initial implementation plus one revision; the product flow permits one additional revision when the prior iteration measurably resolved a blocker and exposed a distinct correctable defect. Controller-owned fields are ignored and audited rather than repaired. |
-| Use measured capability defaults, approved per-Agent invocation timeouts, and independent bounded-repair timeouts | Planning, implementation, and verification have different measured workloads. Fixed-fixture compatibility defaults are 120 seconds for Clarifier, 180 for Planner, 900 for coding/integration, and 300 for testing/review; Adaptive Planning proposes a task-specific value within the corresponding capability ceiling and the user approves it. A repair must regenerate a complete semantic response, so it receives the same per-invocation timeout instead of an arbitrarily small remainder from the first call. Repair remains limited to one call, while total call count, Agent duration, token, and cost budgets bound the complete run. |
+| Use measured capability defaults, controller-resolved Adaptive timeouts, and independent bounded-repair timeouts | Planning, implementation, and verification have different measured workloads. Fixed-fixture compatibility defaults are 120 seconds for Clarifier, 180 for Planner, 900 for coding/integration, and 300 for testing/review. Adaptive Planning classifies each Agent workload as routine, substantial, or complex; it does not authorize seconds. Product policy maps that estimate into a capability-specific default-to-ceiling envelope, an explicit user override may select an exact value inside the envelope, and the controller freezes and enforces the result. A repair must regenerate a complete semantic response, so it receives the same per-invocation timeout instead of an arbitrarily small remainder from the first call. Repair remains limited to one call, while total call count, Agent duration, token, and cost budgets bound the complete run. |
 | Separate review severity from terminal failure | Even a critical-impact product defect may be correctable. Reviewer `fail` therefore requires an explicit safety or evidence-integrity termination reason; ordinary gate failures and implementation defects request `revise`. |
 | Version requirement or acceptance corrections | A hidden or over-specified acceptance condition confounds model evaluation. The confirmed TaskBrief must expose the product contract, black-box checks must accept equivalent compliant presentations, and a correction starts a new benchmark version. |
 | Separate product model routing from strict evaluation routing | Controlled evaluations pin one model and price table and disable switching. Product runs may use approved task-, phase-, capability-, or Agent-specific routes, but the controller must resolve and record every model and may switch only under an explicit user-authorized condition. |
@@ -442,7 +442,7 @@ change in the same controlled trial.
 | Require a generated-project command manifest | Setup, start, and test commands vary by project. A validated `sat-project.json` argv contract lets SAT deliver exact commands without assuming FastAPI, a Web server, or any task-specific entry point. |
 | Use one controller event stream for configurable run-level and per-Agent progress | Compact, standard, and detailed views may expose different safe summaries, dependencies, routes, gates, and budgets without changing execution. Hidden chain-of-thought, secrets, raw unbounded output, and unverifiable percentages are excluded. |
 | Accept user controls through a persisted controller-owned channel | Guidance applies prospectively; correction creates a versioned replan; pause/resume use integrity-checked safe boundaries; interruption and cancellation are best effort for active provider work and preserve cost/evidence. No control may be implemented as an untracked chat mutation. |
-| Keep product state outside the application checkout | Managed runs, workspaces, and trusted source baselines live under the user-local state root. Installation updates cannot overwrite evidence, and uninstallation can preserve, export, or explicitly purge state independently of the application files. |
+| Keep product state outside the application checkout | Planning evidence, managed runs, workspaces, and trusted source baselines live under the user-local state root. Installation updates cannot overwrite evidence, and uninstallation can preserve, export, or explicitly purge state independently of the application files. |
 | Deliver only an accepted result to a new child directory | The model works in an isolated detached clone. After acceptance, SAT copies the exact accepted commit through a same-parent staging directory and publishes it with Linux atomic no-replace semantics, so a failed run, late destination, or conflict never overwrites user files. |
 
 ## Planned Workflow

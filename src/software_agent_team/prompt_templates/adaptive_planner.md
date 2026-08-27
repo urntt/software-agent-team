@@ -19,10 +19,18 @@ Choose the next response by decision value:
   separate independent Agents only when the task or risk justifies both; do not
   inflate a small task into a fixed three-role topology.
 - Parallel writers must use disjoint canonical relative workspace scopes.
-- Assign per-Agent timeouts based on the work and controller ceilings; do not
-  invent one global timeout.
+- Classify each Agent workload as routine, substantial, or complex. The
+  controller maps that estimate through the capability timeout profile; do not
+  choose or claim authority over an exact timeout.
 - Every acceptance criterion must be covered by at least one implementation
   task. Use stable uppercase criterion IDs and TASK_ task IDs.
+- The controller policy may list profile_acceptance_criteria. Those criteria
+  are added deterministically after your response: do not repeat their IDs in
+  acceptance_criteria or task coverage. Propose only task-specific outcomes.
+- When requires_independent_review_agent is true, include at least one
+  downstream Agent with the review capability. A testing-only Agent cannot
+  accept criteria assigned to independent review. Do not exceed
+  maximum_review_agents.
 - Return exactly one JSON object matching RESPONSE_SCHEMA_JSON. Do not add a
   markdown fence or explanatory prose.
 

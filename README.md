@@ -60,15 +60,24 @@ On first use, SAT guides you through:
 1. Local environment diagnostics;
 2. Isolated model-provider configuration;
 3. A plain-language description of what you want to build;
-4. Success conditions and optional constraints;
-5. A new project-directory name; and
-6. A final summary and confirmation before any build starts.
+4. Confirmation of the installed execution profile and a new project-directory
+   name;
+5. Explicit authorization for model-backed Planning;
+6. A bounded conversation containing only questions that can materially change
+   the result;
+7. One overview of requirements, acceptance criteria, implementation tasks,
+   proposed Agents, dependencies, permissions, model, timeouts, concurrency,
+   iterations, and budgets; and
+8. Approval, a natural-language revision request, a supported safe edit, or
+   cancellation before any execution Agent is created.
 
-During the build, SAT displays the active stage, elapsed time, verified Git
-snapshots, quality checks, independent review, revisions, and the final
-decision. On success, it reports the delivered directory and the exact
-commands needed to set up, run, and test the project. On failure, it preserves
-an auditable report instead of presenting unfinished work as successful.
+After approval, SAT creates only the task-defined Agents in that exact plan.
+The controller derives actual launch order from the approved dependency graph,
+enforces concurrency and shared-workspace safety, resolves and enforces each
+Agent timeout, records verified Git snapshots and quality evidence, and owns
+revision and termination decisions. On success, SAT reports the delivered
+directory and exact setup, run, and test commands. On failure, it preserves an
+auditable report instead of presenting unfinished work as successful.
 
 ## Configure a Model
 
@@ -80,10 +89,12 @@ sat configure
 sat configure --show
 ```
 
-SAT stores only the selected `provider/model` reference in its own
-configuration. Provider credentials remain in SAT's isolated OpenClaw state
-or in an explicitly trusted caller environment; they are not written to the
-repository, generated project, run evidence, or SAT exports.
+The normal wizard stores only the selected `provider/model` reference. Advanced
+configuration may also store secret-free prices, the adaptive maximum
+concurrency, or an explicit global invocation-timeout override. Provider
+credentials remain in SAT's isolated OpenClaw state or in an explicitly
+trusted caller environment; they are not written to the repository, generated
+project, run evidence, or SAT exports.
 
 Before asking for a project or starting an Agent, SAT checks that its isolated
 runtime recognizes the exact selected model and has a local catalog/auth route
@@ -105,10 +116,10 @@ Run the guided uninstaller from any directory:
 sat-uninstall
 ```
 
-Uninstallation preserves configuration, generated work, and SAT's isolated
-provider state by default. It can export configuration and generated data
-before removal, and it requires explicit choices before purging preserved
-state. Other OpenClaw installations are never uninstall targets.
+Uninstallation preserves configuration, Planning evidence, generated work, and
+SAT's isolated provider state by default. It can export configuration and
+generated data before removal, and it requires explicit choices before purging
+preserved state. Other OpenClaw installations are never uninstall targets.
 
 See [guided uninstallation](docs/installation.md#guided-uninstallation) for
 the export and purge options.
@@ -118,13 +129,16 @@ the export and purge options.
 SAT is experimental software. The supported build path is currently limited
 to new, small Python 3.12 projects; existing-codebase modification, additional
 runtime profiles, interrupted-run resume, deployment, and publication are not
-yet supported. In addition to comprehensive automated offline coverage, the
-complete public-install-to-running-result journey has passed a live-provider
-rehearsal in a fresh non-root Linux account, including guided setup, a natural
-request, evidence-driven revision, 5/5 accepted delivery, exact delivered
-commands, localhost CRUD and restart persistence, clean application shutdown,
-and zero run-scoped container residue. Independent rehearsal on another device
-remains useful before a live demonstration.
+yet supported. Adaptive Planning, plan approval, task-defined execution, and
+delivery are integrated in the normal `sat` path and covered offline. Rich
+configurable per-Agent progress, active run controls, and multiple model routes
+remain under development.
+
+The earlier guided fixed-team path passed a complete live-provider rehearsal
+in a fresh non-root Linux account, including accepted delivery, exact project
+commands, application checks, and zero run-scoped container residue. That
+evidence does not prove the newly activated adaptive path; a fresh installed
+adaptive rehearsal remains required before claiming demonstration readiness.
 
 Read [`STATUS.md`](STATUS.md) for current evidence and known gaps, and
 [`VISION.md`](VISION.md) for product direction, architecture, scope, and the

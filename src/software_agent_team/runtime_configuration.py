@@ -717,11 +717,13 @@ def materialize_run_configuration(
     sandbox_user: str | None = None,
     model: str | None = None,
     team_plan: TeamPlan | None = None,
+    bootstrap_capability: AgentCapability | None = None,
 ) -> Path:
     """Create a secret-free OpenClaw config bound to one verified workspace.
 
     The checked-in template owns vetted capability and permission profiles.
-    This function emits only approved Agent identities and changes machine-local
+    This function emits only approved Agent identities, or one explicitly
+    selected pre-execution bootstrap capability, and changes machine-local
     runtime values: workspace, sandbox scope, image, resource limits, and model
     routes. Provider credentials remain in OpenClaw's external state or the
     trusted caller environment.
@@ -743,6 +745,17 @@ def materialize_run_configuration(
         model = model.strip()
         if not model:
             raise RuntimeConfigurationError("run model must not be blank")
+    if team_plan is not None and bootstrap_capability is not None:
+        raise RuntimeConfigurationError(
+            "runtime configuration cannot mix a TeamPlan with bootstrap Planning"
+        )
+    if bootstrap_capability is not None and bootstrap_capability not in {
+        AgentCapability.CLARIFICATION,
+        AgentCapability.PLANNING,
+    }:
+        raise RuntimeConfigurationError(
+            "bootstrap runtime requires a clarification or planning capability"
+        )
     if team_plan is not None:
         default_route = team_plan.model_routes.get_route(
             team_plan.model_routes.default_route_id
@@ -822,7 +835,23 @@ def materialize_run_configuration(
             },
         }
     )
-    if team_plan is None:
+    if bootstrap_capability is not None:
+        template_role = _CAPABILITY_TEMPLATE_ROLES[bootstrap_capability]
+        templates = {agent["id"]: agent for agent in agents["list"]}
+        template = templates.get(template_role)
+        if not isinstance(template, dict):
+            raise RuntimeConfigurationError(
+                f"OpenClaw template is missing {template_role}"
+            )
+        agent = json.loads(json.dumps(template))
+        agent["workspace"] = str(resolved_workspace)
+        agent["default"] = True
+        sandbox_config = agent.setdefault("sandbox", {})
+        sandbox_config["workspaceAccess"] = "ro"
+        if model is not None:
+            agent["model"] = {"primary": model, "fallbacks": []}
+        agents["list"] = [agent]
+    elif team_plan is None:
         for agent in agents["list"]:
             agent["workspace"] = str(resolved_workspace)
     else:
