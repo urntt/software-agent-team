@@ -616,6 +616,98 @@ def test_model_inspection_requires_the_exact_available_catalog_entry(
     assert kwargs["shell"] is False
     assert kwargs["env"]["OPENCLAW_STATE_DIR"] == str(state)
     assert kwargs["env"]["OPENCLAW_CONFIG_PATH"] == str(config)
+    assert kwargs["timeout"] == runtime_configuration.MODEL_INSPECTION_TIMEOUT_SECONDS
+
+
+def test_model_inspection_allows_catalog_startup_longer_than_thirty_seconds(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    openclaw = tmp_path / "openclaw"
+    openclaw.write_text("binary", encoding="utf-8")
+    openclaw.chmod(0o755)
+    config = tmp_path / "runtime.json"
+    config.write_text("{}", encoding="utf-8")
+    state = tmp_path / "sat-state/openclaw"
+    state.mkdir(parents=True)
+    observed_timeout: list[int] = []
+
+    class Result:
+        returncode = 0
+        stderr = ""
+        stdout = json.dumps(
+            {
+                "models": [
+                    {
+                        "key": DEEPSEEK_VISION_MODEL,
+                        "available": True,
+                    }
+                ]
+            }
+        )
+
+    def slow_catalog(_argv: list[str], **kwargs: object) -> Result:
+        timeout = int(kwargs["timeout"])
+        observed_timeout.append(timeout)
+        if timeout <= 30:
+            raise runtime_configuration.subprocess.TimeoutExpired(
+                cmd="openclaw models list",
+                timeout=timeout,
+            )
+        return Result()
+
+    monkeypatch.setattr(runtime_configuration.subprocess, "run", slow_catalog)
+
+    result = inspect_openclaw_model(
+        openclaw_binary=openclaw,
+        openclaw_state_dir=state,
+        config_path=config,
+        model=DEEPSEEK_VISION_MODEL,
+    )
+
+    assert result.available
+    assert observed_timeout == [runtime_configuration.MODEL_INSPECTION_TIMEOUT_SECONDS]
+
+
+def test_model_inspection_timeout_reports_safe_exact_bound(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    openclaw = tmp_path / "openclaw"
+    openclaw.write_text("binary", encoding="utf-8")
+    openclaw.chmod(0o755)
+    config = tmp_path / "runtime.json"
+    config.write_text("{}", encoding="utf-8")
+    state = tmp_path / "sat-state/openclaw"
+    state.mkdir(parents=True)
+    hidden_command = ["openclaw", "models", "list", "hidden-value"]
+    timeout = runtime_configuration.subprocess.TimeoutExpired(
+        cmd=hidden_command,
+        timeout=47,
+        stderr="hidden-stderr",
+    )
+    monkeypatch.setattr(
+        runtime_configuration.subprocess,
+        "run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(timeout),
+    )
+
+    with pytest.raises(RuntimeConfigurationError) as captured:
+        inspect_openclaw_model(
+            openclaw_binary=openclaw,
+            openclaw_state_dir=state,
+            config_path=config,
+            model=DEEPSEEK_VISION_MODEL,
+            timeout_seconds=47,
+        )
+
+    assert str(captured.value) == (
+        "OpenClaw model inspection timed out after 47 seconds; "
+        "no provider request was made"
+    )
+    assert captured.value.__cause__ is timeout
+    assert "hidden-value" not in str(captured.value)
+    assert "hidden-stderr" not in str(captured.value)
 
 
 @pytest.mark.parametrize(
@@ -691,6 +783,7 @@ def test_preflight_executes_explicit_commands_without_provider_call(
     monkeypatch.setenv("OPENCLAW_CONFIG_PATH", str(original_state / "openclaw.json"))
     monkeypatch.setenv("OPENCLAW_AGENT_DIR", str(original_state / "agent"))
     calls: list[list[str]] = []
+    timeouts: list[int] = []
 
     class Result:
         def __init__(self, returncode: int, stdout: str = "") -> None:
@@ -705,6 +798,7 @@ def test_preflight_executes_explicit_commands_without_provider_call(
         assert environment["OPENCLAW_CONFIG_PATH"] == str(config)
         assert environment["OPENCLAW_AGENT_DIR"] == ""
         calls.append(argv)
+        timeouts.append(int(kwargs["timeout"]))
         if argv[-1] == "--version":
             name = (
                 "Docker version test" if argv[0] == "/bin/docker" else "OpenClaw test"
@@ -817,6 +911,9 @@ def test_preflight_executes_explicit_commands_without_provider_call(
     assert result.model == DEEPSEEK_VISION_MODEL
     assert result.model_available is True
     assert result.model_error is None
+    assert result.command_timeout_seconds == 30
+    assert result.model_inspection_timeout_seconds == 90
+    assert timeouts == [30, 30, 90, 30, 30, 30, 30, 30, 30]
     assert os.environ["OPENCLAW_STATE_DIR"] == str(original_state)
     assert os.environ["OPENCLAW_CONFIG_PATH"] == str(original_state / "openclaw.json")
     assert os.environ["OPENCLAW_AGENT_DIR"] == str(original_state / "agent")
@@ -830,6 +927,8 @@ def test_preflight_executes_explicit_commands_without_provider_call(
     assert persisted["sandbox_container_ready"] is True
     assert persisted["model"] == DEEPSEEK_VISION_MODEL
     assert persisted["model_available"] is True
+    assert persisted["command_timeout_seconds"] == 30
+    assert persisted["model_inspection_timeout_seconds"] == 90
     with pytest.raises(RuntimeConfigurationError, match="already exists"):
         persist_runtime_preflight(result, evidence)
 

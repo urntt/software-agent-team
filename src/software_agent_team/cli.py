@@ -78,6 +78,7 @@ from software_agent_team.quality_gates import (
 )
 from software_agent_team.run_control import RunPhase
 from software_agent_team.runtime_configuration import (
+    MODEL_INSPECTION_TIMEOUT_SECONDS,
     OpenClawModelInspection,
     RuntimeConfigurationError,
     RuntimePreflight,
@@ -672,6 +673,7 @@ def _configure(args: argparse.Namespace) -> int:
         progress_visibility=progress_visibility,
     )
     if interactive:
+        _render_model_inspection_start(len(configuration.model_profiles))
         inspections = tuple(
             _inspect_selected_model(
                 DEFAULT_OPENCLAW_BINARY,
@@ -1341,6 +1343,23 @@ def _inspect_selected_model(
         )
 
 
+def _render_model_inspection_start(profile_count: int) -> None:
+    """Explain a bounded local model check before its first subprocess wait."""
+
+    if profile_count < 1:
+        raise ValueError("model inspection requires at least one profile")
+    route_label = "route" if profile_count == 1 else "routes"
+    print("\nChecking SAT's isolated model configuration...")
+    print(
+        f"  Verifying {profile_count} local catalog/auth {route_label} without "
+        "generating content."
+    )
+    print(
+        "  Each cold local model check may take up to "
+        f"{MODEL_INSPECTION_TIMEOUT_SECONDS} seconds."
+    )
+
+
 def _run_provider_smoke(
     openclaw_binary: Path,
     model: str,
@@ -1464,6 +1483,7 @@ def _ensure_product_configuration(
             "SAT OpenClaw configuration must not be a symbolic link"
         )
     if current is not None and openclaw_config.is_file():
+        _render_model_inspection_start(len(current.model_profiles))
         default_profile = current.default_model_profile
         default_inspection = _inspect_selected_model(
             DEFAULT_OPENCLAW_BINARY,
@@ -1548,6 +1568,7 @@ def _ensure_product_configuration(
                 current.progress_visibility if current is not None else "standard"
             ),
         )
+    _render_model_inspection_start(len(configuration.model_profiles))
     inspections = tuple(
         _inspect_selected_model(
             DEFAULT_OPENCLAW_BINARY,
@@ -1715,11 +1736,25 @@ def _run_product_planning(
 ) -> ApprovedPlanningResult | None:
     """Run one isolated bootstrap Planning session and clean its sandbox."""
 
-    manifest = load_team_manifest(DEFAULT_TEAM_CONFIG)
-    inspection = inspect_sandbox_image(
-        sandbox_binary="docker",
-        sandbox_image=quality.policy.sandbox.image,
+    print("\nChecking the isolated Planning runtime...")
+    print(
+        "  Verifying the selected model and restricted sandbox without "
+        "generating content."
     )
+    print(
+        "  A cold local model check may take up to "
+        f"{MODEL_INSPECTION_TIMEOUT_SECONDS} seconds."
+    )
+    manifest = load_team_manifest(DEFAULT_TEAM_CONFIG)
+    try:
+        inspection = inspect_sandbox_image(
+            sandbox_binary="docker",
+            sandbox_image=quality.policy.sandbox.image,
+        )
+    except RuntimeConfigurationError as error:
+        raise RuntimeConfigurationError(
+            f"Planning runtime check failed before any Agent was started: {error}"
+        ) from error
     if not inspection.ready or inspection.sandbox_image_id is None:
         raise RuntimeConfigurationError(
             "the configured sandbox image is not present locally"
@@ -1744,15 +1779,20 @@ def _run_product_planning(
             model=configuration.model,
             bootstrap_capability=AgentCapability.CLARIFICATION,
         )
-        preflight = inspect_runtime_preflight(
-            openclaw_binary=DEFAULT_OPENCLAW_BINARY,
-            openclaw_state_dir=state_paths.openclaw,
-            runtime_config=runtime_path,
-            sandbox_binary="docker",
-            sandbox_image=quality.policy.sandbox.image,
-            expected_sandbox_image_id=inspection.sandbox_image_id,
-            expected_model=configuration.model,
-        )
+        try:
+            preflight = inspect_runtime_preflight(
+                openclaw_binary=DEFAULT_OPENCLAW_BINARY,
+                openclaw_state_dir=state_paths.openclaw,
+                runtime_config=runtime_path,
+                sandbox_binary="docker",
+                sandbox_image=quality.policy.sandbox.image,
+                expected_sandbox_image_id=inspection.sandbox_image_id,
+                expected_model=configuration.model,
+            )
+        except RuntimeConfigurationError as error:
+            raise RuntimeConfigurationError(
+                f"Planning runtime check failed before any Agent was started: {error}"
+            ) from error
         if not preflight.ready:
             raise RuntimeConfigurationError(
                 "Planning runtime preflight failed: "

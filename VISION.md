@@ -152,6 +152,11 @@ when code, usability evidence, or controlled experiments justify a replacement.
   checks before its Agent invocation. Startup validates saved defaults;
   run-scoped preflight validates the approved route plan without generation,
   while an actual provider smoke request remains separately authorized.
+- Local readiness checks have explicit controller-owned infrastructure
+  timeouts. The potentially cold OpenClaw model-catalog inspection receives a
+  90-second bound, while ordinary preflight commands retain their 30-second
+  bound. Neither value is an Agent invocation timeout, and a local inspection
+  failure must say that no provider request or Agent invocation occurred.
 - SAT may carry a small versioned, secret-free catalog supplement when an
   explicitly supported provider model exists upstream but is absent from the
   pinned OpenClaw catalog. The supplement declares only routing and model
@@ -424,6 +429,7 @@ change in the same controlled trial.
 | Use OpenClaw as the Agent runtime, not the orchestrator | OpenClaw provides model/provider integration, sessions, tools, and sandboxing; the experiment still needs a model-independent control plane. |
 | Isolate SAT's OpenClaw runtime and state from every existing installation | Compatibility is not ownership. Installing a pinned private binary and overriding every mutable OpenClaw path gives SAT reproducibility without reading, changing, stopping, or deleting a user's existing binary, Gateway, profile, configuration, credentials, sessions, caches, or workspaces. A collision at SAT's private target fails safely instead of being adopted. |
 | Validate and, when necessary, supplement the exact model catalog before Agent work | Saving a `provider/model` string does not prove that the pinned runtime can resolve it. A non-generation catalog/auth check catches unsupported or unauthenticated selections before a build, while a versioned secret-free supplement can bridge a known catalog lag without copying credentials or enabling fallback. |
+| Keep local readiness timeouts separate from Agent invocation timeouts | A cold local catalog process can take longer than a lightweight binary or Docker check without consuming provider tokens. The controller therefore records and enforces a dedicated 90-second model-inspection boundary, keeps ordinary preflight commands at 30 seconds, announces the wait, and never presents either value as time granted to an Agent. |
 | Keep the controller's invocation timeout authoritative | A provider compatibility supplement may describe routing and model metadata, but it must not add an independent transport timeout that conflicts with the approved per-Agent invocation policy. OpenClaw receives the resolved timeout for every call, and SAT's outer process boundary adds only bounded shutdown grace. |
 | Start with `function_specialized` | It introduces independent planning, testing, and review without the merge conflicts that would confound the first vertical slice. |
 | Keep Tester and Reviewer independent, with configurable dispatch concurrency | They inspect the same immutable evidence and never consume each other's interpretation. Parallel dispatch reduces elapsed time when provider capacity permits; serial dispatch prevents overload without changing the semantic experiment. |

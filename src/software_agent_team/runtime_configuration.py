@@ -29,6 +29,10 @@ class RuntimeConfigurationError(ValueError):
     """Raised when a safe run-scoped Agent configuration cannot be created."""
 
 
+PREFLIGHT_COMMAND_TIMEOUT_SECONDS = 30
+MODEL_INSPECTION_TIMEOUT_SECONDS = 90
+
+
 _DEEPSEEK_VISION_MODEL = "deepseek/deepseek-v4-flash-vision-exp"
 _MODEL_COMPATIBILITY: dict[str, dict[str, Any]] = {
     _DEEPSEEK_VISION_MODEL: {
@@ -129,6 +133,16 @@ class RuntimePreflight(BaseModel):
     openclaw_version: str = Field(min_length=1)
     openclaw_state_dir: str = Field(min_length=1)
     runtime_config: str = Field(min_length=1)
+    command_timeout_seconds: int = Field(
+        default=PREFLIGHT_COMMAND_TIMEOUT_SECONDS,
+        ge=1,
+        le=3600,
+    )
+    model_inspection_timeout_seconds: int = Field(
+        default=MODEL_INSPECTION_TIMEOUT_SECONDS,
+        ge=1,
+        le=3600,
+    )
     sandbox_binary: str = Field(min_length=1)
     sandbox_version: str = Field(min_length=1)
     sandbox_image: str = Field(min_length=1)
@@ -374,7 +388,7 @@ def inspect_openclaw_model(
     openclaw_state_dir: Path,
     config_path: Path,
     model: str,
-    timeout_seconds: int = 30,
+    timeout_seconds: int = MODEL_INSPECTION_TIMEOUT_SECONDS,
 ) -> OpenClawModelInspection:
     """Check one exact local model catalog/auth route without generation."""
 
@@ -415,8 +429,16 @@ def inspect_openclaw_model(
             },
             shell=False,
         )
+    except subprocess.TimeoutExpired as error:
+        raise RuntimeConfigurationError(
+            "OpenClaw model inspection timed out after "
+            f"{timeout_seconds} seconds; no provider request was made"
+        ) from error
     except (OSError, subprocess.SubprocessError) as error:
-        raise RuntimeConfigurationError("OpenClaw model inspection failed") from error
+        raise RuntimeConfigurationError(
+            "OpenClaw model inspection failed before completion "
+            f"({type(error).__name__}); no provider request was made"
+        ) from error
     if result.returncode != 0:
         return OpenClawModelInspection(
             model=normalized,
@@ -465,7 +487,7 @@ def inspect_sandbox_image(
     *,
     sandbox_binary: str,
     sandbox_image: str,
-    timeout_seconds: int = 30,
+    timeout_seconds: int = PREFLIGHT_COMMAND_TIMEOUT_SECONDS,
     environment: Mapping[str, str] | None = None,
 ) -> SandboxImageInspection:
     """Resolve a local Docker reference without pulling or running an image."""
@@ -537,7 +559,7 @@ def probe_sandbox_runtime(
     *,
     sandbox_binary: str,
     sandbox_image_id: str,
-    timeout_seconds: int = 30,
+    timeout_seconds: int = PREFLIGHT_COMMAND_TIMEOUT_SECONDS,
     settle_seconds: float = 0.2,
     environment: Mapping[str, str] | None = None,
 ) -> SandboxRuntimeProbe:
@@ -940,12 +962,15 @@ def inspect_runtime_preflight(
     sandbox_image: str,
     expected_sandbox_image_id: str | None = None,
     expected_model: str | None = None,
-    timeout_seconds: int = 30,
+    timeout_seconds: int = PREFLIGHT_COMMAND_TIMEOUT_SECONDS,
+    model_inspection_timeout_seconds: int = MODEL_INSPECTION_TIMEOUT_SECONDS,
 ) -> RuntimePreflight:
     """Check config, selected model, and sandbox execution without model calls."""
 
     if timeout_seconds < 1:
         raise RuntimeConfigurationError("preflight timeout must be positive")
+    if model_inspection_timeout_seconds < 1:
+        raise RuntimeConfigurationError("model inspection timeout must be positive")
     if not openclaw_binary.is_file() or not os.access(openclaw_binary, os.X_OK):
         raise RuntimeConfigurationError("OpenClaw binary is unavailable")
     if not runtime_config.is_file() or runtime_config.is_symlink():
@@ -987,7 +1012,7 @@ def inspect_runtime_preflight(
                 openclaw_state_dir=openclaw_state_dir,
                 config_path=runtime_config,
                 model=expected_model,
-                timeout_seconds=timeout_seconds,
+                timeout_seconds=model_inspection_timeout_seconds,
             )
         else:
             model_inspection = OpenClawModelInspection(
@@ -1027,6 +1052,8 @@ def inspect_runtime_preflight(
         openclaw_version=version.stdout.strip() or version.stderr.strip(),
         openclaw_state_dir=str(openclaw_state_dir.resolve(strict=True)),
         runtime_config=str(runtime_config.resolve(strict=True)),
+        command_timeout_seconds=timeout_seconds,
+        model_inspection_timeout_seconds=model_inspection_timeout_seconds,
         sandbox_binary=sandbox.sandbox_binary,
         sandbox_version=sandbox.sandbox_version,
         sandbox_image=sandbox.sandbox_image,

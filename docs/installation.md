@@ -134,6 +134,13 @@ resolve through the run-scoped catalog and SAT's isolated auth boundary. These
 checks catch a stale container or unresolved primary or fallback route before
 spending provider tokens.
 
+SAT prints a status message before each potentially cold local catalog wait.
+Model inspection may take up to 90 seconds per selected route; ordinary local
+preflight commands retain a 30-second limit. Both values are recorded as
+infrastructure-check settings and are independent of the timeout later granted
+to any Agent. If model inspection times out, SAT identifies that exact phase,
+states that no provider request was made, and stops before creating an Agent.
+
 OpenClaw keeps role sandboxes alive for session reuse by default. SAT's run
 sessions are unique and immutable, so SAT removes the exact run-scoped role
 containers before returning a completed or failed result, and also attempts
@@ -148,9 +155,9 @@ On the first configured run, SAT then:
 2. Offers to open provider-credential setup inside that isolated state;
 3. Reads only SAT's isolated default model without probing the provider and
    asks the user to confirm or replace the exact `provider/model` reference;
-4. Checks that the exact selection has a local catalog/auth route without
-   generating content, and gives a corrective configuration path when it does
-   not;
+4. Announces and checks that the exact selection has a local catalog/auth route
+   without generating content, allows up to 90 seconds for a cold local check,
+   and gives a corrective configuration path when it does not complete;
 5. Saves that model as one strict secret-free default profile in SAT
    configuration;
 6. Offers one explicit minimal provider smoke check, disabled by default;

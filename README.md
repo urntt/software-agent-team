@@ -131,6 +131,11 @@ the bootstrap model. Before starting an Agent, run preflight checks every model
 route authorized by the approved TeamPlan, with a local catalog/auth route for
 each. These checks do not generate content. An optional provider smoke check
 remains a separate, explicitly authorized action because it can incur usage.
+SAT announces the local inspection before waiting. A cold model-catalog check
+may use up to 90 seconds; that infrastructure boundary is separate from the
+30-second ordinary preflight-command limit and from every approved Agent
+invocation timeout. If it expires, SAT reports that no provider request was
+made and does not create an Agent.
 
 See the [installation and configuration guide](docs/installation.md) for
 configuration paths, provider setup, saved defaults, and recovery boundaries.

@@ -225,6 +225,7 @@ def test_guided_request_reprompts_invalid_unicode_before_planning_authorization(
 def test_product_planning_uses_one_bootstrap_agent_and_cleans_it(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     state_paths = cli.ProductStatePaths.below(tmp_path / "state")
     cli.ensure_product_state(state_paths)
@@ -360,6 +361,97 @@ def test_product_planning_uses_one_bootstrap_agent_and_cleans_it(
     ]
     assert len(runtime_paths) == 1
     assert not runtime_paths[0].exists()
+    output = capsys.readouterr().out
+    assert "Checking the isolated Planning runtime" in output
+    assert "without generating content" in output
+    assert "may take up to 90 seconds" in output
+    assert "Planning runtime: isolated workspace, sandbox, and model ready" in output
+
+
+def test_product_planning_reports_model_timeout_before_creating_an_agent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    state_paths = cli.ProductStatePaths.below(tmp_path / "state")
+    cli.ensure_product_state(state_paths)
+    planning_workspace = tmp_path / "profile-seed"
+    planning_workspace.mkdir()
+    request = cli.PlanningRequest(
+        run_id="sat-product-preflight-timeout",
+        project_name="link-checker",
+        source_request="Build a Markdown link checker.",
+        destination=str(tmp_path / "link-checker"),
+        execution_profile=("A new Python project.",),
+        base_constraints=("No runtime network access.",),
+        model="provider/model",
+        authorization="user_confirmed",
+        authorized_at=datetime(2026, 8, 27, 12, 0, tzinfo=UTC),
+    )
+    quality = cli.load_quality_gate_configuration(
+        cli.DEFAULT_PRODUCT_POLICY,
+        cli.DEFAULT_PRODUCT_PROFILE,
+    )
+    monkeypatch.setattr(
+        cli,
+        "inspect_sandbox_image",
+        lambda **kwargs: SandboxImageInspection(
+            sandbox_binary="/usr/bin/docker",
+            sandbox_version="Docker version test",
+            sandbox_image=str(kwargs["sandbox_image"]),
+            sandbox_image_id=f"sha256:{'a' * 64}",
+            sandbox_image_present=True,
+        ),
+    )
+
+    def fake_materialize(*args: object, **_kwargs: object) -> Path:
+        destination = args[1]
+        assert isinstance(destination, Path)
+        destination.write_text("{}\n", encoding="utf-8")
+        return destination
+
+    monkeypatch.setattr(cli, "materialize_run_configuration", fake_materialize)
+    monkeypatch.setattr(
+        cli,
+        "inspect_runtime_preflight",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            cli.RuntimeConfigurationError(
+                "OpenClaw model inspection timed out after 90 seconds; "
+                "no provider request was made"
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "run_interactive_planning",
+        lambda *_args, **_kwargs: pytest.fail(
+            "Planning must not start after runtime preflight failure"
+        ),
+    )
+
+    with pytest.raises(
+        cli.RuntimeConfigurationError,
+        match=(
+            "Planning runtime check failed before any Agent was started: "
+            "OpenClaw model inspection timed out after 90 seconds"
+        ),
+    ):
+        cli._run_product_planning(
+            request,
+            source_repository=planning_workspace,
+            state_paths=state_paths,
+            quality=quality,
+            configuration=UserConfiguration(model="provider/model"),
+        )
+
+    assert not any(state_paths.planning.iterdir())
+    assert not any(state_paths.runs.iterdir())
+    assert not any(state_paths.sources.iterdir())
+    assert not any(state_paths.workspaces.iterdir())
+    assert not list(state_paths.root.glob(".planning-runtime-*"))
+    output = capsys.readouterr().out
+    assert "Checking the isolated Planning runtime" in output
+    assert "may take up to 90 seconds" in output
 
 
 def test_product_global_timeout_override_is_an_exact_controller_policy() -> None:
@@ -807,6 +899,7 @@ def test_cli_requires_a_complete_price_pair(
 def test_first_run_model_setup_keeps_credentials_and_prices_outside_sat(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     path = tmp_path / "config.json"
     answers = iter(("no", "provider/model", "no"))
@@ -850,6 +943,10 @@ def test_first_run_model_setup_keeps_credentials_and_prices_outside_sat(
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["schema_version"] == 6
     assert "api_key" not in payload
+    output = capsys.readouterr().out
+    assert "Checking SAT's isolated model configuration" in output
+    assert "1 local catalog/auth route" in output
+    assert "Each cold local model check may take up to 90 seconds" in output
 
 
 def test_saved_model_is_rechecked_before_the_product_questions(
@@ -895,6 +992,7 @@ def test_saved_model_is_rechecked_before_the_product_questions(
         cli._ensure_product_configuration(state_paths)
 
     output = capsys.readouterr().out
+    assert output.count("Checking SAT's isolated model configuration") == 2
     assert "Saved bootstrap model is not locally ready" in output
     assert "First-run model setup" in output
 
@@ -945,6 +1043,8 @@ def test_unavailable_optional_model_profile_warns_without_resetting_configuratio
     assert result == configured
     assert load_user_configuration(configuration_path) == configured
     output = capsys.readouterr().out
+    assert "Checking SAT's isolated model configuration" in output
+    assert "2 local catalog/auth routes" in output
     assert "Optional model profiles are not locally ready" in output
     assert "provider/optional: route unavailable" in output
     assert "First-run model setup" not in output

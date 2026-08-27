@@ -292,8 +292,9 @@ The Product Demo Slice is complete only when all of the following are true:
 3. Installation automatically diagnoses the supported environment conditions
    and produces actionable failures.
 4. From a new project directory, `sat` completes startup diagnostics,
-   confirms the exact model's local catalog/auth route, and completes first-run
-   configuration without requiring another SAT subcommand.
+   visibly confirms the exact model's local catalog/auth route, explains that a
+   cold local check may take up to 90 seconds without generating content, and
+   completes first-run configuration without requiring another SAT subcommand.
 5. The normal user is not asked for prices, concurrency, timeouts, repair
    limits, team IDs, policy paths, run IDs, or JSON files.
 6. SAT asks what to build, obtains authorization before Planning, performs

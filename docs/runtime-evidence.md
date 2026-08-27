@@ -381,8 +381,10 @@ whose evidence form or digest differs from the frozen TeamPlan origin.
 configuration validity, the bootstrap model and every TeamPlan-authorized
 model's local availability result, image presence and immutable ID,
 restricted-container tool execution and liveness, and any non-secret model or
-container probe error. A run is ready only when the configuration, every exact
-model route, image identity, and container execution checks all pass.
+container probe error. It also records the ordinary preflight-command timeout
+and the separate model-inspection timeout used for that evidence. A run is
+ready only when the configuration, every exact model route, image identity,
+and container execution checks all pass.
 
 Phase artifacts and captured process output are write-once. `team-plan.json`
 freezes Agent identities, responsibilities, dependency waves, workspace and
@@ -631,6 +633,10 @@ when investigating it rather than editing artifacts in place.
 - The bootstrap model and every TeamPlan-authorized primary or fallback model
   must appear exactly once as available in OpenClaw's configured local model
   view before Agent execution. This inspection does not generate content.
+  SAT announces the inspection and gives each potentially cold local catalog
+  process up to 90 seconds, independently of the 30-second ordinary-command
+  limit and all Agent invocation timeouts. An expiry states that no provider
+  request was made and prevents Agent creation.
   `runtime-preflight.json` persists every inspected model, availability result,
   and bounded non-secret error.
 - A reviewed compatibility catalog may add routing and model metadata absent

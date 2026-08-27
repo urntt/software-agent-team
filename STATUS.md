@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** Phase 3E implemented; eighteen fresh installed adaptive rehearsals include one accepted strict-route Adaptive Planning delivery and one provider-backed foreground-control rehearsal; the latest delivery-boundary and Review-recovery repairs await a clean retry
+**Current milestone:** Phase 3E implemented; nineteen fresh installed adaptive rehearsals include one accepted strict-route Adaptive Planning delivery and one provider-backed foreground-control rehearsal; the latest delivery-boundary, Review-recovery, and cold model-inspection repairs await a clean retry
 
 **Last updated:** August 27, 2026
 
@@ -828,6 +828,28 @@ coverage passes 115 tests and the complete repository check passes 725 tests.
 A fresh provider-backed ordinary-user run remains required before claiming the
 repaired path reaches accepted delivery.
 
+The nineteenth fresh-account run again used the public installer, bare `sat`,
+and the strict `deepseek/deepseek-v4-flash-vision-exp` route. Installation,
+automatic diagnostics, isolated configuration, the authorized provider smoke,
+ordinary request capture, destination confirmation, and Planning authorization
+all succeeded. SAT then stopped before creating the bootstrap Planning Agent
+because its local `openclaw models list --json` inspection did not finish
+inside the shared 30-second preflight-command boundary. No provider request,
+Agent, TeamPlan, run, source, workspace, or generated project was created by
+that failed phase. Later read-only checks against the same isolated state
+completed, supporting an insufficient cold-start margin as the cause without
+claiming recovery of the swallowed original subprocess exception.
+
+Model inspection now has a dedicated 90-second infrastructure timeout while
+ordinary local preflight commands remain at 30 seconds. SAT announces the
+bounded local wait before it starts, persists both values in runtime evidence,
+and reports an exact safe timeout that states no provider request was made.
+Planning wraps that diagnostic with the failed phase and confirms that no Agent
+started. Simulated cold-catalog, timeout-safety, visible-status, and no-state
+regressions pass 66 focused tests; the complete repository check passes 728
+tests. A fresh ordinary-user provider retry remains required before this repair
+is considered live-validated.
+
 The rehearsal sequence below concerns the predecessor guided fixed-team
 product path and is retained as defect and regression evidence. It proves the
 installer, isolated runtime, fixed compatibility controller, delivery, and
@@ -1221,7 +1243,8 @@ derived from the task.
 - An independent-device live demonstration of the activated Adaptive Planning
   and Dynamic Team journey;
 - An accepted fresh-account provider delivery after the Round 18
-  delivery-boundary and Review-recovery repairs;
+  delivery-boundary and Review-recovery repairs and the Round 19 cold
+  model-inspection repair;
 - Durable control recovery after a foreground process crash and a
   secondary-process control client;
 - A provider-backed run using two planned model routes and live switch
@@ -1246,8 +1269,8 @@ action succeeded after interruption.
 ## Next Milestone
 
 The next verification step is a fresh-account ordinary-user retry under the
-corrected delivery and Review contracts. Two planned model routes and the
-independent-device demonstration follow. Phase 3F then closes
+corrected delivery, Review, and local model-inspection contracts. Two planned
+model routes and the independent-device demonstration follow. Phase 3F then closes
 the remaining acceptance and usability defects. Fixed-topology comparison remains in Phase 4
 so it can serve as a controlled baseline rather than define the product's
 permanent role layout.

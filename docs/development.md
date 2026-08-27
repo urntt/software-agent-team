@@ -157,6 +157,13 @@ smoke request is a separate explicitly authorized test. When validating a
 trusted shell credential path, the generated configuration may contain the
 environment-variable reference but never its value.
 
+Keep the local model-catalog timeout independent from ordinary preflight and
+Agent invocation timeouts. The catalog subprocess has a 90-second default to
+cover cold pinned-OpenClaw startup; other local preflight commands remain at 30
+seconds. Both values belong in `RuntimePreflight` evidence. Tests must verify
+the exact subprocess bounds, safe timeout text, visible pre-wait status, and
+that a model-inspection failure creates no Planning Agent or run state.
+
 The product profile and evaluation fixture share this dependency image, not a
 TaskBrief, seed, acceptance suite, environment contract, or delivery command.
 The benchmark contract remains frozen for comparable trials. The confirmed

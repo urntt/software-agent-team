@@ -111,6 +111,12 @@ undercut an applicable scope floor. Every resolution, criterion count, boundary
 obligation count, and reason is shown in the overview and never comes from an
 execution Agent.
 
+Before Planning or execution, a separate local readiness check verifies each
+authorized OpenClaw model route without generating content. Its 90-second
+model-catalog boundary is infrastructure policy, not part of the TeamPlan and
+not time available to an Agent; ordinary preflight commands retain a 30-second
+bound. SAT announces this wait and stops before Agent creation if it expires.
+
 ## Planned User Journey
 
 ```text
