@@ -53,7 +53,10 @@ from software_agent_team.git_workspace import (
 )
 from software_agent_team.integrity import canonical_model_sha256
 from software_agent_team.invocation import persist_agent_invocation
-from software_agent_team.planning import AdaptiveImplementationPlan
+from software_agent_team.planning import (
+    AdaptiveImplementationPlan,
+    validate_task_agent_bindings,
+)
 from software_agent_team.progress import (
     ProgressDraftHandler,
     ProgressEvent,
@@ -221,11 +224,14 @@ class DynamicAgentRunner:
             if agent.capability
             in {AgentCapability.IMPLEMENTATION, AgentCapability.INTEGRATION}
         }
-        task_owner_ids = {task.owner_agent_id for task in implementation_plan.tasks}
-        if task_owner_ids != writer_ids:
-            raise ValueError(
-                "implementation plan tasks must cover every approved writer exactly"
+        try:
+            validate_task_agent_bindings(
+                implementation_plan.tasks,
+                {agent.id: agent.dependencies for agent in team_plan.agents},
+                writer_ids,
             )
+        except ValueError as error:
+            raise ValueError(f"dynamic implementation plan {error}") from error
 
         criteria = tuple(item.strip() for item in manual_review_criteria)
         if any(not item for item in criteria) or len(criteria) != len(set(criteria)):

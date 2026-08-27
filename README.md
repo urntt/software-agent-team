@@ -65,7 +65,7 @@ On first use, SAT guides you through:
 5. Explicit authorization for model-backed Planning;
 6. A bounded conversation containing only questions that can materially change
    the result;
-7. One overview of requirements, acceptance criteria, implementation tasks,
+7. One overview of requirements, acceptance criteria, Agent work assignments,
    proposed Agents, dependencies, permissions, resolved model profiles and
    fallback authority, timeouts, concurrency, iterations, and budgets; and
 8. Approval, a natural-language revision request, a supported safe edit, or

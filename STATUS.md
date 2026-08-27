@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** Phase 3E implemented; seven fresh installed adaptive rehearsals have driven controller, transport, progress, profile, and review-boundary corrections, with a clean provider rerun next
+**Current milestone:** Phase 3E implemented; eight fresh installed adaptive rehearsals have driven controller, transport, progress, profile, and review-boundary corrections, with a clean provider rerun next
 
 **Last updated:** August 27, 2026
 
@@ -82,7 +82,7 @@ proves explicit model-work authorization before the first invocation. The
 read-only bootstrap Planner may return either one decision-value question with
 two or three suggestions and a custom-answer path, or one complete proposal.
 Strict proposal validation covers requirements, acceptance criteria,
-implementation tasks, task ownership, dynamic Agent responsibilities,
+Agent work assignments, task ownership, dynamic Agent responsibilities,
 dependencies, workspace scopes, independent quality coverage, concurrency,
 iterations, per-Agent workload classes, the configured model route, and
 controller budgets before the proposal is shown. The Planner does not
@@ -508,6 +508,29 @@ start against image ID
 `sha256:9e129565b0dea409d8808dbe58570701494db5181001a5480b40bf212f0013f4`.
 The complete 667-test offline suite passes. A fresh installed provider rerun
 remains required before declaring the adaptive journey demonstration ready.
+
+That fresh-account rerun passed public installation, `phase1-v5` readiness,
+device checks, isolated configuration, provider smoke, request capture, and
+Planning authorization. Both the initial proposal and its repair selected a
+coherent `impl -> reviewer` Agent DAG, but both also restated the independent
+Review stage as reviewer-owned `TASK_REVIEW`. The internal `tasks` collection
+incorrectly required every owner to be a writer, so the proposal was rejected
+before the overview. No execution run, runtime Agent, workspace, or destination
+was created. Repeating that hidden representation constraint in a repair did
+not improve the proposal.
+
+The task contract now permits explicit work assignments for every approved
+runtime Agent. Quality-owned tasks preserve testing or review focus in the
+overview and the exact Agent prompt; they do not create Agents, grant write
+access, alter dependencies, expand criterion scope, or add model calls. The
+approved `AgentSpec` DAG remains authoritative for those controls. Every writer
+must still own work that covers every proposal-owned criterion, every task
+owner must be an approved Agent, and cross-Agent task dependencies must agree
+with the Agent DAG. The same binding validation runs during proposal parsing,
+prompt construction, and runner startup. The exact preserved repaired response
+now compiles unchanged with its original `impl -> reviewer` execution waves
+and no additional model call. The complete 673-test offline suite passes. A new
+fresh installed provider rerun is still required.
 
 The rehearsal sequence below concerns the predecessor guided fixed-team
 product path and is retained as defect and regression evidence. It proves the

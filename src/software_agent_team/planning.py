@@ -509,7 +509,7 @@ class ProposedAgent(BaseModel):
 
 
 class ProposedTask(BaseModel):
-    """Implementation intent assigned to one proposed runtime Agent."""
+    """Run-scoped work intent assigned to one proposed runtime Agent."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -585,6 +585,65 @@ def _validate_dag(
         visit(node)
 
 
+def validate_task_agent_bindings(
+    tasks: tuple[ProposedTask, ...],
+    agent_dependencies: Mapping[str, tuple[str, ...]],
+    writer_agent_ids: Collection[str],
+) -> None:
+    """Validate task ownership and ordering against one approved Agent DAG."""
+
+    task_ids = tuple(task.id for task in tasks)
+    if len(task_ids) != len(set(task_ids)):
+        raise ValueError("proposed task IDs must be unique")
+    _validate_dag(
+        task_ids,
+        {task.id: task.dependencies for task in tasks},
+        label="task",
+    )
+
+    known_agent_ids = set(agent_dependencies)
+    unknown_task_owners = {task.owner_agent_id for task in tasks} - known_agent_ids
+    if unknown_task_owners:
+        raise ValueError(
+            "tasks reference unknown Agent owners: "
+            + ", ".join(sorted(unknown_task_owners))
+        )
+
+    writers = set(writer_agent_ids)
+    task_owners = {task.owner_agent_id for task in tasks}
+    unassigned_writers = writers - task_owners
+    if unassigned_writers:
+        raise ValueError(
+            "every implementation Agent must own at least one task: "
+            + ", ".join(sorted(unassigned_writers))
+        )
+
+    def transitively_depends(agent_id: str, target: str) -> bool:
+        pending = list(agent_dependencies[agent_id])
+        seen: set[str] = set()
+        while pending:
+            current = pending.pop()
+            if current == target:
+                return True
+            if current not in seen:
+                seen.add(current)
+                pending.extend(agent_dependencies[current])
+        return False
+
+    task_owner_by_id = {task.id: task.owner_agent_id for task in tasks}
+    for task in tasks:
+        for dependency_id in task.dependencies:
+            dependency_owner = task_owner_by_id[dependency_id]
+            if dependency_owner != task.owner_agent_id and not transitively_depends(
+                task.owner_agent_id,
+                dependency_owner,
+            ):
+                raise ValueError(
+                    f"task {task.id} depends on {dependency_id}, but Agent "
+                    f"{task.owner_agent_id} does not depend on {dependency_owner}"
+                )
+
+
 def validate_task_criterion_references(
     tasks: tuple[ProposedTask, ...],
     known_criterion_ids: Collection[str],
@@ -614,7 +673,14 @@ class PlanningProposalBody(BaseModel):
     assumptions: tuple[str, ...] = Field(default=(), max_length=30)
     objective: str = Field(min_length=1, max_length=1000)
     approach: tuple[str, ...] = Field(min_length=1, max_length=30)
-    tasks: tuple[ProposedTask, ...] = Field(min_length=1, max_length=30)
+    tasks: tuple[ProposedTask, ...] = Field(
+        min_length=1,
+        max_length=30,
+        description=(
+            "Work intent for proposed runtime Agents. Tasks describe approved "
+            "focus but do not create Agents or grant permissions."
+        ),
+    )
     risks: tuple[str, ...] = Field(default=(), max_length=30)
     agents: tuple[ProposedAgent, ...] = Field(min_length=2, max_length=16)
     iteration_limit: int = Field(ge=1, le=3)
@@ -690,44 +756,22 @@ class PlanningProposalBody(BaseModel):
                     "every quality Agent must depend on every implementation path"
                 )
 
-        task_ids = tuple(task.id for task in self.tasks)
-        if len(task_ids) != len(set(task_ids)):
-            raise ValueError("proposed task IDs must be unique")
-        _validate_dag(
-            task_ids,
-            {task.id: task.dependencies for task in self.tasks},
-            label="task",
+        validate_task_agent_bindings(
+            self.tasks,
+            dependencies,
+            implementation_agents,
         )
-        if any(task.owner_agent_id not in implementation_agents for task in self.tasks):
-            raise ValueError("every task owner must be an implementation Agent")
-        task_owners = {task.owner_agent_id for task in self.tasks}
-        unassigned_agents = implementation_agents - task_owners
-        if unassigned_agents:
-            raise ValueError(
-                "every implementation Agent must own at least one task: "
-                f"{', '.join(sorted(unassigned_agents))}"
-            )
-        task_owner_by_id = {task.id: task.owner_agent_id for task in self.tasks}
-        for task in self.tasks:
-            for dependency_id in task.dependencies:
-                dependency_owner = task_owner_by_id[dependency_id]
-                if dependency_owner != task.owner_agent_id and not transitively_depends(
-                    task.owner_agent_id,
-                    dependency_owner,
-                ):
-                    raise ValueError(
-                        f"task {task.id} depends on {dependency_id}, but Agent "
-                        f"{task.owner_agent_id} does not depend on "
-                        f"{dependency_owner}"
-                    )
         covered = {
-            criterion for task in self.tasks for criterion in task.acceptance_criteria
+            criterion
+            for task in self.tasks
+            if task.owner_agent_id in implementation_agents
+            for criterion in task.acceptance_criteria
         }
         expected = set(criterion_ids)
         missing = expected - covered
         if missing:
             raise ValueError(
-                "tasks do not cover proposal acceptance criteria: "
+                "writer tasks do not cover proposal acceptance criteria: "
                 + ", ".join(sorted(missing))
             )
         if self.max_concurrency > len(self.agents):

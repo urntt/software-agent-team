@@ -26,6 +26,13 @@ Choose the next response by decision value:
 - Every `expected_paths` entry is relative to the repository root and canonical.
   A directory is written as `tests`, not `tests/`; never use an absolute path,
   backslash, `.` segment, or `..` segment.
+- The `tasks` array describes work assigned to the proposed runtime Agents.
+  Every implementation or integration Agent owns at least one task, and those
+  writer-owned tasks cover every proposal-owned acceptance criterion. A testing
+  or review Agent may own tasks that make its verification focus explicit, but
+  those tasks do not create an Agent, grant write access, change its capability,
+  or replace writer coverage. Agent entries and their dependency DAG remain the
+  authority for identity, permissions, execution order, and model calls.
 - For every unqualified prohibition or safety guarantee, define acceptance and
   test intent across all relevant entry boundaries, including top-level input,
   nested input, aliases or indirection, and failure paths. Do not reduce an

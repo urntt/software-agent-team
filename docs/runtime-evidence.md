@@ -300,6 +300,9 @@ The turn preserves the exact raw response. When the controller infers an
 unambiguous missing question/proposal discriminator or canonicalizes a safe
 relative Planning path presentation, it stores the validated normalized body
 and an explicit field-level normalization list alongside that raw evidence.
+Quality-owned tasks are retained as approved semantic intent and passed to the
+matching read-only Agent. They do not alter the AgentSpec-owned permission,
+dependency, model, timeout, scope, or invocation contract.
 Unsafe, ambiguous, or permission-changing values remain validation failures.
 Turns form a predecessor-digest chain anchored by atomic `session.json` state.
 Proposal revisions are immutable and must match their source turn or a

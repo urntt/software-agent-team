@@ -310,6 +310,89 @@ def test_response_normalizer_leaves_unsafe_paths_for_strict_rejection() -> None:
         PlanningModelResponse.model_validate(normalized)
 
 
+def quality_task_payload(
+    *,
+    acceptance_criteria: list[str] | None = None,
+    expected_paths: list[str] | None = None,
+) -> dict[str, object]:
+    """Return explicit quality-stage work like a live Planner may propose."""
+
+    return {
+        "id": "TASK_REVIEW",
+        "owner_agent_id": "quality_reviewer",
+        "description": "Independently review the implementation and evidence.",
+        "dependencies": ["TASK_IMPLEMENT"],
+        "acceptance_criteria": acceptance_criteria or ["AC_SCAN", "AC_PROFILE"],
+        "expected_paths": expected_paths or ["src", "tests", "README.md"],
+    }
+
+
+def test_proposal_preserves_quality_owned_work_without_granting_authority() -> None:
+    payload = proposal_response().model_dump(mode="json")
+    payload["proposal"]["tasks"].append(quality_task_payload())
+    parsed = PlanningModelResponse.model_validate(payload)
+    profile_criterion = AcceptanceCriterion(
+        id="AC_PROFILE",
+        description="The project satisfies the fixed runtime contract.",
+        verification="Run the profile contract gate.",
+    )
+    assert parsed.proposal is not None
+
+    preview = preview_adaptive_proposal(
+        request(),
+        proposal(body=parsed.proposal),
+        policy(profile_acceptance_criteria=(profile_criterion,)),
+        created_at=FIXED_TIME,
+    )
+
+    assert [task.id for task in preview.implementation_plan.tasks] == [
+        "TASK_IMPLEMENT",
+        "TASK_REVIEW",
+    ]
+    assert preview.team_plan.execution_waves() == (
+        ("cli_developer",),
+        ("acceptance_tester", "quality_reviewer"),
+    )
+    overview = render_planning_overview(preview)
+    assert "TASK_REVIEW -> quality_reviewer" in overview
+    assert "permission: read_only" in overview
+
+
+@pytest.mark.parametrize(
+    ("invalid_case", "message"),
+    (
+        ("unknown_owner", "tasks reference unknown Agent owners: absent_reviewer"),
+        (
+            "sole_proposal_coverage",
+            "writer tasks do not cover proposal acceptance criteria: AC_REPORT",
+        ),
+        (
+            "inverted_dependency",
+            "task TASK_IMPLEMENT depends on TASK_REVIEW, but Agent cli_developer "
+            "does not depend on quality_reviewer",
+        ),
+    ),
+)
+def test_quality_owned_tasks_cannot_bypass_plan_authority(
+    invalid_case: str,
+    message: str,
+) -> None:
+    payload = proposal_response().model_dump(mode="json")
+    quality_task = quality_task_payload()
+    if invalid_case == "unknown_owner":
+        quality_task["owner_agent_id"] = "absent_reviewer"
+    elif invalid_case == "sole_proposal_coverage":
+        payload["proposal"]["tasks"][0]["acceptance_criteria"] = ["AC_SCAN"]
+        quality_task["acceptance_criteria"] = ["AC_REPORT"]
+    else:
+        payload["proposal"]["tasks"][0]["dependencies"] = ["TASK_REVIEW"]
+        quality_task["dependencies"] = []
+    payload["proposal"]["tasks"].append(quality_task)
+
+    with pytest.raises(ValidationError, match=message):
+        PlanningModelResponse.model_validate(payload)
+
+
 def test_proposed_workspace_scope_cannot_repeat_the_destination_directory() -> None:
     payload = proposal_response().model_dump(mode="json")
     payload["proposal"]["agents"][0]["workspace_scope"] = "link-checker"
@@ -781,7 +864,7 @@ def test_proposal_owned_criteria_still_require_task_coverage() -> None:
 
     with pytest.raises(
         ValidationError,
-        match="tasks do not cover proposal acceptance criteria: AC_REPORT",
+        match="writer tasks do not cover proposal acceptance criteria: AC_REPORT",
     ):
         PlanningModelResponse.model_validate(payload)
 
@@ -1175,6 +1258,9 @@ def test_dialogue_revision_structured_edit_and_approval_are_recoverable(
     compact_prompt = " ".join(executor.requests[0].prompt.split())
     assert "do not repeat their definitions" in compact_prompt
     assert "A task may reference a listed profile" in compact_prompt
+    assert "`tasks` array describes work assigned" in compact_prompt
+    assert "testing or review Agent may own tasks" in compact_prompt
+    assert "do not create an Agent, grant write access" in compact_prompt
 
     tampered = approved.model_dump(mode="json")
     tampered["team_plan"]["agents"][0]["timeout_seconds"] += 1
@@ -1350,6 +1436,50 @@ def test_safe_response_variants_do_not_consume_a_model_repair_call(
         "canonicalized proposal.tasks[0].expected_paths[0]",
         "canonicalized proposal.agents[0].workspace_scope",
     )
+
+
+def test_valid_quality_task_does_not_consume_a_model_repair_call(
+    tmp_path: Path,
+) -> None:
+    profile_criterion = AcceptanceCriterion(
+        id="AC_PROFILE",
+        description="The project satisfies the fixed runtime contract.",
+        verification="Run the profile contract gate.",
+    )
+    payload = proposal_response().model_dump(mode="json")
+    payload["proposal"]["tasks"].append(quality_task_payload())
+    raw_response = json.dumps(payload)
+    executor = ScriptedAgentExecutor([raw_response])
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(
+            response_repair_limit=0,
+            profile_acceptance_criteria=(profile_criterion,),
+        ),
+        clock=AdvancingClock(),
+    )
+
+    created = coordinator.start(
+        request(),
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+
+    assert created is not None
+    assert len(executor.requests) == 1
+    assert [task.id for task in created.body.tasks] == [
+        "TASK_IMPLEMENT",
+        "TASK_REVIEW",
+    ]
+    assert {agent.id for agent in created.body.agents} == {
+        "cli_developer",
+        "acceptance_tester",
+        "quality_reviewer",
+    }
+    turn = store.load_turn(request().run_id, 1)
+    assert turn.response_text == raw_response
+    assert turn.response_normalizations == ()
 
 
 def test_cancellation_stops_before_a_proposal_or_approval(tmp_path: Path) -> None:

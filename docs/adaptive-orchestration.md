@@ -187,6 +187,19 @@ preserves valid profile bindings when it materializes the TaskBrief and
 implementation plan. A profile criterion need not be forced onto a task merely
 because it exists.
 
+The `tasks` collection records approved work intent for any runtime Agent.
+Implementation and integration Agents must each own at least one task, and
+their tasks—not quality-only tasks—must cover every Planner-owned acceptance
+criterion. Testing and Review Agents may own tasks that state their verification
+focus. Those entries are preserved in the overview and prompt, but they do not
+create an Agent, grant tools or write access, expand review scope, choose a
+model, set a timeout, or create another model call. Those authorities come only
+from the approved `AgentSpec` and controller policy. Every task owner must exist,
+the task DAG must be acyclic, and a cross-Agent task dependency is valid only
+when the owning Agent depends transitively on the dependency owner. The
+controller applies the same binding validation during proposal parsing, prompt
+construction, and runner startup.
+
 ### Overview Before Execution
 
 The proposal shown before execution contains:
@@ -578,9 +591,9 @@ editor, complete overview, explicit approval evidence, and deterministic
 ordinary-user interaction test are implemented. Bare `sat` now activates this
 interaction together with Batch 3C, so an approved dynamic plan is the exact
 plan the controller executes. The Planning boundary also normalizes only
-unambiguous response-kind and safe relative-path presentation variants before
-strict validation, while preserving the raw response and recording each
-normalized field in the Planning turn.
+unambiguous response-kind and safe relative-path presentation before strict
+validation, while preserving the raw response and recording each normalization
+in the Planning turn.
 Blocking model waits emit a concise heartbeat every ten seconds, record when a
 response returns, show contract validation, and explicitly announce the one
 bounded repair. These messages expose elapsed time and controller state, not

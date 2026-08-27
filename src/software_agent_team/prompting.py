@@ -33,6 +33,7 @@ from software_agent_team.integrity import canonical_model_sha256
 from software_agent_team.planning import (
     AdaptiveImplementationPlan,
     ProposedTask,
+    validate_task_agent_bindings,
     validate_task_criterion_references,
 )
 from software_agent_team.responses import RESPONSE_BODY_MODELS
@@ -236,6 +237,22 @@ class DynamicAgentPromptInputs(BaseModel):
                 self.implementation_plan.tasks,
                 {criterion.id for criterion in self.task_brief.acceptance_criteria},
             )
+            validate_task_agent_bindings(
+                self.implementation_plan.tasks,
+                {
+                    plan_agent.id: plan_agent.dependencies
+                    for plan_agent in self.team_plan.agents
+                },
+                {
+                    plan_agent.id
+                    for plan_agent in self.team_plan.agents
+                    if plan_agent.capability
+                    in {
+                        AgentCapability.IMPLEMENTATION,
+                        AgentCapability.INTEGRATION,
+                    }
+                },
+            )
         except ValueError as error:
             raise ValueError(f"dynamic implementation plan {error}") from error
         if self.iteration > self.team_plan.iteration_limit:
@@ -277,8 +294,6 @@ class DynamicAgentPromptInputs(BaseModel):
             if self.command_evidence or self.manual_review_criteria:
                 raise ValueError("implementation Agent cannot receive quality evidence")
         else:
-            if assigned:
-                raise ValueError("quality Agent cannot own implementation tasks")
             if not self.command_evidence:
                 raise ValueError(
                     "quality Agent requires deterministic command evidence"
@@ -300,7 +315,7 @@ class DynamicAgentPromptInputs(BaseModel):
 
     @property
     def assigned_tasks(self) -> tuple[ProposedTask, ...]:
-        """Return implementation tasks owned by this Agent."""
+        """Return approved work-intent tasks owned by this Agent."""
 
         return tuple(
             task

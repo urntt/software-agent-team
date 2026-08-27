@@ -170,12 +170,44 @@ def budget(**updates: object) -> AgentBudget:
 def dynamic_inputs(
     *,
     include_tester: bool = True,
+    include_quality_tasks: bool = False,
     run_budget: AgentBudget | None = None,
     writer_scope: str = "repository",
 ) -> tuple[TaskBrief, AdaptiveImplementationPlan, TeamPlan]:
     """Build one internally coherent approved plan for runner tests."""
 
     task_brief = brief()
+    tasks = [
+        ProposedTask(
+            id="TASK_BUILD",
+            owner_agent_id="builder",
+            description="Implement and document the greeting utility.",
+            acceptance_criteria=("AC_CODE", "AC_REVIEW"),
+            expected_paths=("greeting.py", "README.md"),
+        )
+    ]
+    if include_quality_tasks and include_tester:
+        tasks.append(
+            ProposedTask(
+                id="TASK_TEST",
+                owner_agent_id="tester",
+                description="Analyze the deterministic greeting checks.",
+                dependencies=("TASK_BUILD",),
+                acceptance_criteria=("AC_CODE",),
+                expected_paths=("greeting.py",),
+            )
+        )
+    if include_quality_tasks:
+        tasks.append(
+            ProposedTask(
+                id="TASK_REVIEW",
+                owner_agent_id="reviewer",
+                description="Review documentation against the final behavior.",
+                dependencies=("TASK_BUILD",),
+                acceptance_criteria=("AC_REVIEW",),
+                expected_paths=("greeting.py", "README.md"),
+            )
+        )
     implementation_plan = AdaptiveImplementationPlan(
         run_id=task_brief.run_id,
         team_id="adaptive_team",
@@ -183,15 +215,7 @@ def dynamic_inputs(
         created_at=FIXED_TIME,
         objective="Implement and independently verify the greeting utility.",
         approach=("Implement one cohesive change.", "Verify the final commit."),
-        tasks=(
-            ProposedTask(
-                id="TASK_BUILD",
-                owner_agent_id="builder",
-                description="Implement and document the greeting utility.",
-                acceptance_criteria=("AC_CODE", "AC_REVIEW"),
-                expected_paths=("greeting.py", "README.md"),
-            ),
-        ),
+        tasks=tuple(tasks),
         risks=("Documentation could diverge from behavior.",),
         assumptions=("Python is available in the target profile.",),
     )
@@ -493,6 +517,7 @@ def runtime(
     tmp_path: Path,
     *,
     include_tester: bool = True,
+    include_quality_tasks: bool = False,
     run_budget: AgentBudget | None = None,
     writer_scope: str = "repository",
     executor_options: dict[str, object] | None = None,
@@ -502,6 +527,7 @@ def runtime(
 
     task_brief, implementation_plan, team_plan = dynamic_inputs(
         include_tester=include_tester,
+        include_quality_tasks=include_quality_tasks,
         run_budget=run_budget,
         writer_scope=writer_scope,
     )
@@ -630,6 +656,36 @@ def test_dynamic_runner_executes_writer_then_parallel_quality_on_one_commit(
     usage = runner.budget_ledger.snapshot()
     assert usage.calls_started == usage.calls_completed == 3
     assert usage.active_calls == 0
+
+
+def test_dynamic_runner_preserves_quality_tasks_as_read_only_prompt_focus(
+    tmp_path: Path,
+) -> None:
+    runner, team_plan, executor, quality_gate, _ = runtime(
+        tmp_path,
+        include_quality_tasks=True,
+        executor_options={"synchronize_quality": True},
+    )
+
+    result = DagScheduler().execute(team_plan, runner)
+
+    assert result.status is ScheduleStatus.COMPLETED
+    assert result.max_observed_concurrency == 2
+    assert quality_gate.calls == 1
+    prompts = {request.agent_id: request.prompt for request in executor.requests}
+    assert '"id": "TASK_TEST"' in prompts["tester"]
+    assert '"owner_agent_id": "tester"' in prompts["tester"]
+    assert '"id": "TASK_REVIEW"' in prompts["reviewer"]
+    assert '"owner_agent_id": "reviewer"' in prompts["reviewer"]
+    compact_tester = " ".join(prompts["tester"].split())
+    compact_reviewer = " ".join(prompts["reviewer"].split())
+    assert "do not grant write access" in compact_tester
+    assert "never treat it as permission" in compact_reviewer
+    assert all(
+        agent.permission_profile is PermissionProfile.READ_ONLY
+        for agent in team_plan.agents
+        if agent.id in {"tester", "reviewer"}
+    )
 
 
 def test_dynamic_runner_projects_long_artifact_summaries_without_failing_handoff(
