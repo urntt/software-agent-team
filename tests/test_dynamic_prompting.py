@@ -515,12 +515,12 @@ def test_dynamic_review_response_rejects_an_unmatched_tool_claim() -> None:
         )
 
 
-def test_dynamic_review_response_rejects_an_ambiguous_tool_claim() -> None:
+def test_dynamic_review_response_binds_every_matching_tool_result() -> None:
     assessment = ReviewCriterionAssessmentResponse(
         criterion_id="AC_LINKS",
         status="satisfied",
         adversarial_check="Ran two probes with an indistinguishable result.",
-        evidence="The semantic selector must identify one result.",
+        evidence="The controller must preserve every matching result.",
         tool_evidence=(review_tool_claim(),),
     )
     request, result = _review_result(
@@ -545,23 +545,35 @@ def test_dynamic_review_response_rejects_an_ambiguous_tool_claim() -> None:
         }
     )
 
-    with pytest.raises(AgentArtifactResponseError, match="matches multiple"):
-        parse_dynamic_agent_response(
-            result,
-            request,
-            task_brief=task_brief(),
-            team_plan=team_plan(),
-            reviewed_criterion_ids=("AC_LINKS",),
-        )
+    parsed = parse_dynamic_agent_response(
+        result,
+        request,
+        task_brief=task_brief(),
+        team_plan=team_plan(),
+        reviewed_criterion_ids=("AC_LINKS",),
+    )
+
+    assert isinstance(parsed.body, GroundedReviewReportResponse)
+    references = parsed.body.criterion_assessments[0].tool_evidence
+    assert [reference.tool_call_id for reference in references] == [
+        "tool-001",
+        "tool-002",
+    ]
+    assert {reference.observable for reference in references} == {
+        "scripted-review-observation"
+    }
 
 
-def test_dynamic_review_response_rejects_duplicate_selectors_for_one_result() -> None:
+def test_dynamic_review_response_deduplicates_repeated_and_overlapping_selectors() -> (
+    None
+):
     assessment = ReviewCriterionAssessmentResponse(
         criterion_id="AC_LINKS",
         status="satisfied",
         adversarial_check="Ran one missing-link probe.",
-        evidence="Two fragments must not duplicate one result reference.",
+        evidence="Repeated fragments still ground one result reference.",
         tool_evidence=(
+            review_tool_claim("scripted-review-observation"),
             review_tool_claim("scripted-review-observation"),
             review_tool_claim("review-observation"),
         ),
@@ -574,14 +586,20 @@ def test_dynamic_review_response_rejects_duplicate_selectors_for_one_result() ->
         )
     )
 
-    with pytest.raises(AgentArtifactResponseError, match="same current tool result"):
-        parse_dynamic_agent_response(
-            result,
-            request,
-            task_brief=task_brief(),
-            team_plan=team_plan(),
-            reviewed_criterion_ids=("AC_LINKS",),
-        )
+    parsed = parse_dynamic_agent_response(
+        result,
+        request,
+        task_brief=task_brief(),
+        team_plan=team_plan(),
+        reviewed_criterion_ids=("AC_LINKS",),
+    )
+
+    assert isinstance(parsed.body, GroundedReviewReportResponse)
+    references = parsed.body.criterion_assessments[0].tool_evidence
+    assert len(references) == 1
+    reference = references[0]
+    assert reference.tool_call_id == "tool-001"
+    assert reference.observable == "scripted-review-observation"
 
 
 def test_dynamic_review_response_structurally_requires_tool_evidence() -> None:

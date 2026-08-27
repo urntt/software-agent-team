@@ -706,9 +706,10 @@ def test_dynamic_reviewer_repairs_a_zero_call_fabricated_tool_citation(
     assert len(reviewer_requests) == 2
     assert [request.timeout_seconds for request in reviewer_requests] == [47, 47]
     assert "CONTROLLED_RESPONSE_REPAIR" in reviewer_requests[1].prompt
-    assert "tool_evidence may contain only a distinctive exact output fragment" in (
+    assert "tool_evidence may contain only a bounded exact output fragment" in (
         reviewer_requests[1].prompt
     )
+    assert "the controller binds every match" in reviewer_requests[1].prompt
     reviewer_records = [
         runner.artifact_store.load(reference)
         for reference in runner.execution_records

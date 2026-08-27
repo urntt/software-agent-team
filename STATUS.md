@@ -426,17 +426,18 @@ SAT's isolated session index, extracts only the latest exact current-prompt
 turn, pairs tool calls and results one-to-one, and persists bounded sanitized
 records with invocation-local IDs, hashes, outcomes, excerpts, and transcript
 provenance. Raw session JSONL is not copied into run artifacts. Dynamic Review
-response schema now requires every criterion assessment to supply a distinctive
-exact observable fragment from the current invocation. The model cannot supply
-or predict a controller tool ID. SAT requires the fragment to match exactly one
-sanitized result and enriches the persisted assessment with its own `tool-00N`
-ID, identity, and outcome. For `exec`, SAT records only the
+response schema now requires every criterion assessment to supply one or more
+bounded exact observable fragments from the current invocation. The model
+cannot supply or predict a controller tool ID. SAT requires every fragment to
+match at least one sanitized result, binds every matching current result, and
+deduplicates repeated or overlapping selectors by controller-owned ID before
+persisting the assessment. For `exec`, SAT records only the
 direct executable plus a hash of the complete arguments, so helper/Python/Git
 paths remain inspectable without persisting possible environment-assignment
 values or the full command. A captured zero-call turn therefore cannot support
-an accepted claim; absent, ambiguous, or duplicate result selectors enter the
-one bounded semantic repair, while invalid session provenance stops at the
-safety boundary without another provider call.
+an accepted claim; an absent result enters the one bounded semantic repair,
+while multiple real matches remain attributable evidence and invalid session
+provenance stops at the safety boundary without another provider call.
 
 A fresh installed probe against the first ID-bearing contract confirmed the
 capture boundary and exposed why semantic bodies must not carry those IDs. The
@@ -445,12 +446,18 @@ direct Python results with both required markers, while the model's four exact
 observable fragments were paired with four incorrect guessed `tool-00N` values.
 The parser correctly rejected the response, but requiring a model to count an
 evolving tool loop and predict a controller-owned presentation ID was itself a
-protocol defect. The observable-only contract above removes that requirement;
-offline regressions include unrelated preliminary calls, unique resolution,
-zero matches, multiple matches, duplicate selections, and rejection of a
-model-supplied ID. A repeat fresh installed provider authority probe and
-complete adaptive run remain required before this journey is demonstration
-ready.
+protocol defect. The first observable-only fresh retest then captured 13 actual
+calls and all five supplied fragments matched current results, including helper,
+direct Python, Git, and negative-boundary evidence. The old controller still
+rejected the response because the ordinary clean-Git fragment occurred in both
+an initial inspection and a final check. Both matches were real; requiring the
+model to manufacture unique wording was another controller-owned mapping task.
+The contract now binds all current matches and deduplicates repeated or
+overlapping selectors. Offline regressions cover unrelated preliminary calls,
+one-to-many resolution, zero matches, repeated and overlapping selectors, and
+rejection of a model-supplied ID. A repeat fresh installed provider authority
+probe and complete adaptive run remain required before this journey is
+demonstration ready.
 
 The rehearsal sequence below concerns the predecessor guided fixed-team
 product path and is retained as defect and regression evidence. It proves the

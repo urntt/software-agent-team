@@ -26,11 +26,12 @@ blocking finding remains.
 
 Every criterion assessment must cite at least one actual tool result from this
 invocation in `tool_evidence`. Controller-owned tool IDs are outside your
-response contract. Provide only one distinctive exact output fragment
-of at most 256 characters; do not predict or return a tool-call ID. The
-controller uniquely resolves that fragment and supplies the tool ID, name, and
-outcome. A fragment matching no current result or multiple current results is
-rejected; prose claims do not replace these references.
+response contract. Provide only a bounded exact output fragment of at most 256
+characters; do not predict or return a tool-call ID. The controller binds every
+current result containing that fragment and supplies each tool ID, name, and
+outcome. Repeated or overlapping fragments are deduplicated; a fragment
+matching no current result is rejected, and prose claims do not replace these
+references.
 
 Verdicts describe what the controller may safely do next. Use `revise` for
 every correctable implementation defect, including a failed quality gate,

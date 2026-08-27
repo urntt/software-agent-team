@@ -50,7 +50,7 @@ def _ground_review_tool_evidence(
     body: ReviewReportResponse,
     result: AgentExecutionResult,
 ) -> GroundedReviewReportResponse:
-    """Resolve model-visible result fragments to controller-owned tool-call IDs."""
+    """Bind model-visible fragments to every matching current tool result."""
 
     if not body.criterion_assessments:
         return GroundedReviewReportResponse(
@@ -69,7 +69,7 @@ def _ground_review_tool_evidence(
         raise ValueError("review tool evidence was not captured")
     grounded_assessments: list[ReviewCriterionAssessment] = []
     for assessment in body.criterion_assessments:
-        references: list[ReviewToolEvidenceReference] = []
+        observable_by_tool_call_id: dict[str, str] = {}
         for claim in assessment.tool_evidence:
             matches = tuple(
                 call
@@ -81,30 +81,23 @@ def _ground_review_tool_evidence(
                     f"criterion {assessment.criterion_id} evidence fragment does "
                     "not match any current tool result"
                 )
-            if len(matches) != 1:
-                raise ValueError(
-                    f"criterion {assessment.criterion_id} evidence fragment "
-                    "matches multiple current tool results"
-                )
-            references.append(
-                ReviewToolEvidenceReference(
-                    tool_call_id=matches[0].id,
-                    observable=claim.observable,
-                )
+            for match in matches:
+                observable_by_tool_call_id.setdefault(match.id, claim.observable)
+        references = tuple(
+            ReviewToolEvidenceReference(
+                tool_call_id=call.id,
+                observable=observable_by_tool_call_id[call.id],
             )
-        identifiers = [reference.tool_call_id for reference in references]
-        if len(identifiers) != len(set(identifiers)):
-            raise ValueError(
-                f"criterion {assessment.criterion_id} cites the same current "
-                "tool result more than once"
-            )
+            for call in telemetry.tool_calls
+            if call.id in observable_by_tool_call_id
+        )
         grounded_assessments.append(
             ReviewCriterionAssessment(
                 criterion_id=assessment.criterion_id,
                 status=assessment.status,
                 adversarial_check=assessment.adversarial_check,
                 evidence=assessment.evidence,
-                tool_evidence=tuple(references),
+                tool_evidence=references,
             )
         )
     return GroundedReviewReportResponse(
@@ -190,7 +183,7 @@ class TestReportResponse(BaseModel):
 
 
 class ReviewToolEvidenceClaim(BaseModel):
-    """Model-visible exact fragment used to select one current tool result."""
+    """Model-visible exact fragment used to select current tool results."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -227,19 +220,6 @@ class ReviewCriterionAssessmentResponse(BaseModel):
         if not cleaned:
             raise ValueError("criterion assessment text must not be blank")
         return cleaned
-
-    @field_validator("tool_evidence")
-    @classmethod
-    def require_unique_tool_evidence(
-        cls,
-        values: tuple[ReviewToolEvidenceClaim, ...],
-    ) -> tuple[ReviewToolEvidenceClaim, ...]:
-        """Make every semantic result selector distinct within one criterion."""
-
-        observables = [value.observable for value in values]
-        if len(observables) != len(set(observables)):
-            raise ValueError("criterion tool-evidence observables must be unique")
-        return values
 
 
 class ReviewReportResponse(BaseModel):

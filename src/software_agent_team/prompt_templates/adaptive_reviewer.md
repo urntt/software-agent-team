@@ -41,13 +41,13 @@ Each entry must name the concrete negative or boundary case you challenged and
 the observable source, documentation, deterministic-command, or sandbox-probe
 evidence for the result. It must also contain at least one `tool_evidence`
 reference to a tool result from this invocation. Controller-owned tool IDs are
-outside your response contract. For every reference, provide only a
-distinctive exact result fragment of at most 256 characters; do not predict or
-return a tool-call ID. The controller uniquely resolves that fragment inside
-this invocation and supplies the tool ID, name, and outcome in its own
-execution record. It rejects a fragment that matches no result or more than one
-result. One call may support multiple criteria when it genuinely exercises
-them. If you cannot establish a
+outside your response contract. For every reference, provide only a bounded
+exact result fragment of at most 256 characters; do not predict or return a
+tool-call ID. The controller binds every current result containing that
+fragment and supplies each tool ID, name, and outcome in its own execution
+record. It deduplicates repeated or overlapping fragments and rejects only a
+fragment that matches no current result. One call may support multiple criteria
+when it genuinely exercises them. If you cannot establish a
 criterion, mark it `blocked` and create a blocking finding that references that
 criterion. Never mark a criterion satisfied from a summary claim or passing
 project-authored test alone.

@@ -313,13 +313,14 @@ adversarially challenge the same scope. A Dynamic Reviewer returns exactly one
 criterion assessment for every assigned criterion, with a concrete negative or
 boundary case and observable evidence. A blocked assessment and its blocking
 finding must reference the same criterion; missing coverage is an invalid
-response rather than implicit acceptance. Every assessment must also supply a
-distinctive exact bounded result fragment from that invocation. The response
-schema makes the fragment structurally required and forbids a model-supplied
-tool ID. The controller requires exactly one current sanitized result to contain
-the fragment, then enriches the persisted assessment with its own tool ID,
-identity, outcome, and hashes. Zero or ambiguous matches are invalid. Review may
-run bounded foreground
+response rather than implicit acceptance. Every assessment must also supply one
+or more bounded exact result fragments from that invocation. The response schema
+makes the fragment structurally required and forbids a model-supplied tool ID.
+The controller requires every fragment to occur in at least one current
+sanitized result, enriches the persisted assessment with every matching tool ID,
+identity, outcome, and hashes, and deduplicates repeated or overlapping
+selectors. A zero match is invalid; multiple real current matches are preserved
+instead of delegated back to model wording. Review may run bounded foreground
 probes in the no-network sandbox against the read-only source and temporary
 fixtures. General write tools remain denied. Review creates a script or fixture
 only through the immutable `sat-probe-write` helper, which accepts a new bounded
@@ -598,11 +599,11 @@ source read-only and denies the general write tool. Its immutable
 that actually exists in the foreground execution surface; the runtime also
 contains the pinned `uv` needed to exercise generated-project commands. The
 OpenClaw adapter validates the current session turn, pairs actual tool calls and
-results, persists only bounded sanitized records, uniquely resolves semantic
-result fragments to controller-owned tool IDs, and rejects zero-call, absent,
-or ambiguous Reviewer evidence. Complete Agent summaries remain immutable
-artifact evidence; the
-controller derives bounded scheduler and downstream-prompt projections with an
+results, persists only bounded sanitized records, binds every matching semantic
+result fragment to controller-owned tool IDs, deduplicates overlapping
+selectors, and rejects zero-call or absent Reviewer evidence. Complete Agent
+summaries remain immutable artifact evidence; the controller derives bounded
+scheduler and downstream-prompt projections with an
 explicit truncation marker, original length, and source-summary SHA-256 rather
 than failing a handoff or asking the model to regenerate known content. The
 adaptive lifecycle coordinator crosses the authoritative snapshot

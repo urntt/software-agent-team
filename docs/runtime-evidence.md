@@ -148,14 +148,14 @@ incorrect controller-owned fields are therefore neither model-quality failures
 nor reasons to spend a repair call.
 
 Reviewer tool claims cross a separate grounding boundary. The response schema
-requires each criterion assessment to supply only a small, distinctive exact
-observable result fragment. It forbids the model from supplying or predicting a
-controller tool ID and does not ask it to echo a tool name, outcome, exit code,
-arguments, or digest. The controller searches only its current sanitized
-execution record, requires the fragment to occur in exactly one result, and
-enriches the persisted assessment with that result's `tool-00N` ID. No match,
-multiple matches, or duplicate selectors for one result use the existing one
-bounded semantic repair.
+requires each criterion assessment to supply only small bounded exact
+observable result fragments. It forbids the model from supplying or predicting
+a controller tool ID and does not ask it to echo a tool name, outcome, exit
+code, arguments, or digest. The controller searches only its current sanitized
+execution record, requires every fragment to occur in at least one result,
+binds every matching `tool-00N` ID, and deterministically deduplicates repeated
+or overlapping selectors. A no-match selector uses the existing one bounded
+semantic repair; multiple real current matches do not.
 Execution records label this grounded Reviewer shape `semantic_body_v2`; other
 current semantic bodies remain `semantic_body_v1`.
 
