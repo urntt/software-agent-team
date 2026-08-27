@@ -592,6 +592,31 @@ without another model call. The complete 677-test offline suite passes. A
 fresh installed provider rerun remains required to verify the complete
 revision loop and delivery path.
 
+The following fresh-account run reached delivery, but independent post-delivery
+validation found that a user-selected root symlink was followed despite an
+absolute never-follow guarantee. The Reviewer had cited a probe result that
+contained the expected path fragment but ended with a traceback, failed
+assertion, and `EXIT=1`; another assessment cited a tool call whose normalized
+result was failed. The former fragment resolver proved that selected text was
+present but did not require the matched result as a whole to support a
+`satisfied` assessment. That allowed a false acceptance even though the
+attributable evidence already contradicted the verdict.
+
+Runtime image `phase1-v6` now pairs `sat-probe-write` with immutable
+`sat-probe-run`. The runner validates an owner-only bounded Python probe,
+executes its open file descriptor with a fixed interpreter and project working
+directory, limits child time and output, and emits a terminal
+`SAT_PROBE_RESULT_V1` marker. Reviewer grounding rejects a satisfied assessment
+when any matched tool result failed, any matched deterministic command failed
+or timed out, a legacy terminal `EXIT=N` reports non-zero, or a direct runner
+marker is missing, malformed, timed out, or non-zero. Exact replay of the
+preserved false-acceptance response is now rejected deterministically before
+assembly. A real restricted non-root container verified runner success,
+assertion failure, timeout semantics, and runtime preflight against image ID
+`sha256:a20a5bdd9a07d903beb78e78b9f69cb37faf1969eedf3aba3ee4945e416f3bd2`;
+the complete 693-test offline suite passes. A fresh installed provider rerun is
+still required to verify the corrected revision and delivery path.
+
 The rehearsal sequence below concerns the predecessor guided fixed-team
 product path and is retained as defect and regression evidence. It proves the
 installer, isolated runtime, fixed compatibility controller, delivery, and

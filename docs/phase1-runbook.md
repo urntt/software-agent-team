@@ -137,16 +137,18 @@ Dockerfile change:
 
 ```bash
 docker build \
-  --tag sat-python-quality:phase1-v5 \
+  --tag sat-python-quality:phase1-v6 \
   runtime/python
 ```
 
 Do not substitute an unrecorded tag or allow an implicit registry pull. Both
 Agent execution and quality gates use the locally built image, with external
-network access disabled inside their containers. This image version adds the
-immutable `sat-probe-write` command used by read-only Reviewers to create only
-new bounded `/tmp/sat-review-probe-*` scripts or fixtures; it does not expose a
-general write tool or project mutation.
+network access disabled inside their containers. This image version provides
+the immutable `sat-probe-write` command used by read-only Reviewers to create
+only new bounded `/tmp/sat-review-probe-*` scripts or fixtures. The companion
+`sat-probe-run` command executes one such Python probe with a fixed interpreter,
+timeout, output bound, and terminal machine-readable result. Neither helper
+exposes a general write tool or project mutation.
 
 ## 3. Prepare the Benchmark Source
 
@@ -176,7 +178,8 @@ runtime preflight: ready ... config=True image=True container=True ... source_co
 Preflight validates the run-scoped, secret-free OpenClaw configuration, checks
 SAT's pinned private OpenClaw binary and state boundary, confirms that the
 sandbox executable is Docker, inspects the required image, and starts and
-removes a restricted container after executing a Python tool helper inside it.
+removes a restricted container after executing the immutable Reviewer probe
+runner's self-test inside it.
 This proves both process startup and the operation OpenClaw needs before the
 first Agent call. It does not contact a model provider or validate provider
 quota.

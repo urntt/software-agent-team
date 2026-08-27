@@ -65,17 +65,25 @@ def review_tool_claim(
     return ReviewToolEvidenceClaim(observable=observable)
 
 
-def captured_tool_call(index: int, output: str) -> AgentToolCallEvidence:
+def captured_tool_call(
+    index: int,
+    output: str,
+    *,
+    executable: str | None = None,
+    failed: bool = False,
+) -> AgentToolCallEvidence:
     """Return one controller-numbered result for semantic grounding tests."""
 
     encoded = output.encode()
     return AgentToolCallEvidence(
         id=f"tool-{index:03d}",
-        tool_name="read",
+        tool_name="exec" if executable is not None else "read",
+        executable=executable,
         external_call_sha256=f"{index:064x}",
         arguments_sha256=f"{index + 100:064x}",
-        outcome="succeeded",
-        is_error=False,
+        outcome="failed" if failed else "succeeded",
+        is_error=failed,
+        exit_code=1 if failed else (0 if executable is not None else None),
         output_sha256=f"{index + 200:064x}",
         output_bytes=len(encoded),
         output_excerpt=output,
@@ -374,6 +382,8 @@ def test_review_prompt_requires_adversarial_absolute_claim_boundaries() -> None:
 
     assert "top-level user input" in rendered
     assert "sat-probe-write /tmp/sat-review-probe-boundaries-7f3a.py" in rendered
+    assert "sat-probe-run /tmp/sat-review-probe-<suffix>.py" in rendered
+    assert "SAT_PROBE_RESULT_V1" in rendered
     assert "Do not use `python -c`" in rendered
     assert "project access is read-only" in compact
     assert "Do not modify source or project files" in compact
@@ -391,6 +401,7 @@ def test_review_prompt_requires_adversarial_absolute_claim_boundaries() -> None:
     assert "criterion_assessments" in rendered
     assert "bounded foreground commands" in rendered
     assert "negative, empty, singleton, boundary" in rendered
+    assert "passing substring from an overall failed result" in rendered
     schema_text = rendered.split("RESPONSE_SCHEMA_JSON\n", 1)[1].split(
         "\n\nFINAL_RESPONSE_CONTRACT",
         1,
@@ -726,6 +737,189 @@ def test_dynamic_review_response_binds_every_matching_tool_result() -> None:
     assert {reference.observable for reference in references} == {
         "scripted-review-observation"
     }
+
+
+def test_satisfied_review_rejects_a_matching_failed_tool_result() -> None:
+    assessment = ReviewCriterionAssessmentResponse(
+        criterion_id="AC_LINKS",
+        status="satisfied",
+        adversarial_check="Ran a boundary probe whose command failed overall.",
+        evidence="A passing-looking substring cannot override the command result.",
+        tool_evidence=(review_tool_claim("partial check looked good"),),
+    )
+    request, result = _review_result(
+        ReviewReportResponse(
+            verdict="accept",
+            criterion_assessments=(assessment,),
+            summary="Claimed success from a failed result.",
+        )
+    )
+    result = result.model_copy(
+        update={
+            "telemetry": result.telemetry.model_copy(
+                update={
+                    "tool_calls": (
+                        captured_tool_call(
+                            1,
+                            "partial check looked good\ncommand failed",
+                            executable="python",
+                            failed=True,
+                        ),
+                    )
+                }
+            )
+        }
+    )
+
+    with pytest.raises(AgentArtifactResponseError, match="overall failed tool"):
+        parse_dynamic_agent_response(
+            result,
+            request,
+            task_brief=task_brief(),
+            team_plan=team_plan(),
+            reviewed_criterion_ids=("AC_LINKS",),
+        )
+
+
+@pytest.mark.parametrize(
+    ("executable", "output"),
+    (
+        ("cd", "expected paths found\nEXIT=1"),
+        (
+            "sat-probe-run",
+            "expected paths found\n"
+            'SAT_PROBE_RESULT_V1 {"exit_code":1,"timed_out":false}',
+        ),
+        (
+            "sat-probe-run",
+            "expected paths found\n"
+            'SAT_PROBE_RESULT_V1 {"exit_code":0,"timed_out":true}',
+        ),
+        ("sat-probe-run", "expected paths found\nmissing terminal marker"),
+    ),
+)
+def test_satisfied_review_rejects_shell_masked_or_invalid_probe_failure(
+    executable: str,
+    output: str,
+) -> None:
+    assessment = ReviewCriterionAssessmentResponse(
+        criterion_id="AC_LINKS",
+        status="satisfied",
+        adversarial_check="Exercised an absolute behavior boundary.",
+        evidence="Claimed one positive fragment from an overall failed probe.",
+        tool_evidence=(review_tool_claim("expected paths found"),),
+    )
+    request, result = _review_result(
+        ReviewReportResponse(
+            verdict="accept",
+            criterion_assessments=(assessment,),
+            summary="Claimed the failed probe passed.",
+        )
+    )
+    result = result.model_copy(
+        update={
+            "telemetry": result.telemetry.model_copy(
+                update={
+                    "tool_calls": (
+                        captured_tool_call(1, output, executable=executable),
+                    )
+                }
+            )
+        }
+    )
+
+    with pytest.raises(AgentArtifactResponseError, match="overall failed tool"):
+        parse_dynamic_agent_response(
+            result,
+            request,
+            task_brief=task_brief(),
+            team_plan=team_plan(),
+            reviewed_criterion_ids=("AC_LINKS",),
+        )
+
+
+def test_satisfied_review_accepts_a_successful_probe_terminal_marker() -> None:
+    assessment = ReviewCriterionAssessmentResponse(
+        criterion_id="AC_LINKS",
+        status="satisfied",
+        adversarial_check="Exercised the broken-link boundary with assertions.",
+        evidence="The bounded probe completed with its authoritative marker.",
+        tool_evidence=(review_tool_claim("BROKEN_LINK_BOUNDARY_OK"),),
+    )
+    request, result = _review_result(
+        ReviewReportResponse(
+            verdict="accept",
+            criterion_assessments=(assessment,),
+            summary="The criterion has successful attributable evidence.",
+        )
+    )
+    output = (
+        'BROKEN_LINK_BOUNDARY_OK\nSAT_PROBE_RESULT_V1 {"exit_code":0,"timed_out":false}'
+    )
+    result = result.model_copy(
+        update={
+            "telemetry": result.telemetry.model_copy(
+                update={
+                    "tool_calls": (
+                        captured_tool_call(1, output, executable="sat-probe-run"),
+                    )
+                }
+            )
+        }
+    )
+
+    parsed = parse_dynamic_agent_response(
+        result,
+        request,
+        task_brief=task_brief(),
+        team_plan=team_plan(),
+        reviewed_criterion_ids=("AC_LINKS",),
+    )
+
+    assert isinstance(parsed.body, GroundedReviewReportResponse)
+    assert parsed.body.criterion_assessments[0].tool_evidence[0].tool_call_id == (
+        "tool-001"
+    )
+
+
+def test_satisfied_review_rejects_matching_failed_deterministic_command() -> None:
+    assessment = ReviewCriterionAssessmentResponse(
+        criterion_id="AC_LINKS",
+        status="satisfied",
+        adversarial_check="Checked the controller command result.",
+        evidence="Claimed a partial line from a failed command.",
+        tool_evidence=(review_tool_claim("one assertion passed"),),
+    )
+    request, result = _review_result(
+        ReviewReportResponse(
+            verdict="accept",
+            criterion_assessments=(assessment,),
+            summary="Claimed a failed deterministic command passed.",
+        )
+    )
+    result = result.model_copy(
+        update={"telemetry": result.telemetry.model_copy(update={"tool_calls": ()})}
+    )
+    command = CommandEvidence(
+        id="CHECK_PROJECT_TESTS",
+        argv=("python", "-m", "pytest"),
+        exit_code=1,
+        duration_ms=12,
+        stdout_path="iterations/01/commands/tests.stdout.txt",
+        stderr_path="iterations/01/commands/tests.stderr.txt",
+        stdout_tail="one assertion passed\none assertion failed",
+        summary="The project test command failed.",
+    )
+
+    with pytest.raises(AgentArtifactResponseError, match="failed or timed-out"):
+        parse_dynamic_agent_response(
+            result,
+            request,
+            task_brief=task_brief(),
+            team_plan=team_plan(),
+            reviewed_criterion_ids=("AC_LINKS",),
+            review_command_evidence=(command,),
+        )
 
 
 def test_controller_grounds_a_repair_against_prior_attempt_evidence() -> None:

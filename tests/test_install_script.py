@@ -165,7 +165,7 @@ if [[ "$*" == "sync --locked" ]]; then
   chmod 755 .venv/bin/sat
 elif [[ "${1:-}" == "run" && "${2:-}" == "--frozen" && \
         "${3:-}" == "python" && "${4:-}" == "-c" ]]; then
-  echo sat-python-quality:phase1-v5
+  echo sat-python-quality:phase1-v6
 elif [[ "${1:-}" == "run" && "${2:-}" == "--frozen" && \
         "${3:-}" == "python" && "${4:-}" == "-" ]]; then
   cat >/dev/null
@@ -250,7 +250,7 @@ def test_installer_prepares_cli_image_and_checks_idempotently(tmp_path: Path) ->
     assert "install: uninstall=sat-uninstall" in first.stdout
     docker_calls = docker_log.read_text(encoding="utf-8")
     assert "info" in docker_calls
-    assert "build --pull=false --tag sat-python-quality:phase1-v5 runtime/python" in (
+    assert "build --pull=false --tag sat-python-quality:phase1-v6 runtime/python" in (
         docker_calls
     )
     assert "image inspect --format {{.Id}}" in docker_calls
@@ -259,6 +259,7 @@ def test_installer_prepares_cli_image_and_checks_idempotently(tmp_path: Path) ->
     assert "--security-opt no-new-privileges" in docker_calls
     assert "--ulimit nproc" not in docker_calls
     assert "exec --workdir /workspace sat-install-probe-" in docker_calls
+    assert "sat-probe-run --self-test" in docker_calls
     assert "container inspect --format {{.State.Running}}" in docker_calls
     assert "container rm --force sat-install-probe-" in docker_calls
     uv_calls = uv_log.read_text(encoding="utf-8")
@@ -336,7 +337,7 @@ def test_installer_rejects_a_container_that_cannot_execute_tool_helpers(
     completed = run_installer(checkout, environment)
 
     assert completed.returncode == 1
-    assert "could not execute its Python tool helper" in completed.stderr
+    assert "could not execute the Reviewer probe runner" in completed.stderr
     assert not (install_bin / "sat").exists()
     assert "container rm --force sat-install-probe-" in docker_log.read_text(
         encoding="utf-8"

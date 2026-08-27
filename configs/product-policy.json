@@ -22,7 +22,7 @@
   },
   "sandbox": {
     "backend": "docker",
-    "image": "sat-python-quality:phase1-v5",
+    "image": "sat-python-quality:phase1-v6",
     "pull": "never",
     "network": "none",
     "read_only_root_filesystem": true,

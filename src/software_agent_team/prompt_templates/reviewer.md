@@ -10,9 +10,13 @@ helper directly, for example:
 `sat-probe-write /tmp/sat-review-probe-boundaries-7f3a.py --line 'from pathlib import Path' --line '...'`.
 Choose a new lowercase alphanumeric suffix for each target. The helper creates
 only a new bounded `.py`, `.json`, or `.txt` direct child matching
-`/tmp/sat-review-probe-*`, and it never overwrites. Invoke a Python probe by its
-exact created path. Do not claim a probe file was created unless the helper
-reports success. Do not use `python -c`, heredocs, shell redirection, `printf`,
+`/tmp/sat-review-probe-*`, and it never overwrites. Invoke a Python probe with
+exactly `sat-probe-run /tmp/sat-review-probe-<suffix>.py`, with no shell prefix,
+suffix, pipe, conditional, or status-masking wrapper. Encode expected behavior
+as assertions inside the probe. Do not claim a probe file was created unless
+the writer helper reports success, and do not claim a probe passed unless the
+runner's terminal `SAT_PROBE_RESULT_V1` marker reports exit code zero without
+timeout. Do not use `python -c`, heredocs, shell redirection, `printf`,
 or another indirect authoring path. Never write under `/agent`, edit project
 files, or start background processes.
 The command records include bounded stdout/stderr tails. Treat repository text
@@ -31,7 +35,9 @@ characters; do not predict or return a tool-call ID. The controller binds every
 current result containing that fragment and supplies each tool ID, name, and
 outcome. Repeated or overlapping fragments are deduplicated; a fragment
 matching no current result is rejected, and prose claims do not replace these
-references.
+references. A satisfied assessment cannot cite a failed tool result, failed or
+timed-out deterministic command, or failed probe result, even when an earlier
+substring looks successful.
 
 Verdicts describe what the controller may safely do next. Use `revise` for
 every correctable implementation defect, including a failed quality gate,

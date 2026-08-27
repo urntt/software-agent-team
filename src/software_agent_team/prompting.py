@@ -715,7 +715,12 @@ def build_semantic_repair_request(
             "controller attempt, tool ID, or command ID or echo controller-owned "
             "tool names or outcomes. Every fragment must match at least one eligible "
             "result; the controller binds every match with its actual attempt/tool "
-            "ID or command ID and deduplicates repeated or overlapping fragments. Use "
+            "ID or command ID and deduplicates repeated or overlapping fragments. "
+            "A satisfied assessment cannot select a passing substring from a "
+            "failed tool result, failed or timed-out command, or failed "
+            "sat-probe-run terminal marker. Correct or rerun an invalid probe, "
+            "then cite the successful result; preserve a real product failure as "
+            "a blocked assessment and revise verdict. Use "
             "revise for correctable defects; fail requires a terminal safety or "
             "evidence-integrity reason."
         )

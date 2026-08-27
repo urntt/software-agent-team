@@ -76,8 +76,8 @@ probe_runtime_image() {
   if ! docker exec \
       --workdir /workspace \
       "$task_probe_name" \
-      python -c "from pathlib import Path; assert Path('.').is_dir()"; then
-    fail "sandbox runtime could not execute its Python tool helper"
+      sat-probe-run --self-test; then
+    fail "sandbox runtime could not execute the Reviewer probe runner"
   fi
   if ! docker container rm --force "$task_probe_name" >/dev/null; then
     fail "sandbox runtime probe container could not be removed"

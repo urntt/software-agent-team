@@ -384,9 +384,14 @@ fixtures. General write tools remain denied. Review creates a script or fixture
 only through the immutable `sat-probe-write` helper, which accepts a new bounded
 canonical direct child matching `/tmp/sat-review-probe-*`, rejects overwrite
 and path indirection, and returns an observable success or refusal. The
-Reviewer may then invoke the exact created path with a simple foreground
-command; project mutation, complex interpreter invocations, background
-processes, and network remain unavailable. That self-directed evidence remains
+Reviewer then invokes a Python probe only through the immutable
+`sat-probe-run` helper. It validates the owner-only probe, executes an immutable
+file descriptor with a fixed interpreter and project working directory, bounds
+time and output, and emits a terminal `SAT_PROBE_RESULT_V1` child result.
+Project mutation, complex interpreter invocations, background processes, and
+network remain unavailable. A satisfied assessment cannot select a positive
+substring from a matched failed tool result, failed or timed-out deterministic
+command, or failed probe marker. That self-directed evidence remains
 attributable and is not
 relabeled as a controller deterministic gate. Documentation may state only the
 boundary established by the implementation and evidence. The generated-project
@@ -654,8 +659,9 @@ writer. Reviewer timeouts take the higher of Planner workload and the
 controller-derived criterion-scope floor. The Reviewer runtime keeps project
 source read-only and denies the general write tool. Its immutable
 `sat-probe-write` command provides the bounded `/tmp` probe-authoring capability
-that actually exists in the foreground execution surface; the runtime also
-contains pinned `uv` for relevant bounded probes. The OpenClaw adapter validates
+that actually exists in the foreground execution surface. `sat-probe-run`
+provides the matching fixed, bounded, controller-verifiable execution path; the
+runtime also contains pinned `uv` for relevant bounded probes. The OpenClaw adapter validates
 each exact session turn, pairs actual tool calls and results, and persists only
 bounded sanitized records. Dynamic semantic repair may carry those records
 forward only within one Reviewer, role stage, immutable commit, and invocation

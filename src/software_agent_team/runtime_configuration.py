@@ -639,9 +639,8 @@ def probe_sandbox_runtime(
                     "--workdir",
                     "/workspace",
                     container_name,
-                    "python",
-                    "-c",
-                    "from pathlib import Path; assert Path('.').is_dir()",
+                    "sat-probe-run",
+                    "--self-test",
                 ],
                 check=False,
                 capture_output=True,
@@ -682,8 +681,8 @@ def probe_sandbox_runtime(
                             ready = True
                         else:
                             error_detail = (
-                                "sandbox probe could not execute its Python tool "
-                                f"helper (exit_code={tool_check.returncode})"
+                                "sandbox probe could not execute the Reviewer "
+                                f"probe runner (exit_code={tool_check.returncode})"
                             )
                     else:
                         status = str(state.get("Status") or "unknown")

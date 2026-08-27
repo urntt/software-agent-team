@@ -535,8 +535,13 @@ when investigating it rather than editing artifacts in place.
   denied. The immutable `sat-probe-write` executable accepts only a new bounded
   canonical direct child matching `/tmp/sat-review-probe-*`, creates it
   atomically with mode `0600`, and rejects overwrite, symlinks, nesting, and
-  traversal. Simple direct probe invocations pass command preflight, and the
-  image includes pinned `uv` for relevant bounded probes. The source mount
+  traversal. Python probes run only through immutable `sat-probe-run`, which
+  validates the owner-only file, executes its open descriptor with a fixed
+  interpreter, limits runtime and output, and emits a terminal
+  `SAT_PROBE_RESULT_V1` marker. SAT rejects a satisfied assessment when any
+  matched tool result failed, matched deterministic command failed or timed
+  out, or matched probe marker reports failure. The image includes pinned `uv`
+  for relevant bounded probes. The source mount
   remains read-only, and resulting
   criterion-by-criterion evidence is attributable rather than controller-owned
   deterministic command evidence.

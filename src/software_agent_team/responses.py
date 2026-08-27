@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Collection
 from dataclasses import dataclass
 
@@ -11,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from software_agent_team.artifacts import (
     AgentRole,
     AgentToolCallEvidence,
+    AgentToolCallOutcome,
     AgentToolEvidenceStatus,
     ArtifactKind,
     CommandEvidence,
@@ -105,6 +107,67 @@ def _observable_matches_output(observable: str, output: str) -> bool:
         return False
     projected_output = _json_whitespace_projection(output)
     return projected_output is not None and projected_observable in projected_output
+
+
+_PROBE_RESULT_PREFIX = "SAT_PROBE_RESULT_V1 "
+_LEGACY_EXIT_MARKER = re.compile(r"^EXIT=(-?[0-9]+)$")
+
+
+def _probe_result_failed(call: AgentToolCallEvidence) -> bool | None:
+    """Resolve the immutable probe runner's terminal child result marker.
+
+    OpenClaw may append its own command diagnostic after the program output, so
+    the runner marker need not be the final physical line. The runner itself
+    writes its authoritative marker after child stdout and stderr; the last
+    well-formed marker is therefore the relevant result for an attributable
+    direct runner invocation.
+    """
+
+    if call.executable not in {"sat-probe-run", "/usr/local/bin/sat-probe-run"}:
+        return None
+    marker_lines = tuple(
+        line
+        for line in call.output_excerpt.splitlines()
+        if line.startswith(_PROBE_RESULT_PREFIX)
+    )
+    if not marker_lines:
+        return True
+    try:
+        payload = json.loads(marker_lines[-1][len(_PROBE_RESULT_PREFIX) :])
+    except (json.JSONDecodeError, TypeError, RecursionError):
+        return True
+    if not isinstance(payload, dict) or set(payload) != {"exit_code", "timed_out"}:
+        return True
+    exit_code = payload["exit_code"]
+    timed_out = payload["timed_out"]
+    if isinstance(exit_code, bool) or not isinstance(exit_code, int):
+        return True
+    if not isinstance(timed_out, bool):
+        return True
+    return timed_out or exit_code != 0
+
+
+def _matched_tool_result_failed(call: AgentToolCallEvidence) -> bool:
+    """Reject an overall failed result even when one substring looks positive."""
+
+    if call.outcome is AgentToolCallOutcome.FAILED:
+        return True
+    probe_failed = _probe_result_failed(call)
+    if probe_failed is not None:
+        return probe_failed
+    nonempty_lines = tuple(
+        line.strip() for line in call.output_excerpt.splitlines() if line.strip()
+    )
+    if not nonempty_lines:
+        return False
+    legacy = _LEGACY_EXIT_MARKER.fullmatch(nonempty_lines[-1])
+    return legacy is not None and int(legacy.group(1)) != 0
+
+
+def _matched_command_failed(command: CommandEvidence) -> bool:
+    """Return whether deterministic command evidence did not complete cleanly."""
+
+    return command.timed_out or command.exit_code != 0
 
 
 def _bind_unambiguous_blocking_finding_scope(
@@ -204,6 +267,27 @@ def _ground_review_tool_evidence(
                     "not match any eligible review-chain tool result or "
                     "deterministic command output"
                 )
+            if assessment.status is ReviewCriterionStatus.SATISFIED:
+                if failed_tools := tuple(
+                    f"attempt {execution_attempt} {call.id}"
+                    for execution_attempt, call in tool_matches
+                    if _matched_tool_result_failed(call)
+                ):
+                    raise ValueError(
+                        f"criterion {assessment.criterion_id} satisfied evidence "
+                        "selects an overall failed tool result: "
+                        + ", ".join(failed_tools)
+                    )
+                if failed_commands := tuple(
+                    command.id
+                    for command in command_matches
+                    if _matched_command_failed(command)
+                ):
+                    raise ValueError(
+                        f"criterion {assessment.criterion_id} satisfied evidence "
+                        "selects a failed or timed-out deterministic command: "
+                        + ", ".join(failed_commands)
+                    )
             for execution_attempt, match in tool_matches:
                 observable_by_tool_call.setdefault(
                     (execution_attempt, match.id),

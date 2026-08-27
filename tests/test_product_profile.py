@@ -164,7 +164,7 @@ def test_product_profile_is_separate_from_the_task_manager_evaluation() -> None:
 
     assert configuration.policy.id == "product_python_v1"
     assert configuration.manifest.id == "python_product_v1"
-    assert configuration.policy.sandbox.image == "sat-python-quality:phase1-v5"
+    assert configuration.policy.sandbox.image == "sat-python-quality:phase1-v6"
     assert configuration.policy.limits.total_timeout_seconds == 420
     serialized = json.dumps(
         {

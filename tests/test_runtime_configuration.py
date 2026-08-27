@@ -1133,7 +1133,7 @@ def test_runtime_probe_rejects_a_running_container_without_tool_execution(
 
     assert not probe.ready
     assert probe.error == (
-        "sandbox probe could not execute its Python tool helper (exit_code=126)"
+        "sandbox probe could not execute the Reviewer probe runner (exit_code=126)"
     )
     assert calls[-1][1:4] == ["container", "rm", "--force"]
 

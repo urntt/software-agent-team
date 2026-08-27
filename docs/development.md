@@ -94,16 +94,16 @@ Build the exact image named by both product and evaluation policies with:
 
 ```bash
 docker build \
-  --tag sat-python-quality:phase1-v5 \
+  --tag sat-python-quality:phase1-v6 \
   runtime/python
 ```
 
 OpenClaw explicitly supplies `sleep infinity` when it creates a scope-owned
 role container; the image uses the same command as a convenient standalone
 diagnostic default. `scripts/install.sh` and live-run preflight both start a
-no-network, read-only-root probe, execute a Python helper inside it, inspect its
-state, and remove it. A successful `docker build`, image lookup, or momentary
-container start alone is not sufficient runtime evidence.
+no-network, read-only-root probe, execute the Reviewer probe runner's self-test
+inside it, inspect its state, and remove it. A successful `docker build`, image
+lookup, or momentary container start alone is not sufficient runtime evidence.
 
 The image includes the exact `uv` pinned in `runtime/python/requirements.in`
 and a locked offline wheelhouse containing project setup and build
@@ -115,8 +115,12 @@ resource-bounded. The image also installs the root-owned immutable
 `sat-probe-write` helper. That command can atomically create only a new bounded
 `/tmp/sat-review-probe-*` `.py`, `.json`, or `.txt` direct child; it refuses
 overwrite and unsafe paths while the project mount and general write tools stay
-read-only. Change either runtime capability and the policy image tag together;
-an old tag must not claim the newer probe capability.
+read-only. Authored Python probes run only through `sat-probe-run`; it validates
+the owner-only file, executes its open descriptor with a fixed interpreter and
+project working directory, enforces a 30-second child timeout and bounded
+output, and emits `SAT_PROBE_RESULT_V1` as the authoritative terminal child
+result. Change either runtime capability and the policy image tag together; an
+old tag must not claim the newer probe capability.
 
 Use the Docker cgroup `--pids-limit` for the per-container process boundary.
 Do not add an `nproc` ulimit as a duplicate control: `RLIMIT_NPROC` can count

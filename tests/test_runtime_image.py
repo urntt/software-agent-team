@@ -36,8 +36,13 @@ def test_runtime_image_uses_content_pinned_base_and_dependency_lock() -> None:
     assert "UV_OFFLINE=1" in dockerfile
     assert "requirements.lock colorama==0.4.6" in dockerfile
     assert "COPY sat_probe_write.py /usr/local/bin/sat-probe-write" in dockerfile
-    assert "chown 0:0 /usr/local/bin/sat-probe-write" in dockerfile
-    assert "chmod 0555 /usr/local/bin/sat-probe-write" in dockerfile
+    assert "COPY sat_probe_run.py /usr/local/bin/sat-probe-run" in dockerfile
+    assert "chown 0:0 /usr/local/bin/sat-probe-write /usr/local/bin/sat-probe-run" in (
+        dockerfile
+    )
+    assert "chmod 0555 /usr/local/bin/sat-probe-write /usr/local/bin/sat-probe-run" in (
+        dockerfile
+    )
     assert 'CMD ["sleep", "infinity"]' in dockerfile
 
     helper = (RUNTIME_ROOT / "sat_probe_write.py").read_text(encoding="utf-8")
@@ -45,6 +50,13 @@ def test_runtime_image_uses_content_pinned_base_and_dependency_lock() -> None:
     assert 'TMP_DIRECTORY = "/tmp"' in helper
     assert "os.O_EXCL" in helper
     assert "os.O_NOFOLLOW" in helper
+
+    runner = (RUNTIME_ROOT / "sat_probe_run.py").read_text(encoding="utf-8")
+    assert runner.startswith("#!/usr/local/bin/python\n")
+    assert 'RESULT_PREFIX = "SAT_PROBE_RESULT_V1 "' in runner
+    assert "os.O_NOFOLLOW" in runner
+    assert "start_new_session=True" in runner
+    assert "resource.RLIMIT_FSIZE" in runner
 
 
 def test_runtime_dependency_lock_contains_only_exact_unique_versions() -> None:

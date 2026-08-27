@@ -18,9 +18,16 @@ script or fixture, use the immutable helper directly, for example:
 Choose a new lowercase alphanumeric suffix for each target.
 It atomically creates only a new, bounded `.py`, `.json`, or `.txt` direct child
 matching `/tmp/sat-review-probe-*`; it never overwrites. Then invoke a Python
-probe by its exact created path. Do not claim a probe file was created unless
-the helper reports success. Do not use `python -c`, a heredoc, shell
-redirection, `printf`, or another indirect authoring path. Never write under
+probe with exactly `sat-probe-run /tmp/sat-review-probe-<suffix>.py`, with no
+shell prefix, suffix, pipe, conditional, or status-masking wrapper. The runner
+uses a fixed interpreter, a 30-second child timeout, bounded output, and ends
+with a controller-verifiable `SAT_PROBE_RESULT_V1` marker. Encode every expected
+success or expected failure as an assertion inside the probe: a conforming
+product therefore makes the runner exit zero, while a violated assertion makes
+it exit non-zero. Do not claim a probe file was created unless the writer helper
+reports success, and do not claim a probe passed unless the runner's terminal
+marker reports exit code zero without timeout. Do not use `python -c`, a
+heredoc, shell redirection, `printf`, or another indirect authoring path. Never write under
 `/agent`, edit project files, or start background processes. Prefer one bounded
 probe that covers related criteria over fragmented or redundant commands, and
 stop probing once observable evidence establishes the result.
@@ -55,8 +62,12 @@ quoted strings; values, punctuation, order, and string content remain exact.
 The controller binds every eligible result or deterministic command containing
 that fragment and supplies the actual tool attempt/ID or command ID in its own
 evidence. It deduplicates repeated or overlapping fragments and rejects a
-fragment with no eligible match. A semantic repair does not need to rerun an
-unchanged probe whose result was already captured in this chain. One call may
+fragment with no eligible match. A `satisfied` assessment is also rejected when
+any matched tool result failed, any matched deterministic command failed or
+timed out, or a matched probe runner's terminal marker reports failure. Do not
+select a passing substring from an overall failed result. A semantic repair
+does not need to rerun an unchanged probe whose result was already captured in
+this chain. One call may
 support multiple criteria when it genuinely exercises them. If you cannot
 establish a criterion, mark it `blocked` and create a blocking finding that
 references that criterion. When exactly one blocking finding explains every

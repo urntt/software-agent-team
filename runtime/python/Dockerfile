@@ -16,9 +16,10 @@ RUN mkdir -p /opt/software-agent-team/wheels \
     && chmod -R a=rX /opt/software-agent-team/wheels
 
 COPY sat_probe_write.py /usr/local/bin/sat-probe-write
+COPY sat_probe_run.py /usr/local/bin/sat-probe-run
 
-RUN chown 0:0 /usr/local/bin/sat-probe-write \
-    && chmod 0555 /usr/local/bin/sat-probe-write
+RUN chown 0:0 /usr/local/bin/sat-probe-write /usr/local/bin/sat-probe-run \
+    && chmod 0555 /usr/local/bin/sat-probe-write /usr/local/bin/sat-probe-run
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

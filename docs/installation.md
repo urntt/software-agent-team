@@ -72,9 +72,9 @@ The installation then:
   OpenClaw runtime when needed;
 - Synchronizes the locked SAT environment;
 - Builds and resolves the pinned sandbox image, then starts a restricted probe,
-  executes a Python tool helper inside it, verifies that it remains alive, and
-  removes it; the image also contains the pinned `uv` used by bounded Reviewer
-  probes of generated-project commands;
+  executes the immutable Reviewer probe runner's self-test inside it, verifies
+  that the container remains alive, and removes it; the image also contains the
+  pinned `uv` used by bounded Reviewer probes of generated-project commands;
 - Runs focused offline configuration and CLI installation checks;
 - Creates `$HOME/.local/bin/sat` and `$HOME/.local/bin/sat-uninstall` without
   overwriting unrelated commands;
