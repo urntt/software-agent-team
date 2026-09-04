@@ -148,6 +148,10 @@ when code, usability evidence, or controlled experiments justify a replacement.
   and uses a separate SAT-owned OpenClaw config, credential, session, cache,
   and workspace root. It never adopts another OpenClaw installation or
   profile, even when that installation is compatible and ready.
+- A user-visible SemVer release identifies compatibility and update
+  significance; the complete Git revision, dirty state, install mode, managed
+  channel, artifact digest, and schema compatibility remain separate
+  provenance fields. Local version inspection never requires network access.
 - Every resolved `provider/model` must pass SAT's isolated catalog and auth
   checks before its Agent invocation. Startup validates saved defaults;
   run-scoped preflight validates the approved route plan without generation,
@@ -428,6 +432,7 @@ change in the same controlled trial.
 | Show one editable plan overview before execution | Requirements, implementation intent, Agent responsibilities, dependencies, permissions, budgets, and model routes affect quality and cost. The user must be able to approve or revise them before the controller creates the team. Controller-owned execution-profile constraints and additional task-specific Planning constraints are shown under distinct authority labels; the Planner must not restate or paraphrase the former, and the compiled TaskBrief preserves both without concealing an approved addition. |
 | Use OpenClaw as the Agent runtime, not the orchestrator | OpenClaw provides model/provider integration, sessions, tools, and sandboxing; the experiment still needs a model-independent control plane. |
 | Isolate SAT's OpenClaw runtime and state from every existing installation | Compatibility is not ownership. Installing a pinned private binary and overriding every mutable OpenClaw path gives SAT reproducibility without reading, changing, stopping, or deleting a user's existing binary, Gateway, profile, configuration, credentials, sessions, caches, or workspaces. A collision at SAT's private target fails safely instead of being adopted. |
+| Separate release identity from source provenance | SemVer tells users whether an update changes the supported product contract; a complete source revision and artifact digest make the installed bytes auditable. Keeping dirty state, install mode, channel, and schema compatibility explicit prevents a moving checkout or partial package identity from masquerading as a reproducible release. |
 | Validate and, when necessary, supplement the exact model catalog before Agent work | Saving a `provider/model` string does not prove that the pinned runtime can resolve it. A non-generation catalog/auth check catches unsupported or unauthenticated selections before a build, while a versioned secret-free supplement can bridge a known catalog lag without copying credentials or enabling fallback. |
 | Keep local readiness timeouts separate from Agent invocation timeouts | A cold local catalog process can take longer than a lightweight binary or Docker check without consuming provider tokens. The controller therefore records and enforces a dedicated 90-second model-inspection boundary, keeps ordinary preflight commands at 30 seconds, announces the wait, and never presents either value as time granted to an Agent. |
 | Keep the controller's invocation timeout authoritative | A provider compatibility supplement may describe routing and model metadata, but it must not add an independent transport timeout that conflicts with the approved per-Agent invocation policy. OpenClaw receives the resolved timeout for every call, and SAT's outer process boundary adds only bounded shutdown grace. |

@@ -325,6 +325,22 @@ framework, or fixed application entry point.
 
 ## Updating an Installation
 
+Check the current release and source provenance locally:
+
+```bash
+sat --version
+sat version
+sat version --json
+```
+
+The short form prints the release plus an exact-revision suffix when one is
+available. The detailed form separates the numeric release, full Git revision,
+dirty state, install mode, managed channel, artifact digest, and provenance
+status. These commands do not contact an update endpoint.
+
+The product-level `sat update` and `sat channel` lifecycle is not implemented
+yet. Until it is available, rerun the managed installation command.
+
 Rerun the managed installation command. The bootstrap verifies ownership and a
 clean tracked application before fetching the selected ref, then reconciles the
 locked environment, private OpenClaw binary, image, launchers, and offline

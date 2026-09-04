@@ -241,6 +241,7 @@ src/software_agent_team/
   scheduling.py                Approved DAG and shared-workspace scheduling
   teams.py                     TeamPlan contracts and fixed-fixture compilation
   user_configuration.py        User-local secret-free live-run defaults
+  versioning.py                Release, source, and managed-install identity
   workflow.py                  Fixed-fixture compatibility orchestration
 scripts/
   bootstrap.sh                 Remote managed-install entry point

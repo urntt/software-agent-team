@@ -106,6 +106,12 @@ from software_agent_team.user_configuration import (
     save_user_configuration,
     user_configuration_path,
 )
+from software_agent_team.versioning import (
+    SoftwareVersionReport,
+    inspect_software_version,
+    render_short_version,
+    render_version_report,
+)
 from software_agent_team.workflow import WorkflowCoordinator, WorkflowOutcome
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -706,6 +712,21 @@ def _load_json_model[ModelT: BaseModel](path: Path, model: type[ModelT]) -> Mode
 
     payload = json.loads(path.read_text(encoding="utf-8"))
     return model.model_validate(payload)
+
+
+def _software_version_report() -> SoftwareVersionReport:
+    """Return the one authoritative release and provenance report."""
+
+    return inspect_software_version(project_root=PROJECT_ROOT)
+
+
+def _show_version(args: argparse.Namespace) -> int:
+    report = _software_version_report()
+    if args.json:
+        print(json.dumps(report.model_dump(mode="json"), indent=2))
+    else:
+        print(render_version_report(report))
+    return 0
 
 
 def _validate_handoff(args: argparse.Namespace) -> int:
@@ -2102,7 +2123,23 @@ def build_parser() -> argparse.ArgumentParser:
             "or use an explicit subcommand for configuration and evaluation."
         ),
     )
+    parser.add_argument(
+        "--version",
+        action="store_true",
+        help="Show the installed SAT release and exact source identity, then exit.",
+    )
     commands = parser.add_subparsers(dest="command")
+
+    version = commands.add_parser(
+        "version",
+        help="Show detailed, non-networked release and provenance information.",
+    )
+    version.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit the version report as machine-readable JSON.",
+    )
+    version.set_defaults(handler=_show_version)
 
     configure = commands.add_parser(
         "configure",
@@ -2404,6 +2441,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     args = build_parser().parse_args(argv)
     try:
+        if args.version:
+            print(render_short_version(_software_version_report()))
+            return 0
         if args.command is None:
             return _run_product()
         return args.handler(args)

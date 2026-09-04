@@ -142,9 +142,21 @@ configuration paths, provider setup, saved defaults, and recovery boundaries.
 
 ## Update or Uninstall
 
-Rerun the installation command to update a managed installation. SAT verifies
-that it owns the installation and that the tracked application is clean before
-updating it.
+Inspect the installed release and exact source identity without making a
+network request:
+
+```bash
+sat --version
+sat version
+```
+
+Use `sat version --json` when a script needs the full identity report. A
+managed update command and stable/dev channel switching are not available yet.
+Until they are, rerun the installation command to update a managed
+installation.
+
+SAT verifies that it owns the installation and that the tracked application is
+clean before updating it.
 
 Run the guided uninstaller from any directory:
 

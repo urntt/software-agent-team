@@ -29,6 +29,30 @@ from software_agent_team.user_configuration import (
 REPOSITORY_ROOT = Path(__file__).parents[1]
 
 
+def test_cli_version_commands_are_local_and_machine_readable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    application = tmp_path / "installed-package"
+    application.mkdir()
+    monkeypatch.setattr(cli, "PROJECT_ROOT", application)
+    monkeypatch.setenv(
+        "SAT_INSTALL_METADATA_PATH",
+        str(tmp_path / "missing-installation.json"),
+    )
+
+    assert main(["--version"]) == 0
+    assert capsys.readouterr().out == "sat 0.1.0\n"
+
+    assert main(["version", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["release_version"] == "0.1.0"
+    assert payload["install_mode"] == "package"
+    assert payload["source_revision"] is None
+    assert payload["identity_status"] == "partial"
+
+
 def test_replacement_planning_request_preserves_scope_and_versions_correction() -> None:
     original = cli.PlanningRequest(
         run_id="sat-original",

@@ -1108,6 +1108,10 @@ The acceptance contract is
 
 ## Implemented and Offline Verified
 
+- Local `sat --version`, human-readable `sat version`, and machine-readable
+  `sat version --json` reporting from one release/source identity API, including
+  managed-install provenance, exact Git revision and dirty state when
+  available, and explicit partial or inconsistent identity status;
 - Reproducible toolchain setup and diagnostics;
 - Unified validation, benchmark-preparation, preflight, and `sat run` CLI;
 - Versioned team manifest and validation;
@@ -1270,6 +1274,9 @@ derived from the task.
 
 ## Not Yet Available or Completed
 
+- A release-published stable installer, product-level `sat update` and channel
+  commands, atomic managed activation and rollback, schema-compatibility
+  reporting, and task-admission update checks;
 - An independent-device live demonstration of the activated Adaptive Planning
   and Dynamic Team journey;
 - Durable control recovery after a foreground process crash and a
