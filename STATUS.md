@@ -2,7 +2,7 @@
 
 **Current milestone:** Phase 3E implemented; twenty fresh installed adaptive rehearsals include two accepted strict-route Adaptive Planning deliveries and one provider-backed foreground-control rehearsal; the latest delivery-boundary, Review-recovery, and cold model-inspection repairs are live-validated
 
-**Last updated:** August 27, 2026
+**Last updated:** September 4, 2026
 
 This document records what the repository implements now, what evidence
 supports that claim, and what remains unavailable. It does not redefine the
@@ -50,7 +50,7 @@ validation also rejects a plan whose complete planned iterations cannot fit
 its call budget. Recovery
 verifies the exact TaskBrief binding, TeamPlan digest, fixed manifest version,
 fixed team digest, resolved Agent timeouts, and cross-file run metadata. The
-complete repository check passes with 720 offline tests.
+complete repository check passes with 809 offline tests.
 
 `RunEvent` is also an executable, append-only contract. Every current workflow
 progress update is persisted with a contiguous sequence, lifecycle revision,
@@ -1113,6 +1113,25 @@ The acceptance contract is
   managed-install provenance, exact Git revision and dirty state when
   available, explicit partial or inconsistent identity status, and one
   authoritative readable interval for every persisted schema family;
+- Impact-driven release-candidate gates that bind `pyproject.toml`, `uv.lock`,
+  the prior release baseline, minimum SemVer increment, exact tag/commit,
+  deterministic source-archive digest, and every schema readable range;
+- A pinned exact-tag GitHub workflow that reruns the offline gates and publishes
+  one digest-verifiable `sat-release.json` asset, plus a stable resolver that
+  rejects drafts, prereleases, tag/manifest drift, repository drift, missing or
+  duplicate assets, and digest mismatch;
+- Product-level `sat update --check`, confirmed `sat update`, local
+  `sat channel status`, and explicit `sat channel switch stable|dev`, all using
+  one immutable target resolver and one staged activation transaction;
+- Managed lifecycle ownership for default and custom application paths,
+  exclusive install/update/uninstall locking, pre-activation persisted-schema
+  compatibility, active-run refusal, atomic application-link and install-record
+  rollback, source-checkout refusal, and v1 managed-layout migration;
+- Versioned managed uninstall that cross-checks the lifecycle root, active
+  release, installation record, logical link, and recorded launchers before
+  removing all retained application versions while preserving configuration,
+  run data, isolated provider state, other OpenClaw installations, uv, Docker,
+  and the sandbox image by default;
 - Reproducible toolchain setup and diagnostics;
 - Unified validation, benchmark-preparation, preflight, and `sat run` CLI;
 - Versioned team manifest and validation;
@@ -1275,9 +1294,11 @@ derived from the task.
 
 ## Not Yet Available or Completed
 
-- A release-published stable installer, product-level `sat update` and channel
-  commands, atomic managed activation and rollback, schema-compatibility
-  reporting, and task-admission update checks;
+- A published stable GitHub Release and fresh supported-device evidence for
+  stable install, stable update, stable↔dev switch, failed-activation rollback,
+  and versioned uninstall;
+- Task-admission update checks plus SAT identity in run evidence, diagnostic
+  exports, and final reports;
 - An independent-device live demonstration of the activated Adaptive Planning
   and Dynamic Team journey;
 - Durable control recovery after a foreground process crash and a

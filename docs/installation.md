@@ -58,11 +58,15 @@ sat
 The bootstrap:
 
 1. Checks Linux/WSL, unprivileged identity, Git, curl, and safe target paths;
-2. Clones or updates the public repository in
-   `${XDG_DATA_HOME:-$HOME/.local/share}/software-agent-team/app`;
-3. Marks that exact directory as a SAT-owned managed application;
-4. Refuses an existing unowned directory or modified tracked application;
-5. Runs the installation from that managed directory.
+2. Downloads a temporary bootstrap helper without treating `main` as the
+   installed application;
+3. Resolves the latest published stable release to one SemVer, full source
+   revision, tag, source-archive digest, and schema-support manifest;
+4. Clones that immutable target into SAT-owned version storage and runs all
+   installation checks before changing the active application;
+5. Atomically activates the verified version through
+   `${XDG_DATA_HOME:-$HOME/.local/share}/software-agent-team/app`, records its
+   provenance, and removes the temporary helper.
 
 The installation then:
 
@@ -85,18 +89,23 @@ developer test suite on the user's device. Those checks remain mandatory for
 contributors and CI through `make check`.
 
 The process is idempotent for the same owned installation. Advanced operators
-may override `SAT_INSTALL_ROOT`, `SAT_REPOSITORY_URL`, `SAT_INSTALL_REF`,
-`SAT_BIN_DIR`, or `UV_BIN`, but those are not normal first-use questions.
+may override `SAT_INSTALL_ROOT`, `SAT_REPOSITORY_URL`, `SAT_BIN_DIR`, or
+`UV_BIN`, but those are not normal first-use questions. A custom application
+path receives a dedicated hidden sidecar root for version storage and locks;
+SAT never claims a generic sibling such as `versions/`. `SAT_INSTALL_CHANNEL`
+may explicitly select `dev`, and only that channel accepts `SAT_INSTALL_REF`.
+`SAT_RELEASE_API_URL` is an advanced stable-release resolver override.
 The OpenClaw prefix is intentionally not configurable: accepting an arbitrary
 prefix would allow installation to mutate a pre-existing OpenClaw runtime.
 
 If Docker, a download, or an offline check interrupts installation, correct the
-reported condition and rerun the same managed-install command. The bootstrap
-reuses only a marked, clean SAT application, reconciles the pinned runtime and
-image, and preserves user configuration and state. It does not require deleting
-the partial installation before a retry. A sandbox image that builds but exits
-before OpenClaw can execute tools is rejected before SAT reports installation
-success or creates a new launcher.
+reported condition and rerun the same command. A lifecycle ownership marker
+makes that retry distinguish SAT staging from unrelated files. The current
+application link and installation record do not change until the candidate has
+completed setup and verification; a failed activation restores both. User
+configuration and state remain outside version storage. A sandbox image that
+builds but exits before OpenClaw can execute tools is rejected before SAT
+reports installation success or creates a new launcher.
 
 Contributors installing from a source checkout should follow
 [`Checkout Installation`](development.md#checkout-installation) instead.
@@ -339,15 +348,47 @@ dirty state, install mode, managed channel, artifact digest, and provenance
 status, followed by the readable interval for each independently versioned
 persisted schema family. These commands do not contact an update endpoint.
 
-The product-level `sat update` and `sat channel` lifecycle is not implemented
-yet. Until it is available, rerun the managed installation command.
+Check the currently selected managed channel without mutation:
 
-Rerun the managed installation command. The bootstrap verifies ownership and a
-clean tracked application before fetching the selected ref, then reconciles the
-locked environment, private OpenClaw binary, image, launchers, and offline
-checks. User configuration and isolated provider state live outside the
-application directory and remain unchanged. Other OpenClaw installations are
-not candidates for reconciliation.
+```bash
+sat update --check
+sat channel status
+```
+
+Apply an available target with an interactive confirmation:
+
+```bash
+sat update
+```
+
+`sat update --yes` is the explicit non-interactive form. Stable update
+availability compares only the numeric release version. A different Git
+revision bound to the same stable number is an identity conflict, not an update
+to accept. Dev-channel checks may report an exact ref revision change, but that
+commit-only drift is not a normal stable update notification.
+
+Switching channels is separate and always explicit:
+
+```bash
+sat channel switch dev
+sat channel switch dev --ref <branch-tag-or-full-commit>
+sat channel switch stable
+```
+
+Install, update, and channel switch use one transaction: validate lifecycle
+ownership, resolve an immutable target, show the current and target identities,
+obtain confirmation, hold the lifecycle lock, stage and verify the complete
+application, check every persisted schema family, and atomically replace the
+logical application link and installation record. An active run, unsupported
+newer state, conflicting launcher, source drift, or failed candidate stops
+before activation. If activation itself fails, the previous link and record are
+restored. A successful change retains older release storage until uninstall;
+user configuration and isolated provider state are not rewritten.
+
+These commands operate only on a verified managed installation. A contributor
+or other source checkout receives an explicit refusal instead of an implicit
+Git mutation. It follows the workflow in
+[`development.md`](development.md#checkout-installation).
 
 For a contributor checkout, follow the update workflow in
 [`development.md`](development.md#checkout-installation).
@@ -360,9 +401,13 @@ Run from any directory:
 sat-uninstall
 ```
 
-The default removes SAT launchers, its Python environment, and its marked
-private OpenClaw binary. It also removes the exact marked managed application
-directory, or preserves a development checkout. By default it preserves:
+The default removes SAT launchers and the complete marked managed application,
+including retained versions and each version's private OpenClaw binary. A
+source checkout is preserved after its checkout-local environment and private
+runtime are removed. Before changing files, a managed uninstall binds the
+active release marker, lifecycle-root marker, installation record, logical
+application link, and recorded launchers; it also refuses an active run or a
+concurrent install/update. By default it preserves:
 
 - SAT configuration;
 - Planning evidence, generated runs, workspaces, and trusted sources;
@@ -377,8 +422,8 @@ Export configuration and generated state first with:
 sat-uninstall --export-to "$HOME/sat-backup" --yes
 ```
 
-The new absolute destination must not already exist and must be outside both
-the application and SAT state. The export can contain
+The new absolute destination must not already exist and must be outside the
+application, managed lifecycle root, and SAT state. The export can contain
 `configuration/config.json`, `data/planning/`, `data/runs/`,
 `data/workspaces/`, `data/sources/`, and `EXPORT.txt`. Provider credentials
 remain excluded.
@@ -415,10 +460,11 @@ isolated provider state is preserved unless `--purge-provider-state` is
 explicitly selected. Every other OpenClaw binary, running process, Gateway,
 profile, configuration, credential, and session remains outside the ownership
 boundary. uv, Docker, and the sandbox image are also preserved. The uninstaller
-deletes a managed application or private runtime only when a regular marker
-names that exact resolved directory; it refuses a missing, symbolic, invalid,
-or mismatched marker. It also refuses symbolic configuration or state targets
-and a missing or mismatched state-ownership marker before export or purge.
+deletes managed version storage only when regular root, release, and install
+records agree on the exact active identity and owned paths; it refuses missing,
+symbolic, invalid, or mismatched metadata. It also refuses symbolic
+configuration or state targets and a missing or mismatched state-ownership
+marker before export or purge.
 
 Preservation is the default because removing a CLI must not silently destroy a
 generated project or its audit evidence. Inspect a completed export before

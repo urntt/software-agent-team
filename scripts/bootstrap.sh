@@ -2,10 +2,14 @@
 set -euo pipefail
 
 task_repository="${SAT_REPOSITORY_URL:-https://github.com/urntt/software-agent-team.git}"
+task_channel="${SAT_INSTALL_CHANNEL:-stable}"
 task_ref="${SAT_INSTALL_REF:-main}"
+task_bootstrap_ref="${SAT_BOOTSTRAP_REF:-main}"
+task_release_api_url="${SAT_RELEASE_API_URL:-https://api.github.com/repos/urntt/software-agent-team/releases/latest}"
 task_data_root="${XDG_DATA_HOME:-$HOME/.local/share}"
-task_install_root="${SAT_INSTALL_ROOT:-$task_data_root/software-agent-team/app}"
-task_marker="$task_install_root/.sat-managed-install"
+task_install_root_override="${SAT_INSTALL_ROOT:-}"
+task_install_root="${task_install_root_override:-$task_data_root/software-agent-team/app}"
+task_uv_bin="${UV_BIN:-$HOME/.local/bin/uv}"
 task_temporary=""
 
 fail() {
@@ -32,10 +36,18 @@ for task_command in bash curl git; do
 done
 [[ "$task_install_root" == /* && "$task_install_root" != "/" ]] || \
   fail "SAT_INSTALL_ROOT must be a specific absolute directory"
-[[ -n "$task_repository" && "$task_repository" != -* ]] || \
+[[ -n "$task_repository" && "$task_repository" != -* && \
+  "$task_repository" != *[$'\t\r\n ']* ]] || \
   fail "SAT_REPOSITORY_URL is invalid"
-[[ "$task_ref" =~ ^[A-Za-z0-9._/-]+$ && "$task_ref" != -* ]] || \
+[[ "$task_channel" == "stable" || "$task_channel" == "dev" ]] || \
+  fail "SAT_INSTALL_CHANNEL must be stable or dev"
+[[ "$task_ref" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$ ]] || \
   fail "SAT_INSTALL_REF is invalid"
+[[ "$task_bootstrap_ref" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$ ]] || \
+  fail "SAT_BOOTSTRAP_REF is invalid"
+[[ "$task_release_api_url" == https://* && \
+  "$task_release_api_url" != *[$'\t\r\n ']* ]] || \
+  fail "SAT_RELEASE_API_URL must be an HTTPS URL"
 
 task_install_parent="$(dirname "$task_install_root")"
 mkdir -p -- "$task_install_parent"
@@ -43,47 +55,48 @@ mkdir -p -- "$task_install_parent"
   fail "installation parent must be a real directory"
 task_install_parent="$(cd "$task_install_parent" && pwd -P)"
 task_install_root="$task_install_parent/$(basename "$task_install_root")"
-task_marker="$task_install_root/.sat-managed-install"
+task_temporary="$(mktemp -d "${TMPDIR:-/tmp}/sat-bootstrap.XXXXXX")"
 
-if [[ -e "$task_install_root" || -L "$task_install_root" ]]; then
-  [[ -d "$task_install_root" && ! -L "$task_install_root" ]] || \
-    fail "installation root must be a real directory"
-  [[ -f "$task_marker" && ! -L "$task_marker" ]] || \
-    fail "existing installation root is not owned by SAT: $task_install_root"
-  [[ "$(sed -n '1p' "$task_marker")" == "software-agent-team-managed-v1" ]] || \
-    fail "managed installation marker is invalid"
-  [[ "$(sed -n '2p' "$task_marker")" == "root=$task_install_root" ]] || \
-    fail "managed installation marker belongs to a different path"
-  [[ -d "$task_install_root/.git" ]] || \
-    fail "managed installation is missing Git metadata"
-  [[ -z "$(git -C "$task_install_root" status --porcelain --untracked-files=all)" ]] || \
-    fail "managed installation contains unexpected file changes"
-  git -C "$task_install_root" fetch --depth 1 origin "$task_ref" || \
-    fail "could not update SAT; check Git access and network connectivity"
-  git -C "$task_install_root" checkout --detach --force FETCH_HEAD
-else
-  task_temporary="$(mktemp -d "$task_install_parent/.sat-bootstrap.XXXXXX")"
-  if ! git clone \
-      --depth 1 \
-      --branch "$task_ref" \
-      --single-branch \
-      -- \
-      "$task_repository" \
-      "$task_temporary/app"; then
-    fail "could not download SAT; check Git access and network connectivity"
-  fi
-  {
-    echo "software-agent-team-managed-v1"
-    echo "root=$task_install_root"
-  } > "$task_temporary/app/.sat-managed-install"
-  mv -- "$task_temporary/app" "$task_install_root"
+if ! git clone \
+    --depth 1 \
+    --branch "$task_bootstrap_ref" \
+    --single-branch \
+    -- \
+    "$task_repository" \
+    "$task_temporary/helper"; then
+  fail "could not download the SAT bootstrap helper; check Git and network access"
 fi
 
+if [[ ! -x "$task_uv_bin" ]]; then
+  if ! curl -LsSf --proto '=https' --tlsv1.2 https://astral.sh/uv/install.sh | \
+      env UV_INSTALL_DIR="$HOME/.local/bin" sh; then
+    fail "could not install uv; check HTTPS and proxy access"
+  fi
+fi
+[[ -x "$task_uv_bin" ]] || fail "uv is unavailable after bootstrap"
+
 (
-  cd "$task_install_root"
-  SAT_MANAGED_INSTALL=1 ./scripts/install.sh
+  cd "$task_temporary/helper"
+  "$task_uv_bin" python install 3.12
+  "$task_uv_bin" sync --locked --no-dev
+  task_arguments=(
+    _managed-install
+    --channel "$task_channel"
+    --repository "$task_repository"
+    --release-api-url "$task_release_api_url"
+  )
+  if [[ "$task_channel" == "dev" ]]; then
+    task_arguments+=(--ref "$task_ref")
+  fi
+  if [[ -n "$task_install_root_override" ]]; then
+    SAT_INSTALL_ROOT="$task_install_root" \
+      "$task_uv_bin" run --frozen --no-dev sat "${task_arguments[@]}"
+  else
+    "$task_uv_bin" run --frozen --no-dev sat "${task_arguments[@]}"
+  fi
 )
 
 echo "bootstrap: managed application=$task_install_root"
+echo "bootstrap: channel=$task_channel"
 echo "bootstrap: uninstall=sat-uninstall"
 echo "bootstrap: next=sat"

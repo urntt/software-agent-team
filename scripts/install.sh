@@ -10,7 +10,8 @@ task_sat_link="$task_bin_dir/sat"
 task_uninstall_target="$task_root/scripts/uninstall.sh"
 task_uninstall_link="$task_bin_dir/sat-uninstall"
 task_managed_install="${SAT_MANAGED_INSTALL:-0}"
-unset SAT_MANAGED_INSTALL
+task_install_stage_only="${SAT_INSTALL_STAGE_ONLY:-0}"
+unset SAT_MANAGED_INSTALL SAT_INSTALL_STAGE_ONLY
 
 fail() {
   echo "install: $1" >&2
@@ -94,6 +95,12 @@ case "$task_architecture" in
 esac
 [[ "$(id -u)" != "0" && "$(id -g)" != "0" ]] || \
   fail "run the installer as an unprivileged user"
+[[ "$task_managed_install" == "0" || "$task_managed_install" == "1" ]] || \
+  fail "SAT_MANAGED_INSTALL must be 0 or 1"
+[[ "$task_install_stage_only" == "0" || "$task_install_stage_only" == "1" ]] || \
+  fail "SAT_INSTALL_STAGE_ONLY must be 0 or 1"
+[[ "$task_install_stage_only" != "1" || "$task_managed_install" == "1" ]] || \
+  fail "stage-only installation requires managed-install mode"
 
 for task_command in bash curl docker git; do
   require_command "$task_command"
@@ -140,9 +147,11 @@ validate_link_destination() {
   fi
 }
 
-validate_link_destination "$task_sat_link" "$task_sat_target" "sat"
-validate_link_destination \
-  "$task_uninstall_link" "$task_uninstall_target" "sat-uninstall"
+if [[ "$task_install_stage_only" != "1" ]]; then
+  validate_link_destination "$task_sat_link" "$task_sat_target" "sat"
+  validate_link_destination \
+    "$task_uninstall_link" "$task_uninstall_target" "sat-uninstall"
+fi
 
 docker info >/dev/null 2>&1 || \
   fail "Docker daemon is unavailable to this user; start Docker and grant access"
@@ -184,14 +193,18 @@ if [[ "$task_managed_install" != "1" ]]; then
 fi
 
 [[ -x "$task_sat_target" ]] || fail "the locked project environment has no sat CLI"
-mkdir -p -- "$task_bin_dir"
-if [[ ! -L "$task_sat_link" ]]; then
-  ln -s "$task_sat_target" "$task_sat_link"
+if [[ "$task_install_stage_only" == "1" ]]; then
+  "$task_sat_target" --help >/dev/null
+else
+  mkdir -p -- "$task_bin_dir"
+  if [[ ! -L "$task_sat_link" ]]; then
+    ln -s "$task_sat_target" "$task_sat_link"
+  fi
+  if [[ ! -L "$task_uninstall_link" ]]; then
+    ln -s "$task_uninstall_target" "$task_uninstall_link"
+  fi
+  "$task_sat_link" --help >/dev/null
 fi
-if [[ ! -L "$task_uninstall_link" ]]; then
-  ln -s "$task_uninstall_target" "$task_uninstall_link"
-fi
-"$task_sat_link" --help >/dev/null
 
 echo "install: Software Agent Team is ready"
 echo "install: sat=$task_sat_link"
@@ -200,6 +213,9 @@ echo "install: image=$task_image"
 echo "install: image_id=$task_image_id"
 echo "install: existing OpenClaw installations and configuration were not read or changed"
 echo "install: SAT provider credentials and configuration will use isolated state on first run"
+if [[ "$task_install_stage_only" == "1" ]]; then
+  echo "install: staged application verified; active launchers were not changed"
+fi
 if [[ "$task_managed_install" != "1" ]]; then
   echo "install: uninstall=sat-uninstall"
   case ":$PATH:" in

@@ -14,6 +14,7 @@ references so that each fact has one clear owner.
 | Maintain or verify acceptance criteria for the guided installation-to-delivery journey | [`product-demo-slice.md`](product-demo-slice.md) |
 | Understand or implement Adaptive Planning, task-defined teams, progress, controls, and model routing | [`adaptive-orchestration.md`](adaptive-orchestration.md) |
 | Install, configure a provider/model default, export local data, or uninstall | [`installation.md`](installation.md) |
+| Prepare, publish, or verify a SAT version and stable/dev channel | [`releases.md`](releases.md) |
 | Understand runtime authority, semantic responses, artifacts, persisted evidence, or safety boundaries | [`runtime-evidence.md`](runtime-evidence.md) |
 | Prepare and inspect a controlled Phase 1 provider-backed evaluation | [`phase1-runbook.md`](phase1-runbook.md) |
 | Set up a development checkout, run checks, update the benchmark, or contribute | [`development.md`](development.md) |
@@ -26,6 +27,8 @@ references so that each fact has one clear owner.
 - `README.md` is the user-facing public entry point and quick start.
 - `installation.md` is the user and operator reference for the supported
   install, configuration, update, export, and uninstall lifecycle.
+- `releases.md` is the maintainer procedure for version changes, release
+  candidates, immutable GitHub publication, and post-release verification.
 - `VISION.md` serves product and engineering decision-makers by owning durable
   product, architecture, experiment, scope, and roadmap decisions.
 - `STATUS.md` serves maintainers and evaluators by owning time-sensitive

@@ -295,6 +295,30 @@ def test_managed_installer_leaves_the_next_action_to_the_bootstrap(
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="installer supports Linux/WSL")
+def test_stage_only_managed_install_verifies_without_touching_launchers(
+    tmp_path: Path,
+) -> None:
+    checkout = prepare_checkout(tmp_path)
+    (checkout / ".sat-managed-install").write_text(
+        '{"schema_version":2}\n',
+        encoding="utf-8",
+    )
+    environment, install_bin, _, docker_log = fake_environment(tmp_path, checkout)
+    environment["SAT_MANAGED_INSTALL"] = "1"
+    environment["SAT_INSTALL_STAGE_ONLY"] = "1"
+
+    completed = run_installer(checkout, environment)
+
+    assert completed.returncode == 0, completed.stderr
+    assert "staged application verified" in completed.stdout
+    assert not (install_bin / "sat").exists()
+    assert not (install_bin / "sat-uninstall").exists()
+    calls = docker_log.read_text(encoding="utf-8").splitlines()
+    assert calls
+    assert all("managed=unset" in line for line in calls)
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="installer supports Linux/WSL")
 def test_installer_rejects_root_before_mutating_the_checkout(tmp_path: Path) -> None:
     checkout = prepare_checkout(tmp_path)
     environment, install_bin, _, docker_log = fake_environment(tmp_path, checkout)

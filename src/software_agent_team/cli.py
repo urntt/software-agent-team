@@ -38,6 +38,12 @@ from software_agent_team.dynamic_workflow import (
 )
 from software_agent_team.execution import OpenClawSubprocessExecutor
 from software_agent_team.git_workspace import GitWorkspace, GitWorkspaceManager
+from software_agent_team.managed_install import (
+    ManagedInstallPaths,
+    install_managed_target,
+    resolve_dev_target,
+    target_from_stable_release,
+)
 from software_agent_team.model_routing import ModelProfile
 from software_agent_team.openclaw_runtime import isolated_openclaw_environment
 from software_agent_team.paths import user_state_root
@@ -76,6 +82,10 @@ from software_agent_team.quality_gates import (
     QualityGateRunner,
     load_quality_gate_configuration,
 )
+from software_agent_team.releases import (
+    DEFAULT_LATEST_RELEASE_API_URL,
+    resolve_latest_stable_release,
+)
 from software_agent_team.run_control import RunPhase
 from software_agent_team.runtime_configuration import (
     MODEL_INSPECTION_TIMEOUT_SECONDS,
@@ -100,6 +110,13 @@ from software_agent_team.teams import (
     TeamPlan,
     load_team_manifest,
 )
+from software_agent_team.updates import (
+    ManagedChangePlan,
+    ManagedChangeStatus,
+    plan_managed_change,
+    resolve_requested_target,
+    validate_current_managed_install,
+)
 from software_agent_team.user_configuration import (
     UserConfiguration,
     load_user_configuration,
@@ -107,6 +124,7 @@ from software_agent_team.user_configuration import (
     user_configuration_path,
 )
 from software_agent_team.versioning import (
+    ManagedChannel,
     SoftwareVersionReport,
     inspect_software_version,
     render_short_version,
@@ -726,6 +744,175 @@ def _show_version(args: argparse.Namespace) -> int:
         print(json.dumps(report.model_dump(mode="json"), indent=2))
     else:
         print(render_version_report(report))
+    return 0
+
+
+def _managed_install_context():
+    """Validate and return the active managed identity for this process."""
+
+    paths = ManagedInstallPaths.from_environment()
+    record, _marker = validate_current_managed_install(
+        project_root=PROJECT_ROOT,
+        paths=paths,
+    )
+    return paths, record
+
+
+def _render_managed_change(plan: ManagedChangePlan) -> None:
+    print(f"status: {plan.status.value}")
+    print(
+        "current: "
+        f"{plan.current_channel.value} {plan.current_version} "
+        f"g{plan.current_revision[:12]}"
+    )
+    target_version = plan.target_version or "candidate"
+    print(
+        "target: "
+        f"{plan.target_channel.value} {target_version} "
+        f"g{plan.target_revision[:12]} ({plan.target_ref})"
+    )
+    print(f"detail: {plan.detail}")
+
+
+def _resolve_managed_change(
+    *,
+    channel: ManagedChannel,
+    dev_ref: str | None,
+):
+    paths, record = _managed_install_context()
+    target = resolve_requested_target(
+        record=record,
+        channel=channel,
+        dev_ref=dev_ref,
+    )
+    return paths, record, target, plan_managed_change(record, target)
+
+
+def _update_managed_install(args: argparse.Namespace) -> int:
+    paths, record = _managed_install_context()
+    target = resolve_requested_target(
+        record=record,
+        channel=record.channel,
+    )
+    plan = plan_managed_change(record, target)
+    if args.json:
+        if not args.check:
+            raise ValueError("--json is supported only with `sat update --check`")
+        print(json.dumps(plan.model_dump(mode="json"), indent=2))
+        return 0
+    _render_managed_change(plan)
+    if args.check:
+        return 0
+    return _apply_managed_change(
+        paths=paths,
+        target=target,
+        plan=plan,
+        assume_yes=args.yes,
+    )
+
+
+def _show_channel(args: argparse.Namespace) -> int:
+    _paths, record = _managed_install_context()
+    payload = {
+        "channel": record.channel.value,
+        "release_version": record.release_version,
+        "source_revision": record.source_revision,
+        "source_ref": record.source_ref,
+    }
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        print(f"channel: {record.channel.value}")
+        print(f"release: {record.release_version}")
+        print(f"revision: {record.source_revision}")
+        print(f"source ref: {record.source_ref}")
+    return 0
+
+
+def _switch_channel(args: argparse.Namespace) -> int:
+    requested = ManagedChannel(args.channel)
+    paths, record = _managed_install_context()
+    if requested is record.channel:
+        print(f"channel is already {requested.value}; use `sat update` to refresh it")
+        return 0
+    if requested is ManagedChannel.STABLE and args.ref is not None:
+        raise ValueError("--ref is available only when switching to dev")
+    target = resolve_requested_target(
+        record=record,
+        channel=requested,
+        dev_ref=args.ref,
+    )
+    plan = plan_managed_change(record, target)
+    _render_managed_change(plan)
+    return _apply_managed_change(
+        paths=paths,
+        target=target,
+        plan=plan,
+        assume_yes=args.yes,
+    )
+
+
+def _apply_managed_change(
+    *,
+    paths: ManagedInstallPaths,
+    target,
+    plan: ManagedChangePlan,
+    assume_yes: bool,
+) -> int:
+    if plan.status is ManagedChangeStatus.INCONSISTENT:
+        raise RuntimeError(plan.detail)
+    if not plan.requires_activation:
+        print("No managed application change was made.")
+        return 0
+    if not assume_yes:
+        if not sys.stdin.isatty():
+            raise ValueError("interactive confirmation is required; use --yes")
+        if not _prompt_yes_no(
+            "Stage, verify, and activate this target?", default=False
+        ):
+            print("Managed application change cancelled.")
+            return 0
+    installed = install_managed_target(target, paths)
+    print(
+        "activated: "
+        f"{installed.channel.value} {installed.release_version} "
+        f"g{installed.source_revision[:12]}"
+    )
+    print("rollback: the previous application remains preserved")
+    return 0
+
+
+def _bootstrap_managed_install(args: argparse.Namespace) -> int:
+    """Install one managed target for the minimal remote bootstrap helper."""
+
+    channel = ManagedChannel(args.channel)
+    if channel is ManagedChannel.STABLE:
+        if args.ref is not None:
+            raise ValueError("a source ref cannot override the stable release")
+        target = target_from_stable_release(
+            resolve_latest_stable_release(
+                release_api_url=args.release_api_url,
+                expected_repository_url=args.repository,
+            )
+        )
+    else:
+        target = resolve_dev_target(
+            repository_url=args.repository,
+            source_ref=args.ref or "main",
+        )
+    paths = ManagedInstallPaths.from_environment()
+    target_version = target.release_version or "candidate"
+    print(
+        "bootstrap target: "
+        f"{target.channel.value} {target_version} "
+        f"g{target.source_revision[:12]} ({target.source_ref})"
+    )
+    installed = install_managed_target(target, paths)
+    print(
+        "bootstrap activated: "
+        f"{installed.channel.value} {installed.release_version} "
+        f"g{installed.source_revision[:12]}"
+    )
     return 0
 
 
@@ -2140,6 +2327,78 @@ def build_parser() -> argparse.ArgumentParser:
         help="Emit the version report as machine-readable JSON.",
     )
     version.set_defaults(handler=_show_version)
+
+    update = commands.add_parser(
+        "update",
+        help="Check or apply an update from the active managed channel.",
+    )
+    update.add_argument(
+        "--check",
+        action="store_true",
+        help="Resolve and report the current channel target without changing files.",
+    )
+    update.add_argument(
+        "--yes",
+        action="store_true",
+        help="Apply an available update without interactive confirmation.",
+    )
+    update.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable output; requires --check.",
+    )
+    update.set_defaults(handler=_update_managed_install)
+
+    channel = commands.add_parser(
+        "channel",
+        help="Inspect or explicitly switch the managed release channel.",
+    )
+    channel_commands = channel.add_subparsers(dest="channel_command", required=True)
+    channel_status = channel_commands.add_parser(
+        "status",
+        help="Show the current managed channel without a network request.",
+    )
+    channel_status.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit the local channel identity as JSON.",
+    )
+    channel_status.set_defaults(handler=_show_channel)
+    channel_switch = channel_commands.add_parser(
+        "switch",
+        help="Stage, verify, and explicitly activate stable or dev.",
+    )
+    channel_switch.add_argument(
+        "channel",
+        choices=tuple(item.value for item in ManagedChannel),
+    )
+    channel_switch.add_argument(
+        "--ref",
+        help="Dev branch, tag, or exact commit; defaults to main on first switch.",
+    )
+    channel_switch.add_argument(
+        "--yes",
+        action="store_true",
+        help="Apply the channel switch without interactive confirmation.",
+    )
+    channel_switch.set_defaults(handler=_switch_channel)
+
+    managed_bootstrap = commands.add_parser(
+        "_managed-install",
+        help=argparse.SUPPRESS,
+    )
+    managed_bootstrap.add_argument(
+        "--channel",
+        required=True,
+        choices=tuple(item.value for item in ManagedChannel),
+    )
+    managed_bootstrap.add_argument("--repository", required=True)
+    managed_bootstrap.add_argument("--ref")
+    managed_bootstrap.add_argument(
+        "--release-api-url",
+        default=DEFAULT_LATEST_RELEASE_API_URL,
+    )
+    managed_bootstrap.set_defaults(handler=_bootstrap_managed_install)
 
     configure = commands.add_parser(
         "configure",

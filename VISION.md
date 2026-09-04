@@ -2,7 +2,7 @@
 
 **Implementation status:** [`STATUS.md`](STATUS.md)
 
-**Last updated:** August 27, 2026
+**Last updated:** September 4, 2026
 
 ## Purpose
 
@@ -152,6 +152,22 @@ when code, usability evidence, or controlled experiments justify a replacement.
   significance; the complete Git revision, dirty state, install mode, managed
   channel, artifact digest, and schema compatibility remain separate
   provenance fields. Local version inspection never requires network access.
+- A normal managed install resolves only a published stable release. An
+  explicit dev channel may follow `main`, another ref, or a fixed candidate
+  revision; source checkouts remain outside the managed updater. Install,
+  update, and channel switch share one staged, compatibility-checked, atomic
+  activation transaction and never change channel silently.
+- SAT installs no update daemon, scheduler, or exit-time worker. Each bare
+  `sat` entry that starts a new task checks update availability once in its
+  foreground admission flow. Failure to reach the release endpoint cannot
+  block the task; help, local version/status, and diagnostic commands do not
+  implicitly contact it. Only a numeric stable release change produces the
+  normal update notice, while exact commit identity remains available for
+  explicit inspection.
+- Normal commits do not change the numeric release. At release-scope freeze, a
+  machine-readable impact ledger determines the minimum SemVer increment; one
+  exact candidate commit must pass local and repository gates before a human
+  authorizes an immutable tag and GitHub Release.
 - Every resolved `provider/model` must pass SAT's isolated catalog and auth
   checks before its Agent invocation. Startup validates saved defaults;
   run-scoped preflight validates the approved route plan without generation,
@@ -433,6 +449,10 @@ change in the same controlled trial.
 | Use OpenClaw as the Agent runtime, not the orchestrator | OpenClaw provides model/provider integration, sessions, tools, and sandboxing; the experiment still needs a model-independent control plane. |
 | Isolate SAT's OpenClaw runtime and state from every existing installation | Compatibility is not ownership. Installing a pinned private binary and overriding every mutable OpenClaw path gives SAT reproducibility without reading, changing, stopping, or deleting a user's existing binary, Gateway, profile, configuration, credentials, sessions, caches, or workspaces. A collision at SAT's private target fails safely instead of being adopted. |
 | Separate release identity from source provenance | SemVer tells users whether an update changes the supported product contract; a complete source revision and artifact digest make the installed bytes auditable. Keeping dirty state, install mode, channel, and schema compatibility explicit prevents a moving checkout or partial package identity from masquerading as a reproducible release. |
+| Make stable publication release-first and keep dev explicit | Normal users need one reproducible version rather than whatever `main` contains at install time. A published stable manifest binds version, tag, commit, archive digest, and readable schemas; developers can still opt into an attributable moving or fixed candidate without turning it into stable. |
+| Use one ownership-bound transaction for install, update, switch, and uninstall | Separate lifecycle paths drift on launchers, state compatibility, rollback, and custom destinations. A root marker, exclusive lock, verified staging, atomic logical link, and preservation-first removal let every command prove which files it may change and restore the prior identity after activation failure. |
+| Check for updates only when foreground product use creates the need | SAT is an on-demand CLI, not a service. One bounded check at each new-task admission keeps release information fresh without a daemon; endpoint failure is a warning rather than an availability dependency, and commit-only drift remains diagnostic instead of repeatedly interrupting users. |
+| Change SemVer at release-scope freeze, not on every commit | Dev provenance already identifies every commit. Impact classification, package/lock consistency, pre-tag gates, explicit tag authorization, and immutable GitHub publication make release significance enforceable without update-notification noise or reliance on a maintainer remembering an informal checklist. |
 | Validate and, when necessary, supplement the exact model catalog before Agent work | Saving a `provider/model` string does not prove that the pinned runtime can resolve it. A non-generation catalog/auth check catches unsupported or unauthenticated selections before a build, while a versioned secret-free supplement can bridge a known catalog lag without copying credentials or enabling fallback. |
 | Keep local readiness timeouts separate from Agent invocation timeouts | A cold local catalog process can take longer than a lightweight binary or Docker check without consuming provider tokens. The controller therefore records and enforces a dedicated 90-second model-inspection boundary, keeps ordinary preflight commands at 30 seconds, announces the wait, and never presents either value as time granted to an Agent. |
 | Keep the controller's invocation timeout authoritative | A provider compatibility supplement may describe routing and model metadata, but it must not add an independent transport timeout that conflicts with the approved per-Agent invocation policy. OpenClaw receives the resolved timeout for every call, and SAT's outer process boundary adds only bounded shutdown grace. |

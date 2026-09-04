@@ -26,6 +26,11 @@ task_openclaw_runtime="$task_runtime_root/openclaw"
 task_openclaw_runtime_marker="$task_openclaw_runtime/.sat-owned-runtime"
 task_managed_marker="$task_root/.sat-managed-install"
 task_managed_install=0
+task_managed_root=""
+task_versions_root=""
+task_installation_record=""
+task_update_lock_fd=""
+task_application_link=""
 
 task_export_to=""
 task_config_policy="keep"
@@ -71,6 +76,202 @@ development checkouts, and custom state roots not selected through SAT_STATE_ROO
 are never read or removed. A managed application directory is removed; a
 development checkout is preserved.
 EOF
+}
+
+load_managed_v2_paths() {
+  local task_python="$task_root/.venv/bin/python"
+  [[ -x "$task_python" && ! -L "$task_managed_marker" ]] || \
+    fail "managed installation metadata cannot be verified"
+  task_versions_root="$(cd "$(dirname "$task_root")" && pwd -P)"
+  task_managed_root="$(cd "$task_versions_root/.." && pwd -P)"
+  local task_root_marker="$task_managed_root/.sat-managed-root"
+  [[ -f "$task_root_marker" && ! -L "$task_root_marker" ]] || \
+    fail "managed root ownership marker is missing or invalid"
+
+  local task_metadata
+  if ! task_metadata="$("$task_python" - \
+    "$task_managed_marker" \
+    "$task_root_marker" \
+    "$task_root" \
+    "$task_versions_root" \
+    "$task_managed_root" <<'PY'
+import json
+import os
+import stat
+import sys
+from pathlib import Path
+
+release_path, root_path, release_root, versions_root, managed_root = map(
+    Path, sys.argv[1:]
+)
+
+
+def load_exact(path: Path, keys: set[str], label: str) -> dict[str, object]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise SystemExit(f"{label} is unreadable: {error}")
+    if not isinstance(payload, dict) or set(payload) != keys:
+        raise SystemExit(f"{label} has an unsupported schema")
+    return payload
+
+
+def absolute_path(value: object, label: str) -> Path:
+    if not isinstance(value, str) or value != value.strip():
+        raise SystemExit(f"{label} is invalid")
+    if any(ord(character) < 32 for character in value):
+        raise SystemExit(f"{label} contains control text")
+    path = Path(value)
+    if not path.is_absolute() or path == Path(path.anchor):
+        raise SystemExit(f"{label} is not a specific absolute path")
+    if os.path.normpath(value) != value:
+        raise SystemExit(f"{label} is not normalized")
+    return path
+
+
+release = load_exact(
+    release_path,
+    {
+        "schema_version",
+        "application_link",
+        "channel",
+        "release_version",
+        "source_revision",
+        "source_ref",
+        "repository_url",
+        "artifact_digest",
+    },
+    "managed release marker",
+)
+root = load_exact(
+    root_path,
+    {
+        "schema_version",
+        "managed_root",
+        "application_link",
+        "versions_root",
+        "installation_record",
+        "bin_directory",
+    },
+    "managed root marker",
+)
+if release["schema_version"] != 2 or root["schema_version"] != 1:
+    raise SystemExit("managed marker schema is unsupported")
+
+application = absolute_path(root["application_link"], "application link")
+record_path = absolute_path(root["installation_record"], "installation record")
+bin_directory = absolute_path(root["bin_directory"], "launcher directory")
+if absolute_path(root["managed_root"], "managed root") != managed_root:
+    raise SystemExit("managed root marker belongs to a different root")
+if absolute_path(root["versions_root"], "versions root") != versions_root:
+    raise SystemExit("managed root marker belongs to different version storage")
+if release_root.parent != versions_root or versions_root.parent != managed_root:
+    raise SystemExit("managed release is outside its owned version storage")
+if release["application_link"] != str(application):
+    raise SystemExit("managed release and root markers disagree")
+if not application.is_symlink() or Path(os.path.realpath(application)) != release_root:
+    raise SystemExit("managed application link does not select this release")
+
+if os.path.lexists(record_path):
+    record_stat = os.lstat(record_path)
+    if not stat.S_ISREG(record_stat.st_mode):
+        raise SystemExit("installation record is not a regular file")
+    record = load_exact(
+        record_path,
+        {
+            "schema_version",
+            "install_mode",
+            "channel",
+            "release_version",
+            "source_revision",
+            "source_ref",
+            "repository_url",
+            "application_path",
+            "artifact_digest",
+            "installed_at",
+        },
+        "installation record",
+    )
+    if record["schema_version"] != 1 or record["install_mode"] != "managed":
+        raise SystemExit("installation record schema is unsupported")
+    shared = {
+        "channel",
+        "release_version",
+        "source_revision",
+        "source_ref",
+        "repository_url",
+        "artifact_digest",
+    }
+    if any(record[field] != release[field] for field in shared):
+        raise SystemExit("installation record and release marker disagree")
+    if record["application_path"] != str(application):
+        raise SystemExit("installation record belongs to a different application")
+
+print(f"{application}\t{record_path}\t{bin_directory}")
+PY
+  )"; then
+    fail "managed installation metadata cannot be verified"
+  fi
+  local task_record_path
+  local task_recorded_bin
+  IFS=$'\t' read -r \
+    task_application_link task_record_path task_recorded_bin <<<"$task_metadata"
+  [[ -n "$task_application_link" && -n "$task_record_path" && \
+    -n "$task_recorded_bin" ]] || \
+    fail "managed installation metadata is incomplete"
+  task_bin_dir="$task_recorded_bin"
+  task_installation_record="$task_record_path"
+  task_sat_target="$task_application_link/.venv/bin/sat"
+  task_uninstall_target="$task_application_link/scripts/uninstall.sh"
+  task_sat_link="$task_bin_dir/sat"
+  task_uninstall_link="$task_bin_dir/sat-uninstall"
+  task_managed_install=2
+}
+
+acquire_managed_lifecycle_lock() {
+  command -v flock >/dev/null 2>&1 || \
+    fail "flock is required to uninstall a managed application"
+  local task_lock="$task_managed_root/update.lock"
+  [[ -f "$task_lock" && ! -L "$task_lock" ]] || \
+    fail "managed lifecycle lock is missing or invalid"
+  exec {task_update_lock_fd}<>"$task_lock"
+  flock -n "$task_update_lock_fd" || \
+    fail "another managed install or update is active"
+}
+
+refuse_active_managed_runs() {
+  local task_python="$task_root/.venv/bin/python"
+  if ! "$task_python" - "$task_runs_root" <<'PY'
+import json
+import os
+import stat
+import sys
+from pathlib import Path
+
+runs = Path(sys.argv[1])
+if not os.path.lexists(runs):
+    raise SystemExit(0)
+mode = os.lstat(runs).st_mode
+if not stat.S_ISDIR(mode):
+    raise SystemExit("run state root is not a real directory")
+active: list[str] = []
+for path in sorted(runs.glob("*/run.json")):
+    entry_mode = os.lstat(path).st_mode
+    if not stat.S_ISREG(entry_mode):
+        raise SystemExit(f"run state is not a regular file: {path}")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        phase = payload["phase"]
+    except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError) as error:
+        raise SystemExit(f"run state cannot be verified: {path}: {error}")
+    if phase not in {"completed", "failed"}:
+        active.append(path.parent.name)
+if active:
+    raise SystemExit("active SAT run blocks uninstall: " + ", ".join(active))
+PY
+  then
+    fail "managed run state prevents uninstall"
+  fi
 }
 
 while (($#)); do
@@ -150,12 +351,21 @@ done
 if [[ -e "$task_managed_marker" || -L "$task_managed_marker" ]]; then
   [[ -f "$task_managed_marker" && ! -L "$task_managed_marker" ]] || \
     fail "managed installation marker must be a regular file"
-  [[ "$(sed -n '1p' "$task_managed_marker")" == \
-    "software-agent-team-managed-v1" ]] || \
-    fail "managed installation marker is invalid"
-  [[ "$(sed -n '2p' "$task_managed_marker")" == "root=$task_root" ]] || \
-    fail "managed installation marker belongs to a different path"
-  task_managed_install=1
+  if [[ "$(sed -n '1p' "$task_managed_marker")" == \
+    "software-agent-team-managed-v1" ]]; then
+    [[ "$(sed -n '2p' "$task_managed_marker")" == "root=$task_root" ]] || \
+      fail "managed installation marker belongs to a different path"
+    task_managed_install=1
+  else
+    load_managed_v2_paths
+  fi
+fi
+if [[ "$task_managed_install" == "2" ]]; then
+  acquire_managed_lifecycle_lock
+  refuse_active_managed_runs
+  [[ "$task_managed_root" != "/" && "$task_managed_root" != "$HOME" && \
+    "$task_managed_root" != "$(dirname "$HOME")" ]] || \
+    fail "refusing to remove an unsafe managed application root"
 fi
 
 ask_yes_no() {
@@ -262,6 +472,12 @@ validate_export_destination() {
     "$task_root/"*) fail "export destination must be outside the source checkout" ;;
     "$task_state_root/"*) fail "export destination must be outside SAT state" ;;
   esac
+  if [[ "$task_managed_install" == "2" ]]; then
+    case "$task_export_to/" in
+      "$task_managed_root/"*) \
+        fail "export destination must be outside the managed application root" ;;
+    esac
+  fi
 }
 
 export_user_state() {
@@ -372,11 +588,11 @@ remove_owned_link() {
 }
 
 remove_owned_link "$task_sat_link" "$task_sat_target" "launcher"
-if [[ -d "$task_root/.venv" ]]; then
+if [[ "$task_managed_install" != "2" && -d "$task_root/.venv" ]]; then
   rm -rf -- "$task_root/.venv"
   echo "uninstall: removed SAT Python environment"
 fi
-if [[ -d "$task_openclaw_runtime" ]]; then
+if [[ "$task_managed_install" != "2" && -d "$task_openclaw_runtime" ]]; then
   rm -rf -- "$task_openclaw_runtime"
   rmdir -- "$task_runtime_root" 2>/dev/null || true
   echo "uninstall: removed SAT's private OpenClaw runtime"
@@ -385,7 +601,19 @@ remove_owned_link "$task_uninstall_link" "$task_uninstall_target" \
   "uninstall launcher"
 
 echo "uninstall: other OpenClaw installations, uv, Docker, and image untouched"
-if [[ "$task_managed_install" == "1" ]]; then
+if [[ "$task_managed_install" == "2" ]]; then
+  [[ -L "$task_application_link" && \
+    "$(readlink -f -- "$task_application_link")" == "$task_root" ]] || \
+    fail "managed application link changed during uninstall"
+  rm -f -- "$task_application_link"
+  if [[ -e "$task_installation_record" || -L "$task_installation_record" ]]; then
+    [[ -f "$task_installation_record" && ! -L "$task_installation_record" ]] || \
+      fail "installation record changed during uninstall"
+    rm -f -- "$task_installation_record"
+  fi
+  rm -rf -- "$task_managed_root"
+  echo "uninstall: removed managed SAT application $task_application_link"
+elif [[ "$task_managed_install" == "1" ]]; then
   [[ "$task_root" != "$HOME" && "$task_root" != "$(dirname "$HOME")" ]] || \
     fail "refusing to remove an unsafe managed installation root"
   rm -rf -- "$task_root"

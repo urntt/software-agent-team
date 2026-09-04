@@ -1,0 +1,64 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out the exact tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install pinned Python toolchain
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.0"
+          enable-cache: false
+
+      - name: Install locked project environment
+        run: |
+          uv python install 3.12
+          uv sync --locked
+
+      - name: Run repository release gates
+        run: |
+          uv run ruff format --check .
+          uv run ruff check .
+          uv run pytest
+          mkdir -p dist
+          uv run python scripts/release.py \
+            --tag "${GITHUB_REF_NAME}" \
+            --output dist/sat-release.json
+
+      - name: Refuse release-version reuse
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            echo "release already exists: ${GITHUB_REF_NAME}" >&2
+            exit 1
+          fi
+
+      - name: Publish immutable-identity release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --verify-tag \
+            --latest \
+            --generate-notes \
+            --title "SAT ${GITHUB_REF_NAME#v}" \
+            "dist/sat-release.json#SAT release identity manifest"

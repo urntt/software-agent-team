@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "baseline_version": null,
+  "target_version": "0.1.0",
+  "changes": [
+    {
+      "id": "initial-guided-builder",
+      "impact": "minor",
+      "summary": "Initial guided multi-agent software builder and managed installation contract"
+    }
+  ]
+}

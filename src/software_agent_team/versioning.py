@@ -399,7 +399,7 @@ def make_installation_record(
         source_revision=source_revision,
         source_ref=source_ref,
         repository_url=repository_url,
-        application_path=str(application_path.resolve()),
+        application_path=str(application_path.absolute()),
         artifact_digest=artifact_digest,
         installed_at=installed_at or datetime.now(UTC),
     )

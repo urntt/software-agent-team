@@ -59,6 +59,10 @@ To update a checkout-bound installation, update the checkout through the
 contributor's normal Git workflow, confirm that the tracked worktree is clean,
 and rerun `./scripts/install.sh`.
 
+Version changes and stable publication follow the separate
+[`release and channel lifecycle`](releases.md). A normal development commit does
+not increment the numeric release version or create a GitHub Release.
+
 ## Validation CLI
 
 The unified CLI exposes focused validators for checked-in contracts:
@@ -200,6 +204,7 @@ docs/
   product-demo-slice.md        Guided user-journey acceptance specification
   adaptive-orchestration.md    Dynamic-team and interactive-control specification
   installation.md             Install, configure, export, and uninstall
+  releases.md                 Version, release, and channel maintainer workflow
   runtime-evidence.md          Runtime, artifact, evidence, and safety model
   phase1-runbook.md            Controlled provider-backed evaluation procedure
   development.md               This development guide
@@ -243,15 +248,22 @@ src/software_agent_team/
   teams.py                     TeamPlan contracts and fixed-fixture compilation
   user_configuration.py        User-local secret-free live-run defaults
   versioning.py                Release, source, and managed-install identity
+  releases.py                  Stable Release manifest and resolver
+  release_tools.py             Change-impact and release-candidate gates
+  managed_install.py           Staged managed install and atomic activation
+  updates.py                   Update and channel-change planning
   workflow.py                  Fixed-fixture compatibility orchestration
 scripts/
   bootstrap.sh                 Remote managed-install entry point
   install.sh                   Locked Linux/WSL application installation
+  release.py                   Release manifest and candidate gate CLI
   openclaw-environment.sh      Private OpenClaw shell-process environment
   uninstall.sh                 Guided preservation, export, and removal
   setup.sh                     Development environment setup
   doctor.sh                    Environment and boundary diagnostics
 tests/                         Offline unit, integration, and end-to-end tests
+release/change-impact.json     Machine-readable SemVer impact ledger
+.github/workflows/release.yml  Exact-tag GitHub Release automation
 README.md                      User-facing public overview and quick start
 STATUS.md                      Current implementation and evaluation evidence
 VISION.md                      Product, architecture, experiment, and roadmap

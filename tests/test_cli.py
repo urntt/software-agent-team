@@ -12,6 +12,11 @@ import software_agent_team.cli as cli
 from software_agent_team.artifacts import AgentRole, TaskBrief
 from software_agent_team.benchmark_seed import prepare_benchmark_seed
 from software_agent_team.cli import main
+from software_agent_team.managed_install import (
+    ManagedInstallError,
+    ManagedInstallPaths,
+    ManagedTarget,
+)
 from software_agent_team.model_routing import ModelProfile
 from software_agent_team.run_control import RunPhase
 from software_agent_team.runtime_configuration import (
@@ -19,12 +24,14 @@ from software_agent_team.runtime_configuration import (
     RuntimePreflight,
     SandboxImageInspection,
 )
+from software_agent_team.schema_compatibility import supported_schemas
 from software_agent_team.teams import AgentCapability, ModelRoutingMode
 from software_agent_team.user_configuration import (
     UserConfiguration,
     load_user_configuration,
     save_user_configuration,
 )
+from software_agent_team.versioning import ManagedChannel, make_installation_record
 
 REPOSITORY_ROOT = Path(__file__).parents[1]
 
@@ -51,6 +58,185 @@ def test_cli_version_commands_are_local_and_machine_readable(
     assert payload["install_mode"] == "package"
     assert payload["source_revision"] is None
     assert payload["identity_status"] == "partial"
+
+
+def managed_cli_fixture(tmp_path: Path):
+    paths = ManagedInstallPaths(
+        managed_root=tmp_path / "managed",
+        application_link=tmp_path / "managed/app",
+        versions_root=tmp_path / "managed/versions",
+        installation_record=tmp_path / "managed/installation.json",
+        lock=tmp_path / "managed/update.lock",
+        bin_directory=tmp_path / "bin",
+        state_root=tmp_path / "state",
+        configuration_path=tmp_path / "config/config.json",
+    )
+    record = make_installation_record(
+        channel=ManagedChannel.STABLE,
+        release_version="0.1.0",
+        source_revision="a" * 40,
+        source_ref="v0.1.0",
+        repository_url="https://example.invalid/software-agent-team.git",
+        application_path=paths.application_link,
+        artifact_digest="sha256:" + "c" * 64,
+        installed_at=datetime(2026, 9, 4, tzinfo=UTC),
+    )
+    return paths, record
+
+
+def stable_cli_target() -> ManagedTarget:
+    return ManagedTarget(
+        channel=ManagedChannel.STABLE,
+        release_version="0.2.0",
+        source_revision="b" * 40,
+        source_ref="v0.2.0",
+        repository_url="https://example.invalid/software-agent-team.git",
+        artifact_digest="sha256:" + "d" * 64,
+        schema_support=supported_schemas(),
+    )
+
+
+def test_update_check_is_read_only_and_machine_readable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    paths, record = managed_cli_fixture(tmp_path)
+    monkeypatch.setattr(cli, "_managed_install_context", lambda: (paths, record))
+    monkeypatch.setattr(
+        cli,
+        "resolve_requested_target",
+        lambda **_kwargs: stable_cli_target(),
+    )
+    monkeypatch.setattr(
+        cli,
+        "install_managed_target",
+        lambda *_args, **_kwargs: pytest.fail("check attempted installation"),
+    )
+
+    assert main(["update", "--check", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "update_available"
+    assert payload["current_version"] == "0.1.0"
+    assert payload["target_version"] == "0.2.0"
+
+
+def test_update_requires_confirmation_or_explicit_yes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    paths, record = managed_cli_fixture(tmp_path)
+    target = stable_cli_target()
+    installed = make_installation_record(
+        channel=ManagedChannel.STABLE,
+        release_version="0.2.0",
+        source_revision=target.source_revision,
+        source_ref="v0.2.0",
+        repository_url=target.repository_url,
+        application_path=paths.application_link,
+        artifact_digest=target.artifact_digest,
+    )
+    calls: list[tuple[ManagedTarget, ManagedInstallPaths]] = []
+    monkeypatch.setattr(cli, "_managed_install_context", lambda: (paths, record))
+    monkeypatch.setattr(cli, "resolve_requested_target", lambda **_kwargs: target)
+    monkeypatch.setattr(
+        cli,
+        "install_managed_target",
+        lambda actual_target, actual_paths: (
+            calls.append((actual_target, actual_paths)) or installed
+        ),
+    )
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False)
+
+    assert main(["update"]) == 1
+    assert not calls
+    assert "interactive confirmation is required" in capsys.readouterr().out
+
+    assert main(["update", "--yes"]) == 0
+    assert calls == [(target, paths)]
+    output = capsys.readouterr().out
+    assert "activated: stable 0.2.0" in output
+    assert "previous application remains preserved" in output
+
+
+def test_channel_status_is_local_and_same_channel_switch_is_a_noop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    paths, record = managed_cli_fixture(tmp_path)
+    monkeypatch.setattr(cli, "_managed_install_context", lambda: (paths, record))
+    monkeypatch.setattr(
+        cli,
+        "resolve_requested_target",
+        lambda **_kwargs: pytest.fail("local channel command resolved network target"),
+    )
+
+    assert main(["channel", "status", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["channel"] == "stable"
+
+    assert main(["channel", "switch", "stable", "--yes"]) == 0
+    assert "already stable" in capsys.readouterr().out
+
+
+def test_channel_switch_uses_the_same_managed_activation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    paths, record = managed_cli_fixture(tmp_path)
+    target = ManagedTarget(
+        channel=ManagedChannel.DEV,
+        release_version=None,
+        source_revision="b" * 40,
+        source_ref="candidate",
+        repository_url=record.repository_url,
+        artifact_digest=None,
+    )
+    installed = record.model_copy(
+        update={
+            "channel": ManagedChannel.DEV,
+            "source_revision": target.source_revision,
+            "source_ref": target.source_ref,
+        }
+    )
+    calls: list[tuple[ManagedTarget, ManagedInstallPaths]] = []
+    monkeypatch.setattr(cli, "_managed_install_context", lambda: (paths, record))
+    monkeypatch.setattr(cli, "resolve_requested_target", lambda **_kwargs: target)
+    monkeypatch.setattr(
+        cli,
+        "install_managed_target",
+        lambda actual_target, actual_paths: (
+            calls.append((actual_target, actual_paths)) or installed
+        ),
+    )
+
+    assert main(["channel", "switch", "dev", "--ref", "candidate", "--yes"]) == 0
+    assert calls == [(target, paths)]
+    assert "switch channel from stable to dev" in capsys.readouterr().out
+
+
+def test_update_refuses_a_source_checkout_before_resolving_a_target(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        cli,
+        "_managed_install_context",
+        lambda: (_ for _ in ()).throw(
+            ManagedInstallError("source checkouts cannot be changed by `sat update`")
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "resolve_requested_target",
+        lambda **_kwargs: pytest.fail("source checkout attempted target resolution"),
+    )
+
+    assert main(["update", "--check"]) == 1
+    assert "source checkouts cannot be changed" in capsys.readouterr().out
 
 
 def test_replacement_planning_request_preserves_scope_and_versions_correction() -> None:

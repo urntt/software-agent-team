@@ -43,7 +43,10 @@ curl -fsSL \
 The installer validates the device, installs SAT's pinned private runtime,
 prepares its Python environment and Docker image, proves that the restricted
 sandbox container stays runnable and can execute a tool helper, runs offline
-checks, and adds `sat` and `sat-uninstall` to the user-local command path.
+checks, and adds `sat` and `sat-uninstall` to the user-local command path. A
+normal installation resolves the latest published stable release and binds it
+to an exact source revision and artifact digest; it does not install a moving
+`main` checkout as stable.
 
 ## Build a Project
 
@@ -151,9 +154,27 @@ sat version
 ```
 
 Use `sat version --json` when a script needs the full identity report. A
-managed update command and stable/dev channel switching are not available yet.
-Until they are, rerun the installation command to update a managed
-installation.
+managed installation can check or apply its current channel target directly:
+
+```bash
+sat update --check
+sat update
+sat channel status
+```
+
+Developers can explicitly switch a managed installation to or from the moving
+development channel:
+
+```bash
+sat channel switch dev
+sat channel switch stable
+```
+
+Update and channel-switch commands show the exact current and target identities
+before activation. They stage and verify the new application, check persisted
+schema compatibility, refuse to change an active run, atomically switch the
+logical application link, and retain the previous release for rollback. A
+source checkout is never rewritten by the managed updater.
 
 SAT verifies that it owns the installation and that the tracked application is
 clean before updating it.
@@ -172,99 +193,13 @@ preserved state. Other OpenClaw installations are never uninstall targets.
 See [guided uninstallation](docs/installation.md#guided-uninstallation) for
 the export and purge options.
 
-## Current Scope and Maturity
+## Current Scope
 
-SAT is experimental software. The supported build path is currently limited
-to new, small Python 3.12 projects; existing-codebase modification, additional
-runtime profiles, interrupted-run resume, deployment, and publication are not
-yet supported. Adaptive Planning, plan approval, task-defined execution, and
-delivery are integrated in the normal `sat` path and covered offline. Planning
-retains raw model evidence while deterministically ignoring repeated
-definitions of fixed controller-owned profile criteria; legal task bindings
-still resolve to the canonical profile contract without consuming a model
-repair. The same append-only event stream now drives configurable per-Agent
-progress, including
-dependency, provider-wait, repair, terminal, route, duration, and budget facts.
-Planning model waits also show elapsed heartbeats, response validation, and a
-bounded-repair transition. Provider heartbeats stop on hidden completion
-events as well as terminal Agent state, and failed quality gates render as
-failures rather than successful check marks. Reviewer timeout has a
-controller-derived scope floor that counts both assigned criteria and every
-explicit Review boundary obligation. Its project mount and general write tools
-remain read-only, while an immutable path-restricted helper can create a
-new bounded `/tmp/sat-review-probe-*` script or fixture without overwriting an
-existing file. The image also includes a locked offline Python wheelhouse.
-Review boundary names use one controller-owned protocol across Planning,
-approval, implementation, and Review. In particular, `top_level_input` is the
-primary input selected by the user or upstream caller; an immediate child
-inside that input is already `nested_input`, not another top-level case.
-Deterministic verification copies only clean committed files into fresh
-sandbox scratch and runs the generated project's exact setup, test, and start
-commands with no network. Reviewer criterion claims must cite actual Reviewer
-tool results or controller-owned deterministic command output from the same
-immutable iteration. Exact fragments are preferred; keyed JSON fragments also
-accept presentation-only RFC JSON whitespace differences outside quoted
-strings. On the normal adaptive path, a bounded semantic repair may reuse an
-integrity-checked result from an earlier attempt by the same Reviewer against
-the same immutable commit. SAT extracts and sanitizes those records itself and
-persists actual attempt-qualified tool IDs or command IDs. Repeated or
-overlapping selectors are deduplicated, while a fragment with no eligible match
-is rejected. For a satisfied direct `sat-probe-run` claim, only completely
-framed child stdout and the terminal result are positive evidence; unframed or
-partial output and traceback source text in child stderr cannot satisfy a
-claim. A later successful probe emission can
-replace an earlier failed probe match for that fragment without deleting the
-failed attempt from audit evidence. A sole unscoped blocking finding is
-deterministically bound to the
-otherwise-uncovered blocked criteria; ambiguous multiple-finding mappings are
-still rejected. The model never has to predict controller-owned IDs or repeat
-an unambiguous relationship solely for serialization. If re-verification fails
-after a revision changed the commit, the terminal report keeps the prior
-finding unresolved while distinguishing its earlier evidence from the current,
-not-yet-independently-verified commit.
-When a report already requires revision for a separately blocked criterion,
-SAT can conservatively turn an additional unsafe positive evidence claim into a
-blocked evidence gap without another model call. It never uses this recovery to
-accept a run, and the failed result remains attributable evidence rather than
-proof of success.
-For an `exec` tool call, SAT attributes only the leading environment assignments
-and first executable token, then stops parsing the unpersisted shell suffix. It
-still hashes the complete canonical arguments and records the real result, so a
-Bash-valid comment suffix cannot erase an otherwise attributable Review while
-an unavailable or malformed executable prefix remains an integrity failure.
-The foreground control palette, live visibility changes, prospective guidance,
-replacement Planning, cooperative pause/resume, best-effort interruption, and
-terminal cancellation are integrated and covered offline. Durable resume after
-a process restart remains under development. Secret-free multi-model profiles,
-deterministic plan-time route resolution, per-Agent route inspection, and an
-explicit provider-failure fallback are implemented and covered offline. A
-fresh provider-backed strict-route adaptive rehearsal has now completed from
-the public installer through accepted delivery and independent post-delivery
-checks. A run with two authorized routes remains required before claiming
-demonstration readiness for the multi-route path.
-
-The generated Python profile requires README documentation of the exact setup,
-start, and test argv. The start command must be directly usable from the
-project root without extra arguments. A dedicated quality gate verifies all
-three exact commands from a fresh copy of the immutable commit; the ordinary
-clean-workspace pytest gate remains an independent check. Every `uv.lock`
-tracked in the proposed delivery must also be installable outside SAT's image:
-the profile rejects absolute, `file:`, parent-directory, missing
-project-relative, and private-wheelhouse sources before delivery. An effectively
-ignored untracked lock is runtime residue and is excluded from this delivery
-judgment and from the clean scratch copy.
-
-The activated adaptive path has passed a complete strict-route live-provider
-rehearsal in a fresh non-root Linux account. Public installation and bare
-`sat` produced a user-approved task-defined team, accepted all ten criteria,
-delivered a clean project, passed all exact project commands and thirteen
-independent post-delivery checks, and left no run-scoped container residue. A
-separate fresh-account provider rehearsal has exercised detailed visibility,
-prospective guidance, cooperative pause, `/controls`, and resume through the
-same ordinary foreground UI. That run deliberately remains failure evidence
-because it exposed the now-corrected Review-channel and lock-portability defects.
-An accepted retry, a two-route switch, and an independent-device demonstration
-remain pending.
+SAT is experimental software. Its current product profile builds new, small
+Python 3.12 projects, including Web applications, CLI tools, and local
+automation. It does not yet modify existing codebases, provide additional
+generated-project runtimes, resume an interrupted process automatically,
+deploy, or publish a generated project.
 
 Read [`STATUS.md`](STATUS.md) for current evidence and known gaps, and
 [`VISION.md`](VISION.md) for product direction, architecture, scope, and the
