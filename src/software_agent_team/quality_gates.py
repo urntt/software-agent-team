@@ -21,6 +21,7 @@ import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal, Protocol, Self
 
@@ -72,6 +73,13 @@ class QualityGateEvidenceError(QualityGateError):
 
 class QualityGateBudgetExceeded(QualityGateError):
     """The aggregate deterministic-gate time budget is exhausted."""
+
+
+class RunPolicyAuthority(StrEnum):
+    """Whether a policy carries frozen experiment inputs or product guards."""
+
+    CONTROLLED_EVALUATION = "controlled_evaluation"
+    PRODUCT = "product"
 
 
 def _safe_relative_path(value: str, *, allow_dot: bool = False) -> str:
@@ -200,17 +208,17 @@ class DockerSandboxPolicy(BaseModel):
 
 
 class RunPolicy(BaseModel):
-    """Versioned authority for deterministic-run sandbox policy."""
+    """Versioned sandbox policy with explicitly separated resource authority."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal[QUALITY_GATE_SCHEMA_VERSION]
     id: str = Field(pattern=r"^[a-z][a-z0-9_-]*$")
-    agent_budget: AgentBudget
-    agent_stage_timeouts_seconds: dict[
-        AgentRole,
-        Annotated[int, Field(ge=1, le=3600)],
-    ]
+    authority: RunPolicyAuthority
+    agent_budget: AgentBudget | None = None
+    agent_stage_timeouts_seconds: (
+        dict[AgentRole, Annotated[int, Field(ge=1, le=3600)]] | None
+    ) = None
     sandbox: DockerSandboxPolicy
     limits: SandboxLimits
 
@@ -218,15 +226,56 @@ class RunPolicy(BaseModel):
     @classmethod
     def require_every_role_timeout(
         cls,
-        values: dict[AgentRole, int],
-    ) -> dict[AgentRole, int]:
+        values: dict[AgentRole, int] | None,
+    ) -> dict[AgentRole, int] | None:
         """Freeze one explicit invocation timeout for every Agent role."""
 
+        if values is None:
+            return None
         missing = set(AgentRole) - set(values)
         if missing:
             names = ", ".join(sorted(role.value for role in missing))
             raise ValueError(f"Agent invocation timeouts are missing roles: {names}")
         return dict(sorted(values.items(), key=lambda item: item[0].value))
+
+    @model_validator(mode="after")
+    def separate_product_and_evaluation_limits(self) -> Self:
+        """Never let experiment ceilings masquerade as ordinary product policy."""
+
+        has_budget = self.agent_budget is not None
+        has_timeouts = self.agent_stage_timeouts_seconds is not None
+        if self.authority is RunPolicyAuthority.CONTROLLED_EVALUATION:
+            if not has_budget or not has_timeouts:
+                raise ValueError(
+                    "controlled-evaluation policies require Agent budgets and "
+                    "invocation timeouts"
+                )
+        elif has_budget or has_timeouts:
+            raise ValueError(
+                "product policies cannot contain Agent call, token, duration, cost, "
+                "or invocation-timeout ceilings"
+            )
+        return self
+
+    @property
+    def evaluation_budget(self) -> AgentBudget:
+        """Return the frozen evaluation budget or reject product misuse."""
+
+        if self.agent_budget is None:
+            raise QualityGateConfigurationError(
+                "product policy has no controlled-evaluation Agent budget"
+            )
+        return self.agent_budget
+
+    @property
+    def evaluation_timeouts(self) -> dict[AgentRole, int]:
+        """Return frozen evaluation timeouts or reject product misuse."""
+
+        if self.agent_stage_timeouts_seconds is None:
+            raise QualityGateConfigurationError(
+                "product policy has no controlled-evaluation Agent timeouts"
+            )
+        return self.agent_stage_timeouts_seconds
 
 
 class ReadOnlyInputMount(BaseModel):

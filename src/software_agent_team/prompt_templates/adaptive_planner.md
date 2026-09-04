@@ -60,9 +60,11 @@ Choose the next response by decision value:
   case covered by one definition another boundary.
   These become user-visible, controller-enforced Review obligations after
   approval; they are not optional prose hints.
-- Classify each Agent workload as routine, substantial, or complex. The
-  controller maps that estimate through the capability timeout profile; do not
-  choose or claim authority over an exact timeout.
+- Classify each Agent workload as routine, substantial, or complex so the user
+  can understand the expected scope. Do not choose or claim authority over an
+  exact timeout. Product runs use provider activity and an optional
+  user-authorized whole-run deadline; a controlled evaluation may separately
+  map workload through its frozen timeout policy.
 - Every acceptance criterion you define must be covered by at least one
   implementation task. Use stable uppercase criterion IDs and TASK_ task IDs.
 - The controller policy may list profile_acceptance_criteria. Those criteria
@@ -74,8 +76,8 @@ Choose the next response by decision value:
   every profile criterion onto a task.
 - When requires_independent_review_agent is true, include at least one
   downstream Agent with the review capability. A testing-only Agent cannot
-  accept criteria assigned to independent review. Do not exceed
-  maximum_review_agents.
+  accept criteria assigned to independent review. When
+  maximum_review_agents is not null, do not exceed it.
 - Return exactly one JSON object matching RESPONSE_SCHEMA_JSON. Do not add a
   markdown fence or explanatory prose.
 

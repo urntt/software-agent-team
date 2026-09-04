@@ -131,6 +131,16 @@ def _channel(
     return store, channel, events
 
 
+def test_control_target_attempt_has_no_arbitrary_two_digit_cap() -> None:
+    target = ControlTarget(
+        kind=ControlTargetKind.AGENT,
+        agent_id="feature_builder",
+        attempt=100,
+    )
+
+    assert target.attempt == 100
+
+
 def test_guidance_is_applied_prospectively_and_consumed_once(tmp_path: Path) -> None:
     store, channel, events = _channel(tmp_path)
     requested = store.request(

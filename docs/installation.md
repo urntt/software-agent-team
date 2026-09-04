@@ -268,8 +268,8 @@ the saved policy; if Planning selects that profile, run preflight stops before
 the first execution Agent call.
 
 Pricing, additional model profiles, route policy, adaptive maximum concurrency,
-progress visibility, and timeout overrides are advanced configuration and are
-not part of normal first-use setup. For example:
+and progress visibility are advanced configuration and are not part of normal
+first-use setup. For example:
 
 ```bash
 sat configure --non-interactive --model provider/model \
@@ -282,7 +282,8 @@ shared-workspace writer safety may reduce actual concurrency. Fixed-evaluation
 verification concurrency
 remains a separate `sat run` option documented in the
 [`Phase 1 evaluation runbook`](phase1-runbook.md). When no trustworthy price is
-available, a product run reports estimated cost as unavailable rather than
+available, task admission asks the user to supply it or explicitly confirm a
+zero-cost route before the first model call rather than
 inventing `$0.00`.
 
 An advanced policy-routing example is:
@@ -294,15 +295,14 @@ sat configure --non-interactive \
   --profile-capabilities fast=implementation,integration,testing,review \
   --profile-priority fast=10 \
   --route-capability implementation=fast \
-  --allow-provider-switch \
-  --max-model-switches 1
+  --allow-provider-switch
 ```
 
 The default profile continues to serve bootstrap clarification and Planning.
 For each runtime Agent, the controller resolves Agent edit, stage override,
 capability override, default-profile support, then lowest numeric eligible
 priority. The Planning overview exposes the resulting primary route, reason,
-fallback list, and pricing before approval. A fallback is not a silent retry:
+finite configured fallback list, and pricing before approval. A fallback is not a silent retry:
 it must be in that Agent's approved assignment, is used only after an
 attributable provider failure, consumes the run call budget, and is recorded
 with the failed call and possible cost consequence. `--clear-model-routing`

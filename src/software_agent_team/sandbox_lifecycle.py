@@ -149,8 +149,8 @@ def cleanup_run_sandbox_containers(
         raise SandboxCleanupError("sandbox binary must not be blank")
     if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", run_id):
         raise SandboxCleanupError("run ID is not safe for sandbox cleanup")
-    if iteration_limit < 1 or iteration_limit > 3:
-        raise SandboxCleanupError("iteration limit is outside the supported range")
+    if iteration_limit < 1:
+        raise SandboxCleanupError("iteration limit must be positive")
     if (roles is None) == (agents is None):
         raise SandboxCleanupError(
             "sandbox cleanup requires exactly one role or AgentSpec collection"

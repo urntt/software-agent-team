@@ -1,6 +1,7 @@
 {
   "schema_version": 1,
   "id": "phase1_deterministic",
+  "authority": "controlled_evaluation",
   "agent_budget": {
     "schema_version": 1,
     "max_calls": 14,

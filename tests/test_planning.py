@@ -637,7 +637,6 @@ def test_controller_resolves_visible_per_agent_model_routes_before_approval() ->
         default_profile_id="default",
         capability_profile_overrides={AgentCapability.TESTING: "quality"},
         authorized_switch_conditions=(ModelSwitchCondition.PROVIDER_FAILURE,),
-        max_switches_per_agent=1,
     )
 
     preview = preview_adaptive_proposal(
@@ -722,7 +721,7 @@ def test_single_profile_plan_editor_does_not_offer_a_hidden_model_option() -> No
         ),
         default_profile_id="default",
     )
-    answers = iter(("4", "x"))
+    answers = iter(("3", "x"))
     output: list[str] = []
 
     edit = planning._read_structured_edit(
@@ -733,8 +732,9 @@ def test_single_profile_plan_editor_does_not_offer_a_hidden_model_option() -> No
     )
 
     assert edit is None
-    assert "  4. One Agent model profile" not in output
-    assert "Choose 1, 2, 3, or x." in output
+    assert "  3. One Agent model profile" not in output
+    assert "One Agent timeout" not in output
+    assert "Choose 1, 2, or x." in output
 
 
 def test_planning_rejects_missing_model_capability_and_fallback_overbudget() -> None:
@@ -780,7 +780,6 @@ def test_planning_rejects_missing_model_capability_and_fallback_overbudget() -> 
         ),
         default_profile_id="default",
         authorized_switch_conditions=(ModelSwitchCondition.PROVIDER_FAILURE,),
-        max_switches_per_agent=1,
     )
     constrained_budget = AgentBudget(
         max_calls=10,
@@ -1262,9 +1261,7 @@ def test_proposal_cannot_split_final_commit_coverage_across_quality_agents() -> 
         )
 
 
-def test_controller_preserves_quality_dependency_and_rejects_timeout_violation() -> (
-    None
-):
+def test_controller_preserves_quality_dependency_and_concurrency_authority() -> None:
     chained_agents = tuple(
         agent.model_copy(
             update={"dependencies": ("acceptance_tester",)}
@@ -1289,23 +1286,6 @@ def test_controller_preserves_quality_dependency_and_rejects_timeout_violation()
         ("acceptance_tester",),
         ("quality_reviewer",),
     )
-
-    invalid = apply_structured_edit(
-        proposal(),
-        StructuredPlanEdit(
-            kind=StructuredEditKind.AGENT_TIMEOUT,
-            agent_id="acceptance_tester",
-            value=301,
-        ),
-        created_at=FIXED_TIME + timedelta(seconds=1),
-    )
-    with pytest.raises(PlanningError, match=r"policy envelope of 240\.\.300s"):
-        preview_adaptive_proposal(
-            request(),
-            invalid,
-            policy(),
-            created_at=FIXED_TIME,
-        )
 
     excessive_concurrency = proposal(
         body=proposal_body().model_copy(update={"max_concurrency": 3})
@@ -1332,13 +1312,9 @@ def test_structured_edits_create_valid_revisions_without_internal_json() -> None
         StructuredPlanEdit(kind=StructuredEditKind.ITERATION_LIMIT, value=1),
         created_at=FIXED_TIME + timedelta(seconds=2),
     )
-    timeout = apply_structured_edit(
+    larger_iteration = apply_structured_edit(
         iteration,
-        StructuredPlanEdit(
-            kind=StructuredEditKind.AGENT_TIMEOUT,
-            agent_id="cli_developer",
-            value=750,
-        ),
+        StructuredPlanEdit(kind=StructuredEditKind.ITERATION_LIMIT, value=4),
         created_at=FIXED_TIME + timedelta(seconds=3),
     )
 
@@ -1347,18 +1323,8 @@ def test_structured_edits_create_valid_revisions_without_internal_json() -> None
     assert concurrency.body.max_concurrency == 1
     assert iteration.body.iteration_limit == 1
     assert not iteration.body.revision_enabled
-    assert timeout.timeout_overrides_seconds == {"cli_developer": 750}
-    assert (
-        preview_adaptive_proposal(
-            request(),
-            timeout,
-            policy(),
-            created_at=FIXED_TIME,
-        )
-        .team_plan.get_agent("cli_developer")
-        .timeout_seconds
-        == 750
-    )
+    assert larger_iteration.body.iteration_limit == 4
+    assert larger_iteration.body.revision_enabled
 
 
 def test_store_detects_changed_append_only_turn_evidence(tmp_path: Path) -> None:
@@ -1384,6 +1350,17 @@ def test_store_detects_changed_append_only_turn_evidence(tmp_path: Path) -> None
     turn_path.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(PlanningIntegrityError, match="head digest changed"):
         store.load_session(request().run_id)
+
+
+def test_planning_store_accepts_evidence_indexes_beyond_three_digits(
+    tmp_path: Path,
+) -> None:
+    evidence = tmp_path / "turns"
+    evidence.mkdir()
+    (evidence / "999.json").write_text("{}\n", encoding="utf-8")
+    (evidence / "1000.json").write_text("{}\n", encoding="utf-8")
+
+    assert PlanningStore._indexed_files(evidence) == {999, 1000}
 
 
 def test_planning_uses_the_shared_task_cost_ledger_and_persists_source(

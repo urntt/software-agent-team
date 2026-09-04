@@ -94,7 +94,7 @@ class ControlTarget(BaseModel):
         default=None,
         pattern=r"^[a-z][a-z0-9_]*$",
     )
-    attempt: int | None = Field(default=None, ge=1, le=99)
+    attempt: int | None = Field(default=None, ge=1)
     phase: RunPhase | None = None
 
     @model_validator(mode="after")
@@ -142,7 +142,7 @@ class ControlCommand(BaseModel):
     command_id: str = Field(pattern=r"^ctl-[a-z0-9][a-z0-9-]*$")
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     request_sequence: int = Field(ge=1)
-    revision: int = Field(ge=1, le=99)
+    revision: int = Field(ge=1)
     requested_at: datetime
     updated_at: datetime
     requester: ControlRequester = ControlRequester.USER
@@ -153,7 +153,7 @@ class ControlCommand(BaseModel):
     status: ControlCommandStatus
     consequence: str | None = Field(default=None, max_length=500)
     provider_cost_caveat: str | None = Field(default=None, max_length=500)
-    resulting_plan_revision: int | None = Field(default=None, ge=1, le=99)
+    resulting_plan_revision: int | None = Field(default=None, ge=1)
     resulting_lifecycle_revision: int | None = Field(default=None, ge=0)
     previous_revision_sha256: str | None = Field(
         default=None,

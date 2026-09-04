@@ -72,13 +72,19 @@ def test_valid_handoff_is_accepted() -> None:
     assert handoff.team_id == "function_specialized"
 
 
-@pytest.mark.parametrize("iteration", [0, 4])
-def test_iteration_must_respect_the_vision_limit(iteration: int) -> None:
+def test_iteration_must_be_positive() -> None:
     payload = valid_handoff_payload()
-    payload["iteration"] = iteration
+    payload["iteration"] = 0
 
     with pytest.raises(ValidationError):
         HandoffEnvelope.model_validate(payload)
+
+
+def test_product_artifacts_do_not_impose_a_fixed_iteration_ceiling() -> None:
+    payload = valid_handoff_payload()
+    payload["iteration"] = 4
+
+    assert HandoffEnvelope.model_validate(payload).iteration == 4
 
 
 def test_blocked_handoff_requires_a_reason() -> None:

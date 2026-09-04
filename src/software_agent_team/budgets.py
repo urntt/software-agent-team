@@ -88,7 +88,7 @@ class AgentBudget(BaseModel):
         ge=1,
         le=31_536_000,
     )
-    max_estimated_cost_usd: Decimal = Field(ge=0, le=10_000)
+    max_estimated_cost_usd: Decimal = Field(ge=0)
 
     @model_validator(mode="after")
     def require_authority_specific_limits(self) -> AgentBudget:
@@ -249,12 +249,10 @@ class ModelPricing(BaseModel):
     input_cost_per_million_usd: Decimal | None = Field(
         default=None,
         ge=0,
-        le=10_000,
     )
     output_cost_per_million_usd: Decimal | None = Field(
         default=None,
         ge=0,
-        le=10_000,
     )
     pricing_source: ModelMetadataSource | None = None
     pricing_observed_at: datetime | None = None

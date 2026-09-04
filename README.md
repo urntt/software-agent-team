@@ -80,9 +80,9 @@ On first use, SAT guides you through:
 
 After approval, SAT creates only the task-defined Agents in that exact plan.
 The controller derives actual launch order from the approved dependency graph,
-enforces concurrency and shared-workspace safety, resolves and enforces each
-Agent timeout, records verified Git snapshots and quality evidence, and owns
-revision and termination decisions. On success, SAT reports the delivered
+enforces concurrency and shared-workspace safety, monitors provider activity and
+any user-authorized whole-run deadline, records verified Git snapshots and
+quality evidence, and owns revision and termination decisions. On success, SAT reports the delivered
 directory and exact setup, run, and test commands. On failure, it preserves an
 auditable report instead of presenting unfinished work as successful.
 
@@ -138,9 +138,11 @@ each. These checks do not generate content. An optional provider smoke check
 remains a separate, explicitly authorized action because it can incur usage.
 SAT announces the local inspection before waiting. A cold model-catalog check
 may use up to 90 seconds; that infrastructure boundary is separate from the
-30-second ordinary preflight-command limit and from every approved Agent
-invocation timeout. If it expires, SAT reports that no provider request was
-made and does not create an Agent.
+30-second ordinary preflight-command limit and from model work. Product Agent
+calls have no fixed wall-clock duration. OpenClaw monitors provider-stream
+inactivity, while SAT applies a whole-run deadline only when the user explicitly
+authorized one for that task. If catalog inspection expires, SAT reports that
+no provider request was made and does not create an Agent.
 
 See the [installation and configuration guide](docs/installation.md) for
 configuration paths, provider setup, saved defaults, and recovery boundaries.

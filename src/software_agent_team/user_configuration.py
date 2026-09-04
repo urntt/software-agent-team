@@ -20,7 +20,7 @@ from software_agent_team.teams import (
     ModelSwitchCondition,
 )
 
-USER_CONFIGURATION_SCHEMA_VERSION = 7
+USER_CONFIGURATION_SCHEMA_VERSION = 8
 USER_CONFIGURATION_ENVIRONMENT_VARIABLE = "SAT_CONFIG_PATH"
 
 
@@ -70,6 +70,29 @@ class _UserConfigurationV5(BaseModel):
         return self
 
 
+class _UserConfigurationV7(BaseModel):
+    """Validated model-routing defaults before product timeouts were removed."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[6, 7]
+    model_profiles: tuple[ModelProfile, ...] = Field(min_length=1)
+    default_model_profile_id: str = Field(
+        default="default",
+        pattern=r"^[a-z][a-z0-9_]*$",
+    )
+    routing_mode: ModelRoutingMode = ModelRoutingMode.STRICT
+    capability_profile_overrides: dict[AgentCapability, str] = Field(
+        default_factory=dict
+    )
+    stage_profile_overrides: dict[str, str] = Field(default_factory=dict)
+    authorized_switch_conditions: tuple[ModelSwitchCondition, ...] = ()
+    max_model_switches_per_agent: int = Field(default=0, ge=0, le=3)
+    max_concurrency: int = Field(default=2, ge=1, le=16)
+    stage_timeout_seconds: int | None = Field(default=None, ge=30, le=3600)
+    progress_visibility: Literal["compact", "standard", "detailed"] = "standard"
+
+
 class UserConfiguration(BaseModel):
     """Non-secret model profiles and product defaults for live SAT runs."""
 
@@ -89,9 +112,7 @@ class UserConfiguration(BaseModel):
     )
     stage_profile_overrides: dict[str, str] = Field(default_factory=dict)
     authorized_switch_conditions: tuple[ModelSwitchCondition, ...] = ()
-    max_model_switches_per_agent: int = Field(default=0, ge=0, le=3)
-    max_concurrency: int = Field(default=2, ge=1, le=16)
-    stage_timeout_seconds: int | None = Field(default=None, ge=30, le=3600)
+    max_concurrency: int = Field(default=2, ge=1)
     progress_visibility: Literal["compact", "standard", "detailed"] = "standard"
 
     @model_validator(mode="before")
@@ -164,7 +185,6 @@ class UserConfiguration(BaseModel):
             capability_profile_overrides=self.capability_profile_overrides,
             stage_profile_overrides=self.stage_profile_overrides,
             authorized_switch_conditions=self.authorized_switch_conditions,
-            max_switches_per_agent=self.max_model_switches_per_agent,
         )
 
 
@@ -332,8 +352,8 @@ def load_user_configuration(
         legacy = _UserConfigurationV1.model_validate(payload)
         notice = (
             "configuration schema v1 was loaded without its legacy "
-            "agent_timeout_seconds value; runs now use measured per-role "
-            "invocation timeouts unless a new global override is configured"
+            "agent_timeout_seconds value; product runs no longer impose "
+            "per-Agent wall-clock limits"
         )
         if on_migration is None:
             warnings.warn(notice, UserWarning, stacklevel=2)
@@ -344,14 +364,12 @@ def load_user_configuration(
             input_cost_per_million_usd=legacy.input_cost_per_million_usd,
             output_cost_per_million_usd=legacy.output_cost_per_million_usd,
             max_concurrency=legacy.verification_concurrency,
-            stage_timeout_seconds=None,
         )
     if payload.get("schema_version") == 2:
         legacy = _UserConfigurationV2.model_validate(payload)
         notice = (
-            "configuration schema v2 was loaded with its existing evaluation "
-            "prices and runtime overrides; current configuration also permits setup "
-            "without a local price estimate"
+            "configuration schema v2 pricing was preserved; its evaluation "
+            "timeout override was retired from product configuration"
         )
         if on_migration is None:
             warnings.warn(notice, UserWarning, stacklevel=2)
@@ -362,13 +380,13 @@ def load_user_configuration(
             input_cost_per_million_usd=legacy.input_cost_per_million_usd,
             output_cost_per_million_usd=legacy.output_cost_per_million_usd,
             max_concurrency=legacy.verification_concurrency,
-            stage_timeout_seconds=legacy.stage_timeout_seconds,
         )
     if payload.get("schema_version") == 3:
         legacy = _UserConfigurationV3.model_validate(payload)
         notice = (
             "configuration schema v3 verification_concurrency was migrated to "
-            "the adaptive max_concurrency setting"
+            "the adaptive max_concurrency setting; its product timeout override "
+            "was retired"
         )
         if on_migration is None:
             warnings.warn(notice, UserWarning, stacklevel=2)
@@ -379,13 +397,12 @@ def load_user_configuration(
             input_cost_per_million_usd=legacy.input_cost_per_million_usd,
             output_cost_per_million_usd=legacy.output_cost_per_million_usd,
             max_concurrency=legacy.verification_concurrency,
-            stage_timeout_seconds=legacy.stage_timeout_seconds,
         )
     if payload.get("schema_version") == 4:
         legacy = _UserConfigurationV4.model_validate(payload)
         notice = (
             "configuration schema v4 was loaded with standard progress visibility; "
-            "save configuration to persist another visibility level"
+            "its product timeout override was retired"
         )
         if on_migration is None:
             warnings.warn(notice, UserWarning, stacklevel=2)
@@ -396,14 +413,13 @@ def load_user_configuration(
             input_cost_per_million_usd=legacy.input_cost_per_million_usd,
             output_cost_per_million_usd=legacy.output_cost_per_million_usd,
             max_concurrency=legacy.max_concurrency,
-            stage_timeout_seconds=legacy.stage_timeout_seconds,
             progress_visibility="standard",
         )
     if payload.get("schema_version") == 5:
         legacy = _UserConfigurationV5.model_validate(payload)
         notice = (
             "configuration schema v5 was migrated to one strict default model "
-            "profile; add profiles explicitly to enable adaptive routing"
+            "profile; its product timeout override was retired"
         )
         if on_migration is None:
             warnings.warn(notice, UserWarning, stacklevel=2)
@@ -414,21 +430,31 @@ def load_user_configuration(
             input_cost_per_million_usd=legacy.input_cost_per_million_usd,
             output_cost_per_million_usd=legacy.output_cost_per_million_usd,
             max_concurrency=legacy.max_concurrency,
-            stage_timeout_seconds=legacy.stage_timeout_seconds,
             progress_visibility=legacy.progress_visibility,
         )
-    if payload.get("schema_version") == 6:
+    if payload.get("schema_version") in {6, 7}:
+        legacy = _UserConfigurationV7.model_validate(payload)
         notice = (
-            "configuration schema v6 was migrated with unknown model context and "
-            "attributable legacy user-supplied prices; task self-check will discover "
-            "or request missing model metadata before use"
+            f"configuration schema v{legacy.schema_version} model routing was "
+            "preserved; its product timeout override was retired because product "
+            "runs use provider liveness and an optional task deadline"
         )
         if on_migration is None:
             warnings.warn(notice, UserWarning, stacklevel=2)
         else:
             on_migration(notice)
+        migrated = legacy.model_dump(
+            exclude={
+                "schema_version",
+                "stage_timeout_seconds",
+                "max_model_switches_per_agent",
+            }
+        )
         return UserConfiguration.model_validate(
-            {**payload, "schema_version": USER_CONFIGURATION_SCHEMA_VERSION}
+            {
+                **migrated,
+                "schema_version": USER_CONFIGURATION_SCHEMA_VERSION,
+            }
         )
     return UserConfiguration.model_validate(payload)
 

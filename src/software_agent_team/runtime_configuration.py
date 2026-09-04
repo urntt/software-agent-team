@@ -87,18 +87,15 @@ class OpenClawModelInspection(BaseModel):
     context_window_tokens: int | None = Field(
         default=None,
         ge=1,
-        le=100_000_000,
     )
     input_modalities: tuple[str, ...] = ()
     input_cost_per_million_usd: Decimal | None = Field(
         default=None,
         ge=0,
-        le=10_000,
     )
     output_cost_per_million_usd: Decimal | None = Field(
         default=None,
         ge=0,
-        le=10_000,
     )
     error: str | None = Field(default=None, max_length=1000)
 
@@ -524,7 +521,7 @@ def inspect_openclaw_model(
         raw_context
         if isinstance(raw_context, int)
         and not isinstance(raw_context, bool)
-        and 1 <= raw_context <= 100_000_000
+        and raw_context >= 1
         else None
     )
     raw_input = matched.get("input")

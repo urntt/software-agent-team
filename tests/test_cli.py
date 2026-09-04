@@ -43,7 +43,6 @@ def ready_user_configuration(
     model: str = "provider/model",
     max_concurrency: int = 2,
     progress_visibility: str = "standard",
-    stage_timeout_seconds: int | None = None,
 ) -> UserConfiguration:
     """Return one fully discovered secret-free model configuration."""
 
@@ -65,7 +64,6 @@ def ready_user_configuration(
         ),
         max_concurrency=max_concurrency,
         progress_visibility=progress_visibility,
-        stage_timeout_seconds=stage_timeout_seconds,
     )
 
 
@@ -96,6 +94,29 @@ def task_resource_authorization(
         ),
         authorized_at=observed_at,
     )
+
+
+def test_replacement_planning_request_preserves_all_prior_constraints() -> None:
+    original = cli.PlanningRequest(
+        run_id="sat-correction-many-constraints",
+        project_name="many-constraints",
+        source_request="Build the requested project.",
+        destination="/tmp/many-constraints",
+        execution_profile=("A new Python project.",),
+        base_constraints=tuple(f"Constraint {index}" for index in range(25)),
+        model="provider/model",
+        authorization="user_confirmed",
+        authorized_at=datetime(2026, 9, 4, 12, 0, tzinfo=UTC),
+    )
+
+    replacement = cli._replacement_planning_request(
+        original,
+        run_id="sat-correction-many-constraints-r2",
+        correction_instruction="Keep every existing constraint.",
+    )
+
+    assert replacement.base_constraints[:-1] == original.base_constraints
+    assert replacement.base_constraints[-1].endswith("Keep every existing constraint.")
 
 
 def test_cli_version_commands_are_local_and_machine_readable(
@@ -619,7 +640,7 @@ def test_product_planning_uses_one_bootstrap_agent_and_cleans_it(
     assert coordinator.policy.max_concurrency == 4
     assert coordinator.policy.max_review_agents is None
     assert coordinator.policy.require_review_agent
-    assert coordinator.policy.planning_timeout_seconds == 180
+    assert coordinator.policy.planning_timeout_seconds == 0
     implementation_timeout = coordinator.policy.capability_timeouts[
         cli.AgentCapability.IMPLEMENTATION
     ]
@@ -629,11 +650,8 @@ def test_product_planning_uses_one_bootstrap_agent_and_cleans_it(
     assert (
         implementation_timeout.default_seconds,
         implementation_timeout.ceiling_seconds,
-    ) == (900, 1800)
-    assert (testing_timeout.default_seconds, testing_timeout.ceiling_seconds) == (
-        300,
-        600,
-    )
+    ) == (0, 0)
+    assert (testing_timeout.default_seconds, testing_timeout.ceiling_seconds) == (0, 0)
     assert {item.id for item in coordinator.policy.profile_acceptance_criteria} == {
         "AC_REQUEST",
         "AC_RUNNABLE",
@@ -756,27 +774,24 @@ def test_product_planning_reports_model_timeout_before_creating_an_agent(
     assert "may take up to 90 seconds" in output
 
 
-def test_product_global_timeout_override_is_an_exact_controller_policy() -> None:
+def test_product_policy_never_derives_per_agent_wall_clock_limits() -> None:
     quality = cli.load_quality_gate_configuration(
         cli.DEFAULT_PRODUCT_POLICY,
         cli.DEFAULT_PRODUCT_PROFILE,
     )
 
-    configuration = ready_user_configuration(
-        model="provider/model",
-        stage_timeout_seconds=1200,
-    )
+    configuration = ready_user_configuration(model="provider/model")
     policy = cli._product_planning_policy(
         quality,
         configuration,
         task_resource_authorization(configuration),
     )
 
-    assert policy.planning_timeout_seconds == 1200
+    assert policy.planning_timeout_seconds == 0
     assert {
         (timeout.default_seconds, timeout.ceiling_seconds)
         for timeout in policy.capability_timeouts.values()
-    } == {(1200, 1200)}
+    } == {(0, 0)}
 
 
 def test_dynamic_product_launch_uses_approved_agents_and_manual_scope(
@@ -1004,8 +1019,6 @@ def test_cli_noninteractive_configuration_is_private_and_reconfigurable(
                 "4",
                 "--progress-visibility",
                 "detailed",
-                "--stage-timeout-seconds",
-                "1200",
             ]
         )
         == 0
@@ -1034,7 +1047,6 @@ def test_cli_noninteractive_configuration_is_private_and_reconfigurable(
     assert second.output_cost_per_million_usd is None
     assert second.max_concurrency == first.max_concurrency
     assert second.progress_visibility == first.progress_visibility
-    assert second.stage_timeout_seconds == first.stage_timeout_seconds
     output = capsys.readouterr().out
     assert "provider credentials: not stored by SAT" in output
 
@@ -1076,8 +1088,6 @@ def test_cli_configures_auditable_adaptive_model_profiles(
                 "--route-capability",
                 "testing=quality",
                 "--allow-provider-switch",
-                "--max-model-switches",
-                "1",
             ]
         )
         == 0
@@ -1091,7 +1101,6 @@ def test_cli_configures_auditable_adaptive_model_profiles(
         "quality",
     )
     assert configured.capability_profile_overrides[AgentCapability.TESTING] == "quality"
-    assert configured.max_model_switches_per_agent == 1
     assert configured.model_profiles[1].input_cost_per_million_usd == Decimal("0.25")
 
     assert main(["configure", "--show"]) == 0
@@ -1183,7 +1192,6 @@ def test_cli_interactive_configuration_prompts_for_first_run_defaults(
     assert configuration.default_model_profile.context_window_tokens == 120_000
     assert configuration.max_concurrency == 2
     assert configuration.progress_visibility == "standard"
-    assert configuration.stage_timeout_seconds is None
 
 
 def test_cli_requires_a_complete_price_pair(
@@ -1543,41 +1551,16 @@ def test_product_delivery_refuses_a_changed_final_report(tmp_path: Path) -> None
         cli._load_final_report(report, expected_sha256="0" * 64)
 
 
-def test_cli_deprecates_the_old_timeout_flag_and_can_restore_role_defaults(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    path = tmp_path / "config.json"
-    monkeypatch.setenv("SAT_CONFIG_PATH", str(path))
-
-    assert (
-        main(
-            [
-                "configure",
-                "--non-interactive",
-                "--model",
-                "provider/model",
-                "--input-cost-per-million-usd",
-                "1",
-                "--output-cost-per-million-usd",
-                "2",
-                "--agent-timeout-seconds",
-                "75",
-            ]
-        )
-        == 0
+def test_product_configuration_has_no_per_agent_timeout_surface() -> None:
+    help_text = (
+        cli.build_parser()
+        ._subparsers._group_actions[0]
+        .choices["configure"]
+        .format_help()
     )
-    configured = load_user_configuration(path)
-    assert configured is not None
-    assert configured.stage_timeout_seconds == 75
-    assert "is deprecated" in capsys.readouterr().out
 
-    assert main(["configure", "--non-interactive", "--use-role-timeouts"]) == 0
-    configured = load_user_configuration(path)
-    assert configured is not None
-    assert configured.stage_timeout_seconds is None
-    assert "role defaults" in capsys.readouterr().out
+    assert "--stage-timeout-seconds" not in help_text
+    assert "--use-role-timeouts" not in help_text
 
 
 def test_cli_reports_v1_timeout_migration_without_reusing_the_old_value(
@@ -1606,7 +1589,7 @@ def test_cli_reports_v1_timeout_migration_without_reusing_the_old_value(
     output = capsys.readouterr().out
     assert "configuration migration:" in output
     assert "without its legacy" in output
-    assert "role defaults" in output
+    assert "no longer impose per-Agent wall-clock limits" in output
 
 
 def test_cli_accepts_the_checked_in_handoff(
@@ -1995,7 +1978,6 @@ def test_cli_run_uses_saved_defaults_when_flags_are_omitted(
             input_cost_per_million_usd="0.75",
             output_cost_per_million_usd="2.25",
             max_concurrency=1,
-            stage_timeout_seconds=1800,
         ),
         configuration_path,
     )
@@ -2049,7 +2031,7 @@ def test_cli_run_uses_saved_defaults_when_flags_are_omitted(
     assert str(pricing.input_cost_per_million_usd) == "0.75"
     assert observed["verification_concurrency"] == 1
     assert observed["iteration_limit"] == 2
-    assert observed["stage_timeout_seconds"] == 1800
+    assert observed["stage_timeout_seconds"] is None
     assert observed["role_timeout_seconds"][AgentRole.PLANNER] == 180
 
 

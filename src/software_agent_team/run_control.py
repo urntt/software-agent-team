@@ -146,8 +146,8 @@ class RunTransition(BaseModel):
     sequence: int = Field(ge=1)
     source: RunPhase
     target: RunPhase
-    iteration_before: int = Field(ge=1, le=3)
-    iteration_after: int = Field(ge=1, le=3)
+    iteration_before: int = Field(ge=1)
+    iteration_after: int = Field(ge=1)
     occurred_at: datetime
     reason: str = Field(min_length=1)
     artifacts: tuple[ArtifactReference, ...] = ()
@@ -253,7 +253,7 @@ class RunRecord(BaseModel):
     schema_version: Literal[RUN_SCHEMA_VERSION] = RUN_SCHEMA_VERSION
     run_id: str = Field(min_length=1, pattern=r"^[a-z0-9][a-z0-9_-]*$")
     team_id: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9_]*$")
-    team_plan_revision: int = Field(ge=1, le=99)
+    team_plan_revision: int = Field(ge=1)
     team_plan_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     agent_timeouts_seconds: dict[str, int] = Field(default_factory=dict)
     event_count: int = Field(default=0, ge=0)
@@ -262,8 +262,8 @@ class RunRecord(BaseModel):
         pattern=r"^[0-9a-f]{64}$",
     )
     phase: RunPhase = RunPhase.CREATED
-    current_iteration: int = Field(default=1, ge=1, le=3)
-    iteration_limit: int = Field(ge=1, le=3)
+    current_iteration: int = Field(default=1, ge=1)
+    iteration_limit: int = Field(ge=1)
     revision: int = Field(default=0, ge=0)
     task_brief_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     created_at: datetime
@@ -305,11 +305,10 @@ class RunRecord(BaseModel):
             re.fullmatch(r"[a-z][a-z0-9_]*", agent_id) is None for agent_id in values
         ):
             raise ValueError("Agent timeout keys must be valid Agent IDs")
-        if any(
-            isinstance(seconds, bool) or not 1 <= seconds <= 3600
-            for seconds in values.values()
-        ):
-            raise ValueError("Agent invocation timeouts must be between 1 and 3600")
+        if any(isinstance(seconds, bool) or seconds < 0 for seconds in values.values()):
+            raise ValueError(
+                "Agent invocation wall-clock limits must be between 0 and 86400"
+            )
         return dict(sorted(values.items()))
 
     @model_validator(mode="after")

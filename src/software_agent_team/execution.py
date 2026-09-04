@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import signal
 import subprocess
@@ -38,6 +39,8 @@ from software_agent_team.teams import (
     capability_for_legacy_role,
     expected_output_for_capability,
 )
+
+DEFAULT_PROCESS_SHUTDOWN_GRACE_SECONDS = 35
 
 ROLE_ARTIFACT_KINDS: dict[AgentRole, frozenset[ArtifactKind]] = {
     AgentRole.CLARIFIER: frozenset({ArtifactKind.CLARIFICATION_RECORD}),
@@ -118,19 +121,25 @@ def stable_agent_session_key(
 
 
 class AgentExecutionRequest(BaseModel):
-    """Complete bounded input to an Agent execution adapter."""
+    """Complete input to one Agent execution adapter invocation.
+
+    ``timeout_seconds`` is a wall-clock limit only when it is positive.  Zero
+    explicitly disables the OpenClaw Agent runtime timeout so product work is
+    governed by provider stream liveness and an optional user-approved run
+    deadline instead of a hidden per-Agent duration budget.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     run_id: str = Field(min_length=1, pattern=r"^[a-z0-9][a-z0-9_-]*$")
     team_id: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9_]*$")
-    iteration: int = Field(ge=1, le=3)
+    iteration: int = Field(ge=1)
     role: AgentRole | None = None
     agent_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     capability: AgentCapability
     expected_kind: ArtifactKind
     prompt: str = Field(min_length=1)
-    timeout_seconds: int = Field(ge=1, le=3600)
+    timeout_seconds: int = Field(ge=0)
     model: str | None = None
 
     @model_validator(mode="before")
@@ -546,7 +555,13 @@ def _decode_process_output(value: str | bytes | None) -> str:
 
 
 class OpenClawSubprocessExecutor:
-    """Invoke one OpenClaw Agent turn through a bounded, shell-free subprocess."""
+    """Invoke one OpenClaw Agent turn through a shell-free subprocess.
+
+    Positive request timeouts remain controlled-evaluation limits.  A zero
+    request timeout is passed through to OpenClaw as its documented
+    no-wall-clock-limit value; OpenClaw's provider stream idle watchdog and
+    tool-specific guards remain responsible for liveness.
+    """
 
     def __init__(
         self,
@@ -554,7 +569,8 @@ class OpenClawSubprocessExecutor:
         openclaw_binary: str | Path = "openclaw",
         environment: Mapping[str, str] | None = None,
         local: bool = True,
-        process_grace_seconds: int = 35,
+        process_grace_seconds: int = DEFAULT_PROCESS_SHUTDOWN_GRACE_SECONDS,
+        run_deadline_at: datetime | None = None,
         runner: ProcessRunner | None = None,
         clock: WallClock = _system_clock,
         monotonic: MonotonicClock = time.monotonic,
@@ -568,6 +584,11 @@ class OpenClawSubprocessExecutor:
         self.environment = None if environment is None else dict(environment)
         self.local = local
         self.process_grace_seconds = process_grace_seconds
+        if run_deadline_at is not None:
+            if run_deadline_at.tzinfo is None or run_deadline_at.utcoffset() is None:
+                raise AgentExecutionError("run deadline must include a UTC offset")
+            run_deadline_at = run_deadline_at.astimezone(UTC)
+        self.run_deadline_at = run_deadline_at
         self.runner = runner
         self.clock = clock
         self.monotonic = monotonic
@@ -584,26 +605,45 @@ class OpenClawSubprocessExecutor:
             prompt_path = Path(temporary) / "prompt.md"
             prompt_path.write_text(request.prompt, encoding="utf-8")
             prompt_path.chmod(0o600)
-            command = self._command(request, prompt_path)
+            runtime_timeout_seconds, deadline_expired = self._runtime_timeout(
+                request,
+                now=started_at,
+            )
+            command = self._command(
+                request,
+                prompt_path,
+                runtime_timeout_seconds=runtime_timeout_seconds,
+            )
+            if deadline_expired:
+                return self._expired_deadline_result(
+                    request=request,
+                    command=command,
+                    started_at=started_at,
+                    started_monotonic=started_monotonic,
+                )
             try:
                 if self.runner is None:
                     completed, interrupted = self._run_interruptible_process(
                         request,
                         command,
+                        runtime_timeout_seconds=runtime_timeout_seconds,
                     )
                 else:
-                    completed = self.runner(
-                        list(command),
-                        check=False,
-                        capture_output=True,
-                        text=True,
-                        encoding="utf-8",
-                        errors="replace",
-                        timeout=request.timeout_seconds + self.process_grace_seconds,
-                        shell=False,
-                        stdin=subprocess.DEVNULL,
-                        env=self._environment(),
-                    )
+                    runner_kwargs: dict[str, object] = {
+                        "check": False,
+                        "capture_output": True,
+                        "text": True,
+                        "encoding": "utf-8",
+                        "errors": "replace",
+                        "shell": False,
+                        "stdin": subprocess.DEVNULL,
+                        "env": self._environment(),
+                    }
+                    if runtime_timeout_seconds > 0:
+                        runner_kwargs["timeout"] = (
+                            runtime_timeout_seconds + self.process_grace_seconds
+                        )
+                    completed = self.runner(list(command), **runner_kwargs)
                     interrupted = False
             except subprocess.TimeoutExpired as error:
                 return self._timeout_result(
@@ -752,6 +792,8 @@ class OpenClawSubprocessExecutor:
         self,
         request: AgentExecutionRequest,
         command: tuple[str, ...],
+        *,
+        runtime_timeout_seconds: int,
     ) -> tuple[subprocess.CompletedProcess[str], bool]:
         """Run one process whose exact session may be interrupted by control input."""
 
@@ -769,7 +811,11 @@ class OpenClawSubprocessExecutor:
         )
         with self._process_lock:
             self._active_processes[request.session_key] = (request, process)
-        timeout = request.timeout_seconds + self.process_grace_seconds
+        timeout = (
+            runtime_timeout_seconds + self.process_grace_seconds
+            if runtime_timeout_seconds > 0
+            else None
+        )
         try:
             try:
                 stdout, stderr = process.communicate(timeout=timeout)
@@ -843,6 +889,8 @@ class OpenClawSubprocessExecutor:
         self,
         request: AgentExecutionRequest,
         prompt_path: Path,
+        *,
+        runtime_timeout_seconds: int,
     ) -> tuple[str, ...]:
         command = [
             self.openclaw_binary,
@@ -855,13 +903,35 @@ class OpenClawSubprocessExecutor:
             request.session_key,
             "--json",
             "--timeout",
-            str(request.timeout_seconds),
+            str(runtime_timeout_seconds),
         ]
         if self.local:
             command.append("--local")
         if request.model is not None:
             command.extend(["--model", request.model])
         return tuple(command)
+
+    def _runtime_timeout(
+        self,
+        request: AgentExecutionRequest,
+        *,
+        now: datetime,
+    ) -> tuple[int, bool]:
+        """Resolve an evaluation limit or remaining user-approved run deadline.
+
+        A zero result means no whole-invocation wall-clock limit.  It does not
+        disable OpenClaw's provider stream idle watchdog or tool-level guards.
+        """
+
+        if self.run_deadline_at is None:
+            return request.timeout_seconds, False
+        remaining = (self.run_deadline_at - now.astimezone(UTC)).total_seconds()
+        if remaining <= 0:
+            return 0, True
+        deadline_seconds = max(1, math.ceil(remaining))
+        if request.timeout_seconds == 0:
+            return deadline_seconds, False
+        return min(request.timeout_seconds, deadline_seconds), False
 
     def _environment(self) -> Mapping[str, str] | None:
         if self.environment is None:
@@ -972,7 +1042,39 @@ class OpenClawSubprocessExecutor:
         )
         return AgentExecutionResult(
             status=AgentExecutionStatus.TIMED_OUT,
-            error=f"OpenClaw exceeded the process timeout of {error.timeout} seconds",
+            error=(
+                "OpenClaw did not exit within the user-authorized run deadline "
+                f"and process shutdown grace ({error.timeout} seconds total)"
+                if self.run_deadline_at is not None
+                else f"OpenClaw exceeded the controlled-evaluation process timeout "
+                f"of {error.timeout} seconds"
+            ),
+            telemetry=telemetry,
+        )
+
+    def _expired_deadline_result(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        command: tuple[str, ...],
+        started_at: datetime,
+        started_monotonic: float,
+    ) -> AgentExecutionResult:
+        """Refuse a new provider call after the whole-run deadline expired."""
+
+        telemetry = self._telemetry(
+            request=request,
+            command=command,
+            started_at=started_at,
+            started_monotonic=started_monotonic,
+            exit_code=None,
+            timed_out=True,
+            stdout="",
+            stderr="",
+        )
+        return AgentExecutionResult(
+            status=AgentExecutionStatus.TIMED_OUT,
+            error="User-authorized whole-run deadline expired before this call",
             telemetry=telemetry,
         )
 

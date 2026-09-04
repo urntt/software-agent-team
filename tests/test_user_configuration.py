@@ -22,7 +22,6 @@ def sample_configuration(**updates: object) -> UserConfiguration:
         "input_cost_per_million_usd": "0.50",
         "output_cost_per_million_usd": "1.50",
         "max_concurrency": 4,
-        "stage_timeout_seconds": 900,
         "progress_visibility": "detailed",
     }
     payload.update(updates)
@@ -110,11 +109,11 @@ def test_v1_configuration_drops_the_legacy_timeout_with_a_notice(
     assert migrated.schema_version == USER_CONFIGURATION_SCHEMA_VERSION
     assert migrated.model == "provider/model"
     assert migrated.max_concurrency == 1
-    assert migrated.stage_timeout_seconds is None
+    assert not hasattr(migrated, "stage_timeout_seconds")
     assert json.loads(path.read_text(encoding="utf-8"))["schema_version"] == 1
 
 
-def test_v2_configuration_preserves_evaluation_defaults_with_a_notice(
+def test_v2_configuration_retires_product_timeout_with_a_notice(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "config.json"
@@ -140,7 +139,7 @@ def test_v2_configuration_preserves_evaluation_defaults_with_a_notice(
     assert migrated.input_cost_per_million_usd == 1
     assert migrated.output_cost_per_million_usd == 2
     assert migrated.max_concurrency == 2
-    assert migrated.stage_timeout_seconds == 900
+    assert not hasattr(migrated, "stage_timeout_seconds")
 
 
 def test_v3_configuration_renames_verification_concurrency_with_a_notice(
@@ -292,6 +291,25 @@ def test_v6_configuration_migrates_missing_model_metadata(tmp_path: Path) -> Non
     assert migrated.default_model_profile.context_window_tokens is None
 
 
+def test_v7_configuration_preserves_routing_and_retires_timeout(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "config.json"
+    payload = sample_configuration().model_dump(mode="json")
+    payload["schema_version"] = 7
+    payload["stage_timeout_seconds"] = 900
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.warns(UserWarning, match="schema v7"):
+        migrated = load_user_configuration(path)
+
+    assert migrated is not None
+    assert migrated.schema_version == USER_CONFIGURATION_SCHEMA_VERSION
+    assert migrated.model == "provider/model"
+    assert migrated.max_concurrency == 4
+    assert not hasattr(migrated, "stage_timeout_seconds")
+
+
 def test_current_configuration_persists_profiles_as_single_source_of_truth(
     tmp_path: Path,
 ) -> None:
@@ -304,6 +322,7 @@ def test_current_configuration_persists_profiles_as_single_source_of_truth(
     assert payload["model_profiles"][0]["model"] == "provider/model"
     assert "model" not in payload
     assert "input_cost_per_million_usd" not in payload
+    assert "stage_timeout_seconds" not in payload
 
 
 def test_user_configuration_refuses_a_symbolic_link(tmp_path: Path) -> None:

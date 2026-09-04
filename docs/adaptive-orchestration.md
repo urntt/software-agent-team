@@ -74,7 +74,7 @@ does not impose a hidden peer-only topology.
 
 ## Decision and Control Responsibility
 
-Adaptive does not make execution order, parallelism, Agent count, or timeouts
+Adaptive does not make execution order, parallelism, Agent count, or time boundaries
 unowned model choices. Responsibility is divided explicitly:
 
 | Decision | Proposal | Approval or default | Runtime enforcement |
@@ -90,7 +90,7 @@ unowned model choices. Responsibility is divided explicitly:
 
 The Planner therefore proposes semantic organization and workload estimates,
 the user authorizes material choices, policy resolves the allowed operational
-envelope, and the controller owns validation, creation, scheduling, timeouts,
+envelope, and the controller owns validation, creation, scheduling, time authority,
 lifecycle, evidence, and cleanup.
 
 Dependencies are the complete sequencing contract. A quality Agent may depend
@@ -285,12 +285,12 @@ preferences. Raw system prompts, arbitrary tool grants, and direct policy-file
 editing remain an advanced contributor surface. Even advanced changes pass the
 same controller validation.
 
-Approval freezes version one of the run contract, including the workload,
-policy envelope, resolution source, and exact timeout selected for every
-Agent. A Reviewer resolution also records its criterion count, explicit
-boundary-obligation count, and effective minimum when scope policy applies.
-Later corrections create a new version; they never mutate an already referenced
-plan in place.
+Approval freezes version one of the run contract. Product plans record
+`provider_activity` with zero per-Agent wall-clock limits plus the optional
+user-authorized whole-run deadline. Controlled evaluations may instead freeze a
+positive timeout, its policy envelope, and exact resolution source. Later
+corrections create a new version; they never mutate an already referenced plan
+in place.
 
 ## Versioned Contracts
 
@@ -309,7 +309,7 @@ A `TeamPlan` binds one confirmed TaskBrief and ImplementationPlan to:
 - Independent verification and review coverage;
 - Aggregate iteration and resource budgets;
 - A `ModelRoutePlan`;
-- The user approval record, controller timeout resolutions, and planner
+- The user approval record, controller time-authority resolutions, and planner
   proposal evidence.
 
 ### `AgentSpec`
@@ -721,7 +721,7 @@ boundary.
 
 **Implementation note:** run-scoped Agent identity and capability telemetry,
 approved-Agent-only OpenClaw configuration, AgentSpec-derived prompt and
-response contracts, exact model and controller-resolved-timeout binding, and
+response contracts, exact model and controller time-authority binding, and
 AgentSpec-derived cleanup selection are implemented. Adaptive plans may use one downstream independent
 quality Agent for a small task; separate testing and review Agents remain an
 explicit justified choice rather than a hidden minimum topology. Controller
@@ -732,11 +732,11 @@ every approved writer, deterministic evidence from every approved Tester or
 from the controller when no Tester exists, evidence from every approved
 Reviewer, one immutable quality commit, and complete manual-review coverage.
 The dynamic runner now binds each scheduler-approved Agent to its exact model,
-timeout, prompt, semantic repair limit, Git or read-only boundary, aggregate
+time authority, prompt, semantic repair limit, Git or read-only boundary, aggregate
 budget, execution record, and durable handoffs. Quality gates are shared once
 per immutable iteration, and every quality Agent must be downstream of every
-writer. Reviewer timeouts take the higher of Planner workload and the
-controller-derived criterion-plus-boundary work-unit floor. The Reviewer runtime keeps project
+writer. Controlled evaluation timeout resolution remains separate from the
+product's provider-liveness and optional whole-run deadline. The Reviewer runtime keeps project
 source read-only and denies the general write tool. Its immutable
 `sat-probe-write` command provides the bounded `/tmp` probe-authoring capability
 that actually exists in the foreground execution surface. `sat-probe-run`
@@ -768,11 +768,11 @@ in this batch.
 
 The current single-clone Git backend serializes every writer and excludes
 readers while a writer is active; independently ready read-only quality Agents
-may run concurrently up to the approved cap. Product configuration now owns an
-adaptive `max_concurrency` value from 1 through 16 rather than reusing the old
-fixed-fixture verification setting. The active product profile currently
-permits one Reviewer because multiple Reviewer acceptance scopes do not yet
-have a user-facing assignment editor.
+may run concurrently up to the user-approved concurrency value and available
+host capacity. Ordinary product Planning has no fixed Agent, Reviewer, call, or
+iteration maximum. Team size and complementary quality responsibilities come
+from the task, risk, dependency graph, and approved USD budget; controlled
+evaluation limits remain separate experiment inputs.
 
 ### Batch 3D: Observable and Controllable Execution
 
@@ -791,7 +791,7 @@ at least guidance and cooperative pause/resume without losing integrity.
 **Implementation note:** append-only events now project scheduler queue and
 readiness, invocation and provider wait, bounded semantic repair, completion,
 failure, and blocked states with Agent dependencies, capability, stage, model,
-duration, evidence, and aggregate budget data. Configuration schema v7 selects
+duration, evidence, and aggregate budget data. Configuration schema v8 selects
 compact, standard, or detailed terminal projection. The foreground palette can
 change that projection without changing execution. Its persisted runtime
 channel applies prospective guidance to the next invocation, drains active work
@@ -821,7 +821,7 @@ provider, budget rejection, authorized switch, refused switch, and strict
 evaluation behavior; one authorized run uses two planned routes without silent
 fallback.
 
-**Implementation note:** configuration schema v7 now owns the secret-free
+**Implementation note:** configuration schema v8 now owns the secret-free
 profiles, attributable price/context metadata, and route policy. Planning resolves and displays an exact assignment
 for every Agent, preflight checks every approved model, prompts and response
 validation bind the active route, and the runtime records or refuses provider

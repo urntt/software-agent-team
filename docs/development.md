@@ -162,7 +162,7 @@ trusted shell credential path, the generated configuration may contain the
 environment-variable reference but never its value.
 
 Keep the local model-catalog timeout independent from ordinary preflight and
-Agent invocation timeouts. The catalog subprocess has a 90-second default to
+model-work time authority. The catalog subprocess has a 90-second default to
 cover cold pinned-OpenClaw startup; other local preflight commands remain at 30
 seconds. Both values belong in `RuntimePreflight` evidence. Tests must verify
 the exact subprocess bounds, safe timeout text, visible pre-wait status, and
@@ -196,7 +196,7 @@ benchmarks/task_manager/
   seed/                        Deterministic starting repository
 configs/
   teams.json                   Team topology source of truth
-  product-policy.json          Product sandbox and bounded run policy
+  product-policy.json          Product deterministic-quality sandbox policy
   run-policy.json              Controlled evaluation policy
   openclaw.example.json5       Sanitized role and tool policy template
 docs/

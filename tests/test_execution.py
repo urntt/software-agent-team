@@ -15,6 +15,7 @@ from pydantic import ValidationError
 
 from software_agent_team.artifacts import AgentRole, ArtifactKind
 from software_agent_team.execution import (
+    AgentExecutionError,
     AgentExecutionRequest,
     AgentExecutionStatus,
     AgentExecutor,
@@ -42,6 +43,10 @@ def request(**updates: object) -> AgentExecutionRequest:
     }
     payload.update(updates)
     return AgentExecutionRequest.model_validate(payload)
+
+
+def test_invocation_timeout_schema_does_not_create_a_one_day_product_cap() -> None:
+    assert request(timeout_seconds=86_401).timeout_seconds == 86_401
 
 
 def openclaw_result(
@@ -130,6 +135,83 @@ def test_openclaw_adapter_uses_message_file_and_no_shell() -> None:
     assert result.status is AgentExecutionStatus.COMPLETED
     assert result.response_text == '{"kind":"implementation_plan"}'
     assert result.telemetry.stderr == "gateway diagnostic\n"
+
+
+def test_product_invocation_disables_wall_clock_without_disabling_openclaw() -> None:
+    observed: dict[str, object] = {}
+
+    def runner(
+        command: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        observed["command"] = tuple(command)
+        observed["kwargs"] = kwargs
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=openclaw_result(),
+            stderr="",
+        )
+
+    result = executor_with_clocks(runner).execute(request(timeout_seconds=0))
+
+    command = observed["command"]
+    assert command[command.index("--timeout") + 1] == "0"
+    assert "timeout" not in observed["kwargs"]
+    assert result.status is AgentExecutionStatus.COMPLETED
+
+
+def test_user_run_deadline_bounds_product_call_by_remaining_time() -> None:
+    observed: dict[str, object] = {}
+
+    def runner(
+        command: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        observed["command"] = tuple(command)
+        observed["kwargs"] = kwargs
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=openclaw_result(),
+            stderr="",
+        )
+
+    result = executor_with_clocks(
+        runner,
+        run_deadline_at=STARTED + timedelta(seconds=75, milliseconds=1),
+    ).execute(request(timeout_seconds=0))
+
+    command = observed["command"]
+    assert command[command.index("--timeout") + 1] == "76"
+    assert observed["kwargs"]["timeout"] == 111
+    assert result.status is AgentExecutionStatus.COMPLETED
+
+
+def test_expired_user_run_deadline_refuses_provider_call() -> None:
+    called = False
+
+    def runner(
+        command: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        nonlocal called
+        called = True
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    result = executor_with_clocks(
+        runner,
+        run_deadline_at=STARTED,
+    ).execute(request(timeout_seconds=0))
+
+    assert not called
+    assert result.status is AgentExecutionStatus.TIMED_OUT
+    assert result.telemetry.timed_out
+    assert result.error == "User-authorized whole-run deadline expired before this call"
+
+
+def test_run_deadline_requires_timezone() -> None:
+    with pytest.raises(AgentExecutionError, match="UTC offset"):
+        OpenClawSubprocessExecutor(
+            run_deadline_at=datetime(2026, 8, 10, 12, 0),
+        )
 
 
 def test_openclaw_adapter_captures_runtime_telemetry() -> None:

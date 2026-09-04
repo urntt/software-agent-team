@@ -23,7 +23,7 @@ Every execution request and telemetry record now carries a run-scoped Agent ID
 and controller-known capability. A fixed evaluation role is optional
 compatibility metadata and must match that identity when present. Dynamic
 requests bind the exact approved AgentSpec output contract, model route,
-per-invocation timeout, deterministic session key, and assigned task IDs;
+time authority, deterministic session key, and assigned task IDs;
 mismatched response or telemetry context is rejected before it can become
 evidence. Shared controller-owned assembly binds dynamic implementation, test,
 and review semantics to verified facts, and the normal product launcher now
@@ -238,10 +238,11 @@ rejects two competing objects. Payload count alone is not a semantic verdict.
 
 One controlled repair may address only the semantic contract. It receives a
 bounded, value-free structural diagnostic, such as the duplicate key name,
-while the immutable execution record retains the raw provider output. The
-initial response and optional repair each receive the frozen per-invocation
-timeout. Both calls remain inside aggregate call, duration, token, and cost
-budgets.
+while the immutable execution record retains the raw provider output. In
+controlled evaluations, the initial response and optional repair each receive
+the frozen per-invocation timeout. Product calls instead share the
+user-authorized USD ceiling and optional whole-run deadline; their call,
+duration, and token counts remain telemetry.
 
 If a model returns controller-owned fields, they are ignored and recorded in
 the execution record. Missing or incorrect echoes such as `kind`, commit
@@ -350,16 +351,17 @@ an echoed profile definition never adopts its model-authored text or removes a
 legal task binding to the canonical profile ID.
 Quality-owned tasks are retained as approved semantic intent and passed to the
 matching read-only Agent. They do not alter the AgentSpec-owned permission,
-dependency, model, timeout, scope, or invocation contract.
+dependency, model, time authority, scope, or invocation contract.
 Unsafe, ambiguous, or permission-changing values remain validation failures.
 Turns form a predecessor-digest chain anchored by atomic `session.json` state.
 Proposal revisions are immutable and must match their source turn or a
 controller-owned structured edit. Approval binds the exact proposal, confirmed
 TaskBrief, adaptive implementation plan, and TeamPlan digests. It also stores
-each Agent's workload class, allowed timeout envelope, resolution source, and
-exact resolved seconds. Reviewer resolutions also bind the exact criterion
-count and controller-derived minimum when scope raises the floor. The approval
-then revalidates those seconds against the TeamPlan at the execution boundary.
+each Agent's workload class and time-authority resolution. Product approval
+records provider activity with no per-Agent wall-clock limit; a controlled
+evaluation may instead record an allowed timeout envelope and exact resolved
+seconds. Approval revalidates that authority against the TeamPlan at the
+execution boundary.
 The bootstrap Planner cannot create Agents or change lifecycle state.
 
 Task-criterion binding is context-aware without transferring profile ownership
@@ -392,7 +394,7 @@ and container execution checks all pass.
 
 Phase artifacts and captured process output are write-once. `team-plan.json`
 freezes Agent identities, responsibilities, dependency waves, workspace and
-permission boundaries, invocation timeouts, model authorization, concurrency,
+permission boundaries, time authority, model authorization, concurrency,
 iteration policy, and aggregate budget. Its digest is immutable run metadata,
 and the plan itself binds the exact confirmed `TaskBrief` digest. `run.json` is
 atomically replaced under an optimistic revision check and records the
@@ -461,10 +463,10 @@ responsibilities. `DagScheduler` decides readiness, actual launch order,
 bounded concurrency, and shared-workspace exclusion from the approved
 `TeamPlan`. `DynamicAgentRunner` may execute only the ready `AgentSpec` passed
 to it. It binds that invocation to the approved capability, model route,
-per-Agent timeout, permission profile, assigned tasks, and dependency
-handoffs; it cannot create Agents, edit the DAG, or extend a timeout.
+time authority, permission profile, assigned tasks, and dependency
+handoffs; it cannot create Agents, edit the DAG, or extend a user deadline.
 
-Each invocation reserves aggregate call capacity atomically before launch and
+Each invocation enters the shared budget ledger atomically before launch and
 records reported tokens, duration, and known price after completion. Raw
 stdout/stderr, telemetry, the semantic response reference when valid, and any
 post-call budget rejection are persisted together. When session collection is
@@ -472,9 +474,10 @@ active, the same `AgentExecutionRecord` stores its collection status,
 transcript digest, current-turn record count, ordered sanitized tool records,
 and any bounded integrity error. Missing model, provider, token, or required
 Reviewer tool evidence is never treated as zero usage or success. A repair is
-permitted only for a semantic-body failure, receives the same approved
-invocation timeout, and remains bounded by the aggregate call and resource
-budgets.
+permitted only for a semantic-body failure. Product repair uses the same
+provider-liveness and remaining whole-run deadline authority; controlled
+evaluation repair receives its frozen invocation timeout. Both remain inside
+the applicable budget.
 
 Agent-authored summaries are complete immutable artifact evidence and are not
 forced to guess a hidden downstream display limit. When a summary exceeds the
@@ -647,7 +650,7 @@ when investigating it rather than editing artifacts in place.
   view before Agent execution. This inspection does not generate content.
   SAT announces the inspection and gives each potentially cold local catalog
   process up to 90 seconds, independently of the 30-second ordinary-command
-  limit and all Agent invocation timeouts. An expiry states that no provider
+  limit and every model-work time authority. An expiry states that no provider
   request was made and prevents Agent creation.
   `runtime-preflight.json` persists every inspected model, availability result,
   and bounded non-secret error.
@@ -672,40 +675,32 @@ when investigating it rather than editing artifacts in place.
 
 ## Resource and Cost Boundary
 
-- CPU, memory, process, open-file, tmpfs, captured command-output, wall-clock,
-  iteration, and Agent-invocation limits are mandatory before live runs.
-- Checked-in capability defaults and fixed-role compatibility timeouts reflect
-  measured workloads. Adaptive Planning supplies only a routine, substantial,
-  or complex workload class. Product policy deterministically resolves that
-  class inside a capability-specific default-to-ceiling envelope; a direct user
-  timeout override must remain inside the effective envelope. Reviewer scope
-  assigns one work unit to every criterion and one more to every explicit
-  Review boundary obligation, then maps fewer than 6, 6–10, or 11+ work units
-  to a routine, substantial, or complex minimum. The controller uses the higher
-  of that floor and Planner workload. The resulting
-  Adaptive TeamPlan freezes the exact timeout for each run-scoped Agent. A
-  global CLI or saved timeout override collapses every Adaptive envelope to one
-  explicit value but cannot undercut the scope floor; it remains an
-  experimental variable.
-- The approval evidence records the criterion count and boundary-obligation
-  count used by the scope calculation. Those facts and the exact resolved
-  seconds are visible before approval. Runtime Agents cannot extend the frozen
-  value, and an earlier invocation duration does not silently mutate an already
-  approved TeamPlan.
-- Without a global override, the product envelope uses the checked-in
-  capability timeout as its default and twice that value, capped at 3,600
-  seconds, as its ceiling. Routine selects the default, complex selects the
-  ceiling, and substantial selects their integer midpoint.
+- CPU, memory, process, open-file, tmpfs, and captured command-output guards
+  protect machine and protocol integrity. They are not substitutes for task
+  scope, team topology, or model-work budgets.
+- Product Planning and execution use zero as the explicit OpenClaw
+  whole-invocation timeout. This removes the former workload-to-seconds mapping
+  and saved global timeout override from the product path. Zero does not disable
+  provider or tool liveness: OpenClaw continues to enforce its provider-stream
+  idle watchdog and tool-specific guards.
+- Before the first model call, SAT asks whether the user has a real whole-run
+  deadline and recommends no deadline by default. When authorized, the exact
+  deadline starts at resource authorization, covers Planning and execution, and
+  is converted to remaining seconds before every call. An expired deadline
+  prevents another provider call; it never becomes a new per-Agent default.
+- Product TeamPlan timeout resolutions record zero with
+  `provider_activity` as their source. Fixed evaluation TeamPlans retain
+  positive role-specific invocation limits so comparisons can freeze and vary
+  time as an explicit experiment variable.
 - In controlled evaluations, an initial semantic response and its optional
   repair each receive the frozen evaluation timeout, while call count and
   Agent duration remain measured experiment variables. The ordinary product
-  path is migrating from this fixed wall-clock contract to a renewable
-  activity-based liveness lease and does not treat call count or Agent duration
-  as user budgets.
+  path does not treat call count or Agent duration as user budgets.
 - Model compatibility supplements do not set a second provider-transport
-  timeout. The controller passes the approved per-Agent timeout, or its exact
-  fixed-role compatibility value, to OpenClaw for every invocation, and the
-  outer subprocess boundary permits only bounded shutdown grace beyond it.
+  timeout. Product calls pass either zero or the remaining user deadline to
+  OpenClaw; controlled evaluations pass their frozen timeout. The outer
+  subprocess boundary adds bounded process-shutdown grace only when a positive
+  runtime boundary exists.
 - Controlled evaluations check their frozen token, duration, call, and cost
   thresholds after each invocation. Ordinary tasks use one USD authorization;
   their call, token, duration, Agent, and iteration counts remain telemetry.

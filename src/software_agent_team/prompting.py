@@ -103,7 +103,7 @@ class DynamicRevisionFeedback(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    previous_iteration: int = Field(ge=1, le=2)
+    previous_iteration: int = Field(ge=1)
     output_commit: str = Field(pattern=COMMIT_PATTERN)
     blocking_findings: tuple[ReviewFinding, ...] = ()
     blocking_reasons: tuple[str, ...] = ()
@@ -167,7 +167,7 @@ class DynamicAgentPromptInputs(BaseModel):
         default=None,
         pattern=r"^[a-z][a-z0-9_]*$",
     )
-    iteration: int = Field(ge=1, le=3)
+    iteration: int = Field(ge=1)
     iteration_input_commit: str = Field(pattern=COMMIT_PATTERN)
     input_commit: str = Field(pattern=COMMIT_PATTERN)
     upstream_results: tuple[DynamicUpstreamResult, ...] = ()
@@ -344,8 +344,8 @@ class AgentPromptInputs(BaseModel):
     task_brief: TaskBrief
     team_id: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9_]*$")
     team_roles: frozenset[AgentRole] = Field(min_length=1)
-    iteration: int = Field(ge=1, le=3)
-    iteration_limit: int = Field(ge=1, le=3)
+    iteration: int = Field(ge=1)
+    iteration_limit: int = Field(ge=1)
     role: AgentRole
     expected_kind: ArtifactKind
     input_commit: str | None = Field(default=None, pattern=COMMIT_PATTERN)

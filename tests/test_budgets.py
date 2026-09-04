@@ -86,6 +86,21 @@ def test_free_user_task_may_authorize_zero_total_cost() -> None:
     assert budget.max_estimated_cost_usd == 0
 
 
+def test_user_task_cost_and_model_prices_are_not_capped_by_legacy_defaults() -> None:
+    authorized = AgentBudget(
+        authority=BudgetAuthority.USER_TASK,
+        max_estimated_cost_usd="10000.01",
+    )
+    pricing = ModelPricing(
+        model="provider/specialized-model",
+        input_cost_per_million_usd="10000.01",
+        output_cost_per_million_usd="20000.02",
+    )
+
+    assert authorized.max_estimated_cost_usd == Decimal("10000.01")
+    assert pricing.output_cost_per_million_usd == Decimal("20000.02")
+
+
 def test_user_task_rejects_evaluation_only_count_limit() -> None:
     with pytest.raises(ValidationError, match="only one USD ceiling"):
         AgentBudget(

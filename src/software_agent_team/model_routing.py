@@ -34,23 +34,20 @@ class ModelProfile(BaseModel):
     id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     model: str = Field(min_length=3)
     capabilities: tuple[AgentCapability, ...] = Field(min_length=1)
-    priority: int = Field(default=100, ge=1, le=1000)
+    priority: int = Field(default=100, ge=1)
     input_cost_per_million_usd: Decimal | None = Field(
         default=None,
         ge=0,
-        le=10_000,
     )
     output_cost_per_million_usd: Decimal | None = Field(
         default=None,
         ge=0,
-        le=10_000,
     )
     pricing_source: ModelMetadataSource | None = None
     pricing_observed_at: datetime | None = None
     context_window_tokens: int | None = Field(
         default=None,
         ge=1,
-        le=100_000_000,
     )
     context_source: ModelMetadataSource | None = None
     context_observed_at: datetime | None = None
@@ -147,14 +144,13 @@ class ModelRoutingPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     mode: ModelRoutingMode = ModelRoutingMode.STRICT
-    profiles: tuple[ModelProfile, ...] = Field(min_length=1, max_length=16)
+    profiles: tuple[ModelProfile, ...] = Field(min_length=1)
     default_profile_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     capability_profile_overrides: dict[AgentCapability, str] = Field(
         default_factory=dict
     )
     stage_profile_overrides: dict[str, str] = Field(default_factory=dict)
     authorized_switch_conditions: tuple[ModelSwitchCondition, ...] = ()
-    max_switches_per_agent: int = Field(default=0, ge=0, le=3)
 
     @field_validator("stage_profile_overrides")
     @classmethod
@@ -197,23 +193,14 @@ class ModelRoutingPolicy(BaseModel):
             raise ValueError(
                 "default model profile must support clarification and planning"
             )
-        if self.mode is ModelRoutingMode.STRICT:
-            if (
-                len(self.profiles) != 1
-                or self.capability_profile_overrides
-                or self.stage_profile_overrides
-                or self.authorized_switch_conditions
-                or self.max_switches_per_agent
-            ):
-                raise ValueError(
-                    "strict model routing requires one profile and no overrides "
-                    "or switches"
-                )
-        elif bool(self.authorized_switch_conditions) != bool(
-            self.max_switches_per_agent
+        if self.mode is ModelRoutingMode.STRICT and (
+            len(self.profiles) != 1
+            or self.capability_profile_overrides
+            or self.stage_profile_overrides
+            or self.authorized_switch_conditions
         ):
             raise ValueError(
-                "model switch conditions and a positive switch limit belong together"
+                "strict model routing requires one profile and no overrides or switches"
             )
         return self
 
@@ -324,7 +311,7 @@ def resolve_model_route_plan(
         if policy.authorized_switch_conditions:
             fallback_ids = tuple(
                 profile.id for profile in eligible if profile.id != selected.id
-            )[: policy.max_switches_per_agent]
+            )
         assignments.append(
             ModelRouteAssignment(
                 agent_id=agent.id,

@@ -104,17 +104,15 @@ sat configure --non-interactive \
   --model provider/model \
   --input-cost-per-million-usd 0.00 \
   --output-cost-per-million-usd 0.00 \
-  --verification-concurrency 1 \
-  --use-role-timeouts
+  --verification-concurrency 1
 sat configure --show
 ```
 
-The configuration records model, current token prices, verification
-concurrency, and an optional global Agent-invocation timeout override. It never
-records an API key. With no override, the checked-in per-role budgets apply.
-For tightly controlled experiments, the equivalent explicit `sat run` flags
-below remain useful because the complete invocation can be copied into the
-trial notes.
+The configuration records model, current token prices, routing, and product
+concurrency. It never records an API key or a product Agent timeout. Controlled
+evaluations keep their invocation limits in the checked-in policy or the
+explicit `sat run` flags below so the complete frozen invocation can be copied
+into the trial notes.
 
 ## 1. Verify the Checkout
 
@@ -228,7 +226,8 @@ escape the frozen resource policy.
 
 If a measured provider requires an intentionally uniform budget, add
 `--stage-timeout-seconds N` and record that override as an experimental
-variable. `--use-role-timeouts` ignores a saved global override for one run.
+variable. `--use-role-timeouts` selects the checked-in fixed-role values for
+that evaluation.
 The deprecated `--agent-timeout-seconds` spelling has the same per-invocation
 meaning and will be removed in the next major release. Do not change timeout
 policy after a run starts or omit it from comparisons.

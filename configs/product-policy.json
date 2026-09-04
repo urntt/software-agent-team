@@ -1,25 +1,7 @@
 {
   "schema_version": 1,
   "id": "product_python_v1",
-  "agent_budget": {
-    "schema_version": 1,
-    "max_calls": 14,
-    "max_input_tokens": 1000000,
-    "max_output_tokens": 200000,
-    "max_agent_duration_seconds": 7200,
-    "max_estimated_cost_usd": "25.00"
-  },
-  "agent_stage_timeouts_seconds": {
-    "clarifier": 120,
-    "single_agent": 900,
-    "planner": 180,
-    "generalist_developer": 900,
-    "frontend_developer": 900,
-    "backend_developer": 900,
-    "integrator": 900,
-    "tester": 300,
-    "reviewer": 300
-  },
+  "authority": "product",
   "sandbox": {
     "backend": "docker",
     "image": "sat-python-quality:phase1-v6",

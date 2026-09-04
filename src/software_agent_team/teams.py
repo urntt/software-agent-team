@@ -145,19 +145,16 @@ class ModelRoute(BaseModel):
     input_cost_per_million_usd: Decimal | None = Field(
         default=None,
         ge=0,
-        le=10_000,
     )
     output_cost_per_million_usd: Decimal | None = Field(
         default=None,
         ge=0,
-        le=10_000,
     )
     pricing_source: ModelMetadataSource | None = None
     pricing_observed_at: datetime | None = None
     context_window_tokens: int | None = Field(
         default=None,
         ge=1,
-        le=100_000_000,
     )
     context_source: ModelMetadataSource | None = None
     context_observed_at: datetime | None = None
@@ -374,7 +371,11 @@ class AgentSpec(BaseModel):
     dependencies: tuple[str, ...] = ()
     expected_output: ArtifactKind
     model_route_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
-    timeout_seconds: int = Field(ge=1, le=3600)
+    # Positive values are controlled-evaluation wall-clock limits. Adaptive
+    # product plans use zero, which OpenClaw defines as no Agent runtime
+    # timeout; provider stream inactivity and an optional task deadline are
+    # separate authorities.
+    timeout_seconds: int = Field(ge=0)
     workspace_scope: str = Field(min_length=1, max_length=200)
     legacy_role: AgentRole | None = None
 
@@ -430,7 +431,7 @@ class TeamPlan(BaseModel):
 
     schema_version: Literal[TEAM_PLAN_SCHEMA_VERSION] = TEAM_PLAN_SCHEMA_VERSION
     plan_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
-    revision: int = Field(ge=1, le=99)
+    revision: int = Field(ge=1)
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     task_brief_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     implementation_plan_sha256: str | None = Field(
@@ -450,12 +451,12 @@ class TeamPlan(BaseModel):
         default=None,
         pattern=r"^[0-9a-f]{64}$",
     )
-    agents: tuple[AgentSpec, ...] = Field(min_length=1, max_length=16)
+    agents: tuple[AgentSpec, ...] = Field(min_length=1)
     model_routes: ModelRoutePlan
     budget: AgentBudget
     run_deadline_seconds: int | None = Field(default=None, ge=1)
-    iteration_limit: int = Field(ge=1, le=3)
-    max_concurrency: int = Field(ge=1, le=16)
+    iteration_limit: int = Field(ge=1)
+    max_concurrency: int = Field(ge=1)
     independent_review: bool
     revision_enabled: bool
 
@@ -484,6 +485,10 @@ class TeamPlan(BaseModel):
                 raise ValueError("fixed plan team ID must match its source fixture")
             if any(agent.legacy_role is None for agent in self.agents):
                 raise ValueError("fixed plans require a legacy role for every Agent")
+            if any(agent.timeout_seconds == 0 for agent in self.agents):
+                raise ValueError(
+                    "fixed evaluation plans require positive invocation timeouts"
+                )
         else:
             if self.approval_source is not PlanApprovalSource.USER:
                 raise ValueError("adaptive plans require user approval")
@@ -514,7 +519,6 @@ class TeamPlan(BaseModel):
                 )
             if not self.independent_review:
                 raise ValueError("adaptive plans require independent quality control")
-
         agent_ids = [agent.id for agent in self.agents]
         if len(agent_ids) != len(set(agent_ids)):
             raise ValueError("TeamPlan Agent IDs must be unique")

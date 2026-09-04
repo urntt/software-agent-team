@@ -26,6 +26,8 @@ from software_agent_team.run_control import RunPhase
 RUN_EVENT_SCHEMA_VERSION = 2
 EVENTS_DIRECTORY = "events"
 EVENT_FILENAME_PATTERN = re.compile(r"^(?P<sequence>[0-9]{6})\.json$")
+DEFAULT_PROGRESS_HEARTBEAT_SECONDS = 10.0
+MAX_PROGRESS_SUMMARY_CHARACTERS = 500
 
 
 class ProgressEventKind(StrEnum):
@@ -339,15 +341,18 @@ class RunEvent(BaseModel):
     category: RunEventCategory
     minimum_visibility: RunEventVisibility
     source: RunEventSource = RunEventSource.CONTROLLER
-    summary: str = Field(min_length=1, max_length=500)
+    summary: str = Field(
+        min_length=1,
+        max_length=MAX_PROGRESS_SUMMARY_CHARACTERS,
+    )
     phase: RunPhase
     agent_id: str | None = Field(
         default=None,
         pattern=r"^[a-z][a-z0-9_]*$",
     )
     agent_state: AgentRunState | None = None
-    iteration: int | None = Field(default=None, ge=1, le=99)
-    attempt: int | None = Field(default=None, ge=1, le=99)
+    iteration: int | None = Field(default=None, ge=1)
+    attempt: int | None = Field(default=None, ge=1)
     duration_ms: int | None = Field(default=None, ge=0)
     capability: str | None = Field(
         default=None,
@@ -728,7 +733,7 @@ class TerminalProgressRenderer:
         *,
         output: TextIO | None = None,
         visibility: RunEventVisibility = RunEventVisibility.STANDARD,
-        heartbeat_seconds: float = 10.0,
+        heartbeat_seconds: float = DEFAULT_PROGRESS_HEARTBEAT_SECONDS,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         if heartbeat_seconds <= 0:

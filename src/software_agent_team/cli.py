@@ -37,6 +37,7 @@ from software_agent_team.budgets import (
 from software_agent_team.configuration import validate_environment_configuration
 from software_agent_team.control_console import TerminalControlConsole
 from software_agent_team.controls import ControlCommandStore
+from software_agent_team.decision_limits import validate_decision_limit_registry
 from software_agent_team.dynamic_workflow import (
     DynamicWorkflowCoordinator,
     DynamicWorkflowOutcome,
@@ -196,6 +197,7 @@ class _AdaptiveWorkflowLaunchOptions(_RuntimeLaunchOptions):
     artifact_repair_limit: int = 1
     progress_handler: ProgressHandler | None = None
     budget_ledger: AgentBudgetLedger | None = None
+    run_deadline_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -260,17 +262,8 @@ def _print_configuration(configuration: UserConfiguration, path: Path) -> None:
         condition.value for condition in configuration.authorized_switch_conditions
     )
     print(f"authorized model switches: {switches or 'none'}")
-    print(
-        "maximum model switches per Agent: "
-        f"{configuration.max_model_switches_per_agent}"
-    )
     print(f"maximum concurrent Agents: {configuration.max_concurrency}")
     print(f"progress visibility: {configuration.progress_visibility}")
-    timeout = configuration.stage_timeout_seconds
-    print(
-        "global Agent invocation timeout override (seconds): "
-        f"{timeout if timeout is not None else 'role defaults'}"
-    )
 
 
 def _load_user_configuration(path: Path | None = None) -> UserConfiguration | None:
@@ -461,7 +454,7 @@ def _prompt_context_window(model: str) -> int:
         raw = input(
             f"Context-window tokens for {model} (provider-documented value): "
         ).strip()
-        if raw.isdecimal() and 1 <= int(raw) <= 100_000_000:
+        if raw.isdecimal() and int(raw) >= 1:
             return int(raw)
         print("Enter an integer between 1 and 100000000.")
 
@@ -650,7 +643,6 @@ def _configured_model_fields(
         capability_overrides = dict(current.capability_profile_overrides)
         stage_overrides = dict(current.stage_profile_overrides)
         switch_conditions = current.authorized_switch_conditions
-        max_switches = current.max_model_switches_per_agent
         _replace_profile(
             profiles,
             default_profile_id,
@@ -688,7 +680,6 @@ def _configured_model_fields(
         capability_overrides = {}
         stage_overrides = {}
         switch_conditions = ()
-        max_switches = 0
 
     if args.clear_model_routing:
         default = next(
@@ -705,7 +696,6 @@ def _configured_model_fields(
         capability_overrides = {}
         stage_overrides = {}
         switch_conditions = ()
-        max_switches = 0
         routing_mode = ModelRoutingMode.STRICT
 
     existing_ids = {profile.id for profile in profiles}
@@ -820,17 +810,8 @@ def _configured_model_fields(
 
     if args.allow_provider_switch:
         switch_conditions = (ModelSwitchCondition.PROVIDER_FAILURE,)
-        max_switches = args.max_model_switches or 1
     elif args.disable_provider_switch:
         switch_conditions = ()
-        max_switches = 0
-    elif args.max_model_switches is not None:
-        if not switch_conditions:
-            raise ValueError(
-                "--max-model-switches requires --allow-provider-switch or an "
-                "existing switch policy"
-            )
-        max_switches = args.max_model_switches
 
     return {
         "model_profiles": tuple(profiles),
@@ -839,7 +820,6 @@ def _configured_model_fields(
         "capability_profile_overrides": capability_overrides,
         "stage_profile_overrides": stage_overrides,
         "authorized_switch_conditions": switch_conditions,
-        "max_model_switches_per_agent": max_switches,
     }
 
 
@@ -848,7 +828,6 @@ def _configure(args: argparse.Namespace) -> int:
 
     path = user_configuration_path()
     current = _load_user_configuration(path)
-    timeout_supplied, supplied_timeout = _timeout_flag(args)
     supplied = (
         any(
             value is not None
@@ -858,10 +837,8 @@ def _configure(args: argparse.Namespace) -> int:
                 args.output_cost_per_million_usd,
                 args.max_concurrency,
                 args.progress_visibility,
-                supplied_timeout,
             )
         )
-        or timeout_supplied
         or any(
             (
                 args.add_model_profile,
@@ -880,7 +857,6 @@ def _configure(args: argparse.Namespace) -> int:
             for value in (
                 args.default_model_profile,
                 args.routing_mode,
-                args.max_model_switches,
             )
         )
         or args.allow_provider_switch
@@ -938,7 +914,6 @@ def _configure(args: argparse.Namespace) -> int:
         progress_visibility = (
             current.progress_visibility if current is not None else "standard"
         )
-        timeout = current.stage_timeout_seconds if current is not None else None
     else:
         if not supplied:
             raise ValueError(
@@ -980,13 +955,6 @@ def _configure(args: argparse.Namespace) -> int:
             if current
             else "standard"
         )
-        timeout = (
-            supplied_timeout
-            if timeout_supplied
-            else current.stage_timeout_seconds
-            if current
-            else None
-        )
         if model is None:
             raise ValueError(
                 "first-time non-interactive configuration requires --model"
@@ -1002,7 +970,6 @@ def _configure(args: argparse.Namespace) -> int:
     configuration = UserConfiguration(
         **model_fields,
         max_concurrency=concurrency,
-        stage_timeout_seconds=timeout,
         progress_visibility=progress_visibility,
     )
     if interactive:
@@ -1281,6 +1248,7 @@ def _validate_artifact(args: argparse.Namespace) -> int:
 
 
 def _validate_config(args: argparse.Namespace) -> int:
+    validate_decision_limit_registry(PROJECT_ROOT)
     manifest, _ = validate_environment_configuration(args.teams, args.openclaw)
     quality_manifest = args.quality_manifest or args.benchmark or DEFAULT_BENCHMARK
     quality = load_quality_gate_configuration(args.policy, quality_manifest)
@@ -1389,6 +1357,7 @@ def _prepare_runtime_boundary(
         openclaw_binary=options.openclaw_binary,
         environment=openclaw_environment,
         local=True,
+        run_deadline_at=getattr(options, "run_deadline_at", None),
     )
 
     def runtime_setup(workspace: GitWorkspace, run_directory: Path) -> None:
@@ -1540,7 +1509,7 @@ def _execute_workflow(
         workspaces_root=options.workspaces_root,
         executor=boundary.executor,
         quality_gate_factory=boundary.quality_gate_factory,
-        budget=configuration.policy.agent_budget,
+        budget=configuration.policy.evaluation_budget,
         pricing=ModelPricing(
             model=options.model,
             input_cost_per_million_usd=options.input_cost_per_million_usd,
@@ -1548,7 +1517,7 @@ def _execute_workflow(
         ),
         runtime_setup=boundary.runtime_setup,
         manual_review_criteria=configuration.manifest.manual_review_criteria,
-        role_timeout_seconds=configuration.policy.agent_stage_timeouts_seconds,
+        role_timeout_seconds=configuration.policy.evaluation_timeouts,
         stage_timeout_seconds=options.stage_timeout_seconds,
         artifact_repair_limit=options.artifact_repair_limit,
         iteration_limit=options.iteration_limit,
@@ -1711,13 +1680,7 @@ def _run_workflow(args: argparse.Namespace) -> int:
         if user_configuration is not None
         else None
     )
-    timeout = (
-        supplied_timeout
-        if timeout_supplied
-        else user_configuration.stage_timeout_seconds
-        if user_configuration is not None
-        else None
-    )
+    timeout = supplied_timeout if timeout_supplied else None
     concurrency = (
         args.verification_concurrency
         if args.verification_concurrency is not None
@@ -2095,9 +2058,6 @@ def _ensure_product_configuration(
         configuration = UserConfiguration(
             model=model,
             max_concurrency=(current.max_concurrency if current is not None else 2),
-            stage_timeout_seconds=(
-                current.stage_timeout_seconds if current is not None else None
-            ),
             progress_visibility=(
                 current.progress_visibility if current is not None else "standard"
             ),
@@ -2230,42 +2190,31 @@ def _product_planning_policy(
     configuration: UserConfiguration,
     resource_authorization: TaskResourceAuthorization,
 ) -> PlanningPolicy:
-    """Compile product profile limits into the bootstrap Planning authority."""
+    """Compile user-authorized product resources into Planning authority."""
 
-    role_timeouts = quality.policy.agent_stage_timeouts_seconds
-
-    def timeout(role: AgentRole) -> int:
-        return configuration.stage_timeout_seconds or role_timeouts[role]
-
-    def adaptive_timeout(role: AgentRole) -> CapabilityTimeoutPolicy:
-        default = timeout(role)
-        ceiling = (
-            default
-            if configuration.stage_timeout_seconds is not None
-            else min(3600, default * 2)
-        )
-        return CapabilityTimeoutPolicy(
-            default_seconds=default,
-            ceiling_seconds=ceiling,
-        )
+    provider_activity = CapabilityTimeoutPolicy(
+        default_seconds=0,
+        ceiling_seconds=0,
+    )
 
     return PlanningPolicy(
-        planning_timeout_seconds=timeout(AgentRole.PLANNER),
+        max_clarification_rounds=None,
+        max_proposal_revisions=None,
+        planning_timeout_seconds=0,
         max_agents=None,
         max_concurrency=configuration.max_concurrency,
         max_review_agents=None,
+        max_iterations=None,
         run_deadline_seconds=resource_authorization.run_deadline_seconds,
         budget=AgentBudget(
             authority=BudgetAuthority.USER_TASK,
             max_estimated_cost_usd=(resource_authorization.maximum_estimated_cost_usd),
         ),
         capability_timeouts={
-            AgentCapability.IMPLEMENTATION: adaptive_timeout(
-                AgentRole.GENERALIST_DEVELOPER
-            ),
-            AgentCapability.INTEGRATION: adaptive_timeout(AgentRole.INTEGRATOR),
-            AgentCapability.TESTING: adaptive_timeout(AgentRole.TESTER),
-            AgentCapability.REVIEW: adaptive_timeout(AgentRole.REVIEWER),
+            AgentCapability.IMPLEMENTATION: provider_activity,
+            AgentCapability.INTEGRATION: provider_activity,
+            AgentCapability.TESTING: provider_activity,
+            AgentCapability.REVIEW: provider_activity,
         },
         model_routing=configuration.model_routing_policy(),
         profile_acceptance_criteria=quality.task_brief.acceptance_criteria,
@@ -2360,6 +2309,7 @@ def _run_product_planning(
                 config_path=runtime_path,
             ),
             local=True,
+            run_deadline_at=resource_authorization.deadline_at,
         )
         planning_metadata = next(
             (
@@ -2473,11 +2423,7 @@ def _replacement_planning_request(
         "User correction that supersedes conflicting earlier requirements: "
         f"{correction_instruction.strip()}"
     )
-    constraints = request.base_constraints
-    if len(constraints) < 20:
-        constraints = (*constraints, correction)
-    else:
-        constraints = (*constraints[:-1], f"{constraints[-1]}\n{correction}")
+    constraints = (*request.base_constraints, correction)
     return PlanningRequest(
         **{
             **request.model_dump(),
@@ -2599,6 +2545,7 @@ def _run_product() -> int:
                     artifact_repair_limit=1,
                     progress_handler=renderer,
                     budget_ledger=budget_ledger,
+                    run_deadline_at=resource_authorization.deadline_at,
                 ),
                 control_store_handler=start_controls,
             )
@@ -2877,19 +2824,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--allow-provider-switch",
         action="store_true",
         help=(
-            "Authorize bounded fallback only after an attributable provider failure."
+            "Authorize fallback through the finite configured route list only after "
+            "an attributable provider failure."
         ),
     )
     provider_switch.add_argument(
         "--disable-provider-switch",
         action="store_true",
         help="Remove provider-failure switch authorization.",
-    )
-    configure.add_argument(
-        "--max-model-switches",
-        type=int,
-        choices=(1, 2, 3),
-        help="Maximum approved fallback advances per Agent.",
     )
     configure.add_argument(
         "--clear-model-routing",
@@ -2899,7 +2841,6 @@ def build_parser() -> argparse.ArgumentParser:
     configure.add_argument(
         "--max-concurrency",
         type=int,
-        choices=tuple(range(1, 17)),
         help=(
             "Maximum ready Agents the adaptive scheduler may run concurrently; "
             "shared-workspace writer safety can reduce actual concurrency."
@@ -2912,27 +2853,6 @@ def build_parser() -> argparse.ArgumentParser:
             "Select compact, standard, or detailed controller-backed progress "
             "without changing execution behavior."
         ),
-    )
-    configure_timeout = configure.add_mutually_exclusive_group()
-    configure_timeout.add_argument(
-        "--stage-timeout-seconds",
-        type=int,
-        help=(
-            "Optional global timeout for each Agent invocation, applied "
-            "independently to one bounded response repair; otherwise use "
-            "checked-in role defaults."
-        ),
-    )
-    configure_timeout.add_argument(
-        "--agent-timeout-seconds",
-        dest="deprecated_agent_timeout_seconds",
-        type=int,
-        help=argparse.SUPPRESS,
-    )
-    configure_timeout.add_argument(
-        "--use-role-timeouts",
-        action="store_true",
-        help="Clear the global override and use checked-in per-role timeouts.",
     )
     configure.set_defaults(handler=_configure)
 

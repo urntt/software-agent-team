@@ -76,9 +76,9 @@ from software_agent_team.teams import (
 
 PLANNING_SCHEMA_VERSION = 2
 PLANNING_TEMPLATE = Path(__file__).with_name("prompt_templates") / "adaptive_planner.md"
-_MAX_EVIDENCE_TEXT = 1_000_000
-_MAX_RESPONSE_NORMALIZATIONS = 100
-_MAX_RESPONSE_NORMALIZATION_LENGTH = 200
+MAX_PLANNING_EVIDENCE_CHARACTERS = 1_000_000
+MAX_RESPONSE_NORMALIZATIONS = 100
+MAX_RESPONSE_NORMALIZATION_CHARACTERS = 200
 
 
 class PlanningError(RuntimeError):
@@ -118,7 +118,6 @@ class StructuredEditKind(StrEnum):
 
     MAX_CONCURRENCY = "max_concurrency"
     ITERATION_LIMIT = "iteration_limit"
-    AGENT_TIMEOUT = "agent_timeout"
     AGENT_MODEL = "agent_model"
 
 
@@ -392,8 +391,8 @@ class PlanningRequest(BaseModel):
     project_name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
     source_request: str = Field(min_length=1, max_length=2000)
     destination: str = Field(min_length=1, max_length=4096)
-    execution_profile: tuple[str, ...] = Field(min_length=1, max_length=20)
-    base_constraints: tuple[str, ...] = Field(default=(), max_length=20)
+    execution_profile: tuple[str, ...] = Field(min_length=1)
+    base_constraints: tuple[str, ...] = ()
     model: str = Field(min_length=3)
     authorization: Literal["user_confirmed"]
     authorized_at: datetime
@@ -714,27 +713,25 @@ class PlanningProposalBody(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     title: str = Field(min_length=1, max_length=120)
-    requirements: tuple[str, ...] = Field(min_length=1, max_length=30)
+    requirements: tuple[str, ...] = Field(min_length=1)
     acceptance_criteria: tuple[ProposedCriterion, ...] = Field(
         min_length=1,
-        max_length=30,
     )
-    constraints: tuple[str, ...] = Field(default=(), max_length=30)
-    assumptions: tuple[str, ...] = Field(default=(), max_length=30)
+    constraints: tuple[str, ...] = ()
+    assumptions: tuple[str, ...] = ()
     objective: str = Field(min_length=1, max_length=1000)
-    approach: tuple[str, ...] = Field(min_length=1, max_length=30)
+    approach: tuple[str, ...] = Field(min_length=1)
     tasks: tuple[ProposedTask, ...] = Field(
         min_length=1,
-        max_length=30,
         description=(
             "Work intent for proposed runtime Agents. Tasks describe approved "
             "focus but do not create Agents or grant permissions."
         ),
     )
-    risks: tuple[str, ...] = Field(default=(), max_length=30)
-    agents: tuple[ProposedAgent, ...] = Field(min_length=2, max_length=16)
-    iteration_limit: int = Field(ge=1, le=3)
-    max_concurrency: int = Field(ge=1, le=16)
+    risks: tuple[str, ...] = ()
+    agents: tuple[ProposedAgent, ...] = Field(min_length=2)
+    iteration_limit: int = Field(ge=1)
+    max_concurrency: int = Field(ge=1)
     revision_enabled: bool
 
     @field_validator("title", "objective")
@@ -883,7 +880,7 @@ class AdaptiveImplementationPlan(BaseModel):
     schema_version: Literal[PLANNING_SCHEMA_VERSION] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     team_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
-    revision: int = Field(ge=1, le=99)
+    revision: int = Field(ge=1)
     created_at: datetime
     objective: str
     approach: tuple[str, ...]
@@ -930,12 +927,15 @@ class PlanningTurn(BaseModel):
 
     schema_version: Literal[PLANNING_SCHEMA_VERSION] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
-    sequence: int = Field(ge=1, le=999)
+    sequence: int = Field(ge=1)
     previous_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     user_message: str = Field(min_length=1, max_length=10_000)
-    prompt: str = Field(min_length=1, max_length=_MAX_EVIDENCE_TEXT)
+    prompt: str = Field(min_length=1, max_length=MAX_PLANNING_EVIDENCE_CHARACTERS)
     prompt_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    response_text: str | None = Field(default=None, max_length=_MAX_EVIDENCE_TEXT)
+    response_text: str | None = Field(
+        default=None,
+        max_length=MAX_PLANNING_EVIDENCE_CHARACTERS,
+    )
     response_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     parsed_response: PlanningModelResponse | None = None
     response_normalizations: tuple[str, ...] = Field(
@@ -948,9 +948,9 @@ class PlanningTurn(BaseModel):
     @field_validator("response_normalizations")
     @classmethod
     def require_unique_normalizations(cls, values: tuple[str, ...]) -> tuple[str, ...]:
-        if len(values) > _MAX_RESPONSE_NORMALIZATIONS:
+        if len(values) > MAX_RESPONSE_NORMALIZATIONS:
             raise ValueError("too many Planning response normalizations")
-        if any(len(value) > _MAX_RESPONSE_NORMALIZATION_LENGTH for value in values):
+        if any(len(value) > MAX_RESPONSE_NORMALIZATION_CHARACTERS for value in values):
             raise ValueError("Planning response normalization entries are too long")
         return _clean_unique(values, label="Planning response normalization")
 
@@ -988,10 +988,10 @@ class PlanningProposal(BaseModel):
 
     schema_version: Literal[PLANNING_SCHEMA_VERSION] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
-    revision: int = Field(ge=1, le=99)
+    revision: int = Field(ge=1)
     created_at: datetime
     source: PlanningProposalSource
-    source_turn_sequence: int | None = Field(default=None, ge=1, le=999)
+    source_turn_sequence: int | None = Field(default=None, ge=1)
     change_request: str | None = Field(default=None, min_length=1, max_length=2000)
     body: PlanningProposalBody
     timeout_overrides_seconds: dict[str, int] = Field(default_factory=dict)
@@ -1050,10 +1050,10 @@ class PlanningSession(BaseModel):
     status: PlanningSessionStatus
     created_at: datetime
     updated_at: datetime
-    turn_count: int = Field(default=0, ge=0, le=999)
+    turn_count: int = Field(default=0, ge=0)
     turn_head_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
-    latest_proposal_revision: int | None = Field(default=None, ge=1, le=99)
-    approved_revision: int | None = Field(default=None, ge=1, le=99)
+    latest_proposal_revision: int | None = Field(default=None, ge=1)
+    approved_revision: int | None = Field(default=None, ge=1)
 
     @field_validator("created_at", "updated_at")
     @classmethod
@@ -1090,10 +1090,7 @@ class StructuredPlanEdit(BaseModel):
 
     @model_validator(mode="after")
     def require_target(self) -> Self:
-        if self.kind in {
-            StructuredEditKind.AGENT_TIMEOUT,
-            StructuredEditKind.AGENT_MODEL,
-        }:
+        if self.kind is StructuredEditKind.AGENT_MODEL:
             if self.agent_id is None:
                 raise ValueError("Agent-specific edits require an Agent target")
         elif self.agent_id is not None:
@@ -1107,29 +1104,27 @@ class StructuredPlanEdit(BaseModel):
             return self
         if not isinstance(self.value, int):
             raise ValueError("numeric plan edits require an integer")
-        if not 1 <= self.value <= 3600:
-            raise ValueError("numeric plan edits must be within 1..3600")
-        if self.kind is StructuredEditKind.AGENT_TIMEOUT and self.value < 30:
-            raise ValueError("Agent timeout edit requires an Agent and at least 30s")
-        if self.kind is StructuredEditKind.ITERATION_LIMIT and self.value > 3:
-            raise ValueError("iteration limit cannot exceed three")
-        if self.kind is StructuredEditKind.MAX_CONCURRENCY and self.value > 16:
-            raise ValueError("concurrency cannot exceed sixteen")
+        if self.value < 1:
+            raise ValueError("numeric plan edits require a positive value")
         return self
 
 
 class CapabilityTimeoutPolicy(BaseModel):
-    """Controller-owned timeout envelope for one adaptive capability."""
+    """Controller-owned evaluation timeout or disabled product timeout."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    default_seconds: int = Field(ge=30, le=3600)
-    ceiling_seconds: int = Field(ge=30, le=3600)
+    default_seconds: int = Field(ge=0)
+    ceiling_seconds: int = Field(ge=0)
 
     @model_validator(mode="after")
     def require_ordered_envelope(self) -> Self:
         if self.default_seconds > self.ceiling_seconds:
             raise ValueError("timeout default cannot exceed its ceiling")
+        if (self.default_seconds == 0) != (self.ceiling_seconds == 0):
+            raise ValueError("a disabled product timeout requires a zero-only envelope")
+        if 0 < self.default_seconds < 30:
+            raise ValueError("positive invocation timeouts must be at least 30s")
         return self
 
     def resolve(self, workload: AgentWorkload) -> int:
@@ -1149,24 +1144,49 @@ class AgentTimeoutResolution(BaseModel):
 
     agent_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     workload: AgentWorkload
-    default_seconds: int = Field(ge=30, le=3600)
-    ceiling_seconds: int = Field(ge=30, le=3600)
-    minimum_seconds: int | None = Field(default=None, ge=30, le=3600)
+    default_seconds: int = Field(ge=0)
+    ceiling_seconds: int = Field(ge=0)
+    minimum_seconds: int | None = Field(default=None, ge=0)
     scope_criterion_count: int | None = Field(default=None, ge=1, le=100)
     scope_boundary_obligation_count: int | None = Field(
         default=None,
         ge=0,
         le=400,
     )
-    resolved_seconds: int = Field(ge=30, le=3600)
+    resolved_seconds: int = Field(ge=0)
     source: Literal[
         "policy_workload",
         "policy_scope_floor",
         "user_override",
+        "provider_activity",
     ]
 
     @model_validator(mode="after")
     def require_valid_resolution(self) -> Self:
+        if self.source == "provider_activity":
+            if any(
+                value != 0
+                for value in (
+                    self.default_seconds,
+                    self.ceiling_seconds,
+                    self.resolved_seconds,
+                )
+            ):
+                raise ValueError(
+                    "provider-activity liveness cannot carry a wall-clock limit"
+                )
+            if self.minimum_seconds not in {None, 0}:
+                raise ValueError(
+                    "provider-activity liveness cannot carry a timeout minimum"
+                )
+            if (
+                self.scope_criterion_count is not None
+                or self.scope_boundary_obligation_count is not None
+            ):
+                raise ValueError(
+                    "provider-activity liveness cannot use review scope as time"
+                )
+            return self
         policy = CapabilityTimeoutPolicy(
             default_seconds=self.default_seconds,
             ceiling_seconds=self.ceiling_seconds,
@@ -1205,17 +1225,14 @@ class PlanningApproval(BaseModel):
 
     schema_version: Literal[PLANNING_SCHEMA_VERSION] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
-    revision: int = Field(ge=1, le=99)
+    revision: int = Field(ge=1)
     approved_at: datetime
     confirmation: Literal["user_approved"]
     proposal_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     task_brief_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     implementation_plan_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     team_plan_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    timeout_resolutions: tuple[AgentTimeoutResolution, ...] = Field(
-        min_length=2,
-        max_length=16,
-    )
+    timeout_resolutions: tuple[AgentTimeoutResolution, ...] = Field(min_length=2)
 
     @field_validator("approved_at")
     @classmethod
@@ -1239,13 +1256,14 @@ class PlanningPolicy(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    max_clarification_rounds: int = Field(default=3, ge=0, le=5)
-    max_proposal_revisions: int = Field(default=3, ge=1, le=5)
+    max_clarification_rounds: int | None = Field(default=3, ge=0)
+    max_proposal_revisions: int | None = Field(default=3, ge=1)
     response_repair_limit: int = Field(default=1, ge=0, le=2)
-    planning_timeout_seconds: int = Field(default=180, ge=1, le=3600)
+    planning_timeout_seconds: int = Field(default=180, ge=0)
     max_agents: int | None = Field(default=8, ge=2)
-    max_concurrency: int = Field(default=4, ge=1, le=16)
+    max_concurrency: int = Field(default=4, ge=1)
     max_review_agents: int | None = Field(default=16, ge=1)
+    max_iterations: int | None = Field(default=3, ge=1)
     run_deadline_seconds: int | None = Field(default=None, ge=1)
     review_substantial_work_unit_threshold: int = Field(default=6, ge=2, le=499)
     review_complex_work_unit_threshold: int = Field(default=11, ge=3, le=500)
@@ -1444,6 +1462,14 @@ def preview_adaptive_proposal(
             f"ceiling of {policy.max_concurrency}"
         )
     if (
+        policy.max_iterations is not None
+        and body.iteration_limit > policy.max_iterations
+    ):
+        raise PlanningError(
+            f"proposal has {body.iteration_limit} iterations; policy permits "
+            f"{policy.max_iterations}"
+        )
+    if (
         policy.budget.max_calls is not None
         and len(body.agents) > policy.budget.max_calls
     ):
@@ -1568,6 +1594,41 @@ def preview_adaptive_proposal(
     timeout_resolutions = []
     for proposed in body.agents:
         timeout_policy = policy.capability_timeouts[proposed.capability]
+        override = proposal.timeout_overrides_seconds.get(proposed.id)
+        if timeout_policy.default_seconds == 0:
+            if override is not None:
+                raise PlanningError(
+                    "product plans cannot override provider-activity liveness "
+                    f"with a wall-clock timeout ({proposed.id})"
+                )
+            timeout_resolutions.append(
+                AgentTimeoutResolution(
+                    agent_id=proposed.id,
+                    workload=proposed.workload,
+                    default_seconds=0,
+                    ceiling_seconds=0,
+                    resolved_seconds=0,
+                    source="provider_activity",
+                )
+            )
+            agents.append(
+                AgentSpec(
+                    id=proposed.id,
+                    label=proposed.label,
+                    responsibility=proposed.responsibility,
+                    rationale=proposed.rationale,
+                    capability=proposed.capability,
+                    permission_profile=permission_for_capability(proposed.capability),
+                    stage_id=proposed.stage_id,
+                    dependencies=proposed.dependencies,
+                    expected_output=expected_output_for_capability(proposed.capability),
+                    model_route_id=assignments[proposed.id].primary_route_id,
+                    timeout_seconds=0,
+                    workspace_scope=proposed.workspace_scope,
+                )
+            )
+            continue
+
         scope_criterion_count = (
             len(task_brief.acceptance_criteria)
             if proposed.capability is AgentCapability.REVIEW
@@ -1589,7 +1650,6 @@ def preview_adaptive_proposal(
                     scope_boundary_obligation_count or 0,
                 )
             )
-        override = proposal.timeout_overrides_seconds.get(proposed.id)
         if override is not None and not (
             minimum_timeout <= override <= timeout_policy.ceiling_seconds
         ):
@@ -1682,7 +1742,6 @@ def apply_structured_edit(
     """Create one new proposal revision through a bounded safe edit."""
 
     body = proposal.body
-    timeout_overrides = dict(proposal.timeout_overrides_seconds)
     model_overrides = dict(proposal.model_profile_overrides)
     if edit.kind is StructuredEditKind.MAX_CONCURRENCY:
         assert isinstance(edit.value, int)
@@ -1697,13 +1756,6 @@ def apply_structured_edit(
             }
         )
         description = f"Set iteration limit to {edit.value}."
-    elif edit.kind is StructuredEditKind.AGENT_TIMEOUT:
-        if edit.agent_id not in {agent.id for agent in body.agents}:
-            raise PlanningError(f"unknown Agent for timeout edit: {edit.agent_id}")
-        assert edit.agent_id is not None
-        assert isinstance(edit.value, int)
-        timeout_overrides[edit.agent_id] = edit.value
-        description = f"Set {edit.agent_id} timeout to {edit.value} seconds."
     else:
         if edit.agent_id not in {agent.id for agent in body.agents}:
             raise PlanningError(f"unknown Agent for model edit: {edit.agent_id}")
@@ -1719,7 +1771,7 @@ def apply_structured_edit(
         source=PlanningProposalSource.STRUCTURED_EDIT,
         change_request=description,
         body=body,
-        timeout_overrides_seconds=timeout_overrides,
+        timeout_overrides_seconds=proposal.timeout_overrides_seconds,
         model_profile_overrides=model_overrides,
     )
 
@@ -1838,9 +1890,20 @@ def render_planning_overview(preview: PlanningPreview) -> str:
                 f"{boundary_obligations} boundary obligations "
                 f"({work_units} work units)"
             )
-        else:
+        elif timeout.source == "user_override":
             timeout_source = "user override"
+        else:
+            timeout_source = "provider activity"
         minimum_timeout = timeout.minimum_seconds or timeout.default_seconds
+        time_boundary = (
+            "      time boundary: provider activity liveness; "
+            "no per-Agent wall-clock limit"
+            if timeout.source == "provider_activity"
+            else (
+                f"      timeout: {agent.timeout_seconds} seconds ({timeout_source}; "
+                f"allowed {minimum_timeout}..{timeout.ceiling_seconds})"
+            )
+        )
         lines.extend(
             (
                 f"    - {agent.id} ({agent.label})",
@@ -1865,8 +1928,7 @@ def render_planning_overview(preview: PlanningPreview) -> str:
                 ),
                 f"      model pricing: {_render_model_pricing(route)}",
                 f"      workload: {timeout.workload.value}",
-                f"      timeout: {agent.timeout_seconds} seconds ({timeout_source}; "
-                f"allowed {minimum_timeout}..{timeout.ceiling_seconds})",
+                time_boundary,
             )
         )
     waves = " -> ".join(" + ".join(wave) for wave in plan.execution_waves())
@@ -1961,7 +2023,7 @@ class PlanningStore:
                 raise PlanningIntegrityError(
                     f"Planning evidence entry is not a regular file: {path}"
                 )
-            match = re.fullmatch(r"([0-9]{3})\.json", path.name)
+            match = re.fullmatch(r"([0-9]{3,})\.json", path.name)
             if match is None:
                 raise PlanningIntegrityError(
                     f"unexpected Planning evidence file: {path.name}"
@@ -2325,7 +2387,10 @@ class AdaptivePlanningCoordinator:
                 self.store.append_proposal(proposal, now=self.clock())
                 return proposal
             assert response.question is not None
-            if clarification_rounds >= self.policy.max_clarification_rounds:
+            if (
+                self.policy.max_clarification_rounds is not None
+                and clarification_rounds >= self.policy.max_clarification_rounds
+            ):
                 raise PlanningError("Planning exceeded its clarification-round limit")
             answer = answer_question(response.question)
             if answer is None:
@@ -2352,7 +2417,10 @@ class AdaptivePlanningCoordinator:
     ) -> PlanningProposal | None:
         """Use natural language to produce a complete replacement revision."""
 
-        if proposal.revision >= self.policy.max_proposal_revisions:
+        if (
+            self.policy.max_proposal_revisions is not None
+            and proposal.revision >= self.policy.max_proposal_revisions
+        ):
             raise PlanningError("Planning reached its proposal-revision limit")
         change_request = _clean_text(change_request, label="proposal change request")
         transcript: list[dict[str, object]] = []
@@ -2383,7 +2451,10 @@ class AdaptivePlanningCoordinator:
                 self.store.append_proposal(revision, now=self.clock())
                 return revision
             assert response.question is not None
-            if clarification_rounds >= self.policy.max_clarification_rounds:
+            if (
+                self.policy.max_clarification_rounds is not None
+                and clarification_rounds >= self.policy.max_clarification_rounds
+            ):
                 raise PlanningError("Planning revision exceeded its question limit")
             answer = answer_question(response.question)
             if answer is None:
@@ -2407,7 +2478,10 @@ class AdaptivePlanningCoordinator:
     ) -> PlanningProposal:
         """Validate and persist one safe non-model proposal revision."""
 
-        if proposal.revision >= self.policy.max_proposal_revisions:
+        if (
+            self.policy.max_proposal_revisions is not None
+            and proposal.revision >= self.policy.max_proposal_revisions
+        ):
             raise PlanningError("Planning reached its proposal-revision limit")
         revision = apply_structured_edit(proposal, edit, created_at=self.clock())
         self._validate_preview(request, revision)
@@ -2682,7 +2756,7 @@ class AdaptivePlanningCoordinator:
             "controller_policy": {
                 "maximum_agents": self.policy.max_agents,
                 "maximum_concurrency": self.policy.max_concurrency,
-                "maximum_iterations": 3,
+                "maximum_iterations": self.policy.max_iterations,
                 "maximum_agent_calls": self.policy.budget.max_calls,
                 "maximum_estimated_cost_usd": str(
                     self.policy.budget.max_estimated_cost_usd
@@ -2841,9 +2915,8 @@ def _read_structured_edit(
     write("Safe plan edits")
     write("  1. Maximum parallel Agents")
     write("  2. Implementation iteration limit")
-    write("  3. One Agent timeout")
     if allow_model_edit:
-        write("  4. One Agent model profile")
+        write("  3. One Agent model profile")
     write("  x. Return to overview")
     while True:
         choice = read("Edit: ").strip().casefold()
@@ -2863,7 +2936,7 @@ def _read_structured_edit(
             )
         if choice == "2":
             value = _read_positive_integer(
-                "Implementation iterations (1-3): ", read=read, write=write
+                "Implementation iterations: ", read=read, write=write
             )
             return (
                 None
@@ -2873,27 +2946,7 @@ def _read_structured_edit(
                     value=value,
                 )
             )
-        if choice == "3":
-            write("Runtime Agents:")
-            for agent in proposal.body.agents:
-                write(f"  - {agent.id}: {agent.workload.value} workload")
-            agent_id = read("Agent ID: ").strip()
-            if not agent_id:
-                write("Agent ID must not be blank.")
-                continue
-            value = _read_positive_integer(
-                "Timeout in seconds (at least 30): ", read=read, write=write
-            )
-            return (
-                None
-                if value is None
-                else StructuredPlanEdit(
-                    kind=StructuredEditKind.AGENT_TIMEOUT,
-                    agent_id=agent_id,
-                    value=value,
-                )
-            )
-        if choice == "4" and allow_model_edit:
+        if choice == "3" and allow_model_edit:
             assert model_routing is not None
             write("Runtime Agents:")
             for agent in proposal.body.agents:
@@ -2917,7 +2970,7 @@ def _read_structured_edit(
                 agent_id=agent_id,
                 value=profile_id,
             )
-        choices = "1, 2, 3, 4, or x" if allow_model_edit else "1, 2, 3, or x"
+        choices = "1, 2, 3, or x" if allow_model_edit else "1, 2, or x"
         write(f"Choose {choices}.")
 
 

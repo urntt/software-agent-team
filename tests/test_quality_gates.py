@@ -25,6 +25,7 @@ from software_agent_team.quality_gates import (
     ReadOnlyInputMount,
     ResolvedInputMount,
     RunPolicy,
+    RunPolicyAuthority,
     SandboxExecution,
     SandboxInvocation,
     SandboxLimits,
@@ -222,6 +223,21 @@ def test_policy_requires_a_bounded_timeout_for_every_agent_role() -> None:
     payload["agent_stage_timeouts_seconds"]["planner"] = 3601
     with pytest.raises(ValidationError):
         RunPolicy.model_validate(payload)
+
+
+def test_product_policy_cannot_carry_controlled_evaluation_limits() -> None:
+    product_path = REPOSITORY_ROOT / "configs" / "product-policy.json"
+    product = json.loads(product_path.read_text(encoding="utf-8"))
+    evaluation = json.loads(POLICY_PATH.read_text(encoding="utf-8"))
+
+    validated = RunPolicy.model_validate(product)
+    assert validated.authority is RunPolicyAuthority.PRODUCT
+    assert validated.agent_budget is None
+    assert validated.agent_stage_timeouts_seconds is None
+
+    product["agent_budget"] = evaluation["agent_budget"]
+    with pytest.raises(ValidationError, match="product policies cannot contain"):
+        RunPolicy.model_validate(product)
 
 
 def test_mount_targets_must_be_read_only_and_isolated() -> None:

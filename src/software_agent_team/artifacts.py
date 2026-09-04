@@ -323,9 +323,9 @@ class HandoffEnvelope(BaseModel):
     kind: Literal[ArtifactKind.HANDOFF_ENVELOPE] = ArtifactKind.HANDOFF_ENVELOPE
     run_id: str = Field(min_length=1, pattern=r"^[a-z0-9][a-z0-9_-]*$")
     team_id: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9_]*$")
-    iteration: int = Field(ge=1, le=3)
+    iteration: int = Field(ge=1)
     stage: str = Field(default="handoff", pattern=r"^[a-z][a-z0-9_]*$")
-    sequence: int = Field(default=1, ge=1, le=999)
+    sequence: int = Field(default=1, ge=1)
     source_agent_id: str = Field(pattern=AGENT_ID_PATTERN)
     target_agent_id: str | None = Field(default=None, pattern=AGENT_ID_PATTERN)
     status: HandoffStatus
@@ -400,7 +400,7 @@ class PhaseArtifact(BaseModel):
 class IterationArtifact(PhaseArtifact):
     """Metadata shared by artifacts produced within one implementation pass."""
 
-    iteration: int = Field(ge=1, le=3)
+    iteration: int = Field(ge=1)
 
 
 class AgentToolCallEvidence(BaseModel):
@@ -537,7 +537,7 @@ def validate_tool_evidence_collection(
 
 
 class AgentExecutionRecord(BaseModel):
-    """Controller-recorded telemetry for one bounded Agent invocation."""
+    """Controller-recorded telemetry for one Agent invocation."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -547,9 +547,9 @@ class AgentExecutionRecord(BaseModel):
     )
     run_id: str = Field(min_length=1, pattern=r"^[a-z0-9][a-z0-9_-]*$")
     team_id: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9_]*$")
-    iteration: int = Field(ge=1, le=3)
+    iteration: int = Field(ge=1)
     stage: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
-    attempt: int = Field(default=1, ge=1, le=99)
+    attempt: int = Field(default=1, ge=1)
     agent_id: str = Field(pattern=AGENT_ID_PATTERN)
     capability: str = Field(pattern=AGENT_ID_PATTERN)
     session_key: str = Field(min_length=1)
@@ -587,8 +587,10 @@ class AgentExecutionRecord(BaseModel):
     session_record_count: int | None = Field(default=None, ge=1, le=4096)
     tool_calls: tuple[AgentToolCallEvidence, ...] = ()
     tool_evidence_error: str | None = Field(default=None, min_length=1, max_length=2000)
-    stage_timeout_seconds: int | None = Field(default=None, ge=1, le=3600)
-    remaining_timeout_seconds: int | None = Field(default=None, ge=1, le=3600)
+    # Zero records that product execution did not impose a per-Agent wall-clock
+    # limit. Positive values remain exact controlled-evaluation evidence.
+    stage_timeout_seconds: int | None = Field(default=None, ge=0)
+    remaining_timeout_seconds: int | None = Field(default=None, ge=0)
     response_artifact: ArtifactReference | None = None
     error: str | None = Field(default=None, min_length=1)
 
@@ -654,7 +656,7 @@ class AgentExecutionRecord(BaseModel):
             and self.remaining_timeout_seconds > self.stage_timeout_seconds
         ):
             raise ValueError(
-                "invocation timeout cannot exceed the configured role timeout"
+                "effective invocation timeout cannot exceed its configured limit"
             )
         if not set(self.ignored_controller_fields).issubset(
             self.controller_supplied_fields

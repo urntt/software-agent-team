@@ -134,10 +134,12 @@ repository, generated project, run artifacts, logs, exports, or terminal echo;
 OpenClaw stores them only in SAT's private OpenClaw state unless they are
 inherited from the trusted caller environment.
 
-Pricing overrides, adaptive maximum concurrency, invocation-timeout overrides,
-repair limits, policy files, and model routing remain advanced settings. They
-are not first-run questions. The controller uses checked-in safe defaults
-unless the user deliberately enters an advanced mode.
+Per-route pricing overrides, adaptive maximum concurrency, repair limits,
+policy files, and model routing remain advanced settings. Product Agent
+invocations do not have a configurable fixed wall-clock duration. Before every
+task's first model call, task admission shows the selected route prices and asks
+for one total USD ceiling plus an optional whole-run deadline; no deadline is
+the recommended default.
 
 ## Request, Clarification, and Confirmation
 
@@ -160,7 +162,7 @@ The user may answer in ordinary language. SAT then:
 6. Presents one complete overview containing requirements, acceptance criteria,
    Agent work assignments and their derived write/read-only authority, proposed
    Agents and rationales, dependencies, permissions, workspace scopes, model,
-   controller-resolved timeouts,
+   provider-liveness and optional whole-run deadline authority,
    execution waves, concurrency, iterations, and budgets; and
 7. Lets the user approve, request a natural-language replacement, make a
    supported safe edit, or cancel before any execution Agent is created.
@@ -183,14 +185,14 @@ After plan approval, the controller automatically and atomically:
 
 - Generates a unique internal run ID;
 - Persists the authorized request, append-only Planning turns, immutable plan
-  revisions, exact approval with per-Agent timeout rationale, confirmed
+  revisions, exact resource approval and liveness authority, confirmed
   TaskBrief, implementation intent, and approved TeamPlan;
 - Creates only the approved run-scoped AgentSpecs; it does not select a fixed
   product team;
 - Creates a fresh isolated source baseline and run workspace;
 - Verifies that no existing evidence or user file will be overwritten,
   including when a destination appears while the build is running;
-- Records the exact model routes, controller-resolved timeouts, policy, source,
+- Records the exact model routes, optional task deadline, liveness mode, policy, source,
   and environment identity.
 
 Write-once evidence and fresh source isolation remain mandatory. The UX change
@@ -295,8 +297,11 @@ The Product Demo Slice is complete only when all of the following are true:
    visibly confirms the exact model's local catalog/auth route, explains that a
    cold local check may take up to 90 seconds without generating content, and
    completes first-run configuration without requiring another SAT subcommand.
-5. The normal user is not asked for prices, concurrency, timeouts, repair
-   limits, team IDs, policy paths, run IDs, or JSON files.
+5. The normal user is asked for one total USD task budget and whether a real
+   whole-run deadline exists. Discoverable route prices and context lengths are
+   shown automatically; only missing model metadata is requested. The user is
+   not asked for Agent/call/token/iteration limits, per-Agent timeouts, team IDs,
+   policy paths, run IDs, or JSON files.
 6. SAT asks what to build, obtains authorization before Planning, performs
    bounded clarification, and lets the user revise or approve a complete plan
    before an execution Agent is created.

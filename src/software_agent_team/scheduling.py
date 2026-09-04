@@ -126,7 +126,7 @@ class ScheduledAgentRecord(BaseModel):
     stage_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     dependencies: tuple[str, ...] = ()
     state: ScheduledAgentState
-    timeout_seconds: int = Field(ge=1, le=3600)
+    timeout_seconds: int = Field(ge=0)
     started_at: datetime | None = None
     finished_at: datetime | None = None
     duration_ms: int | None = Field(default=None, ge=0)
@@ -205,7 +205,7 @@ class DagScheduleResult(BaseModel):
 
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     plan_id: str
-    iteration: int = Field(ge=1, le=3)
+    iteration: int = Field(ge=1)
     status: ScheduleStatus
     records: tuple[ScheduledAgentRecord, ...]
     events: tuple[ScheduleEvent, ...]

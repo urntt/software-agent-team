@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
+from software_agent_team.model_metadata import ModelMetadataSource
 from software_agent_team.model_routing import (
     ModelProfile,
     ModelRoutingError,
@@ -193,7 +194,7 @@ def test_policy_rejects_capability_mismatch_and_unknown_agent_override() -> None
         )
 
 
-def test_policy_freezes_only_explicit_bounded_provider_fallbacks() -> None:
+def test_policy_freezes_the_finite_eligible_provider_fallback_chain() -> None:
     policy = ModelRoutingPolicy(
         mode=ModelRoutingMode.POLICY,
         profiles=(
@@ -218,7 +219,6 @@ def test_policy_freezes_only_explicit_bounded_provider_fallbacks() -> None:
         ),
         default_profile_id="primary",
         authorized_switch_conditions=(ModelSwitchCondition.PROVIDER_FAILURE,),
-        max_switches_per_agent=1,
     )
 
     plan = resolve_model_route_plan(
@@ -226,8 +226,42 @@ def test_policy_freezes_only_explicit_bounded_provider_fallbacks() -> None:
         (agent("developer", AgentCapability.IMPLEMENTATION, stage_id="build"),),
     )
 
-    assert plan.get_assignment("developer").fallback_route_ids == ("fallback",)
-    assert tuple(route.id for route in plan.routes) == ("primary", "fallback")
+    assert plan.get_assignment("developer").fallback_route_ids == (
+        "fallback",
+        "unused",
+    )
+    assert tuple(route.id for route in plan.routes) == (
+        "primary",
+        "fallback",
+        "unused",
+    )
+
+
+def test_policy_does_not_impose_legacy_profile_or_metadata_ceilings() -> None:
+    profiles = tuple(
+        ModelProfile(
+            id=f"route_{index}",
+            model=f"provider/model-{index}",
+            capabilities=(*BOOTSTRAP, AgentCapability.IMPLEMENTATION),
+            priority=1000 + index,
+            input_cost_per_million_usd=10_001,
+            output_cost_per_million_usd=20_001,
+            pricing_source=ModelMetadataSource.USER_SUPPLIED,
+            context_window_tokens=100_000_001,
+            context_source=ModelMetadataSource.USER_SUPPLIED,
+        )
+        for index in range(17)
+    )
+
+    policy = ModelRoutingPolicy(
+        mode=ModelRoutingMode.POLICY,
+        profiles=profiles,
+        default_profile_id="route_0",
+    )
+
+    assert len(policy.profiles) == 17
+    assert policy.profiles[-1].priority == 1016
+    assert policy.profiles[-1].context_window_tokens == 100_000_001
 
 
 def test_strict_policy_rejects_hidden_profiles_or_switches() -> None:

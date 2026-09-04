@@ -7,7 +7,7 @@ import os
 import re
 from collections import deque
 from collections.abc import Iterable, Mapping, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
@@ -23,7 +23,7 @@ SELF_CHECK_SCHEMA_VERSION = 1
 _CHECK_ID_PATTERN = r"^[a-z][a-z0-9_.:-]{2,127}$"
 _RUN_ID_PATTERN = r"^[a-z0-9][a-z0-9_-]*$"
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
-_MAX_REPORT_BYTES = 4 * 1024 * 1024
+MAX_SELF_CHECK_REPORT_BYTES = 4 * 1024 * 1024
 
 
 class SelfCheckError(RuntimeError):
@@ -119,10 +119,10 @@ class TaskModelMetadata(BaseModel):
 
     profile_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     model: str = Field(min_length=3, max_length=500)
-    input_cost_per_million_usd: Decimal = Field(ge=0, le=10_000)
-    output_cost_per_million_usd: Decimal = Field(ge=0, le=10_000)
+    input_cost_per_million_usd: Decimal = Field(ge=0)
+    output_cost_per_million_usd: Decimal = Field(ge=0)
     pricing_source: ModelMetadataSource
-    context_window_tokens: int = Field(ge=1, le=100_000_000)
+    context_window_tokens: int = Field(ge=1)
     context_source: ModelMetadataSource
     observed_at: datetime
 
@@ -162,12 +162,9 @@ class TaskResourceAuthorization(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    maximum_estimated_cost_usd: Decimal = Field(ge=0, le=10_000)
+    maximum_estimated_cost_usd: Decimal = Field(ge=0)
     run_deadline_seconds: int | None = Field(default=None, ge=1)
-    model_metadata: tuple[TaskModelMetadata, ...] = Field(
-        min_length=1,
-        max_length=128,
-    )
+    model_metadata: tuple[TaskModelMetadata, ...] = Field(min_length=1)
     confirmation: Literal["user_confirmed"] = "user_confirmed"
     authorized_at: datetime
 
@@ -191,6 +188,14 @@ class TaskResourceAuthorization(BaseModel):
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError("task authorization time must include a UTC offset")
         return value.astimezone(UTC)
+
+    @property
+    def deadline_at(self) -> datetime | None:
+        """Return the exact whole-run deadline derived from user authority."""
+
+        if self.run_deadline_seconds is None:
+            return None
+        return self.authorized_at + timedelta(seconds=self.run_deadline_seconds)
 
 
 class SelfCheckResult(BaseModel):
@@ -469,7 +474,7 @@ class TaskSelfCheckStore:
             json.dumps(report.model_dump(mode="json"), ensure_ascii=False, indent=2)
             + "\n"
         ).encode()
-        if len(content) > _MAX_REPORT_BYTES:
+        if len(content) > MAX_SELF_CHECK_REPORT_BYTES:
             raise SelfCheckError("self-check report exceeds the persistence limit")
         temporary = run_directory / f".{destination.name}.{uuid4().hex}.tmp"
         try:
@@ -504,7 +509,7 @@ class TaskSelfCheckStore:
                 raise SelfCheckError(f"self-check entry is not a regular file: {path}")
             try:
                 raw = path.read_bytes()
-                if len(raw) > _MAX_REPORT_BYTES:
+                if len(raw) > MAX_SELF_CHECK_REPORT_BYTES:
                     raise SelfCheckError("self-check report exceeds the read limit")
                 report = TaskSelfCheckReport.model_validate_json(raw)
             except (OSError, ValueError) as error:

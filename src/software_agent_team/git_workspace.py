@@ -105,7 +105,7 @@ class GitSnapshot(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     run_id: str = Field(min_length=1, pattern=r"^[a-z0-9][a-z0-9_-]*$")
-    iteration: int = Field(ge=1, le=3)
+    iteration: int = Field(ge=1)
     input_commit: str = Field(pattern=COMMIT_PATTERN)
     output_commit: str = Field(pattern=COMMIT_PATTERN)
     commit_count: int = Field(ge=1)
