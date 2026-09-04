@@ -92,6 +92,13 @@ def test_managed_identity_round_trips_without_git_checkout(tmp_path: Path) -> No
     assert report.identity_status is IdentityStatus.VERIFIED
     assert report.provenance_source == "installation_record"
     assert report.display_version == "0.1.0+g" + "a" * 12
+    assert {item.family.value for item in report.schema_support} >= {
+        "installation",
+        "user_configuration",
+        "run",
+        "planning",
+        "artifact",
+    }
     assert render_short_version(report) == "sat 0.1.0+g" + "a" * 12 + " [stable]"
 
 

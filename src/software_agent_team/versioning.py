@@ -18,6 +18,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from software_agent_team.schema_compatibility import SchemaSupport
+
 DISTRIBUTION_NAME = "software-agent-team"
 INSTALLATION_RECORD_SCHEMA_VERSION = 1
 INSTALLATION_RECORD_ENVIRONMENT_VARIABLE = "SAT_INSTALL_METADATA_PATH"
@@ -163,6 +165,7 @@ class SoftwareVersionReport(BaseModel):
     installed_at: datetime | None
     identity_status: IdentityStatus
     provenance_source: Literal["installation_record", "git", "unavailable"]
+    schema_support: tuple[SchemaSupport, ...]
     problems: tuple[str, ...] = ()
 
     @field_validator("release_version")
@@ -269,6 +272,8 @@ def inspect_software_version(
 ) -> SoftwareVersionReport:
     """Inspect package identity, managed provenance, or a source checkout."""
 
+    from software_agent_team.schema_compatibility import supported_schemas
+
     release_version = installed_version or _installed_release_version(project_root)
     parse_release_version(release_version)
     root = project_root.resolve()
@@ -296,6 +301,7 @@ def inspect_software_version(
             installed_at=record.installed_at,
             identity_status=status,
             provenance_source="installation_record",
+            schema_support=supported_schemas(),
             problems=tuple(problems),
         )
 
@@ -318,6 +324,7 @@ def inspect_software_version(
                 IdentityStatus.PARTIAL if dirty else IdentityStatus.VERIFIED
             ),
             provenance_source="git",
+            schema_support=supported_schemas(),
             problems=("source checkout has uncommitted changes",) if dirty else (),
         )
 
@@ -335,6 +342,7 @@ def inspect_software_version(
         installed_at=None,
         identity_status=IdentityStatus.PARTIAL,
         provenance_source="unavailable",
+        schema_support=supported_schemas(),
         problems=("source provenance is unavailable",),
     )
 
@@ -362,6 +370,12 @@ def render_version_report(report: SoftwareVersionReport) -> str:
         f"identity: {report.identity_status.value}",
         f"provenance: {report.provenance_source}",
     ]
+    lines.extend(
+        "schema: "
+        f"{support.family.value} current={support.current} "
+        f"readable={support.minimum_readable}..{support.maximum_readable}"
+        for support in report.schema_support
+    )
     lines.extend(f"problem: {problem}" for problem in report.problems)
     return "\n".join(lines)
 

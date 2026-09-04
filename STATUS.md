@@ -1111,7 +1111,8 @@ The acceptance contract is
 - Local `sat --version`, human-readable `sat version`, and machine-readable
   `sat version --json` reporting from one release/source identity API, including
   managed-install provenance, exact Git revision and dirty state when
-  available, and explicit partial or inconsistent identity status;
+  available, explicit partial or inconsistent identity status, and one
+  authoritative readable interval for every persisted schema family;
 - Reproducible toolchain setup and diagnostics;
 - Unified validation, benchmark-preparation, preflight, and `sat run` CLI;
 - Versioned team manifest and validation;
