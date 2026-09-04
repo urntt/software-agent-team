@@ -180,6 +180,7 @@ class DynamicWorkflowCoordinator:
         executor: AgentExecutor,
         quality_gate_factory: DynamicQualityGateFactory,
         pricing_by_model: Mapping[str, ModelPricing],
+        budget_ledger: AgentBudgetLedger | None = None,
         runtime_setup: RuntimeSetup | None = None,
         manual_review_criteria: tuple[str, ...] = (),
         review_scope_by_agent: Mapping[str, tuple[str, ...]] | None = None,
@@ -207,6 +208,7 @@ class DynamicWorkflowCoordinator:
         self.executor = executor
         self.quality_gate_factory = quality_gate_factory
         self.pricing_by_model = prices
+        self.budget_ledger = budget_ledger
         self.runtime_setup = runtime_setup
         self.manual_review_criteria = criteria
         self.review_scope_by_agent = review_scope_by_agent
@@ -250,6 +252,13 @@ class DynamicWorkflowCoordinator:
         if set(self.pricing_by_model) != route_models:
             raise DynamicWorkflowError(
                 "pricing evidence must exactly cover approved model routes"
+            )
+        if (
+            self.budget_ledger is not None
+            and self.budget_ledger.budget != team_plan.budget
+        ):
+            raise DynamicWorkflowError(
+                "shared task budget ledger does not match the approved TeamPlan"
             )
 
         controller = RunController(RunStore(self.runs_root), None, clock=self.clock)
@@ -309,7 +318,7 @@ class DynamicWorkflowCoordinator:
             ),
             event_journal=event_journal,
             run_directory=run_directory,
-            budget_ledger=AgentBudgetLedger(team_plan.budget),
+            budget_ledger=(self.budget_ledger or AgentBudgetLedger(team_plan.budget)),
             control_channel=control_channel,
         )
         control_cleanup: ControlStoreCleanup | None = None

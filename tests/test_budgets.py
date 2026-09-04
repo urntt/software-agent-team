@@ -10,6 +10,7 @@ from software_agent_team.budgets import (
     AgentBudget,
     AgentBudgetExceeded,
     AgentBudgetLedger,
+    BudgetAuthority,
     ModelPricing,
 )
 
@@ -62,6 +63,36 @@ def test_agent_budget_requires_every_aggregate_ceiling() -> None:
 
     assert budget.max_calls == 14
     assert budget.max_estimated_cost_usd == Decimal("25.00")
+
+
+def test_user_task_budget_has_only_one_usd_ceiling() -> None:
+    budget = AgentBudget(
+        authority=BudgetAuthority.USER_TASK,
+        max_estimated_cost_usd="5.00",
+    )
+
+    assert budget.max_calls is None
+    assert budget.max_input_tokens is None
+    assert budget.max_output_tokens is None
+    assert budget.max_agent_duration_seconds is None
+
+
+def test_free_user_task_may_authorize_zero_total_cost() -> None:
+    budget = AgentBudget(
+        authority=BudgetAuthority.USER_TASK,
+        max_estimated_cost_usd="0",
+    )
+
+    assert budget.max_estimated_cost_usd == 0
+
+
+def test_user_task_rejects_evaluation_only_count_limit() -> None:
+    with pytest.raises(ValidationError, match="only one USD ceiling"):
+        AgentBudget(
+            authority=BudgetAuthority.USER_TASK,
+            max_calls=10,
+            max_estimated_cost_usd="5.00",
+        )
 
 
 @pytest.mark.parametrize(

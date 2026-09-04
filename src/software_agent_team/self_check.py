@@ -8,6 +8,7 @@ import re
 from collections import deque
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, datetime
+from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
 from typing import Literal, Self
@@ -16,6 +17,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from software_agent_team.integrity import canonical_model_sha256
+from software_agent_team.model_metadata import ModelMetadataSource
 
 SELF_CHECK_SCHEMA_VERSION = 1
 _CHECK_ID_PATTERN = r"^[a-z][a-z0-9_.:-]{2,127}$"
@@ -110,6 +112,87 @@ class SelfCheckEvidence(BaseModel):
         return value
 
 
+class TaskModelMetadata(BaseModel):
+    """Run-scoped price and context facts frozen before the first model call."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    profile_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
+    model: str = Field(min_length=3, max_length=500)
+    input_cost_per_million_usd: Decimal = Field(ge=0, le=10_000)
+    output_cost_per_million_usd: Decimal = Field(ge=0, le=10_000)
+    pricing_source: ModelMetadataSource
+    context_window_tokens: int = Field(ge=1, le=100_000_000)
+    context_source: ModelMetadataSource
+    observed_at: datetime
+
+    @field_validator("model")
+    @classmethod
+    def require_model_reference(cls, value: str) -> str:
+        cleaned = value.strip()
+        provider, separator, model = cleaned.partition("/")
+        if (
+            not provider
+            or not separator
+            or not model
+            or any(character.isspace() for character in cleaned)
+        ):
+            raise ValueError("task model metadata requires provider/model")
+        return cleaned
+
+    @field_validator("observed_at")
+    @classmethod
+    def require_aware_observation_time(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("task model metadata time must include a UTC offset")
+        return value.astimezone(UTC)
+
+    @model_validator(mode="after")
+    def validate_zero_price_source(self) -> Self:
+        if self.pricing_source is ModelMetadataSource.CONFIRMED_ZERO and (
+            self.input_cost_per_million_usd != 0
+            or self.output_cost_per_million_usd != 0
+        ):
+            raise ValueError("confirmed-zero task pricing requires two zero prices")
+        return self
+
+
+class TaskResourceAuthorization(BaseModel):
+    """User authority for total task cost and an optional whole-run deadline."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    maximum_estimated_cost_usd: Decimal = Field(ge=0, le=10_000)
+    run_deadline_seconds: int | None = Field(default=None, ge=1)
+    model_metadata: tuple[TaskModelMetadata, ...] = Field(
+        min_length=1,
+        max_length=128,
+    )
+    confirmation: Literal["user_confirmed"] = "user_confirmed"
+    authorized_at: datetime
+
+    @field_validator("model_metadata")
+    @classmethod
+    def require_unique_models(
+        cls,
+        values: tuple[TaskModelMetadata, ...],
+    ) -> tuple[TaskModelMetadata, ...]:
+        profile_ids = [item.profile_id for item in values]
+        models = [item.model for item in values]
+        if len(profile_ids) != len(set(profile_ids)):
+            raise ValueError("task model profile IDs must be unique")
+        if len(models) != len(set(models)):
+            raise ValueError("task model identities must be unique")
+        return values
+
+    @field_validator("authorized_at")
+    @classmethod
+    def require_aware_authorization_time(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("task authorization time must include a UTC offset")
+        return value.astimezone(UTC)
+
+
 class SelfCheckResult(BaseModel):
     """One dependency-aware, actionable readiness result."""
 
@@ -189,6 +272,7 @@ class TaskSelfCheckReport(BaseModel):
     revision: int = Field(ge=1)
     previous_report_sha256: str | None = Field(default=None, pattern=_SHA256_PATTERN)
     created_at: datetime
+    resource_authorization: TaskResourceAuthorization | None = None
     checks: tuple[SelfCheckResult, ...] = Field(min_length=1, max_length=2048)
 
     @field_validator("created_at")

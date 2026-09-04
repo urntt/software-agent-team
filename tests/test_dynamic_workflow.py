@@ -22,7 +22,7 @@ from software_agent_team.artifacts import (
     ReviewSeverity,
     TaskBrief,
 )
-from software_agent_team.budgets import AgentBudget, ModelPricing
+from software_agent_team.budgets import AgentBudget, AgentBudgetLedger, ModelPricing
 from software_agent_team.controls import (
     ControlApplicationBoundary,
     ControlCommandStatus,
@@ -507,6 +507,7 @@ def coordinator(
     gates: RecordingQualityGateFactory,
     *,
     control_store_handler=None,
+    budget_ledger: AgentBudgetLedger | None = None,
 ) -> DynamicWorkflowCoordinator:
     """Build the dynamic coordinator from test-owned boundaries."""
 
@@ -524,6 +525,7 @@ def coordinator(
         executor=executor,
         quality_gate_factory=gates,
         pricing_by_model={MODEL: ModelPricing(model=MODEL)},
+        budget_ledger=budget_ledger,
         manual_review_criteria=manual,
         control_store_handler=control_store_handler,
         clock=lambda: FIXED_TIME,
@@ -619,6 +621,45 @@ def test_dynamic_workflow_accepts_one_iteration_with_live_lifecycle_order(
     )
     assert invocation_event.budget_usage is not None
     assert invocation_event.model == MODEL
+
+
+def test_dynamic_workflow_continues_one_shared_planning_budget_ledger(
+    tmp_path: Path,
+) -> None:
+    approved = approved_inputs(run_id="adaptive-shared-budget")
+    ledger = AgentBudgetLedger(approved.team_plan.budget)
+    planning_call = ledger.reserve_call("clarifier")
+    planning_usage = ledger.complete_call(
+        planning_call,
+        input_tokens=100,
+        output_tokens=50,
+        duration_ms=20,
+        estimated_cost_usd=None,
+    )
+    source = initialize_source(tmp_path)
+    executor = AdaptiveExecutor(tmp_path / "workspaces" / approved.task_brief.run_id)
+
+    outcome = coordinator(
+        tmp_path,
+        approved,
+        executor,
+        RecordingQualityGateFactory(),
+        budget_ledger=ledger,
+    ).execute(approved, source_repository=source)
+
+    assert outcome.record.phase is RunPhase.COMPLETED
+    usage = ledger.snapshot()
+    assert usage.calls_completed == (
+        planning_usage.calls_completed + len(approved.team_plan.agents)
+    )
+    invocation_usages = tuple(
+        event.budget_usage
+        for event in outcome.events
+        if event.kind is ProgressEventKind.AGENT_INVOCATION_COMPLETED
+    )
+    assert invocation_usages
+    assert invocation_usages[0] is not None
+    assert invocation_usages[0].calls_completed >= 2
 
 
 def test_dynamic_workflow_revises_from_commit_bound_feedback_then_accepts(

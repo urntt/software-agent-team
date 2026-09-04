@@ -200,20 +200,31 @@ SAT configuration is stored atomically with mode `0600` at:
 ${XDG_CONFIG_HOME:-$HOME/.config}/software-agent-team/config.json
 ```
 
-Schema version 6 stores one or more secret-free model profiles, the default
+Schema version 7 stores one or more secret-free model profiles, the default
 bootstrap profile, strict or policy routing, optional capability and stage
 overrides, and the only currently supported runtime switch condition:
 `provider_failure`. A profile contains a canonical OpenClaw `provider/model`,
-its authorized SAT Agent capabilities, deterministic integer priority, and an
-optional paired price table. It never contains a credential.
+its authorized SAT Agent capabilities, deterministic integer priority, paired
+input/output prices with their source and observation time, and context-window
+capacity with its source and observation time. Setup discovers these facts from
+the isolated runtime when possible, displays them, and lets the user correct
+prices. It asks for context only when discovery fails and never treats an
+unknown price as zero. It never contains a credential.
 
 The same configuration may contain an adaptive `max_concurrency` from 1
-through 16, `compact`, `standard`, or `detailed` progress visibility, and an
-explicit global invocation-timeout override. The guided first-use flow writes
-one strict default profile and uses controller defaults for other fields.
-Existing schema-v1 through schema-v5 values migrate one way into schema 6;
+through 16 and `compact`, `standard`, or `detailed` progress visibility. The
+guided first-use flow writes one strict default profile and uses controller
+defaults for other fields. Existing schema-v1 through schema-v6 values migrate
+one way into schema 7;
 the former scalar model and price fields become the default profile rather
 than a second source of truth.
+
+Before each task's first model call, SAT refreshes every authorized route and
+freezes a task-scoped metadata snapshot. It then asks for one maximum total
+model spend in USD and, separately, whether to set a whole-run deadline; no
+deadline is the recommended default. Calls, tokens, Agent count, Reviewer
+count, iterations, and cumulative Agent duration are measured but are not
+separate ordinary-product limits.
 
 The normal first-run wizard stores only one strict default model profile in SAT
 configuration and uses checked-in runtime defaults. Credential entry and

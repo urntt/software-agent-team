@@ -17,6 +17,7 @@ from software_agent_team.managed_install import (
     ManagedInstallPaths,
     ManagedTarget,
 )
+from software_agent_team.model_metadata import ModelMetadataSource
 from software_agent_team.model_routing import ModelProfile
 from software_agent_team.run_control import RunPhase
 from software_agent_team.runtime_configuration import (
@@ -27,6 +28,7 @@ from software_agent_team.runtime_configuration import (
 from software_agent_team.schema_compatibility import supported_schemas
 from software_agent_team.teams import AgentCapability, ModelRoutingMode
 from software_agent_team.user_configuration import (
+    USER_CONFIGURATION_SCHEMA_VERSION,
     UserConfiguration,
     load_user_configuration,
     save_user_configuration,
@@ -34,6 +36,66 @@ from software_agent_team.user_configuration import (
 from software_agent_team.versioning import ManagedChannel, make_installation_record
 
 REPOSITORY_ROOT = Path(__file__).parents[1]
+
+
+def ready_user_configuration(
+    *,
+    model: str = "provider/model",
+    max_concurrency: int = 2,
+    progress_visibility: str = "standard",
+    stage_timeout_seconds: int | None = None,
+) -> UserConfiguration:
+    """Return one fully discovered secret-free model configuration."""
+
+    observed_at = datetime(2026, 9, 4, 12, 0, tzinfo=UTC)
+    return UserConfiguration(
+        model_profiles=(
+            ModelProfile(
+                id="default",
+                model=model,
+                capabilities=tuple(AgentCapability),
+                input_cost_per_million_usd="1.00",
+                output_cost_per_million_usd="2.00",
+                pricing_source=ModelMetadataSource.RUNTIME_CATALOG,
+                pricing_observed_at=observed_at,
+                context_window_tokens=120_000,
+                context_source=ModelMetadataSource.RUNTIME_CATALOG,
+                context_observed_at=observed_at,
+            ),
+        ),
+        max_concurrency=max_concurrency,
+        progress_visibility=progress_visibility,
+        stage_timeout_seconds=stage_timeout_seconds,
+    )
+
+
+def task_resource_authorization(
+    configuration: UserConfiguration,
+    *,
+    maximum_cost_usd: str = "5.00",
+    deadline_seconds: int | None = None,
+) -> cli.TaskResourceAuthorization:
+    """Freeze one test-owned task authorization from complete model metadata."""
+
+    observed_at = datetime(2026, 9, 4, 12, 5, tzinfo=UTC)
+    return cli.TaskResourceAuthorization(
+        maximum_estimated_cost_usd=maximum_cost_usd,
+        run_deadline_seconds=deadline_seconds,
+        model_metadata=tuple(
+            cli.TaskModelMetadata(
+                profile_id=profile.id,
+                model=profile.model,
+                input_cost_per_million_usd=profile.input_cost_per_million_usd,
+                output_cost_per_million_usd=profile.output_cost_per_million_usd,
+                pricing_source=profile.pricing_source,
+                context_window_tokens=profile.context_window_tokens,
+                context_source=profile.context_source,
+                observed_at=observed_at,
+            )
+            for profile in configuration.model_profiles
+        ),
+        authorized_at=observed_at,
+    )
 
 
 def test_cli_version_commands_are_local_and_machine_readable(
@@ -293,6 +355,9 @@ def test_cli_no_command_runs_the_guided_product_journey(
             "Build a CLI that checks Markdown links.",
             "yes",
             "link-checker",
+            "",
+            "no",
+            "yes",
             "yes",
         )
     )
@@ -306,7 +371,7 @@ def test_cli_no_command_runs_the_guided_product_journey(
     monkeypatch.setattr(
         cli,
         "_ensure_product_configuration",
-        lambda _state_paths: UserConfiguration(
+        lambda _state_paths: ready_user_configuration(
             model="provider/model",
             progress_visibility="detailed",
         ),
@@ -385,11 +450,14 @@ def test_cli_no_command_runs_the_guided_product_journey(
     assert planning_request.authorization == "user_confirmed"
     assert planning_request.model == "provider/model"
     assert observed["approved"] is approved
+    planning_kwargs = observed["planning_kwargs"]
     assert options.source_repository == source
     assert options.model == "provider/model"
     assert options.progress_handler.visibility is cli.RunEventVisibility.DETAILED
     assert options.policy == cli.DEFAULT_PRODUCT_POLICY
     assert options.quality_manifest == cli.DEFAULT_PRODUCT_PROFILE
+    assert planning_kwargs["budget_ledger"] is options.budget_ledger
+    assert options.budget_ledger is not None
     output = capsys.readouterr().out
     assert "What would you like to build?" in output
     assert "task-management" not in output
@@ -410,6 +478,9 @@ def test_guided_request_reprompts_invalid_unicode_before_planning_authorization(
             "Build a local timer",
             "yes",
             "timer",
+            "",
+            "no",
+            "yes",
             "yes",
         )
     )
@@ -418,17 +489,19 @@ def test_guided_request_reprompts_invalid_unicode_before_planning_authorization(
     collected = cli._collect_product_request(
         working_directory=tmp_path,
         run_id="sat-guided-unicode",
-        configuration=UserConfiguration(model="provider/model"),
+        configuration=ready_user_configuration(),
         execution_profile=("A new Python project.",),
         base_constraints=("No runtime network access.",),
     )
 
     assert collected is not None
-    request, destination = collected
+    request, destination, authorization = collected
     assert request.source_request == "Build a local timer"
     assert request.base_constraints == ("No runtime network access.",)
     assert request.authorization == "user_confirmed"
     assert destination == tmp_path / "timer"
+    assert authorization.maximum_estimated_cost_usd == Decimal("5.00")
+    assert authorization.run_deadline_seconds is None
     assert "Invalid terminal text in software request" in capsys.readouterr().out
 
 
@@ -456,9 +529,16 @@ def test_product_planning_uses_one_bootstrap_agent_and_cleans_it(
         cli.DEFAULT_PRODUCT_POLICY,
         cli.DEFAULT_PRODUCT_PROFILE,
     )
-    configuration = UserConfiguration(
+    configuration = ready_user_configuration(
         model="provider/model",
         max_concurrency=4,
+    )
+    authorization = task_resource_authorization(configuration)
+    budget_ledger = cli.AgentBudgetLedger(
+        cli.AgentBudget(
+            authority=cli.BudgetAuthority.USER_TASK,
+            max_estimated_cost_usd=authorization.maximum_estimated_cost_usd,
+        )
     )
     observed: dict[str, object] = {}
     runtime_paths: list[Path] = []
@@ -524,6 +604,8 @@ def test_product_planning_uses_one_bootstrap_agent_and_cleans_it(
         state_paths=state_paths,
         quality=quality,
         configuration=configuration,
+        resource_authorization=authorization,
+        budget_ledger=budget_ledger,
     )
 
     assert result is approved
@@ -535,7 +617,7 @@ def test_product_planning_uses_one_bootstrap_agent_and_cleans_it(
     coordinator = observed["coordinator"]
     assert coordinator.store.root == state_paths.planning
     assert coordinator.policy.max_concurrency == 4
-    assert coordinator.policy.max_review_agents == 1
+    assert coordinator.policy.max_review_agents is None
     assert coordinator.policy.require_review_agent
     assert coordinator.policy.planning_timeout_seconds == 180
     implementation_timeout = coordinator.policy.capability_timeouts[
@@ -638,6 +720,14 @@ def test_product_planning_reports_model_timeout_before_creating_an_agent(
             "Planning must not start after runtime preflight failure"
         ),
     )
+    configuration = ready_user_configuration()
+    authorization = task_resource_authorization(configuration)
+    budget_ledger = cli.AgentBudgetLedger(
+        cli.AgentBudget(
+            authority=cli.BudgetAuthority.USER_TASK,
+            max_estimated_cost_usd=authorization.maximum_estimated_cost_usd,
+        )
+    )
 
     with pytest.raises(
         cli.RuntimeConfigurationError,
@@ -651,7 +741,9 @@ def test_product_planning_reports_model_timeout_before_creating_an_agent(
             source_repository=planning_workspace,
             state_paths=state_paths,
             quality=quality,
-            configuration=UserConfiguration(model="provider/model"),
+            configuration=configuration,
+            resource_authorization=authorization,
+            budget_ledger=budget_ledger,
         )
 
     assert not any(state_paths.planning.iterdir())
@@ -670,12 +762,14 @@ def test_product_global_timeout_override_is_an_exact_controller_policy() -> None
         cli.DEFAULT_PRODUCT_PROFILE,
     )
 
+    configuration = ready_user_configuration(
+        model="provider/model",
+        stage_timeout_seconds=1200,
+    )
     policy = cli._product_planning_policy(
         quality,
-        UserConfiguration(
-            model="provider/model",
-            stage_timeout_seconds=1200,
-        ),
+        configuration,
+        task_resource_authorization(configuration),
     )
 
     assert policy.planning_timeout_seconds == 1200
@@ -693,6 +787,8 @@ def test_dynamic_product_launch_uses_approved_agents_and_manual_scope(
         model="provider/model",
         input_cost_per_million_usd=None,
         output_cost_per_million_usd=None,
+        pricing_source=None,
+        pricing_observed_at=None,
     )
     agents = (SimpleNamespace(id="builder"), SimpleNamespace(id="reviewer"))
     team_plan = SimpleNamespace(
@@ -1057,7 +1153,7 @@ def test_cli_interactive_configuration_prompts_for_first_run_defaults(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     path = tmp_path / "config.json"
-    answers = iter(("no", "provider/model"))
+    answers = iter(("no", "provider/model", ""))
     monkeypatch.setenv("SAT_CONFIG_PATH", str(path))
     monkeypatch.setenv("SAT_STATE_ROOT", str(tmp_path / "state"))
     monkeypatch.setattr(cli.sys, "stdin", SimpleNamespace(isatty=lambda: True))
@@ -1068,6 +1164,9 @@ def test_cli_interactive_configuration_prompts_for_first_run_defaults(
         lambda *_args, **_kwargs: OpenClawModelInspection(
             model="provider/model",
             available=True,
+            context_window_tokens=120_000,
+            input_cost_per_million_usd="1.00",
+            output_cost_per_million_usd="2.00",
         ),
     )
 
@@ -1076,8 +1175,12 @@ def test_cli_interactive_configuration_prompts_for_first_run_defaults(
     configuration = load_user_configuration(path)
     assert configuration is not None
     assert configuration.model == "provider/model"
-    assert configuration.input_cost_per_million_usd is None
-    assert configuration.output_cost_per_million_usd is None
+    assert configuration.input_cost_per_million_usd == Decimal("1.00")
+    assert configuration.output_cost_per_million_usd == Decimal("2.00")
+    assert configuration.default_model_profile.pricing_source is (
+        ModelMetadataSource.RUNTIME_CATALOG
+    )
+    assert configuration.default_model_profile.context_window_tokens == 120_000
     assert configuration.max_concurrency == 2
     assert configuration.progress_visibility == "standard"
     assert configuration.stage_timeout_seconds is None
@@ -1106,13 +1209,13 @@ def test_cli_requires_a_complete_price_pair(
     assert "price flags must be supplied together" in capsys.readouterr().out
 
 
-def test_first_run_model_setup_keeps_credentials_and_prices_outside_sat(
+def test_first_run_setup_keeps_credentials_outside_sat_and_saves_model_metadata(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     path = tmp_path / "config.json"
-    answers = iter(("no", "provider/model", "no"))
+    answers = iter(("no", "provider/model", "", "no"))
     monkeypatch.setenv("SAT_CONFIG_PATH", str(path))
     monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
     monkeypatch.setattr(
@@ -1140,6 +1243,9 @@ def test_first_run_model_setup_keeps_credentials_and_prices_outside_sat(
         lambda *_args, **_kwargs: OpenClawModelInspection(
             model="provider/model",
             available=True,
+            context_window_tokens=120_000,
+            input_cost_per_million_usd="1.00",
+            output_cost_per_million_usd="2.00",
         ),
     )
 
@@ -1149,9 +1255,10 @@ def test_first_run_model_setup_keeps_credentials_and_prices_outside_sat(
     configured = cli._ensure_product_configuration(state_paths)
 
     assert configured.model == "provider/model"
-    assert configured.input_cost_per_million_usd is None
+    assert configured.input_cost_per_million_usd == Decimal("1.00")
+    assert configured.default_model_profile.context_window_tokens == 120_000
     payload = json.loads(path.read_text(encoding="utf-8"))
-    assert payload["schema_version"] == 6
+    assert payload["schema_version"] == USER_CONFIGURATION_SCHEMA_VERSION
     assert "api_key" not in payload
     output = capsys.readouterr().out
     assert "Checking SAT's isolated model configuration" in output
@@ -1221,11 +1328,21 @@ def test_unavailable_optional_model_profile_warns_without_resetting_configuratio
                 id="default",
                 model="provider/default",
                 capabilities=capabilities,
+                input_cost_per_million_usd="1.00",
+                output_cost_per_million_usd="2.00",
+                pricing_source=ModelMetadataSource.USER_SUPPLIED,
+                context_window_tokens=120_000,
+                context_source=ModelMetadataSource.USER_SUPPLIED,
             ),
             ModelProfile(
                 id="optional",
                 model="provider/optional",
                 capabilities=(AgentCapability.TESTING,),
+                input_cost_per_million_usd="1.00",
+                output_cost_per_million_usd="2.00",
+                pricing_source=ModelMetadataSource.USER_SUPPLIED,
+                context_window_tokens=120_000,
+                context_source=ModelMetadataSource.USER_SUPPLIED,
             ),
         ),
         routing_mode=ModelRoutingMode.POLICY,

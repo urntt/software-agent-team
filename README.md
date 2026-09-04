@@ -120,9 +120,11 @@ The normal wizard stores one selected `provider/model` as a strict default
 profile. Advanced configuration can add secret-free model profiles, declare
 the Agent capabilities each profile may serve, choose deterministic stage or
 capability routes, and explicitly authorize a bounded switch after an
-attributable provider failure. It can also store per-profile prices, the
-adaptive maximum concurrency, compact/standard/detailed progress visibility,
-or an explicit global invocation-timeout override. Use
+attributable provider failure. It also stores non-secret price/context metadata
+with its source, plus adaptive maximum concurrency and
+compact/standard/detailed progress visibility. Before each task's first model
+call, SAT refreshes those model facts and asks for one task-wide USD ceiling
+and an optional whole-run deadline; no deadline is the default. Use
 `sat configure --help` for the complete advanced interface.
 
 Provider credentials remain in SAT's isolated OpenClaw state or in an

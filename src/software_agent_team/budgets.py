@@ -3,13 +3,24 @@
 from __future__ import annotations
 
 import re
+from datetime import UTC, datetime
 from decimal import Decimal
+from enum import StrEnum
 from threading import Lock
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from software_agent_team.model_metadata import ModelMetadataSource
+
 BUDGET_SCHEMA_VERSION = 1
+
+
+class BudgetAuthority(StrEnum):
+    """Why one run budget exists and which fields may stop work."""
+
+    CONTROLLED_EVALUATION = "controlled_evaluation"
+    USER_TASK = "user_task"
 
 
 class AgentBudgetExceeded(RuntimeError):
@@ -58,21 +69,50 @@ class AgentBudgetUsage(BaseModel):
 
 
 class AgentBudget(BaseModel):
-    """Stop thresholds for one bounded Agent workflow run.
+    """Controller budget for a controlled evaluation or one user task.
 
-    The call count is checked before launch. Token, duration, and cost usage are
-    provider-reported measurements, so crossing those thresholds fails the run
-    after that invocation and prevents another one.
+    Controlled evaluations may freeze call, token, duration, and cost ceilings.
+    Ordinary product tasks authorize only one USD ceiling; all other usage is
+    telemetry and cannot shape the team or stop the run.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal[BUDGET_SCHEMA_VERSION] = BUDGET_SCHEMA_VERSION
-    max_calls: int = Field(ge=4, le=50)
-    max_input_tokens: int = Field(ge=1, le=10_000_000)
-    max_output_tokens: int = Field(ge=1, le=2_000_000)
-    max_agent_duration_seconds: int = Field(ge=1, le=86_400)
-    max_estimated_cost_usd: Decimal = Field(gt=0, le=10_000)
+    authority: BudgetAuthority = BudgetAuthority.CONTROLLED_EVALUATION
+    max_calls: int | None = Field(default=None, ge=1, le=1_000_000)
+    max_input_tokens: int | None = Field(default=None, ge=1, le=1_000_000_000)
+    max_output_tokens: int | None = Field(default=None, ge=1, le=1_000_000_000)
+    max_agent_duration_seconds: int | None = Field(
+        default=None,
+        ge=1,
+        le=31_536_000,
+    )
+    max_estimated_cost_usd: Decimal = Field(ge=0, le=10_000)
+
+    @model_validator(mode="after")
+    def require_authority_specific_limits(self) -> AgentBudget:
+        optional_limits = (
+            self.max_calls,
+            self.max_input_tokens,
+            self.max_output_tokens,
+            self.max_agent_duration_seconds,
+        )
+        if self.authority is BudgetAuthority.CONTROLLED_EVALUATION:
+            if any(value is None for value in optional_limits):
+                raise ValueError(
+                    "controlled-evaluation budgets require call, token, and "
+                    "duration ceilings"
+                )
+            if self.max_estimated_cost_usd <= 0:
+                raise ValueError(
+                    "controlled-evaluation budgets require a positive cost ceiling"
+                )
+        elif any(value is not None for value in optional_limits):
+            raise ValueError(
+                "ordinary user-task budgets may contain only one USD ceiling"
+            )
+        return self
 
 
 class AgentBudgetLedger:
@@ -104,7 +144,10 @@ class AgentBudgetLedger:
         if re.fullmatch(r"[a-z][a-z0-9_]*", agent_id) is None:
             raise ValueError("budget reservations require a valid Agent ID")
         with self._lock:
-            if self._calls_started >= self.budget.max_calls:
+            if (
+                self.budget.max_calls is not None
+                and self._calls_started >= self.budget.max_calls
+            ):
                 raise AgentBudgetExceeded(
                     "Agent call budget is exhausted",
                     self._snapshot_locked(),
@@ -177,11 +220,20 @@ class AgentBudgetLedger:
         )
 
     def _exceeded_detail(self, usage: AgentBudgetUsage) -> str | None:
-        if usage.input_tokens > self.budget.max_input_tokens:
+        if (
+            self.budget.max_input_tokens is not None
+            and usage.input_tokens > self.budget.max_input_tokens
+        ):
             return "Agent input-token budget was exceeded"
-        if usage.output_tokens > self.budget.max_output_tokens:
+        if (
+            self.budget.max_output_tokens is not None
+            and usage.output_tokens > self.budget.max_output_tokens
+        ):
             return "Agent output-token budget was exceeded"
-        if usage.agent_duration_ms > self.budget.max_agent_duration_seconds * 1000:
+        if (
+            self.budget.max_agent_duration_seconds is not None
+            and usage.agent_duration_ms > self.budget.max_agent_duration_seconds * 1000
+        ):
             return "Agent duration budget was exceeded"
         if usage.known_estimated_cost_usd > self.budget.max_estimated_cost_usd:
             return "Agent estimated-cost budget was exceeded"
@@ -204,6 +256,24 @@ class ModelPricing(BaseModel):
         ge=0,
         le=10_000,
     )
+    pricing_source: ModelMetadataSource | None = None
+    pricing_observed_at: datetime | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def infer_explicit_price_source(cls, value: object) -> object:
+        """Attribute legacy explicit prices without claiming discovery."""
+
+        if not isinstance(value, dict):
+            return value
+        payload = dict(value)
+        if (
+            payload.get("input_cost_per_million_usd") is not None
+            and payload.get("output_cost_per_million_usd") is not None
+            and payload.get("pricing_source") is None
+        ):
+            payload["pricing_source"] = ModelMetadataSource.USER_SUPPLIED.value
+        return payload
 
     @field_validator("model")
     @classmethod
@@ -223,7 +293,27 @@ class ModelPricing(BaseModel):
             self.output_cost_per_million_usd is None
         ):
             raise ValueError("input and output prices must be configured together")
+        prices_known = self.input_cost_per_million_usd is not None
+        if prices_known != (self.pricing_source is not None):
+            raise ValueError("known model prices require one pricing source")
+        if self.pricing_source is ModelMetadataSource.CONFIRMED_ZERO and (
+            self.input_cost_per_million_usd != 0
+            or self.output_cost_per_million_usd != 0
+        ):
+            raise ValueError("confirmed-zero pricing requires two zero prices")
         return self
+
+    @field_validator("pricing_observed_at")
+    @classmethod
+    def require_aware_observation_time(
+        cls,
+        value: datetime | None,
+    ) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("pricing observation time must include a UTC offset")
+        return value.astimezone(UTC)
 
     def estimate_cost(
         self,

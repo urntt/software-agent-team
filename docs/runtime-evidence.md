@@ -696,25 +696,31 @@ when investigating it rather than editing artifacts in place.
   capability timeout as its default and twice that value, capped at 3,600
   seconds, as its ceiling. Routine selects the default, complex selects the
   ceiling, and substantial selects their integer midpoint.
-- An initial semantic response and its optional one-call repair each receive
-  the resolved Agent timeout. A repair must regenerate the complete response;
-  it is not given an arbitrary remainder from the first call. The run-wide
-  call-count and Agent-duration budgets still include both invocations.
+- In controlled evaluations, an initial semantic response and its optional
+  repair each receive the frozen evaluation timeout, while call count and
+  Agent duration remain measured experiment variables. The ordinary product
+  path is migrating from this fixed wall-clock contract to a renewable
+  activity-based liveness lease and does not treat call count or Agent duration
+  as user budgets.
 - Model compatibility supplements do not set a second provider-transport
   timeout. The controller passes the approved per-Agent timeout, or its exact
   fixed-role compatibility value, to OpenClaw for every invocation, and the
   outer subprocess boundary permits only bounded shutdown grace beyond it.
-- Reported aggregate input/output tokens, Agent duration, and estimated cost
-  are checked after every invocation. Crossing a threshold fails the run and
-  prevents another invocation.
+- Controlled evaluations check their frozen token, duration, call, and cost
+  thresholds after each invocation. Ordinary tasks use one USD authorization;
+  their call, token, duration, Agent, and iteration counts remain telemetry.
 - One thread-safe controller ledger atomically reserves the call count before
   launch, so concurrently ready Agents cannot oversubscribe the budget. It
   records completed-call telemetry before raising a post-call token, duration,
   or known-cost rejection; missing token telemetry and unavailable pricing are
   counted explicitly rather than converted to zero.
-- A product run without a trustworthy configured price records estimated cost
-  as unavailable rather than zero. Controlled comparisons require an explicit
-  paired price table.
+- An ordinary task cannot make its first model call until every authorized
+  route has a frozen paired price or the user explicitly confirms that route
+  as zero-cost. Unknown is never converted to zero. Controlled comparisons
+  likewise require an explicit paired price table.
+- The current shared ledger accounts for Planning and dynamic execution in one
+  process and Planning turn evidence records its cost source. Per-stage and
+  per-route report breakdown and provider-backed validation remain pending.
 - Usage is not known before a provider call completes. A provider-side spending
   or quota limit is therefore the hard monetary authorization boundary; the
   controller cannot reverse the cost of the call that crosses a post-call

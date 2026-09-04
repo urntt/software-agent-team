@@ -3,6 +3,7 @@
 import json
 import os
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -584,6 +585,10 @@ def test_model_inspection_requires_the_exact_available_catalog_entry(
                     {
                         "key": DEEPSEEK_VISION_MODEL,
                         "available": True,
+                        "contextWindow": 120_000,
+                        "input": "text+image",
+                        "inputCostPerMillionUsd": "0.10",
+                        "outputCostPerMillionUsd": "0.20",
                     },
                     {"key": "deepseek/another-model", "available": True},
                 ]
@@ -606,6 +611,10 @@ def test_model_inspection_requires_the_exact_available_catalog_entry(
 
     assert result.available
     assert result.error is None
+    assert result.context_window_tokens == 120_000
+    assert result.input_modalities == ("text", "image")
+    assert result.input_cost_per_million_usd == Decimal("0.10")
+    assert result.output_cost_per_million_usd == Decimal("0.20")
     assert observed["argv"] == [
         str(openclaw),
         "models",

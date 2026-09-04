@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import time
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -12,9 +13,19 @@ from pydantic import ValidationError
 
 import software_agent_team.planning as planning
 from software_agent_team.artifacts import AcceptanceCriterion, ReviewBoundaryKind
-from software_agent_team.budgets import AgentBudget
-from software_agent_team.execution import ScriptedAgentExecutor
+from software_agent_team.budgets import (
+    AgentBudget,
+    AgentBudgetLedger,
+    BudgetAuthority,
+    ModelPricing,
+)
+from software_agent_team.execution import (
+    AgentTokenUsage,
+    ScriptedAgentExecutor,
+    ScriptedAgentResponse,
+)
 from software_agent_team.integrity import canonical_model_sha256
+from software_agent_team.model_metadata import ModelMetadataSource
 from software_agent_team.model_routing import ModelProfile, ModelRoutingPolicy
 from software_agent_team.planning import (
     AdaptivePlanningCoordinator,
@@ -1373,6 +1384,60 @@ def test_store_detects_changed_append_only_turn_evidence(tmp_path: Path) -> None
     turn_path.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(PlanningIntegrityError, match="head digest changed"):
         store.load_session(request().run_id)
+
+
+def test_planning_uses_the_shared_task_cost_ledger_and_persists_source(
+    tmp_path: Path,
+) -> None:
+    task_budget = AgentBudget(
+        authority=BudgetAuthority.USER_TASK,
+        max_estimated_cost_usd="1.00",
+    )
+    ledger = AgentBudgetLedger(task_budget)
+    store = PlanningStore(tmp_path / "planning")
+    executor = ScriptedAgentExecutor(
+        [
+            ScriptedAgentResponse(
+                text=response(proposal_response()),
+                model="provider/model",
+                provider="provider",
+                usage=AgentTokenUsage(input_tokens=100_000, output_tokens=20_000),
+                duration_ms=125,
+            )
+        ]
+    )
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(budget=task_budget),
+        budget_ledger=ledger,
+        pricing=ModelPricing(
+            model="provider/model",
+            input_cost_per_million_usd="2.50",
+            output_cost_per_million_usd="10.00",
+            pricing_source=ModelMetadataSource.RUNTIME_CATALOG,
+            pricing_observed_at=FIXED_TIME,
+        ),
+        clock=AdvancingClock(),
+    )
+
+    assert (
+        coordinator.start(
+            request(),
+            answer_question=lambda _question: pytest.fail("unexpected question"),
+        )
+        is not None
+    )
+
+    usage = ledger.snapshot()
+    assert usage.calls_started == 1
+    assert usage.calls_completed == 1
+    assert usage.known_estimated_cost_usd == Decimal("0.45")
+    execution = store.load_turn(request().run_id, 1).execution
+    assert execution.estimated_cost_usd == Decimal("0.45")
+    assert execution.pricing_source is ModelMetadataSource.RUNTIME_CATALOG
+    assert execution.budget_usage == usage
+    assert execution.budget_error is None
 
 
 def test_store_rejects_unanchored_planning_evidence(tmp_path: Path) -> None:

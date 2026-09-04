@@ -20,7 +20,7 @@ from software_agent_team.teams import (
     ModelSwitchCondition,
 )
 
-USER_CONFIGURATION_SCHEMA_VERSION = 6
+USER_CONFIGURATION_SCHEMA_VERSION = 7
 USER_CONFIGURATION_ENVIRONMENT_VARIABLE = "SAT_CONFIG_PATH"
 
 
@@ -416,6 +416,19 @@ def load_user_configuration(
             max_concurrency=legacy.max_concurrency,
             stage_timeout_seconds=legacy.stage_timeout_seconds,
             progress_visibility=legacy.progress_visibility,
+        )
+    if payload.get("schema_version") == 6:
+        notice = (
+            "configuration schema v6 was migrated with unknown model context and "
+            "attributable legacy user-supplied prices; task self-check will discover "
+            "or request missing model metadata before use"
+        )
+        if on_migration is None:
+            warnings.warn(notice, UserWarning, stacklevel=2)
+        else:
+            on_migration(notice)
+        return UserConfiguration.model_validate(
+            {**payload, "schema_version": USER_CONFIGURATION_SCHEMA_VERSION}
         )
     return UserConfiguration.model_validate(payload)
 

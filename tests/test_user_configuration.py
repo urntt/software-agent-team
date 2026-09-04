@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from software_agent_team.user_configuration import (
+    USER_CONFIGURATION_SCHEMA_VERSION,
     UserConfiguration,
     UserConfigurationError,
     load_user_configuration,
@@ -106,7 +107,7 @@ def test_v1_configuration_drops_the_legacy_timeout_with_a_notice(
         migrated = load_user_configuration(path)
 
     assert migrated is not None
-    assert migrated.schema_version == 6
+    assert migrated.schema_version == USER_CONFIGURATION_SCHEMA_VERSION
     assert migrated.model == "provider/model"
     assert migrated.max_concurrency == 1
     assert migrated.stage_timeout_seconds is None
@@ -135,7 +136,7 @@ def test_v2_configuration_preserves_evaluation_defaults_with_a_notice(
         migrated = load_user_configuration(path)
 
     assert migrated is not None
-    assert migrated.schema_version == 6
+    assert migrated.schema_version == USER_CONFIGURATION_SCHEMA_VERSION
     assert migrated.input_cost_per_million_usd == 1
     assert migrated.output_cost_per_million_usd == 2
     assert migrated.max_concurrency == 2
@@ -164,7 +165,7 @@ def test_v3_configuration_renames_verification_concurrency_with_a_notice(
         migrated = load_user_configuration(path)
 
     assert migrated is not None
-    assert migrated.schema_version == 6
+    assert migrated.schema_version == USER_CONFIGURATION_SCHEMA_VERSION
     assert migrated.max_concurrency == 2
 
 
@@ -190,7 +191,7 @@ def test_v4_configuration_defaults_to_standard_progress_with_a_notice(
         migrated = load_user_configuration(path)
 
     assert migrated is not None
-    assert migrated.schema_version == 6
+    assert migrated.schema_version == USER_CONFIGURATION_SCHEMA_VERSION
     assert migrated.max_concurrency == 4
     assert migrated.progress_visibility == "standard"
 
@@ -237,12 +238,58 @@ def test_v5_configuration_migrates_to_one_strict_profile(tmp_path: Path) -> None
         migrated = load_user_configuration(path)
 
     assert migrated is not None
-    assert migrated.schema_version == 6
+    assert migrated.schema_version == USER_CONFIGURATION_SCHEMA_VERSION
     assert migrated.model == "provider/model"
     assert migrated.default_model_profile.id == "default"
     assert migrated.routing_mode.value == "strict"
     assert migrated.max_concurrency == 3
     assert migrated.progress_visibility == "compact"
+
+
+def test_v6_configuration_migrates_missing_model_metadata(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 6,
+                "model_profiles": [
+                    {
+                        "id": "default",
+                        "model": "provider/model",
+                        "capabilities": [
+                            "clarification",
+                            "planning",
+                            "implementation",
+                            "integration",
+                            "testing",
+                            "review",
+                        ],
+                        "priority": 100,
+                        "input_cost_per_million_usd": "1",
+                        "output_cost_per_million_usd": "2",
+                    }
+                ],
+                "default_model_profile_id": "default",
+                "routing_mode": "strict",
+                "capability_profile_overrides": {},
+                "stage_profile_overrides": {},
+                "authorized_switch_conditions": [],
+                "max_model_switches_per_agent": 0,
+                "max_concurrency": 2,
+                "stage_timeout_seconds": None,
+                "progress_visibility": "standard",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.warns(UserWarning, match="schema v6"):
+        migrated = load_user_configuration(path)
+
+    assert migrated is not None
+    assert migrated.schema_version == USER_CONFIGURATION_SCHEMA_VERSION
+    assert migrated.default_model_profile.pricing_source == "user_supplied"
+    assert migrated.default_model_profile.context_window_tokens is None
 
 
 def test_current_configuration_persists_profiles_as_single_source_of_truth(
@@ -253,7 +300,7 @@ def test_current_configuration_persists_profiles_as_single_source_of_truth(
 
     payload = json.loads(path.read_text(encoding="utf-8"))
 
-    assert payload["schema_version"] == 6
+    assert payload["schema_version"] == USER_CONFIGURATION_SCHEMA_VERSION
     assert payload["model_profiles"][0]["model"] == "provider/model"
     assert "model" not in payload
     assert "input_cost_per_million_usd" not in payload

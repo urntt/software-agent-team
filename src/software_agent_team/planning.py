@@ -9,8 +9,10 @@ import re
 import threading
 import time
 from collections.abc import Callable, Collection, Mapping
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
 from string import Template
@@ -34,7 +36,13 @@ from software_agent_team.artifacts import (
     TaskBrief,
     review_boundary_definition_map,
 )
-from software_agent_team.budgets import AgentBudget
+from software_agent_team.budgets import (
+    AgentBudget,
+    AgentBudgetExceeded,
+    AgentBudgetLedger,
+    AgentBudgetUsage,
+    ModelPricing,
+)
 from software_agent_team.execution import (
     AgentExecutionRequest,
     AgentExecutionResult,
@@ -42,6 +50,7 @@ from software_agent_team.execution import (
     AgentExecutor,
 )
 from software_agent_team.integrity import canonical_model_sha256
+from software_agent_team.model_metadata import ModelMetadataSource
 from software_agent_team.model_routing import (
     ModelProfile,
     ModelRoutingError,
@@ -902,6 +911,10 @@ class PlanningExecutionEvidence(BaseModel):
     model: str | None = None
     input_tokens: int | None = Field(default=None, ge=0)
     output_tokens: int | None = Field(default=None, ge=0)
+    estimated_cost_usd: Decimal | None = Field(default=None, ge=0)
+    pricing_source: ModelMetadataSource | None = None
+    budget_usage: AgentBudgetUsage | None = None
+    budget_error: str | None = Field(default=None, min_length=1, max_length=2000)
     error: str | None = None
 
     @field_validator("started_at", "finished_at")
@@ -1230,9 +1243,10 @@ class PlanningPolicy(BaseModel):
     max_proposal_revisions: int = Field(default=3, ge=1, le=5)
     response_repair_limit: int = Field(default=1, ge=0, le=2)
     planning_timeout_seconds: int = Field(default=180, ge=1, le=3600)
-    max_agents: int = Field(default=8, ge=2, le=16)
+    max_agents: int | None = Field(default=8, ge=2)
     max_concurrency: int = Field(default=4, ge=1, le=16)
-    max_review_agents: int = Field(default=16, ge=1, le=16)
+    max_review_agents: int | None = Field(default=16, ge=1)
+    run_deadline_seconds: int | None = Field(default=None, ge=1)
     review_substantial_work_unit_threshold: int = Field(default=6, ge=2, le=499)
     review_complex_work_unit_threshold: int = Field(default=11, ge=3, le=500)
     budget: AgentBudget
@@ -1419,7 +1433,7 @@ def preview_adaptive_proposal(
     if proposal.run_id != request.run_id:
         raise PlanningError("proposal belongs to a different Planning request")
     body = proposal.body
-    if len(body.agents) > policy.max_agents:
+    if policy.max_agents is not None and len(body.agents) > policy.max_agents:
         raise PlanningError(
             f"proposal has {len(body.agents)} Agents; policy permits "
             f"{policy.max_agents}"
@@ -1429,10 +1443,13 @@ def preview_adaptive_proposal(
             f"proposal concurrency {body.max_concurrency} exceeds the policy "
             f"ceiling of {policy.max_concurrency}"
         )
-    if len(body.agents) > policy.budget.max_calls:
+    if (
+        policy.budget.max_calls is not None
+        and len(body.agents) > policy.budget.max_calls
+    ):
         raise PlanningError("proposal Agent count exceeds the approved call budget")
     planned_calls = len(body.agents) * body.iteration_limit
-    if planned_calls > policy.budget.max_calls:
+    if policy.budget.max_calls is not None and planned_calls > policy.budget.max_calls:
         raise PlanningError(
             f"proposal requires up to {planned_calls} planned Agent calls, but the "
             f"approved budget permits {policy.budget.max_calls}"
@@ -1484,7 +1501,7 @@ def preview_adaptive_proposal(
     review_count = sum(
         agent.capability is AgentCapability.REVIEW for agent in body.agents
     )
-    if review_count > policy.max_review_agents:
+    if policy.max_review_agents is not None and review_count > policy.max_review_agents:
         raise PlanningError(
             f"proposal has {review_count} review Agents; this profile permits "
             f"{policy.max_review_agents}"
@@ -1634,6 +1651,7 @@ def preview_adaptive_proposal(
         agents=tuple(agents),
         model_routes=model_routes,
         budget=policy.budget,
+        run_deadline_seconds=policy.run_deadline_seconds,
         iteration_limit=body.iteration_limit,
         max_concurrency=body.max_concurrency,
         independent_review=True,
@@ -1868,12 +1886,33 @@ def render_planning_overview(preview: PlanningPreview) -> str:
                 if plan.model_routes.authorized_switch_conditions
                 else "none"
             ),
-            f"    - model calls: {plan.budget.max_calls}",
-            f"    - input tokens: {plan.budget.max_input_tokens}",
-            f"    - output tokens: {plan.budget.max_output_tokens}",
-            "    - cumulative Agent time: "
-            f"{plan.budget.max_agent_duration_seconds} seconds",
+            (
+                f"    - model calls: {plan.budget.max_calls}"
+                if plan.budget.max_calls is not None
+                else "    - model calls: measured, not capped for this product task"
+            ),
+            (
+                f"    - input tokens: {plan.budget.max_input_tokens}"
+                if plan.budget.max_input_tokens is not None
+                else "    - input tokens: measured for cost, not independently capped"
+            ),
+            (
+                f"    - output tokens: {plan.budget.max_output_tokens}"
+                if plan.budget.max_output_tokens is not None
+                else "    - output tokens: measured for cost, not independently capped"
+            ),
+            (
+                "    - cumulative Agent time: "
+                f"{plan.budget.max_agent_duration_seconds} seconds"
+                if plan.budget.max_agent_duration_seconds is not None
+                else "    - cumulative Agent time: observed, not independently capped"
+            ),
             f"    - estimated cost ceiling: ${plan.budget.max_estimated_cost_usd}",
+            (
+                f"    - whole-run deadline: {plan.run_deadline_seconds} seconds"
+                if plan.run_deadline_seconds is not None
+                else "    - whole-run deadline: none"
+            ),
             "    - independent downstream quality judgment: required",
         )
     )
@@ -2063,6 +2102,10 @@ class PlanningStore:
         response_normalizations: tuple[str, ...],
         validation_error: str | None,
         now: datetime,
+        estimated_cost_usd: Decimal | None = None,
+        pricing_source: ModelMetadataSource | None = None,
+        budget_usage: AgentBudgetUsage | None = None,
+        budget_error: str | None = None,
     ) -> PlanningTurn:
         session = self.load_session(run_id)
         if session.status in {
@@ -2097,6 +2140,10 @@ class PlanningStore:
                 model=result.telemetry.model,
                 input_tokens=None if usage is None else usage.input_tokens,
                 output_tokens=None if usage is None else usage.output_tokens,
+                estimated_cost_usd=estimated_cost_usd,
+                pricing_source=pricing_source,
+                budget_usage=budget_usage,
+                budget_error=budget_error,
                 error=result.error,
             ),
         )
@@ -2227,11 +2274,19 @@ class AdaptivePlanningCoordinator:
         executor: AgentExecutor,
         store: PlanningStore,
         policy: PlanningPolicy,
+        budget_ledger: AgentBudgetLedger | None = None,
+        pricing: ModelPricing | None = None,
         clock: Clock = _system_clock,
     ) -> None:
+        if (budget_ledger is None) != (pricing is None):
+            raise ValueError("Planning budget ledger and pricing belong together")
+        if budget_ledger is not None and budget_ledger.budget != policy.budget:
+            raise ValueError("Planning budget ledger does not match the policy")
         self.executor = executor
         self.store = store
         self.policy = policy
+        self.budget_ledger = budget_ledger
+        self.pricing = pricing
         self.clock = clock
 
     def start(
@@ -2448,7 +2503,24 @@ class AdaptivePlanningCoordinator:
                     model=request.model,
                 ),
             )
-            result = self.executor.execute(execution_request)
+            reservation = (
+                None
+                if self.budget_ledger is None
+                else self.budget_ledger.reserve_call("clarifier")
+            )
+            try:
+                result = self.executor.execute(execution_request)
+            except BaseException:
+                if self.budget_ledger is not None and reservation is not None:
+                    with suppress(AgentBudgetExceeded):
+                        self.budget_ledger.complete_call(
+                            reservation,
+                            input_tokens=None,
+                            output_tokens=None,
+                            duration_ms=0,
+                            estimated_cost_usd=None,
+                        )
+                raise
             self._emit_activity(
                 activity_handler,
                 PlanningActivity(
@@ -2463,6 +2535,32 @@ class AdaptivePlanningCoordinator:
             parsed: PlanningModelResponse | None = None
             response_normalizations: tuple[str, ...] = ()
             validation_error: str | None = None
+            estimated_cost: Decimal | None = None
+            budget_usage: AgentBudgetUsage | None = None
+            budget_error: str | None = None
+            if self.budget_ledger is not None and reservation is not None:
+                assert self.pricing is not None
+                usage = result.telemetry.usage
+                if (
+                    usage is not None
+                    and usage.input_tokens is not None
+                    and usage.output_tokens is not None
+                ):
+                    estimated_cost = self.pricing.estimate_cost(
+                        input_tokens=usage.input_tokens,
+                        output_tokens=usage.output_tokens,
+                    )
+                try:
+                    budget_usage = self.budget_ledger.complete_call(
+                        reservation,
+                        input_tokens=None if usage is None else usage.input_tokens,
+                        output_tokens=None if usage is None else usage.output_tokens,
+                        duration_ms=result.telemetry.duration_ms,
+                        estimated_cost_usd=estimated_cost,
+                    )
+                except AgentBudgetExceeded as error:
+                    budget_usage = error.usage
+                    budget_error = str(error)
             if result.status is not AgentExecutionStatus.COMPLETED:
                 validation_error = (
                     result.error or f"Planning execution ended as {result.status.value}"
@@ -2513,7 +2611,15 @@ class AdaptivePlanningCoordinator:
                 response_normalizations=response_normalizations,
                 validation_error=validation_error,
                 now=self.clock(),
+                estimated_cost_usd=estimated_cost,
+                pricing_source=(
+                    None if self.pricing is None else self.pricing.pricing_source
+                ),
+                budget_usage=budget_usage,
+                budget_error=budget_error,
             )
+            if budget_error is not None:
+                raise PlanningError(budget_error)
             if parsed is not None:
                 self._emit_activity(
                     activity_handler,
@@ -2578,6 +2684,10 @@ class AdaptivePlanningCoordinator:
                 "maximum_concurrency": self.policy.max_concurrency,
                 "maximum_iterations": 3,
                 "maximum_agent_calls": self.policy.budget.max_calls,
+                "maximum_estimated_cost_usd": str(
+                    self.policy.budget.max_estimated_cost_usd
+                ),
+                "run_deadline_seconds": self.policy.run_deadline_seconds,
                 "maximum_review_agents": self.policy.max_review_agents,
                 "profile_acceptance_criteria": [
                     criterion.model_dump(mode="json")

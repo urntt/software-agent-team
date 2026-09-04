@@ -28,7 +28,12 @@ from software_agent_team.artifacts import (
     parse_phase_artifact,
 )
 from software_agent_team.benchmark_seed import prepare_benchmark_seed
-from software_agent_team.budgets import ModelPricing
+from software_agent_team.budgets import (
+    AgentBudget,
+    AgentBudgetLedger,
+    BudgetAuthority,
+    ModelPricing,
+)
 from software_agent_team.configuration import validate_environment_configuration
 from software_agent_team.control_console import TerminalControlConsole
 from software_agent_team.controls import ControlCommandStore
@@ -44,6 +49,7 @@ from software_agent_team.managed_install import (
     resolve_dev_target,
     target_from_stable_release,
 )
+from software_agent_team.model_metadata import ModelMetadataSource
 from software_agent_team.model_routing import ModelProfile
 from software_agent_team.openclaw_runtime import isolated_openclaw_environment
 from software_agent_team.paths import user_state_root
@@ -102,6 +108,10 @@ from software_agent_team.runtime_configuration import (
 )
 from software_agent_team.runtime_controls import RuntimeControlDecision
 from software_agent_team.sandbox_lifecycle import cleanup_run_sandbox_containers
+from software_agent_team.self_check import (
+    TaskModelMetadata,
+    TaskResourceAuthorization,
+)
 from software_agent_team.teams import (
     AgentCapability,
     ModelRoutingMode,
@@ -185,6 +195,7 @@ class _AdaptiveWorkflowLaunchOptions(_RuntimeLaunchOptions):
 
     artifact_repair_limit: int = 1
     progress_handler: ProgressHandler | None = None
+    budget_ledger: AgentBudgetLedger | None = None
 
 
 @dataclass(frozen=True)
@@ -213,7 +224,16 @@ def _print_configuration(configuration: UserConfiguration, path: Path) -> None:
             if profile.input_cost_per_million_usd is None
             else (
                 f"${profile.input_cost_per_million_usd} input / "
-                f"${profile.output_cost_per_million_usd} output per million tokens"
+                f"${profile.output_cost_per_million_usd} output per million tokens "
+                f"({profile.pricing_source.value})"
+            )
+        )
+        context = (
+            "context length unknown"
+            if profile.context_window_tokens is None
+            else (
+                f"{profile.context_window_tokens} context tokens "
+                f"({profile.context_source.value})"
             )
         )
         default = (
@@ -221,7 +241,7 @@ def _print_configuration(configuration: UserConfiguration, path: Path) -> None:
         )
         print(
             f"  - {profile.id}{default}: {profile.model}; priority "
-            f"{profile.priority}; {capabilities}; {pricing}"
+            f"{profile.priority}; {capabilities}; {pricing}; {context}"
         )
     if configuration.capability_profile_overrides:
         print("capability routes:")
@@ -318,6 +338,273 @@ def _prompt_product_text(
         return response
 
 
+def _prompt_nonnegative_decimal(label: str) -> Decimal:
+    """Read one explicit bounded USD price without treating blank as zero."""
+
+    while True:
+        raw = input(f"{label}: ").strip()
+        try:
+            value = Decimal(raw)
+        except Exception:
+            print("Enter a non-negative decimal amount in USD.")
+            continue
+        if not value.is_finite() or value < 0 or value > Decimal("10000"):
+            print("Enter a finite USD amount between 0 and 10000.")
+            continue
+        return value
+
+
+def _prompt_task_cost_ceiling() -> Decimal:
+    """Ask for the one user-owned aggregate budget before any model call."""
+
+    print("\nTask model budget")
+    print("  This is a maximum authorized spend, not a predicted final cost.")
+    print("  $5.00 is a starting suggestion for a small project; change it freely.")
+    while True:
+        raw = input("Maximum total model spend for this task (USD) [5.00]: ").strip()
+        if not raw:
+            return Decimal("5.00")
+        try:
+            value = Decimal(raw)
+        except Exception:
+            print("Enter a non-negative decimal amount in USD.")
+            continue
+        if value.is_finite() and Decimal(0) <= value <= Decimal("10000"):
+            return value
+        print("Enter a finite USD amount between 0 and 10000.")
+
+
+def _prompt_optional_run_deadline() -> int | None:
+    """Ask whether a real whole-run deadline exists; default to none."""
+
+    print("\nWhole-run deadline")
+    print("  No deadline is recommended unless you have an actual time limit.")
+    if not _prompt_yes_no("Set a deadline for this task?", default=False):
+        return None
+    while True:
+        raw = input("Maximum whole-run time in minutes [120]: ").strip() or "120"
+        if raw.isdecimal() and 1 <= int(raw) <= 525_600:
+            return int(raw) * 60
+        print("Enter a whole number of minutes between 1 and 525600.")
+
+
+def _collect_task_resource_authorization(
+    configuration: UserConfiguration,
+    *,
+    authorized_at: datetime | None = None,
+) -> TaskResourceAuthorization | None:
+    """Freeze known model facts and explicit cost/deadline authority for one task."""
+
+    when = (authorized_at or datetime.now(UTC)).astimezone(UTC)
+    snapshots: list[TaskModelMetadata] = []
+    print("\nModels available to this task")
+    for profile in configuration.model_profiles:
+        if (
+            profile.input_cost_per_million_usd is None
+            or profile.output_cost_per_million_usd is None
+            or profile.pricing_source is None
+            or profile.context_window_tokens is None
+            or profile.context_source is None
+        ):
+            raise RuntimeConfigurationError(
+                f"model metadata is incomplete for profile {profile.id}; "
+                "run task self-check remediation before Planning"
+            )
+        print(
+            f"  - {profile.id}: {profile.model}; "
+            f"${profile.input_cost_per_million_usd} input / "
+            f"${profile.output_cost_per_million_usd} output per million tokens "
+            f"({profile.pricing_source.value}); "
+            f"context {profile.context_window_tokens} "
+            f"({profile.context_source.value})"
+        )
+        snapshots.append(
+            TaskModelMetadata(
+                profile_id=profile.id,
+                model=profile.model,
+                input_cost_per_million_usd=(profile.input_cost_per_million_usd),
+                output_cost_per_million_usd=(profile.output_cost_per_million_usd),
+                pricing_source=profile.pricing_source,
+                context_window_tokens=profile.context_window_tokens,
+                context_source=profile.context_source,
+                observed_at=when,
+            )
+        )
+    maximum_cost = _prompt_task_cost_ceiling()
+    deadline = _prompt_optional_run_deadline()
+    print("\nTask resource authorization")
+    print(f"  Total model-spend ceiling: ${maximum_cost}")
+    print(
+        "  Whole-run deadline: "
+        + (f"{deadline} seconds" if deadline is not None else "none")
+    )
+    print("  Call count, token count, Agent count, and iteration count are telemetry,")
+    print("  not separate limits for this ordinary product task.")
+    if not _prompt_yes_no(
+        "Authorize these model routes and task limits?",
+        default=False,
+    ):
+        print("Build cancelled; no model request was made.")
+        return None
+    return TaskResourceAuthorization(
+        maximum_estimated_cost_usd=maximum_cost,
+        run_deadline_seconds=deadline,
+        model_metadata=tuple(snapshots),
+        authorized_at=when,
+    )
+
+
+def _prompt_context_window(model: str) -> int:
+    """Ask only when the local runtime cannot discover model context length."""
+
+    while True:
+        raw = input(
+            f"Context-window tokens for {model} (provider-documented value): "
+        ).strip()
+        if raw.isdecimal() and 1 <= int(raw) <= 100_000_000:
+            return int(raw)
+        print("Enter an integer between 1 and 100000000.")
+
+
+def _complete_model_metadata(
+    configuration: UserConfiguration,
+    inspections: Sequence[OpenClawModelInspection],
+    *,
+    offer_price_change: bool,
+    observed_at: datetime | None = None,
+) -> UserConfiguration:
+    """Discover model metadata first, then ask only for unknowns or overrides."""
+
+    when = (observed_at or datetime.now(UTC)).astimezone(UTC)
+    by_model = {inspection.model: inspection for inspection in inspections}
+    if len(by_model) != len(inspections):
+        raise RuntimeConfigurationError("model metadata inspections are not unique")
+    expected = {profile.model for profile in configuration.model_profiles}
+    if set(by_model) != expected:
+        raise RuntimeConfigurationError(
+            "model metadata inspections do not cover the configured profiles"
+        )
+
+    profiles: list[ModelProfile] = []
+    for profile in configuration.model_profiles:
+        inspection = by_model[profile.model]
+        if not inspection.available:
+            profiles.append(profile)
+            continue
+        updates: dict[str, object] = {}
+        print(f"\nModel metadata: {profile.id} ({profile.model})")
+
+        if inspection.context_window_tokens is not None:
+            context = inspection.context_window_tokens
+            updates.update(
+                context_window_tokens=context,
+                context_source=ModelMetadataSource.RUNTIME_CATALOG,
+                context_observed_at=when,
+            )
+            print(f"  Context: {context} tokens (runtime catalog)")
+        elif profile.context_window_tokens is not None:
+            print(
+                f"  Context: {profile.context_window_tokens} tokens "
+                f"({profile.context_source.value})"
+            )
+        else:
+            print("  Context: not available from the runtime catalog")
+            context = _prompt_context_window(profile.model)
+            updates.update(
+                context_window_tokens=context,
+                context_source=ModelMetadataSource.USER_SUPPLIED,
+                context_observed_at=when,
+            )
+
+        discovered_prices = (
+            inspection.input_cost_per_million_usd,
+            inspection.output_cost_per_million_usd,
+        )
+        saved_prices = (
+            profile.input_cost_per_million_usd,
+            profile.output_cost_per_million_usd,
+        )
+        use_discovered = all(value is not None for value in discovered_prices)
+        if use_discovered:
+            input_price, output_price = discovered_prices
+            assert input_price is not None and output_price is not None
+            print(
+                "  Discovered price: "
+                f"${input_price} input / ${output_price} output per million tokens"
+            )
+            change_prices = offer_price_change and not _prompt_yes_no(
+                "Use the runtime-catalog prices for this model?",
+                default=True,
+            )
+            if not change_prices:
+                updates.update(
+                    input_cost_per_million_usd=input_price,
+                    output_cost_per_million_usd=output_price,
+                    pricing_source=ModelMetadataSource.RUNTIME_CATALOG,
+                    pricing_observed_at=when,
+                )
+                profiles.append(
+                    ModelProfile.model_validate(
+                        {**profile.model_dump(mode="json"), **updates}
+                    )
+                )
+                continue
+        elif all(value is not None for value in saved_prices):
+            input_price, output_price = saved_prices
+            assert input_price is not None and output_price is not None
+            print(
+                "  Saved price: "
+                f"${input_price} input / ${output_price} output per million tokens "
+                f"({profile.pricing_source.value})"
+            )
+            change_prices = offer_price_change and _prompt_yes_no(
+                "Change these saved prices?",
+                default=False,
+            )
+            if not change_prices:
+                profiles.append(
+                    ModelProfile.model_validate(
+                        {**profile.model_dump(mode="json"), **updates}
+                    )
+                )
+                continue
+        else:
+            print("  Price: not available from the runtime catalog")
+
+        input_price = _prompt_nonnegative_decimal(
+            "Input price per million tokens (USD)"
+        )
+        output_price = _prompt_nonnegative_decimal(
+            "Output price per million tokens (USD)"
+        )
+        source = (
+            ModelMetadataSource.CONFIRMED_ZERO
+            if input_price == 0 and output_price == 0
+            else ModelMetadataSource.USER_SUPPLIED
+        )
+        if source is ModelMetadataSource.CONFIRMED_ZERO and not _prompt_yes_no(
+            "Confirm that this model route costs $0 for both input and output?",
+            default=False,
+        ):
+            raise RuntimeConfigurationError("zero-price confirmation was declined")
+        updates.update(
+            input_cost_per_million_usd=input_price,
+            output_cost_per_million_usd=output_price,
+            pricing_source=source,
+            pricing_observed_at=when,
+        )
+        profiles.append(
+            ModelProfile.model_validate({**profile.model_dump(mode="json"), **updates})
+        )
+
+    return UserConfiguration.model_validate(
+        {
+            **configuration.model_dump(mode="json"),
+            "model_profiles": tuple(profiles),
+        }
+    )
+
+
 def _split_configuration_assignment(value: str, *, label: str) -> tuple[str, str]:
     left, separator, right = value.partition("=")
     if (
@@ -369,6 +656,14 @@ def _configured_model_fields(
             default_profile_id,
             input_cost_per_million_usd=input_cost,
             output_cost_per_million_usd=output_cost,
+            pricing_source=(
+                None
+                if input_cost is None
+                else ModelMetadataSource.CONFIRMED_ZERO
+                if input_cost == 0 and output_cost == 0
+                else ModelMetadataSource.USER_SUPPLIED
+            ),
+            pricing_observed_at=(None if input_cost is None else datetime.now(UTC)),
         )
     else:
         profiles = [
@@ -378,6 +673,14 @@ def _configured_model_fields(
                 capabilities=tuple(AgentCapability),
                 input_cost_per_million_usd=input_cost,
                 output_cost_per_million_usd=output_cost,
+                pricing_source=(
+                    None
+                    if input_cost is None
+                    else ModelMetadataSource.CONFIRMED_ZERO
+                    if input_cost == 0 and output_cost == 0
+                    else ModelMetadataSource.USER_SUPPLIED
+                ),
+                pricing_observed_at=(None if input_cost is None else datetime.now(UTC)),
             )
         ]
         default_profile_id = "default"
@@ -485,6 +788,12 @@ def _configured_model_fields(
             profile_id,
             input_cost_per_million_usd=profile_input,
             output_cost_per_million_usd=profile_output,
+            pricing_source=(
+                ModelMetadataSource.CONFIRMED_ZERO
+                if profile_input == 0 and profile_output == 0
+                else ModelMetadataSource.USER_SUPPLIED
+            ),
+            pricing_observed_at=datetime.now(UTC),
         )
 
     if args.default_model_profile is not None:
@@ -717,6 +1026,11 @@ def _configure(args: argparse.Namespace) -> int:
                     for inspection in unavailable
                 )
             )
+        configuration = _complete_model_metadata(
+            configuration,
+            inspections,
+            offer_price_change=True,
+        )
     save_user_configuration(configuration, path)
     print("configuration saved")
     _print_configuration(configuration, path)
@@ -1303,6 +1617,8 @@ def _execute_dynamic_workflow(
             model=route.model,
             input_cost_per_million_usd=route.input_cost_per_million_usd,
             output_cost_per_million_usd=route.output_cost_per_million_usd,
+            pricing_source=route.pricing_source,
+            pricing_observed_at=route.pricing_observed_at,
         )
         for route in team_plan.model_routes.routes
     }
@@ -1315,6 +1631,7 @@ def _execute_dynamic_workflow(
         executor=boundary.executor,
         quality_gate_factory=boundary.quality_gate_factory,
         pricing_by_model=pricing_by_model,
+        budget_ledger=options.budget_ledger,
         runtime_setup=boundary.runtime_setup,
         manual_review_criteria=manual_review_criteria,
         artifact_repair_limit=options.artifact_repair_limit,
@@ -1710,6 +2027,15 @@ def _ensure_product_configuration(
                 for profile in current.model_profiles
                 if profile.id != default_profile.id
             )
+            inspected = (default_inspection, *additional_inspections)
+            completed = _complete_model_metadata(
+                current,
+                inspected,
+                offer_price_change=False,
+            )
+            if completed != current:
+                save_user_configuration(completed, path)
+                current = completed
             print(f"✓ Bootstrap model: {default_profile.model}")
             unavailable_optional = tuple(
                 item for item in additional_inspections if not item.available
@@ -1799,6 +2125,11 @@ def _ensure_product_configuration(
                 f"{inspection.model}: {inspection.error}" for inspection in unavailable
             )
         )
+    configuration = _complete_model_metadata(
+        configuration,
+        inspections,
+        offer_price_change=True,
+    )
     save_user_configuration(configuration, path)
     print(f"✓ Saved secret-free model configuration to {path}")
     if _prompt_yes_no(
@@ -1822,7 +2153,7 @@ def _collect_product_request(
     configuration: UserConfiguration,
     execution_profile: tuple[str, ...],
     base_constraints: tuple[str, ...],
-) -> tuple[PlanningRequest, Path] | None:
+) -> tuple[PlanningRequest, Path, TaskResourceAuthorization] | None:
     """Collect the direct inputs and authorization required before Planning."""
 
     print("\nWhat would you like to build?")
@@ -1871,6 +2202,9 @@ def _collect_product_request(
     print("  No execution Agent is created until you approve the full overview.")
     print("  Multiple model requests may be made and may incur provider usage.")
     print("  SAT cannot determine your organization's model or Docker policy.")
+    resource_authorization = _collect_task_resource_authorization(configuration)
+    if resource_authorization is None:
+        return None
     if not _prompt_yes_no(
         "Start model-backed Planning for this request?",
         default=False,
@@ -1888,12 +2222,13 @@ def _collect_product_request(
         authorization="user_confirmed",
         authorized_at=datetime.now(UTC),
     )
-    return planning_request, destination
+    return planning_request, destination, resource_authorization
 
 
 def _product_planning_policy(
     quality: QualityGateConfiguration,
     configuration: UserConfiguration,
+    resource_authorization: TaskResourceAuthorization,
 ) -> PlanningPolicy:
     """Compile product profile limits into the bootstrap Planning authority."""
 
@@ -1916,10 +2251,14 @@ def _product_planning_policy(
 
     return PlanningPolicy(
         planning_timeout_seconds=timeout(AgentRole.PLANNER),
-        max_agents=min(8, quality.policy.agent_budget.max_calls),
+        max_agents=None,
         max_concurrency=configuration.max_concurrency,
-        max_review_agents=1,
-        budget=quality.policy.agent_budget,
+        max_review_agents=None,
+        run_deadline_seconds=resource_authorization.run_deadline_seconds,
+        budget=AgentBudget(
+            authority=BudgetAuthority.USER_TASK,
+            max_estimated_cost_usd=(resource_authorization.maximum_estimated_cost_usd),
+        ),
         capability_timeouts={
             AgentCapability.IMPLEMENTATION: adaptive_timeout(
                 AgentRole.GENERALIST_DEVELOPER
@@ -1941,6 +2280,8 @@ def _run_product_planning(
     state_paths: ProductStatePaths,
     quality: QualityGateConfiguration,
     configuration: UserConfiguration,
+    resource_authorization: TaskResourceAuthorization,
+    budget_ledger: AgentBudgetLedger,
 ) -> ApprovedPlanningResult | None:
     """Run one isolated bootstrap Planning session and clean its sandbox."""
 
@@ -2020,10 +2361,38 @@ def _run_product_planning(
             ),
             local=True,
         )
+        planning_metadata = next(
+            (
+                item
+                for item in resource_authorization.model_metadata
+                if item.model == request.model
+            ),
+            None,
+        )
+        if planning_metadata is None:
+            raise RuntimeConfigurationError(
+                "task authorization does not cover the Planning model"
+            )
         coordinator = AdaptivePlanningCoordinator(
             executor=executor,
             store=PlanningStore(state_paths.planning),
-            policy=_product_planning_policy(quality, configuration),
+            policy=_product_planning_policy(
+                quality,
+                configuration,
+                resource_authorization,
+            ),
+            budget_ledger=budget_ledger,
+            pricing=ModelPricing(
+                model=planning_metadata.model,
+                input_cost_per_million_usd=(
+                    planning_metadata.input_cost_per_million_usd
+                ),
+                output_cost_per_million_usd=(
+                    planning_metadata.output_cost_per_million_usd
+                ),
+                pricing_source=planning_metadata.pricing_source,
+                pricing_observed_at=planning_metadata.observed_at,
+            ),
         )
         cleanup_arguments = {
             "sandbox_binary": "docker",
@@ -2161,7 +2530,13 @@ def _run_product() -> int:
     )
     if request is None:
         return 0
-    planning_request, destination = request
+    planning_request, destination, resource_authorization = request
+    budget_ledger = AgentBudgetLedger(
+        AgentBudget(
+            authority=BudgetAuthority.USER_TASK,
+            max_estimated_cost_usd=(resource_authorization.maximum_estimated_cost_usd),
+        )
+    )
 
     renderer = TerminalProgressRenderer(
         visibility=RunEventVisibility(configuration.progress_visibility),
@@ -2174,6 +2549,8 @@ def _run_product() -> int:
                 state_paths=state_paths,
                 quality=quality,
                 configuration=configuration,
+                resource_authorization=resource_authorization,
+                budget_ledger=budget_ledger,
             )
             if approved is None:
                 return 0
@@ -2221,6 +2598,7 @@ def _run_product() -> int:
                     ),
                     artifact_repair_limit=1,
                     progress_handler=renderer,
+                    budget_ledger=budget_ledger,
                 ),
                 control_store_handler=start_controls,
             )

@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from software_agent_team.artifacts import AgentRole, ArtifactKind
 from software_agent_team.budgets import AgentBudget
 from software_agent_team.integrity import canonical_model_sha256
+from software_agent_team.model_metadata import ModelMetadataSource
 
 TEAM_PLAN_SCHEMA_VERSION = 1
 
@@ -151,6 +152,36 @@ class ModelRoute(BaseModel):
         ge=0,
         le=10_000,
     )
+    pricing_source: ModelMetadataSource | None = None
+    pricing_observed_at: datetime | None = None
+    context_window_tokens: int | None = Field(
+        default=None,
+        ge=1,
+        le=100_000_000,
+    )
+    context_source: ModelMetadataSource | None = None
+    context_observed_at: datetime | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def infer_explicit_metadata_sources(cls, value: object) -> object:
+        """Attribute legacy explicit metadata without claiming discovery."""
+
+        if not isinstance(value, dict):
+            return value
+        payload = dict(value)
+        if (
+            payload.get("input_cost_per_million_usd") is not None
+            and payload.get("output_cost_per_million_usd") is not None
+            and payload.get("pricing_source") is None
+        ):
+            payload["pricing_source"] = ModelMetadataSource.USER_SUPPLIED.value
+        if (
+            payload.get("context_window_tokens") is not None
+            and payload.get("context_source") is None
+        ):
+            payload["context_source"] = ModelMetadataSource.USER_SUPPLIED.value
+        return payload
 
     @field_validator("model")
     @classmethod
@@ -189,7 +220,28 @@ class ModelRoute(BaseModel):
             self.output_cost_per_million_usd is None
         ):
             raise ValueError("model route input and output prices belong together")
+        prices_known = self.input_cost_per_million_usd is not None
+        if prices_known != (self.pricing_source is not None):
+            raise ValueError("known model route prices require one source")
+        context_known = self.context_window_tokens is not None
+        if context_known != (self.context_source is not None):
+            raise ValueError("known model route context requires one source")
+        if self.pricing_source is ModelMetadataSource.CONFIRMED_ZERO and (
+            self.input_cost_per_million_usd != 0
+            or self.output_cost_per_million_usd != 0
+        ):
+            raise ValueError("confirmed-zero route pricing requires two zero prices")
         return self
+
+    @field_validator("pricing_observed_at", "context_observed_at")
+    @classmethod
+    def require_aware_metadata_time(
+        cls,
+        value: datetime | None,
+    ) -> datetime | None:
+        if value is None:
+            return None
+        return _require_utc(value)
 
 
 class ModelRouteAssignment(BaseModel):
@@ -401,6 +453,7 @@ class TeamPlan(BaseModel):
     agents: tuple[AgentSpec, ...] = Field(min_length=1, max_length=16)
     model_routes: ModelRoutePlan
     budget: AgentBudget
+    run_deadline_seconds: int | None = Field(default=None, ge=1)
     iteration_limit: int = Field(ge=1, le=3)
     max_concurrency: int = Field(ge=1, le=16)
     independent_review: bool
@@ -535,10 +588,14 @@ class TeamPlan(BaseModel):
                         )
         if self.max_concurrency > len(self.agents):
             raise ValueError("TeamPlan concurrency cannot exceed its Agent count")
-        if len(self.agents) > self.budget.max_calls:
+        if (
+            self.budget.max_calls is not None
+            and len(self.agents) > self.budget.max_calls
+        ):
             raise ValueError("TeamPlan Agent count exceeds the run call budget")
         if (
             self.origin is TeamPlanOrigin.ADAPTIVE_PLANNING
+            and self.budget.max_calls is not None
             and len(self.agents) * self.iteration_limit > self.budget.max_calls
         ):
             raise ValueError(
@@ -553,7 +610,10 @@ class TeamPlan(BaseModel):
                 * self.iteration_limit
             )
             planned_calls = len(self.agents) * self.iteration_limit + fallback_calls
-            if planned_calls > self.budget.max_calls:
+            if (
+                self.budget.max_calls is not None
+                and planned_calls > self.budget.max_calls
+            ):
                 raise ValueError(
                     "TeamPlan primary and authorized fallback invocations exceed "
                     "the run call budget"

@@ -82,8 +82,9 @@ unowned model choices. Responsibility is divided explicitly:
 | Agent number, labels, responsibilities, and capabilities | Bootstrap Planning derives them from the task and explains each one | User approves or revises the overview | Controller creates only approved `AgentSpec` entries |
 | Dependencies and possible parallel waves | Bootstrap Planning proposes a DAG | User approves it; policy supplies safe limits | Controller validates acyclicity and schedules only ready nodes |
 | Maximum concurrency | Bootstrap Planning proposes a bounded value | User may edit it; policy caps it | Controller decides which ready Agents actually start without exceeding the cap |
-| Per-Agent invocation timeout | Bootstrap Planning classifies workload as routine, substantial, or complex; it does not choose seconds | Capability policy maps that class into a default-to-ceiling envelope; exact Review criteria and boundary obligations may raise the minimum; the user may set an exact advanced override only inside the effective envelope | Controller freezes, passes, and enforces the exact resolved timeout for every invocation |
-| Call, token, duration, iteration, and cost budgets | Product policy supplies the safe envelope; Planning works within it | User sees and approves the effective limits | Controller rejects over-budget plans and stops further launches when a limit is reached |
+| Whole-run time | Planning may explain likely duration but does not invent a deadline | SAT asks before the first model call; default is no deadline unless the user has a real one | Controller applies only the explicitly authorized task deadline |
+| Provider-call liveness | The model does not choose its own watchdog | Provider/model capability and measured evidence define a renewable inactivity lease plus probe/grace behavior | Controller renews only from trustworthy activity and interrupts only after sustained verified silence |
+| Task model cost | Planning may explain route use and cost exposure | User authorizes one total USD ceiling covering the complete task journey | One monotonic ledger accounts for Planning, execution, correction, repair, and switching; calls, tokens, Agent count, iterations, and duration remain telemetry |
 | Model route | Planning may recommend task needs; configured profiles and routing policy provide candidates | User approves effective routes and switch conditions | Controller resolves and records the authorized route; there is no silent fallback |
 | Replanning or team changes during execution | User correction or an Agent recommendation may request a change | Material changes require a new validated revision and user confirmation | Controller applies a revision only at a safe checkpoint |
 
@@ -97,19 +98,15 @@ on another quality Agent when the overview makes that handoff explicit. The
 controller does not silently rewrite the DAG to maximize parallelism, and the
 scheduler never starts a dependent Agent early.
 
-For the current product profile, `routine` maps to the checked-in capability
-default, `complex` maps to twice that default capped at 3,600 seconds, and
-`substantial` maps to their integer midpoint. Coding and integration therefore
-resolve to 900, 1,350, or 1,800 seconds; testing and review resolve to 300, 450,
-or 600 seconds. Review scope independently supplies a minimum through auditable
-work units: each assigned criterion counts once and each explicit
-`review_boundaries` entry counts once more. Fewer than six work units is routine,
-six through ten is substantial, and eleven or more is complex. The controller
-uses the higher of the Planner estimate and this scope floor. An explicit global
-timeout override collapses all three workload classes to one value but cannot
-undercut an applicable scope floor. Every resolution, criterion count, boundary
-obligation count, and reason is shown in the overview and never comes from an
-execution Agent.
+Fixed capability seconds, call/token ceilings, and iteration counts remain
+valid only when a controlled evaluation deliberately freezes them as measured
+variables. They are not ordinary-product defaults. Product admission instead
+records one user-approved USD ceiling and an optional whole-run deadline. Each
+provider invocation is protected by a separate renewable inactivity contract:
+trustworthy provider streaming, tool lifecycle/output, controller-verified
+artifact, or checkpoint activity renews the lease; SAT's own elapsed-time
+heartbeat and a live process do not. Sustained silence enters a visible
+suspected-stall probe and grace state before interruption and evidence cleanup.
 
 Before Planning or execution, a separate local readiness check verifies each
 authorized OpenClaw model route without generating content. Its 90-second
@@ -634,8 +631,12 @@ the exact primary and fallback assignments.
 
 Before execution, SAT verifies the bootstrap model and every route authorized
 by the approved TeamPlan through its isolated OpenClaw catalog/auth boundary.
-Every invocation records the canonical provider/model, route reference,
-resolution source and reason, known price, telemetry, and remaining budget.
+Task admission first refreshes every configured route's context capacity and
+input/output price. Discovery is preferred; the user is asked only when context
+remains unknown, while an unknown price must be supplied or explicitly
+confirmed as zero. Every invocation records the canonical provider/model,
+route reference, resolution source and reason, frozen price source, telemetry,
+estimated cost, and remaining task budget.
 Runtime switching is currently permitted only after an attributable
 `provider_failure`, only when the approved Agent assignment lists a next route,
 and only up to the configured per-Agent switch limit. The failed invocation is
@@ -790,7 +791,7 @@ at least guidance and cooperative pause/resume without losing integrity.
 **Implementation note:** append-only events now project scheduler queue and
 readiness, invocation and provider wait, bounded semantic repair, completion,
 failure, and blocked states with Agent dependencies, capability, stage, model,
-duration, evidence, and aggregate budget data. Configuration schema v6 selects
+duration, evidence, and aggregate budget data. Configuration schema v7 selects
 compact, standard, or detailed terminal projection. The foreground palette can
 change that projection without changing execution. Its persisted runtime
 channel applies prospective guidance to the next invocation, drains active work
@@ -820,8 +821,8 @@ provider, budget rejection, authorized switch, refused switch, and strict
 evaluation behavior; one authorized run uses two planned routes without silent
 fallback.
 
-**Implementation note:** configuration schema v6 now owns the secret-free
-profiles and route policy. Planning resolves and displays an exact assignment
+**Implementation note:** configuration schema v7 now owns the secret-free
+profiles, attributable price/context metadata, and route policy. Planning resolves and displays an exact assignment
 for every Agent, preflight checks every approved model, prompts and response
 validation bind the active route, and the runtime records or refuses provider
 switches at the controller boundary. Offline tests cover precedence,

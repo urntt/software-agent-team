@@ -9,6 +9,7 @@ import subprocess
 import time
 from collections.abc import Mapping
 from contextlib import suppress
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -83,7 +84,44 @@ class OpenClawModelInspection(BaseModel):
 
     model: str = Field(min_length=1)
     available: bool
+    context_window_tokens: int | None = Field(
+        default=None,
+        ge=1,
+        le=100_000_000,
+    )
+    input_modalities: tuple[str, ...] = ()
+    input_cost_per_million_usd: Decimal | None = Field(
+        default=None,
+        ge=0,
+        le=10_000,
+    )
+    output_cost_per_million_usd: Decimal | None = Field(
+        default=None,
+        ge=0,
+        le=10_000,
+    )
     error: str | None = Field(default=None, max_length=1000)
+
+    @field_validator("input_modalities")
+    @classmethod
+    def require_clean_modalities(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        cleaned = tuple(value.strip().casefold() for value in values)
+        if any(
+            not value or any(character.isspace() for character in value)
+            for value in cleaned
+        ):
+            raise ValueError("model input modalities must be clean tokens")
+        if len(cleaned) != len(set(cleaned)):
+            raise ValueError("model input modalities must be unique")
+        return cleaned
+
+    @model_validator(mode="after")
+    def require_complete_price_pair(self) -> OpenClawModelInspection:
+        if (self.input_cost_per_million_usd is None) != (
+            self.output_cost_per_million_usd is None
+        ):
+            raise ValueError("model inspection prices must be complete or unknown")
+        return self
 
 
 class SandboxImageInspection(BaseModel):
@@ -471,7 +509,8 @@ def inspect_openclaw_model(
             available=False,
             error=f"OpenClaw does not recognize the configured model: {normalized}",
         )
-    if matches[0].get("available") is not True:
+    matched = matches[0]
+    if matched.get("available") is not True:
         return OpenClawModelInspection(
             model=normalized,
             available=False,
@@ -480,7 +519,51 @@ def inspect_openclaw_model(
                 f"model: {normalized}"
             ),
         )
-    return OpenClawModelInspection(model=normalized, available=True)
+    raw_context = matched.get("contextWindow")
+    context_window = (
+        raw_context
+        if isinstance(raw_context, int)
+        and not isinstance(raw_context, bool)
+        and 1 <= raw_context <= 100_000_000
+        else None
+    )
+    raw_input = matched.get("input")
+    if isinstance(raw_input, str):
+        input_modalities = tuple(
+            item.strip().casefold()
+            for item in raw_input.replace(",", "+").split("+")
+            if item.strip()
+        )
+    elif isinstance(raw_input, list):
+        input_modalities = tuple(
+            item.strip().casefold()
+            for item in raw_input
+            if isinstance(item, str) and item.strip()
+        )
+    else:
+        input_modalities = ()
+    discovered_prices: tuple[Decimal | None, Decimal | None] = (None, None)
+    raw_input_price = matched.get("inputCostPerMillionUsd")
+    raw_output_price = matched.get("outputCostPerMillionUsd")
+    if raw_input_price is not None and raw_output_price is not None:
+        try:
+            input_price = Decimal(str(raw_input_price))
+            output_price = Decimal(str(raw_output_price))
+        except (InvalidOperation, ValueError):
+            pass
+        else:
+            if Decimal(0) <= input_price <= Decimal(10_000) and Decimal(
+                0
+            ) <= output_price <= Decimal(10_000):
+                discovered_prices = (input_price, output_price)
+    return OpenClawModelInspection(
+        model=normalized,
+        available=True,
+        context_window_tokens=context_window,
+        input_modalities=tuple(dict.fromkeys(input_modalities)),
+        input_cost_per_million_usd=discovered_prices[0],
+        output_cost_per_million_usd=discovered_prices[1],
+    )
 
 
 def inspect_sandbox_image(

@@ -9,6 +9,18 @@ supports that claim, and what remains unavailable. It does not redefine the
 product, architecture, experiment, or roadmap; those decisions belong to
 [`VISION.md`](VISION.md).
 
+The current development head implements configuration schema v7 model metadata
+with attributable price/context sources, task-scoped route snapshots, an
+explicit per-task USD authorization and optional deadline prompt, and separate
+controlled-evaluation versus ordinary-user budget shapes. Planning and dynamic
+execution can now consume one shared monotonic ledger, so Planning turns retain
+their token, estimated-cost, price-source, and aggregate-budget evidence instead
+of disappearing from runtime accounting. Formatter, lint, and **822 offline
+tests** pass for this integration batch. The renewable streaming-activity
+liveness lease, two mandatory self-check checkpoints, complete cost breakdown,
+and fresh provider/device validation are not implemented yet; these facts do
+not close the corresponding readiness, budget, cost, or timeout work.
+
 ## Phase 1 Result
 
 The function-specialized vertical slice is implemented and has produced a
@@ -62,7 +74,7 @@ queued, ready, running, provider-waiting, bounded-repair, completed, failed, or
 blocked transitions. Events include safe activity, dependencies, capability,
 stage, approved model, attempt and duration where applicable, invocation
 evidence, and aggregate budget snapshots. Compact, standard, and detailed
-filtering consumes the same event contract. Configuration schema v6 persists
+filtering consumes the same event contract. Configuration schema v7 persists
 the selected visibility together with secret-free model profiles and route
 policy without changing renderer semantics, and bare `sat` applies the selected
 visibility to the product renderer; standard remains the default.

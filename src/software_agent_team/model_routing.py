@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from software_agent_team.model_metadata import ModelMetadataSource
 from software_agent_team.teams import (
     AgentCapability,
     ModelRoute,
@@ -43,6 +45,36 @@ class ModelProfile(BaseModel):
         ge=0,
         le=10_000,
     )
+    pricing_source: ModelMetadataSource | None = None
+    pricing_observed_at: datetime | None = None
+    context_window_tokens: int | None = Field(
+        default=None,
+        ge=1,
+        le=100_000_000,
+    )
+    context_source: ModelMetadataSource | None = None
+    context_observed_at: datetime | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def infer_explicit_metadata_sources(cls, value: object) -> object:
+        """Attribute legacy explicit metadata without inventing discovery."""
+
+        if not isinstance(value, dict):
+            return value
+        payload = dict(value)
+        prices_present = (
+            payload.get("input_cost_per_million_usd") is not None
+            and payload.get("output_cost_per_million_usd") is not None
+        )
+        if prices_present and payload.get("pricing_source") is None:
+            payload["pricing_source"] = ModelMetadataSource.USER_SUPPLIED.value
+        if (
+            payload.get("context_window_tokens") is not None
+            and payload.get("context_source") is None
+        ):
+            payload["context_source"] = ModelMetadataSource.USER_SUPPLIED.value
+        return payload
 
     @field_validator("model")
     @classmethod
@@ -78,7 +110,30 @@ class ModelProfile(BaseModel):
             raise ValueError(
                 "model profile input and output prices must be configured together"
             )
+        prices_known = self.input_cost_per_million_usd is not None
+        if prices_known != (self.pricing_source is not None):
+            raise ValueError("known model prices require exactly one pricing source")
+        context_known = self.context_window_tokens is not None
+        if context_known != (self.context_source is not None):
+            raise ValueError("known context length requires exactly one context source")
+        if self.pricing_source is ModelMetadataSource.CONFIRMED_ZERO and (
+            self.input_cost_per_million_usd != 0
+            or self.output_cost_per_million_usd != 0
+        ):
+            raise ValueError("confirmed-zero pricing requires two zero prices")
         return self
+
+    @field_validator("pricing_observed_at", "context_observed_at")
+    @classmethod
+    def require_aware_observation_time(
+        cls,
+        value: datetime | None,
+    ) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("model metadata timestamps must include a UTC offset")
+        return value.astimezone(UTC)
 
     def supports(self, capability: AgentCapability) -> bool:
         """Return whether this profile is user-authorized for one SAT capability."""
@@ -298,6 +353,11 @@ def resolve_model_route_plan(
             eligible_capabilities=profile.capabilities,
             input_cost_per_million_usd=profile.input_cost_per_million_usd,
             output_cost_per_million_usd=profile.output_cost_per_million_usd,
+            pricing_source=profile.pricing_source,
+            pricing_observed_at=profile.pricing_observed_at,
+            context_window_tokens=profile.context_window_tokens,
+            context_source=profile.context_source,
+            context_observed_at=profile.context_observed_at,
         )
         for profile in policy.profiles
         if profile.id in used_routes
