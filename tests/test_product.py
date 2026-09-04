@@ -110,6 +110,7 @@ def test_product_state_is_private_and_rejects_a_symlink(tmp_path: Path) -> None:
             paths.workspaces,
             paths.sources,
             paths.planning,
+            paths.self_checks,
             paths.openclaw,
         )
     )
@@ -121,6 +122,7 @@ def test_product_state_is_private_and_rejects_a_symlink(tmp_path: Path) -> None:
             paths.workspaces,
             paths.sources,
             paths.planning,
+            paths.self_checks,
             paths.openclaw,
         )
     )

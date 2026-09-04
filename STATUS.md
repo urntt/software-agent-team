@@ -1108,6 +1108,11 @@ The acceptance contract is
 
 ## Implemented and Offline Verified
 
+- A versioned `TaskSelfCheckReport` contract with stable result identity,
+  authority, dependency, freshness, severity, status, actionable evidence and
+  remediation; transitive invalidation and exact stale-result refresh; a
+  write-once per-task digest chain; compact, standard, and detailed rendering;
+  and independent persisted-schema compatibility coverage;
 - Local `sat --version`, human-readable `sat version`, and machine-readable
   `sat version --json` reporting from one release/source identity API, including
   managed-install provenance, exact Git revision and dirty state when
@@ -1299,6 +1304,9 @@ derived from the task.
   and versioned uninstall;
 - Task-admission update checks plus SAT identity in run evidence, diagnostic
   exports, and final reports;
+- Product wiring for the task-admission and plan-execution self-check
+  checkpoints, including interactive remediation, all-route capability checks,
+  and changed-fact revalidation;
 - An independent-device live demonstration of the activated Adaptive Planning
   and Dynamic Team journey;
 - Durable control recovery after a foreground process crash and a

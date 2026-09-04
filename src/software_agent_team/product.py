@@ -141,6 +141,7 @@ class ProductStatePaths:
     workspaces: Path
     sources: Path
     planning: Path
+    self_checks: Path
     openclaw: Path
 
     @classmethod
@@ -151,6 +152,7 @@ class ProductStatePaths:
             workspaces=root / "workspaces",
             sources=root / "sources",
             planning=root / "planning",
+            self_checks=root / "self-checks",
             openclaw=root / "openclaw",
         )
 
@@ -188,6 +190,7 @@ def ensure_product_state(paths: ProductStatePaths) -> None:
         paths.workspaces,
         paths.sources,
         paths.planning,
+        paths.self_checks,
         paths.openclaw,
     ):
         path.mkdir(exist_ok=True, mode=0o700)

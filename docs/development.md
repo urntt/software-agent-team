@@ -245,6 +245,7 @@ src/software_agent_team/
   runtime_configuration.py     Run-scoped OpenClaw config and preflight
   scheduling.py                Approved DAG and shared-workspace scheduling
   schema_compatibility.py      Persisted-schema readable-range registry
+  self_check.py                Task-readiness schema, dependency graph, and store
   teams.py                     TeamPlan contracts and fixed-fixture compilation
   user_configuration.py        User-local secret-free live-run defaults
   versioning.py                Release, source, and managed-install identity

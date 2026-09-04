@@ -24,6 +24,7 @@ class SchemaFamily(StrEnum):
     CONTROL_COMMAND = "control_command"
     TEAM_PLAN = "team_plan"
     BUDGET = "budget"
+    SELF_CHECK = "self_check"
 
 
 class SchemaSupport(BaseModel):
@@ -86,6 +87,7 @@ def supported_schemas() -> tuple[SchemaSupport, ...]:
     from software_agent_team.planning import PLANNING_SCHEMA_VERSION
     from software_agent_team.progress import RUN_EVENT_SCHEMA_VERSION
     from software_agent_team.run_control import RUN_SCHEMA_VERSION
+    from software_agent_team.self_check import SELF_CHECK_SCHEMA_VERSION
     from software_agent_team.teams import TEAM_PLAN_SCHEMA_VERSION
     from software_agent_team.user_configuration import (
         USER_CONFIGURATION_SCHEMA_VERSION,
@@ -101,6 +103,7 @@ def supported_schemas() -> tuple[SchemaSupport, ...]:
         (SchemaFamily.CONTROL_COMMAND, CONTROL_COMMAND_SCHEMA_VERSION),
         (SchemaFamily.TEAM_PLAN, TEAM_PLAN_SCHEMA_VERSION),
         (SchemaFamily.BUDGET, BUDGET_SCHEMA_VERSION),
+        (SchemaFamily.SELF_CHECK, SELF_CHECK_SCHEMA_VERSION),
     )
     support = [
         SchemaSupport(
@@ -227,6 +230,13 @@ def _persisted_schema_paths(
         _require_real_directory(planning, "planning state root")
         for path in sorted(planning.glob("**/*.json")):
             candidates.append((SchemaFamily.PLANNING, path))
+    self_checks = state_root / "self-checks"
+    if self_checks.exists():
+        _require_real_directory(self_checks, "self-check state root")
+        for run in sorted(self_checks.iterdir()):
+            _require_real_directory(run, "self-check task directory")
+            for path in sorted(run.glob("*.json")):
+                candidates.append((SchemaFamily.SELF_CHECK, path))
     return candidates
 
 

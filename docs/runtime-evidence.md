@@ -293,6 +293,10 @@ planning/<run_id>/
 └── approvals/
     └── <revision>.json
 
+self-checks/<run_id>/
+├── 0001-task_admission.json
+└── 0002-plan_execution.json
+
 runs/<run_id>/
 ├── task-brief.json
 ├── team-plan.json
@@ -395,6 +399,14 @@ atomically replaced under an optimistic revision check and records the
 evidence references required for every material transition. A loader verifies
 the frozen TaskBrief, TeamPlan, fixed-fixture provenance when applicable, and
 all cross-file digests before returning state.
+
+Task self-check reports form a separate write-once digest chain because they
+exist before a run workspace and may be revised when an observed dependency
+changes. Each result identifies its checkpoint, category, authority, inputs,
+dependencies, freshness, severity, status, observed non-secret fact, evidence,
+consequence, remediation, and rerun rule. A changed fact invalidates only that
+result and its transitive dependents; a stale result cannot authorize Planning
+or execution.
 
 Every compatibility-workflow status update is first enriched into a versioned
 `RunEvent`. It stores its run ID, contiguous sequence, UTC timestamp, lifecycle
