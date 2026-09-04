@@ -12,7 +12,11 @@ from typing import Protocol, cast
 
 from pydantic import ValidationError
 
-from software_agent_team.artifact_store import ArtifactStore, ArtifactStoreError
+from software_agent_team.artifact_store import (
+    ArtifactStore,
+    ArtifactStoreError,
+    FinalReportBundle,
+)
 from software_agent_team.artifacts import (
     AgentRole,
     ArtifactKind,
@@ -47,7 +51,9 @@ from software_agent_team.budgets import (
     AgentBudgetExceeded,
     AgentBudgetLedger,
     AgentCallReservation,
+    BudgetLedgerRecord,
     ModelPricing,
+    budget_ledger_sha256,
 )
 from software_agent_team.execution import (
     AgentExecutionRequest,
@@ -83,7 +89,10 @@ from software_agent_team.quality_gates import (
     QualityGateError,
     SandboxUnavailableError,
 )
-from software_agent_team.reporting import render_run_report
+from software_agent_team.reporting import (
+    render_minimal_terminal_report,
+    render_run_report,
+)
 from software_agent_team.responses import (
     AgentArtifactResponseError,
     AgentResponseBody,
@@ -885,7 +894,14 @@ class WorkflowCoordinator:
             )
             assert context.budget_ledger is not None
             try:
-                reservation = context.budget_ledger.reserve_call(request.agent_id)
+                reservation = context.budget_ledger.reserve_call(
+                    request.agent_id,
+                    run_id=context.brief.run_id,
+                    stage=stage,
+                    attempt=attempt,
+                    route_id=context.team_plan.model_routes.default_route_id,
+                    pricing=self.pricing,
+                )
             except AgentBudgetExceeded as error:
                 raise AgentInvocationError(
                     str(error),
@@ -1186,19 +1202,20 @@ class WorkflowCoordinator:
             ),
             summary="The implementation passed deterministic gates and review.",
         )
-        final_reference = context.artifact_store.write(
+        bundle = self._write_terminal_report(
+            context,
+            record,
             final_report,
             description="Authoritative terminal report.",
         )
-        markdown_path = context.artifact_store.write_final_report_markdown(
-            final_reference,
-            self._render_report(context, record, final_report),
-        )
-        record = context.controller.complete(
-            record.run_id,
-            expected_revision=record.revision,
-            detail=final_report.summary,
-            final_report=final_reference,
+        record = context.artifact_store.bind_final_report_bundle(
+            bundle,
+            lambda reference: context.controller.complete(
+                record.run_id,
+                expected_revision=record.revision,
+                detail=final_report.summary,
+                final_report=reference,
+            ),
         )
         self._emit(
             context,
@@ -1209,7 +1226,12 @@ class WorkflowCoordinator:
                 iteration=record.current_iteration,
             ),
         )
-        return self._outcome(context, record, final_reference, markdown_path)
+        return self._outcome(
+            context,
+            record,
+            bundle.reference,
+            bundle.markdown_path,
+        )
 
     def _fail(
         self,
@@ -1243,20 +1265,22 @@ class WorkflowCoordinator:
             unresolved_findings=_unique(unresolved),
             summary=f"The run failed: {detail}",
         )
-        final_reference = context.artifact_store.write(
+        bundle = self._write_terminal_report(
+            context,
+            record,
             final_report,
             description="Authoritative terminal failure report.",
+            allow_minimal_fallback=True,
         )
-        markdown_path = context.artifact_store.write_final_report_markdown(
-            final_reference,
-            self._render_report(context, record, final_report),
-        )
-        record = context.controller.fail(
-            record.run_id,
-            expected_revision=record.revision,
-            reason=reason,
-            detail=detail,
-            final_report=final_reference,
+        record = context.artifact_store.bind_final_report_bundle(
+            bundle,
+            lambda reference: context.controller.fail(
+                record.run_id,
+                expected_revision=record.revision,
+                reason=reason,
+                detail=detail,
+                final_report=reference,
+            ),
         )
         self._emit(
             context,
@@ -1270,7 +1294,12 @@ class WorkflowCoordinator:
                 iteration=record.current_iteration,
             ),
         )
-        return self._outcome(context, record, final_reference, markdown_path)
+        return self._outcome(
+            context,
+            record,
+            bundle.reference,
+            bundle.markdown_path,
+        )
 
     @staticmethod
     def _outcome(
@@ -1296,6 +1325,8 @@ class WorkflowCoordinator:
         context: _WorkflowContext,
         record: RunRecord,
         report: FinalReport,
+        budget_record: BudgetLedgerRecord,
+        budget_digest: str,
     ) -> str:
         return render_run_report(
             artifact_store=context.artifact_store,
@@ -1304,7 +1335,48 @@ class WorkflowCoordinator:
             execution_records=tuple(context.execution_records),
             handoffs=tuple(context.handoffs),
             command_evidence=tuple(context.command_evidence),
+            budget_ledger=budget_record,
+            budget_ledger_sha256=budget_digest,
         )
+
+    def _write_terminal_report(
+        self,
+        context: _WorkflowContext,
+        record: RunRecord,
+        report: FinalReport,
+        *,
+        description: str,
+        allow_minimal_fallback: bool = False,
+    ) -> FinalReportBundle:
+        """Prepare terminal evidence before committing its canonical bundle."""
+
+        assert context.budget_ledger is not None
+        budget_record = context.budget_ledger.terminal_record()
+        budget_digest = budget_ledger_sha256(budget_record)
+        try:
+            markdown = self._render_report(
+                context,
+                record,
+                report,
+                budget_record,
+                budget_digest,
+            )
+        except Exception as error:
+            if not allow_minimal_fallback:
+                raise
+            markdown = render_minimal_terminal_report(
+                report=report,
+                budget_ledger=budget_record,
+                budget_ledger_sha256=budget_digest,
+                rendering_error=error,
+            )
+        bundle = context.artifact_store.write_final_report_bundle(
+            report,
+            markdown,
+            budget_record,
+            description=description,
+        )
+        return bundle
 
     @staticmethod
     def _agent_termination_reason(

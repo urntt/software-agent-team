@@ -39,7 +39,11 @@ from software_agent_team.artifacts import (
     parse_phase_artifact,
 )
 from software_agent_team.artifacts import TestReport as PhaseTestReport
-from software_agent_team.budgets import AgentBudget
+from software_agent_team.budgets import (
+    AgentBudget,
+    AgentBudgetUsage,
+    BudgetLedgerRecord,
+)
 from software_agent_team.integrity import canonical_model_sha256
 from software_agent_team.teams import (
     AgentCapability,
@@ -496,6 +500,125 @@ def test_store_round_trips_all_six_phase_artifacts(tmp_path: Path) -> None:
     assert (store.root / markdown_path).read_text(encoding="utf-8").startswith("#")
     with pytest.raises(ArtifactAlreadyExistsError, match="already exists"):
         store.write_final_report_markdown(final_ref, "# Replacement\n")
+
+
+def empty_budget_ledger() -> BudgetLedgerRecord:
+    return BudgetLedgerRecord(
+        budget=function_team_plan().budget,
+        usage=AgentBudgetUsage(
+            calls_started=0,
+            calls_completed=0,
+            active_calls=0,
+            input_tokens=0,
+            output_tokens=0,
+            agent_duration_ms=0,
+            known_estimated_cost_usd="0",
+            unpriced_calls=0,
+            unreported_token_calls=0,
+        ),
+        calls=(),
+    )
+
+
+def terminal_failure_report() -> FinalReport:
+    return FinalReport(
+        run_id="task-manager-001",
+        team_id="function_specialized",
+        created_at=CREATED_AT,
+        status=FinalStatus.FAILED,
+        termination_reason="execution_failed",
+        final_commit=None,
+        iterations=(),
+        acceptance_results=(),
+        summary="The run stopped before delivery.",
+    )
+
+
+def test_store_commits_the_terminal_report_bundle_together(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+
+    bundle = store.write_final_report_bundle(
+        terminal_failure_report(),
+        "# Final report\n\nThe run stopped before delivery.\n",
+        empty_budget_ledger(),
+        description="Authoritative terminal failure report.",
+    )
+
+    assert store.load(bundle.reference) == terminal_failure_report()
+    assert (store.root / bundle.markdown_path).is_file()
+    assert (store.root / bundle.budget_ledger_path).is_file()
+    assert len(bundle.markdown_sha256) == 64
+    assert len(bundle.budget_ledger_sha256) == 64
+
+
+def test_store_rolls_back_only_the_exact_uncommitted_terminal_bundle(
+    tmp_path: Path,
+) -> None:
+    store = make_store(tmp_path)
+    bundle = store.write_final_report_bundle(
+        terminal_failure_report(),
+        "# Final report\n\nThe run stopped before delivery.\n",
+        empty_budget_ledger(),
+        description="Authoritative terminal failure report.",
+    )
+
+    store.rollback_final_report_bundle(bundle)
+
+    assert not (store.root / bundle.reference.path).exists()
+    assert not (store.root / bundle.markdown_path).exists()
+    assert not (store.root / bundle.budget_ledger_path).exists()
+
+
+def test_store_refuses_to_rollback_a_changed_terminal_bundle(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    bundle = store.write_final_report_bundle(
+        terminal_failure_report(),
+        "# Final report\n\nThe run stopped before delivery.\n",
+        empty_budget_ledger(),
+        description="Authoritative terminal failure report.",
+    )
+    (store.root / bundle.markdown_path).write_text(
+        "changed after preparation\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ArtifactIntegrityError, match="differs"):
+        store.rollback_final_report_bundle(bundle)
+
+    assert (store.root / bundle.reference.path).is_file()
+    assert (store.root / bundle.markdown_path).is_file()
+    assert (store.root / bundle.budget_ledger_path).is_file()
+
+
+def test_terminal_report_bundle_rolls_back_every_canonical_file_on_link_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = make_store(tmp_path)
+    real_link = artifact_store_module.os.link
+    link_count = 0
+
+    def fail_second_link(source: Path, destination: Path) -> None:
+        nonlocal link_count
+        link_count += 1
+        if link_count == 2:
+            raise OSError("injected terminal bundle failure")
+        real_link(source, destination)
+
+    monkeypatch.setattr(artifact_store_module.os, "link", fail_second_link)
+
+    with pytest.raises(OSError, match="injected terminal bundle failure"):
+        store.write_final_report_bundle(
+            terminal_failure_report(),
+            "# Final report\n\nThe run stopped before delivery.\n",
+            empty_budget_ledger(),
+            description="Authoritative terminal failure report.",
+        )
+
+    assert not (store.root / "final-report.json").exists()
+    assert not (store.root / "final-report.md").exists()
+    assert not (store.root / "budget-ledger.json").exists()
+    assert not tuple(store.root.glob(".*.tmp"))
 
 
 def test_store_separates_same_kind_outputs_by_dynamic_agent_id(

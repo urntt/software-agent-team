@@ -96,6 +96,16 @@ def task_resource_authorization(
     )
 
 
+def test_cost_prompts_do_not_reintroduce_an_arbitrary_product_ceiling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    answers = iter(("20000.02", "30000.03"))
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+
+    assert cli._prompt_nonnegative_decimal("Input price") == Decimal("20000.02")
+    assert cli._prompt_task_cost_ceiling() == Decimal("30000.03")
+
+
 def test_replacement_planning_request_preserves_all_prior_constraints() -> None:
     original = cli.PlanningRequest(
         run_id="sat-correction-many-constraints",

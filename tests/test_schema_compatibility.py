@@ -61,6 +61,7 @@ def test_persisted_schema_scan_classifies_known_state_paths(tmp_path: Path) -> N
         installation: 1,
         state / "runs/run-1/run.json": 6,
         state / "runs/run-1/team-plan.json": 1,
+        state / "runs/run-1/budget-ledger.json": 1,
         state / "runs/run-1/events/000001.json": 2,
         state / "runs/run-1/controls/control-1/000001.json": 2,
         state / "runs/run-1/implementation-plan.json": 2,

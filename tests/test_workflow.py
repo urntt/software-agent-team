@@ -10,6 +10,9 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+
+import software_agent_team.workflow as workflow_module
 from software_agent_team.artifacts import (
     AgentRole,
     CommandEvidence,
@@ -52,7 +55,7 @@ from software_agent_team.responses import (
 from software_agent_team.responses import (
     TestReportResponse as SemanticTestReport,
 )
-from software_agent_team.run_control import RunPhase, TerminationReason
+from software_agent_team.run_control import RunControlError, RunPhase, TerminationReason
 from software_agent_team.teams import load_team_manifest
 from software_agent_team.workflow import WorkflowCoordinator
 
@@ -464,6 +467,11 @@ def test_offline_workflow_completes_with_parallel_independent_verification(
     markdown = (run_directory / outcome.human_report_path).read_text(encoding="utf-8")
     assert "Status: `completed`" in markdown
     assert "Agent calls: 4" in markdown
+    assert "Complete-journey model calls: 4" in markdown
+    assert "Cost by call, Agent, phase, and route" in markdown
+    assert "`implement`" in markdown
+    assert "`primary / offline/test-model`" in markdown
+    assert (run_directory / "budget-ledger.json").is_file()
     assert len(list((run_directory / "iterations/01/commands").glob("*.txt"))) == 8
     test_report = json.loads(
         (run_directory / "iterations/01/agents/tester/test-report.json").read_text(
@@ -580,6 +588,61 @@ def test_workflow_reports_unconfigured_cost_without_inventing_zero(
     ).read_text(encoding="utf-8")
     assert "Estimated model cost: not configured" in markdown
     assert "Estimated model cost: $0.000000" not in markdown
+
+
+def test_report_render_failure_preserves_the_original_error_in_one_terminal_bundle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = initialize_source(tmp_path)
+    workspace = tmp_path / "workspaces" / task_brief().run_id
+    executor = DynamicWorkflowExecutor(workspace)
+
+    def fail_render(**_kwargs: object) -> str:
+        raise RuntimeError("injected rich report failure")
+
+    monkeypatch.setattr(workflow_module, "render_run_report", fail_render)
+    outcome = coordinator(tmp_path, executor).execute(
+        task_brief(),
+        source_repository=source,
+    )
+
+    run_directory = tmp_path / "runs" / task_brief().run_id
+    markdown = (run_directory / outcome.human_report_path).read_text(encoding="utf-8")
+    assert outcome.record.phase is RunPhase.FAILED
+    assert "injected rich report failure" in outcome.record.termination_detail
+    assert "Report finalization diagnostic" in markdown
+    assert "injected rich report failure" in markdown
+    assert (run_directory / "final-report.json").is_file()
+    assert (run_directory / "budget-ledger.json").is_file()
+    assert len(tuple(run_directory.glob("final-report.json"))) == 1
+
+
+def test_success_bundle_is_rolled_back_before_controller_failure_is_reported(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = initialize_source(tmp_path)
+    workspace = tmp_path / "workspaces" / task_brief().run_id
+    executor = DynamicWorkflowExecutor(workspace)
+
+    def fail_complete(*_args: object, **_kwargs: object) -> object:
+        raise RunControlError("injected terminal transition failure")
+
+    monkeypatch.setattr(workflow_module.RunController, "complete", fail_complete)
+    outcome = coordinator(tmp_path, executor).execute(
+        task_brief(),
+        source_repository=source,
+    )
+
+    run_directory = tmp_path / "runs" / task_brief().run_id
+    report = json.loads((run_directory / "final-report.json").read_text())
+    assert outcome.record.phase is RunPhase.FAILED
+    assert "injected terminal transition failure" in outcome.record.termination_detail
+    assert report["status"] == "failed"
+    assert len(tuple(run_directory.glob("final-report.json"))) == 1
+    assert (run_directory / "final-report.md").is_file()
+    assert (run_directory / "budget-ledger.json").is_file()
 
 
 def test_workflow_uses_verified_git_facts_instead_of_model_claims(

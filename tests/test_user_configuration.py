@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from software_agent_team.model_routing import ModelProfile
+from software_agent_team.teams import AgentCapability
 from software_agent_team.user_configuration import (
     USER_CONFIGURATION_SCHEMA_VERSION,
     UserConfiguration,
@@ -214,6 +216,25 @@ def test_product_configuration_can_omit_local_price_estimates() -> None:
             model="provider/model",
             input_cost_per_million_usd="1",
         )
+
+
+def test_product_model_profile_count_is_not_an_orchestration_limit() -> None:
+    profiles = tuple(
+        ModelProfile(
+            id=f"route_{index}",
+            model=f"provider/model-{index}",
+            capabilities=tuple(AgentCapability),
+        )
+        for index in range(20)
+    )
+
+    configuration = UserConfiguration(
+        model_profiles=profiles,
+        default_model_profile_id="route_0",
+        routing_mode="policy",
+    )
+
+    assert len(configuration.model_profiles) == 20
 
 
 def test_v5_configuration_migrates_to_one_strict_profile(tmp_path: Path) -> None:

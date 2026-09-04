@@ -517,7 +517,15 @@ class DynamicAgentRunner:
                 if repair_detail is None
                 else build_semantic_repair_request(base_request, repair_detail)
             )
-            reservation = self.budget_ledger.reserve_call(agent.id)
+            pricing = self.pricing_by_model[cast(str, request.model)]
+            reservation = self.budget_ledger.reserve_call(
+                agent.id,
+                run_id=self.task_brief.run_id,
+                stage=agent.stage_id,
+                attempt=attempt,
+                route_id=route_id,
+                pricing=pricing,
+            )
             self._emit_activity(
                 agent,
                 kind=ProgressEventKind.AGENT_WAITING_PROVIDER,
@@ -619,7 +627,6 @@ class DynamicAgentRunner:
                     failure = error
                     record_error = self._error_detail(error)
 
-            pricing = self.pricing_by_model[cast(str, request.model)]
             persisted = persist_agent_invocation(
                 artifact_store=self.artifact_store,
                 budget_ledger=self.budget_ledger,
@@ -637,16 +644,30 @@ class DynamicAgentRunner:
             self._record_execution_reference(agent.id, persisted.reference)
             if current_review_evidence is not None:
                 review_evidence_attempts.append(current_review_evidence)
+            budget_usage = self.budget_ledger.snapshot()
+            budget_remaining = budget_usage.remaining_estimated_cost_usd(
+                self.budget_ledger.budget
+            )
+            pricing_source = (
+                "unknown"
+                if pricing.pricing_source is None
+                else pricing.pricing_source.value
+            )
             self._emit_activity(
                 agent,
                 kind=ProgressEventKind.AGENT_INVOCATION_COMPLETED,
                 message=(
-                    f"{agent.label} invocation {attempt} returned {result.status.value}"
+                    f"{agent.label} invocation {attempt} returned "
+                    f"{result.status.value}; task model spend "
+                    f"${budget_usage.known_estimated_cost_usd:.6f} estimated / "
+                    f"${self.budget_ledger.budget.max_estimated_cost_usd} "
+                    f"authorized, ${budget_remaining:.6f} recorded remaining "
+                    f"(price source {pricing_source})"
                 ),
                 attempt=attempt,
                 model=request.model,
                 duration_ms=result.telemetry.duration_ms,
-                budget_usage=self.budget_ledger.snapshot(),
+                budget_usage=budget_usage,
                 references=(
                     RunEventReference(
                         kind=RunEventReferenceKind.ARTIFACT,

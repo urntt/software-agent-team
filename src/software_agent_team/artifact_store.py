@@ -3,6 +3,7 @@
 import hashlib
 import json
 import os
+from collections.abc import Callable
 from contextlib import suppress
 from itertools import pairwise
 from pathlib import Path, PurePosixPath
@@ -35,6 +36,11 @@ from software_agent_team.artifacts import (
     resolve_acceptance_results,
     validate_artifact_context,
 )
+from software_agent_team.budgets import (
+    BUDGET_LEDGER_FILENAME,
+    BudgetLedgerRecord,
+    serialize_budget_ledger,
+)
 from software_agent_team.integrity import canonical_model_sha256
 from software_agent_team.teams import AgentCapability, TeamPlan
 
@@ -58,6 +64,16 @@ class ExecutionOutputEvidence(NamedTuple):
     stderr_path: str
     stdout_sha256: str
     stderr_sha256: str
+
+
+class FinalReportBundle(NamedTuple):
+    """Paths and digests committed by one terminal evidence transaction."""
+
+    reference: ArtifactReference
+    markdown_path: str
+    markdown_sha256: str
+    budget_ledger_path: str
+    budget_ledger_sha256: str
 
 
 def _artifact_path(artifact: PersistedArtifact) -> PurePosixPath:
@@ -279,6 +295,125 @@ class ArtifactStore:
         destination = self.root / relative_path.as_posix()
         self._write_immutable_file(destination, content.encode("utf-8"))
         return relative_path.as_posix()
+
+    def write_final_report_bundle(
+        self,
+        report: FinalReport,
+        markdown: str,
+        budget_ledger: BudgetLedgerRecord,
+        *,
+        description: str,
+    ) -> FinalReportBundle:
+        """Commit terminal JSON, Markdown, and budget evidence as one bundle."""
+
+        try:
+            self._validate_context(report)
+        except ValueError as error:
+            raise ArtifactStoreError("artifact context is invalid") from error
+        self._validate_references(report)
+        if not markdown.strip() or "\x00" in markdown:
+            raise ArtifactStoreError("human report content is invalid")
+
+        report_path = PurePosixPath("final-report.json")
+        markdown_path = PurePosixPath("final-report.md")
+        budget_path = PurePosixPath(BUDGET_LEDGER_FILENAME)
+        entries = (
+            (report_path, _serialize(report)),
+            (markdown_path, markdown.encode("utf-8")),
+            (budget_path, serialize_budget_ledger(budget_ledger)),
+        )
+        destinations = tuple(
+            (relative, self.root.joinpath(*relative.parts), content)
+            for relative, content in entries
+        )
+        for relative, destination, _content in destinations:
+            self._require_inside_root(destination, must_exist=False)
+            if destination.exists() or destination.is_symlink():
+                raise ArtifactAlreadyExistsError(
+                    f"artifact already exists: {relative.as_posix()}"
+                )
+
+        staged: list[tuple[Path, Path]] = []
+        created: list[Path] = []
+        try:
+            for relative, destination, content in destinations:
+                temporary = self.root / f".{relative.name}.{uuid4().hex}.tmp"
+                with temporary.open("xb") as output:
+                    output.write(content)
+                    output.flush()
+                    os.fsync(output.fileno())
+                staged.append((temporary, destination))
+            for temporary, destination in staged:
+                os.link(temporary, destination)
+                created.append(destination)
+            _fsync_directory(self.root)
+        except Exception:
+            for destination in reversed(created):
+                destination.unlink(missing_ok=True)
+            if created:
+                _fsync_directory(self.root)
+            raise
+        finally:
+            for temporary, _destination in staged:
+                temporary.unlink(missing_ok=True)
+
+        report_content = entries[0][1]
+        budget_content = entries[2][1]
+        return FinalReportBundle(
+            reference=ArtifactReference(
+                kind=ArtifactKind.FINAL_REPORT,
+                path=report_path.as_posix(),
+                sha256=hashlib.sha256(report_content).hexdigest(),
+                description=description,
+            ),
+            markdown_path=markdown_path.as_posix(),
+            markdown_sha256=hashlib.sha256(entries[1][1]).hexdigest(),
+            budget_ledger_path=budget_path.as_posix(),
+            budget_ledger_sha256=hashlib.sha256(budget_content).hexdigest(),
+        )
+
+    def rollback_final_report_bundle(self, bundle: FinalReportBundle) -> None:
+        """Remove an uncommitted terminal bundle only when every digest matches."""
+
+        expected = (
+            (bundle.reference.path, bundle.reference.sha256),
+            (bundle.markdown_path, bundle.markdown_sha256),
+            (bundle.budget_ledger_path, bundle.budget_ledger_sha256),
+        )
+        destinations: list[Path] = []
+        for relative, digest in expected:
+            destination = self.root.joinpath(*PurePosixPath(relative).parts)
+            self._require_inside_root(destination, must_exist=True)
+            if destination.is_symlink() or not destination.is_file():
+                raise ArtifactIntegrityError(
+                    "terminal rollback target is not a regular file"
+                )
+            if hashlib.sha256(destination.read_bytes()).hexdigest() != digest:
+                raise ArtifactIntegrityError(
+                    "terminal rollback target differs from the prepared bundle"
+                )
+            destinations.append(destination)
+        for destination in reversed(destinations):
+            destination.unlink()
+        _fsync_directory(self.root)
+
+    def bind_final_report_bundle[ResultT](
+        self,
+        bundle: FinalReportBundle,
+        transition: Callable[[ArtifactReference], ResultT],
+    ) -> ResultT:
+        """Bind a prepared bundle to controller state or roll it back exactly."""
+
+        try:
+            return transition(bundle.reference)
+        except BaseException as error:
+            try:
+                self.rollback_final_report_bundle(bundle)
+            except Exception as rollback_error:
+                error.add_note(
+                    f"terminal bundle rollback also failed: {rollback_error}"
+                )
+            raise
 
     def load(self, reference: ArtifactReference) -> PersistedArtifact:
         """Load one referenced artifact after path, digest, type, and context checks."""

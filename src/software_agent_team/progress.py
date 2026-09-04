@@ -195,7 +195,7 @@ _EVENT_METADATA: dict[
     ),
     ProgressEventKind.AGENT_INVOCATION_COMPLETED: (
         RunEventCategory.AGENT,
-        RunEventVisibility.DETAILED,
+        RunEventVisibility.STANDARD,
         AgentRunState.RUNNING,
     ),
     ProgressEventKind.MODEL_ROUTE_SWITCHED: (
@@ -804,8 +804,8 @@ class TerminalProgressRenderer:
             > _VISIBILITY_RANK[self.visibility]
         )
         if event.kind is ProgressEventKind.AGENT_INVOCATION_COMPLETED:
-            # Invocation checkpoints are detailed-only, but they must stop a
-            # standard-visibility provider heartbeat even when hidden.
+            # Invocation checkpoints stop their provider heartbeat before the
+            # standard cost summary is rendered.
             self._stop_waiting(event)
         elif event.kind in {
             ProgressEventKind.AGENT_COMPLETED,

@@ -205,6 +205,9 @@ def _persisted_schema_paths(
             _append_if_present(
                 candidates, SchemaFamily.TEAM_PLAN, run / "team-plan.json"
             )
+            _append_if_present(
+                candidates, SchemaFamily.BUDGET, run / "budget-ledger.json"
+            )
             events = run / "events"
             if events.exists():
                 _require_real_directory(events, "run event directory")

@@ -10,7 +10,11 @@ from typing import Protocol
 
 from pydantic import ValidationError
 
-from software_agent_team.artifact_store import ArtifactStore, ArtifactStoreError
+from software_agent_team.artifact_store import (
+    ArtifactStore,
+    ArtifactStoreError,
+    FinalReportBundle,
+)
 from software_agent_team.artifacts import (
     ArtifactReference,
     CheckStatus,
@@ -26,7 +30,12 @@ from software_agent_team.artifacts import (
     WorkResult,
     resolve_acceptance_results,
 )
-from software_agent_team.budgets import AgentBudgetLedger, ModelPricing
+from software_agent_team.budgets import (
+    AgentBudgetLedger,
+    BudgetLedgerRecord,
+    ModelPricing,
+    budget_ledger_sha256,
+)
 from software_agent_team.controls import ControlCommandStore
 from software_agent_team.dynamic_runner import (
     DynamicAgentRunner,
@@ -60,7 +69,10 @@ from software_agent_team.quality_gates import (
     QualityGateError,
     SandboxUnavailableError,
 )
-from software_agent_team.reporting import render_run_report
+from software_agent_team.reporting import (
+    render_minimal_terminal_report,
+    render_run_report,
+)
 from software_agent_team.run_control import (
     RunControlError,
     RunController,
@@ -1009,19 +1021,20 @@ class DynamicWorkflowCoordinator:
             known_limitations=limitations,
             summary="The adaptive team passed deterministic gates and review.",
         )
-        reference = context.artifact_store.write(
+        bundle = self._write_terminal_report(
+            context,
+            record,
             report,
             description="Authoritative terminal report.",
         )
-        markdown = context.artifact_store.write_final_report_markdown(
-            reference,
-            self._render_report(context, record, report),
-        )
-        record = context.controller.complete(
-            record.run_id,
-            expected_revision=record.revision,
-            detail=report.summary,
-            final_report=reference,
+        record = context.artifact_store.bind_final_report_bundle(
+            bundle,
+            lambda reference: context.controller.complete(
+                record.run_id,
+                expected_revision=record.revision,
+                detail=report.summary,
+                final_report=reference,
+            ),
         )
         self._emit(
             context,
@@ -1032,7 +1045,12 @@ class DynamicWorkflowCoordinator:
                 iteration=record.current_iteration,
             ),
         )
-        return self._outcome(context, record, reference, markdown)
+        return self._outcome(
+            context,
+            record,
+            bundle.reference,
+            bundle.markdown_path,
+        )
 
     def _fail(
         self,
@@ -1082,20 +1100,22 @@ class DynamicWorkflowCoordinator:
             known_limitations=limitations,
             summary=f"The adaptive run failed: {detail}",
         )
-        reference = context.artifact_store.write(
+        bundle = self._write_terminal_report(
+            context,
+            record,
             report,
             description="Authoritative terminal failure report.",
+            allow_minimal_fallback=True,
         )
-        markdown = context.artifact_store.write_final_report_markdown(
-            reference,
-            self._render_report(context, record, report),
-        )
-        record = context.controller.fail(
-            record.run_id,
-            expected_revision=record.revision,
-            reason=reason,
-            detail=detail,
-            final_report=reference,
+        record = context.artifact_store.bind_final_report_bundle(
+            bundle,
+            lambda reference: context.controller.fail(
+                record.run_id,
+                expected_revision=record.revision,
+                reason=reason,
+                detail=detail,
+                final_report=reference,
+            ),
         )
         self._emit(
             context,
@@ -1106,7 +1126,12 @@ class DynamicWorkflowCoordinator:
                 iteration=record.current_iteration,
             ),
         )
-        return self._outcome(context, record, reference, markdown)
+        return self._outcome(
+            context,
+            record,
+            bundle.reference,
+            bundle.markdown_path,
+        )
 
     def _stop_by_user(
         self,
@@ -1131,20 +1156,22 @@ class DynamicWorkflowCoordinator:
             known_limitations=(),
             summary=detail,
         )
-        reference = context.artifact_store.write(
+        bundle = self._write_terminal_report(
+            context,
+            record,
             report,
             description="Authoritative user-controlled terminal report.",
+            allow_minimal_fallback=True,
         )
-        markdown = context.artifact_store.write_final_report_markdown(
-            reference,
-            self._render_report(context, record, report),
-        )
-        record = context.controller.fail(
-            record.run_id,
-            expected_revision=record.revision,
-            reason=reason,
-            detail=detail,
-            final_report=reference,
+        record = context.artifact_store.bind_final_report_bundle(
+            bundle,
+            lambda reference: context.controller.fail(
+                record.run_id,
+                expected_revision=record.revision,
+                reason=reason,
+                detail=detail,
+                final_report=reference,
+            ),
         )
         self._emit(
             context,
@@ -1158,8 +1185,8 @@ class DynamicWorkflowCoordinator:
         return self._outcome(
             context,
             record,
-            reference,
-            markdown,
+            bundle.reference,
+            bundle.markdown_path,
             control_stop=control_stop,
             correction_instruction=correction_instruction,
         )
@@ -1193,6 +1220,8 @@ class DynamicWorkflowCoordinator:
         context: _DynamicWorkflowContext,
         record: RunRecord,
         report: FinalReport,
+        budget_record: BudgetLedgerRecord,
+        budget_digest: str,
     ) -> str:
         return render_run_report(
             artifact_store=context.artifact_store,
@@ -1201,7 +1230,48 @@ class DynamicWorkflowCoordinator:
             execution_records=tuple(context.execution_records),
             handoffs=tuple(context.handoffs),
             command_evidence=tuple(context.command_evidence),
+            budget_ledger=budget_record,
+            budget_ledger_sha256=budget_digest,
         )
+
+    @classmethod
+    def _write_terminal_report(
+        cls,
+        context: _DynamicWorkflowContext,
+        record: RunRecord,
+        report: FinalReport,
+        *,
+        description: str,
+        allow_minimal_fallback: bool = False,
+    ) -> FinalReportBundle:
+        """Prepare terminal evidence before committing its canonical bundle."""
+
+        budget_record = context.budget_ledger.terminal_record()
+        budget_digest = budget_ledger_sha256(budget_record)
+        try:
+            markdown = cls._render_report(
+                context,
+                record,
+                report,
+                budget_record,
+                budget_digest,
+            )
+        except Exception as error:
+            if not allow_minimal_fallback:
+                raise
+            markdown = render_minimal_terminal_report(
+                report=report,
+                budget_ledger=budget_record,
+                budget_ledger_sha256=budget_digest,
+                rendering_error=error,
+            )
+        bundle = context.artifact_store.write_final_report_bundle(
+            report,
+            markdown,
+            budget_record,
+            description=description,
+        )
+        return bundle
 
     @staticmethod
     def _termination_reason(error: Exception) -> TerminationReason:

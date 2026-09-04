@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+
+import software_agent_team.dynamic_workflow as dynamic_workflow_module
 from software_agent_team.artifact_store import ArtifactStore
 from software_agent_team.artifacts import (
     AcceptanceCriterion,
@@ -66,7 +70,7 @@ from software_agent_team.responses import (
 from software_agent_team.responses import (
     TestReportResponse as SemanticTestReportResponse,
 )
-from software_agent_team.run_control import RunPhase, TerminationReason
+from software_agent_team.run_control import RunControlError, RunPhase, TerminationReason
 from software_agent_team.runtime_controls import RuntimeControlDecision
 from software_agent_team.scheduling import ScheduleStatus
 from software_agent_team.teams import (
@@ -641,7 +645,6 @@ def test_dynamic_workflow_continues_one_shared_planning_budget_ledger(
         input_tokens=100,
         output_tokens=50,
         duration_ms=20,
-        estimated_cost_usd=None,
     )
     source = initialize_source(tmp_path)
     executor = AdaptiveExecutor(tmp_path / "workspaces" / approved.task_brief.run_id)
@@ -947,3 +950,70 @@ def test_dynamic_workflow_correction_preserves_instruction_for_replanning(
     assert report.status is FinalStatus.CANCELLED
     assert outcome.schedules[0].status is ScheduleStatus.CORRECTION_REQUESTED
     assert executor.requests == []
+
+
+def test_dynamic_report_render_failure_uses_one_terminal_failure_bundle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    approved = approved_inputs(run_id="adaptive-report-failure")
+    source = initialize_source(tmp_path)
+    executor = AdaptiveExecutor(tmp_path / "workspaces" / approved.task_brief.run_id)
+
+    def fail_render(**_kwargs: object) -> str:
+        raise RuntimeError("injected dynamic report failure")
+
+    monkeypatch.setattr(
+        dynamic_workflow_module,
+        "render_run_report",
+        fail_render,
+    )
+    outcome = coordinator(
+        tmp_path,
+        approved,
+        executor,
+        RecordingQualityGateFactory(),
+    ).execute(approved, source_repository=source)
+
+    run_directory = tmp_path / "runs" / approved.task_brief.run_id
+    markdown = (run_directory / outcome.human_report_path).read_text(encoding="utf-8")
+    assert outcome.record.phase is RunPhase.FAILED
+    assert "injected dynamic report failure" in outcome.record.termination_detail
+    assert "Report finalization diagnostic" in markdown
+    assert (run_directory / "final-report.json").is_file()
+    assert (run_directory / "budget-ledger.json").is_file()
+
+
+def test_dynamic_success_bundle_rolls_back_before_controller_failure_report(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    approved = approved_inputs(run_id="adaptive-terminal-transition-failure")
+    source = initialize_source(tmp_path)
+    executor = AdaptiveExecutor(tmp_path / "workspaces" / approved.task_brief.run_id)
+
+    def fail_complete(*_args: object, **_kwargs: object) -> object:
+        raise RunControlError("injected dynamic terminal transition failure")
+
+    monkeypatch.setattr(
+        dynamic_workflow_module.RunController,
+        "complete",
+        fail_complete,
+    )
+    outcome = coordinator(
+        tmp_path,
+        approved,
+        executor,
+        RecordingQualityGateFactory(),
+    ).execute(approved, source_repository=source)
+
+    run_directory = tmp_path / "runs" / approved.task_brief.run_id
+    report = json.loads((run_directory / "final-report.json").read_text())
+    assert outcome.record.phase is RunPhase.FAILED
+    assert "injected dynamic terminal transition failure" in (
+        outcome.record.termination_detail
+    )
+    assert report["status"] == "failed"
+    assert len(tuple(run_directory.glob("final-report.json"))) == 1
+    assert (run_directory / "final-report.md").is_file()
+    assert (run_directory / "budget-ledger.json").is_file()

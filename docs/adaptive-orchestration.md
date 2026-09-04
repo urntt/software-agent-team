@@ -270,7 +270,9 @@ The proposal shown before execution contains:
 6. Permission and workspace boundaries in plain language;
 7. Model choices or routing preferences, including any authorized automatic
    selection or switching;
-8. Time, call, token, and cost limits when known;
+8. The user-approved task USD authorization and optional deadline; controlled
+   evaluations additionally show their frozen call, token, duration, and cost
+   limits;
 9. The delivery destination and expected validation commands.
 
 The overview presents controller-owned execution-profile constraints separately
@@ -388,7 +390,9 @@ Agent is created:
 - Unique writable ownership or an explicit integration protocol;
 - Permission profiles compatible with each responsibility;
 - Independent quality coverage;
-- Agent, call, iteration, duration, token, and cost limits;
+- Ordinary-task USD/deadline authority, host-derived concurrency, and any
+  separate controlled-evaluation call, iteration, duration, token, or cost
+  limits;
 - Available and authorized model routes;
 - Prompt inputs that can be reconstructed from versioned templates and
   persisted artifacts;
@@ -635,11 +639,14 @@ Task admission first refreshes every configured route's context capacity and
 input/output price. Discovery is preferred; the user is asked only when context
 remains unknown, while an unknown price must be supplied or explicitly
 confirmed as zero. Every invocation records the canonical provider/model,
-route reference, resolution source and reason, frozen price source, telemetry,
-estimated cost, and remaining task budget.
+route reference, resolution source and reason, frozen price source and
+observation time, telemetry, estimated cost, and remaining task authorization.
+The standard progress view shows the updated amount after every invocation;
+the terminal ledger and report preserve the complete Planning-to-delivery
+breakdown by phase, Agent, attempt, route, and model.
 Runtime switching is currently permitted only after an attributable
 `provider_failure`, only when the approved Agent assignment lists a next route,
-and only up to the configured per-Agent switch limit. The failed invocation is
+and only within that finite approved route list. The failed invocation is
 persisted and budget-accounted before the UI announces the switch and its
 possible provider-cost consequence. Semantic response repair is a separate
 bounded mechanism. There is no silent fallback.

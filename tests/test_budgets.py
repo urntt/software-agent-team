@@ -1,7 +1,9 @@
 """Tests for explicit Agent resource and estimated-cost budgets."""
 
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -10,9 +12,14 @@ from software_agent_team.budgets import (
     AgentBudget,
     AgentBudgetExceeded,
     AgentBudgetLedger,
+    AgentCallReservation,
     BudgetAuthority,
+    ModelCostSource,
     ModelPricing,
+    load_budget_ledger,
+    persist_budget_ledger,
 )
+from software_agent_team.model_metadata import ModelMetadataSource
 
 
 def budget(**updates: object) -> AgentBudget:
@@ -162,14 +169,14 @@ def test_budget_ledger_records_usage_before_post_call_rejection() -> None:
             input_tokens=11,
             output_tokens=2,
             duration_ms=500,
-            estimated_cost_usd=Decimal("0.25"),
         )
 
     usage = captured.value.usage
     assert usage.calls_completed == 1
     assert usage.active_calls == 0
     assert usage.input_tokens == 11
-    assert usage.known_estimated_cost_usd == Decimal("0.25")
+    assert usage.known_estimated_cost_usd == 0
+    assert usage.unpriced_calls == 1
 
 
 def test_budget_ledger_preserves_unknown_usage_and_price() -> None:
@@ -181,7 +188,6 @@ def test_budget_ledger_preserves_unknown_usage_and_price() -> None:
         input_tokens=None,
         output_tokens=None,
         duration_ms=25,
-        estimated_cost_usd=None,
     )
 
     assert usage.input_tokens == 0
@@ -199,7 +205,6 @@ def test_budget_ledger_rejects_reusing_a_completed_reservation() -> None:
         input_tokens=1,
         output_tokens=1,
         duration_ms=1,
-        estimated_cost_usd=Decimal("0"),
     )
 
     with pytest.raises(ValueError, match="not active"):
@@ -208,5 +213,158 @@ def test_budget_ledger_rejects_reusing_a_completed_reservation() -> None:
             input_tokens=1,
             output_tokens=1,
             duration_ms=1,
-            estimated_cost_usd=Decimal("0"),
         )
+
+
+def user_task_budget(maximum: str = "1.00") -> AgentBudget:
+    return AgentBudget(
+        authority=BudgetAuthority.USER_TASK,
+        max_estimated_cost_usd=maximum,
+    )
+
+
+def priced_model(
+    *,
+    input_price: str = "2.50",
+    output_price: str = "10.00",
+) -> ModelPricing:
+    return ModelPricing(
+        model="provider/model",
+        input_cost_per_million_usd=input_price,
+        output_cost_per_million_usd=output_price,
+        pricing_source=ModelMetadataSource.RUNTIME_CATALOG,
+        pricing_observed_at=datetime(2026, 9, 4, 12, 0, tzinfo=UTC),
+    )
+
+
+def reserve_user_call(
+    ledger: AgentBudgetLedger,
+    *,
+    attempt: int = 1,
+    pricing: ModelPricing | None = None,
+) -> AgentCallReservation:
+    return ledger.reserve_call(
+        "clarifier" if attempt == 1 else "builder",
+        run_id="task-1",
+        stage="planning" if attempt == 1 else "implementation",
+        attempt=attempt,
+        route_id="default",
+        pricing=pricing or priced_model(),
+    )
+
+
+def test_user_task_rejects_unknown_pricing_before_launch() -> None:
+    ledger = AgentBudgetLedger(user_task_budget())
+
+    with pytest.raises(AgentBudgetExceeded, match="pricing is unknown") as captured:
+        ledger.reserve_call(
+            "clarifier",
+            run_id="task-1",
+            stage="planning",
+            route_id="default",
+        )
+
+    assert captured.value.usage.calls_started == 0
+    assert ledger.call_records() == ()
+
+
+def test_user_task_rejects_unattributed_call_before_launch() -> None:
+    ledger = AgentBudgetLedger(user_task_budget())
+
+    with pytest.raises(ValueError, match="attribution is incomplete"):
+        ledger.reserve_call("clarifier", pricing=priced_model())
+
+    assert ledger.snapshot().calls_started == 0
+
+
+def test_user_task_rejects_next_paid_call_after_recorded_ceiling() -> None:
+    ledger = AgentBudgetLedger(user_task_budget("0.45"))
+    first = reserve_user_call(ledger)
+    usage = ledger.complete_call(
+        first,
+        input_tokens=100_000,
+        output_tokens=20_000,
+        duration_ms=125,
+    )
+
+    assert usage.remaining_estimated_cost_usd(ledger.budget) == 0
+    with pytest.raises(AgentBudgetExceeded, match="exhausted before launch"):
+        reserve_user_call(ledger, attempt=2)
+    assert ledger.snapshot().calls_started == 1
+
+
+def test_zero_price_task_can_run_at_zero_authorized_spend() -> None:
+    ledger = AgentBudgetLedger(user_task_budget("0"))
+    zero = priced_model(input_price="0", output_price="0").model_copy(
+        update={"pricing_source": ModelMetadataSource.CONFIRMED_ZERO}
+    )
+
+    for attempt in (1, 2):
+        reservation = reserve_user_call(ledger, attempt=attempt, pricing=zero)
+        ledger.complete_call(
+            reservation,
+            input_tokens=50,
+            output_tokens=10,
+            duration_ms=5,
+        )
+
+    assert ledger.snapshot().known_estimated_cost_usd == 0
+    assert ledger.snapshot().calls_completed == 2
+
+
+def test_user_task_stops_when_provider_usage_cannot_account_cost() -> None:
+    ledger = AgentBudgetLedger(user_task_budget())
+    reservation = reserve_user_call(ledger)
+
+    with pytest.raises(AgentBudgetExceeded, match="could not be accounted"):
+        ledger.complete_call(
+            reservation,
+            input_tokens=None,
+            output_tokens=None,
+            duration_ms=25,
+        )
+    with pytest.raises(AgentBudgetExceeded, match="cannot be accounted"):
+        reserve_user_call(ledger, attempt=2)
+
+
+def test_terminal_budget_ledger_persists_attributable_cost_evidence(
+    tmp_path: Path,
+) -> None:
+    ledger = AgentBudgetLedger(user_task_budget("2.00"))
+    planning = reserve_user_call(ledger)
+    ledger.complete_call(
+        planning,
+        input_tokens=100_000,
+        output_tokens=20_000,
+        duration_ms=125,
+    )
+    runtime = reserve_user_call(ledger, attempt=2)
+    ledger.complete_call(
+        runtime,
+        input_tokens=10_000,
+        output_tokens=5_000,
+        duration_ms=250,
+    )
+
+    record, digest = persist_budget_ledger(tmp_path, ledger)
+    loaded = load_budget_ledger(tmp_path / "budget-ledger.json")
+
+    assert loaded == record
+    assert len(digest) == 64
+    assert loaded.usage.known_estimated_cost_usd == Decimal("0.525")
+    assert [call.stage for call in loaded.calls] == ["planning", "implementation"]
+    assert all(call.route_id == "default" for call in loaded.calls)
+    assert all(call.cost_source is ModelCostSource.ESTIMATED for call in loaded.calls)
+    assert all(
+        call.pricing_source is ModelMetadataSource.RUNTIME_CATALOG
+        for call in loaded.calls
+    )
+    assert all(call.pricing_observed_at is not None for call in loaded.calls)
+
+
+def test_terminal_budget_ledger_rejects_an_active_call() -> None:
+    ledger = AgentBudgetLedger(user_task_budget())
+    reserve_user_call(ledger)
+
+    with pytest.raises(ValueError, match="active calls"):
+        ledger.terminal_record()

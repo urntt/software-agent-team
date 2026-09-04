@@ -133,8 +133,8 @@ DECISION_LIMIT_REGISTRY: tuple[DecisionLimitDefinition, ...] = (
         rationale="This is the only aggregate model-usage budget for an ordinary task.",
         visibility=DecisionLimitVisibility.ALWAYS,
         configurability=DecisionLimitConfigurability.USER_PER_TASK,
-        consequence="A model call that cannot fit the remaining authorization is refused.",
-        recovery="Increase the task budget explicitly or approve a less costly plan.",
+        consequence="No new paid call starts after recorded estimated spend exhausts the authorization; an absolute provider bill cap remains provider-owned.",
+        recovery="Increase the task authorization, approve a less costly route or plan, or configure a provider-side quota for an absolute cap.",
         evidence="VISION.md resource-authority decision",
     ),
     _definition(

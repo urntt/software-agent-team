@@ -134,12 +134,15 @@ repository, generated project, run artifacts, logs, exports, or terminal echo;
 OpenClaw stores them only in SAT's private OpenClaw state unless they are
 inherited from the trusted caller environment.
 
-Per-route pricing overrides, adaptive maximum concurrency, repair limits,
-policy files, and model routing remain advanced settings. Product Agent
-invocations do not have a configurable fixed wall-clock duration. Before every
-task's first model call, task admission shows the selected route prices and asks
-for one total USD ceiling plus an optional whole-run deadline; no deadline is
-the recommended default.
+Setup and interactive model changes display discovered input/output prices and
+their source, then let the user keep or replace them. Added profiles must gain
+the same complete metadata before they can be authorized for a task. Adaptive
+maximum concurrency, repair policy, and detailed routing rules remain advanced
+settings. Product Agent invocations do not have a configurable fixed wall-clock
+duration. Before every task's first model call, task admission refreshes and
+shows every authorized route, asks for any metadata that remains unknown, and
+asks for one total USD authorization plus an optional whole-run deadline; no
+deadline is the recommended default.
 
 ## Request, Clarification, and Confirmation
 
@@ -253,7 +256,8 @@ A completed run ends with one concise delivery view containing:
 - Exact install, start, and test commands;
 - Acceptance and independent-review results;
 - Known limitations or unresolved blockers;
-- Elapsed time and cost summary when available;
+- Elapsed time plus recorded complete-journey cost, remaining authorization,
+  source, and per-phase/Agent/route breakdown when available;
 - Paths to the human-readable report and advanced evidence.
 
 Every accepted project must contain `sat-project.json`. This controller-checked
@@ -309,8 +313,8 @@ The Product Demo Slice is complete only when all of the following are true:
    TeamPlan, source baseline, run path, and workspace automatically without
    weakening write-once evidence.
 8. The terminal shows controller-backed phase changes, per-Agent states and
-   summaries, elapsed waiting time, gate progress, review, and revision
-   information throughout the build.
+   summaries, elapsed waiting time, model spend and remaining authorization,
+   gate progress, review, and revision information throughout the build.
 9. Success returns a clean runnable project, exact start/test commands, quality
    results, limitations, and report paths.
 10. A terminal workflow outcome leaves no live or stopped OpenClaw role

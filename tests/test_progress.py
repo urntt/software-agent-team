@@ -275,6 +275,47 @@ def test_detailed_renderer_projects_agent_state_route_dependencies_and_budget(
     assert "input=120 output=40" in rendered
 
 
+def test_standard_renderer_shows_model_spend_after_each_invocation(
+    tmp_path: Path,
+) -> None:
+    output = StringIO()
+    renderer = TerminalProgressRenderer(
+        output=output,
+        visibility=RunEventVisibility.STANDARD,
+    )
+    event_journal = journal(tmp_path, handler=renderer)
+    event_journal.append(
+        ProgressEvent(
+            kind=ProgressEventKind.AGENT_INVOCATION_COMPLETED,
+            message=(
+                "Builder invocation 1 returned completed; task model spend "
+                "$0.010000 estimated / $1.00 authorized, $0.990000 recorded "
+                "remaining (price source runtime_catalog)"
+            ),
+            agent_id="builder",
+            iteration=1,
+            attempt=1,
+            budget_usage=AgentBudgetUsage(
+                calls_started=1,
+                calls_completed=1,
+                active_calls=0,
+                input_tokens=120,
+                output_tokens=40,
+                agent_duration_ms=250,
+                known_estimated_cost_usd="0.01",
+                unpriced_calls=0,
+                unreported_token_calls=0,
+            ),
+        ),
+        lifecycle_revision=3,
+        phase=RunPhase.IMPLEMENTING,
+    )
+
+    rendered = output.getvalue()
+    assert "task model spend $0.010000 estimated / $1.00 authorized" in rendered
+    assert "known_cost_usd=" not in rendered
+
+
 def test_liveness_events_keep_stall_visible_and_stream_detail_optional(
     tmp_path: Path,
 ) -> None:

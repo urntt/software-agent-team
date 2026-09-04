@@ -20,6 +20,7 @@ from software_agent_team.artifacts import (
 from software_agent_team.budgets import (
     AgentBudget,
     AgentBudgetLedger,
+    AgentBudgetUsage,
     BudgetAuthority,
     ModelPricing,
 )
@@ -1402,6 +1403,7 @@ def test_planning_uses_the_shared_task_cost_ledger_and_persists_source(
             pricing_source=ModelMetadataSource.RUNTIME_CATALOG,
             pricing_observed_at=FIXED_TIME,
         ),
+        route_id="default",
         clock=AdvancingClock(),
     )
 
@@ -1422,6 +1424,52 @@ def test_planning_uses_the_shared_task_cost_ledger_and_persists_source(
     assert execution.pricing_source is ModelMetadataSource.RUNTIME_CATALOG
     assert execution.budget_usage == usage
     assert execution.budget_error is None
+
+
+def test_planning_cost_progress_and_approval_overview_show_remaining_authority() -> (
+    None
+):
+    output: list[str] = []
+    progress = TerminalPlanningProgress(write=output.append)
+    usage = AgentBudgetUsage(
+        calls_started=1,
+        calls_completed=1,
+        active_calls=0,
+        input_tokens=100_000,
+        output_tokens=20_000,
+        agent_duration_ms=125,
+        known_estimated_cost_usd="0.45",
+        unpriced_calls=0,
+        unreported_token_calls=0,
+    )
+    progress(
+        PlanningActivity(
+            kind=PlanningActivityKind.BUDGET_UPDATED,
+            attempt=1,
+            maximum_attempts=2,
+            model="provider/model",
+            budget_usage=usage,
+            budget_ceiling_usd=Decimal("1.00"),
+            pricing_source=ModelMetadataSource.RUNTIME_CATALOG,
+        )
+    )
+    product_budget = AgentBudget(
+        authority=BudgetAuthority.USER_TASK,
+        max_estimated_cost_usd="1.00",
+    )
+    preview = preview_adaptive_proposal(
+        request(),
+        proposal(),
+        policy(budget=product_budget),
+        created_at=FIXED_TIME,
+    )
+    overview = render_planning_overview(preview, budget_usage=usage)
+
+    assert "$0.450000 estimated / $1.00 authorized" in output[-1]
+    assert "price source runtime_catalog" in output[-1]
+    assert "recorded Planning spend: $0.450000 estimated" in overview
+    assert "recorded budget remaining before execution: $0.550000" in overview
+    assert "absolute billing cap: requires a provider-side" in overview
 
 
 def test_planning_persists_provider_liveness_evidence(tmp_path: Path) -> None:

@@ -42,6 +42,7 @@ from software_agent_team.budgets import (
     AgentBudgetExceeded,
     AgentBudgetLedger,
     AgentBudgetUsage,
+    BudgetAuthority,
     ModelPricing,
 )
 from software_agent_team.execution import (
@@ -144,6 +145,7 @@ class PlanningActivityKind(StrEnum):
     STALL_RECOVERED = "stall_recovered"
     PROVIDER_STALLED = "provider_stalled"
     RESPONSE_RECEIVED = "response_received"
+    BUDGET_UPDATED = "budget_updated"
     REPAIR_SCHEDULED = "repair_scheduled"
     RESPONSE_VALIDATED = "response_validated"
 
@@ -163,6 +165,9 @@ class PlanningActivity:
     stall_grace_seconds: float | None = None
     policy_source: str | None = None
     degradation_reason: str | None = None
+    budget_usage: AgentBudgetUsage | None = None
+    budget_ceiling_usd: Decimal | None = None
+    pricing_source: ModelMetadataSource | None = None
 
 
 PlanningActivityHandler = Callable[[PlanningActivity], None]
@@ -242,6 +247,27 @@ class TerminalPlanningProgress:
         }.get(activity.kind)
         if intermediate is not None:
             self._print(intermediate)
+            return
+
+        if activity.kind is PlanningActivityKind.BUDGET_UPDATED:
+            assert activity.budget_usage is not None
+            assert activity.budget_ceiling_usd is not None
+            usage = activity.budget_usage
+            remaining = max(
+                Decimal(0),
+                activity.budget_ceiling_usd - usage.known_estimated_cost_usd,
+            )
+            source = (
+                "unknown"
+                if activity.pricing_source is None
+                else activity.pricing_source.value
+            )
+            self._print(
+                "  Task model spend: "
+                f"${usage.known_estimated_cost_usd:.6f} estimated / "
+                f"${activity.budget_ceiling_usd} authorized; "
+                f"${remaining:.6f} recorded remaining; price source {source}"
+            )
             return
 
         self.close()
@@ -1840,7 +1866,11 @@ def _render_model_pricing(route: ModelRoute) -> str:
     )
 
 
-def render_planning_overview(preview: PlanningPreview) -> str:
+def render_planning_overview(
+    preview: PlanningPreview,
+    *,
+    budget_usage: AgentBudgetUsage | None = None,
+) -> str:
     """Render every material decision a user approves before execution."""
 
     brief = preview.task_brief
@@ -2023,6 +2053,20 @@ def render_planning_overview(preview: PlanningPreview) -> str:
                 else "    - cumulative Agent time: observed, not independently capped"
             ),
             f"    - estimated cost ceiling: ${plan.budget.max_estimated_cost_usd}",
+            *(
+                (
+                    "    - recorded Planning spend: "
+                    f"${budget_usage.known_estimated_cost_usd:.6f} estimated",
+                    "    - recorded budget remaining before execution: "
+                    f"${budget_usage.remaining_estimated_cost_usd(plan.budget):.6f}",
+                )
+                if budget_usage is not None
+                else ()
+            ),
+            (
+                "    - absolute billing cap: requires a provider-side spending "
+                "or quota limit"
+            ),
             (
                 f"    - whole-run deadline: {plan.run_deadline_seconds} seconds"
                 if plan.run_deadline_seconds is not None
@@ -2392,17 +2436,25 @@ class AdaptivePlanningCoordinator:
         policy: PlanningPolicy,
         budget_ledger: AgentBudgetLedger | None = None,
         pricing: ModelPricing | None = None,
+        route_id: str | None = None,
         clock: Clock = _system_clock,
     ) -> None:
         if (budget_ledger is None) != (pricing is None):
             raise ValueError("Planning budget ledger and pricing belong together")
         if budget_ledger is not None and budget_ledger.budget != policy.budget:
             raise ValueError("Planning budget ledger does not match the policy")
+        if (
+            budget_ledger is not None
+            and budget_ledger.budget.authority is BudgetAuthority.USER_TASK
+            and route_id is None
+        ):
+            raise ValueError("User-task Planning requires an attributable model route")
         self.executor = executor
         self.store = store
         self.policy = policy
         self.budget_ledger = budget_ledger
         self.pricing = pricing
+        self.route_id = route_id
         self.clock = clock
 
     def start(
@@ -2634,7 +2686,14 @@ class AdaptivePlanningCoordinator:
             reservation = (
                 None
                 if self.budget_ledger is None
-                else self.budget_ledger.reserve_call("clarifier")
+                else self.budget_ledger.reserve_call(
+                    "clarifier",
+                    run_id=request.run_id,
+                    stage="planning",
+                    attempt=attempt,
+                    route_id=self.route_id,
+                    pricing=self.pricing,
+                )
             )
 
             def observe_execution_activity(
@@ -2663,7 +2722,6 @@ class AdaptivePlanningCoordinator:
                             input_tokens=None,
                             output_tokens=None,
                             duration_ms=0,
-                            estimated_cost_usd=None,
                         )
                 raise
             self._emit_activity(
@@ -2691,7 +2749,7 @@ class AdaptivePlanningCoordinator:
                     and usage.input_tokens is not None
                     and usage.output_tokens is not None
                 ):
-                    estimated_cost = self.pricing.estimate_cost(
+                    estimated_cost = reservation.estimate_cost(
                         input_tokens=usage.input_tokens,
                         output_tokens=usage.output_tokens,
                     )
@@ -2701,11 +2759,24 @@ class AdaptivePlanningCoordinator:
                         input_tokens=None if usage is None else usage.input_tokens,
                         output_tokens=None if usage is None else usage.output_tokens,
                         duration_ms=result.telemetry.duration_ms,
-                        estimated_cost_usd=estimated_cost,
                     )
                 except AgentBudgetExceeded as error:
                     budget_usage = error.usage
                     budget_error = str(error)
+                self._emit_activity(
+                    activity_handler,
+                    PlanningActivity(
+                        kind=PlanningActivityKind.BUDGET_UPDATED,
+                        attempt=attempt,
+                        maximum_attempts=maximum_attempts,
+                        model=request.model,
+                        budget_usage=budget_usage,
+                        budget_ceiling_usd=(
+                            self.budget_ledger.budget.max_estimated_cost_usd
+                        ),
+                        pricing_source=self.pricing.pricing_source,
+                    ),
+                )
             if result.status is not AgentExecutionStatus.COMPLETED:
                 validation_error = (
                     result.error or f"Planning execution ended as {result.status.value}"
@@ -3125,7 +3196,16 @@ def run_interactive_planning(
             created_at=proposal.created_at,
         )
         write("")
-        write(render_planning_overview(preview))
+        write(
+            render_planning_overview(
+                preview,
+                budget_usage=(
+                    None
+                    if coordinator.budget_ledger is None
+                    else coordinator.budget_ledger.snapshot()
+                ),
+            )
+        )
         write("")
         write("  a. Approve and allow the controller to create this team")
         write("  r. Request changes in your own words")

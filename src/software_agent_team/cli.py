@@ -332,7 +332,7 @@ def _prompt_product_text(
 
 
 def _prompt_nonnegative_decimal(label: str) -> Decimal:
-    """Read one explicit bounded USD price without treating blank as zero."""
+    """Read one explicit finite USD price without treating blank as zero."""
 
     while True:
         raw = input(f"{label}: ").strip()
@@ -341,8 +341,8 @@ def _prompt_nonnegative_decimal(label: str) -> Decimal:
         except Exception:
             print("Enter a non-negative decimal amount in USD.")
             continue
-        if not value.is_finite() or value < 0 or value > Decimal("10000"):
-            print("Enter a finite USD amount between 0 and 10000.")
+        if not value.is_finite() or value < 0:
+            print("Enter a finite non-negative USD amount.")
             continue
         return value
 
@@ -362,9 +362,9 @@ def _prompt_task_cost_ceiling() -> Decimal:
         except Exception:
             print("Enter a non-negative decimal amount in USD.")
             continue
-        if value.is_finite() and Decimal(0) <= value <= Decimal("10000"):
+        if value.is_finite() and value >= 0:
             return value
-        print("Enter a finite USD amount between 0 and 10000.")
+        print("Enter a finite non-negative USD amount.")
 
 
 def _prompt_optional_run_deadline() -> int | None:
@@ -433,6 +433,8 @@ def _collect_task_resource_authorization(
     )
     print("  Call count, token count, Agent count, and iteration count are telemetry,")
     print("  not separate limits for this ordinary product task.")
+    print("  SAT stops new calls after recorded estimated spend reaches this ceiling;")
+    print("  an absolute billing cap requires a provider-side spending or quota limit.")
     if not _prompt_yes_no(
         "Authorize these model routes and task limits?",
         default=False,
@@ -456,7 +458,7 @@ def _prompt_context_window(model: str) -> int:
         ).strip()
         if raw.isdecimal() and int(raw) >= 1:
             return int(raw)
-        print("Enter an integer between 1 and 100000000.")
+        print("Enter a positive integer.")
 
 
 def _complete_model_metadata(
@@ -2371,6 +2373,7 @@ def _run_product_planning(
                 pricing_source=planning_metadata.pricing_source,
                 pricing_observed_at=planning_metadata.observed_at,
             ),
+            route_id=planning_metadata.profile_id,
         )
         cleanup_arguments = {
             "sandbox_binary": "docker",

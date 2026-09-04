@@ -59,17 +59,10 @@ def persist_agent_invocation(
         remaining_timeout_seconds = request.timeout_seconds
     telemetry = result.telemetry
     usage = telemetry.usage
-    estimated_cost = None
-    if (
-        pricing is not None
-        and usage is not None
-        and usage.input_tokens is not None
-        and usage.output_tokens is not None
-    ):
-        estimated_cost = pricing.estimate_cost(
-            input_tokens=usage.input_tokens,
-            output_tokens=usage.output_tokens,
-        )
+    estimated_cost = reservation.estimate_cost(
+        input_tokens=None if usage is None else usage.input_tokens,
+        output_tokens=None if usage is None else usage.output_tokens,
+    )
 
     budget_error: str | None = None
     try:
@@ -78,7 +71,6 @@ def persist_agent_invocation(
             input_tokens=None if usage is None else usage.input_tokens,
             output_tokens=None if usage is None else usage.output_tokens,
             duration_ms=telemetry.duration_ms,
-            estimated_cost_usd=estimated_cost,
         )
     except AgentBudgetExceeded as budget_exception:
         budget_error = str(budget_exception)

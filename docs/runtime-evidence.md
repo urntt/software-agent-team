@@ -519,6 +519,15 @@ evidence to a bounded revision, and writes terminal evidence. Bare `sat` passes
 the exact approved Planning result through this path and then uses the existing
 accepted-result delivery boundary.
 
+Terminal finalization first validates the machine report, human rendering, and
+complete model-spend ledger in memory. `ArtifactStore` then stages and publishes
+`final-report.json`, `final-report.md`, and `budget-ledger.json` as one
+write-once bundle. A file-publication failure removes every file created by that
+attempt. If the following controller transition fails, SAT verifies all three
+digests and rolls back that still-uncommitted bundle before recording the
+failure. A detailed-rendering failure uses a dependency-free failure view, so
+it cannot overwrite the original terminal reason with a duplicate report error.
+
 The controller supports explicit recovery of an isolated clone created
 immediately before a crash. The current `sat run` command intentionally starts
 only a fresh run and does not infer that an unrecorded external action
@@ -727,18 +736,25 @@ when investigating it rather than editing artifacts in place.
 - Controlled evaluations check their frozen token, duration, call, and cost
   thresholds after each invocation. Ordinary tasks use one USD authorization;
   their call, token, duration, Agent, and iteration counts remain telemetry.
-- One thread-safe controller ledger atomically reserves the call count before
-  launch, so concurrently ready Agents cannot oversubscribe the budget. It
-  records completed-call telemetry before raising a post-call token, duration,
-  or known-cost rejection; missing token telemetry and unavailable pricing are
-  counted explicitly rather than converted to zero.
+- One thread-safe controller ledger atomically reserves every invocation before
+  launch. For ordinary tasks, that reservation requires the run, phase, Agent,
+  attempt, route, model, paired price, price source, and authorization snapshot;
+  the ledger itself calculates cost from those frozen terms and provider usage.
+  Controlled evaluations additionally reserve their fixed call count. Completed
+  telemetry is retained before any post-call evaluation threshold or task-cost
+  rejection; missing token telemetry and unavailable pricing are counted
+  explicitly rather than converted to zero.
 - An ordinary task cannot make its first model call until every authorized
   route has a frozen paired price or the user explicitly confirms that route
   as zero-cost. Unknown is never converted to zero. Controlled comparisons
   likewise require an explicit paired price table.
-- The current shared ledger accounts for Planning and dynamic execution in one
-  process and Planning turn evidence records its cost source. Per-stage and
-  per-route report breakdown and provider-backed validation remain pending.
+- The shared ledger covers Planning, dynamic execution, correction Planning,
+  semantic repair, and authorized route switching in one process. Standard
+  progress shows recorded spend, authorization remaining, and price source.
+  Terminal `budget-ledger.json` preserves every call in reservation order, and
+  the human report breaks it down by run, phase, Agent, attempt, route, model,
+  token usage, price source, and cost basis. Provider-backed validation remains
+  pending.
 - Usage is not known before a provider call completes. A provider-side spending
   or quota limit is therefore the hard monetary authorization boundary; the
   controller cannot reverse the cost of the call that crosses a post-call

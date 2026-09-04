@@ -101,7 +101,7 @@ class UserConfiguration(BaseModel):
     schema_version: Literal[USER_CONFIGURATION_SCHEMA_VERSION] = (
         USER_CONFIGURATION_SCHEMA_VERSION
     )
-    model_profiles: tuple[ModelProfile, ...] = Field(min_length=1, max_length=16)
+    model_profiles: tuple[ModelProfile, ...] = Field(min_length=1)
     default_model_profile_id: str = Field(
         default="default",
         pattern=r"^[a-z][a-z0-9_]*$",

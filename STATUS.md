@@ -9,7 +9,7 @@ supports that claim, and what remains unavailable. It does not redefine the
 product, architecture, experiment, or roadmap; those decisions belong to
 [`VISION.md`](VISION.md).
 
-The current development head implements configuration schema v7 model metadata
+The current development head implements configuration schema v8 model metadata
 with attributable price/context sources, task-scoped route snapshots, one
 explicit per-task USD authorization and optional deadline prompt, and separate
 controlled-evaluation versus ordinary-user resource authority. Product Planning
@@ -17,11 +17,15 @@ and execution no longer use a fixed wall-clock work limit. SAT resolves a
 provider/model-aware renewable inactivity lease, observes private stream and
 attributable tool lifecycle without persisting their content, visibly separates
 suspected stall, grace, recovery, degraded observation, and terminal stall, and
-persists typed content-free evidence for Planning and runtime Agents. Formatter,
-lint, doctor, and **851 offline tests** pass for this implementation. The two
-mandatory self-check checkpoints, complete cost breakdown, and fresh
-provider/device liveness validation remain incomplete; the corresponding issues
-are not closed by offline evidence.
+persists typed content-free evidence for Planning and runtime Agents. One
+controller-priced ledger now covers Planning through terminal execution,
+standard progress exposes spend and remaining authorization, and final reports
+include attributable per-call cost evidence. Terminal JSON, Markdown, and the
+ledger are prepared and published as one rollback-capable bundle before the
+controller transition. Formatter, lint, doctor, and **870 offline tests** pass
+for this implementation. The two mandatory self-check checkpoints and fresh
+provider/device cost and liveness validation remain incomplete; the
+corresponding issues are not closed by offline evidence.
 
 ## Phase 1 Result
 
@@ -1249,18 +1253,21 @@ The acceptance contract is
   source visibility, and controller-only Agent invocation policy;
 - Explicit deterministic command coverage, `pending_review` manual criteria,
   Reviewer scope attestation, and controller-owned evidence resolution;
-- Pre-call task-wide known-cost authorization for ordinary tasks, plus explicit
-  call, token, duration, and cost thresholds only for controlled evaluation;
-- Thread-safe aggregate budget reservations shared by fixed and task-defined
-  execution, including post-call usage retention and explicit unpriced or
-  missing-token counters;
+- Pre-call route-price and task-wide USD authorization for ordinary tasks, plus
+  explicit call, token, duration, and cost thresholds only for controlled
+  evaluation;
+- One thread-safe ledger shared by Planning, task-defined execution, correction,
+  repair, and switching. It prices provider usage from frozen call terms,
+  preserves unpriced or missing-token states, exposes standard progress, and
+  emits an attributable `budget-ledger.json` plus report breakdown;
 - Typed decision-limit ownership metadata; one user-approved task-wide USD
   ceiling and optional deadline for ordinary tasks; provider-activity time
   authority; controlled-evaluation-only timeout/count envelopes; user-selected
   concurrency; and configuration-schema migrations from superseded product
   caps;
 - Explicit completed and failed terminal outcomes with machine-readable and
-  human-readable reports;
+  human-readable reports, committed with their model-spend ledger through a
+  rollback-capable terminal bundle;
 - Remote one-command Linux/WSL bootstrap into an owned user-local application
   directory, plus the pinned toolchain, locked environment, fixed Docker image,
   stable launchers, update validation, and a checkout-based contributor path;
