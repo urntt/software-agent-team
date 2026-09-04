@@ -470,14 +470,17 @@ Each invocation enters the shared budget ledger atomically before launch and
 records reported tokens, duration, and known price after completion. Raw
 stdout/stderr, telemetry, the semantic response reference when valid, and any
 post-call budget rejection are persisted together. When session collection is
-active, the same `AgentExecutionRecord` stores its collection status,
+active, the same `AgentExecutionRecord` stores its typed execution status,
+content-free provider-liveness policy and counters, collection status,
 transcript digest, current-turn record count, ordered sanitized tool records,
 and any bounded integrity error. Missing model, provider, token, or required
 Reviewer tool evidence is never treated as zero usage or success. A repair is
 permitted only for a semantic-body failure. Product repair uses the same
 provider-liveness and remaining whole-run deadline authority; controlled
 evaluation repair receives its frozen invocation timeout. Both remain inside
-the applicable budget.
+the applicable budget. Bootstrap Planning turns persist the same liveness
+evidence in `PlanningExecutionEvidence`, so a stall or degraded observer cannot
+disappear before the execution run exists.
 
 Agent-authored summaries are complete immutable artifact evidence and are not
 forced to guess a hidden downstream display limit. When a summary exceeds the
@@ -681,8 +684,27 @@ when investigating it rather than editing artifacts in place.
 - Product Planning and execution use zero as the explicit OpenClaw
   whole-invocation timeout. This removes the former workload-to-seconds mapping
   and saved global timeout override from the product path. Zero does not disable
-  provider or tool liveness: OpenClaw continues to enforce its provider-stream
-  idle watchdog and tool-specific guards.
+  liveness: OpenClaw retains its transport boundary, while SAT observes the
+  pinned runtime's private raw stream without reading or persisting its content
+  and counts only attributable current-turn assistant and tool lifecycle records.
+- SAT resolves a provider/model-aware inactivity lease from the pinned runtime's
+  cloud or local stream boundary. An explicit provider request timeout replaces
+  that implicit boundary, including when it deliberately gives a slow model more
+  time. Process and interpreter startup do not start the lease: it begins only
+  after SAT attributes the exact current-turn checkpoint or the invocation's
+  private provider stream. Stream activity and completed attributable session
+  records then renew it. An active tool suspends the provider lease and remains subject to its
+  own tool-specific guard; SAT heartbeat text and process existence never renew
+  provider liveness.
+- Sustained silence first emits a persisted `suspected stalled` event naming the
+  observed inactivity, policy source, interruption consequence, and grace period.
+  SAT continues checking the private stream and attributable tool state during
+  that grace. Trusted activity emits recovery and continues the same invocation;
+  continued silence becomes typed `provider_stalled`, terminates only the exact
+  SAT-owned process group, and preserves content-free counters in the Planning
+  turn or `AgentExecutionRecord`. If attribution or the private observer is
+  unavailable, SAT records degraded liveness and does not guess that silence is
+  a stall.
 - Before the first model call, SAT asks whether the user has a real whole-run
   deadline and recommends no deadline by default. When authorized, the exact
   deadline starts at resource authorization, covers Planning and execution, and
@@ -699,8 +721,9 @@ when investigating it rather than editing artifacts in place.
 - Model compatibility supplements do not set a second provider-transport
   timeout. Product calls pass either zero or the remaining user deadline to
   OpenClaw; controlled evaluations pass their frozen timeout. The outer
-  subprocess boundary adds bounded process-shutdown grace only when a positive
-  runtime boundary exists.
+  subprocess boundary applies bounded process-shutdown grace after a deadline,
+  evaluation timeout, user interrupt, or confirmed provider stall; that cleanup
+  guard is not productive work time.
 - Controlled evaluations check their frozen token, duration, call, and cost
   thresholds after each invocation. Ordinary tasks use one USD authorization;
   their call, token, duration, Agent, and iteration counts remain telemetry.

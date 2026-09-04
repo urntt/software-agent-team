@@ -12,7 +12,11 @@ import pytest
 from pydantic import ValidationError
 
 import software_agent_team.planning as planning
-from software_agent_team.artifacts import AcceptanceCriterion, ReviewBoundaryKind
+from software_agent_team.artifacts import (
+    AcceptanceCriterion,
+    ProviderLivenessEvidence,
+    ReviewBoundaryKind,
+)
 from software_agent_team.budgets import (
     AgentBudget,
     AgentBudgetLedger,
@@ -20,6 +24,9 @@ from software_agent_team.budgets import (
     ModelPricing,
 )
 from software_agent_team.execution import (
+    AgentExecutionResult,
+    AgentExecutionStatus,
+    AgentExecutionTelemetry,
     AgentTokenUsage,
     ScriptedAgentExecutor,
     ScriptedAgentResponse,
@@ -1417,6 +1424,56 @@ def test_planning_uses_the_shared_task_cost_ledger_and_persists_source(
     assert execution.budget_error is None
 
 
+def test_planning_persists_provider_liveness_evidence(tmp_path: Path) -> None:
+    liveness = ProviderLivenessEvidence(
+        mode="enforced",
+        policy_source="test provider contract",
+        silence_seconds=120,
+        stall_grace_seconds=30,
+        raw_stream_observed=True,
+        session_observed=True,
+        provider_activity_observations=3,
+        tool_started_count=1,
+        tool_completed_count=1,
+        stall_suspected_count=1,
+        stall_recovered_count=1,
+        stalled=False,
+    )
+    execution_result = AgentExecutionResult(
+        status=AgentExecutionStatus.COMPLETED,
+        response_text=response(proposal_response()),
+        telemetry=AgentExecutionTelemetry(
+            role=planning.AgentRole.CLARIFIER,
+            agent_id="clarifier",
+            capability=AgentCapability.CLARIFICATION,
+            session_key="agent:clarifier:test",
+            command=("fake-openclaw",),
+            started_at=FIXED_TIME,
+            finished_at=FIXED_TIME,
+            duration_ms=125,
+            exit_code=0,
+            provider="provider",
+            model="provider/model",
+            provider_liveness=liveness,
+        ),
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=ScriptedAgentExecutor([execution_result]),
+        store=store,
+        policy=policy(),
+        clock=AdvancingClock(),
+    )
+
+    created = coordinator.start(
+        request(),
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+
+    assert created is not None
+    assert store.load_turn(request().run_id, 1).execution.provider_liveness == liveness
+
+
 def test_store_rejects_unanchored_planning_evidence(tmp_path: Path) -> None:
     store = PlanningStore(tmp_path / "planning")
     coordinator = AdaptivePlanningCoordinator(
@@ -1675,6 +1732,41 @@ def test_terminal_planning_progress_shows_heartbeat_and_stops_cleanly() -> None:
     assert any("still waiting for the model" in line for line in output)
     assert any("response received in 0.0s (completed)" in line for line in output)
     assert tuple(output) == rendered_at_completion
+
+
+def test_terminal_planning_progress_explains_stall_policy_and_recovery() -> None:
+    output: list[str] = []
+    progress = TerminalPlanningProgress(write=output.append)
+
+    progress(
+        PlanningActivity(
+            kind=PlanningActivityKind.STALL_SUSPECTED,
+            attempt=1,
+            maximum_attempts=1,
+            model="provider/model",
+            inactivity_ms=90_000,
+            silence_seconds=120,
+            stall_grace_seconds=30,
+            policy_source="test provider contract",
+        )
+    )
+    progress(
+        PlanningActivity(
+            kind=PlanningActivityKind.STALL_RECOVERED,
+            attempt=1,
+            maximum_attempts=1,
+            model="provider/model",
+            inactivity_ms=0,
+            silence_seconds=120,
+            stall_grace_seconds=30,
+            policy_source="test provider contract",
+        )
+    )
+
+    assert "no trusted activity for 90.0s" in output[0]
+    assert "another 30s" in output[0]
+    assert "test provider contract" in output[0]
+    assert "recovered during the 30s grace period" in output[1]
 
 
 def test_safe_response_variants_do_not_consume_a_model_repair_call(

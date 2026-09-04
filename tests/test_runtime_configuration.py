@@ -571,7 +571,18 @@ def test_model_inspection_requires_the_exact_available_catalog_entry(
     openclaw.write_text("binary", encoding="utf-8")
     openclaw.chmod(0o755)
     config = tmp_path / "runtime.json"
-    config.write_text("{}", encoding="utf-8")
+    config.write_text(
+        json.dumps(
+            {
+                "models": {
+                    "providers": {
+                        "deepseek": {"timeoutSeconds": 75},
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
     state = tmp_path / "sat-state/openclaw"
     state.mkdir(parents=True)
     observed: dict[str, object] = {}
@@ -585,6 +596,7 @@ def test_model_inspection_requires_the_exact_available_catalog_entry(
                     {
                         "key": DEEPSEEK_VISION_MODEL,
                         "available": True,
+                        "local": False,
                         "contextWindow": 120_000,
                         "input": "text+image",
                         "inputCostPerMillionUsd": "0.10",
@@ -611,6 +623,8 @@ def test_model_inspection_requires_the_exact_available_catalog_entry(
 
     assert result.available
     assert result.error is None
+    assert result.local is False
+    assert result.provider_request_timeout_seconds == 75
     assert result.context_window_tokens == 120_000
     assert result.input_modalities == ("text", "image")
     assert result.input_cost_per_million_usd == Decimal("0.10")
@@ -626,6 +640,54 @@ def test_model_inspection_requires_the_exact_available_catalog_entry(
     assert kwargs["env"]["OPENCLAW_STATE_DIR"] == str(state)
     assert kwargs["env"]["OPENCLAW_CONFIG_PATH"] == str(config)
     assert kwargs["timeout"] == runtime_configuration.MODEL_INSPECTION_TIMEOUT_SECONDS
+
+
+def test_model_inspection_does_not_hide_prices_above_an_internal_magic_cap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    openclaw = tmp_path / "openclaw"
+    openclaw.write_text("binary", encoding="utf-8")
+    openclaw.chmod(0o755)
+    config = tmp_path / "runtime.json"
+    config.write_text("{}", encoding="utf-8")
+    state = tmp_path / "sat-state/openclaw"
+    state.mkdir(parents=True)
+
+    monkeypatch.setattr(
+        runtime_configuration.subprocess,
+        "run",
+        lambda *_args, **_kwargs: type(
+            "Result",
+            (),
+            {
+                "returncode": 0,
+                "stdout": json.dumps(
+                    {
+                        "models": [
+                            {
+                                "key": DEEPSEEK_VISION_MODEL,
+                                "available": True,
+                                "inputCostPerMillionUsd": "10000.01",
+                                "outputCostPerMillionUsd": "999999999.99",
+                            }
+                        ]
+                    }
+                ),
+                "stderr": "",
+            },
+        )(),
+    )
+
+    result = inspect_openclaw_model(
+        openclaw_binary=openclaw,
+        openclaw_state_dir=state,
+        config_path=config,
+        model=DEEPSEEK_VISION_MODEL,
+    )
+
+    assert result.input_cost_per_million_usd == Decimal("10000.01")
+    assert result.output_cost_per_million_usd == Decimal("999999999.99")
 
 
 def test_model_inspection_allows_catalog_startup_longer_than_thirty_seconds(

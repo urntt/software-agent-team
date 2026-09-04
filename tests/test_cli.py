@@ -961,6 +961,16 @@ def test_dynamic_runtime_preflight_checks_every_approved_model_route(
             sandbox_container_ready=True,
             model="provider/default",
             model_available=True,
+            model_local=False,
+            model_request_timeout_seconds=75,
+            model_inspections=(
+                OpenClawModelInspection(
+                    model="provider/default",
+                    available=True,
+                    local=False,
+                    provider_request_timeout_seconds=75,
+                ),
+            ),
         ),
     )
     inspected: list[str] = []

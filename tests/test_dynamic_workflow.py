@@ -36,6 +36,7 @@ from software_agent_team.dynamic_workflow import (
     DynamicWorkflowOutcome,
 )
 from software_agent_team.execution import (
+    AgentExecutionActivityHandler,
     AgentExecutionRequest,
     AgentExecutionResult,
     AgentExecutionStatus,
@@ -354,7 +355,13 @@ class AdaptiveExecutor:
         self.requests: list[AgentExecutionRequest] = []
         self.counts: dict[str, int] = {}
 
-    def execute(self, request: AgentExecutionRequest) -> AgentExecutionResult:
+    def execute(
+        self,
+        request: AgentExecutionRequest,
+        *,
+        activity_handler: AgentExecutionActivityHandler | None = None,
+    ) -> AgentExecutionResult:
+        del activity_handler
         self.requests.append(request)
         count = self.counts.get(request.agent_id, 0) + 1
         self.counts[request.agent_id] = count

@@ -46,6 +46,54 @@ class HandoffStatus(StrEnum):
     FAILED = "failed"
 
 
+class AgentExecutionStatus(StrEnum):
+    """Observable terminal state of one Agent adapter invocation."""
+
+    COMPLETED = "completed"
+    PROCESS_FAILED = "process_failed"
+    PROVIDER_FAILED = "provider_failed"
+    PROVIDER_STALLED = "provider_stalled"
+    TIMED_OUT = "timed_out"
+    INVALID_RESPONSE = "invalid_response"
+    LAUNCH_FAILED = "launch_failed"
+    INTERRUPTED = "interrupted"
+
+
+class ProviderLivenessEvidence(BaseModel):
+    """Persistable, content-free evidence from a renewable activity lease."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    mode: Literal["enforced", "degraded"]
+    policy_source: str = Field(min_length=1, max_length=300)
+    silence_seconds: float = Field(gt=0)
+    stall_grace_seconds: float = Field(gt=0)
+    lease_started: bool = False
+    lease_start_source: Literal["current_turn", "provider_stream"] | None = None
+    raw_stream_observed: bool = False
+    session_observed: bool = False
+    provider_activity_observations: int = Field(ge=0)
+    tool_started_count: int = Field(ge=0)
+    tool_completed_count: int = Field(ge=0)
+    stall_suspected_count: int = Field(ge=0)
+    stall_recovered_count: int = Field(ge=0)
+    maximum_inactivity_ms: int = Field(default=0, ge=0)
+    stalled: bool = False
+    degradation_reason: str | None = Field(default=None, min_length=1, max_length=500)
+
+    @model_validator(mode="after")
+    def bind_mode_and_reason(self) -> Self:
+        if (self.mode == "degraded") != (self.degradation_reason is not None):
+            raise ValueError("degraded liveness requires exactly one reason")
+        if self.stalled and self.mode != "enforced":
+            raise ValueError("degraded liveness cannot declare a provider stall")
+        if self.lease_started != (self.lease_start_source is not None):
+            raise ValueError("started liveness requires exactly one start source")
+        if self.stalled and not self.lease_started:
+            raise ValueError("provider stall requires a started liveness lease")
+        return self
+
+
 class ArtifactKind(StrEnum):
     """Persisted artifact types used by the workflow."""
 
@@ -552,6 +600,7 @@ class AgentExecutionRecord(BaseModel):
     attempt: int = Field(default=1, ge=1)
     agent_id: str = Field(pattern=AGENT_ID_PATTERN)
     capability: str = Field(pattern=AGENT_ID_PATTERN)
+    execution_status: AgentExecutionStatus | None = None
     session_key: str = Field(min_length=1)
     session_id: str | None = Field(default=None, min_length=1)
     model: str | None = Field(default=None, min_length=1)
@@ -561,6 +610,7 @@ class AgentExecutionRecord(BaseModel):
     duration_ms: int = Field(ge=0)
     exit_code: int | None = None
     timed_out: bool = False
+    provider_liveness: ProviderLivenessEvidence | None = None
     input_tokens: int | None = Field(default=None, ge=0)
     output_tokens: int | None = Field(default=None, ge=0)
     estimated_cost_usd: Decimal | None = Field(default=None, ge=0)
@@ -698,6 +748,20 @@ class AgentExecutionRecord(BaseModel):
                 raise ValueError("successful executions require a response artifact")
             if self.exit_code == 0 and self.error is None and self.model is None:
                 raise ValueError("successful executions require model metadata")
+        if self.execution_status is AgentExecutionStatus.TIMED_OUT:
+            if not self.timed_out:
+                raise ValueError("typed timeout status requires timeout evidence")
+        elif self.execution_status is not None and self.timed_out:
+            raise ValueError("timeout evidence requires the typed timeout status")
+        if self.execution_status is AgentExecutionStatus.PROVIDER_STALLED:
+            if self.provider_liveness is None or not self.provider_liveness.stalled:
+                raise ValueError(
+                    "provider-stalled status requires terminal liveness evidence"
+                )
+        elif self.provider_liveness is not None and self.provider_liveness.stalled:
+            raise ValueError(
+                "terminal liveness evidence requires provider-stalled status"
+            )
         return self
 
 

@@ -7,6 +7,7 @@ import json
 import math
 import os
 import signal
+import stat
 import subprocess
 import tempfile
 import threading
@@ -21,18 +22,21 @@ from typing import Protocol, Self, runtime_checkable
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from software_agent_team.artifacts import (
+    AgentExecutionStatus,
     AgentRole,
     AgentToolCallEvidence,
     AgentToolCallOutcome,
     AgentToolEvidenceStatus,
     ArtifactKind,
     PhaseArtifact,
+    ProviderLivenessEvidence,
     validate_tool_evidence_collection,
 )
 from software_agent_team.openclaw_session_evidence import (
     CapturedOpenClawToolEvidence,
     OpenClawSessionEvidenceError,
     capture_openclaw_tool_evidence,
+    inspect_openclaw_session_activity,
 )
 from software_agent_team.teams import (
     AgentCapability,
@@ -41,6 +45,11 @@ from software_agent_team.teams import (
 )
 
 DEFAULT_PROCESS_SHUTDOWN_GRACE_SECONDS = 35
+DEFAULT_CLOUD_PROVIDER_SILENCE_SECONDS = 120.0
+DEFAULT_LOCAL_PROVIDER_SILENCE_SECONDS = 300.0
+DEFAULT_PROVIDER_STALL_GRACE_SECONDS = 30.0
+DEFAULT_LIVENESS_POLL_SECONDS = 0.25
+PROVIDER_ACTIVITY_REPORT_SECONDS = 10.0
 
 ROLE_ARTIFACT_KINDS: dict[AgentRole, frozenset[ArtifactKind]] = {
     AgentRole.CLARIFIER: frozenset({ArtifactKind.CLARIFICATION_RECORD}),
@@ -63,16 +72,110 @@ class ScriptedResponseExhaustedError(AgentExecutionError):
     """Raised when an offline scripted executor has no response left."""
 
 
-class AgentExecutionStatus(StrEnum):
-    """Observable terminal state of one adapter invocation."""
+class AgentExecutionActivityKind(StrEnum):
+    """Content-free activity emitted while one provider invocation is active."""
 
-    COMPLETED = "completed"
-    PROCESS_FAILED = "process_failed"
-    PROVIDER_FAILED = "provider_failed"
-    TIMED_OUT = "timed_out"
-    INVALID_RESPONSE = "invalid_response"
-    LAUNCH_FAILED = "launch_failed"
-    INTERRUPTED = "interrupted"
+    PROVIDER_STREAM = "provider_stream"
+    TOOL_STARTED = "tool_started"
+    TOOL_COMPLETED = "tool_completed"
+    LIVENESS_DEGRADED = "liveness_degraded"
+    STALL_SUSPECTED = "stall_suspected"
+    STALL_RECOVERED = "stall_recovered"
+    PROVIDER_STALLED = "provider_stalled"
+
+
+class ProviderLivenessPolicy(BaseModel):
+    """Provider/model-aware renewable silence lease for one invocation."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    model: str = Field(min_length=1)
+    silence_seconds: float = Field(gt=0)
+    stall_grace_seconds: float = Field(gt=0)
+    source: str = Field(min_length=1, max_length=300)
+
+    @model_validator(mode="after")
+    def require_a_warning_window(self) -> Self:
+        if self.stall_grace_seconds >= self.silence_seconds:
+            raise ValueError("provider stall grace must be shorter than the lease")
+        return self
+
+    @property
+    def suspect_after_seconds(self) -> float:
+        """Return when the visible grace phase starts."""
+
+        return self.silence_seconds - self.stall_grace_seconds
+
+
+def resolve_provider_liveness_policy(
+    *,
+    model: str,
+    local: bool | None,
+    provider_request_timeout_seconds: int | None = None,
+) -> ProviderLivenessPolicy:
+    """Mirror the pinned OpenClaw stream boundary without a work budget."""
+
+    upstream_seconds = (
+        DEFAULT_LOCAL_PROVIDER_SILENCE_SECONDS
+        if local is True
+        else DEFAULT_CLOUD_PROVIDER_SILENCE_SECONDS
+    )
+    sources = [
+        "pinned OpenClaw local first-event boundary"
+        if local is True
+        else "pinned OpenClaw cloud first-event boundary"
+    ]
+    if provider_request_timeout_seconds is not None:
+        if provider_request_timeout_seconds < 1:
+            raise ValueError("provider request timeout must be positive")
+        # The pinned runtime treats an explicit provider timeout as an override,
+        # including when it deliberately extends the implicit cloud boundary for
+        # a slow model. Taking the smaller value here would recreate the fixed
+        # cutoff that this renewable-liveness contract replaces.
+        upstream_seconds = provider_request_timeout_seconds
+        sources.append("configured provider request timeout")
+    grace = min(
+        DEFAULT_PROVIDER_STALL_GRACE_SECONDS,
+        upstream_seconds / 4,
+    )
+    return ProviderLivenessPolicy(
+        model=model,
+        silence_seconds=upstream_seconds,
+        stall_grace_seconds=grace,
+        source="; ".join(sources),
+    )
+
+
+class AgentExecutionActivity(BaseModel):
+    """Safe controller observation; never contains provider or tool content."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: AgentExecutionActivityKind
+    agent_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
+    session_key: str = Field(min_length=1)
+    model: str | None = Field(default=None, min_length=1)
+    elapsed_ms: int = Field(ge=0)
+    trusted_activity_count: int = Field(ge=0)
+    active_tool_count: int = Field(ge=0)
+    inactivity_ms: int = Field(ge=0)
+    silence_seconds: float = Field(gt=0)
+    stall_grace_seconds: float = Field(gt=0)
+    policy_source: str = Field(min_length=1, max_length=300)
+    degradation_reason: str | None = Field(default=None, min_length=1, max_length=500)
+
+    @model_validator(mode="after")
+    def bind_degradation_reason(self) -> Self:
+        if (self.kind is AgentExecutionActivityKind.LIVENESS_DEGRADED) != (
+            self.degradation_reason is not None
+        ):
+            raise ValueError(
+                "only degraded liveness activity may contain a degradation reason"
+            )
+        return self
+
+
+AgentExecutionActivityHandler = Callable[[AgentExecutionActivity], None]
 
 
 def validate_role_artifact_kind(role: AgentRole, kind: ArtifactKind) -> None:
@@ -251,6 +354,7 @@ class AgentExecutionTelemetry(BaseModel):
     provider: str | None = None
     model: str | None = None
     usage: AgentTokenUsage | None = None
+    provider_liveness: ProviderLivenessEvidence | None = None
     tool_evidence_status: AgentToolEvidenceStatus = AgentToolEvidenceStatus.NOT_CAPTURED
     session_transcript_sha256: str | None = Field(
         default=None,
@@ -322,6 +426,14 @@ class AgentExecutionTelemetry(BaseModel):
             )
         if self.timed_out and self.interrupted:
             raise ValueError("an Agent execution cannot be timed out and interrupted")
+        if (
+            self.provider_liveness is not None
+            and self.provider_liveness.stalled
+            and (self.timed_out or self.interrupted)
+        ):
+            raise ValueError(
+                "provider-stalled telemetry cannot also be timed out or interrupted"
+            )
         validate_tool_evidence_collection(
             status=self.tool_evidence_status,
             transcript_sha256=self.session_transcript_sha256,
@@ -377,6 +489,21 @@ class AgentExecutionResult(BaseModel):
                 raise ValueError("timed-out result requires timed-out telemetry")
         elif self.telemetry.timed_out:
             raise ValueError("only timed-out results may contain timed-out telemetry")
+        if self.status is AgentExecutionStatus.PROVIDER_STALLED:
+            if (
+                self.telemetry.provider_liveness is None
+                or not self.telemetry.provider_liveness.stalled
+            ):
+                raise ValueError(
+                    "provider-stalled result requires provider liveness evidence"
+                )
+        elif (
+            self.telemetry.provider_liveness is not None
+            and self.telemetry.provider_liveness.stalled
+        ):
+            raise ValueError(
+                "only provider-stalled results may contain terminal stall evidence"
+            )
         if self.status is AgentExecutionStatus.INTERRUPTED:
             if not self.telemetry.interrupted:
                 raise ValueError("interrupted result requires interrupted telemetry")
@@ -391,7 +518,12 @@ class AgentExecutionResult(BaseModel):
 class AgentExecutor(Protocol):
     """Replaceable synchronous execution boundary used by the controller."""
 
-    def execute(self, request: AgentExecutionRequest) -> AgentExecutionResult:
+    def execute(
+        self,
+        request: AgentExecutionRequest,
+        *,
+        activity_handler: AgentExecutionActivityHandler | None = None,
+    ) -> AgentExecutionResult:
         """Execute one bounded Agent turn without advancing workflow state."""
 
 
@@ -554,13 +686,243 @@ def _decode_process_output(value: str | bytes | None) -> str:
     return value
 
 
+def _consume_private_raw_stream(path: Path) -> bool:
+    """Observe and discard a private raw-stream batch without reading content."""
+
+    flags = os.O_RDWR | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise OSError("raw stream is not a regular file")
+        if metadata.st_uid != os.geteuid():
+            raise OSError("raw stream owner changed")
+        if metadata.st_size == 0:
+            return False
+        os.ftruncate(descriptor, 0)
+        return True
+    finally:
+        os.close(descriptor)
+
+
+class _ProviderLivenessMonitor:
+    """Renew a silence lease from trusted, content-free OpenClaw activity."""
+
+    def __init__(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        policy: ProviderLivenessPolicy,
+        raw_stream_path: Path,
+        state_dir: Path,
+        started_monotonic: float,
+        activity_handler: AgentExecutionActivityHandler | None,
+    ) -> None:
+        self.request = request
+        self.policy = policy
+        self.raw_stream_path = raw_stream_path
+        self.state_dir = state_dir
+        self.started_monotonic = started_monotonic
+        self.activity_handler = activity_handler
+        self.last_activity: float | None = None
+        self.lease_start_source: str | None = None
+        self.last_provider_report = float("-inf")
+        self.previous_trusted_records = 0
+        self.previous_tool_started = 0
+        self.previous_tool_completed = 0
+        self.active_tool_count = 0
+        self.raw_stream_observed = False
+        self.session_observed = False
+        self.provider_activity_observations = 0
+        self.stall_suspected_count = 0
+        self.stall_recovered_count = 0
+        self.maximum_inactivity_ms = 0
+        self.suspected = False
+        self.stalled = False
+        self.degradation_reason: str | None = None
+
+    def poll(self, now: float, *, enforce_stall: bool = True) -> bool:
+        """Observe activity and optionally enforce the live silence boundary."""
+
+        if self.last_activity is not None:
+            inactivity_before_poll = max(0.0, now - self.last_activity)
+            self.maximum_inactivity_ms = max(
+                self.maximum_inactivity_ms,
+                round(inactivity_before_poll * 1000),
+            )
+        trusted_activity = False
+        try:
+            raw_activity = _consume_private_raw_stream(self.raw_stream_path)
+        except OSError:
+            self._degrade("private provider-stream observer became unavailable", now)
+            raw_activity = False
+        if raw_activity:
+            trusted_activity = True
+            self._start_lease(now, source="provider_stream")
+            self.raw_stream_observed = True
+            self.provider_activity_observations += 1
+
+        try:
+            session = inspect_openclaw_session_activity(
+                state_dir=self.state_dir,
+                agent_id=self.request.agent_id,
+                session_key=self.request.session_key,
+                prompt=self.request.prompt,
+            )
+        except OpenClawSessionEvidenceError:
+            self._degrade("OpenClaw session activity could not be attributed", now)
+            session = None
+        if session is not None:
+            first_session_observation = not self.session_observed
+            self.session_observed = True
+            if first_session_observation:
+                # The exact current prompt in OpenClaw's current-turn record is
+                # the earliest attributable checkpoint available to the SAT
+                # subprocess adapter. Process/interpreter startup before this
+                # point is not provider silence.
+                self._start_lease(now, source="current_turn")
+                trusted_activity = True
+            if session.trusted_record_count > self.previous_trusted_records:
+                trusted_activity = True
+            started_delta = session.tool_started_count - self.previous_tool_started
+            completed_delta = (
+                session.tool_completed_count - self.previous_tool_completed
+            )
+            if started_delta < 0 or completed_delta < 0:
+                self._degrade("OpenClaw session activity moved backwards", now)
+            else:
+                for _ in range(started_delta):
+                    self._emit(AgentExecutionActivityKind.TOOL_STARTED, now)
+                for _ in range(completed_delta):
+                    self._emit(AgentExecutionActivityKind.TOOL_COMPLETED, now)
+            self.previous_trusted_records = session.trusted_record_count
+            self.previous_tool_started = session.tool_started_count
+            self.previous_tool_completed = session.tool_completed_count
+            self.active_tool_count = session.active_tool_count
+
+        if trusted_activity:
+            self.last_activity = now
+            if self.suspected:
+                self.suspected = False
+                self.stall_recovered_count += 1
+                self._emit(AgentExecutionActivityKind.STALL_RECOVERED, now)
+            if raw_activity and (
+                self.provider_activity_observations == 1
+                or now - self.last_provider_report >= PROVIDER_ACTIVITY_REPORT_SECONDS
+            ):
+                self.last_provider_report = now
+                self._emit(AgentExecutionActivityKind.PROVIDER_STREAM, now)
+
+        if (
+            not enforce_stall
+            or self.degradation_reason is not None
+            or self.active_tool_count > 0
+        ):
+            return False
+        if self.last_activity is None:
+            return False
+        inactive = max(0.0, now - self.last_activity)
+        if not self.suspected and inactive >= self.policy.suspect_after_seconds:
+            if not self.session_observed:
+                self._degrade(
+                    "OpenClaw session observer was not ready before the stall probe",
+                    now,
+                )
+                return False
+            self.suspected = True
+            self.stall_suspected_count += 1
+            self._emit(AgentExecutionActivityKind.STALL_SUSPECTED, now)
+        if self.suspected and inactive >= self.policy.silence_seconds:
+            self.stalled = True
+            self._emit(AgentExecutionActivityKind.PROVIDER_STALLED, now)
+            return True
+        return False
+
+    def finalize(self, now: float) -> ProviderLivenessEvidence:
+        """Collect terminal counters without changing an already-owned outcome."""
+
+        self.poll(now, enforce_stall=False)
+        if self.last_activity is None:
+            self._degrade(
+                "OpenClaw current-turn activity was never attributable",
+                now,
+            )
+        return self.evidence()
+
+    def _start_lease(self, now: float, *, source: str) -> None:
+        if self.last_activity is not None:
+            return
+        self.last_activity = now
+        self.lease_start_source = source
+
+    def _degrade(self, reason: str, now: float) -> None:
+        if self.degradation_reason is not None:
+            return
+        self.degradation_reason = reason
+        self._emit(AgentExecutionActivityKind.LIVENESS_DEGRADED, now)
+
+    def _emit(self, kind: AgentExecutionActivityKind, now: float) -> None:
+        if self.activity_handler is None:
+            return
+        inactivity = (
+            0.0 if self.last_activity is None else max(0.0, now - self.last_activity)
+        )
+        activity = AgentExecutionActivity(
+            kind=kind,
+            agent_id=self.request.agent_id,
+            session_key=self.request.session_key,
+            model=self.request.model,
+            elapsed_ms=max(0, round((now - self.started_monotonic) * 1000)),
+            trusted_activity_count=(
+                self.provider_activity_observations + self.previous_trusted_records
+            ),
+            active_tool_count=self.active_tool_count,
+            inactivity_ms=max(0, round(inactivity * 1000)),
+            silence_seconds=self.policy.silence_seconds,
+            stall_grace_seconds=self.policy.stall_grace_seconds,
+            policy_source=self.policy.source,
+            degradation_reason=(
+                self.degradation_reason
+                if kind is AgentExecutionActivityKind.LIVENESS_DEGRADED
+                else None
+            ),
+        )
+        try:
+            self.activity_handler(activity)
+        except Exception:
+            self.degradation_reason = "provider liveness activity could not be reported"
+
+    def evidence(self) -> ProviderLivenessEvidence:
+        """Freeze the safe counters after the child process has stopped."""
+
+        return ProviderLivenessEvidence(
+            mode="degraded" if self.degradation_reason is not None else "enforced",
+            policy_source=self.policy.source,
+            silence_seconds=self.policy.silence_seconds,
+            stall_grace_seconds=self.policy.stall_grace_seconds,
+            lease_started=self.last_activity is not None,
+            lease_start_source=self.lease_start_source,
+            raw_stream_observed=self.raw_stream_observed,
+            session_observed=self.session_observed,
+            provider_activity_observations=self.provider_activity_observations,
+            tool_started_count=self.previous_tool_started,
+            tool_completed_count=self.previous_tool_completed,
+            stall_suspected_count=self.stall_suspected_count,
+            stall_recovered_count=self.stall_recovered_count,
+            maximum_inactivity_ms=self.maximum_inactivity_ms,
+            stalled=self.stalled,
+            degradation_reason=self.degradation_reason,
+        )
+
+
 class OpenClawSubprocessExecutor:
     """Invoke one OpenClaw Agent turn through a shell-free subprocess.
 
     Positive request timeouts remain controlled-evaluation limits.  A zero
     request timeout is passed through to OpenClaw as its documented
-    no-wall-clock-limit value; OpenClaw's provider stream idle watchdog and
-    tool-specific guards remain responsible for liveness.
+    no-wall-clock-limit value. SAT separately observes the pinned runtime's
+    private raw stream and attributable tool lifecycle to enforce a renewable
+    provider-silence lease without limiting productive wall-clock work.
     """
 
     def __init__(
@@ -574,12 +936,18 @@ class OpenClawSubprocessExecutor:
         runner: ProcessRunner | None = None,
         clock: WallClock = _system_clock,
         monotonic: MonotonicClock = time.monotonic,
+        liveness_poll_seconds: float = DEFAULT_LIVENESS_POLL_SECONDS,
+        liveness_policies: Mapping[str, ProviderLivenessPolicy] | None = None,
     ) -> None:
         if process_grace_seconds < 1:
             raise AgentExecutionError("OpenClaw process grace period must be positive")
         binary = str(openclaw_binary)
         if not binary:
             raise AgentExecutionError("OpenClaw binary must not be empty")
+        if liveness_poll_seconds <= 0:
+            raise AgentExecutionError(
+                "provider liveness poll interval must be positive"
+            )
         self.openclaw_binary = binary
         self.environment = None if environment is None else dict(environment)
         self.local = local
@@ -592,11 +960,42 @@ class OpenClawSubprocessExecutor:
         self.runner = runner
         self.clock = clock
         self.monotonic = monotonic
+        self.liveness_poll_seconds = liveness_poll_seconds
+        self._liveness_policies = dict(liveness_policies or {})
+        if any(key != policy.model for key, policy in self._liveness_policies.items()):
+            raise AgentExecutionError("provider liveness policy keys must match models")
         self._process_lock = threading.Lock()
         self._active_processes: dict[str, ActiveProcess] = {}
         self._interrupt_requests: set[str] = set()
 
-    def execute(self, request: AgentExecutionRequest) -> AgentExecutionResult:
+    def register_model_liveness(
+        self,
+        *,
+        model: str,
+        local: bool | None,
+        provider_request_timeout_seconds: int | None = None,
+    ) -> ProviderLivenessPolicy:
+        """Register inspected model locality before any invocation starts."""
+
+        policy = resolve_provider_liveness_policy(
+            model=model,
+            local=local,
+            provider_request_timeout_seconds=provider_request_timeout_seconds,
+        )
+        existing = self._liveness_policies.get(model)
+        if existing is not None and existing != policy:
+            raise AgentExecutionError(
+                f"provider liveness policy changed after registration: {model}"
+            )
+        self._liveness_policies[model] = policy
+        return policy
+
+    def execute(
+        self,
+        request: AgentExecutionRequest,
+        *,
+        activity_handler: AgentExecutionActivityHandler | None = None,
+    ) -> AgentExecutionResult:
         """Run ``openclaw agent`` and retain all process and usage evidence."""
 
         started_at = self.clock()
@@ -605,6 +1004,8 @@ class OpenClawSubprocessExecutor:
             prompt_path = Path(temporary) / "prompt.md"
             prompt_path.write_text(request.prompt, encoding="utf-8")
             prompt_path.chmod(0o600)
+            raw_stream_path = Path(temporary) / "provider-stream.jsonl"
+            raw_stream_path.touch(mode=0o600, exist_ok=False)
             runtime_timeout_seconds, deadline_expired = self._runtime_timeout(
                 request,
                 now=started_at,
@@ -623,10 +1024,14 @@ class OpenClawSubprocessExecutor:
                 )
             try:
                 if self.runner is None:
-                    completed, interrupted = self._run_interruptible_process(
-                        request,
-                        command,
-                        runtime_timeout_seconds=runtime_timeout_seconds,
+                    completed, interrupted, provider_stalled, liveness = (
+                        self._run_interruptible_process(
+                            request,
+                            command,
+                            runtime_timeout_seconds=runtime_timeout_seconds,
+                            raw_stream_path=raw_stream_path,
+                            activity_handler=activity_handler,
+                        )
                     )
                 else:
                     runner_kwargs: dict[str, object] = {
@@ -645,6 +1050,8 @@ class OpenClawSubprocessExecutor:
                         )
                     completed = self.runner(list(command), **runner_kwargs)
                     interrupted = False
+                    provider_stalled = False
+                    liveness = None
             except subprocess.TimeoutExpired as error:
                 return self._timeout_result(
                     request=request,
@@ -673,6 +1080,18 @@ class OpenClawSubprocessExecutor:
                 exit_code=completed.returncode,
                 stdout=stdout,
                 stderr=stderr,
+                provider_liveness=liveness,
+            )
+        if provider_stalled:
+            return self._provider_stalled_result(
+                request=request,
+                command=command,
+                started_at=started_at,
+                started_monotonic=started_monotonic,
+                exit_code=completed.returncode,
+                stdout=stdout,
+                stderr=stderr,
+                provider_liveness=liveness,
             )
         if completed.returncode != 0:
             telemetry = self._telemetry(
@@ -683,6 +1102,7 @@ class OpenClawSubprocessExecutor:
                 exit_code=completed.returncode,
                 stdout=stdout,
                 stderr=stderr,
+                provider_liveness=liveness,
             )
             return AgentExecutionResult(
                 status=AgentExecutionStatus.PROCESS_FAILED,
@@ -701,6 +1121,7 @@ class OpenClawSubprocessExecutor:
                 exit_code=completed.returncode,
                 stdout=stdout,
                 stderr=stderr,
+                provider_liveness=liveness,
             )
             return AgentExecutionResult(
                 status=AgentExecutionStatus.INVALID_RESPONSE,
@@ -712,6 +1133,28 @@ class OpenClawSubprocessExecutor:
             request,
             payload,
         )
+        declared_provider_stall = (
+            payload.declared_timeout
+            and liveness is not None
+            and liveness.stall_suspected_count > 0
+            and not liveness.degradation_reason
+            and liveness.maximum_inactivity_ms >= round(liveness.silence_seconds * 1000)
+            and (
+                runtime_timeout_seconds == 0
+                or runtime_timeout_seconds > liveness.silence_seconds
+            )
+        )
+        if declared_provider_stall and not liveness.stalled:
+            liveness = liveness.model_copy(update={"stalled": True})
+            self._emit_declared_provider_stall(
+                request=request,
+                activity_handler=activity_handler,
+                evidence=liveness,
+                elapsed_ms=max(
+                    0,
+                    round((self.monotonic() - started_monotonic) * 1000),
+                ),
+            )
         telemetry = self._telemetry(
             request=request,
             command=command,
@@ -721,11 +1164,18 @@ class OpenClawSubprocessExecutor:
             stdout=stdout,
             stderr=stderr,
             payload=payload,
-            timed_out=payload.declared_timeout,
+            timed_out=payload.declared_timeout and not declared_provider_stall,
             captured_tools=captured_tools,
             tool_evidence_error=tool_evidence_error,
+            provider_liveness=liveness,
         )
         if payload.declared_timeout:
+            if declared_provider_stall:
+                return AgentExecutionResult(
+                    status=AgentExecutionStatus.PROVIDER_STALLED,
+                    error="OpenClaw reported sustained provider inactivity",
+                    telemetry=telemetry,
+                )
             return AgentExecutionResult(
                 status=AgentExecutionStatus.TIMED_OUT,
                 error="OpenClaw reported an Agent timeout",
@@ -794,8 +1244,29 @@ class OpenClawSubprocessExecutor:
         command: tuple[str, ...],
         *,
         runtime_timeout_seconds: int,
-    ) -> tuple[subprocess.CompletedProcess[str], bool]:
+        raw_stream_path: Path,
+        activity_handler: AgentExecutionActivityHandler | None,
+    ) -> tuple[
+        subprocess.CompletedProcess[str],
+        bool,
+        bool,
+        ProviderLivenessEvidence | None,
+    ]:
         """Run one process whose exact session may be interrupted by control input."""
+
+        state_dir = self._state_directory()
+        liveness_monitor = (
+            None
+            if state_dir is None
+            else _ProviderLivenessMonitor(
+                request=request,
+                policy=self._liveness_policy(request),
+                raw_stream_path=raw_stream_path,
+                state_dir=state_dir,
+                started_monotonic=self.monotonic(),
+                activity_handler=activity_handler,
+            )
+        )
 
         process = subprocess.Popen(
             list(command),
@@ -806,34 +1277,61 @@ class OpenClawSubprocessExecutor:
             errors="replace",
             shell=False,
             stdin=subprocess.DEVNULL,
-            env=self._environment(),
+            env=self._environment(raw_stream_path=raw_stream_path),
             start_new_session=os.name == "posix",
         )
         with self._process_lock:
             self._active_processes[request.session_key] = (request, process)
-        timeout = (
+        process_timeout = (
             runtime_timeout_seconds + self.process_grace_seconds
             if runtime_timeout_seconds > 0
             else None
         )
+        process_started = self.monotonic()
+        provider_stalled = False
         try:
-            try:
-                stdout, stderr = process.communicate(timeout=timeout)
-            except subprocess.TimeoutExpired as error:
-                self._signal_process(process)
+            while True:
                 try:
                     stdout, stderr = process.communicate(
-                        timeout=min(5, self.process_grace_seconds)
+                        timeout=self.liveness_poll_seconds
                     )
+                    if liveness_monitor is not None:
+                        # Once the exact process has completed there is nothing
+                        # left to interrupt. Collect final counters, but never
+                        # retroactively turn a returned response into a stall.
+                        liveness_monitor.finalize(self.monotonic())
+                    break
                 except subprocess.TimeoutExpired:
-                    self._kill_process(process)
-                    stdout, stderr = process.communicate()
-                raise subprocess.TimeoutExpired(
-                    command,
-                    timeout,
-                    output=stdout or error.output,
-                    stderr=stderr or error.stderr,
-                ) from error
+                    now = self.monotonic()
+                    if liveness_monitor is not None and liveness_monitor.poll(now):
+                        provider_stalled = True
+                        self._signal_process(process)
+                        try:
+                            stdout, stderr = process.communicate(
+                                timeout=min(5, self.process_grace_seconds)
+                            )
+                        except subprocess.TimeoutExpired:
+                            self._kill_process(process)
+                            stdout, stderr = process.communicate()
+                        break
+                    if (
+                        process_timeout is not None
+                        and now - process_started >= process_timeout
+                    ):
+                        self._signal_process(process)
+                        try:
+                            stdout, stderr = process.communicate(
+                                timeout=min(5, self.process_grace_seconds)
+                            )
+                        except subprocess.TimeoutExpired:
+                            self._kill_process(process)
+                            stdout, stderr = process.communicate()
+                        raise subprocess.TimeoutExpired(
+                            command,
+                            process_timeout,
+                            output=stdout,
+                            stderr=stderr,
+                        ) from None
         finally:
             with self._process_lock:
                 self._active_processes.pop(request.session_key, None)
@@ -847,6 +1345,8 @@ class OpenClawSubprocessExecutor:
                 stderr=stderr,
             ),
             interrupted,
+            provider_stalled,
+            None if liveness_monitor is None else liveness_monitor.evidence(),
         )
 
     @staticmethod
@@ -933,10 +1433,43 @@ class OpenClawSubprocessExecutor:
             return deadline_seconds, False
         return min(request.timeout_seconds, deadline_seconds), False
 
-    def _environment(self) -> Mapping[str, str] | None:
+    def _state_directory(self) -> Path | None:
         if self.environment is None:
             return None
-        return {**os.environ, **self.environment}
+        raw = self.environment.get("OPENCLAW_STATE_DIR")
+        if raw is None:
+            return None
+        candidate = Path(raw)
+        if not candidate.is_absolute() or not candidate.is_dir():
+            return None
+        return candidate
+
+    def _liveness_policy(
+        self,
+        request: AgentExecutionRequest,
+    ) -> ProviderLivenessPolicy:
+        model = request.model or "unresolved/default"
+        return self._liveness_policies.get(model) or resolve_provider_liveness_policy(
+            model=model,
+            local=None,
+        )
+
+    def _environment(
+        self,
+        *,
+        raw_stream_path: Path | None = None,
+    ) -> Mapping[str, str] | None:
+        if self.environment is None and raw_stream_path is None:
+            return None
+        environment = {**os.environ, **(self.environment or {})}
+        if raw_stream_path is not None:
+            environment.update(
+                {
+                    "OPENCLAW_RAW_STREAM": "1",
+                    "OPENCLAW_RAW_STREAM_PATH": str(raw_stream_path.resolve()),
+                }
+            )
+        return environment
 
     def _capture_tool_evidence(
         self,
@@ -979,6 +1512,7 @@ class OpenClawSubprocessExecutor:
         payload: _OpenClawResponse | None = None,
         captured_tools: CapturedOpenClawToolEvidence | None = None,
         tool_evidence_error: str | None = None,
+        provider_liveness: ProviderLivenessEvidence | None = None,
     ) -> AgentExecutionTelemetry:
         finished_at = self.clock()
         elapsed = max(0, round((self.monotonic() - started_monotonic) * 1000))
@@ -1002,6 +1536,7 @@ class OpenClawSubprocessExecutor:
             provider=None if payload is None else payload.provider,
             model=None if payload is None else payload.model,
             usage=None if payload is None else payload.usage,
+            provider_liveness=provider_liveness,
             tool_evidence_status=(
                 AgentToolEvidenceStatus.INVALID
                 if tool_evidence_error is not None
@@ -1088,6 +1623,7 @@ class OpenClawSubprocessExecutor:
         exit_code: int | None,
         stdout: str,
         stderr: str,
+        provider_liveness: ProviderLivenessEvidence | None = None,
     ) -> AgentExecutionResult:
         telemetry = self._telemetry(
             request=request,
@@ -1098,12 +1634,87 @@ class OpenClawSubprocessExecutor:
             interrupted=True,
             stdout=stdout,
             stderr=stderr,
+            provider_liveness=provider_liveness,
         )
         return AgentExecutionResult(
             status=AgentExecutionStatus.INTERRUPTED,
             error="Agent invocation was interrupted by user control",
             telemetry=telemetry,
         )
+
+    def _provider_stalled_result(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        command: tuple[str, ...],
+        started_at: datetime,
+        started_monotonic: float,
+        exit_code: int | None,
+        stdout: str,
+        stderr: str,
+        provider_liveness: ProviderLivenessEvidence | None,
+    ) -> AgentExecutionResult:
+        if provider_liveness is None or not provider_liveness.stalled:
+            raise AgentExecutionError(
+                "terminal provider stall requires liveness evidence"
+            )
+        telemetry = self._telemetry(
+            request=request,
+            command=command,
+            started_at=started_at,
+            started_monotonic=started_monotonic,
+            exit_code=exit_code,
+            stdout=stdout,
+            stderr=stderr,
+            provider_liveness=provider_liveness,
+        )
+        return AgentExecutionResult(
+            status=AgentExecutionStatus.PROVIDER_STALLED,
+            error=(
+                "Provider produced no trusted activity through the visible stall "
+                "probe and grace period"
+            ),
+            telemetry=telemetry,
+        )
+
+    @staticmethod
+    def _emit_declared_provider_stall(
+        *,
+        request: AgentExecutionRequest,
+        activity_handler: AgentExecutionActivityHandler | None,
+        evidence: ProviderLivenessEvidence,
+        elapsed_ms: int,
+    ) -> None:
+        """Project a provider-owned timeout only when silence proves the cause."""
+
+        if activity_handler is None:
+            return
+        activity = AgentExecutionActivity(
+            kind=AgentExecutionActivityKind.PROVIDER_STALLED,
+            agent_id=request.agent_id,
+            session_key=request.session_key,
+            model=request.model,
+            elapsed_ms=elapsed_ms,
+            trusted_activity_count=(
+                evidence.provider_activity_observations
+                + evidence.tool_started_count
+                + evidence.tool_completed_count
+            ),
+            active_tool_count=max(
+                0,
+                evidence.tool_started_count - evidence.tool_completed_count,
+            ),
+            inactivity_ms=evidence.maximum_inactivity_ms,
+            silence_seconds=evidence.silence_seconds,
+            stall_grace_seconds=evidence.stall_grace_seconds,
+            policy_source=evidence.policy_source,
+        )
+        try:
+            activity_handler(activity)
+        except Exception:
+            # Liveness evidence remains authoritative even if an optional
+            # presentation callback fails after OpenClaw has already stopped.
+            return
 
     def _launch_failure_result(
         self,
@@ -1193,9 +1804,15 @@ class ScriptedAgentExecutor:
 
         return len(self._responses)
 
-    def execute(self, request: AgentExecutionRequest) -> AgentExecutionResult:
+    def execute(
+        self,
+        request: AgentExecutionRequest,
+        *,
+        activity_handler: AgentExecutionActivityHandler | None = None,
+    ) -> AgentExecutionResult:
         """Consume one predeclared response and record the exact request."""
 
+        del activity_handler
         self.requests.append(request)
         if not self._responses:
             raise ScriptedResponseExhaustedError(

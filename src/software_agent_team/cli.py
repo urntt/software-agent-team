@@ -1394,15 +1394,17 @@ def _prepare_runtime_boundary(
         )
         if team_plan is not None:
             inspections: list[OpenClawModelInspection] = []
+            primary_inspection = next(
+                (
+                    item
+                    for item in preflight.model_inspections
+                    if item.model == preflight.model
+                ),
+                None,
+            )
             for route in team_plan.model_routes.routes:
-                if route.model == preflight.model:
-                    inspections.append(
-                        OpenClawModelInspection(
-                            model=route.model,
-                            available=preflight.model_available is True,
-                            error=preflight.model_error,
-                        )
-                    )
+                if route.model == preflight.model and primary_inspection is not None:
+                    inspections.append(primary_inspection)
                 else:
                     inspections.append(
                         inspect_openclaw_model(
@@ -1417,6 +1419,27 @@ def _prepare_runtime_boundary(
                     **preflight.model_dump(mode="json"),
                     "model_inspections": tuple(inspections),
                 }
+            )
+        liveness_inspections = preflight.model_inspections
+        if not liveness_inspections and preflight.model is not None:
+            liveness_inspections = (
+                OpenClawModelInspection(
+                    model=preflight.model,
+                    available=preflight.model_available is True,
+                    error=preflight.model_error,
+                    local=preflight.model_local,
+                    provider_request_timeout_seconds=(
+                        preflight.model_request_timeout_seconds
+                    ),
+                ),
+            )
+        for model_inspection in liveness_inspections:
+            executor.register_model_liveness(
+                model=model_inspection.model,
+                local=model_inspection.local,
+                provider_request_timeout_seconds=(
+                    model_inspection.provider_request_timeout_seconds
+                ),
             )
         persist_runtime_preflight(
             preflight,
@@ -2310,6 +2333,11 @@ def _run_product_planning(
             ),
             local=True,
             run_deadline_at=resource_authorization.deadline_at,
+        )
+        executor.register_model_liveness(
+            model=configuration.model,
+            local=preflight.model_local,
+            provider_request_timeout_seconds=(preflight.model_request_timeout_seconds),
         )
         planning_metadata = next(
             (

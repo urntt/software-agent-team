@@ -41,6 +41,16 @@ class CapturedOpenClawToolEvidence:
     tool_calls: tuple[AgentToolCallEvidence, ...]
 
 
+@dataclass(frozen=True)
+class OpenClawSessionActivity:
+    """Content-free liveness facts for the current OpenClaw invocation."""
+
+    trusted_record_count: int
+    tool_started_count: int
+    tool_completed_count: int
+    active_tool_count: int
+
+
 def _sha256(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
@@ -186,6 +196,156 @@ def _current_invocation_records(
             "current OpenClaw invocation has no completed response record"
         )
     return invocation
+
+
+def inspect_openclaw_session_activity(
+    *,
+    state_dir: Path,
+    agent_id: str,
+    session_key: str,
+    prompt: str,
+) -> OpenClawSessionActivity | None:
+    """Inspect current-turn lifecycle records without retaining their content.
+
+    ``None`` means OpenClaw has not materialized the attributable session yet.
+    Once it exists, malformed identities or records fail closed so callers can
+    expose degraded liveness instead of guessing that a provider is active.
+    """
+
+    candidate = state_dir / "agents" / agent_id / "sessions"
+    try:
+        candidate.lstat()
+    except FileNotFoundError:
+        return None
+    sessions = _require_safe_session_directory(state_dir, agent_id)
+    try:
+        index_payload = _read_regular_file(
+            sessions / "sessions.json",
+            limit=_MAX_INDEX_BYTES,
+            label="OpenClaw session index",
+        )
+    except OpenClawSessionEvidenceError as error:
+        if not (sessions / "sessions.json").exists():
+            return None
+        raise error
+    index = _load_json_object(index_payload, label="OpenClaw session index")
+    entry = index.get(session_key)
+    if entry is None:
+        return None
+    if not isinstance(entry, dict):
+        raise OpenClawSessionEvidenceError("OpenClaw session index entry is invalid")
+    session_id = entry.get("sessionId")
+    if (
+        not isinstance(session_id, str)
+        or not session_id
+        or len(session_id) > 128
+        or any(
+            character
+            not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
+            for character in session_id
+        )
+    ):
+        raise OpenClawSessionEvidenceError("OpenClaw session ID is unsafe")
+    expected_path = sessions / f"{session_id}.jsonl"
+    session_file = entry.get("sessionFile")
+    if session_file is not None and (
+        not isinstance(session_file, str) or Path(session_file) != expected_path
+    ):
+        raise OpenClawSessionEvidenceError(
+            "OpenClaw session index points outside the expected transcript"
+        )
+    if not expected_path.exists():
+        return None
+    transcript = _read_regular_file(
+        expected_path,
+        limit=_MAX_SESSION_BYTES,
+        label="OpenClaw session transcript",
+    )
+    if not transcript:
+        return None
+    complete_lines = transcript.splitlines()
+    if not transcript.endswith(b"\n"):
+        complete_lines = complete_lines[:-1]
+    if not complete_lines:
+        return None
+    if len(complete_lines) > _MAX_SESSION_RECORDS:
+        raise OpenClawSessionEvidenceError(
+            "OpenClaw session transcript has an invalid record count"
+        )
+    records = tuple(
+        _load_json_object(line, label="OpenClaw session record")
+        for line in complete_lines
+    )
+    first = records[0]
+    if first.get("type") != "session" or first.get("id") != session_id:
+        raise OpenClawSessionEvidenceError(
+            "OpenClaw transcript identity differs from the invocation session"
+        )
+    try:
+        invocation = _current_invocation_records(records, prompt=prompt)
+    except OpenClawSessionEvidenceError as error:
+        if "prompt is absent" in str(error) or "no completed response" in str(error):
+            matches = [
+                index
+                for index, record in enumerate(records)
+                if record.get("type") == "message"
+                and isinstance(record.get("message"), dict)
+                and record["message"].get("role") == "user"
+                and _message_text(record["message"].get("content")) == prompt
+            ]
+            if not matches:
+                return None
+            invocation = records[matches[-1] :]
+        else:
+            raise
+
+    started: set[str] = set()
+    completed: set[str] = set()
+    trusted_records = 0
+    for record in invocation[1:]:
+        if record.get("type") != "message":
+            continue
+        message = record.get("message")
+        if not isinstance(message, dict):
+            raise OpenClawSessionEvidenceError("OpenClaw message record is invalid")
+        role = message.get("role")
+        if role == "assistant":
+            trusted_records += 1
+            content = message.get("content")
+            if not isinstance(content, list):
+                continue
+            for item in content:
+                if not isinstance(item, dict) or item.get("type") != "toolCall":
+                    continue
+                external_id = item.get("id")
+                if not isinstance(external_id, str) or not external_id:
+                    raise OpenClawSessionEvidenceError(
+                        "OpenClaw tool-call identity is invalid"
+                    )
+                if external_id in started:
+                    raise OpenClawSessionEvidenceError(
+                        "OpenClaw session repeats a tool-call identity"
+                    )
+                started.add(external_id)
+        elif role == "toolResult":
+            trusted_records += 1
+            external_id = message.get("toolCallId")
+            if not isinstance(external_id, str) or external_id not in started:
+                raise OpenClawSessionEvidenceError(
+                    "OpenClaw tool result has no attributable call identity"
+                )
+            if external_id in completed:
+                raise OpenClawSessionEvidenceError(
+                    "OpenClaw session repeats a tool result"
+                )
+            completed.add(external_id)
+
+    return OpenClawSessionActivity(
+        trusted_record_count=trusted_records,
+        tool_started_count=len(started),
+        tool_completed_count=len(completed),
+        active_tool_count=len(started - completed),
+    )
 
 
 def _canonical_arguments(arguments: object) -> bytes:

@@ -168,6 +168,16 @@ seconds. Both values belong in `RuntimePreflight` evidence. Tests must verify
 the exact subprocess bounds, safe timeout text, visible pre-wait status, and
 that a model-inspection failure creates no Planning Agent or run state.
 
+Provider liveness is a separate infrastructure contract. Model inspection
+records catalog locality and any configured provider request timeout; the
+execution adapter resolves those facts against the pinned OpenClaw first-event
+boundary. The lease starts from an attributable current-turn or provider-stream
+checkpoint, never subprocess startup. Tests for a liveness change must cover a
+long productive stream, sustained silence, activity during grace, an active tool, degraded attribution,
+exact-process cleanup, persisted Planning and execution evidence, and compact
+versus detailed progress. Register each changed threshold or polling constant in
+`decision_limits.py`; do not turn it into an Agent work budget.
+
 The product profile and evaluation fixture share this dependency image, not a
 TaskBrief, seed, acceptance suite, environment contract, or delivery command.
 The benchmark contract remains frozen for comparable trials. The confirmed

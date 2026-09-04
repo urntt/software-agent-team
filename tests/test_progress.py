@@ -275,6 +275,72 @@ def test_detailed_renderer_projects_agent_state_route_dependencies_and_budget(
     assert "input=120 output=40" in rendered
 
 
+def test_liveness_events_keep_stall_visible_and_stream_detail_optional(
+    tmp_path: Path,
+) -> None:
+    compact_output = StringIO()
+    detailed_output = StringIO()
+    compact_journal = journal(
+        tmp_path / "compact",
+        handler=TerminalProgressRenderer(
+            output=compact_output,
+            visibility=RunEventVisibility.COMPACT,
+        ),
+    )
+    detailed_journal = journal(
+        tmp_path / "detailed",
+        handler=TerminalProgressRenderer(
+            output=detailed_output,
+            visibility=RunEventVisibility.DETAILED,
+        ),
+    )
+    drafts = (
+        ProgressEvent(
+            kind=ProgressEventKind.AGENT_PROVIDER_ACTIVITY,
+            message="Builder received provider stream activity",
+            agent_id="builder",
+            iteration=1,
+            attempt=1,
+        ),
+        ProgressEvent(
+            kind=ProgressEventKind.AGENT_STALL_SUSPECTED,
+            message=(
+                "Builder has produced no trusted activity for 90.0s; checking "
+                "for another 30s before interruption (test provider contract)"
+            ),
+            agent_id="builder",
+            iteration=1,
+            attempt=1,
+        ),
+        ProgressEvent(
+            kind=ProgressEventKind.AGENT_PROVIDER_STALLED,
+            message=(
+                "Builder provider remained silent for 120s; interrupting only "
+                "this invocation and preserving its evidence"
+            ),
+            agent_id="builder",
+            iteration=1,
+            attempt=1,
+        ),
+    )
+    for draft in drafts:
+        compact_journal.append(
+            draft,
+            lifecycle_revision=3,
+            phase=RunPhase.IMPLEMENTING,
+        )
+        detailed_journal.append(
+            draft,
+            lifecycle_revision=3,
+            phase=RunPhase.IMPLEMENTING,
+        )
+
+    assert "provider stream activity" not in compact_output.getvalue()
+    assert "no trusted activity for 90.0s" in compact_output.getvalue()
+    assert "preserving its evidence" in compact_output.getvalue()
+    assert "provider stream activity" in detailed_output.getvalue()
+
+
 def test_journal_persists_a_contiguous_hash_chain(tmp_path: Path) -> None:
     event_journal = journal(tmp_path)
     first = event_journal.append(

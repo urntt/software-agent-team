@@ -962,7 +962,10 @@ class WorkflowCoordinator:
                     f"Agent execution ended as {result.status.value}"
                 )
                 repairable = result.status is AgentExecutionStatus.INVALID_RESPONSE
-                if result.status is AgentExecutionStatus.PROVIDER_FAILED:
+                if result.status in {
+                    AgentExecutionStatus.PROVIDER_FAILED,
+                    AgentExecutionStatus.PROVIDER_STALLED,
+                }:
                     failure_reason = TerminationReason.DEPENDENCY_UNAVAILABLE
 
             execution_reference = self._record_execution(
@@ -1315,7 +1318,10 @@ class WorkflowCoordinator:
             return TerminationReason.RESOURCE_LIMIT_REACHED
         if result.status is AgentExecutionStatus.LAUNCH_FAILED:
             return TerminationReason.DEPENDENCY_UNAVAILABLE
-        if result.status is AgentExecutionStatus.PROVIDER_FAILED:
+        if result.status in {
+            AgentExecutionStatus.PROVIDER_FAILED,
+            AgentExecutionStatus.PROVIDER_STALLED,
+        }:
             return TerminationReason.DEPENDENCY_UNAVAILABLE
         return TerminationReason.EXECUTION_FAILED
 

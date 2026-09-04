@@ -32,6 +32,7 @@ from software_agent_team.artifacts import (
     AcceptanceCriterion,
     AgentRole,
     ArtifactKind,
+    ProviderLivenessEvidence,
     ReviewBoundaryKind,
     TaskBrief,
     review_boundary_definition_map,
@@ -44,6 +45,8 @@ from software_agent_team.budgets import (
     ModelPricing,
 )
 from software_agent_team.execution import (
+    AgentExecutionActivity,
+    AgentExecutionActivityKind,
     AgentExecutionRequest,
     AgentExecutionResult,
     AgentExecutionStatus,
@@ -133,6 +136,13 @@ class PlanningActivityKind(StrEnum):
     """User-safe checkpoints around one blocking Planning invocation."""
 
     WAITING_MODEL = "waiting_model"
+    PROVIDER_ACTIVITY = "provider_activity"
+    TOOL_STARTED = "tool_started"
+    TOOL_COMPLETED = "tool_completed"
+    LIVENESS_DEGRADED = "liveness_degraded"
+    STALL_SUSPECTED = "stall_suspected"
+    STALL_RECOVERED = "stall_recovered"
+    PROVIDER_STALLED = "provider_stalled"
     RESPONSE_RECEIVED = "response_received"
     REPAIR_SCHEDULED = "repair_scheduled"
     RESPONSE_VALIDATED = "response_validated"
@@ -148,6 +158,11 @@ class PlanningActivity:
     model: str
     duration_ms: int | None = None
     execution_status: AgentExecutionStatus | None = None
+    inactivity_ms: int | None = None
+    silence_seconds: float | None = None
+    stall_grace_seconds: float | None = None
+    policy_source: str | None = None
+    degradation_reason: str | None = None
 
 
 PlanningActivityHandler = Callable[[PlanningActivity], None]
@@ -190,6 +205,43 @@ class TerminalPlanningProgress:
             with self._lock:
                 self._waiting = (stop, thread)
             thread.start()
+            return
+
+        intermediate = {
+            PlanningActivityKind.PROVIDER_ACTIVITY: (
+                "  Planning received provider stream activity"
+            ),
+            PlanningActivityKind.TOOL_STARTED: (
+                "  Planning started a sandboxed tool operation"
+            ),
+            PlanningActivityKind.TOOL_COMPLETED: (
+                "  Planning completed a sandboxed tool operation"
+            ),
+            PlanningActivityKind.LIVENESS_DEGRADED: (
+                "! Planning provider liveness is degraded: "
+                f"{activity.degradation_reason}; SAT will preserve the call "
+                "instead of inferring a stall from silence"
+            ),
+            PlanningActivityKind.STALL_SUSPECTED: (
+                "? Planning has produced no trusted activity for "
+                f"{(activity.inactivity_ms or 0) / 1000:.1f}s; checking the "
+                "private stream and attributable tool state for another "
+                f"{(activity.stall_grace_seconds or 0):g}s before interruption "
+                f"({activity.policy_source})"
+            ),
+            PlanningActivityKind.STALL_RECOVERED: (
+                "↻ Planning provider activity recovered during the "
+                f"{(activity.stall_grace_seconds or 0):g}s grace period"
+            ),
+            PlanningActivityKind.PROVIDER_STALLED: (
+                "✗ Planning provider remained silent for "
+                f"{(activity.silence_seconds or 0):g}s; interrupting only this "
+                "invocation "
+                "and preserving its evidence"
+            ),
+        }.get(activity.kind)
+        if intermediate is not None:
+            self._print(intermediate)
             return
 
         self.close()
@@ -912,6 +964,7 @@ class PlanningExecutionEvidence(BaseModel):
     pricing_source: ModelMetadataSource | None = None
     budget_usage: AgentBudgetUsage | None = None
     budget_error: str | None = Field(default=None, min_length=1, max_length=2000)
+    provider_liveness: ProviderLivenessEvidence | None = None
     error: str | None = None
 
     @field_validator("started_at", "finished_at")
@@ -2206,6 +2259,7 @@ class PlanningStore:
                 pricing_source=pricing_source,
                 budget_usage=budget_usage,
                 budget_error=budget_error,
+                provider_liveness=result.telemetry.provider_liveness,
                 error=result.error,
             ),
         )
@@ -2582,8 +2636,25 @@ class AdaptivePlanningCoordinator:
                 if self.budget_ledger is None
                 else self.budget_ledger.reserve_call("clarifier")
             )
+
+            def observe_execution_activity(
+                execution_activity: AgentExecutionActivity,
+                *,
+                current_attempt: int = attempt,
+            ) -> None:
+                self._emit_execution_activity(
+                    activity_handler,
+                    execution_activity,
+                    attempt=current_attempt,
+                    maximum_attempts=maximum_attempts,
+                    model=request.model,
+                )
+
             try:
-                result = self.executor.execute(execution_request)
+                result = self.executor.execute(
+                    execution_request,
+                    activity_handler=observe_execution_activity,
+                )
             except BaseException:
                 if self.budget_ledger is not None and reservation is not None:
                     with suppress(AgentBudgetExceeded):
@@ -2733,6 +2804,53 @@ class AdaptivePlanningCoordinator:
         except Exception:
             # Ephemeral terminal rendering cannot change persisted Planning.
             return
+
+    @classmethod
+    def _emit_execution_activity(
+        cls,
+        handler: PlanningActivityHandler | None,
+        activity: AgentExecutionActivity,
+        *,
+        attempt: int,
+        maximum_attempts: int,
+        model: str,
+    ) -> None:
+        kind = {
+            AgentExecutionActivityKind.PROVIDER_STREAM: (
+                PlanningActivityKind.PROVIDER_ACTIVITY
+            ),
+            AgentExecutionActivityKind.TOOL_STARTED: PlanningActivityKind.TOOL_STARTED,
+            AgentExecutionActivityKind.TOOL_COMPLETED: (
+                PlanningActivityKind.TOOL_COMPLETED
+            ),
+            AgentExecutionActivityKind.LIVENESS_DEGRADED: (
+                PlanningActivityKind.LIVENESS_DEGRADED
+            ),
+            AgentExecutionActivityKind.STALL_SUSPECTED: (
+                PlanningActivityKind.STALL_SUSPECTED
+            ),
+            AgentExecutionActivityKind.STALL_RECOVERED: (
+                PlanningActivityKind.STALL_RECOVERED
+            ),
+            AgentExecutionActivityKind.PROVIDER_STALLED: (
+                PlanningActivityKind.PROVIDER_STALLED
+            ),
+        }[activity.kind]
+        cls._emit_activity(
+            handler,
+            PlanningActivity(
+                kind=kind,
+                attempt=attempt,
+                maximum_attempts=maximum_attempts,
+                model=model,
+                duration_ms=activity.elapsed_ms,
+                inactivity_ms=activity.inactivity_ms,
+                silence_seconds=activity.silence_seconds,
+                stall_grace_seconds=activity.stall_grace_seconds,
+                policy_source=activity.policy_source,
+                degradation_reason=activity.degradation_reason,
+            ),
+        )
 
     def _prompt(
         self,

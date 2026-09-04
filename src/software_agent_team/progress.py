@@ -39,6 +39,13 @@ class ProgressEventKind(StrEnum):
     AGENT_READY = "agent_ready"
     AGENT_STARTED = "agent_started"
     AGENT_WAITING_PROVIDER = "agent_waiting_provider"
+    AGENT_PROVIDER_ACTIVITY = "agent_provider_activity"
+    AGENT_TOOL_STARTED = "agent_tool_started"
+    AGENT_TOOL_COMPLETED = "agent_tool_completed"
+    AGENT_LIVENESS_DEGRADED = "agent_liveness_degraded"
+    AGENT_STALL_SUSPECTED = "agent_stall_suspected"
+    AGENT_STALL_RECOVERED = "agent_stall_recovered"
+    AGENT_PROVIDER_STALLED = "agent_provider_stalled"
     AGENT_INVOCATION_COMPLETED = "agent_invocation_completed"
     MODEL_ROUTE_SWITCHED = "model_route_switched"
     AGENT_COMPLETED = "agent_completed"
@@ -150,6 +157,41 @@ _EVENT_METADATA: dict[
         RunEventCategory.AGENT,
         RunEventVisibility.STANDARD,
         AgentRunState.WAITING_PROVIDER,
+    ),
+    ProgressEventKind.AGENT_PROVIDER_ACTIVITY: (
+        RunEventCategory.AGENT,
+        RunEventVisibility.DETAILED,
+        AgentRunState.WAITING_PROVIDER,
+    ),
+    ProgressEventKind.AGENT_TOOL_STARTED: (
+        RunEventCategory.AGENT,
+        RunEventVisibility.STANDARD,
+        AgentRunState.RUNNING,
+    ),
+    ProgressEventKind.AGENT_TOOL_COMPLETED: (
+        RunEventCategory.AGENT,
+        RunEventVisibility.STANDARD,
+        AgentRunState.RUNNING,
+    ),
+    ProgressEventKind.AGENT_LIVENESS_DEGRADED: (
+        RunEventCategory.AGENT,
+        RunEventVisibility.COMPACT,
+        AgentRunState.WAITING_PROVIDER,
+    ),
+    ProgressEventKind.AGENT_STALL_SUSPECTED: (
+        RunEventCategory.AGENT,
+        RunEventVisibility.COMPACT,
+        AgentRunState.WAITING_PROVIDER,
+    ),
+    ProgressEventKind.AGENT_STALL_RECOVERED: (
+        RunEventCategory.AGENT,
+        RunEventVisibility.STANDARD,
+        AgentRunState.WAITING_PROVIDER,
+    ),
+    ProgressEventKind.AGENT_PROVIDER_STALLED: (
+        RunEventCategory.AGENT,
+        RunEventVisibility.COMPACT,
+        AgentRunState.FAILED,
     ),
     ProgressEventKind.AGENT_INVOCATION_COMPLETED: (
         RunEventCategory.AGENT,
@@ -266,6 +308,13 @@ _EVENT_METADATA: dict[
 _ATTEMPT_EVENT_KINDS = {
     ProgressEventKind.AGENT_STARTED,
     ProgressEventKind.AGENT_WAITING_PROVIDER,
+    ProgressEventKind.AGENT_PROVIDER_ACTIVITY,
+    ProgressEventKind.AGENT_TOOL_STARTED,
+    ProgressEventKind.AGENT_TOOL_COMPLETED,
+    ProgressEventKind.AGENT_LIVENESS_DEGRADED,
+    ProgressEventKind.AGENT_STALL_SUSPECTED,
+    ProgressEventKind.AGENT_STALL_RECOVERED,
+    ProgressEventKind.AGENT_PROVIDER_STALLED,
     ProgressEventKind.AGENT_INVOCATION_COMPLETED,
     ProgressEventKind.MODEL_ROUTE_SWITCHED,
     ProgressEventKind.AGENT_COMPLETED,
@@ -764,6 +813,7 @@ class TerminalProgressRenderer:
             ProgressEventKind.AGENT_SKIPPED,
             ProgressEventKind.AGENT_INTERRUPTED,
             ProgressEventKind.AGENT_CANCELLED,
+            ProgressEventKind.AGENT_PROVIDER_STALLED,
         }:
             # Scheduler terminal events currently identify the scheduling
             # attempt, while bounded semantic repair may have advanced the
@@ -792,6 +842,13 @@ class TerminalProgressRenderer:
             ProgressEventKind.AGENT_QUEUED: "○",
             ProgressEventKind.AGENT_READY: "→",
             ProgressEventKind.AGENT_INVOCATION_COMPLETED: "·",
+            ProgressEventKind.AGENT_PROVIDER_ACTIVITY: "·",
+            ProgressEventKind.AGENT_TOOL_STARTED: "⚙",
+            ProgressEventKind.AGENT_TOOL_COMPLETED: "✓",
+            ProgressEventKind.AGENT_LIVENESS_DEGRADED: "!",
+            ProgressEventKind.AGENT_STALL_SUSPECTED: "?",
+            ProgressEventKind.AGENT_STALL_RECOVERED: "↻",
+            ProgressEventKind.AGENT_PROVIDER_STALLED: "✗",
             ProgressEventKind.MODEL_ROUTE_SWITCHED: "⇄",
             ProgressEventKind.AGENT_COMPLETED: "✓",
             ProgressEventKind.AGENT_RETRY: "↻",

@@ -35,11 +35,15 @@ from software_agent_team.budgets import (
 )
 from software_agent_team.dynamic_runner import DynamicAgentRunner
 from software_agent_team.execution import (
+    AgentExecutionActivity,
+    AgentExecutionActivityHandler,
+    AgentExecutionActivityKind,
     AgentExecutionRequest,
     AgentExecutionResult,
     AgentExecutionStatus,
     AgentExecutionTelemetry,
     AgentTokenUsage,
+    ProviderLivenessEvidence,
 )
 from software_agent_team.git_workspace import GitWorkspace, GitWorkspaceManager
 from software_agent_team.integrity import canonical_model_sha256
@@ -336,6 +340,7 @@ class DynamicExecutor:
         mutate_reader: str | None = None,
         synchronize_quality: bool = False,
         provider_fail_once_for: str | None = None,
+        provider_stall_once_for: str | None = None,
         zero_review_tool_calls_once: bool = False,
         invalid_review_response_once: bool = False,
         invalid_review_evidence: bool = False,
@@ -347,6 +352,7 @@ class DynamicExecutor:
         self.omit_model_for = omit_model_for
         self.mutate_reader = mutate_reader
         self.provider_fail_once_for = provider_fail_once_for
+        self.provider_stall_once_for = provider_stall_once_for
         self.zero_review_tool_calls_once = zero_review_tool_calls_once
         self.invalid_review_response_once = invalid_review_response_once
         self.invalid_review_evidence = invalid_review_evidence
@@ -357,7 +363,12 @@ class DynamicExecutor:
         self._lock = threading.Lock()
         self._quality_barrier = threading.Barrier(2) if synchronize_quality else None
 
-    def execute(self, request: AgentExecutionRequest) -> AgentExecutionResult:
+    def execute(
+        self,
+        request: AgentExecutionRequest,
+        *,
+        activity_handler: AgentExecutionActivityHandler | None = None,
+    ) -> AgentExecutionResult:
         with self._lock:
             self.requests.append(request)
             count = self._counts.get(request.agent_id, 0) + 1
@@ -381,6 +392,63 @@ class DynamicExecutor:
                     session_id=f"session-{request.agent_id}",
                     provider="test",
                     model=request.model,
+                ),
+            )
+        if self.provider_stall_once_for == request.agent_id and count == 1:
+            if activity_handler is not None:
+                for kind, elapsed_ms, inactivity_ms in (
+                    (AgentExecutionActivityKind.STALL_SUSPECTED, 90_000, 90_000),
+                    (AgentExecutionActivityKind.PROVIDER_STALLED, 120_000, 120_000),
+                ):
+                    activity_handler(
+                        AgentExecutionActivity(
+                            kind=kind,
+                            agent_id=request.agent_id,
+                            session_key=request.session_key,
+                            model=request.model,
+                            elapsed_ms=elapsed_ms,
+                            trusted_activity_count=0,
+                            active_tool_count=0,
+                            inactivity_ms=inactivity_ms,
+                            silence_seconds=120,
+                            stall_grace_seconds=30,
+                            policy_source="test provider contract",
+                        )
+                    )
+            return AgentExecutionResult(
+                status=AgentExecutionStatus.PROVIDER_STALLED,
+                error="scripted provider stall",
+                telemetry=AgentExecutionTelemetry(
+                    role=None,
+                    agent_id=request.agent_id,
+                    capability=request.capability,
+                    session_key=request.session_key,
+                    command=("fake-agent", request.agent_id),
+                    started_at=FIXED_TIME,
+                    finished_at=FIXED_TIME,
+                    duration_ms=10,
+                    exit_code=-15,
+                    stdout="",
+                    stderr="",
+                    session_id=f"session-{request.agent_id}",
+                    provider="test",
+                    model=request.model,
+                    provider_liveness=ProviderLivenessEvidence(
+                        mode="enforced",
+                        policy_source="test provider contract",
+                        silence_seconds=120,
+                        stall_grace_seconds=30,
+                        lease_started=True,
+                        lease_start_source="current_turn",
+                        session_observed=True,
+                        provider_activity_observations=0,
+                        tool_started_count=0,
+                        tool_completed_count=0,
+                        stall_suspected_count=1,
+                        stall_recovered_count=0,
+                        maximum_inactivity_ms=120_000,
+                        stalled=True,
+                    ),
                 ),
             )
         if request.agent_id == "builder":
@@ -970,6 +1038,53 @@ def test_dynamic_runner_switches_only_after_approved_provider_failure(
         "default",
         "fallback",
     )
+
+
+def test_dynamic_runner_can_use_approved_fallback_after_provider_stall(
+    tmp_path: Path,
+) -> None:
+    runner, team_plan, executor, _, _ = runtime(
+        tmp_path,
+        model_switching=True,
+        executor_options={"provider_stall_once_for": "builder"},
+    )
+    events: list[ProgressEvent] = []
+    runner.activity_handler = events.append
+
+    result = DagScheduler().execute(team_plan, runner)
+
+    assert result.status is ScheduleStatus.COMPLETED
+    builder_requests = [
+        request for request in executor.requests if request.agent_id == "builder"
+    ]
+    assert [request.model for request in builder_requests] == [
+        MODEL,
+        "test/fallback-model",
+    ]
+    first = next(
+        runner.artifact_store.load(reference)
+        for reference in runner.execution_records
+        if "/implement/builder-attempt-01" in reference.path
+    )
+    assert isinstance(first, AgentExecutionRecord)
+    assert first.execution_status is AgentExecutionStatus.PROVIDER_STALLED
+    assert first.provider_liveness is not None
+    assert first.provider_liveness.stalled
+    suspected = next(
+        event
+        for event in events
+        if event.kind is ProgressEventKind.AGENT_STALL_SUSPECTED
+    )
+    stalled = next(
+        event
+        for event in events
+        if event.kind is ProgressEventKind.AGENT_PROVIDER_STALLED
+    )
+    assert "90.0s" in suspected.message
+    assert "another 30s" in suspected.message
+    assert "test provider contract" in suspected.message
+    assert "silent for 120s" in stalled.message
+    assert "preserving its evidence" in stalled.message
 
 
 def test_dynamic_runner_refuses_unapproved_provider_fallback(

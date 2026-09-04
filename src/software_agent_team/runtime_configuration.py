@@ -84,6 +84,8 @@ class OpenClawModelInspection(BaseModel):
 
     model: str = Field(min_length=1)
     available: bool
+    local: bool | None = None
+    provider_request_timeout_seconds: int | None = Field(default=None, ge=1)
     context_window_tokens: int | None = Field(
         default=None,
         ge=1,
@@ -192,6 +194,8 @@ class RuntimePreflight(BaseModel):
     model: str | None = Field(default=None, min_length=1)
     model_available: bool | None = None
     model_error: str | None = Field(default=None, max_length=1000)
+    model_local: bool | None = None
+    model_request_timeout_seconds: int | None = Field(default=None, ge=1)
     model_inspections: tuple[OpenClawModelInspection, ...] = ()
 
     @field_validator("model_inspections")
@@ -228,6 +232,9 @@ class RuntimePreflight(BaseModel):
         if (
             primary.available is not self.model_available
             or primary.error != self.model_error
+            or primary.local is not self.model_local
+            or primary.provider_request_timeout_seconds
+            != self.model_request_timeout_seconds
         ):
             raise ValueError(
                 "bootstrap model inspection differs from primary preflight evidence"
@@ -549,13 +556,37 @@ def inspect_openclaw_model(
         except (InvalidOperation, ValueError):
             pass
         else:
-            if Decimal(0) <= input_price <= Decimal(10_000) and Decimal(
-                0
-            ) <= output_price <= Decimal(10_000):
+            if input_price >= 0 and output_price >= 0:
                 discovered_prices = (input_price, output_price)
+    provider_timeout: int | None = None
+    try:
+        configured = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        configured = None
+    if isinstance(configured, dict):
+        models = configured.get("models")
+        providers = models.get("providers") if isinstance(models, dict) else None
+        provider_id = normalized.partition("/")[0]
+        provider_config = (
+            providers.get(provider_id) if isinstance(providers, dict) else None
+        )
+        raw_timeout = (
+            provider_config.get("timeoutSeconds")
+            if isinstance(provider_config, dict)
+            else None
+        )
+        if (
+            isinstance(raw_timeout, int)
+            and not isinstance(raw_timeout, bool)
+            and raw_timeout >= 1
+        ):
+            provider_timeout = raw_timeout
+    raw_local = matched.get("local")
     return OpenClawModelInspection(
         model=normalized,
         available=True,
+        local=raw_local if isinstance(raw_local, bool) else None,
+        provider_request_timeout_seconds=provider_timeout,
         context_window_tokens=context_window,
         input_modalities=tuple(dict.fromkeys(input_modalities)),
         input_cost_per_million_usd=discovered_prices[0],
@@ -1147,4 +1178,11 @@ def inspect_runtime_preflight(
             model_inspection.available if model_inspection is not None else None
         ),
         model_error=(model_inspection.error if model_inspection is not None else None),
+        model_local=(model_inspection.local if model_inspection is not None else None),
+        model_request_timeout_seconds=(
+            model_inspection.provider_request_timeout_seconds
+            if model_inspection is not None
+            else None
+        ),
+        model_inspections=(() if model_inspection is None else (model_inspection,)),
     )

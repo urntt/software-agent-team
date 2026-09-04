@@ -10,16 +10,18 @@ product, architecture, experiment, or roadmap; those decisions belong to
 [`VISION.md`](VISION.md).
 
 The current development head implements configuration schema v7 model metadata
-with attributable price/context sources, task-scoped route snapshots, an
+with attributable price/context sources, task-scoped route snapshots, one
 explicit per-task USD authorization and optional deadline prompt, and separate
-controlled-evaluation versus ordinary-user budget shapes. Planning and dynamic
-execution can now consume one shared monotonic ledger, so Planning turns retain
-their token, estimated-cost, price-source, and aggregate-budget evidence instead
-of disappearing from runtime accounting. Formatter, lint, and **822 offline
-tests** pass for this integration batch. The renewable streaming-activity
-liveness lease, two mandatory self-check checkpoints, complete cost breakdown,
-and fresh provider/device validation are not implemented yet; these facts do
-not close the corresponding readiness, budget, cost, or timeout work.
+controlled-evaluation versus ordinary-user resource authority. Product Planning
+and execution no longer use a fixed wall-clock work limit. SAT resolves a
+provider/model-aware renewable inactivity lease, observes private stream and
+attributable tool lifecycle without persisting their content, visibly separates
+suspected stall, grace, recovery, degraded observation, and terminal stall, and
+persists typed content-free evidence for Planning and runtime Agents. Formatter,
+lint, doctor, and **851 offline tests** pass for this implementation. The two
+mandatory self-check checkpoints, complete cost breakdown, and fresh
+provider/device liveness validation remain incomplete; the corresponding issues
+are not closed by offline evidence.
 
 ## Phase 1 Result
 
@@ -57,12 +59,11 @@ dispatch. There is no second fixed-role run-control path.
 
 Validation rejects invalid dependencies, write-scope conflicts, incompatible
 permissions, missing independent quality coverage, unauthorized model routes,
-and over-limit concurrency or Agent counts before Agent creation. Adaptive
-validation also rejects a plan whose complete planned iterations cannot fit
-its call budget. Recovery
-verifies the exact TaskBrief binding, TeamPlan digest, fixed manifest version,
-fixed team digest, resolved Agent timeouts, and cross-file run metadata. The
-complete repository check passes with 809 offline tests.
+and concurrency above the user-approved host setting before Agent creation.
+Controlled evaluation additionally validates frozen Agent/call/iteration
+limits; ordinary product plans do not inherit those limits. Recovery verifies
+the exact TaskBrief binding, TeamPlan digest, fixed manifest version, fixed team
+digest, resolved time authority, and cross-file run metadata.
 
 `RunEvent` is also an executable, append-only contract. Every current workflow
 progress update is persisted with a contiguous sequence, lifecycle revision,
@@ -70,10 +71,12 @@ phase, Agent identity when applicable, visibility class, and predecessor
 digest. `run.json` atomically anchors the latest event, so recovery detects
 missing, reordered, modified, or extra events, including a changed tail.
 The dynamic scheduler and runner now project every approved Agent through
-queued, ready, running, provider-waiting, bounded-repair, completed, failed, or
-blocked transitions. Events include safe activity, dependencies, capability,
-stage, approved model, attempt and duration where applicable, invocation
-evidence, and aggregate budget snapshots. Compact, standard, and detailed
+queued, ready, running, provider-waiting, provider activity, tool lifecycle,
+suspected stall, grace recovery, degraded observation, bounded-repair,
+completed, failed, or blocked transitions. Events include safe activity,
+dependencies, capability, stage, approved model, attempt and duration where
+applicable, invocation evidence, and aggregate budget snapshots. Compact,
+standard, and detailed
 filtering consumes the same event contract. Configuration schema v7 persists
 the selected visibility together with secret-free model profiles and route
 policy without changing renderer semantics, and bare `sat` applies the selected
@@ -95,24 +98,23 @@ read-only bootstrap Planner may return either one decision-value question with
 two or three suggestions and a custom-answer path, or one complete proposal.
 Strict proposal validation covers requirements, acceptance criteria,
 Agent work assignments, task ownership, dynamic Agent responsibilities,
-dependencies, workspace scopes, independent quality coverage, concurrency,
-iterations, per-Agent workload classes, the configured model route, and
-controller budgets before the proposal is shown. The Planner does not
-authorize seconds: controller policy maps routine, substantial, or complex
-workload into a capability-specific default-to-ceiling timeout envelope. Review
-scope adds one work unit per assigned criterion and per explicit boundary
-obligation, so the timeout floor reflects the structured verification contract
-rather than criterion count alone.
+dependencies, workspace scopes, independent quality coverage, user-approved
+concurrency, proposed iterations, per-Agent workload classes, the configured
+model route, and resource authority before the proposal is shown. Product plans
+resolve every per-Agent wall-clock value to zero and record
+`provider_activity`; workload-to-timeout mapping and Review scope floors remain
+only in controlled evaluation.
 
 The ordinary-user interaction supports free-form answers, natural-language
 replacement revisions, safe edits to maximum concurrency, iteration count, and
-individual Agent timeouts, cancellation, a complete plain-language overview,
-and explicit approval. `PlanningStore` persists the authorized request,
+Agent model profile, cancellation, a complete plain-language overview, and
+explicit approval. `PlanningStore` persists the authorized request,
 hash-chained model turns including rejected response evidence, immutable
 proposal revisions, exact approval digests, and the controller's per-Agent
-timeout resolutions with workload class, policy envelope, source, and final
-seconds, including the Review criterion and boundary-obligation counts used by
-scope policy. Approval promotes the
+time-authority resolutions. Product resolutions record zero with a
+provider-activity source; controlled evaluation retains workload, policy
+envelope, final seconds, and any Review scope evidence. Planning turns also
+retain content-free provider-liveness evidence. Approval promotes the
 validated preview into an authorized confirmed `TaskBrief`, adaptive
 implementation plan, and executable `TeamPlan`.
 The resulting `ApprovedPlanningResult` revalidates those exact digests and
@@ -137,8 +139,9 @@ requests and telemetry use an approved run-scoped Agent ID and capability;
 fixed-role identity remains compatibility metadata only for the existing
 evaluation workflow. Capability-specific templates compile the exact approved
 responsibility, assigned tasks, dependencies, permission profile, model route,
-and timeout into minimum-context prompts. Response parsing rejects mismatched
-Agent identity, capability, session, task ownership, model, or timeout.
+and time authority into minimum-context prompts. Response parsing rejects
+mismatched Agent identity, capability, session, task ownership, model, or time
+authority.
 
 Artifact schema v2 removes fixed-role identity from durable handoffs and
 execution records. Every Agent-produced iteration artifact is stored beneath
@@ -178,11 +181,11 @@ The Phase 3C dynamic runner is now implemented behind the general DAG
 scheduler. The scheduler remains the only owner of readiness, launch order,
 bounded concurrency, and shared-Git writer exclusion. The runner invokes only
 the supplied approved `AgentSpec`, preserves its exact authorized model set and
-timeout,
-allows at most one full-timeout semantic repair, accounts for every call in one
-thread-safe aggregate ledger, and persists raw output plus telemetry before a
+time authority, allows at most one currently configured semantic repair,
+accounts for every call in one thread-safe aggregate ledger, and persists raw
+output plus telemetry before a
 post-call budget rejection stops the schedule. Agents cannot create another
-Agent, change dependencies, reorder work, or extend timeouts.
+Agent, change dependencies, reorder work, or extend time authority.
 
 Each dynamic writer starts from the controller's current clean commit, leaves
 a clean descendant commit, and is rejected for changes outside its approved
@@ -239,11 +242,11 @@ model. The Planning overview exposes every primary route, selection reason,
 known pricing, and approved fallback before user approval. TeamPlan validation,
 run configuration, prompts, response telemetry, budget feasibility, and
 runtime preflight all bind those exact assignments. Only an attributable
-provider failure can advance to an explicitly approved fallback; the failed
-call and switch remain evidence and semantic repair stays a separate bounded
-mechanism. Offline routing and dynamic-runner tests cover both authorized and
-refused switches. A provider-backed run using two planned routes remains
-pending.
+provider failure or typed provider stall can advance under an explicitly
+approved provider-failure switch condition; the failed call, liveness evidence,
+and switch remain evidence, while semantic repair stays a separate mechanism.
+Offline routing and dynamic-runner tests cover authorized and refused switches.
+A provider-backed run using two planned routes remains pending.
 
 ## Product Readiness Boundary
 
@@ -1155,9 +1158,10 @@ The acceptance contract is
 - Versioned `TeamPlan`, `AgentSpec`, and `ModelRoutePlan` contracts with
   validation for dependency cycles, unknown references, write ownership,
   permission profiles, quality independence and coverage, model
-  authorization, concurrency, iteration limits, and minimum call feasibility;
+  authorization, approved concurrency, and conditional controlled-evaluation
+  limits;
 - Exact compilation of every fixed evaluation fixture into the same
-  run-scoped contract, including frozen TaskBrief binding, Agent timeouts,
+  run-scoped contract, including frozen TaskBrief binding, Agent time authority,
   dependency waves, workspace scopes, model route, budget, and manifest
   provenance;
 - Versioned, hash-chained `RunEvent` persistence with run-state head anchoring,
@@ -1178,17 +1182,19 @@ The acceptance contract is
 - Task-defined proposal compilation into confirmed requirements, adaptive
   implementation intent, least-privilege AgentSpecs, exact primary and
   fallback model assignments, dependency waves, qualitative per-Agent workload
-  estimates, controller-resolved per-Agent timeouts, and aggregate controller
+  estimates, controller-resolved time authority, and aggregate controller
   budgets;
 - Task-proportional Adaptive team validation with no bootstrap capability in
   the runtime team, exact task ownership and cross-Agent dependency alignment,
   and at least one downstream read-only quality path for every writer;
-- Hash-chained Planning-turn evidence, immutable proposal revisions, exact
-  user-approval digests, natural-language revision, safe structured limit
-  edits, cancellation, and a complete plain-language overview;
+- Hash-chained Planning-turn evidence including typed content-free provider
+  liveness, immutable proposal revisions, exact user-approval digests,
+  natural-language revision, safe structured edits, cancellation, and a
+  complete plain-language overview;
 - A replaceable OpenClaw subprocess adapter with stable fixed-role and
   run-scoped Agent sessions, explicit Agent ID and capability telemetry,
-  version-pinned local and Gateway JSON parsing, and canonical
+  version-pinned local and Gateway JSON parsing, private content-free stream
+  observation, provider/model-aware renewable inactivity leases, and canonical
   `provider/model` telemetry;
 - Sanitized OpenClaw Agent registry, permission checks, approved-Agent-only
   run-scoped configuration, non-root identity, exact per-Agent model-route
@@ -1201,7 +1207,7 @@ The acceptance contract is
   mount provenance;
 - Confirmed task-brief and handoff-envelope contracts;
 - Fixed-role and task-defined capability minimum-context prompts, strict
-  semantic JSON response parsing, dynamic identity/task/route/timeout binding,
+  semantic JSON response parsing, dynamic identity/task/route/time-authority binding,
   controller assembly of persisted envelope, Git, test, and scope facts, and
   one independently timed semantic response repair;
 - Contract-aware response normalization that permits presentation argv arrays
@@ -1215,9 +1221,10 @@ The acceptance contract is
   validation;
 - Immutable phase artifacts, handoffs, command output, Agent output, canonical
   paths, and SHA-256 references;
-- Deterministic TeamPlan DAG scheduling with dependency readiness, exact Agent
-  count, approved concurrency caps, per-Agent timeout propagation, fail-fast
-  launch control, attributable skipped nodes, and ordered progress events;
+- Deterministic TeamPlan DAG scheduling with dependency readiness, exact
+  approved team membership, approved concurrency, time-authority propagation,
+  fail-fast launch control, attributable skipped nodes, and ordered progress
+  events;
 - Shared-Git workspace safety that permits concurrent read-only Agents while
   making every workspace writer exclusive until isolated worktrees and an
   explicit integration protocol exist;
@@ -1242,16 +1249,16 @@ The acceptance contract is
   source visibility, and controller-only Agent invocation policy;
 - Explicit deterministic command coverage, `pending_review` manual criteria,
   Reviewer scope attestation, and controller-owned evidence resolution;
-- Pre-call Agent invocation limits and post-call token, duration, and
-  estimated-cost stop thresholds;
+- Pre-call task-wide known-cost authorization for ordinary tasks, plus explicit
+  call, token, duration, and cost thresholds only for controlled evaluation;
 - Thread-safe aggregate budget reservations shared by fixed and task-defined
   execution, including post-call usage retention and explicit unpriced or
   missing-token counters;
-- Checked-in capability defaults and fixed-role compatibility invocation
-  timeouts, workload-to-timeout policy envelopes, user-attributable exact
-  overrides inside those envelopes, frozen resolved run policy, an adaptive
-  1..16 concurrency setting, and configuration-schema migrations from the
-  former scalar timeout and verification-only concurrency;
+- Typed decision-limit ownership metadata; one user-approved task-wide USD
+  ceiling and optional deadline for ordinary tasks; provider-activity time
+  authority; controlled-evaluation-only timeout/count envelopes; user-selected
+  concurrency; and configuration-schema migrations from superseded product
+  caps;
 - Explicit completed and failed terminal outcomes with machine-readable and
   human-readable reports;
 - Remote one-command Linux/WSL bootstrap into an owned user-local application
@@ -1277,7 +1284,8 @@ The acceptance contract is
   source creation after approval, isolated workspaces, and write-once evidence;
 - Controller-backed role, elapsed-waiting, Git-snapshot, quality-gate,
   independent-review, decision, revision, completion, and failure progress,
-  plus adaptive Agent queue, readiness, provider wait, repair, duration,
+  plus adaptive Agent queue, readiness, provider wait/activity, tool lifecycle,
+  liveness degradation, suspected stall/grace/recovery, repair, duration,
   dependency, route, budget, and terminal-state projection;
 - Accepted-result-only delivery through a same-parent staging directory into a
   new non-overwriting project child, followed by exact setup, start, and test

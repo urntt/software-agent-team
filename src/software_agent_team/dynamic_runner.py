@@ -38,6 +38,8 @@ from software_agent_team.budgets import (
     ModelPricing,
 )
 from software_agent_team.execution import (
+    AgentExecutionActivity,
+    AgentExecutionActivityKind,
     AgentExecutionRequest,
     AgentExecutionResult,
     AgentExecutionStatus,
@@ -533,7 +535,16 @@ class DynamicAgentRunner:
                     for guidance in guidance_by_id.values()
                 ),
             )
-            result = self._execute(request)
+            result = self._execute(
+                request,
+                activity_handler=lambda activity, current_attempt=attempt: (
+                    self._observe_execution_activity(
+                        agent,
+                        attempt=current_attempt,
+                        activity=activity,
+                    )
+                ),
+            )
             response_reference: ArtifactReference | None = None
             ignored_fields: tuple[str, ...] = ()
             record_error: str | None = None
@@ -662,7 +673,11 @@ class DynamicAgentRunner:
                     self._finish_writer(agent, input_commit, work.output_commit)
                 return response_reference
             if (
-                result.status is AgentExecutionStatus.PROVIDER_FAILED
+                result.status
+                in {
+                    AgentExecutionStatus.PROVIDER_FAILED,
+                    AgentExecutionStatus.PROVIDER_STALLED,
+                }
                 and provider_switching
                 and route_index + 1 < len(route_ids)
                 and isinstance(failure, DynamicAgentRunnerError)
@@ -756,10 +771,89 @@ class DynamicAgentRunner:
             )
         )
 
-    def _execute(self, request: AgentExecutionRequest) -> AgentExecutionResult:
+    def _observe_execution_activity(
+        self,
+        agent: AgentSpec,
+        *,
+        attempt: int,
+        activity: AgentExecutionActivity,
+    ) -> None:
+        kind = {
+            AgentExecutionActivityKind.PROVIDER_STREAM: (
+                ProgressEventKind.AGENT_PROVIDER_ACTIVITY
+            ),
+            AgentExecutionActivityKind.TOOL_STARTED: (
+                ProgressEventKind.AGENT_TOOL_STARTED
+            ),
+            AgentExecutionActivityKind.TOOL_COMPLETED: (
+                ProgressEventKind.AGENT_TOOL_COMPLETED
+            ),
+            AgentExecutionActivityKind.LIVENESS_DEGRADED: (
+                ProgressEventKind.AGENT_LIVENESS_DEGRADED
+            ),
+            AgentExecutionActivityKind.STALL_SUSPECTED: (
+                ProgressEventKind.AGENT_STALL_SUSPECTED
+            ),
+            AgentExecutionActivityKind.STALL_RECOVERED: (
+                ProgressEventKind.AGENT_STALL_RECOVERED
+            ),
+            AgentExecutionActivityKind.PROVIDER_STALLED: (
+                ProgressEventKind.AGENT_PROVIDER_STALLED
+            ),
+        }[activity.kind]
+        message = {
+            AgentExecutionActivityKind.PROVIDER_STREAM: (
+                f"{agent.label} received provider stream activity"
+            ),
+            AgentExecutionActivityKind.TOOL_STARTED: (
+                f"{agent.label} started a sandboxed tool operation"
+            ),
+            AgentExecutionActivityKind.TOOL_COMPLETED: (
+                f"{agent.label} completed a sandboxed tool operation"
+            ),
+            AgentExecutionActivityKind.LIVENESS_DEGRADED: (
+                f"{agent.label} provider liveness is degraded: "
+                f"{activity.degradation_reason}; SAT will preserve the call "
+                "instead of guessing that silence means a stall"
+            ),
+            AgentExecutionActivityKind.STALL_SUSPECTED: (
+                f"{agent.label} has produced no trusted activity for "
+                f"{activity.inactivity_ms / 1000:.1f}s; SAT is checking its "
+                "private stream and attributable tool state for another "
+                f"{activity.stall_grace_seconds:g}s before interruption "
+                f"({activity.policy_source})"
+            ),
+            AgentExecutionActivityKind.STALL_RECOVERED: (
+                f"{agent.label} provider activity recovered during the "
+                f"{activity.stall_grace_seconds:g}s grace period"
+            ),
+            AgentExecutionActivityKind.PROVIDER_STALLED: (
+                f"{agent.label} provider remained silent for "
+                f"{activity.silence_seconds:g}s; SAT is interrupting only this "
+                "invocation and preserving its evidence"
+            ),
+        }[activity.kind]
+        self._emit_activity(
+            agent,
+            kind=kind,
+            message=message,
+            attempt=attempt,
+            model=activity.model,
+            duration_ms=activity.elapsed_ms,
+        )
+
+    def _execute(
+        self,
+        request: AgentExecutionRequest,
+        *,
+        activity_handler: Callable[[AgentExecutionActivity], None],
+    ) -> AgentExecutionResult:
         started_at = _utc(self.clock)
         try:
-            return self.executor.execute(request)
+            return self.executor.execute(
+                request,
+                activity_handler=activity_handler,
+            )
         except Exception as error:
             finished_at = _utc(self.clock)
             duration_ms = max(
@@ -1274,6 +1368,7 @@ class DynamicAgentRunner:
         if status in {
             AgentExecutionStatus.LAUNCH_FAILED,
             AgentExecutionStatus.PROVIDER_FAILED,
+            AgentExecutionStatus.PROVIDER_STALLED,
         }:
             return TerminationReason.DEPENDENCY_UNAVAILABLE
         if status is AgentExecutionStatus.INVALID_RESPONSE:

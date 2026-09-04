@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 import threading
 import time
 from datetime import UTC, datetime, timedelta
@@ -15,14 +16,17 @@ from pydantic import ValidationError
 
 from software_agent_team.artifacts import AgentRole, ArtifactKind
 from software_agent_team.execution import (
+    AgentExecutionActivityKind,
     AgentExecutionError,
     AgentExecutionRequest,
     AgentExecutionStatus,
     AgentExecutor,
     AgentTokenUsage,
     OpenClawSubprocessExecutor,
+    ProviderLivenessPolicy,
     ScriptedAgentExecutor,
     ScriptedResponseExhaustedError,
+    resolve_provider_liveness_policy,
     stable_agent_session_key,
     stable_session_key,
 )
@@ -88,6 +92,91 @@ def executor_with_clocks(
         monotonic=lambda: next(monotonic_times),
         **kwargs,
     )
+
+
+def live_liveness_executor(
+    tmp_path: Path,
+    program: str,
+) -> OpenClawSubprocessExecutor:
+    binary = tmp_path / "fake-openclaw"
+    binary.write_text(
+        f"#!{sys.executable}\n" + program,
+        encoding="utf-8",
+    )
+    binary.chmod(0o700)
+    state = tmp_path / "state"
+    state.mkdir()
+    policy = ProviderLivenessPolicy(
+        model="provider/model",
+        silence_seconds=0.30,
+        stall_grace_seconds=0.10,
+        source="test provider contract",
+    )
+    return OpenClawSubprocessExecutor(
+        openclaw_binary=binary,
+        environment={"OPENCLAW_STATE_DIR": str(state)},
+        process_grace_seconds=1,
+        liveness_poll_seconds=0.02,
+        liveness_policies={policy.model: policy},
+    )
+
+
+FAKE_OPENCLAW_SETUP = r"""
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+def argument(name):
+    return sys.argv[sys.argv.index(name) + 1]
+
+agent_id = argument("--agent")
+session_key = argument("--session-key")
+prompt = Path(argument("--message-file")).read_text(encoding="utf-8")
+session_id = "liveness-session"
+sessions = Path(os.environ["OPENCLAW_STATE_DIR"]) / "agents" / agent_id / "sessions"
+sessions.mkdir(parents=True, exist_ok=True)
+transcript = sessions / f"{session_id}.jsonl"
+records = [
+    {"type": "session", "id": session_id},
+    {"type": "message", "message": {"role": "user", "content": prompt}},
+]
+
+def write_records():
+    transcript.write_text(
+        "\n".join(json.dumps(item) for item in records) + "\n",
+        encoding="utf-8",
+    )
+
+def append_raw(value):
+    raw_path = Path(os.environ["OPENCLAW_RAW_STREAM_PATH"])
+    with raw_path.open("a", encoding="utf-8") as stream:
+        payload = {"event": "assistant_text_stream", "content": value}
+        stream.write(json.dumps(payload) + "\n")
+
+def finish():
+    records.append({
+        "type": "message",
+        "message": {"role": "assistant", "content": [{"type": "text", "text": "done"}]},
+    })
+    write_records()
+    print(json.dumps({
+        "payloads": [{"text": "{\\\"kind\\\":\\\"implementation_plan\\\"}"}],
+        "meta": {"agentMeta": {
+            "sessionId": session_id,
+            "provider": "provider",
+            "model": "model",
+            "usage": {"input": 1, "output": 1},
+        }},
+    }))
+
+write_records()
+(sessions / "sessions.json").write_text(
+    json.dumps({session_key: {"sessionId": session_id}}),
+    encoding="utf-8",
+)
+"""
 
 
 def test_openclaw_adapter_uses_message_file_and_no_shell() -> None:
@@ -212,6 +301,37 @@ def test_run_deadline_requires_timezone() -> None:
         OpenClawSubprocessExecutor(
             run_deadline_at=datetime(2026, 8, 10, 12, 0),
         )
+
+
+def test_liveness_policy_follows_model_locality_and_provider_timeout() -> None:
+    cloud = resolve_provider_liveness_policy(
+        model="provider/cloud",
+        local=False,
+    )
+    local = resolve_provider_liveness_policy(
+        model="provider/local",
+        local=True,
+    )
+    configured = resolve_provider_liveness_policy(
+        model="provider/configured",
+        local=True,
+        provider_request_timeout_seconds=40,
+    )
+    extended = resolve_provider_liveness_policy(
+        model="provider/slow-cloud",
+        local=False,
+        provider_request_timeout_seconds=300,
+    )
+
+    assert cloud.silence_seconds == 120
+    assert cloud.suspect_after_seconds == 90
+    assert local.silence_seconds == 300
+    assert local.suspect_after_seconds == 270
+    assert configured.silence_seconds == 40
+    assert configured.stall_grace_seconds == 10
+    assert configured.suspect_after_seconds == 30
+    assert extended.silence_seconds == 300
+    assert extended.suspect_after_seconds == 270
 
 
 def test_openclaw_adapter_captures_runtime_telemetry() -> None:
@@ -534,6 +654,220 @@ def test_openclaw_adapter_records_launch_failure() -> None:
     assert result.status is AgentExecutionStatus.LAUNCH_FAILED
     assert result.telemetry.exit_code is None
     assert "/opt/openclaw" in result.telemetry.stderr
+
+
+def test_provider_stream_activity_renews_lease_beyond_total_wall_clock(
+    tmp_path: Path,
+) -> None:
+    executor = live_liveness_executor(
+        tmp_path,
+        FAKE_OPENCLAW_SETUP
+        + r"""
+for index in range(6):
+    time.sleep(0.10)
+    append_raw(f"private streamed content {index}")
+finish()
+""",
+    )
+    activities = []
+
+    result = executor.execute(
+        request(timeout_seconds=0, model="provider/model"),
+        activity_handler=activities.append,
+    )
+
+    assert result.status is AgentExecutionStatus.COMPLETED
+    assert result.telemetry.duration_ms >= 500
+    assert result.telemetry.provider_liveness is not None
+    assert result.telemetry.provider_liveness.raw_stream_observed
+    assert result.telemetry.provider_liveness.lease_started
+    assert result.telemetry.provider_liveness.lease_start_source == "current_turn"
+    assert result.telemetry.provider_liveness.provider_activity_observations >= 5
+    assert not result.telemetry.provider_liveness.stalled
+    assert AgentExecutionActivityKind.PROVIDER_STREAM in {
+        activity.kind for activity in activities
+    }
+    assert "private streamed content" not in result.model_dump_json()
+    assert "private streamed content" not in " ".join(map(str, activities))
+
+
+def test_sustained_provider_silence_warns_then_stops_exact_process(
+    tmp_path: Path,
+) -> None:
+    executor = live_liveness_executor(
+        tmp_path,
+        FAKE_OPENCLAW_SETUP + "\ntime.sleep(30)\n",
+    )
+    activities = []
+
+    result = executor.execute(
+        request(timeout_seconds=0, model="provider/model"),
+        activity_handler=activities.append,
+    )
+
+    assert result.status is AgentExecutionStatus.PROVIDER_STALLED
+    assert result.telemetry.duration_ms < 2_000
+    assert result.telemetry.timed_out is False
+    assert result.telemetry.provider_liveness is not None
+    assert result.telemetry.provider_liveness.stalled
+    assert result.telemetry.provider_liveness.stall_suspected_count == 1
+    assert result.telemetry.provider_liveness.maximum_inactivity_ms >= 300
+    assert [
+        activity.kind
+        for activity in activities
+        if activity.kind
+        in {
+            AgentExecutionActivityKind.STALL_SUSPECTED,
+            AgentExecutionActivityKind.PROVIDER_STALLED,
+        }
+    ] == [
+        AgentExecutionActivityKind.STALL_SUSPECTED,
+        AgentExecutionActivityKind.PROVIDER_STALLED,
+    ]
+    assert executor.interrupt("planner") == 0
+
+
+def test_provider_activity_during_stall_grace_recovers_without_cutoff(
+    tmp_path: Path,
+) -> None:
+    executor = live_liveness_executor(
+        tmp_path,
+        FAKE_OPENCLAW_SETUP
+        + r"""
+time.sleep(0.24)
+append_raw("recovered private response")
+time.sleep(0.10)
+finish()
+""",
+    )
+    activities = []
+
+    result = executor.execute(
+        request(timeout_seconds=0, model="provider/model"),
+        activity_handler=activities.append,
+    )
+
+    assert result.status is AgentExecutionStatus.COMPLETED
+    assert result.telemetry.provider_liveness is not None
+    assert result.telemetry.provider_liveness.stall_suspected_count == 1
+    assert result.telemetry.provider_liveness.stall_recovered_count == 1
+    kinds = [activity.kind for activity in activities]
+    assert kinds.index(AgentExecutionActivityKind.STALL_SUSPECTED) < kinds.index(
+        AgentExecutionActivityKind.STALL_RECOVERED
+    )
+
+
+def test_process_completion_cannot_be_retroactively_classified_as_a_stall(
+    tmp_path: Path,
+) -> None:
+    executor = live_liveness_executor(
+        tmp_path,
+        FAKE_OPENCLAW_SETUP
+        + r"""
+time.sleep(0.35)
+finish()
+""",
+    )
+    # Let the exact process complete between observations, after the synthetic
+    # lease used by this test. The returned response owns the terminal state.
+    executor.liveness_poll_seconds = 0.50
+    activities = []
+
+    result = executor.execute(
+        request(timeout_seconds=0, model="provider/model"),
+        activity_handler=activities.append,
+    )
+
+    assert result.status is AgentExecutionStatus.COMPLETED
+    assert result.telemetry.provider_liveness is not None
+    assert not result.telemetry.provider_liveness.stalled
+    assert AgentExecutionActivityKind.PROVIDER_STALLED not in {
+        activity.kind for activity in activities
+    }
+
+
+def test_active_tool_suspends_provider_lease_until_tool_result(
+    tmp_path: Path,
+) -> None:
+    executor = live_liveness_executor(
+        tmp_path,
+        FAKE_OPENCLAW_SETUP
+        + r"""
+time.sleep(0.05)
+records.append({
+    "type": "message",
+    "message": {"role": "assistant", "content": [{
+        "type": "toolCall", "id": "tool-1", "name": "exec",
+        "arguments": {"command": "test"}
+    }]},
+})
+write_records()
+time.sleep(0.50)
+records.append({
+    "type": "message",
+    "message": {
+        "role": "toolResult", "toolCallId": "tool-1", "toolName": "exec",
+        "isError": False, "content": [{"type": "text", "text": "private tool output"}],
+        "details": {"status": "completed", "exitCode": 0},
+    },
+})
+write_records()
+append_raw("provider resumed")
+finish()
+""",
+    )
+    activities = []
+
+    result = executor.execute(
+        request(timeout_seconds=0, model="provider/model"),
+        activity_handler=activities.append,
+    )
+
+    assert result.status is AgentExecutionStatus.COMPLETED
+    assert result.telemetry.duration_ms >= 500
+    assert result.telemetry.provider_liveness is not None
+    assert result.telemetry.provider_liveness.tool_started_count == 1
+    assert result.telemetry.provider_liveness.tool_completed_count == 1
+    assert result.telemetry.provider_liveness.stall_suspected_count == 0
+    assert (
+        "private tool output"
+        not in result.telemetry.provider_liveness.model_dump_json()
+    )
+
+
+def test_missing_attributable_session_degrades_instead_of_guessing_stall(
+    tmp_path: Path,
+) -> None:
+    executor = live_liveness_executor(
+        tmp_path,
+        r"""
+import json
+import time
+time.sleep(0.40)
+print(json.dumps({
+    "payloads": [{"text": "{\\\"kind\\\":\\\"implementation_plan\\\"}"}],
+    "meta": {"agentMeta": {
+        "sessionId": "missing-session", "provider": "provider", "model": "model",
+        "usage": {"input": 1, "output": 1},
+    }},
+}))
+""",
+    )
+    activities = []
+
+    result = executor.execute(
+        request(timeout_seconds=0, model="provider/model"),
+        activity_handler=activities.append,
+    )
+
+    assert result.status is AgentExecutionStatus.COMPLETED
+    assert result.telemetry.provider_liveness is not None
+    assert result.telemetry.provider_liveness.mode == "degraded"
+    assert not result.telemetry.provider_liveness.lease_started
+    assert not result.telemetry.provider_liveness.stalled
+    assert AgentExecutionActivityKind.LIVENESS_DEGRADED in {
+        activity.kind for activity in activities
+    }
 
 
 def test_default_openclaw_process_can_be_interrupted_by_agent_identity(

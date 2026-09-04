@@ -22,6 +22,7 @@ from software_agent_team.artifacts import (
 )
 from software_agent_team.budgets import AgentBudget, ModelPricing
 from software_agent_team.execution import (
+    AgentExecutionActivityHandler,
     AgentExecutionRequest,
     AgentExecutionResult,
     AgentExecutionStatus,
@@ -140,7 +141,13 @@ class DynamicWorkflowExecutor:
         self._lock = threading.Lock()
         self._barrier = threading.Barrier(2) if verify_barrier else None
 
-    def execute(self, request: AgentExecutionRequest) -> AgentExecutionResult:
+    def execute(
+        self,
+        request: AgentExecutionRequest,
+        *,
+        activity_handler: AgentExecutionActivityHandler | None = None,
+    ) -> AgentExecutionResult:
+        del activity_handler
         with self._lock:
             self.requests.append(request)
             count = self._counts.get(request.role, 0) + 1
@@ -956,7 +963,13 @@ def test_workflow_records_openclaw_declared_timeout_as_resource_limit(
     source = initialize_source(tmp_path)
 
     class TimedOutExecutor:
-        def execute(self, request: AgentExecutionRequest) -> AgentExecutionResult:
+        def execute(
+            self,
+            request: AgentExecutionRequest,
+            *,
+            activity_handler: AgentExecutionActivityHandler | None = None,
+        ) -> AgentExecutionResult:
+            del activity_handler
             return AgentExecutionResult(
                 status=AgentExecutionStatus.TIMED_OUT,
                 error="OpenClaw reported an Agent timeout",

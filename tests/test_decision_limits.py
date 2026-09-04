@@ -27,7 +27,7 @@ def test_every_registered_limit_has_one_resolvable_authority() -> None:
     )
 
 
-def test_product_semantic_resources_are_user_or_discovery_authorities() -> None:
+def test_product_resource_authority_classes_remain_distinct() -> None:
     by_id = {item.id: item for item in DECISION_LIMIT_REGISTRY}
 
     assert by_id["user.task-cost-usd"].configurability is (
@@ -41,6 +41,12 @@ def test_product_semantic_resources_are_user_or_discovery_authorities() -> None:
     )
     assert by_id["provider.stream-inactivity"].visibility is (
         DecisionLimitVisibility.ON_TRIGGER
+    )
+    assert by_id["provider.stream-inactivity"].category is (
+        DecisionLimitCategory.INFRASTRUCTURE_GUARD
+    )
+    assert by_id["provider.stream-inactivity"].configurability is (
+        DecisionLimitConfigurability.MAINTAINER_POLICY
     )
 
 

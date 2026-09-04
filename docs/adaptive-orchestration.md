@@ -704,7 +704,11 @@ turn.
 Blocking model waits emit a concise heartbeat every ten seconds, record when a
 response returns, show contract validation, and explicitly announce the one
 bounded repair. These messages expose elapsed time and controller state, not
-prompts or hidden reasoning.
+prompts or hidden reasoning. The execution adapter additionally projects
+content-free provider stream and attributable tool lifecycle activity. A
+provider/model-aware renewable silence lease emits a policy-attributed warning,
+grace, recovery, or typed stall; Planning turn evidence preserves the same
+counters and never stores streamed response content as progress.
 
 ### Batch 3C: Dynamic Team Runtime
 
@@ -733,7 +737,11 @@ from the controller when no Tester exists, evidence from every approved
 Reviewer, one immutable quality commit, and complete manual-review coverage.
 The dynamic runner now binds each scheduler-approved Agent to its exact model,
 time authority, prompt, semantic repair limit, Git or read-only boundary, aggregate
-budget, execution record, and durable handoffs. Quality gates are shared once
+budget, execution record, and durable handoffs. Its persisted events distinguish
+provider activity, tool start/completion, degraded observation, suspected stall,
+grace recovery, and terminal provider stall. A confirmed stall preserves typed
+content-free evidence and may use only an already approved provider-failure
+fallback; total productive wall-clock time is not a stopping condition. Quality gates are shared once
 per immutable iteration, and every quality Agent must be downstream of every
 writer. Controlled evaluation timeout resolution remains separate from the
 product's provider-liveness and optional whole-run deadline. The Reviewer runtime keeps project

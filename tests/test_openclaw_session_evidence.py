@@ -21,6 +21,7 @@ from software_agent_team.execution import (
 from software_agent_team.openclaw_session_evidence import (
     OpenClawSessionEvidenceError,
     capture_openclaw_tool_evidence,
+    inspect_openclaw_session_activity,
 )
 from software_agent_team.teams import AgentCapability
 
@@ -239,6 +240,71 @@ def test_capture_records_a_complete_zero_tool_invocation(tmp_path: Path) -> None
 
     assert captured.record_count == 2
     assert captured.tool_calls == ()
+
+
+def test_activity_inspection_tracks_current_tool_lifecycle_without_content(
+    tmp_path: Path,
+) -> None:
+    invocation = request(prompt="Do not expose SECRET_ACTIVITY_CONTENT.")
+    records = [
+        session_record(),
+        user_record(invocation.prompt),
+        tool_call_record("current-call", command="read SECRET_ACTIVITY_CONTENT"),
+    ]
+    transcript = write_session_state(
+        tmp_path,
+        invocation=invocation,
+        records=records,
+    )
+
+    active = inspect_openclaw_session_activity(
+        state_dir=tmp_path,
+        agent_id=invocation.agent_id,
+        session_key=invocation.session_key,
+        prompt=invocation.prompt,
+    )
+
+    assert active is not None
+    assert active.trusted_record_count == 1
+    assert active.tool_started_count == 1
+    assert active.tool_completed_count == 0
+    assert active.active_tool_count == 1
+    assert "SECRET_ACTIVITY_CONTENT" not in repr(active)
+
+    records.append(tool_result_record("current-call", output="SECRET_ACTIVITY_CONTENT"))
+    transcript.write_text(
+        "\n".join(json.dumps(item) for item in records) + "\n",
+        encoding="utf-8",
+    )
+    completed = inspect_openclaw_session_activity(
+        state_dir=tmp_path,
+        agent_id=invocation.agent_id,
+        session_key=invocation.session_key,
+        prompt=invocation.prompt,
+    )
+
+    assert completed is not None
+    assert completed.trusted_record_count == 2
+    assert completed.tool_started_count == 1
+    assert completed.tool_completed_count == 1
+    assert completed.active_tool_count == 0
+    assert "SECRET_ACTIVITY_CONTENT" not in repr(completed)
+
+
+def test_activity_inspection_returns_none_until_current_session_exists(
+    tmp_path: Path,
+) -> None:
+    invocation = request()
+
+    assert (
+        inspect_openclaw_session_activity(
+            state_dir=tmp_path,
+            agent_id=invocation.agent_id,
+            session_key=invocation.session_key,
+            prompt=invocation.prompt,
+        )
+        is None
+    )
 
 
 def test_capture_keeps_only_the_executable_not_sensitive_exec_arguments(

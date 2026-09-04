@@ -73,8 +73,8 @@ On first use, SAT guides you through:
    Agent work assignments with their controller-derived write or read-only
    authority, proposed Agents, dependencies, permissions, explicit Review entry
    obligations for absolute guarantees and the exact meaning of each boundary,
-   resolved model profiles and fallback authority, timeout reasons,
-   concurrency, iterations, and budgets; and
+   resolved model profiles and fallback authority, time authority and liveness
+   policy, concurrency, iterations, and budgets; and
 8. Approval, a natural-language revision request, a supported safe edit, or
    cancellation before any execution Agent is created.
 
@@ -139,10 +139,14 @@ remains a separate, explicitly authorized action because it can incur usage.
 SAT announces the local inspection before waiting. A cold model-catalog check
 may use up to 90 seconds; that infrastructure boundary is separate from the
 30-second ordinary preflight-command limit and from model work. Product Agent
-calls have no fixed wall-clock duration. OpenClaw monitors provider-stream
-inactivity, while SAT applies a whole-run deadline only when the user explicitly
-authorized one for that task. If catalog inspection expires, SAT reports that
-no provider request was made and does not create an Agent.
+calls have no fixed wall-clock duration. OpenClaw retains its provider transport
+boundary, and SAT independently watches a private content-free signal for stream
+events plus attributable tool lifecycle. Trusted activity renews the lease
+regardless of total work time. Sustained silence first produces a visible warning
+and grace period, then stops only that invocation and preserves its evidence. SAT
+applies a whole-run deadline only when the user explicitly authorized one for
+that task. If catalog inspection expires, SAT reports that no provider request
+was made and does not create an Agent.
 
 See the [installation and configuration guide](docs/installation.md) for
 configuration paths, provider setup, saved defaults, and recovery boundaries.
