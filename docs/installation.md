@@ -107,6 +107,11 @@ configuration and state remain outside version storage. A sandbox image that
 builds but exits before OpenClaw can execute tools is rejected before SAT
 reports installation success or creates a new launcher.
 
+The staged installer removes the invoking process's `VIRTUAL_ENV` only from its
+child environment so uv resolves the candidate's own `.venv`; it preserves
+other explicitly supplied environment such as proxy settings, and it does not
+modify the caller's shell or another virtual environment on disk.
+
 If the stable release endpoint returns HTTP 404, SAT reports that the stable
 channel has no published or accessible verified release and stops without
 substituting `main`. Development evaluators may deliberately choose the separate

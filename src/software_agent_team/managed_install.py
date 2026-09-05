@@ -449,6 +449,7 @@ def stage_managed_target(
             "SAT_INSTALL_ROOT": str(paths.application_link),
             "SAT_INSTALL_METADATA_PATH": str(paths.installation_record),
         }
+        install_environment.pop("VIRTUAL_ENV", None)
         runner((str(stage / "scripts" / "install.sh"),), stage, install_environment)
         _validate_staged_application(stage, marker)
         schema_support = target.schema_support or _read_staged_schema_support(stage)

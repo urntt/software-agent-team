@@ -237,6 +237,46 @@ def test_standard_install_holds_the_lifecycle_lock_while_staging(
     assert observations
 
 
+def test_staged_install_drops_only_the_callers_active_virtual_environment(
+    tmp_path: Path,
+) -> None:
+    repository, revision = prepare_repository(tmp_path)
+    install_paths = paths(tmp_path)
+    caller_environment = {
+        **os.environ,
+        "VIRTUAL_ENV": "/tmp/bootstrap-helper/.venv",
+        "SAT_TEST_HANDOFF": "preserved",
+    }
+    install_environments: list[dict[str, str]] = []
+
+    def capture_install_environment(
+        command: tuple[str, ...] | list[str],
+        cwd: Path | None,
+        environment: dict[str, str] | None,
+    ) -> None:
+        if environment is not None:
+            install_environments.append(dict(environment))
+        subprocess.run(
+            list(command),
+            cwd=cwd,
+            env=environment,
+            check=True,
+            timeout=30,
+        )
+
+    stage_managed_target(
+        dev_target(repository, revision),
+        install_paths,
+        environment=caller_environment,
+        command_runner=capture_install_environment,
+    )
+
+    assert len(install_environments) == 1
+    assert "VIRTUAL_ENV" not in install_environments[0]
+    assert install_environments[0]["SAT_TEST_HANDOFF"] == "preserved"
+    assert caller_environment["VIRTUAL_ENV"] == "/tmp/bootstrap-helper/.venv"
+
+
 def test_dev_resolution_accepts_one_advertised_ref_and_exact_revision(
     tmp_path: Path,
 ) -> None:
