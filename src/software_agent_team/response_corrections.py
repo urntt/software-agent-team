@@ -256,45 +256,17 @@ class ResponseValidationDiagnostic(BaseModel):
         return _json_sha256(payload)
 
 
-class SemanticFieldReplacement(BaseModel):
-    """One model-authored replacement at a controller-approved JSON path."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    path: str = Field(min_length=2, max_length=500)
-    value: JsonValue
-
-    @field_validator("path")
-    @classmethod
-    def require_non_root_pointer(cls, value: str) -> str:
-        if value == "/" or not value.startswith("/"):
-            raise ValueError("semantic field replacement must target a field")
-        _decode_pointer(value)
-        return value
-
-
 class SemanticCorrectionEnvelope(BaseModel):
     """The only model submission accepted during targeted correction."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    kind: Literal["semantic_correction_v1"] = "semantic_correction_v1"
+    kind: Literal["semantic_correction_v2"] = "semantic_correction_v2"
     base_response_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    replacements: tuple[SemanticFieldReplacement, ...] = Field(
+    replacement_values: tuple[JsonValue, ...] = Field(
         min_length=1,
         max_length=MAX_CORRECTION_FIELDS,
     )
-
-    @field_validator("replacements")
-    @classmethod
-    def require_unique_paths(
-        cls,
-        values: tuple[SemanticFieldReplacement, ...],
-    ) -> tuple[SemanticFieldReplacement, ...]:
-        paths = [item.path for item in values]
-        if len(paths) != len(set(paths)):
-            raise ValueError("semantic correction paths must be unique")
-        return values
 
 
 class SemanticCorrectionRequestEvidence(BaseModel):
@@ -636,27 +608,40 @@ def build_semantic_correction_plan(
 def correction_prompt(plan: SemanticCorrectionPlan) -> str:
     """Render the small correction envelope contract without echoing content."""
 
-    issues = [
+    target_slots = [
         {
-            "path": issue.path,
-            "code": issue.code,
-            "invariant_id": issue.invariant_id,
-            "subjects": [item.model_dump(mode="json") for item in issue.subjects],
-            "message": issue.message,
+            "slot": index,
+            "target_path": path,
+            "errors": [
+                {
+                    "code": issue.code,
+                    "invariant_id": issue.invariant_id,
+                    "subjects": [
+                        item.model_dump(mode="json") for item in issue.subjects
+                    ],
+                    "message": issue.message,
+                }
+                for issue in plan.diagnostic.issues
+                if issue.path == path
+            ],
         }
-        for issue in plan.diagnostic.issues
-        if any(_paths_overlap(issue.path, path) for path in plan.evidence.target_paths)
+        for index, path in enumerate(plan.evidence.target_paths)
     ]
     schema = SemanticCorrectionEnvelope.model_json_schema()
+    value_schema = schema["properties"]["replacement_values"]
+    value_schema["minItems"] = len(plan.evidence.target_paths)
+    value_schema["maxItems"] = len(plan.evidence.target_paths)
     return (
-        "\n\nTARGETED_SEMANTIC_CORRECTION_V1\n"
+        "\n\nTARGETED_SEMANTIC_CORRECTION_V2\n"
         "The prior semantic JSON object was parsed and retained by the controller. "
         "Do not regenerate or repeat that object. Return only a correction envelope "
-        "matching CORRECTION_SCHEMA_JSON. Each target path must appear exactly once; "
-        "all other fields are immutable and will be preserved by the controller.\n"
+        "matching CORRECTION_SCHEMA_JSON. Provide one semantic value for each slot, "
+        "in exact slot order. Do not repeat or choose target paths; the controller "
+        "owns those bindings. All other fields are immutable and will be preserved "
+        "by the controller.\n"
         f"BASE_RESPONSE_SHA256\n{plan.evidence.base_response_sha256}\n"
-        "TARGET_PATHS_AND_ERRORS\n"
-        f"{json.dumps(issues, ensure_ascii=False, indent=2)}\n"
+        "TARGET_SLOTS_AND_ERRORS\n"
+        f"{json.dumps(target_slots, ensure_ascii=False, indent=2)}\n"
         "CORRECTION_SCHEMA_JSON\n"
         f"{json.dumps(schema, ensure_ascii=False, indent=2)}\n"
         "Return exactly one JSON object and no prose or Markdown fence."
@@ -672,19 +657,19 @@ def apply_semantic_correction(
     envelope = SemanticCorrectionEnvelope.model_validate(envelope_payload)
     if envelope.base_response_sha256 != plan.evidence.base_response_sha256:
         raise ValueError("semantic correction base digest does not match")
-    replacements = {item.path: item.value for item in envelope.replacements}
-    if set(replacements) != set(plan.evidence.target_paths):
-        missing = set(plan.evidence.target_paths) - set(replacements)
-        unexpected = set(replacements) - set(plan.evidence.target_paths)
-        detail = []
-        if missing:
-            detail.append("missing " + ", ".join(sorted(missing)))
-        if unexpected:
-            detail.append("unauthorized " + ", ".join(sorted(unexpected)))
-        raise ValueError("semantic correction paths differ: " + "; ".join(detail))
+    expected_count = len(plan.evidence.target_paths)
+    if len(envelope.replacement_values) != expected_count:
+        raise ValueError(
+            "semantic correction value count differs: "
+            f"expected {expected_count}, received {len(envelope.replacement_values)}"
+        )
 
     corrected: object = deepcopy(plan.base_payload)
-    for path in plan.evidence.target_paths:
+    for path, replacement_value in zip(
+        plan.evidence.target_paths,
+        envelope.replacement_values,
+        strict=True,
+    ):
         parts = _decode_pointer(path)
         parent = corrected
         for part in parts[:-1]:
@@ -702,11 +687,11 @@ def apply_semantic_correction(
                 )
         final = parts[-1]
         if isinstance(parent, dict):
-            parent[final] = deepcopy(replacements[path])
+            parent[final] = deepcopy(replacement_value)
         elif isinstance(parent, list):
             if not final.isdecimal() or int(final) >= len(parent):
                 raise ValueError(f"semantic correction index is invalid: {path}")
-            parent[int(final)] = deepcopy(replacements[path])
+            parent[int(final)] = deepcopy(replacement_value)
         else:
             raise ValueError(f"semantic correction target is not a container: {path}")
     assert isinstance(corrected, dict)

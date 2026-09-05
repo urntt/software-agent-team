@@ -555,6 +555,59 @@ def _normalize_planning_response_payload(
     proposal = normalized.get("proposal")
     if not isinstance(proposal, dict):
         return normalized, tuple(changes)
+    decisions = proposal.get("decisions")
+    assumption_decision_ids = proposal.get("assumption_decision_ids")
+    if isinstance(decisions, list):
+        canonical_id_counts: dict[str, int] = {}
+        for decision in decisions:
+            decision_id = decision.get("id") if isinstance(decision, dict) else None
+            if (
+                isinstance(decision_id, str)
+                and re.fullmatch(r"DECISION_[A-Za-z0-9_]+", decision_id) is not None
+            ):
+                canonical_id = decision_id.upper()
+                canonical_id_counts[canonical_id] = (
+                    canonical_id_counts.get(canonical_id, 0) + 1
+                )
+        for decision_index, decision in enumerate(decisions):
+            if not isinstance(decision, dict):
+                continue
+            decision_id = decision.get("id")
+            if (
+                not isinstance(decision_id, str)
+                or re.fullmatch(r"DECISION_[A-Za-z0-9_]+", decision_id) is None
+            ):
+                continue
+            canonical_id = decision_id.upper()
+            if (
+                canonical_id == decision_id
+                or canonical_id_counts.get(canonical_id) != 1
+            ):
+                continue
+            decision["id"] = canonical_id
+            changes.append(
+                f"canonicalized proposal.decisions[{decision_index}].id as "
+                f"{canonical_id}"
+            )
+        if isinstance(assumption_decision_ids, list):
+            for reference_index, reference in enumerate(assumption_decision_ids):
+                if (
+                    not isinstance(reference, str)
+                    or re.fullmatch(r"DECISION_[A-Za-z0-9_]+", reference) is None
+                ):
+                    continue
+                canonical_id = reference.upper()
+                if (
+                    canonical_id == reference
+                    or canonical_id_counts.get(canonical_id) != 1
+                ):
+                    continue
+                assumption_decision_ids[reference_index] = canonical_id
+                changes.append(
+                    "canonicalized "
+                    f"proposal.assumption_decision_ids[{reference_index}] as "
+                    f"{canonical_id}"
+                )
     acceptance_criteria = proposal.get("acceptance_criteria")
     tasks = proposal.get("tasks")
     agents = proposal.get("agents")

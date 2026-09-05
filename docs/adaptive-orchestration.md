@@ -191,6 +191,8 @@ may perform only these bounded, semantics-preserving normalizations:
   `tests`;
 - Canonicalize safe `workspace_scope` presentation such as `repository/` to
   `repository`;
+- Canonicalize the letter case of an otherwise well-formed `DECISION_` token
+  and its exact assumption reference when that canonical identity is unique;
 - Remove a schema-forbidden field only when removing it cannot grant or hide
   controller/evidence authority.
 
@@ -202,8 +204,9 @@ controller does not compare or adopt the model-authored description,
 verification text, or Review boundaries. Absolute paths, backslashes, parent
 traversal and ambiguous response bodies remain invalid. Protected authority
 fields are rejected rather than normalized away. Other model-owned defects are
-eligible only for digest-bound correction of the exact typed paths identified
-by validation; the model never regenerates the complete retained object.
+eligible only for digest-bound correction of the exact typed fields identified
+by validation; the model never regenerates the complete retained object or
+selects the fields it may replace.
 
 OpenClaw may deliver the semantic response and an ancillary tool diagnostic as
 separate visible payloads. The execution boundary preserves their original
@@ -215,9 +218,12 @@ payload count is therefore not mistaken for semantic object count.
 The pinned OpenClaw Agent CLI does not expose a response-schema parameter for a
 tool-using turn. SAT therefore compiles responses at the controller boundary.
 Transport failures and unlocated errors stop. A targetable model-owned failure
-produces a content-free diagnostic and a `semantic_correction_v1` envelope bound
-to the retained object's SHA-256. The model supplies values for exactly the
-listed JSON-pointer paths; every other value remains immutable. Product
+produces a content-free diagnostic and a `semantic_correction_v2` request bound
+to the retained object's SHA-256. The Controller assigns an ordered slot to
+each exact validator-owned JSON-pointer path; the model returns only one value
+per slot and cannot submit, widen, or reorder path authority. Derived parent
+errors are not copied into a child-field request. Every other value remains
+immutable. Product
 Planning continues only after every prior validator-owned invariant/subject
 identity disappears and a distinct targetable failure remains within the task
 budget. A newly exposed relational error is not treated as the same defect merely

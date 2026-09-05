@@ -261,9 +261,12 @@ A targetable model-owned failure becomes a versioned, content-free diagnostic
 with a validator-owned invariant ID, structured affected-entity subjects, and
 exact model-owned JSON-pointer paths. Human-readable error text explains the
 failure but never defines its identity. The controller retains the invalid semantic object,
-binds its canonical SHA-256 into a `semantic_correction_v1` envelope, and asks
-the model to return replacements for exactly those paths—never the complete
-object. It applies the replacements to a copy, preserves every unrelated field,
+binds its canonical SHA-256 into a `semantic_correction_v2` request, assigns the
+exact paths to ordered Controller-owned slots, and asks the model to return only
+the corresponding semantic values—never paths or the complete object. The
+runtime schema requires the exact slot count, so the model cannot widen field
+authority; the Controller applies each value to its pre-authorized path on a
+copy and preserves every unrelated field,
 and revalidates the compiled result. A writer's verified commit and snapshot
 are frozen before correction and must remain unchanged. A missing user-owned
 decision returns through the typed Planning-question path and never enters this

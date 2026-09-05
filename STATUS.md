@@ -61,7 +61,11 @@ removes only schema-forbidden fields that cannot carry controller/evidence
 authority and records each normalization. Profile-criterion ID collisions now
 remove only redundant echoes; a task-specific relation needed for requirement
 coverage receives a deterministic non-reserved ID while the canonical profile
-binding and all model-owned verification relationships remain intact. A
+binding and all model-owned verification relationships remain intact. An
+otherwise well-formed `DECISION_` token and its assumption reference are
+canonicalized to uppercase only when the resulting identity is unique, so a
+presentation-only case mismatch cannot spend another model call while a real
+collision still fails strict validation. A
 Reviewer response is also compiled against the exact TaskBrief-owned boundary
 scope before nested boundary content is validated. Extra checks outside that
 scope are removed with an explicit normalization instead of creating new
@@ -70,9 +74,11 @@ scope retain strict completeness, uniqueness, and evidence-grounding rules. A
 remaining targetable model-owned failure creates a diagnostic-v2 invariant ID,
 structured affected-entity subjects, precise model-owned JSON-pointer authority,
 and a SHA-bound
-`semantic_correction_v1` envelope; the controller retains every unrelated
-field, freezes a writer's verified Git result, and records each request and
-outcome. Planning relational validation no longer infers identity or correction
+`semantic_correction_v2` request. The Controller binds those paths to ordered
+slots and the model returns only corresponding semantic values, so it cannot
+select a parent container or otherwise widen correction authority. The
+controller retains every unrelated field, freezes a writer's verified Git
+result, and records each request and outcome. Planning relational validation no longer infers identity or correction
 scope from human error prose; unclassified relations fail closed. Product
 Planning and dynamic execution continue only after measurable
 improvement within the task budget, while the fixed evaluation surface retains
@@ -83,6 +89,15 @@ the latest distinct writer-coverage then verifier-authority failure now yields
 different fingerprints and narrows correction from four proposal containers to
 `tasks`, followed by the exact criterion `verification_agent_ids`; a corrected
 Reviewer provider run remains pending.
+
+A fresh installed run at `4095086` exposed the final v1 authority defect before
+this replacement: six lowercase-suffix decision IDs were the only invalid
+fields, but the correction response replaced the parent `decisions` container
+and was safely rejected as unauthorized. The current compiler instead resolves
+that collision-free token presentation deterministically; genuine multi-field
+correction accepts only an exact-length value vector whose paths remain
+Controller-owned. This root-cause repair is offline-verified but still requires
+a new provider-backed journey before the issue can close.
 
 A fresh installed run at `54b0275` reached approved Planning, a clean writer
 commit, and five passing deterministic gates. Its Reviewer returned ten
@@ -95,9 +110,11 @@ assessments in one pass and records removal of the five unapproved arrays. This
 proves the captured regression path offline, not a corrected provider journey;
 the issue remains open until a fresh run crosses Review without that call.
 
-Doctor, formatter, lint, and the complete **941-test offline suite** pass with
-the diagnostic-v2 change, including the exact captured two-invariant Planning
-sequence and a three-call correction regression. The managed stable resolver
+Doctor, formatter, lint, and the complete **945-test offline suite** pass with
+diagnostic-v2 and slot-bound semantic correction v2, including the exact
+captured two-invariant Planning sequence, a three-call correction regression,
+collision-safe decision-token canonicalization, and multi-field Controller path
+binding. The managed stable resolver
 also distinguishes an unpublished/inaccessible HTTP 404, refuses silent dev
 fallback, and explains the explicit dev-channel choice. Managed staging removes
 the caller's active `VIRTUAL_ENV` only from the install child so the candidate

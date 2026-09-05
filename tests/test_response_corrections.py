@@ -11,10 +11,12 @@ from software_agent_team.response_corrections import (
     ResponseIssueSubject,
     ResponseIssueSubjectKind,
     ResponseValidationDiagnostic,
+    ResponseValidationIssue,
     SemanticCorrectionOutcome,
     apply_semantic_correction,
     build_semantic_correction_plan,
     correction_outcome,
+    correction_prompt,
     deterministically_remove_forbidden_fields,
     diagnostic_from_invariant,
     diagnostic_from_message,
@@ -54,9 +56,9 @@ def test_plan_targets_only_invalid_fields_and_preserves_other_content() -> None:
 
     corrected = apply_semantic_correction(
         {
-            "kind": "semantic_correction_v1",
+            "kind": "semantic_correction_v2",
             "base_response_sha256": semantic_payload_sha256(payload),
-            "replacements": [{"path": "/summary", "value": "valid summary"}],
+            "replacement_values": ["valid summary"],
         },
         plan,
     )
@@ -67,7 +69,7 @@ def test_plan_targets_only_invalid_fields_and_preserves_other_content() -> None:
     }
 
 
-def test_correction_rejects_an_unauthorized_or_incomplete_path_set() -> None:
+def test_correction_rejects_a_value_count_that_cannot_bind_all_targets() -> None:
     payload: dict[str, object] = {
         "summary": "",
         "tasks": [],
@@ -79,19 +81,79 @@ def test_correction_rejects_an_unauthorized_or_incomplete_path_set() -> None:
     try:
         apply_semantic_correction(
             {
-                "kind": "semantic_correction_v1",
+                "kind": "semantic_correction_v2",
                 "base_response_sha256": semantic_payload_sha256(payload),
-                "replacements": [
-                    {"path": "/summary", "value": "valid"},
-                    {"path": "/preserved", "value": "changed"},
-                ],
+                "replacement_values": ["valid"],
             },
             plan,
         )
     except ValueError as error:
-        assert "paths differ" in str(error)
+        assert "value count differs: expected 2, received 1" in str(error)
     else:
-        raise AssertionError("unauthorized semantic correction was accepted")
+        raise AssertionError("incomplete semantic correction was accepted")
+
+
+def test_correction_prompt_keeps_path_authority_in_the_controller() -> None:
+    payload: dict[str, object] = {
+        "items": [{"id": "first"}, {"id": "second"}],
+        "preserved": "keep",
+    }
+    report = ResponseValidationDiagnostic(
+        failure_class=ResponseFailureClass.SEMANTIC_SCHEMA,
+        response_sha256=semantic_payload_sha256(payload),
+        issues=(
+            ResponseValidationIssue(
+                path="/items/0/id",
+                code="invalid_id",
+                invariant_id="invalid_id",
+                message="first ID is invalid",
+                authority=ResponseIssueAuthority.MODEL,
+            ),
+            ResponseValidationIssue(
+                path="/items/1/id",
+                code="invalid_id",
+                invariant_id="invalid_id",
+                message="second ID is invalid",
+                authority=ResponseIssueAuthority.MODEL,
+            ),
+            ResponseValidationIssue(
+                path="/items",
+                code="derived_container_error",
+                invariant_id="derived_container_error",
+                message="derived parent error must not be requested",
+                authority=ResponseIssueAuthority.MODEL,
+            ),
+        ),
+        correction_paths=("/items/0/id", "/items/1/id"),
+    )
+    plan = build_semantic_correction_plan(payload, report)
+    assert plan is not None
+
+    prompt = correction_prompt(plan)
+    schema = prompt.split("CORRECTION_SCHEMA_JSON\n", maxsplit=1)[1]
+
+    assert "TARGETED_SEMANTIC_CORRECTION_V2" in prompt
+    assert "Do not repeat or choose target paths" in prompt
+    assert "derived parent error must not be requested" not in prompt
+    assert '"target_path": "/items/0/id"' in prompt
+    assert '"target_path": "/items/1/id"' in prompt
+    assert '"replacement_values"' in schema
+    assert '"minItems": 2' in schema
+    assert '"maxItems": 2' in schema
+    assert '"path"' not in schema
+
+    corrected = apply_semantic_correction(
+        {
+            "kind": "semantic_correction_v2",
+            "base_response_sha256": semantic_payload_sha256(payload),
+            "replacement_values": ["FIRST", "SECOND"],
+        },
+        plan,
+    )
+    assert corrected == {
+        "items": [{"id": "FIRST"}, {"id": "SECOND"}],
+        "preserved": "keep",
+    }
 
 
 def test_outcome_requires_targeted_errors_to_disappear_and_rejects_cycles() -> None:
@@ -152,9 +214,9 @@ def test_outcome_distinguishes_a_new_container_error_from_the_fixed_child() -> N
     assert plan is not None
     corrected = apply_semantic_correction(
         {
-            "kind": "semantic_correction_v1",
+            "kind": "semantic_correction_v2",
             "base_response_sha256": semantic_payload_sha256(payload),
-            "replacements": [{"path": "/summary", "value": "valid"}],
+            "replacement_values": ["valid"],
         },
         plan,
     )

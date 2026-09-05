@@ -92,11 +92,9 @@ def semantic_correction_response(
 
     return json.dumps(
         {
-            "kind": "semantic_correction_v1",
+            "kind": "semantic_correction_v2",
             "base_response_sha256": semantic_payload_sha256(base_payload),
-            "replacements": [
-                {"path": path, "value": value} for path, value in replacements.items()
-            ],
+            "replacement_values": [replacements[path] for path in sorted(replacements)],
         }
     )
 
@@ -920,7 +918,7 @@ def test_dynamic_writer_targeted_correction_keeps_timeout_and_git_evidence(
     ]
     assert len(writer_requests) == 2
     assert [request.timeout_seconds for request in writer_requests] == [71, 71]
-    assert "TARGETED_SEMANTIC_CORRECTION_V1" in writer_requests[1].prompt
+    assert "TARGETED_SEMANTIC_CORRECTION_V2" in writer_requests[1].prompt
     assert "Do not regenerate or repeat that object" in writer_requests[1].prompt
     assert len(runner.execution_records) == 4
     writer_records = [
@@ -984,7 +982,7 @@ def test_dynamic_reviewer_repairs_a_zero_call_fabricated_tool_citation(
     ]
     assert len(reviewer_requests) == 2
     assert [request.timeout_seconds for request in reviewer_requests] == [47, 47]
-    assert "TARGETED_SEMANTIC_CORRECTION_V1" in reviewer_requests[1].prompt
+    assert "TARGETED_SEMANTIC_CORRECTION_V2" in reviewer_requests[1].prompt
     normalized_prompt = " ".join(reviewer_requests[1].prompt.split())
     assert "provide only a bounded result fragment" in normalized_prompt
     assert "deterministic command stdout/stderr from this immutable" in (

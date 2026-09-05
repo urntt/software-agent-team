@@ -364,11 +364,9 @@ def correction_response(
 ) -> str:
     return json.dumps(
         {
-            "kind": "semantic_correction_v1",
+            "kind": "semantic_correction_v2",
             "base_response_sha256": semantic_payload_sha256(base_payload),
-            "replacements": [
-                {"path": path, "value": value} for path, value in replacements.items()
-            ],
+            "replacement_values": [replacements[path] for path in sorted(replacements)],
         }
     )
 
@@ -734,6 +732,49 @@ def test_response_normalizer_canonicalizes_only_safe_presentation_variants() -> 
         "canonicalized proposal.tasks[0].expected_paths[1]",
         "canonicalized proposal.agents[0].workspace_scope",
     )
+
+
+def test_response_normalizer_canonicalizes_unambiguous_decision_tokens() -> None:
+    payload = proposal_response().model_dump(mode="json")
+    decisions = payload["proposal"]["decisions"]
+    canonical_ids = [decision["id"] for decision in decisions]
+    lowercase_ids = [
+        "DECISION_" + decision_id.removeprefix("DECISION_").lower()
+        for decision_id in canonical_ids
+    ]
+    for decision, lowercase_id in zip(decisions, lowercase_ids, strict=True):
+        decision["id"] = lowercase_id
+    payload["proposal"]["assumption_decision_ids"] = ["DECISION_scan_structure"]
+    original = json.loads(json.dumps(payload))
+
+    normalized, changes = planning._normalize_planning_response_payload(payload)
+    parsed = PlanningModelResponse.model_validate(normalized)
+
+    assert payload == original
+    assert parsed.proposal is not None
+    assert [decision.id for decision in parsed.proposal.decisions] == canonical_ids
+    assert parsed.proposal.assumption_decision_ids == ("DECISION_SCAN_STRUCTURE",)
+    assert len(changes) == len(canonical_ids) + 1
+    assert changes[0] == (
+        "canonicalized proposal.decisions[0].id as DECISION_ACCEPTANCE"
+    )
+    assert changes[-1] == (
+        "canonicalized proposal.assumption_decision_ids[0] as DECISION_SCAN_STRUCTURE"
+    )
+
+
+def test_response_normalizer_leaves_case_collisions_for_strict_rejection() -> None:
+    payload = proposal_response().model_dump(mode="json")
+    payload["proposal"]["decisions"][0]["id"] = "DECISION_COLLISION"
+    payload["proposal"]["decisions"][1]["id"] = "DECISION_collision"
+
+    normalized, changes = planning._normalize_planning_response_payload(payload)
+
+    assert normalized["proposal"]["decisions"][0]["id"] == "DECISION_COLLISION"
+    assert normalized["proposal"]["decisions"][1]["id"] == "DECISION_collision"
+    assert changes == ()
+    with pytest.raises(ValidationError, match="String should match pattern"):
+        PlanningModelResponse.model_validate(normalized)
 
 
 def test_response_normalizer_leaves_unsafe_paths_for_strict_rejection() -> None:
@@ -2154,13 +2195,10 @@ def test_invalid_complete_proposal_is_repaired_before_it_is_shown(
     invalid_payload = proposal_response().model_dump(mode="json")
     invalid_payload["proposal"]["tasks"][0]["owner_agent_id"] = "absent_agent"
     correction = {
-        "kind": "semantic_correction_v1",
+        "kind": "semantic_correction_v2",
         "base_response_sha256": semantic_payload_sha256(invalid_payload),
-        "replacements": [
-            {
-                "path": "/proposal/tasks/0/owner_agent_id",
-                "value": valid_payload["proposal"]["tasks"][0]["owner_agent_id"],
-            },
+        "replacement_values": [
+            valid_payload["proposal"]["tasks"][0]["owner_agent_id"],
         ],
     }
     executor = ScriptedAgentExecutor(
@@ -2192,8 +2230,9 @@ def test_invalid_complete_proposal_is_repaired_before_it_is_shown(
     assert "tasks reference unknown Agent owners: absent_agent" in (
         rejected.validation_error
     )
-    assert "TARGETED_SEMANTIC_CORRECTION_V1" in executor.requests[1].prompt
+    assert "TARGETED_SEMANTIC_CORRECTION_V2" in executor.requests[1].prompt
     assert "Do not regenerate or repeat that object" in executor.requests[1].prompt
+    assert "Do not repeat or choose target paths" in executor.requests[1].prompt
     assert rejected.response_validation is not None
     assert rejected.response_validation.correction_paths == (
         "/proposal/tasks/0/owner_agent_id",
@@ -2212,6 +2251,43 @@ def test_invalid_complete_proposal_is_repaired_before_it_is_shown(
     assert [
         (activity.attempt, activity.maximum_attempts) for activity in activities
     ] == [(1, 2), (1, 2), (1, 2), (2, 2), (2, 2), (2, 2)]
+
+
+def test_decision_identifier_case_is_normalized_without_a_model_call(
+    tmp_path: Path,
+) -> None:
+    payload = proposal_response().model_dump(mode="json")
+    for decision in payload["proposal"]["decisions"]:
+        decision_id = decision["id"]
+        decision["id"] = "DECISION_" + decision_id.removeprefix("DECISION_").lower()
+    payload["proposal"]["assumption_decision_ids"] = ["DECISION_scan_structure"]
+    executor = ScriptedAgentExecutor([json.dumps(payload)])
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(response_repair_limit=None),
+        clock=AdvancingClock(),
+    )
+
+    created = coordinator.start(
+        request(),
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+
+    assert created is not None
+    assert len(executor.requests) == 1
+    turn = store.load_turn(request().run_id, 1)
+    assert turn.response_validation is None
+    assert turn.response_normalizations is not None
+    assert (
+        len(turn.response_normalizations) == len(payload["proposal"]["decisions"]) + 1
+    )
+    assert turn.parsed_response is not None
+    assert turn.parsed_response.proposal is not None
+    assert turn.parsed_response.proposal.assumption_decision_ids == (
+        "DECISION_SCAN_STRUCTURE",
+    )
 
 
 def test_product_planning_continues_only_when_targeted_correction_improves(
