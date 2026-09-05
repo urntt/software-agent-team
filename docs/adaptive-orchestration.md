@@ -569,23 +569,34 @@ run
         └── attempt, activity, handoff, or quality check
 ```
 
-Every Agent can be `queued`, `ready`, `running`, `waiting_provider`,
-`waiting_dependency`, `blocked`, `paused`, `completed`, `interrupted`,
-`cancelled`, or `failed`. The interface shows elapsed time, the last meaningful
-safe summary, and the dependency or blocker when known. It does not invent a
-completion percentage when the controller lacks a meaningful denominator.
+Every Agent can be `queued`, `ready`, `running`, `launched`, `initializing`,
+`waiting_provider`, `tool_active`, `stopping`, `collecting_evidence`, `stopped`,
+`waiting_dependency`, `blocked`, `paused`, `completed`, `waiting_repair`,
+`interrupted`, `cancelled`, or `failed`. The interface shows elapsed time, the
+last meaningful safe summary, and the dependency or blocker when known. It does
+not invent a completion percentage when the controller lacks a meaningful
+denominator.
+
+The default standard projection includes one Controller-owned checkpoint
+snapshot for active work: the approved task and invocation phase, last verified
+checkpoint, next controller-known checkpoint, completed tool-operation count,
+Git snapshot, gate and Review state, known task-wide USD spend, authorization,
+and remaining amount. A checkpoint is an observed state transition or an
+approved future boundary; it is never partial model text, hidden reasoning, a
+tool argument, or an Agent-authored progress claim.
 
 ### Visibility Levels
 
 The user may change visibility during a run without changing execution:
 
-- `compact`: current run phase, important decisions, blockers, and terminal
-  result;
-- `standard` (default): compact information plus every Agent's state, current
-  safe activity, completed handoffs, gates, revisions, and elapsed time;
-- `detailed`: standard information plus attempt IDs, dependency transitions,
-  model route, budget consumption, tool categories, artifact references, and
-  controller validation events.
+- `compact`: current run phase, important recovery or stopping transitions,
+  budget warnings, blockers, and terminal result;
+- `standard` (default): compact information plus every Agent's approved task,
+  invocation phase, last and next checkpoints, completed work, Git/gate/Review
+  state, elapsed time, and task-wide budget snapshot;
+- `detailed`: standard information plus attempt IDs, exact initialization
+  checkpoints, dependency transitions, model route, trusted activity counters,
+  tool categories, artifact references, and controller validation events.
 
 Raw provider credentials, environment secrets, hidden reasoning, unbounded
 model output, and unrelated host information are excluded from every level.
@@ -817,10 +828,12 @@ The dynamic runner now binds each scheduler-approved Agent to its exact model,
 time authority, prompt, invocation-scoped typed submission schema,
 semantic-correction policy, Git or read-only boundary, aggregate
 budget, execution record, and durable handoffs. Its persisted events distinguish
-provider activity, tool start/completion, degraded observation, suspected stall,
-grace recovery, and terminal provider stall. A confirmed stall preserves typed
-content-free evidence and may use only an already approved provider-failure
-fallback; total productive wall-clock time is not a stopping condition. Quality gates are shared once
+launch, attributable initialization checkpoints, provider wait, tool activity,
+stopping, evidence collection, exact-process cleanup, and terminal status.
+Initialization and provider inactivity have separate warning, recovery, and
+typed failure authorities. A confirmed stall preserves typed content-free
+evidence and may use only an already approved provider-failure fallback; total
+productive wall-clock time is not a stopping condition. Quality gates are shared once
 per immutable iteration, and every quality Agent must be downstream of every
 writer. Controlled evaluation timeout resolution remains separate from the
 product's provider-liveness and optional whole-run deadline. The Reviewer runtime keeps project

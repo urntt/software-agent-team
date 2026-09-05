@@ -16,12 +16,15 @@ from pydantic import ValidationError
 
 from software_agent_team.artifacts import AgentRole, ArtifactKind
 from software_agent_team.execution import (
+    AgentExecutionActivity,
     AgentExecutionActivityKind,
     AgentExecutionError,
     AgentExecutionRequest,
+    AgentExecutionResult,
     AgentExecutionStatus,
     AgentExecutor,
     AgentTokenUsage,
+    InitializationLivenessPolicy,
     OpenClawSubprocessExecutor,
     ProviderLivenessPolicy,
     ScriptedAgentExecutor,
@@ -29,6 +32,11 @@ from software_agent_team.execution import (
     resolve_provider_liveness_policy,
     stable_agent_session_key,
     stable_session_key,
+)
+from software_agent_team.invocation_lifecycle import (
+    InitializationCheckpoint,
+    InvocationPhase,
+    InvocationStopReason,
 )
 from software_agent_team.process_lifecycle import ProcessLeaseStore
 from software_agent_team.submissions import (
@@ -103,6 +111,10 @@ def executor_with_clocks(
 def live_liveness_executor(
     tmp_path: Path,
     program: str,
+    *,
+    initialization_policy: InitializationLivenessPolicy | None = None,
+    process_grace_seconds: float = 1,
+    run_deadline_at: datetime | None = None,
 ) -> OpenClawSubprocessExecutor:
     binary = tmp_path / "fake-openclaw"
     binary.write_text(
@@ -121,9 +133,11 @@ def live_liveness_executor(
     return OpenClawSubprocessExecutor(
         openclaw_binary=binary,
         environment={"OPENCLAW_STATE_DIR": str(state)},
-        process_grace_seconds=1,
+        process_grace_seconds=process_grace_seconds,
+        run_deadline_at=run_deadline_at,
         liveness_poll_seconds=0.02,
         liveness_policies={policy.model: policy},
+        initialization_policy=initialization_policy,
     )
 
 
@@ -277,7 +291,7 @@ def test_user_run_deadline_bounds_product_call_by_remaining_time() -> None:
 
     command = observed["command"]
     assert command[command.index("--timeout") + 1] == "76"
-    assert observed["kwargs"]["timeout"] == 111
+    assert observed["kwargs"]["timeout"] == pytest.approx(110.001)
     assert result.status is AgentExecutionStatus.COMPLETED
 
 
@@ -338,6 +352,17 @@ def test_liveness_policy_follows_model_locality_and_provider_timeout() -> None:
     assert configured.suspect_after_seconds == 30
     assert extended.silence_seconds == 300
     assert extended.suspect_after_seconds == 270
+
+
+def test_lifecycle_activity_kind_must_match_its_exact_phase() -> None:
+    with pytest.raises(ValidationError, match="kind must match"):
+        AgentExecutionActivity(
+            kind=AgentExecutionActivityKind.INVOCATION_LAUNCHED,
+            agent_id="planner",
+            session_key="agent:planner:test",
+            elapsed_ms=0,
+            invocation_phase=InvocationPhase.INITIALIZING,
+        )
 
 
 def test_openclaw_adapter_captures_runtime_telemetry() -> None:
@@ -908,6 +933,15 @@ def test_sustained_provider_silence_warns_then_stops_exact_process(
     assert result.telemetry.provider_liveness.stalled
     assert result.telemetry.provider_liveness.stall_suspected_count == 1
     assert result.telemetry.provider_liveness.maximum_inactivity_ms >= 300
+    lifecycle = result.telemetry.invocation_lifecycle
+    assert lifecycle is not None
+    assert lifecycle.shutdown.reason is InvocationStopReason.PROVIDER_STALL
+    assert [transition.phase for transition in lifecycle.transitions][-3:] == [
+        InvocationPhase.STOPPING,
+        InvocationPhase.COLLECTING_EVIDENCE,
+        InvocationPhase.STOPPED,
+    ]
+    assert lifecycle.shutdown.cleanup_completed
     assert [
         activity.kind
         for activity in activities
@@ -1066,6 +1100,301 @@ print(json.dumps({
     }
 
 
+def test_slow_initialization_reaches_current_turn_before_provider_lease(
+    tmp_path: Path,
+) -> None:
+    executor = live_liveness_executor(
+        tmp_path,
+        "import time\ntime.sleep(0.18)\n"
+        + FAKE_OPENCLAW_SETUP
+        + "\ntime.sleep(0.05)\nappend_raw('ready')\nfinish()\n",
+        initialization_policy=InitializationLivenessPolicy(
+            no_progress_seconds=0.35,
+            stall_grace_seconds=0.10,
+            source="test initialization contract",
+        ),
+    )
+    activities = []
+
+    result = executor.execute(
+        request(timeout_seconds=0, model="provider/model"),
+        activity_handler=activities.append,
+    )
+
+    assert result.status is AgentExecutionStatus.COMPLETED
+    lifecycle = result.telemetry.invocation_lifecycle
+    assert lifecycle is not None
+    assert lifecycle.initialization.checkpoints == (
+        InitializationCheckpoint.PROCESS_LAUNCHED,
+        InitializationCheckpoint.SESSION_DIRECTORY,
+        InitializationCheckpoint.SESSION_INDEX,
+        InitializationCheckpoint.SESSION_BOUND,
+        InitializationCheckpoint.TRANSCRIPT_HEADER,
+        InitializationCheckpoint.CURRENT_TURN,
+    )
+    assert result.telemetry.provider_liveness is not None
+    assert result.telemetry.provider_liveness.lease_start_source == "current_turn"
+    phases = [transition.phase for transition in lifecycle.transitions]
+    assert phases.index(InvocationPhase.INITIALIZING) < phases.index(
+        InvocationPhase.PROVIDER_WAIT
+    )
+    assert phases[-2:] == [
+        InvocationPhase.COLLECTING_EVIDENCE,
+        InvocationPhase.STOPPED,
+    ]
+
+
+def test_initialization_no_progress_warns_stops_collects_and_reaps(
+    tmp_path: Path,
+) -> None:
+    executor = live_liveness_executor(
+        tmp_path,
+        "import time\ntime.sleep(30)\n",
+        initialization_policy=InitializationLivenessPolicy(
+            no_progress_seconds=0.22,
+            stall_grace_seconds=0.08,
+            source="test initialization contract",
+        ),
+        process_grace_seconds=0.10,
+    )
+    activities = []
+
+    result = executor.execute(
+        request(timeout_seconds=0, model="provider/model"),
+        activity_handler=activities.append,
+    )
+
+    assert result.status is AgentExecutionStatus.INITIALIZATION_STALLED
+    lifecycle = result.telemetry.invocation_lifecycle
+    assert lifecycle is not None
+    assert lifecycle.initialization.stalled
+    assert lifecycle.initialization.checkpoints == (
+        InitializationCheckpoint.PROCESS_LAUNCHED,
+    )
+    assert lifecycle.shutdown.reason is InvocationStopReason.INITIALIZATION_STALL
+    assert lifecycle.shutdown.terminate_sent
+    assert not lifecycle.shutdown.kill_sent
+    assert lifecycle.shutdown.cleanup_completed
+    lifecycle_kinds = [
+        activity.kind
+        for activity in activities
+        if activity.kind
+        in {
+            AgentExecutionActivityKind.INITIALIZATION_STALL_SUSPECTED,
+            AgentExecutionActivityKind.INITIALIZATION_STALLED,
+            AgentExecutionActivityKind.INVOCATION_STOPPING,
+            AgentExecutionActivityKind.INVOCATION_COLLECTING_EVIDENCE,
+            AgentExecutionActivityKind.INVOCATION_STOPPED,
+        }
+    ]
+    assert lifecycle_kinds == [
+        AgentExecutionActivityKind.INITIALIZATION_STALL_SUSPECTED,
+        AgentExecutionActivityKind.INITIALIZATION_STALLED,
+        AgentExecutionActivityKind.INVOCATION_STOPPING,
+        AgentExecutionActivityKind.INVOCATION_COLLECTING_EVIDENCE,
+        AgentExecutionActivityKind.INVOCATION_STOPPED,
+    ]
+    assert executor.interrupt("planner") == 0
+
+
+def test_initialization_checkpoint_recovers_visible_grace(tmp_path: Path) -> None:
+    prefix = r"""
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+agent_id = sys.argv[sys.argv.index("--agent") + 1]
+sessions = Path(os.environ["OPENCLAW_STATE_DIR"]) / "agents" / agent_id / "sessions"
+sessions.mkdir(parents=True, exist_ok=True)
+time.sleep(0.20)
+(sessions / "sessions.json").write_text("{}", encoding="utf-8")
+time.sleep(0.04)
+"""
+    executor = live_liveness_executor(
+        tmp_path,
+        prefix + FAKE_OPENCLAW_SETUP + "\nappend_raw('ready')\nfinish()\n",
+        initialization_policy=InitializationLivenessPolicy(
+            no_progress_seconds=0.25,
+            stall_grace_seconds=0.10,
+            source="test initialization contract",
+        ),
+    )
+    activities = []
+
+    result = executor.execute(
+        request(timeout_seconds=0, model="provider/model"),
+        activity_handler=activities.append,
+    )
+
+    assert result.status is AgentExecutionStatus.COMPLETED
+    lifecycle = result.telemetry.invocation_lifecycle
+    assert lifecycle is not None
+    assert lifecycle.initialization.stall_suspected_count == 1
+    assert lifecycle.initialization.stall_recovered_count == 1
+    kinds = [activity.kind for activity in activities]
+    assert kinds.index(
+        AgentExecutionActivityKind.INITIALIZATION_STALL_SUSPECTED
+    ) < kinds.index(AgentExecutionActivityKind.INITIALIZATION_STALL_RECOVERED)
+
+
+def test_initialization_observer_failure_stops_with_typed_process_evidence(
+    tmp_path: Path,
+) -> None:
+    program = r"""
+import os
+import sys
+import time
+from pathlib import Path
+
+agent_id = sys.argv[sys.argv.index("--agent") + 1]
+sessions = Path(os.environ["OPENCLAW_STATE_DIR"]) / "agents" / agent_id / "sessions"
+sessions.mkdir(parents=True, exist_ok=True)
+(sessions / "sessions.json").write_text("not-json", encoding="utf-8")
+time.sleep(30)
+"""
+    executor = live_liveness_executor(
+        tmp_path,
+        program,
+        initialization_policy=InitializationLivenessPolicy(
+            no_progress_seconds=0.40,
+            stall_grace_seconds=0.10,
+            source="test initialization contract",
+        ),
+        process_grace_seconds=0.10,
+    )
+    activities = []
+
+    result = executor.execute(
+        request(timeout_seconds=0, model="provider/model"),
+        activity_handler=activities.append,
+    )
+
+    assert result.status is AgentExecutionStatus.PROCESS_FAILED
+    lifecycle = result.telemetry.invocation_lifecycle
+    assert lifecycle is not None
+    assert lifecycle.initialization.mode == "degraded"
+    assert lifecycle.initialization.degradation_reason == (
+        "OpenClaw initialization progress could not be attributed"
+    )
+    assert lifecycle.shutdown.reason is InvocationStopReason.PROCESS_FAILURE
+    assert lifecycle.shutdown.cleanup_completed
+    assert AgentExecutionActivityKind.INITIALIZATION_LIVENESS_DEGRADED in {
+        activity.kind for activity in activities
+    }
+
+
+def test_missing_state_directory_fails_closed_and_reaps_process(tmp_path: Path) -> None:
+    binary = tmp_path / "unobservable-openclaw"
+    binary.write_text(
+        f"#!{sys.executable}\nimport time\ntime.sleep(30)\n",
+        encoding="utf-8",
+    )
+    binary.chmod(0o700)
+    executor = OpenClawSubprocessExecutor(
+        openclaw_binary=binary,
+        environment={},
+        process_grace_seconds=0.10,
+        liveness_poll_seconds=0.02,
+        initialization_policy=InitializationLivenessPolicy(
+            no_progress_seconds=0.40,
+            stall_grace_seconds=0.10,
+            source="test initialization contract",
+        ),
+    )
+
+    result = executor.execute(request(timeout_seconds=0, model="provider/model"))
+
+    assert result.status is AgentExecutionStatus.PROCESS_FAILED
+    lifecycle = result.telemetry.invocation_lifecycle
+    assert lifecycle is not None
+    assert lifecycle.initialization.mode == "unavailable"
+    assert lifecycle.shutdown.reason is InvocationStopReason.PROCESS_FAILURE
+    assert lifecycle.shutdown.terminate_sent
+    assert lifecycle.shutdown.cleanup_completed
+
+
+def test_user_deadline_stops_at_exact_remaining_time_and_preserves_reason(
+    tmp_path: Path,
+) -> None:
+    executor = live_liveness_executor(
+        tmp_path,
+        FAKE_OPENCLAW_SETUP + "\ntime.sleep(30)\n",
+        process_grace_seconds=0.10,
+        run_deadline_at=datetime.now(UTC) + timedelta(seconds=0.25),
+    )
+
+    result = executor.execute(request(timeout_seconds=0, model="provider/model"))
+
+    assert result.status is AgentExecutionStatus.TIMED_OUT
+    assert result.telemetry.duration_ms < 900
+    lifecycle = result.telemetry.invocation_lifecycle
+    assert lifecycle is not None
+    assert lifecycle.shutdown.reason is InvocationStopReason.RUN_DEADLINE
+    assert lifecycle.shutdown.cleanup_completed
+
+
+def test_controlled_evaluation_timeout_has_distinct_lifecycle_authority(
+    tmp_path: Path,
+) -> None:
+    executor = live_liveness_executor(
+        tmp_path,
+        FAKE_OPENCLAW_SETUP
+        + "\nfor index in range(300):\n"
+        + "    time.sleep(0.05)\n"
+        + "    append_raw(f'progress {index}')\n",
+        process_grace_seconds=0.10,
+    )
+
+    result = executor.execute(request(timeout_seconds=1, model="provider/model"))
+
+    assert result.status is AgentExecutionStatus.TIMED_OUT
+    lifecycle = result.telemetry.invocation_lifecycle
+    assert lifecycle is not None
+    assert lifecycle.shutdown.reason is InvocationStopReason.EVALUATION_TIMEOUT
+    assert lifecycle.shutdown.cleanup_completed
+
+
+def test_cancel_all_uses_user_cancel_reason_and_reaps_active_process(
+    tmp_path: Path,
+) -> None:
+    executor = live_liveness_executor(
+        tmp_path,
+        "import time\ntime.sleep(30)\n",
+        initialization_policy=InitializationLivenessPolicy(
+            no_progress_seconds=5,
+            stall_grace_seconds=1,
+            source="test initialization contract",
+        ),
+        process_grace_seconds=0.10,
+    )
+    observed: dict[str, AgentExecutionResult] = {}
+    worker = threading.Thread(
+        target=lambda: observed.setdefault(
+            "result",
+            executor.execute(request(timeout_seconds=0, model="provider/model")),
+        )
+    )
+    worker.start()
+    interrupted = 0
+    for _ in range(100):
+        interrupted = executor.interrupt_all()
+        if interrupted:
+            break
+        time.sleep(0.01)
+    worker.join(timeout=5)
+
+    assert interrupted == 1
+    assert not worker.is_alive()
+    result = observed["result"]
+    assert result.status is AgentExecutionStatus.INTERRUPTED
+    lifecycle = result.telemetry.invocation_lifecycle
+    assert lifecycle is not None
+    assert lifecycle.shutdown.reason is InvocationStopReason.USER_CANCEL
+    assert lifecycle.shutdown.cleanup_completed
+
+
 def test_default_openclaw_process_can_be_interrupted_by_agent_identity(
     tmp_path: Path,
 ) -> None:
@@ -1100,6 +1429,11 @@ def test_default_openclaw_process_can_be_interrupted_by_agent_identity(
     assert result.status is AgentExecutionStatus.INTERRUPTED
     assert result.telemetry.interrupted
     assert result.telemetry.timed_out is False
+    lifecycle = result.telemetry.invocation_lifecycle
+    assert lifecycle is not None
+    assert lifecycle.shutdown.reason is InvocationStopReason.USER_INTERRUPT
+    assert lifecycle.shutdown.terminate_sent
+    assert lifecycle.shutdown.cleanup_completed
     assert executor.interrupt("planner") == 0
 
 
@@ -1140,6 +1474,11 @@ def test_interrupt_escalates_when_the_process_ignores_termination(
     assert not worker.is_alive()
     result = observed["result"]
     assert result.status is AgentExecutionStatus.INTERRUPTED
+    lifecycle = result.telemetry.invocation_lifecycle
+    assert lifecycle is not None
+    assert lifecycle.shutdown.kill_sent
+    assert lifecycle.shutdown.signal == 9
+    assert lifecycle.shutdown.cleanup_completed
 
 
 def test_stable_session_key_is_deterministic_and_phase_scoped() -> None:

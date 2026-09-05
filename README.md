@@ -164,14 +164,23 @@ remains a separate, explicitly authorized action because it can incur usage.
 SAT announces the local inspection before waiting. A cold model-catalog check
 may use up to 90 seconds; that infrastructure boundary is separate from the
 30-second ordinary preflight-command limit and from model work. Product Agent
-calls have no fixed wall-clock duration. OpenClaw retains its provider transport
-boundary, and SAT independently watches a private content-free signal for stream
-events plus attributable tool lifecycle. Trusted activity renews the lease
-regardless of total work time. Sustained silence first produces a visible warning
-and grace period, then stops only that invocation and preserves its evidence. SAT
-applies a whole-run deadline only when the user explicitly authorized one for
-that task. If catalog inspection expires, SAT reports that no provider request
-was made and does not create an Agent.
+calls have no fixed wall-clock duration. Before provider waiting begins, SAT
+observes a finite sequence of attributable OpenClaw initialization checkpoints
+in its private state. Ninety seconds without checkpoint progress opens a visible
+final 15-second diagnostic window; continued inactivity stops only that
+invocation, while a late checkpoint recovers the same invocation. An unavailable
+or malformed initialization observer fails closed instead of leaving an
+unobservable process running.
+
+Once the current turn or its private provider stream is attributable, OpenClaw
+retains its provider transport boundary and SAT watches content-free stream and
+tool-lifecycle signals. Trusted activity renews the provider lease regardless of
+total work time. Sustained silence first produces a visible warning and grace
+period. Any stop then remains visibly `stopping` and `collecting_evidence` until
+the exact process outcome, output, evidence, and cleanup are known; only then is
+it `stopped` and terminal. SAT applies a whole-run deadline only when the user
+explicitly authorized one for that task. If catalog inspection expires, SAT
+reports that no provider request was made and does not create an Agent.
 
 Every live OpenClaw subprocess launched by SAT also receives a private durable
 ownership lease. Startup distinguishes invocations owned by another live SAT

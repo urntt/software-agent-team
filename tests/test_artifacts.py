@@ -1,5 +1,6 @@
 """Tests for task-brief and cross-Agent handoff contracts."""
 
+import json
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 
@@ -204,6 +205,63 @@ def valid_execution_payload() -> dict[str, object]:
     }
 
 
+def lifecycle_payload(
+    reason: str = "completed",
+    *,
+    exit_code: int | None = 0,
+    signal: int | None = None,
+) -> dict[str, object]:
+    """Return minimal coherent lifecycle evidence for record binding tests."""
+
+    return {
+        "schema_version": 1,
+        "transitions": [
+            {"sequence": 1, "phase": "launched", "elapsed_ms": 0},
+            {
+                "sequence": 2,
+                "phase": "stopping",
+                "elapsed_ms": 1,
+                "stop_reason": reason,
+            },
+            {
+                "sequence": 3,
+                "phase": "collecting_evidence",
+                "elapsed_ms": 2,
+                "stop_reason": reason,
+            },
+            {
+                "sequence": 4,
+                "phase": "stopped",
+                "elapsed_ms": 2,
+                "stop_reason": reason,
+            },
+        ],
+        "initialization": {
+            "mode": "unavailable",
+            "policy_source": "test lifecycle policy",
+            "no_progress_seconds": 90,
+            "stall_grace_seconds": 15,
+            "degradation_reason": "test adapter has no live process observer",
+        },
+        "shutdown": {
+            "reason": reason,
+            "shutdown_grace_seconds": 35,
+            "process_started": True,
+            "process_group_targeted": False,
+            "terminate_sent": signal is not None,
+            "kill_sent": signal == 9,
+            "exit_code": exit_code,
+            "signal": signal,
+            "stdout_collected": True,
+            "stderr_collected": True,
+            "session_evidence_status": "not_captured",
+            "submission_evidence_status": "not_configured",
+            "process_lease_released": True,
+            "cleanup_completed": True,
+        },
+    }
+
+
 def test_valid_agent_execution_record_is_accepted() -> None:
     record = AgentExecutionRecord.model_validate(valid_execution_payload())
 
@@ -238,6 +296,61 @@ def test_schema_three_execution_record_remains_readable_without_typed_transport(
     assert record.schema_version == 3
     assert record.response_transport is None
     assert record.submission_evidence is None
+
+
+def test_schema_four_execution_record_keeps_canonical_shape_without_lifecycle() -> None:
+    current = AgentExecutionRecord.model_validate(valid_execution_payload())
+    payload = current.model_dump(mode="json")
+    payload["schema_version"] = 4
+    assert "invocation_lifecycle" not in payload
+
+    restored = AgentExecutionRecord.model_validate_json(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    )
+
+    assert restored.schema_version == 4
+    assert restored.invocation_lifecycle is None
+    assert restored.model_dump(mode="json") == payload
+
+
+def test_current_execution_record_binds_lifecycle_reason_to_typed_status() -> None:
+    payload = valid_execution_payload()
+    payload["execution_status"] = "completed"
+    payload["invocation_lifecycle"] = lifecycle_payload()
+
+    record = AgentExecutionRecord.model_validate(payload)
+
+    assert record.invocation_lifecycle is not None
+    assert record.invocation_lifecycle.shutdown.reason.value == "completed"
+
+    mismatched = deepcopy(payload)
+    mismatched["invocation_lifecycle"] = lifecycle_payload("provider_failure")
+    with pytest.raises(ValidationError, match="does not match execution status"):
+        AgentExecutionRecord.model_validate(mismatched)
+
+
+def test_timed_out_execution_record_accepts_actual_termination_signal() -> None:
+    payload = valid_execution_payload()
+    payload.update(
+        {
+            "execution_status": "timed_out",
+            "timed_out": True,
+            "exit_code": -15,
+            "error": "Controlled evaluation timeout stopped the invocation.",
+            "response_artifact": None,
+            "invocation_lifecycle": lifecycle_payload(
+                "evaluation_timeout",
+                exit_code=None,
+                signal=15,
+            ),
+        }
+    )
+
+    record = AgentExecutionRecord.model_validate(payload)
+
+    assert record.exit_code == -15
+    assert record.invocation_lifecycle is not None
+    assert record.invocation_lifecycle.shutdown.signal == 15
 
 
 def test_execution_record_preserves_response_binding_and_stage_budget() -> None:

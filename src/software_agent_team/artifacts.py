@@ -19,6 +19,10 @@ from pydantic import (
     model_validator,
 )
 
+from software_agent_team.invocation_lifecycle import (
+    InvocationLifecycleEvidence,
+    InvocationStopReason,
+)
 from software_agent_team.response_corrections import (
     ResponseValidationDiagnostic,
     SemanticCorrectionOutcome,
@@ -30,7 +34,7 @@ from software_agent_team.submissions import (
 )
 from software_agent_team.versioning import SoftwareVersionReport
 
-ARTIFACT_SCHEMA_VERSION = 4
+ARTIFACT_SCHEMA_VERSION = 5
 MINIMUM_READABLE_ARTIFACT_SCHEMA_VERSION = 2
 COMMIT_PATTERN = r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
 AGENT_ID_PATTERN = r"^[a-z][a-z0-9_]*$"
@@ -65,6 +69,7 @@ class AgentExecutionStatus(StrEnum):
     PROCESS_FAILED = "process_failed"
     PROVIDER_FAILED = "provider_failed"
     PROVIDER_STALLED = "provider_stalled"
+    INITIALIZATION_STALLED = "initialization_stalled"
     TIMED_OUT = "timed_out"
     INVALID_RESPONSE = "invalid_response"
     LAUNCH_FAILED = "launch_failed"
@@ -379,7 +384,7 @@ class HandoffEnvelope(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, ARTIFACT_SCHEMA_VERSION] = ARTIFACT_SCHEMA_VERSION
+    schema_version: Literal[2, 3, 4, ARTIFACT_SCHEMA_VERSION] = ARTIFACT_SCHEMA_VERSION
     kind: Literal[ArtifactKind.HANDOFF_ENVELOPE] = ArtifactKind.HANDOFF_ENVELOPE
     run_id: str = Field(min_length=1, pattern=r"^[a-z0-9][a-z0-9_-]*$")
     team_id: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9_]*$")
@@ -442,7 +447,7 @@ class PhaseArtifact(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, ARTIFACT_SCHEMA_VERSION] = ARTIFACT_SCHEMA_VERSION
+    schema_version: Literal[2, 3, 4, ARTIFACT_SCHEMA_VERSION] = ARTIFACT_SCHEMA_VERSION
     kind: ArtifactKind
     run_id: str = Field(min_length=1, pattern=r"^[a-z0-9][a-z0-9_-]*$")
     team_id: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9_]*$")
@@ -601,7 +606,7 @@ class AgentExecutionRecord(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, ARTIFACT_SCHEMA_VERSION] = ARTIFACT_SCHEMA_VERSION
+    schema_version: Literal[2, 3, 4, ARTIFACT_SCHEMA_VERSION] = ARTIFACT_SCHEMA_VERSION
     kind: Literal[ArtifactKind.AGENT_EXECUTION_RECORD] = (
         ArtifactKind.AGENT_EXECUTION_RECORD
     )
@@ -623,6 +628,10 @@ class AgentExecutionRecord(BaseModel):
     exit_code: int | None = None
     timed_out: bool = False
     provider_liveness: ProviderLivenessEvidence | None = None
+    invocation_lifecycle: InvocationLifecycleEvidence | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     input_tokens: int | None = Field(default=None, ge=0)
     output_tokens: int | None = Field(default=None, ge=0)
     estimated_cost_usd: Decimal | None = Field(default=None, ge=0)
@@ -825,10 +834,10 @@ class AgentExecutionRecord(BaseModel):
             error=self.tool_evidence_error,
         )
         if self.timed_out:
-            if self.exit_code not in {None, 0}:
+            if self.exit_code is not None and self.exit_code > 0:
                 raise ValueError(
-                    "timed-out executions require no exit code or a zero "
-                    "OpenClaw wrapper exit"
+                    "timed-out executions require no exit, a zero wrapper exit, "
+                    "or a terminating signal"
                 )
             if self.error is None:
                 raise ValueError("timed-out executions must record an error")
@@ -863,6 +872,48 @@ class AgentExecutionRecord(BaseModel):
             raise ValueError(
                 "terminal liveness evidence requires provider-stalled status"
             )
+        if self.invocation_lifecycle is not None:
+            if self.schema_version < ARTIFACT_SCHEMA_VERSION:
+                raise ValueError(
+                    "legacy execution records cannot contain invocation lifecycle"
+                )
+            if self.execution_status is None:
+                raise ValueError(
+                    "invocation lifecycle requires a typed execution status"
+                )
+            allowed_reasons = {
+                AgentExecutionStatus.COMPLETED: {InvocationStopReason.COMPLETED},
+                AgentExecutionStatus.PROCESS_FAILED: {
+                    InvocationStopReason.PROCESS_FAILURE
+                },
+                AgentExecutionStatus.PROVIDER_FAILED: {
+                    InvocationStopReason.PROVIDER_FAILURE
+                },
+                AgentExecutionStatus.PROVIDER_STALLED: {
+                    InvocationStopReason.PROVIDER_STALL
+                },
+                AgentExecutionStatus.INITIALIZATION_STALLED: {
+                    InvocationStopReason.INITIALIZATION_STALL
+                },
+                AgentExecutionStatus.TIMED_OUT: {
+                    InvocationStopReason.RUN_DEADLINE,
+                    InvocationStopReason.EVALUATION_TIMEOUT,
+                },
+                AgentExecutionStatus.INVALID_RESPONSE: {
+                    InvocationStopReason.INVALID_RESPONSE
+                },
+                AgentExecutionStatus.LAUNCH_FAILED: {
+                    InvocationStopReason.LAUNCH_FAILURE
+                },
+                AgentExecutionStatus.INTERRUPTED: {
+                    InvocationStopReason.USER_INTERRUPT,
+                    InvocationStopReason.USER_CANCEL,
+                },
+            }[self.execution_status]
+            if self.invocation_lifecycle.shutdown.reason not in allowed_reasons:
+                raise ValueError(
+                    "invocation lifecycle reason does not match execution status"
+                )
         return self
 
 

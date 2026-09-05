@@ -12,9 +12,12 @@ import pytest
 
 from software_agent_team.budgets import AgentBudgetUsage
 from software_agent_team.integrity import canonical_model_sha256
+from software_agent_team.invocation_lifecycle import InvocationPhase
 from software_agent_team.progress import (
+    ProgressCheckpointSnapshot,
     ProgressEvent,
     ProgressEventKind,
+    RunEvent,
     RunEventJournal,
     RunEventVisibility,
     TerminalProgressRenderer,
@@ -380,6 +383,119 @@ def test_liveness_events_keep_stall_visible_and_stream_detail_optional(
     assert "no trusted activity for 90.0s" in compact_output.getvalue()
     assert "preserving its evidence" in compact_output.getvalue()
     assert "provider stream activity" in detailed_output.getvalue()
+
+
+def test_checkpoint_projection_is_hidden_in_compact_and_explained_in_standard(
+    tmp_path: Path,
+) -> None:
+    snapshot = ProgressCheckpointSnapshot(
+        approved_task_ids=("TASK_BUILD",),
+        invocation_phase=InvocationPhase.TOOL_ACTIVE,
+        last_verified_checkpoint="Completed 2 attributable tool operations",
+        next_controller_checkpoint="Observe completion of the active operation",
+        completed_tool_operations=2,
+        git_state="working",
+        gate_state="not_started",
+        review_state="not_applicable",
+        known_estimated_cost_usd="0.125",
+        authorized_cost_usd="1.00",
+        remaining_estimated_cost_usd="0.875",
+    )
+    compact_output = StringIO()
+    standard_output = StringIO()
+    for root, output, visibility in (
+        (tmp_path / "compact", compact_output, RunEventVisibility.COMPACT),
+        (tmp_path / "standard", standard_output, RunEventVisibility.STANDARD),
+    ):
+        journal(
+            root,
+            handler=TerminalProgressRenderer(
+                output=output,
+                visibility=visibility,
+                heartbeat_seconds=1,
+            ),
+        ).append(
+            ProgressEvent(
+                kind=ProgressEventKind.AGENT_TOOL_ACTIVE,
+                message="Builder has an attributable tool operation active",
+                agent_id="builder",
+                iteration=1,
+                attempt=1,
+                checkpoint=snapshot,
+            ),
+            lifecycle_revision=3,
+            phase=RunPhase.IMPLEMENTING,
+        )
+
+    assert "progress phase=" not in compact_output.getvalue()
+    rendered = standard_output.getvalue()
+    assert "phase=tool_active tasks=TASK_BUILD" in rendered
+    assert "Completed 2 attributable tool operations" in rendered
+    assert "next=Observe completion of the active operation" in rendered
+    assert "$0.125000 estimated / $1.00 authorized" in rendered
+
+
+def test_stopping_transition_prevents_stale_working_heartbeat(tmp_path: Path) -> None:
+    output = StringIO()
+    renderer = TerminalProgressRenderer(output=output, heartbeat_seconds=0.01)
+    event_journal = journal(tmp_path, handler=renderer)
+    event_journal.append(
+        ProgressEvent(
+            kind=ProgressEventKind.AGENT_WAITING_PROVIDER,
+            message="Builder is waiting for the approved model",
+            agent_id="builder",
+            iteration=1,
+            attempt=1,
+        ),
+        lifecycle_revision=3,
+        phase=RunPhase.IMPLEMENTING,
+    )
+    time.sleep(0.025)
+    event_journal.append(
+        ProgressEvent(
+            kind=ProgressEventKind.AGENT_STOPPING,
+            message="Builder is stopping after a user interrupt",
+            agent_id="builder",
+            iteration=1,
+            attempt=1,
+        ),
+        lifecycle_revision=3,
+        phase=RunPhase.IMPLEMENTING,
+    )
+    stopped_at = output.getvalue()
+    time.sleep(0.025)
+    renderer.close()
+
+    assert "waiting for the model" in stopped_at
+    assert "stopping after a user interrupt" in stopped_at
+    assert output.getvalue() == stopped_at
+
+
+def test_schema_two_run_event_round_trips_without_new_checkpoint_bytes(
+    tmp_path: Path,
+) -> None:
+    persisted = journal(tmp_path).append(
+        ProgressEvent(
+            kind=ProgressEventKind.AGENT_STARTED,
+            message="Builder started",
+            agent_id="builder",
+            iteration=1,
+            attempt=1,
+        ),
+        lifecycle_revision=2,
+        phase=RunPhase.IMPLEMENTING,
+    )
+    payload = persisted.model_dump(mode="json")
+    payload["schema_version"] = 2
+    assert "checkpoint" not in payload
+
+    restored = RunEvent.model_validate_json(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    )
+
+    assert restored.schema_version == 2
+    assert restored.checkpoint is None
+    assert restored.model_dump(mode="json") == payload
 
 
 def test_journal_persists_a_contiguous_hash_chain(tmp_path: Path) -> None:

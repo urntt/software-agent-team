@@ -209,8 +209,8 @@ For a provider with one generation slot, append
 independent verification: Tester and Reviewer still receive the same immutable
 commit and controller evidence, and neither sees the other role's report.
 
-The normal policy uses role-specific invocation timeouts from
-`configs/run-policy.json`:
+The checked-in controlled-evaluation policy uses role-specific invocation
+timeouts from `configs/run-policy.json`:
 
 | Roles | Per-invocation timeout |
 | --- | ---: |

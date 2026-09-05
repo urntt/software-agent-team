@@ -54,6 +54,11 @@ from software_agent_team.execution import (
     AgentExecutor,
 )
 from software_agent_team.integrity import canonical_model_sha256
+from software_agent_team.invocation_lifecycle import (
+    InitializationCheckpoint,
+    InvocationPhase,
+    InvocationStopReason,
+)
 from software_agent_team.model_metadata import ModelMetadataSource
 from software_agent_team.model_routing import (
     ModelProfile,
@@ -285,6 +290,18 @@ class PlanningActivityKind(StrEnum):
     """User-safe checkpoints around one blocking Planning invocation."""
 
     WAITING_MODEL = "waiting_model"
+    INVOCATION_LAUNCHED = "invocation_launched"
+    INITIALIZING = "initializing"
+    INITIALIZATION_PROGRESS = "initialization_progress"
+    INITIALIZATION_LIVENESS_DEGRADED = "initialization_liveness_degraded"
+    INITIALIZATION_STALL_SUSPECTED = "initialization_stall_suspected"
+    INITIALIZATION_STALL_RECOVERED = "initialization_stall_recovered"
+    INITIALIZATION_STALLED = "initialization_stalled"
+    PROVIDER_WAIT = "provider_wait"
+    TOOL_ACTIVE = "tool_active"
+    STOPPING = "stopping"
+    COLLECTING_EVIDENCE = "collecting_evidence"
+    STOPPED = "stopped"
     PROVIDER_ACTIVITY = "provider_activity"
     TOOL_STARTED = "tool_started"
     TOOL_COMPLETED = "tool_completed"
@@ -313,6 +330,11 @@ class PlanningActivity:
     stall_grace_seconds: float | None = None
     policy_source: str | None = None
     degradation_reason: str | None = None
+    invocation_phase: InvocationPhase | None = None
+    stop_reason: InvocationStopReason | None = None
+    initialization_checkpoint: InitializationCheckpoint | None = None
+    shutdown_grace_seconds: float | None = None
+    action: str | None = None
     budget_usage: AgentBudgetUsage | None = None
     budget_ceiling_usd: Decimal | None = None
     pricing_source: ModelMetadataSource | None = None
@@ -341,61 +363,130 @@ class TerminalPlanningProgress:
 
     def __call__(self, activity: PlanningActivity) -> None:
         if activity.kind is PlanningActivityKind.WAITING_MODEL:
-            self.close()
             attempt_label = (
                 str(activity.attempt)
                 if activity.maximum_attempts is None
                 else f"{activity.attempt}/{activity.maximum_attempts}"
             )
-            self._print(
-                f"● Planning is waiting for {activity.model} (attempt {attempt_label})"
+            self._start_waiting(
+                activity,
+                visible=(
+                    f"● Planning invocation is queued for {activity.model} "
+                    f"(attempt {attempt_label})"
+                ),
+                heartbeat=(f"Planning invocation is queued (attempt {attempt_label})"),
             )
-            stop = threading.Event()
-            started = self.monotonic()
-            thread = threading.Thread(
-                target=self._heartbeat,
-                args=(stop, started, activity),
-                name="sat-planning-progress",
-                daemon=True,
-            )
-            with self._lock:
-                self._waiting = (stop, thread)
-            thread.start()
             return
 
-        intermediate = {
-            PlanningActivityKind.PROVIDER_ACTIVITY: (
-                "  Planning received provider stream activity"
-            ),
-            PlanningActivityKind.TOOL_STARTED: (
-                "  Planning started a sandboxed tool operation"
-            ),
-            PlanningActivityKind.TOOL_COMPLETED: (
-                "  Planning completed a sandboxed tool operation"
-            ),
-            PlanningActivityKind.LIVENESS_DEGRADED: (
+        if activity.kind in {
+            PlanningActivityKind.INITIALIZING,
+            PlanningActivityKind.PROVIDER_WAIT,
+            PlanningActivityKind.TOOL_ACTIVE,
+        }:
+            label = {
+                PlanningActivityKind.INITIALIZING: (
+                    "Planning is initializing an attributable OpenClaw turn"
+                ),
+                PlanningActivityKind.PROVIDER_WAIT: (
+                    f"Planning is waiting for {activity.model}"
+                ),
+                PlanningActivityKind.TOOL_ACTIVE: (
+                    "Planning has attributable tool operations active"
+                ),
+            }[activity.kind]
+            self._start_waiting(
+                activity,
+                visible=f"● {label}",
+                heartbeat=label,
+            )
+            return
+
+        if activity.kind in {
+            PlanningActivityKind.STOPPING,
+            PlanningActivityKind.COLLECTING_EVIDENCE,
+            PlanningActivityKind.STOPPED,
+        }:
+            self.close()
+            reason = (
+                "unknown"
+                if activity.stop_reason is None
+                else activity.stop_reason.value
+            )
+            if activity.kind is PlanningActivityKind.STOPPING:
+                message = (
+                    f"■ Planning is stopping ({reason}); shutdown ceiling "
+                    f"{(activity.shutdown_grace_seconds or 0):g}s"
+                )
+            elif activity.kind is PlanningActivityKind.COLLECTING_EVIDENCE:
+                message = "… Planning process stopped; collecting attributable evidence"
+            else:
+                message = (
+                    f"■ Planning invocation stopped ({reason}); process outcome "
+                    "and evidence are known"
+                )
+            self._print(message)
+            return
+
+        checkpoint = (
+            "unknown"
+            if activity.initialization_checkpoint is None
+            else activity.initialization_checkpoint.value
+        )
+        intermediate: str | None = None
+        if activity.kind is PlanningActivityKind.INVOCATION_LAUNCHED:
+            intermediate = "  Planning entered the execution adapter"
+        elif activity.kind is PlanningActivityKind.INITIALIZATION_PROGRESS:
+            intermediate = f"  Planning initialization verified {checkpoint}"
+        elif activity.kind is PlanningActivityKind.INITIALIZATION_LIVENESS_DEGRADED:
+            intermediate = (
+                "! Planning initialization observer is unavailable: "
+                f"{activity.degradation_reason}"
+            )
+        elif activity.kind is PlanningActivityKind.INITIALIZATION_STALL_SUSPECTED:
+            intermediate = (
+                "? Planning initialization has made no progress for "
+                f"{(activity.inactivity_ms or 0) / 1000:.1f}s; waiting the final "
+                f"{(activity.stall_grace_seconds or 0):g}s diagnostic window"
+            )
+        elif activity.kind is PlanningActivityKind.INITIALIZATION_STALL_RECOVERED:
+            intermediate = (
+                f"↻ Planning initialization advanced to {checkpoint} during grace"
+            )
+        elif activity.kind is PlanningActivityKind.INITIALIZATION_STALLED:
+            intermediate = (
+                "! Planning initialization remained stalled; a typed stop follows"
+            )
+        elif activity.kind is PlanningActivityKind.PROVIDER_ACTIVITY:
+            intermediate = "  Planning received provider stream activity"
+        elif activity.kind is PlanningActivityKind.TOOL_STARTED:
+            intermediate = "  Planning started a sandboxed tool operation"
+        elif activity.kind is PlanningActivityKind.TOOL_COMPLETED:
+            intermediate = "  Planning completed a sandboxed tool operation"
+        elif activity.kind is PlanningActivityKind.LIVENESS_DEGRADED:
+            intermediate = (
                 "! Planning provider liveness is degraded: "
                 f"{activity.degradation_reason}; SAT will preserve the call "
                 "instead of inferring a stall from silence"
-            ),
-            PlanningActivityKind.STALL_SUSPECTED: (
+            )
+        elif activity.kind is PlanningActivityKind.STALL_SUSPECTED:
+            intermediate = (
                 "? Planning has produced no trusted activity for "
                 f"{(activity.inactivity_ms or 0) / 1000:.1f}s; checking the "
                 "private stream and attributable tool state for another "
                 f"{(activity.stall_grace_seconds or 0):g}s before interruption "
                 f"({activity.policy_source})"
-            ),
-            PlanningActivityKind.STALL_RECOVERED: (
+            )
+        elif activity.kind is PlanningActivityKind.STALL_RECOVERED:
+            intermediate = (
                 "↻ Planning provider activity recovered during the "
                 f"{(activity.stall_grace_seconds or 0):g}s grace period"
-            ),
-            PlanningActivityKind.PROVIDER_STALLED: (
-                "✗ Planning provider remained silent for "
-                f"{(activity.silence_seconds or 0):g}s; interrupting only this "
-                "invocation "
-                "and preserving its evidence"
-            ),
-        }.get(activity.kind)
+            )
+        elif activity.kind is PlanningActivityKind.PROVIDER_STALLED:
+            intermediate = (
+                "! Planning provider remained silent for "
+                f"{(activity.silence_seconds or 0):g}s; stall confirmed and the "
+                "separate stopping transition follows"
+            )
         if intermediate is not None:
             self._print(intermediate)
             return
@@ -454,23 +545,45 @@ class TerminalPlanningProgress:
             waiting[0].set()
             waiting[1].join(timeout=min(self.heartbeat_seconds, 0.2))
 
+    def _start_waiting(
+        self,
+        activity: PlanningActivity,
+        *,
+        visible: str,
+        heartbeat: str,
+    ) -> None:
+        self.close()
+        self._print(visible)
+        stop = threading.Event()
+        started = self.monotonic()
+        attempt_label = (
+            str(activity.attempt)
+            if activity.maximum_attempts is None
+            else f"{activity.attempt}/{activity.maximum_attempts}"
+        )
+        thread = threading.Thread(
+            target=self._heartbeat,
+            args=(stop, started, heartbeat, attempt_label),
+            name="sat-planning-progress",
+            daemon=True,
+        )
+        with self._lock:
+            self._waiting = (stop, thread)
+        thread.start()
+
     def _heartbeat(
         self,
         stop: threading.Event,
         started: float,
-        activity: PlanningActivity,
+        message: str,
+        attempt_label: str,
     ) -> None:
         while not stop.wait(self.heartbeat_seconds):
             elapsed = max(0, int(self.monotonic() - started))
             minutes, seconds = divmod(elapsed, 60)
-            attempt_label = (
-                str(activity.attempt)
-                if activity.maximum_attempts is None
-                else f"{activity.attempt}/{activity.maximum_attempts}"
-            )
             self._print(
-                "  Planning is still waiting for the model "
-                f"(attempt {attempt_label}): {minutes:02d}:{seconds:02d} elapsed"
+                f"  {message} (attempt {attempt_label}): "
+                f"{minutes:02d}:{seconds:02d} elapsed"
             )
 
     def _print(self, value: str) -> None:
@@ -4519,6 +4632,42 @@ class AdaptivePlanningCoordinator:
         model: str,
     ) -> None:
         kind = {
+            AgentExecutionActivityKind.INVOCATION_LAUNCHED: (
+                PlanningActivityKind.INVOCATION_LAUNCHED
+            ),
+            AgentExecutionActivityKind.INVOCATION_INITIALIZING: (
+                PlanningActivityKind.INITIALIZING
+            ),
+            AgentExecutionActivityKind.INITIALIZATION_PROGRESS: (
+                PlanningActivityKind.INITIALIZATION_PROGRESS
+            ),
+            AgentExecutionActivityKind.INITIALIZATION_LIVENESS_DEGRADED: (
+                PlanningActivityKind.INITIALIZATION_LIVENESS_DEGRADED
+            ),
+            AgentExecutionActivityKind.INITIALIZATION_STALL_SUSPECTED: (
+                PlanningActivityKind.INITIALIZATION_STALL_SUSPECTED
+            ),
+            AgentExecutionActivityKind.INITIALIZATION_STALL_RECOVERED: (
+                PlanningActivityKind.INITIALIZATION_STALL_RECOVERED
+            ),
+            AgentExecutionActivityKind.INITIALIZATION_STALLED: (
+                PlanningActivityKind.INITIALIZATION_STALLED
+            ),
+            AgentExecutionActivityKind.INVOCATION_PROVIDER_WAIT: (
+                PlanningActivityKind.PROVIDER_WAIT
+            ),
+            AgentExecutionActivityKind.INVOCATION_TOOL_ACTIVE: (
+                PlanningActivityKind.TOOL_ACTIVE
+            ),
+            AgentExecutionActivityKind.INVOCATION_STOPPING: (
+                PlanningActivityKind.STOPPING
+            ),
+            AgentExecutionActivityKind.INVOCATION_COLLECTING_EVIDENCE: (
+                PlanningActivityKind.COLLECTING_EVIDENCE
+            ),
+            AgentExecutionActivityKind.INVOCATION_STOPPED: (
+                PlanningActivityKind.STOPPED
+            ),
             AgentExecutionActivityKind.PROVIDER_STREAM: (
                 PlanningActivityKind.PROVIDER_ACTIVITY
             ),
@@ -4552,6 +4701,11 @@ class AdaptivePlanningCoordinator:
                 stall_grace_seconds=activity.stall_grace_seconds,
                 policy_source=activity.policy_source,
                 degradation_reason=activity.degradation_reason,
+                invocation_phase=activity.invocation_phase,
+                stop_reason=activity.stop_reason,
+                initialization_checkpoint=activity.initialization_checkpoint,
+                shutdown_grace_seconds=activity.shutdown_grace_seconds,
+                action=activity.action,
             ),
         )
 

@@ -17,6 +17,7 @@ from software_agent_team.artifacts import (
     AgentToolCallEvidence,
     AgentToolCallOutcome,
 )
+from software_agent_team.invocation_lifecycle import InitializationCheckpoint
 
 _MAX_INDEX_BYTES = 4 * 1024 * 1024
 _MAX_SESSION_BYTES = 16 * 1024 * 1024
@@ -49,6 +50,19 @@ class OpenClawSessionActivity:
     tool_started_count: int
     tool_completed_count: int
     active_tool_count: int
+
+
+@dataclass(frozen=True)
+class OpenClawInitializationObservation:
+    """Highest attributable checkpoint reached while OpenClaw starts one turn."""
+
+    checkpoint: InitializationCheckpoint
+
+
+@dataclass(frozen=True)
+class _OpenClawSessionSnapshot:
+    observation: OpenClawInitializationObservation
+    invocation_records: tuple[dict[str, object], ...] | None = None
 
 
 def _sha256(value: bytes) -> str:
@@ -160,11 +174,19 @@ def _message_text(content: object) -> str | None:
     return "\n".join(parts) if parts else None
 
 
+def _message_matches_prompt(content: object, prompt_sha256: str) -> bool:
+    """Match an attributable turn by digest without retaining prompt text."""
+
+    text = _message_text(content)
+    return text is not None and _sha256(text.encode("utf-8")) == prompt_sha256
+
+
 def _current_invocation_records(
     records: tuple[dict[str, object], ...],
     *,
     prompt: str,
 ) -> tuple[dict[str, object], ...]:
+    prompt_sha256 = _sha256(prompt.encode("utf-8"))
     matches: list[int] = []
     for index, record in enumerate(records):
         if record.get("type") != "message":
@@ -172,7 +194,7 @@ def _current_invocation_records(
         message = record.get("message")
         if not isinstance(message, dict) or message.get("role") != "user":
             continue
-        if _message_text(message.get("content")) == prompt:
+        if _message_matches_prompt(message.get("content"), prompt_sha256):
             matches.append(index)
     if not matches:
         raise OpenClawSessionEvidenceError(
@@ -198,19 +220,14 @@ def _current_invocation_records(
     return invocation
 
 
-def inspect_openclaw_session_activity(
+def _inspect_openclaw_session_snapshot(
     *,
     state_dir: Path,
     agent_id: str,
     session_key: str,
     prompt: str,
-) -> OpenClawSessionActivity | None:
-    """Inspect current-turn lifecycle records without retaining their content.
-
-    ``None`` means OpenClaw has not materialized the attributable session yet.
-    Once it exists, malformed identities or records fail closed so callers can
-    expose degraded liveness instead of guessing that a provider is active.
-    """
+) -> _OpenClawSessionSnapshot | None:
+    """Resolve one exact session boundary and its highest safe checkpoint."""
 
     candidate = state_dir / "agents" / agent_id / "sessions"
     try:
@@ -218,6 +235,11 @@ def inspect_openclaw_session_activity(
     except FileNotFoundError:
         return None
     sessions = _require_safe_session_directory(state_dir, agent_id)
+    snapshot = _OpenClawSessionSnapshot(
+        observation=OpenClawInitializationObservation(
+            checkpoint=InitializationCheckpoint.SESSION_DIRECTORY
+        )
+    )
     try:
         index_payload = _read_regular_file(
             sessions / "sessions.json",
@@ -226,12 +248,17 @@ def inspect_openclaw_session_activity(
         )
     except OpenClawSessionEvidenceError as error:
         if not (sessions / "sessions.json").exists():
-            return None
+            return snapshot
         raise error
     index = _load_json_object(index_payload, label="OpenClaw session index")
+    snapshot = _OpenClawSessionSnapshot(
+        observation=OpenClawInitializationObservation(
+            checkpoint=InitializationCheckpoint.SESSION_INDEX
+        )
+    )
     entry = index.get(session_key)
     if entry is None:
-        return None
+        return snapshot
     if not isinstance(entry, dict):
         raise OpenClawSessionEvidenceError("OpenClaw session index entry is invalid")
     session_id = entry.get("sessionId")
@@ -254,20 +281,25 @@ def inspect_openclaw_session_activity(
         raise OpenClawSessionEvidenceError(
             "OpenClaw session index points outside the expected transcript"
         )
+    snapshot = _OpenClawSessionSnapshot(
+        observation=OpenClawInitializationObservation(
+            checkpoint=InitializationCheckpoint.SESSION_BOUND
+        )
+    )
     if not expected_path.exists():
-        return None
+        return snapshot
     transcript = _read_regular_file(
         expected_path,
         limit=_MAX_SESSION_BYTES,
         label="OpenClaw session transcript",
     )
     if not transcript:
-        return None
+        return snapshot
     complete_lines = transcript.splitlines()
     if not transcript.endswith(b"\n"):
         complete_lines = complete_lines[:-1]
     if not complete_lines:
-        return None
+        return snapshot
     if len(complete_lines) > _MAX_SESSION_RECORDS:
         raise OpenClawSessionEvidenceError(
             "OpenClaw session transcript has an invalid record count"
@@ -281,23 +313,86 @@ def inspect_openclaw_session_activity(
         raise OpenClawSessionEvidenceError(
             "OpenClaw transcript identity differs from the invocation session"
         )
-    try:
-        invocation = _current_invocation_records(records, prompt=prompt)
-    except OpenClawSessionEvidenceError as error:
-        if "prompt is absent" in str(error) or "no completed response" in str(error):
-            matches = [
-                index
-                for index, record in enumerate(records)
-                if record.get("type") == "message"
-                and isinstance(record.get("message"), dict)
-                and record["message"].get("role") == "user"
-                and _message_text(record["message"].get("content")) == prompt
-            ]
-            if not matches:
-                return None
-            invocation = records[matches[-1] :]
-        else:
-            raise
+    snapshot = _OpenClawSessionSnapshot(
+        observation=OpenClawInitializationObservation(
+            checkpoint=InitializationCheckpoint.TRANSCRIPT_HEADER
+        )
+    )
+    prompt_sha256 = _sha256(prompt.encode("utf-8"))
+    matches = [
+        index
+        for index, record in enumerate(records)
+        if record.get("type") == "message"
+        and isinstance(record.get("message"), dict)
+        and record["message"].get("role") == "user"
+        and _message_matches_prompt(record["message"].get("content"), prompt_sha256)
+    ]
+    if not matches:
+        return snapshot
+    start = matches[-1]
+    end = len(records)
+    for index in range(start + 1, len(records)):
+        record = records[index]
+        message = record.get("message")
+        if (
+            record.get("type") == "message"
+            and isinstance(message, dict)
+            and message.get("role") == "user"
+        ):
+            end = index
+            break
+    return _OpenClawSessionSnapshot(
+        observation=OpenClawInitializationObservation(
+            checkpoint=InitializationCheckpoint.CURRENT_TURN
+        ),
+        invocation_records=records[start:end],
+    )
+
+
+def inspect_openclaw_initialization(
+    *,
+    state_dir: Path,
+    agent_id: str,
+    session_key: str,
+    prompt: str,
+) -> OpenClawInitializationObservation | None:
+    """Return finite launch-to-turn progress without retaining session content."""
+
+    snapshot = _inspect_openclaw_session_snapshot(
+        state_dir=state_dir,
+        agent_id=agent_id,
+        session_key=session_key,
+        prompt=prompt,
+    )
+    return None if snapshot is None else snapshot.observation
+
+
+def inspect_openclaw_session_activity(
+    *,
+    state_dir: Path,
+    agent_id: str,
+    session_key: str,
+    prompt: str,
+) -> OpenClawSessionActivity | None:
+    """Inspect current-turn lifecycle records without retaining their content.
+
+    ``None`` means the exact current turn is not ready. Malformed identities or
+    records fail closed so callers never guess that a provider is active.
+    """
+
+    snapshot = _inspect_openclaw_session_snapshot(
+        state_dir=state_dir,
+        agent_id=agent_id,
+        session_key=session_key,
+        prompt=prompt,
+    )
+    if (
+        snapshot is None
+        or snapshot.observation.checkpoint is not InitializationCheckpoint.CURRENT_TURN
+        or snapshot.invocation_records is None
+    ):
+        return None
+    invocation = snapshot.invocation_records
 
     started: set[str] = set()
     completed: set[str] = set()

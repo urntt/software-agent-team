@@ -41,7 +41,9 @@ from software_agent_team.dynamic_workflow import (
     DynamicWorkflowOutcome,
 )
 from software_agent_team.execution import (
+    AgentExecutionActivity,
     AgentExecutionActivityHandler,
+    AgentExecutionActivityKind,
     AgentExecutionRequest,
     AgentExecutionResult,
     AgentExecutionStatus,
@@ -49,6 +51,11 @@ from software_agent_team.execution import (
     AgentTokenUsage,
 )
 from software_agent_team.integrity import canonical_model_sha256
+from software_agent_team.invocation_lifecycle import (
+    InitializationCheckpoint,
+    InvocationPhase,
+    InvocationStopReason,
+)
 from software_agent_team.planning import (
     AdaptiveImplementationPlan,
     AgentTimeoutResolution,
@@ -399,7 +406,7 @@ class AdaptiveExecutor:
         *,
         activity_handler: AgentExecutionActivityHandler | None = None,
     ) -> AgentExecutionResult:
-        del activity_handler
+        self._emit_start(request, activity_handler)
         self.requests.append(request)
         count = self.counts.get(request.agent_id, 0) + 1
         self.counts[request.agent_id] = count
@@ -435,6 +442,11 @@ class AdaptiveExecutor:
             ).model_dump_json()
         elif request.agent_id == "reviewer":
             if self.timeout_second_review and count == 2:
+                self._emit_stop(
+                    request,
+                    activity_handler,
+                    InvocationStopReason.EVALUATION_TIMEOUT,
+                )
                 return AgentExecutionResult(
                     status=AgentExecutionStatus.TIMED_OUT,
                     error="review exceeded its approved invocation timeout",
@@ -537,6 +549,7 @@ class AdaptiveExecutor:
             tool_call_id=submission_call.id,
             payload_sha256=canonical_json_sha256(submission_payload),
         )
+        self._emit_stop(request, activity_handler, InvocationStopReason.COMPLETED)
         return AgentExecutionResult(
             status=AgentExecutionStatus.COMPLETED,
             response_text=body,
@@ -573,6 +586,81 @@ class AdaptiveExecutor:
             ),
             submission_evidence=submission_evidence,
         )
+
+    @staticmethod
+    def _emit_start(
+        request: AgentExecutionRequest,
+        activity_handler: AgentExecutionActivityHandler | None,
+    ) -> None:
+        if activity_handler is None:
+            return
+        for kind, phase, checkpoint in (
+            (
+                AgentExecutionActivityKind.INVOCATION_LAUNCHED,
+                InvocationPhase.LAUNCHED,
+                None,
+            ),
+            (
+                AgentExecutionActivityKind.INVOCATION_INITIALIZING,
+                InvocationPhase.INITIALIZING,
+                InitializationCheckpoint.PROCESS_LAUNCHED,
+            ),
+            (
+                AgentExecutionActivityKind.INVOCATION_PROVIDER_WAIT,
+                InvocationPhase.PROVIDER_WAIT,
+                InitializationCheckpoint.CURRENT_TURN,
+            ),
+        ):
+            activity_handler(
+                AgentExecutionActivity(
+                    kind=kind,
+                    agent_id=request.agent_id,
+                    session_key=request.session_key,
+                    model=request.model,
+                    elapsed_ms=0,
+                    invocation_phase=phase,
+                    initialization_checkpoint=checkpoint,
+                )
+            )
+
+    @staticmethod
+    def _emit_stop(
+        request: AgentExecutionRequest,
+        activity_handler: AgentExecutionActivityHandler | None,
+        reason: InvocationStopReason,
+    ) -> None:
+        if activity_handler is None:
+            return
+        for kind, phase in (
+            (
+                AgentExecutionActivityKind.INVOCATION_STOPPING,
+                InvocationPhase.STOPPING,
+            ),
+            (
+                AgentExecutionActivityKind.INVOCATION_COLLECTING_EVIDENCE,
+                InvocationPhase.COLLECTING_EVIDENCE,
+            ),
+            (
+                AgentExecutionActivityKind.INVOCATION_STOPPED,
+                InvocationPhase.STOPPED,
+            ),
+        ):
+            activity_handler(
+                AgentExecutionActivity(
+                    kind=kind,
+                    agent_id=request.agent_id,
+                    session_key=request.session_key,
+                    model=request.model,
+                    elapsed_ms=10,
+                    invocation_phase=phase,
+                    stop_reason=reason,
+                    shutdown_grace_seconds=(
+                        1
+                        if kind is AgentExecutionActivityKind.INVOCATION_STOPPING
+                        else None
+                    ),
+                )
+            )
 
 
 def coordinator(

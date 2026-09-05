@@ -412,10 +412,16 @@ workspaces/<run_id>/
 └── detached self-contained Git clone and generated result
 ```
 
-Artifact schema v4 adds the independent response-transport identity and bound
-submission evidence. Schema v3 introduced typed response diagnostics,
-deterministic normalization, targeted-correction requests, and correction
-outcomes; SAT retains read support for schema v2 and v3. All readable versions
+Artifact schema v5 adds a versioned, content-free invocation lifecycle to
+execution telemetry. It records phase transitions, initialization liveness, the
+typed stop authority, signal or exit outcome, evidence collection, process-lease
+release, and cleanup completion. Schema v4 added the independent
+response-transport identity and bound submission evidence; schema v3 introduced
+typed response diagnostics, deterministic normalization, targeted-correction
+requests, and correction outcomes. SAT retains read support for schema v2
+through v4. Optional compatibility fields omit themselves when absent, so
+loading and serializing historical evidence preserves its canonical bytes. All
+readable versions
 attribute handoffs, execution telemetry, and Agent-owned artifacts to run-scoped Agent IDs. The Agent namespace prevents two Agents with
 the same output kind from claiming the same immutable path. On every write and
 load, the store checks producer identity, stage membership, capability, and
@@ -584,12 +590,17 @@ reports without software identity remain readable and keep their original
 canonical serialization.
 
 Every compatibility-workflow status update is first enriched into a versioned
-`RunEvent`. It stores its run ID, contiguous sequence, UTC timestamp, lifecycle
-revision, category, minimum visibility, phase, and attributable Agent attempt
-when applicable. Dynamic events additionally record queue/readiness/provider
-wait/repair/terminal state, safe activity, dependencies, capability, stage,
-approved model, route-switch references, duration, invocation reference, and
-aggregate budget snapshot.
+`RunEvent`. Schema v3 adds an optional Controller-owned checkpoint snapshot and
+retains canonical read support for schema v2 events. It stores its run ID,
+contiguous sequence, UTC timestamp, lifecycle revision, category, minimum
+visibility, phase, and attributable Agent attempt when applicable. Dynamic
+events additionally record queue/readiness/initialization/provider/tool/stop/
+evidence-collection/repair/terminal state, safe activity, dependencies,
+capability, stage, approved model, route-switch references, duration, invocation
+reference, and aggregate budget snapshot. The checkpoint projection binds the
+approved task, invocation phase, last verified and next controller-known
+checkpoints, completed tool operations, Git/gate/Review state, and known,
+authorized, and remaining USD amounts without embedding model or tool content.
 Heartbeat lifecycle follows controller state even when the ending event is
 hidden by the selected visibility: an invocation-completed checkpoint stops
 provider waiting, and a terminal Agent event closes every semantic-repair
@@ -870,6 +881,17 @@ when investigating it rather than editing artifacts in place.
   liveness: OpenClaw retains its transport boundary, while SAT observes the
   pinned runtime's private raw stream without reading or persisting its content
   and counts only attributable current-turn assistant and tool lifecycle records.
+- Before that provider lease can exist, the same execution adapter owns a finite
+  invocation lifecycle: `launched → initializing → provider_wait ↔ tool_active →
+  stopping → collecting_evidence → stopped`. The initialization observer accepts
+  only monotonic, attributable checkpoints: process launch, session directory,
+  session index, session binding, transcript header, and exact current-turn
+  prompt digest; the private provider stream is an equivalent ready boundary.
+  Prompt content is neither retained nor emitted. Ninety seconds without a new
+  checkpoint enters a visible final 15-second grace, after which the exact
+  process is stopped as `initialization_stall`. Observer absence or malformed
+  attribution fails closed as `process_failure`; neither outcome is rewritten as
+  provider silence.
 - SAT resolves a provider/model-aware inactivity lease from the pinned runtime's
   cloud or local stream boundary. An explicit provider request timeout replaces
   that implicit boundary, including when it deliberately gives a slow model more
@@ -904,9 +926,13 @@ when investigating it rather than editing artifacts in place.
 - Model compatibility supplements do not set a second provider-transport
   timeout. Product calls pass either zero or the remaining user deadline to
   OpenClaw; controlled evaluations pass their frozen timeout. The outer
-  subprocess boundary applies bounded process-shutdown grace after a deadline,
-  evaluation timeout, user interrupt, or confirmed provider stall; that cleanup
-  guard is not productive work time.
+  subprocess boundary applies a 35-second process-shutdown grace after a
+  deadline, evaluation timeout, user interrupt, user cancel, initialization
+  stall, confirmed provider stall, or process failure; that cleanup guard is not
+  productive work time. Every path first enters `stopping`, synchronously sends
+  SIGTERM to the exact process group, escalates to SIGKILL only after the grace,
+  reaps the process, collects stdout/stderr and typed session/submission evidence,
+  releases its process lease, and only then emits `stopped` and a terminal result.
 - Controlled evaluations check their frozen token, duration, call, and cost
   thresholds after each invocation. Ordinary tasks use one USD authorization;
   their call, token, duration, Agent, and iteration counts remain telemetry.

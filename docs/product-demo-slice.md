@@ -214,20 +214,23 @@ partial workspace as a successful delivery.
 The deterministic controller emits user-safe events. The terminal displays:
 
 - The current lifecycle phase and every approved Agent's attributable state;
-- Completed phase summaries;
-- Elapsed time while waiting for a provider response;
+- The active Agent's approved tasks, last verified checkpoint, and next
+  controller-known checkpoint;
+- Completed tool-operation, Git, gate, and Review state;
+- Elapsed time while initializing, waiting for a provider response, using a
+  tool, stopping, or collecting evidence;
 - Verified Git snapshot summaries;
 - Quality-gate counts and results;
 - Independent review status;
 - Revision reasons and iteration count;
 - Budget or provider failures in plain language.
 
-The approved plan permits between one and three implementation iterations.
-Revision is enabled only when the approved limit exceeds one. Controller
+An ordinary product plan does not impose a fixed iteration budget. Controller
 evidence, rather than an Agent request by itself, decides whether another
 iteration is justified; repeated blockers, no relevant Git change, terminal
-failures, and budget exhaustion still stop the run. The advanced frozen
-evaluation path keeps its separate two-iteration comparison limit.
+failures, and exhausted USD or deadline authorization still stop the run. The
+advanced frozen evaluation path keeps its separate two-iteration comparison
+limit.
 
 For example:
 

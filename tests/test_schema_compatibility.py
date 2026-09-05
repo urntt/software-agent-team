@@ -12,6 +12,10 @@ from software_agent_team.artifacts import (
     MINIMUM_READABLE_ARTIFACT_SCHEMA_VERSION,
 )
 from software_agent_team.planning import PLANNING_SCHEMA_VERSION
+from software_agent_team.progress import (
+    MINIMUM_READABLE_RUN_EVENT_SCHEMA_VERSION,
+    RUN_EVENT_SCHEMA_VERSION,
+)
 from software_agent_team.schema_compatibility import (
     CANDIDATE_COMPATIBILITY_PROTOCOL_VERSION,
     CandidateCompatibilityEnvelope,
@@ -56,11 +60,17 @@ def test_registry_declares_only_intentional_historical_read_support() -> None:
     assert artifact.current == artifact.maximum_readable == ARTIFACT_SCHEMA_VERSION
     assert artifact.supports(MINIMUM_READABLE_ARTIFACT_SCHEMA_VERSION)
 
+    run_event = support[SchemaFamily.RUN_EVENT]
+    assert run_event.minimum_readable == MINIMUM_READABLE_RUN_EVENT_SCHEMA_VERSION
+    assert run_event.current == run_event.maximum_readable == RUN_EVENT_SCHEMA_VERSION
+    assert run_event.supports(2)
+
     for family, item in support.items():
         if family in {
             SchemaFamily.USER_CONFIGURATION,
             SchemaFamily.PLANNING,
             SchemaFamily.ARTIFACT,
+            SchemaFamily.RUN_EVENT,
         }:
             continue
         assert item.minimum_readable == item.current == item.maximum_readable

@@ -11,6 +11,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
 from typing import Literal, Self, TextIO
@@ -21,9 +22,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from software_agent_team.artifacts import IterationDecision
 from software_agent_team.budgets import AgentBudgetUsage
 from software_agent_team.integrity import canonical_model_sha256
+from software_agent_team.invocation_lifecycle import InvocationPhase
 from software_agent_team.run_control import RunPhase
 
-RUN_EVENT_SCHEMA_VERSION = 2
+RUN_EVENT_SCHEMA_VERSION = 3
+MINIMUM_READABLE_RUN_EVENT_SCHEMA_VERSION = 2
 EVENTS_DIRECTORY = "events"
 EVENT_FILENAME_PATTERN = re.compile(r"^(?P<sequence>[0-9]{6})\.json$")
 DEFAULT_PROGRESS_HEARTBEAT_SECONDS = 10.0
@@ -38,14 +41,25 @@ class ProgressEventKind(StrEnum):
     AGENT_QUEUED = "agent_queued"
     AGENT_READY = "agent_ready"
     AGENT_STARTED = "agent_started"
+    AGENT_INVOCATION_LAUNCHED = "agent_invocation_launched"
+    AGENT_INITIALIZING = "agent_initializing"
+    AGENT_INITIALIZATION_PROGRESS = "agent_initialization_progress"
+    AGENT_INITIALIZATION_LIVENESS_DEGRADED = "agent_initialization_liveness_degraded"
+    AGENT_INITIALIZATION_STALL_SUSPECTED = "agent_initialization_stall_suspected"
+    AGENT_INITIALIZATION_STALL_RECOVERED = "agent_initialization_stall_recovered"
+    AGENT_INITIALIZATION_STALLED = "agent_initialization_stalled"
     AGENT_WAITING_PROVIDER = "agent_waiting_provider"
     AGENT_PROVIDER_ACTIVITY = "agent_provider_activity"
+    AGENT_TOOL_ACTIVE = "agent_tool_active"
     AGENT_TOOL_STARTED = "agent_tool_started"
     AGENT_TOOL_COMPLETED = "agent_tool_completed"
     AGENT_LIVENESS_DEGRADED = "agent_liveness_degraded"
     AGENT_STALL_SUSPECTED = "agent_stall_suspected"
     AGENT_STALL_RECOVERED = "agent_stall_recovered"
     AGENT_PROVIDER_STALLED = "agent_provider_stalled"
+    AGENT_STOPPING = "agent_stopping"
+    AGENT_COLLECTING_EVIDENCE = "agent_collecting_evidence"
+    AGENT_STOPPED = "agent_stopped"
     AGENT_INVOCATION_COMPLETED = "agent_invocation_completed"
     MODEL_ROUTE_SWITCHED = "model_route_switched"
     AGENT_COMPLETED = "agent_completed"
@@ -94,7 +108,13 @@ class AgentRunState(StrEnum):
     QUEUED = "queued"
     READY = "ready"
     RUNNING = "running"
+    LAUNCHED = "launched"
+    INITIALIZING = "initializing"
     WAITING_PROVIDER = "waiting_provider"
+    TOOL_ACTIVE = "tool_active"
+    STOPPING = "stopping"
+    COLLECTING_EVIDENCE = "collecting_evidence"
+    STOPPED = "stopped"
     WAITING_DEPENDENCY = "waiting_dependency"
     BLOCKED = "blocked"
     PAUSED = "paused"
@@ -153,6 +173,41 @@ _EVENT_METADATA: dict[
         RunEventVisibility.STANDARD,
         AgentRunState.RUNNING,
     ),
+    ProgressEventKind.AGENT_INVOCATION_LAUNCHED: (
+        RunEventCategory.AGENT,
+        RunEventVisibility.STANDARD,
+        AgentRunState.LAUNCHED,
+    ),
+    ProgressEventKind.AGENT_INITIALIZING: (
+        RunEventCategory.AGENT,
+        RunEventVisibility.STANDARD,
+        AgentRunState.INITIALIZING,
+    ),
+    ProgressEventKind.AGENT_INITIALIZATION_PROGRESS: (
+        RunEventCategory.AGENT,
+        RunEventVisibility.DETAILED,
+        AgentRunState.INITIALIZING,
+    ),
+    ProgressEventKind.AGENT_INITIALIZATION_LIVENESS_DEGRADED: (
+        RunEventCategory.AGENT,
+        RunEventVisibility.COMPACT,
+        AgentRunState.INITIALIZING,
+    ),
+    ProgressEventKind.AGENT_INITIALIZATION_STALL_SUSPECTED: (
+        RunEventCategory.AGENT,
+        RunEventVisibility.COMPACT,
+        AgentRunState.INITIALIZING,
+    ),
+    ProgressEventKind.AGENT_INITIALIZATION_STALL_RECOVERED: (
+        RunEventCategory.AGENT,
+        RunEventVisibility.STANDARD,
+        AgentRunState.INITIALIZING,
+    ),
+    ProgressEventKind.AGENT_INITIALIZATION_STALLED: (
+        RunEventCategory.AGENT,
+        RunEventVisibility.COMPACT,
+        AgentRunState.INITIALIZING,
+    ),
     ProgressEventKind.AGENT_WAITING_PROVIDER: (
         RunEventCategory.AGENT,
         RunEventVisibility.STANDARD,
@@ -162,6 +217,11 @@ _EVENT_METADATA: dict[
         RunEventCategory.AGENT,
         RunEventVisibility.DETAILED,
         AgentRunState.WAITING_PROVIDER,
+    ),
+    ProgressEventKind.AGENT_TOOL_ACTIVE: (
+        RunEventCategory.AGENT,
+        RunEventVisibility.STANDARD,
+        AgentRunState.TOOL_ACTIVE,
     ),
     ProgressEventKind.AGENT_TOOL_STARTED: (
         RunEventCategory.AGENT,
@@ -191,7 +251,22 @@ _EVENT_METADATA: dict[
     ProgressEventKind.AGENT_PROVIDER_STALLED: (
         RunEventCategory.AGENT,
         RunEventVisibility.COMPACT,
-        AgentRunState.FAILED,
+        AgentRunState.WAITING_PROVIDER,
+    ),
+    ProgressEventKind.AGENT_STOPPING: (
+        RunEventCategory.AGENT,
+        RunEventVisibility.COMPACT,
+        AgentRunState.STOPPING,
+    ),
+    ProgressEventKind.AGENT_COLLECTING_EVIDENCE: (
+        RunEventCategory.AGENT,
+        RunEventVisibility.COMPACT,
+        AgentRunState.COLLECTING_EVIDENCE,
+    ),
+    ProgressEventKind.AGENT_STOPPED: (
+        RunEventCategory.AGENT,
+        RunEventVisibility.COMPACT,
+        AgentRunState.STOPPED,
     ),
     ProgressEventKind.AGENT_INVOCATION_COMPLETED: (
         RunEventCategory.AGENT,
@@ -307,14 +382,25 @@ _EVENT_METADATA: dict[
 
 _ATTEMPT_EVENT_KINDS = {
     ProgressEventKind.AGENT_STARTED,
+    ProgressEventKind.AGENT_INVOCATION_LAUNCHED,
+    ProgressEventKind.AGENT_INITIALIZING,
+    ProgressEventKind.AGENT_INITIALIZATION_PROGRESS,
+    ProgressEventKind.AGENT_INITIALIZATION_LIVENESS_DEGRADED,
+    ProgressEventKind.AGENT_INITIALIZATION_STALL_SUSPECTED,
+    ProgressEventKind.AGENT_INITIALIZATION_STALL_RECOVERED,
+    ProgressEventKind.AGENT_INITIALIZATION_STALLED,
     ProgressEventKind.AGENT_WAITING_PROVIDER,
     ProgressEventKind.AGENT_PROVIDER_ACTIVITY,
+    ProgressEventKind.AGENT_TOOL_ACTIVE,
     ProgressEventKind.AGENT_TOOL_STARTED,
     ProgressEventKind.AGENT_TOOL_COMPLETED,
     ProgressEventKind.AGENT_LIVENESS_DEGRADED,
     ProgressEventKind.AGENT_STALL_SUSPECTED,
     ProgressEventKind.AGENT_STALL_RECOVERED,
     ProgressEventKind.AGENT_PROVIDER_STALLED,
+    ProgressEventKind.AGENT_STOPPING,
+    ProgressEventKind.AGENT_COLLECTING_EVIDENCE,
+    ProgressEventKind.AGENT_STOPPED,
     ProgressEventKind.AGENT_INVOCATION_COMPLETED,
     ProgressEventKind.MODEL_ROUTE_SWITCHED,
     ProgressEventKind.AGENT_COMPLETED,
@@ -376,12 +462,61 @@ class RunEventReference(BaseModel):
         return cleaned
 
 
+class ProgressCheckpointSnapshot(BaseModel):
+    """Controller-owned, content-free answer to current/finished/next/cost."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    approved_task_ids: tuple[str, ...]
+    invocation_phase: InvocationPhase
+    last_verified_checkpoint: str = Field(min_length=1, max_length=300)
+    next_controller_checkpoint: str = Field(min_length=1, max_length=300)
+    completed_tool_operations: int = Field(default=0, ge=0)
+    git_state: Literal["not_applicable", "verified", "working", "changed"]
+    gate_state: Literal["not_started", "running", "passed", "failed"]
+    review_state: Literal[
+        "not_applicable",
+        "not_started",
+        "running",
+        "accepted",
+        "changes_requested",
+        "blocked",
+    ]
+    known_estimated_cost_usd: Decimal = Field(ge=0)
+    authorized_cost_usd: Decimal = Field(gt=0)
+    remaining_estimated_cost_usd: Decimal = Field(ge=0)
+
+    @field_validator("approved_task_ids")
+    @classmethod
+    def require_task_ids(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        if len(values) != len(set(values)) or any(
+            re.fullmatch(r"TASK_[A-Z0-9_]+", value) is None for value in values
+        ):
+            raise ValueError("checkpoint task IDs must be unique canonical IDs")
+        return values
+
+    @field_validator("last_verified_checkpoint", "next_controller_checkpoint")
+    @classmethod
+    def require_safe_checkpoint_text(cls, value: str) -> str:
+        return _clean_summary(value)
+
+    @model_validator(mode="after")
+    def validate_cost_snapshot(self) -> Self:
+        expected = max(
+            Decimal(0),
+            self.authorized_cost_usd - self.known_estimated_cost_usd,
+        )
+        if self.remaining_estimated_cost_usd != expected:
+            raise ValueError("checkpoint remaining cost must match known task spend")
+        return self
+
+
 class RunEvent(BaseModel):
     """One immutable, attributable, user-safe controller event."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[RUN_EVENT_SCHEMA_VERSION] = RUN_EVENT_SCHEMA_VERSION
+    schema_version: Literal[2, RUN_EVENT_SCHEMA_VERSION] = RUN_EVENT_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     sequence: int = Field(ge=1)
     occurred_at: datetime
@@ -414,6 +549,10 @@ class RunEvent(BaseModel):
     model: str | None = Field(default=None, min_length=1, max_length=300)
     dependency_ids: tuple[str, ...] = ()
     budget_usage: AgentBudgetUsage | None = None
+    checkpoint: ProgressCheckpointSnapshot | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     completed: int | None = Field(default=None, ge=0)
     total: int | None = Field(default=None, ge=1)
     changed_files: tuple[str, ...] = ()
@@ -510,6 +649,11 @@ class RunEvent(BaseModel):
             ProgressEventKind.AGENT_INVOCATION_COMPLETED
         ):
             raise ValueError("only completed invocations record budget usage")
+        if self.checkpoint is not None:
+            if self.agent_id is None:
+                raise ValueError("checkpoint snapshots require an Agent event")
+            if self.schema_version < RUN_EVENT_SCHEMA_VERSION:
+                raise ValueError("legacy RunEvents cannot contain checkpoint snapshots")
         control_kinds = {
             ProgressEventKind.CONTROL_RECEIVED,
             ProgressEventKind.CONTROL_APPLIED,
@@ -570,6 +714,7 @@ class ProgressEvent:
     model: str | None = None
     dependency_ids: tuple[str, ...] = ()
     budget_usage: AgentBudgetUsage | None = None
+    checkpoint: ProgressCheckpointSnapshot | None = None
     completed: int | None = None
     total: int | None = None
     changed_files: tuple[str, ...] = ()
@@ -673,6 +818,7 @@ class RunEventJournal:
                 model=draft.model,
                 dependency_ids=draft.dependency_ids,
                 budget_usage=draft.budget_usage,
+                checkpoint=draft.checkpoint,
                 completed=draft.completed,
                 total=draft.total,
                 changed_files=draft.changed_files,
@@ -813,7 +959,9 @@ class TerminalProgressRenderer:
             ProgressEventKind.AGENT_SKIPPED,
             ProgressEventKind.AGENT_INTERRUPTED,
             ProgressEventKind.AGENT_CANCELLED,
-            ProgressEventKind.AGENT_PROVIDER_STALLED,
+            ProgressEventKind.AGENT_STOPPING,
+            ProgressEventKind.AGENT_COLLECTING_EVIDENCE,
+            ProgressEventKind.AGENT_STOPPED,
         }:
             # Scheduler terminal events currently identify the scheduling
             # attempt, while targeted semantic correction may have advanced the
@@ -831,7 +979,10 @@ class TerminalProgressRenderer:
             return
         if event.kind in {
             ProgressEventKind.AGENT_STARTED,
+            ProgressEventKind.AGENT_INITIALIZING,
             ProgressEventKind.AGENT_WAITING_PROVIDER,
+            ProgressEventKind.AGENT_TOOL_ACTIVE,
+            ProgressEventKind.AGENT_TOOL_STARTED,
         }:
             self._start_waiting(event)
             self._print_details(event)
@@ -841,14 +992,25 @@ class TerminalProgressRenderer:
             ProgressEventKind.WORKSPACE_READY: "✓",
             ProgressEventKind.AGENT_QUEUED: "○",
             ProgressEventKind.AGENT_READY: "→",
+            ProgressEventKind.AGENT_INVOCATION_LAUNCHED: "●",
+            ProgressEventKind.AGENT_INITIALIZING: "●",
+            ProgressEventKind.AGENT_INITIALIZATION_PROGRESS: "·",
+            ProgressEventKind.AGENT_INITIALIZATION_LIVENESS_DEGRADED: "!",
+            ProgressEventKind.AGENT_INITIALIZATION_STALL_SUSPECTED: "?",
+            ProgressEventKind.AGENT_INITIALIZATION_STALL_RECOVERED: "↻",
+            ProgressEventKind.AGENT_INITIALIZATION_STALLED: "!",
             ProgressEventKind.AGENT_INVOCATION_COMPLETED: "·",
             ProgressEventKind.AGENT_PROVIDER_ACTIVITY: "·",
+            ProgressEventKind.AGENT_TOOL_ACTIVE: "⚙",
             ProgressEventKind.AGENT_TOOL_STARTED: "⚙",
             ProgressEventKind.AGENT_TOOL_COMPLETED: "✓",
             ProgressEventKind.AGENT_LIVENESS_DEGRADED: "!",
             ProgressEventKind.AGENT_STALL_SUSPECTED: "?",
             ProgressEventKind.AGENT_STALL_RECOVERED: "↻",
-            ProgressEventKind.AGENT_PROVIDER_STALLED: "✗",
+            ProgressEventKind.AGENT_PROVIDER_STALLED: "!",
+            ProgressEventKind.AGENT_STOPPING: "■",
+            ProgressEventKind.AGENT_COLLECTING_EVIDENCE: "…",
+            ProgressEventKind.AGENT_STOPPED: "■",
             ProgressEventKind.MODEL_ROUTE_SWITCHED: "⇄",
             ProgressEventKind.AGENT_COMPLETED: "✓",
             ProgressEventKind.AGENT_RETRY: "↻",
@@ -957,8 +1119,14 @@ class TerminalProgressRenderer:
     @staticmethod
     def _heartbeat_summary(event: RunEvent) -> str:
         assert event.agent_id is not None
+        if event.kind is ProgressEventKind.AGENT_INITIALIZING:
+            return f"{event.agent_id} is initializing its invocation"
         if event.kind is ProgressEventKind.AGENT_WAITING_PROVIDER:
             return f"{event.agent_id} is waiting for the model"
+        if event.kind is ProgressEventKind.AGENT_TOOL_STARTED:
+            return f"{event.agent_id} has an attributable tool operation active"
+        if event.kind is ProgressEventKind.AGENT_TOOL_ACTIVE:
+            return f"{event.agent_id} has attributable tool operations active"
         return f"{event.agent_id} is working"
 
     def _heartbeat(
@@ -973,6 +1141,24 @@ class TerminalProgressRenderer:
             self._print(f"  {message} {minutes:02d}:{seconds:02d} elapsed")
 
     def _print_details(self, event: RunEvent) -> None:
+        if (
+            self.visibility is not RunEventVisibility.COMPACT
+            and event.checkpoint is not None
+        ):
+            checkpoint = event.checkpoint
+            task_ids = ",".join(checkpoint.approved_task_ids) or "none"
+            self._print(
+                "  progress "
+                f"phase={checkpoint.invocation_phase.value} tasks={task_ids} "
+                f"completed={checkpoint.last_verified_checkpoint}; "
+                f"next={checkpoint.next_controller_checkpoint}"
+            )
+            self._print(
+                "  task budget "
+                f"${checkpoint.known_estimated_cost_usd:.6f} estimated / "
+                f"${checkpoint.authorized_cost_usd} authorized; "
+                f"${checkpoint.remaining_estimated_cost_usd:.6f} recorded remaining"
+            )
         if self.visibility is not RunEventVisibility.DETAILED:
             return
         if event.agent_id is not None:

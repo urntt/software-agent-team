@@ -118,6 +118,7 @@ def persist_agent_invocation(
         exit_code=telemetry.exit_code,
         timed_out=telemetry.timed_out,
         provider_liveness=telemetry.provider_liveness,
+        invocation_lifecycle=telemetry.invocation_lifecycle,
         input_tokens=None if usage is None else usage.input_tokens,
         output_tokens=None if usage is None else usage.output_tokens,
         estimated_cost_usd=estimated_cost,

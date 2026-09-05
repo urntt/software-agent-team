@@ -203,6 +203,16 @@ exact-process cleanup, persisted Planning and execution evidence, and compact
 versus detailed progress. Register each changed threshold or polling constant in
 `decision_limits.py`; do not turn it into an Agent work budget.
 
+Initialization liveness precedes that lease and uses the same execution-adapter
+lifecycle for Planning and runtime Agents. Tests must separately cover slow
+checkpoint progress, permanent startup hang, recovery inside the visible grace,
+missing or malformed state observation, exact user interrupt/cancel, user
+deadline, controlled-evaluation timeout, TERM exit, KILL escalation, evidence
+collection, and absence of stale working heartbeats. `RunEvent` schema v3 must
+remain canonically readable from v2, and Artifact schema v5 from v2 through v4.
+Any added phase, stop reason, or infrastructure threshold belongs in the one
+shared lifecycle or decision-limit registry rather than a parallel adapter.
+
 The product profile and evaluation fixture share this dependency image, not a
 TaskBrief, seed, acceptance suite, environment contract, or delivery command.
 The benchmark contract remains frozen for comparable trials. The confirmed

@@ -47,6 +47,11 @@ from software_agent_team.execution import (
 )
 from software_agent_team.git_workspace import GitWorkspace, GitWorkspaceManager
 from software_agent_team.integrity import canonical_model_sha256
+from software_agent_team.invocation_lifecycle import (
+    InitializationCheckpoint,
+    InvocationPhase,
+    InvocationStopReason,
+)
 from software_agent_team.planning import AdaptiveImplementationPlan, ProposedTask
 from software_agent_team.progress import ProgressEvent, ProgressEventKind
 from software_agent_team.response_corrections import semantic_payload_sha256
@@ -400,7 +405,13 @@ class DynamicExecutor:
             self.requests.append(request)
             count = self._counts.get(request.agent_id, 0) + 1
             self._counts[request.agent_id] = count
+        self._emit_lifecycle_start(request, activity_handler)
         if self.provider_fail_once_for == request.agent_id and count == 1:
+            self._emit_lifecycle_stop(
+                request,
+                activity_handler,
+                InvocationStopReason.PROVIDER_FAILURE,
+            )
             return AgentExecutionResult(
                 status=AgentExecutionStatus.PROVIDER_FAILED,
                 error="scripted provider failure",
@@ -442,6 +453,11 @@ class DynamicExecutor:
                             policy_source="test provider contract",
                         )
                     )
+            self._emit_lifecycle_stop(
+                request,
+                activity_handler,
+                InvocationStopReason.PROVIDER_STALL,
+            )
             return AgentExecutionResult(
                 status=AgentExecutionStatus.PROVIDER_STALLED,
                 error="scripted provider stall",
@@ -597,7 +613,94 @@ class DynamicExecutor:
                 submission_payload = json.loads(response_text)
         else:  # pragma: no cover - the fixture owns the complete team
             raise AssertionError(f"unexpected Agent: {request.agent_id}")
+        self._emit_lifecycle_stop(
+            request,
+            activity_handler,
+            InvocationStopReason.COMPLETED,
+        )
         return self._result(request, response_text, submission_payload)
+
+    @staticmethod
+    def _emit_lifecycle_start(
+        request: AgentExecutionRequest,
+        activity_handler: AgentExecutionActivityHandler | None,
+    ) -> None:
+        if activity_handler is None:
+            return
+        for kind, phase, checkpoint, action in (
+            (
+                AgentExecutionActivityKind.INVOCATION_LAUNCHED,
+                InvocationPhase.LAUNCHED,
+                None,
+                "Test adapter accepted the invocation",
+            ),
+            (
+                AgentExecutionActivityKind.INVOCATION_INITIALIZING,
+                InvocationPhase.INITIALIZING,
+                InitializationCheckpoint.CURRENT_TURN,
+                "Test adapter established an attributable current turn",
+            ),
+            (
+                AgentExecutionActivityKind.INVOCATION_PROVIDER_WAIT,
+                InvocationPhase.PROVIDER_WAIT,
+                InitializationCheckpoint.CURRENT_TURN,
+                "Test adapter is waiting for the approved model",
+            ),
+        ):
+            activity_handler(
+                AgentExecutionActivity(
+                    kind=kind,
+                    agent_id=request.agent_id,
+                    session_key=request.session_key,
+                    model=request.model,
+                    elapsed_ms=0,
+                    invocation_phase=phase,
+                    initialization_checkpoint=checkpoint,
+                    action=action,
+                )
+            )
+
+    @staticmethod
+    def _emit_lifecycle_stop(
+        request: AgentExecutionRequest,
+        activity_handler: AgentExecutionActivityHandler | None,
+        reason: InvocationStopReason,
+    ) -> None:
+        if activity_handler is None:
+            return
+        for kind, phase, grace, action in (
+            (
+                AgentExecutionActivityKind.INVOCATION_STOPPING,
+                InvocationPhase.STOPPING,
+                35.0,
+                "Test adapter entered controlled shutdown",
+            ),
+            (
+                AgentExecutionActivityKind.INVOCATION_COLLECTING_EVIDENCE,
+                InvocationPhase.COLLECTING_EVIDENCE,
+                None,
+                "Test adapter is collecting invocation evidence",
+            ),
+            (
+                AgentExecutionActivityKind.INVOCATION_STOPPED,
+                InvocationPhase.STOPPED,
+                None,
+                "Test adapter collected process and cleanup evidence",
+            ),
+        ):
+            activity_handler(
+                AgentExecutionActivity(
+                    kind=kind,
+                    agent_id=request.agent_id,
+                    session_key=request.session_key,
+                    model=request.model,
+                    elapsed_ms=10,
+                    invocation_phase=phase,
+                    stop_reason=reason,
+                    shutdown_grace_seconds=grace,
+                    action=action,
+                )
+            )
 
     def _wait_for_quality_peer(self) -> None:
         if self._quality_barrier is None:
@@ -1329,7 +1432,20 @@ def test_dynamic_runner_can_use_approved_fallback_after_provider_stall(
     assert "another 30s" in suspected.message
     assert "test provider contract" in suspected.message
     assert "silent for 120s" in stalled.message
-    assert "preserving its evidence" in stalled.message
+    assert "separate stopping transition follows" in stalled.message
+    assert stalled.checkpoint is not None
+    assert stalled.checkpoint.invocation_phase is InvocationPhase.PROVIDER_WAIT
+    event_kinds = [event.kind for event in events]
+    ordered = [
+        ProgressEventKind.AGENT_PROVIDER_STALLED,
+        ProgressEventKind.AGENT_STOPPING,
+        ProgressEventKind.AGENT_COLLECTING_EVIDENCE,
+        ProgressEventKind.AGENT_STOPPED,
+        ProgressEventKind.AGENT_INVOCATION_COMPLETED,
+        ProgressEventKind.MODEL_ROUTE_SWITCHED,
+    ]
+    positions = [event_kinds.index(kind) for kind in ordered]
+    assert positions == sorted(positions)
 
 
 def test_dynamic_runner_refuses_unapproved_provider_fallback(

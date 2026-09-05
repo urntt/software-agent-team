@@ -18,9 +18,11 @@ from software_agent_team.execution import (
     AgentExecutionStatus,
     OpenClawSubprocessExecutor,
 )
+from software_agent_team.invocation_lifecycle import InitializationCheckpoint
 from software_agent_team.openclaw_session_evidence import (
     OpenClawSessionEvidenceError,
     capture_openclaw_tool_evidence,
+    inspect_openclaw_initialization,
     inspect_openclaw_session_activity,
 )
 from software_agent_team.teams import AgentCapability
@@ -305,6 +307,85 @@ def test_activity_inspection_returns_none_until_current_session_exists(
         )
         is None
     )
+
+
+def test_initialization_inspection_reports_only_finite_attributable_checkpoints(
+    tmp_path: Path,
+) -> None:
+    invocation = request(prompt="Do not expose INITIALIZATION_SECRET.")
+    assert (
+        inspect_openclaw_initialization(
+            state_dir=tmp_path,
+            agent_id=invocation.agent_id,
+            session_key=invocation.session_key,
+            prompt=invocation.prompt,
+        )
+        is None
+    )
+    sessions = tmp_path / "agents" / invocation.agent_id / "sessions"
+    sessions.mkdir(parents=True)
+    directory = inspect_openclaw_initialization(
+        state_dir=tmp_path,
+        agent_id=invocation.agent_id,
+        session_key=invocation.session_key,
+        prompt=invocation.prompt,
+    )
+    assert directory is not None
+    assert directory.checkpoint is InitializationCheckpoint.SESSION_DIRECTORY
+
+    (sessions / "sessions.json").write_text("{}", encoding="utf-8")
+    indexed = inspect_openclaw_initialization(
+        state_dir=tmp_path,
+        agent_id=invocation.agent_id,
+        session_key=invocation.session_key,
+        prompt=invocation.prompt,
+    )
+    assert indexed is not None
+    assert indexed.checkpoint is InitializationCheckpoint.SESSION_INDEX
+
+    (sessions / "sessions.json").write_text(
+        json.dumps({invocation.session_key: {"sessionId": SESSION_ID}}),
+        encoding="utf-8",
+    )
+    bound = inspect_openclaw_initialization(
+        state_dir=tmp_path,
+        agent_id=invocation.agent_id,
+        session_key=invocation.session_key,
+        prompt=invocation.prompt,
+    )
+    assert bound is not None
+    assert bound.checkpoint is InitializationCheckpoint.SESSION_BOUND
+
+    transcript = sessions / f"{SESSION_ID}.jsonl"
+    transcript.write_text(
+        json.dumps(session_record()) + "\n",
+        encoding="utf-8",
+    )
+    header = inspect_openclaw_initialization(
+        state_dir=tmp_path,
+        agent_id=invocation.agent_id,
+        session_key=invocation.session_key,
+        prompt=invocation.prompt,
+    )
+    assert header is not None
+    assert header.checkpoint is InitializationCheckpoint.TRANSCRIPT_HEADER
+
+    transcript.write_text(
+        "\n".join(
+            (json.dumps(session_record()), json.dumps(user_record(invocation.prompt)))
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    current = inspect_openclaw_initialization(
+        state_dir=tmp_path,
+        agent_id=invocation.agent_id,
+        session_key=invocation.session_key,
+        prompt=invocation.prompt,
+    )
+    assert current is not None
+    assert current.checkpoint is InitializationCheckpoint.CURRENT_TURN
+    assert "INITIALIZATION_SECRET" not in repr(current)
 
 
 def test_capture_keeps_only_the_executable_not_sensitive_exec_arguments(

@@ -2240,17 +2240,25 @@ def test_invalid_complete_proposal_is_repaired_before_it_is_shown(
     corrected = store.load_turn(request().run_id, 2)
     assert corrected.semantic_correction_request is not None
     assert corrected.semantic_correction_outcome == "accepted"
+    invocation = [
+        PlanningActivityKind.WAITING_MODEL,
+        PlanningActivityKind.INVOCATION_LAUNCHED,
+        PlanningActivityKind.INITIALIZING,
+        PlanningActivityKind.PROVIDER_WAIT,
+        PlanningActivityKind.STOPPING,
+        PlanningActivityKind.COLLECTING_EVIDENCE,
+        PlanningActivityKind.STOPPED,
+        PlanningActivityKind.RESPONSE_RECEIVED,
+    ]
     assert [activity.kind for activity in activities] == [
-        PlanningActivityKind.WAITING_MODEL,
-        PlanningActivityKind.RESPONSE_RECEIVED,
+        *invocation,
         PlanningActivityKind.CORRECTION_SCHEDULED,
-        PlanningActivityKind.WAITING_MODEL,
-        PlanningActivityKind.RESPONSE_RECEIVED,
+        *invocation,
         PlanningActivityKind.RESPONSE_VALIDATED,
     ]
     assert [
         (activity.attempt, activity.maximum_attempts) for activity in activities
-    ] == [(1, 2), (1, 2), (1, 2), (2, 2), (2, 2), (2, 2)]
+    ] == [(1, 2)] * 9 + [(2, 2)] * 9
 
 
 def test_decision_identifier_case_is_normalized_without_a_model_call(
@@ -2549,8 +2557,10 @@ def test_terminal_planning_progress_shows_heartbeat_and_stops_cleanly() -> None:
     time.sleep(0.025)
     progress.close()
 
-    assert any("Planning is waiting for provider/model" in line for line in output)
-    assert any("still waiting for the model" in line for line in output)
+    assert any(
+        "Planning invocation is queued for provider/model" in line for line in output
+    )
+    assert any("Planning invocation is queued" in line for line in output)
     assert any("response received in 0.0s (completed)" in line for line in output)
     assert tuple(output) == rendered_at_completion
 

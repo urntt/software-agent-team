@@ -148,7 +148,10 @@ def supported_schemas() -> tuple[SchemaSupport, ...]:
         PLANNING_SCHEMA_VERSION,
     )
     from software_agent_team.process_lifecycle import PROCESS_LEASE_SCHEMA_VERSION
-    from software_agent_team.progress import RUN_EVENT_SCHEMA_VERSION
+    from software_agent_team.progress import (
+        MINIMUM_READABLE_RUN_EVENT_SCHEMA_VERSION,
+        RUN_EVENT_SCHEMA_VERSION,
+    )
     from software_agent_team.run_control import RUN_SCHEMA_VERSION
     from software_agent_team.self_check import SELF_CHECK_SCHEMA_VERSION
     from software_agent_team.teams import TEAM_PLAN_SCHEMA_VERSION
@@ -177,6 +180,19 @@ def supported_schemas() -> tuple[SchemaSupport, ...]:
             maximum_readable=version,
         )
         for family, version in exact
+    ]
+    support = [
+        (
+            SchemaSupport(
+                family=item.family,
+                current=item.current,
+                minimum_readable=MINIMUM_READABLE_RUN_EVENT_SCHEMA_VERSION,
+                maximum_readable=item.maximum_readable,
+            )
+            if item.family is SchemaFamily.RUN_EVENT
+            else item
+        )
+        for item in support
     ]
     support = [
         (

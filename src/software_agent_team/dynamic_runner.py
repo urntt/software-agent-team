@@ -55,11 +55,13 @@ from software_agent_team.git_workspace import (
 )
 from software_agent_team.integrity import canonical_model_sha256
 from software_agent_team.invocation import persist_agent_invocation
+from software_agent_team.invocation_lifecycle import InvocationPhase
 from software_agent_team.planning import (
     AdaptiveImplementationPlan,
     validate_task_agent_bindings,
 )
 from software_agent_team.progress import (
+    ProgressCheckpointSnapshot,
     ProgressDraftHandler,
     ProgressEvent,
     ProgressEventKind,
@@ -311,6 +313,7 @@ class DynamicAgentRunner:
         self._quality_commit: str | None = None
         self._quality_gate_calls = 0
         self._controller_test_reference: ArtifactReference | None = None
+        self._last_verified_checkpoint: dict[str, str] = {}
 
     @staticmethod
     def _resolve_review_scopes(
@@ -538,23 +541,6 @@ class DynamicAgentRunner:
                 attempt=attempt,
                 route_id=route_id,
                 pricing=pricing,
-            )
-            self._emit_activity(
-                agent,
-                kind=ProgressEventKind.AGENT_WAITING_PROVIDER,
-                message=(
-                    f"{agent.label} is waiting for the approved {request.model} "
-                    f"model (attempt {attempt})"
-                ),
-                attempt=attempt,
-                model=request.model,
-                references=tuple(
-                    RunEventReference(
-                        kind=RunEventReferenceKind.CONTROL_COMMAND,
-                        id=guidance.command_id,
-                    )
-                    for guidance in guidance_by_id.values()
-                ),
             )
             result = self._execute(
                 request,
@@ -787,6 +773,18 @@ class DynamicAgentRunner:
                         id=route_id,
                     ),
                 ),
+                checkpoint=self._checkpoint_snapshot(
+                    agent,
+                    phase=InvocationPhase.STOPPED,
+                    last_verified_checkpoint=(
+                        "Invocation evidence and model usage were persisted"
+                    ),
+                    next_controller_checkpoint=(
+                        "Validate the typed response and choose completion, "
+                        "correction, fallback, or failure"
+                    ),
+                    completed_tool_operations=len(result.telemetry.tool_calls),
+                ),
             )
             if persisted.budget_error is not None:
                 raise DynamicAgentRunnerError(
@@ -882,6 +880,7 @@ class DynamicAgentRunner:
         duration_ms: int | None = None,
         budget_usage: AgentBudgetUsage | None = None,
         references: tuple[RunEventReference, ...] = (),
+        checkpoint: ProgressCheckpointSnapshot | None = None,
     ) -> None:
         """Project one safe invocation checkpoint without changing runtime state."""
 
@@ -900,6 +899,7 @@ class DynamicAgentRunner:
                 model=model,
                 dependency_ids=agent.dependencies,
                 budget_usage=budget_usage,
+                checkpoint=checkpoint,
                 references=references,
             )
         )
@@ -912,6 +912,42 @@ class DynamicAgentRunner:
         activity: AgentExecutionActivity,
     ) -> None:
         kind = {
+            AgentExecutionActivityKind.INVOCATION_LAUNCHED: (
+                ProgressEventKind.AGENT_INVOCATION_LAUNCHED
+            ),
+            AgentExecutionActivityKind.INVOCATION_INITIALIZING: (
+                ProgressEventKind.AGENT_INITIALIZING
+            ),
+            AgentExecutionActivityKind.INITIALIZATION_PROGRESS: (
+                ProgressEventKind.AGENT_INITIALIZATION_PROGRESS
+            ),
+            AgentExecutionActivityKind.INITIALIZATION_LIVENESS_DEGRADED: (
+                ProgressEventKind.AGENT_INITIALIZATION_LIVENESS_DEGRADED
+            ),
+            AgentExecutionActivityKind.INITIALIZATION_STALL_SUSPECTED: (
+                ProgressEventKind.AGENT_INITIALIZATION_STALL_SUSPECTED
+            ),
+            AgentExecutionActivityKind.INITIALIZATION_STALL_RECOVERED: (
+                ProgressEventKind.AGENT_INITIALIZATION_STALL_RECOVERED
+            ),
+            AgentExecutionActivityKind.INITIALIZATION_STALLED: (
+                ProgressEventKind.AGENT_INITIALIZATION_STALLED
+            ),
+            AgentExecutionActivityKind.INVOCATION_PROVIDER_WAIT: (
+                ProgressEventKind.AGENT_WAITING_PROVIDER
+            ),
+            AgentExecutionActivityKind.INVOCATION_TOOL_ACTIVE: (
+                ProgressEventKind.AGENT_TOOL_ACTIVE
+            ),
+            AgentExecutionActivityKind.INVOCATION_STOPPING: (
+                ProgressEventKind.AGENT_STOPPING
+            ),
+            AgentExecutionActivityKind.INVOCATION_COLLECTING_EVIDENCE: (
+                ProgressEventKind.AGENT_COLLECTING_EVIDENCE
+            ),
+            AgentExecutionActivityKind.INVOCATION_STOPPED: (
+                ProgressEventKind.AGENT_STOPPED
+            ),
             AgentExecutionActivityKind.PROVIDER_STREAM: (
                 ProgressEventKind.AGENT_PROVIDER_ACTIVITY
             ),
@@ -934,7 +970,67 @@ class DynamicAgentRunner:
                 ProgressEventKind.AGENT_PROVIDER_STALLED
             ),
         }[activity.kind]
+        initialization_checkpoint = (
+            "unknown"
+            if activity.initialization_checkpoint is None
+            else activity.initialization_checkpoint.value
+        )
+        stop_reason = (
+            "unknown" if activity.stop_reason is None else activity.stop_reason.value
+        )
+        inactivity_seconds = (activity.inactivity_ms or 0) / 1000
+        stall_grace_seconds = activity.stall_grace_seconds or 0
+        silence_seconds = activity.silence_seconds or 0
+        shutdown_grace_seconds = activity.shutdown_grace_seconds or 0
         message = {
+            AgentExecutionActivityKind.INVOCATION_LAUNCHED: (
+                f"{agent.label} invocation {attempt} entered the execution adapter"
+            ),
+            AgentExecutionActivityKind.INVOCATION_INITIALIZING: (
+                f"{agent.label} is initializing an attributable OpenClaw turn"
+            ),
+            AgentExecutionActivityKind.INITIALIZATION_PROGRESS: (
+                f"{agent.label} initialization verified {initialization_checkpoint}"
+            ),
+            AgentExecutionActivityKind.INITIALIZATION_LIVENESS_DEGRADED: (
+                f"{agent.label} initialization observer is unavailable: "
+                f"{activity.degradation_reason}"
+            ),
+            AgentExecutionActivityKind.INITIALIZATION_STALL_SUSPECTED: (
+                f"{agent.label} initialization made no attributable progress for "
+                f"{inactivity_seconds:.1f}s; waiting the final "
+                f"{stall_grace_seconds:g}s diagnostic window "
+                f"({activity.policy_source})"
+            ),
+            AgentExecutionActivityKind.INITIALIZATION_STALL_RECOVERED: (
+                f"{agent.label} initialization advanced to "
+                f"{initialization_checkpoint} during the grace window"
+            ),
+            AgentExecutionActivityKind.INITIALIZATION_STALLED: (
+                f"{agent.label} initialization made no attributable progress for "
+                f"{silence_seconds:g}s; a typed initialization stop follows"
+            ),
+            AgentExecutionActivityKind.INVOCATION_PROVIDER_WAIT: (
+                f"{agent.label} current turn is attributable and is waiting for "
+                f"the approved {activity.model} model"
+            ),
+            AgentExecutionActivityKind.INVOCATION_TOOL_ACTIVE: (
+                f"{agent.label} has {activity.active_tool_count} attributable "
+                "tool operation(s) active"
+            ),
+            AgentExecutionActivityKind.INVOCATION_STOPPING: (
+                f"{agent.label} is stopping ({stop_reason}); "
+                f"{activity.action}; shutdown ceiling "
+                f"{shutdown_grace_seconds:g}s"
+            ),
+            AgentExecutionActivityKind.INVOCATION_COLLECTING_EVIDENCE: (
+                f"{agent.label} process has stopped; collecting invocation evidence "
+                f"({stop_reason})"
+            ),
+            AgentExecutionActivityKind.INVOCATION_STOPPED: (
+                f"{agent.label} invocation is stopped; process outcome, evidence, "
+                f"and cleanup are known ({stop_reason})"
+            ),
             AgentExecutionActivityKind.PROVIDER_STREAM: (
                 f"{agent.label} received provider stream activity"
             ),
@@ -951,21 +1047,104 @@ class DynamicAgentRunner:
             ),
             AgentExecutionActivityKind.STALL_SUSPECTED: (
                 f"{agent.label} has produced no trusted activity for "
-                f"{activity.inactivity_ms / 1000:.1f}s; SAT is checking its "
+                f"{inactivity_seconds:.1f}s; SAT is checking its "
                 "private stream and attributable tool state for another "
-                f"{activity.stall_grace_seconds:g}s before interruption "
+                f"{stall_grace_seconds:g}s before interruption "
                 f"({activity.policy_source})"
             ),
             AgentExecutionActivityKind.STALL_RECOVERED: (
                 f"{agent.label} provider activity recovered during the "
-                f"{activity.stall_grace_seconds:g}s grace period"
+                f"{stall_grace_seconds:g}s grace period"
             ),
             AgentExecutionActivityKind.PROVIDER_STALLED: (
                 f"{agent.label} provider remained silent for "
-                f"{activity.silence_seconds:g}s; SAT is interrupting only this "
-                "invocation and preserving its evidence"
+                f"{silence_seconds:g}s; stall is confirmed and the "
+                "separate stopping transition follows"
             ),
         }[activity.kind]
+        phase = (
+            activity.invocation_phase
+            or {
+                AgentExecutionActivityKind.INITIALIZATION_PROGRESS: (
+                    InvocationPhase.INITIALIZING
+                ),
+                AgentExecutionActivityKind.INITIALIZATION_LIVENESS_DEGRADED: (
+                    InvocationPhase.INITIALIZING
+                ),
+                AgentExecutionActivityKind.INITIALIZATION_STALL_SUSPECTED: (
+                    InvocationPhase.INITIALIZING
+                ),
+                AgentExecutionActivityKind.INITIALIZATION_STALL_RECOVERED: (
+                    InvocationPhase.INITIALIZING
+                ),
+                AgentExecutionActivityKind.INITIALIZATION_STALLED: (
+                    InvocationPhase.INITIALIZING
+                ),
+                AgentExecutionActivityKind.PROVIDER_STREAM: (
+                    InvocationPhase.PROVIDER_WAIT
+                ),
+                AgentExecutionActivityKind.TOOL_STARTED: InvocationPhase.TOOL_ACTIVE,
+                AgentExecutionActivityKind.TOOL_COMPLETED: (
+                    InvocationPhase.TOOL_ACTIVE
+                    if activity.active_tool_count
+                    else InvocationPhase.PROVIDER_WAIT
+                ),
+                AgentExecutionActivityKind.LIVENESS_DEGRADED: (
+                    InvocationPhase.PROVIDER_WAIT
+                ),
+                AgentExecutionActivityKind.STALL_SUSPECTED: (
+                    InvocationPhase.PROVIDER_WAIT
+                ),
+                AgentExecutionActivityKind.STALL_RECOVERED: (
+                    InvocationPhase.PROVIDER_WAIT
+                ),
+                AgentExecutionActivityKind.PROVIDER_STALLED: (
+                    InvocationPhase.PROVIDER_WAIT
+                ),
+            }[activity.kind]
+        )
+        last_checkpoint: str | None = None
+        if activity.initialization_checkpoint is not None:
+            last_checkpoint = (
+                "Verified OpenClaw initialization checkpoint "
+                f"{activity.initialization_checkpoint.value}"
+            )
+        elif activity.kind is AgentExecutionActivityKind.PROVIDER_STREAM:
+            last_checkpoint = "Observed attributable provider stream activity"
+        elif activity.kind is AgentExecutionActivityKind.TOOL_COMPLETED:
+            last_checkpoint = (
+                f"Completed {activity.completed_tool_count} attributable tool "
+                "operation(s)"
+            )
+        elif phase is InvocationPhase.STOPPING:
+            last_checkpoint = f"Accepted typed stop reason {stop_reason}"
+        elif phase is InvocationPhase.COLLECTING_EVIDENCE:
+            last_checkpoint = "Observed the exact invocation process stop"
+        elif phase is InvocationPhase.STOPPED:
+            last_checkpoint = (
+                "Collected process, session, submission, and cleanup facts"
+            )
+        next_checkpoint = {
+            InvocationPhase.LAUNCHED: "Launch the exact OpenClaw process",
+            InvocationPhase.INITIALIZING: (
+                "Reach an attributable current turn or private provider stream"
+            ),
+            InvocationPhase.PROVIDER_WAIT: (
+                "Observe provider response activity or an attributable tool operation"
+            ),
+            InvocationPhase.TOOL_ACTIVE: (
+                "Observe completion of the active attributable tool operation"
+            ),
+            InvocationPhase.STOPPING: (
+                "Confirm process exit or escalate at the shutdown ceiling"
+            ),
+            InvocationPhase.COLLECTING_EVIDENCE: (
+                "Persist terminal invocation evidence and budget usage"
+            ),
+            InvocationPhase.STOPPED: (
+                "Let the Controller validate output and choose the next approved action"
+            ),
+        }[phase]
         self._emit_activity(
             agent,
             kind=kind,
@@ -973,6 +1152,70 @@ class DynamicAgentRunner:
             attempt=attempt,
             model=activity.model,
             duration_ms=activity.elapsed_ms,
+            checkpoint=self._checkpoint_snapshot(
+                agent,
+                phase=phase,
+                last_verified_checkpoint=last_checkpoint,
+                next_controller_checkpoint=next_checkpoint,
+                completed_tool_operations=activity.completed_tool_count,
+            ),
+        )
+
+    def _checkpoint_snapshot(
+        self,
+        agent: AgentSpec,
+        *,
+        phase: InvocationPhase,
+        last_verified_checkpoint: str | None,
+        next_controller_checkpoint: str,
+        completed_tool_operations: int,
+    ) -> ProgressCheckpointSnapshot:
+        """Freeze one safe task-progress projection from Controller-owned facts."""
+
+        with self._state_lock:
+            if last_verified_checkpoint is not None:
+                self._last_verified_checkpoint[agent.id] = last_verified_checkpoint
+            last = self._last_verified_checkpoint.get(
+                agent.id,
+                "Controller admitted this invocation under the approved plan",
+            )
+            quality_state = self._quality_state
+        usage = self.budget_ledger.snapshot()
+        authorized = self.budget_ledger.budget.max_estimated_cost_usd
+        assigned_task_ids = tuple(
+            task.id
+            for task in self.implementation_plan.tasks
+            if task.owner_agent_id == agent.id
+        )
+        gate_state = {
+            "pending": "not_started",
+            "running": "running",
+            "ready": "passed",
+            "failed": "failed",
+        }[quality_state]
+        return ProgressCheckpointSnapshot(
+            approved_task_ids=assigned_task_ids,
+            invocation_phase=phase,
+            last_verified_checkpoint=last,
+            next_controller_checkpoint=next_controller_checkpoint,
+            completed_tool_operations=completed_tool_operations,
+            git_state=(
+                "working"
+                if agent.permission_profile is PermissionProfile.WORKSPACE_WRITE
+                else "verified"
+            ),
+            gate_state=gate_state,
+            review_state=(
+                "running"
+                if agent.capability is AgentCapability.REVIEW
+                else "not_applicable"
+            ),
+            known_estimated_cost_usd=usage.known_estimated_cost_usd,
+            authorized_cost_usd=authorized,
+            remaining_estimated_cost_usd=max(
+                0,
+                authorized - usage.known_estimated_cost_usd,
+            ),
         )
 
     def _execute(
@@ -1500,6 +1743,7 @@ class DynamicAgentRunner:
             return TerminationReason.USER_INTERRUPTED
         if status in {
             AgentExecutionStatus.LAUNCH_FAILED,
+            AgentExecutionStatus.INITIALIZATION_STALLED,
             AgentExecutionStatus.PROVIDER_FAILED,
             AgentExecutionStatus.PROVIDER_STALLED,
         }:
