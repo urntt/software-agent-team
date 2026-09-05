@@ -326,7 +326,7 @@ def test_update_requires_confirmation_or_explicit_yes(
     assert "previous application remains preserved" in output
 
 
-def test_channel_status_is_local_and_same_channel_switch_is_a_noop(
+def test_channel_status_and_same_channel_switch_without_ref_are_local(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -345,6 +345,9 @@ def test_channel_status_is_local_and_same_channel_switch_is_a_noop(
 
     assert main(["channel", "switch", "stable", "--yes"]) == 0
     assert "already stable" in capsys.readouterr().out
+
+    assert main(["channel", "switch", "stable", "--ref", "candidate", "--yes"]) == 1
+    assert "--ref is available only when switching to dev" in capsys.readouterr().out
 
 
 def test_channel_switch_uses_the_same_managed_activation(
@@ -382,6 +385,116 @@ def test_channel_switch_uses_the_same_managed_activation(
     assert main(["channel", "switch", "dev", "--ref", "candidate", "--yes"]) == 0
     assert calls == [(target, paths)]
     assert "switch channel from stable to dev" in capsys.readouterr().out
+
+
+def test_same_dev_channel_with_explicit_ref_uses_managed_activation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    paths, stable = managed_cli_fixture(tmp_path)
+    record = make_installation_record(
+        channel=ManagedChannel.DEV,
+        release_version=stable.release_version,
+        source_revision="a" * 40,
+        source_ref="old-candidate",
+        repository_url=stable.repository_url,
+        application_path=paths.application_link,
+        artifact_digest=None,
+        installed_at=stable.installed_at,
+    )
+    target = ManagedTarget(
+        channel=ManagedChannel.DEV,
+        release_version=None,
+        source_revision="b" * 40,
+        source_ref="new-candidate",
+        repository_url=record.repository_url,
+        artifact_digest=None,
+    )
+    installed = record.model_copy(
+        update={
+            "source_revision": target.source_revision,
+            "source_ref": target.source_ref,
+        }
+    )
+    resolutions: list[dict[str, object]] = []
+    calls: list[tuple[ManagedTarget, ManagedInstallPaths]] = []
+    monkeypatch.setattr(cli, "_managed_install_context", lambda: (paths, record))
+    monkeypatch.setattr(
+        cli,
+        "resolve_requested_target",
+        lambda **kwargs: resolutions.append(kwargs) or target,
+    )
+    monkeypatch.setattr(
+        cli,
+        "install_managed_target",
+        lambda actual_target, actual_paths: (
+            calls.append((actual_target, actual_paths)) or installed
+        ),
+    )
+
+    assert (
+        main(
+            [
+                "channel",
+                "switch",
+                "dev",
+                "--ref",
+                "new-candidate",
+                "--yes",
+            ]
+        )
+        == 0
+    )
+    assert resolutions == [
+        {
+            "record": record,
+            "channel": ManagedChannel.DEV,
+            "dev_ref": "new-candidate",
+        }
+    ]
+    assert calls == [(target, paths)]
+    output = capsys.readouterr().out
+    assert "status: update_available" in output
+    assert "new-candidate" in output
+
+
+def test_same_dev_channel_and_current_explicit_ref_do_not_reinstall(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    paths, stable = managed_cli_fixture(tmp_path)
+    record = make_installation_record(
+        channel=ManagedChannel.DEV,
+        release_version=stable.release_version,
+        source_revision="a" * 40,
+        source_ref="candidate",
+        repository_url=stable.repository_url,
+        application_path=paths.application_link,
+        artifact_digest=None,
+        installed_at=stable.installed_at,
+    )
+    target = ManagedTarget(
+        channel=ManagedChannel.DEV,
+        release_version=None,
+        source_revision=record.source_revision,
+        source_ref=record.source_ref,
+        repository_url=record.repository_url,
+        artifact_digest=None,
+    )
+    monkeypatch.setattr(cli, "_managed_install_context", lambda: (paths, record))
+    monkeypatch.setattr(cli, "resolve_requested_target", lambda **_kwargs: target)
+    monkeypatch.setattr(
+        cli,
+        "install_managed_target",
+        lambda *_args, **_kwargs: pytest.fail("current dev target was reinstalled"),
+    )
+
+    assert main(["channel", "switch", "dev", "--ref", "candidate", "--yes"]) == 0
+    output = capsys.readouterr().out
+    assert "status: current" in output
+    assert "No managed application change was made." in output
 
 
 def test_update_refuses_a_source_checkout_before_resolving_a_target(

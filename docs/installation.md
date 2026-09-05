@@ -445,6 +445,12 @@ sat channel switch dev --ref <branch-tag-or-full-commit>
 sat channel switch stable
 ```
 
+An explicit dev `--ref` also retargets an installation that is already on the
+dev channel. SAT resolves and displays the exact commit before confirmation;
+if the ref still resolves to the installed revision, it makes no change. With
+no `--ref`, switching to the already active channel is a local no-op and
+`sat update` remains the command that refreshes its recorded target.
+
 Install, update, and channel switch use one transaction: validate lifecycle
 ownership, resolve an immutable target, show the current and target identities,
 obtain confirmation, hold the lifecycle lock, stage and verify the complete

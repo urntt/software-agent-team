@@ -203,8 +203,13 @@ development channel:
 
 ```bash
 sat channel switch dev
+sat channel switch dev --ref <branch-tag-or-full-commit>
 sat channel switch stable
 ```
+
+The explicit dev ref can also retarget an installation that is already on the
+dev channel; SAT shows the resolved revision and obtains confirmation before
+activation.
 
 Update and channel-switch commands show the exact current and target identities
 before activation. They stage and verify the new application, check persisted

@@ -1137,11 +1137,11 @@ def _show_channel(args: argparse.Namespace) -> int:
 def _switch_channel(args: argparse.Namespace) -> int:
     requested = ManagedChannel(args.channel)
     paths, record = _managed_install_context()
-    if requested is record.channel:
-        print(f"channel is already {requested.value}; use `sat update` to refresh it")
-        return 0
     if requested is ManagedChannel.STABLE and args.ref is not None:
         raise ValueError("--ref is available only when switching to dev")
+    if requested is record.channel and args.ref is None:
+        print(f"channel is already {requested.value}; use `sat update` to refresh it")
+        return 0
     target = resolve_requested_target(
         record=record,
         channel=requested,
@@ -3151,7 +3151,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     channel_switch.add_argument(
         "--ref",
-        help="Dev branch, tag, or exact commit; defaults to main on first switch.",
+        help=(
+            "Dev branch, tag, or exact commit; defaults to main on the first "
+            "switch and can retarget an existing dev installation."
+        ),
     )
     channel_switch.add_argument(
         "--yes",
