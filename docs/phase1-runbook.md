@@ -305,6 +305,10 @@ Confirm all of the following before marking Phase 1 accepted:
   `semantic_body_v4` for a grounded Reviewer response with explicit approved
   boundary checks. Historical `semantic_body_v2` and `semantic_body_v3` records
   retain their prior tool-only and deterministic-command grounding contracts.
+  Dynamic execution records separately identify `typed_submission_v1` as their
+  response transport and bind the accepted payload digest to the final
+  successful `sat_submit_artifact` tool evidence. Assistant presentation text
+  is not the dynamic artifact transport.
   The record lists the controller-supplied persisted fields, records any
   redundant model-returned controller fields that were ignored, and records
   the resolved stage and remaining attempt timeouts. Missing or incorrect

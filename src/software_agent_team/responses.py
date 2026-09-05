@@ -46,6 +46,7 @@ from software_agent_team.response_corrections import (
     diagnostic_from_transport,
     diagnostic_from_validation_error,
 )
+from software_agent_team.submissions import AgentSubmissionPurpose
 from software_agent_team.teams import TeamPlan, capability_for_legacy_role
 
 
@@ -836,7 +837,21 @@ def _parse_semantic_body(
     *,
     task_brief: TaskBrief | None = None,
 ) -> ParsedAgentResponse:
-    payload = parse_json_object_response(value)
+    return _parse_semantic_payload(
+        parse_json_object_response(value),
+        expected_kind,
+        task_brief=task_brief,
+    )
+
+
+def _parse_semantic_payload(
+    payload: dict[str, object],
+    expected_kind: ArtifactKind,
+    *,
+    task_brief: TaskBrief | None = None,
+) -> ParsedAgentResponse:
+    """Validate semantic values already delivered through a typed channel."""
+
     model = RESPONSE_BODY_MODELS.get(expected_kind)
     controller_fields = _CONTROLLER_FIELDS.get(expected_kind)
     if model is None or controller_fields is None:
@@ -1290,6 +1305,10 @@ def parse_agent_response(
     if not 1 <= iteration_limit <= 3 or request.iteration > iteration_limit:
         raise AgentArtifactResponseError("request exceeds the run iteration limit")
 
+    if result.response_text is None:
+        raise AgentArtifactResponseError(
+            "Agent execution omitted its semantic response"
+        )
     parsed = _parse_semantic_body(
         result.response_text,
         request.expected_kind,
@@ -1334,6 +1353,7 @@ def parse_dynamic_agent_response(
     reviewed_criterion_ids: Collection[str] = (),
     review_tool_evidence_attempts: tuple[ReviewToolEvidenceAttempt, ...] = (),
     review_command_evidence: tuple[CommandEvidence, ...] = (),
+    controller_semantic_payload: dict[str, object] | None = None,
 ) -> ParsedAgentResponse:
     """Bind one semantic response to an approved run-scoped AgentSpec."""
 
@@ -1397,11 +1417,43 @@ def parse_dynamic_agent_response(
             "execution telemetry model differs from the approved AgentSpec"
         )
 
-    parsed = _parse_semantic_body(
-        result.response_text,
-        request.expected_kind,
-        task_brief=task_brief,
-    )
+    if controller_semantic_payload is not None:
+        if (
+            request.submission_contract is None
+            or request.submission_contract.purpose
+            is not AgentSubmissionPurpose.SEMANTIC_CORRECTION
+            or result.semantic_submission is None
+            or result.semantic_submission.evidence.purpose
+            is not AgentSubmissionPurpose.SEMANTIC_CORRECTION
+        ):
+            raise AgentArtifactResponseError(
+                "controller semantic payload requires an accepted correction submission"
+            )
+        parsed = _parse_semantic_payload(
+            controller_semantic_payload,
+            request.expected_kind,
+            task_brief=task_brief,
+        )
+    elif request.submission_contract is not None:
+        if result.semantic_submission is None:
+            raise AgentArtifactResponseError(
+                "dynamic Agent execution omitted its typed semantic submission"
+            )
+        parsed = _parse_semantic_payload(
+            result.semantic_submission.payload,
+            request.expected_kind,
+            task_brief=task_brief,
+        )
+    else:
+        if result.response_text is None:
+            raise AgentArtifactResponseError(
+                "dynamic Agent execution omitted its semantic response"
+            )
+        parsed = _parse_semantic_body(
+            result.response_text,
+            request.expected_kind,
+            task_brief=task_brief,
+        )
     body = parsed.body
     if isinstance(body, ReviewReportResponse):
         try:

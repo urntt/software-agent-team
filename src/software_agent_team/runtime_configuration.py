@@ -18,6 +18,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from software_agent_team.configuration import load_openclaw_template
 from software_agent_team.openclaw_runtime import isolated_openclaw_environment
+from software_agent_team.submissions import (
+    ARTIFACT_SUBMISSION_PLUGIN_ID,
+    ARTIFACT_SUBMISSION_TOOL,
+    artifact_submission_plugin_path,
+)
 from software_agent_team.teams import (
     AgentCapability,
     PermissionProfile,
@@ -1032,6 +1037,21 @@ def materialize_run_configuration(
         for agent in agents["list"]:
             agent["workspace"] = str(resolved_workspace)
     else:
+        plugin_path = artifact_submission_plugin_path()
+        payload["plugins"] = {
+            "enabled": True,
+            "allow": [ARTIFACT_SUBMISSION_PLUGIN_ID],
+            "deny": [],
+            "load": {"paths": [str(plugin_path)]},
+            "entries": {
+                ARTIFACT_SUBMISSION_PLUGIN_ID: {
+                    "enabled": True,
+                }
+            },
+        }
+        tools = payload.setdefault("tools", {})
+        sandbox_tools = tools.setdefault("sandbox", {}).setdefault("tools", {})
+        sandbox_tools["alsoAllow"] = [ARTIFACT_SUBMISSION_TOOL]
         templates = {agent["id"]: agent for agent in agents["list"]}
         dynamic_agents: list[dict[str, Any]] = []
         for index, spec in enumerate(team_plan.agents):

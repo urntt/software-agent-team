@@ -227,6 +227,19 @@ def test_schema_two_execution_record_remains_readable_without_correction_evidenc
     assert record.semantic_correction_outcome is None
 
 
+def test_schema_three_execution_record_remains_readable_without_typed_transport() -> (
+    None
+):
+    payload = valid_execution_payload()
+    payload["schema_version"] = 3
+
+    record = AgentExecutionRecord.model_validate(payload)
+
+    assert record.schema_version == 3
+    assert record.response_transport is None
+    assert record.submission_evidence is None
+
+
 def test_execution_record_preserves_response_binding_and_stage_budget() -> None:
     payload = valid_execution_payload()
     payload.update(
@@ -283,6 +296,54 @@ def test_execution_record_preserves_sanitized_tool_session_evidence() -> None:
     assert record.session_record_count == 4
     assert record.tool_calls[0].id == "tool-001"
     assert record.tool_calls[0].output_excerpt == "BOUNDARY_OK"
+
+
+def test_execution_record_binds_typed_submission_to_final_tool_evidence() -> None:
+    payload = valid_execution_payload()
+    payload.update(
+        {
+            "execution_status": "completed",
+            "response_contract": "semantic_body_v1",
+            "response_transport": "typed_submission_v1",
+            "submission_evidence": {
+                "protocol": "sat_artifact_submission_v1",
+                "purpose": "artifact",
+                "status": "accepted",
+                "tool_name": "sat_submit_artifact",
+                "schema_sha256": "a" * 64,
+                "binding_sha256": "b" * 64,
+                "tool_call_id": "tool-001",
+                "payload_sha256": "c" * 64,
+            },
+            "tool_evidence_status": "captured",
+            "session_transcript_sha256": "d" * 64,
+            "session_record_count": 4,
+            "tool_calls": [
+                {
+                    "id": "tool-001",
+                    "tool_name": "sat_submit_artifact",
+                    "external_call_sha256": "e" * 64,
+                    "arguments_sha256": "c" * 64,
+                    "outcome": "succeeded",
+                    "is_error": False,
+                    "reported_status": "completed",
+                    "output_sha256": "f" * 64,
+                    "output_bytes": 8,
+                    "output_excerpt": "accepted",
+                }
+            ],
+        }
+    )
+
+    record = AgentExecutionRecord.model_validate(payload)
+
+    assert record.response_contract == "semantic_body_v1"
+    assert record.response_transport == "typed_submission_v1"
+    assert record.submission_evidence is not None
+
+    payload["tool_calls"][0]["arguments_sha256"] = "0" * 64
+    with pytest.raises(ValidationError, match="final successful captured tool call"):
+        AgentExecutionRecord.model_validate(payload)
 
 
 @pytest.mark.parametrize(

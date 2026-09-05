@@ -130,12 +130,16 @@ def persist_agent_invocation(
             if request.expected_kind is ArtifactKind.REVIEW_REPORT
             else "semantic_body_v1"
         ),
+        response_transport=(
+            "typed_submission_v1" if request.submission_contract is not None else None
+        ),
         controller_supplied_fields=controller_supplied_fields,
         ignored_controller_fields=ignored_controller_fields,
         response_normalizations=response_normalizations,
         response_validation=response_validation,
         semantic_correction_request=semantic_correction_request,
         semantic_correction_outcome=semantic_correction_outcome,
+        submission_evidence=result.submission_evidence,
         tool_evidence_status=telemetry.tool_evidence_status,
         session_transcript_sha256=telemetry.session_transcript_sha256,
         session_record_count=telemetry.session_record_count,

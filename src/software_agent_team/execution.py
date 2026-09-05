@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import os
+import secrets
 import signal
 import stat
 import subprocess
@@ -20,6 +21,7 @@ from pathlib import Path
 from typing import Protocol, Self, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic.types import JsonValue
 
 from software_agent_team.artifacts import (
     AgentExecutionStatus,
@@ -41,6 +43,17 @@ from software_agent_team.openclaw_session_evidence import (
 from software_agent_team.process_lifecycle import (
     InvocationProcessLease,
     ProcessLeaseStore,
+)
+from software_agent_team.submissions import (
+    AgentSemanticSubmission,
+    AgentSubmissionContract,
+    AgentSubmissionEvidence,
+    AgentSubmissionStatus,
+    SubmissionFileCapture,
+    canonical_json_sha256,
+    capture_submission_file,
+    rejected_submission_evidence,
+    validate_submission_capture,
 )
 from software_agent_team.teams import (
     AgentCapability,
@@ -248,6 +261,7 @@ class AgentExecutionRequest(BaseModel):
     prompt: str = Field(min_length=1)
     timeout_seconds: int = Field(ge=0)
     model: str | None = None
+    submission_contract: AgentSubmissionContract | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -449,7 +463,7 @@ class AgentExecutionTelemetry(BaseModel):
 
 
 class AgentExecutionResult(BaseModel):
-    """Adapter result before the untrusted Agent text is parsed as an artifact."""
+    """Adapter result before untrusted semantic values become an artifact."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -457,6 +471,8 @@ class AgentExecutionResult(BaseModel):
     response_text: str | None = None
     error: str | None = None
     telemetry: AgentExecutionTelemetry
+    semantic_submission: AgentSemanticSubmission | None = None
+    submission_evidence: AgentSubmissionEvidence | None = None
 
     @field_validator("response_text", "error")
     @classmethod
@@ -470,11 +486,14 @@ class AgentExecutionResult(BaseModel):
 
     @model_validator(mode="after")
     def validate_result(self) -> Self:
-        """Require response text only for a successful adapter invocation."""
+        """Bind successful text or typed submission to the process outcome."""
 
         if self.status is AgentExecutionStatus.COMPLETED:
-            if self.response_text is None:
-                raise ValueError("completed Agent execution requires response text")
+            if self.response_text is None and self.semantic_submission is None:
+                raise ValueError(
+                    "completed Agent execution requires response text or a semantic "
+                    "submission"
+                )
             if self.error is not None:
                 raise ValueError("completed Agent execution cannot contain an error")
             if self.telemetry.timed_out or self.telemetry.exit_code != 0:
@@ -488,6 +507,22 @@ class AgentExecutionResult(BaseModel):
                 raise ValueError(
                     "unsuccessful Agent execution cannot expose response text"
                 )
+            if self.semantic_submission is not None:
+                raise ValueError(
+                    "unsuccessful Agent execution cannot expose a semantic submission"
+                )
+        if self.semantic_submission is not None:
+            if self.submission_evidence != self.semantic_submission.evidence:
+                raise ValueError(
+                    "semantic submission and submission evidence must match"
+                )
+        elif (
+            self.submission_evidence is not None
+            and self.submission_evidence.status is AgentSubmissionStatus.ACCEPTED
+        ):
+            raise ValueError(
+                "accepted submission evidence requires its semantic payload"
+            )
         if self.status is AgentExecutionStatus.TIMED_OUT:
             if not self.telemetry.timed_out:
                 raise ValueError("timed-out result requires timed-out telemetry")
@@ -1006,12 +1041,48 @@ class OpenClawSubprocessExecutor:
 
         started_at = self.clock()
         started_monotonic = self.monotonic()
+        submission_binding_sha256: str | None = None
+        submission_capture: SubmissionFileCapture | None = None
         with tempfile.TemporaryDirectory(prefix="sat-openclaw-") as temporary:
+            temporary_path = Path(temporary)
             prompt_path = Path(temporary) / "prompt.md"
             prompt_path.write_text(request.prompt, encoding="utf-8")
             prompt_path.chmod(0o600)
             raw_stream_path = Path(temporary) / "provider-stream.jsonl"
             raw_stream_path.touch(mode=0o600, exist_ok=False)
+            submission_environment: dict[str, str] = {}
+            submission_output_path: Path | None = None
+            if request.submission_contract is not None:
+                submission_schema_path = temporary_path / "submission-schema.json"
+                submission_schema_path.write_text(
+                    request.submission_contract.parameters_schema_json,
+                    encoding="utf-8",
+                )
+                submission_schema_path.chmod(0o600)
+                submission_output_path = temporary_path / "semantic-submission.json"
+                submission_binding_sha256 = hashlib.sha256(
+                    b"\x00".join(
+                        (
+                            secrets.token_bytes(32),
+                            request.session_key.encode("utf-8"),
+                            request.submission_contract.schema_sha256.encode("ascii"),
+                        )
+                    )
+                ).hexdigest()
+                submission_environment = {
+                    "SAT_ARTIFACT_SUBMISSION_SCHEMA_PATH": str(
+                        submission_schema_path.resolve()
+                    ),
+                    "SAT_ARTIFACT_SUBMISSION_OUTPUT_PATH": str(
+                        submission_output_path.resolve()
+                    ),
+                    "SAT_ARTIFACT_SUBMISSION_SCHEMA_SHA256": (
+                        request.submission_contract.schema_sha256
+                    ),
+                    "SAT_ARTIFACT_SUBMISSION_BINDING_SHA256": (
+                        submission_binding_sha256
+                    ),
+                }
             runtime_timeout_seconds, deadline_expired = self._runtime_timeout(
                 request,
                 now=started_at,
@@ -1036,6 +1107,7 @@ class OpenClawSubprocessExecutor:
                             command,
                             runtime_timeout_seconds=runtime_timeout_seconds,
                             raw_stream_path=raw_stream_path,
+                            submission_environment=submission_environment,
                             activity_handler=activity_handler,
                         )
                     )
@@ -1048,7 +1120,9 @@ class OpenClawSubprocessExecutor:
                         "errors": "replace",
                         "shell": False,
                         "stdin": subprocess.DEVNULL,
-                        "env": self._environment(),
+                        "env": self._environment(
+                            submission_environment=submission_environment
+                        ),
                     }
                     if runtime_timeout_seconds > 0:
                         runner_kwargs["timeout"] = (
@@ -1074,6 +1148,8 @@ class OpenClawSubprocessExecutor:
                     started_monotonic=started_monotonic,
                     error=error,
                 )
+            if submission_output_path is not None:
+                submission_capture = capture_submission_file(submission_output_path)
 
         stdout = _decode_process_output(completed.stdout)
         stderr = _decode_process_output(completed.stderr)
@@ -1193,6 +1269,56 @@ class OpenClawSubprocessExecutor:
                 error="OpenClaw reported an upstream model-provider failure",
                 telemetry=telemetry,
             )
+        if request.submission_contract is not None:
+            assert submission_binding_sha256 is not None
+            assert submission_capture is not None
+            semantic_submission, submission_evidence = validate_submission_capture(
+                request.submission_contract,
+                binding_sha256=submission_binding_sha256,
+                capture=submission_capture,
+                tool_calls=(
+                    () if captured_tools is None else captured_tools.tool_calls
+                ),
+                tool_evidence_error=tool_evidence_error,
+            )
+            if semantic_submission is None:
+                assert submission_evidence.diagnostic_code is not None
+                return AgentExecutionResult(
+                    status=AgentExecutionStatus.INVALID_RESPONSE,
+                    error=(
+                        "typed artifact submission rejected: "
+                        f"{submission_evidence.diagnostic_code}"
+                    ),
+                    telemetry=telemetry,
+                    submission_evidence=submission_evidence,
+                )
+            if payload.has_error_payload:
+                rejected = rejected_submission_evidence(
+                    request.submission_contract,
+                    binding_sha256=submission_binding_sha256,
+                    status=AgentSubmissionStatus.INVALID,
+                    code="openclaw_error_after_submission",
+                    detail="OpenClaw returned an error reply payload after submission",
+                    tool_call_id=submission_evidence.tool_call_id,
+                    payload_sha256=submission_evidence.payload_sha256,
+                )
+                return AgentExecutionResult(
+                    status=AgentExecutionStatus.INVALID_RESPONSE,
+                    error="OpenClaw returned an error reply payload after submission",
+                    telemetry=telemetry,
+                    submission_evidence=rejected,
+                )
+            return AgentExecutionResult(
+                status=AgentExecutionStatus.COMPLETED,
+                response_text=(
+                    "\n\n".join(payload.visible_texts)
+                    if payload.visible_texts
+                    else None
+                ),
+                telemetry=telemetry,
+                semantic_submission=semantic_submission,
+                submission_evidence=submission_evidence,
+            )
         if payload.has_error_payload:
             return AgentExecutionResult(
                 status=AgentExecutionStatus.INVALID_RESPONSE,
@@ -1251,6 +1377,7 @@ class OpenClawSubprocessExecutor:
         *,
         runtime_timeout_seconds: int,
         raw_stream_path: Path,
+        submission_environment: Mapping[str, str],
         activity_handler: AgentExecutionActivityHandler | None,
     ) -> tuple[
         subprocess.CompletedProcess[str],
@@ -1283,7 +1410,10 @@ class OpenClawSubprocessExecutor:
             errors="replace",
             shell=False,
             stdin=subprocess.DEVNULL,
-            env=self._environment(raw_stream_path=raw_stream_path),
+            env=self._environment(
+                raw_stream_path=raw_stream_path,
+                submission_environment=submission_environment,
+            ),
             start_new_session=os.name == "posix",
         )
         process_lease: InvocationProcessLease | None = None
@@ -1481,8 +1611,13 @@ class OpenClawSubprocessExecutor:
         self,
         *,
         raw_stream_path: Path | None = None,
+        submission_environment: Mapping[str, str] | None = None,
     ) -> Mapping[str, str] | None:
-        if self.environment is None and raw_stream_path is None:
+        if (
+            self.environment is None
+            and raw_stream_path is None
+            and not submission_environment
+        ):
             return None
         environment = {**os.environ, **(self.environment or {})}
         if raw_stream_path is not None:
@@ -1492,6 +1627,7 @@ class OpenClawSubprocessExecutor:
                     "OPENCLAW_RAW_STREAM_PATH": str(raw_stream_path.resolve()),
                 }
             )
+        environment.update(submission_environment or {})
         return environment
 
     def _capture_tool_evidence(
@@ -1777,6 +1913,7 @@ class ScriptedAgentResponse(BaseModel):
     duration_ms: int = Field(default=0, ge=0)
     stderr: str = ""
     tool_calls: tuple[AgentToolCallEvidence, ...] = ()
+    submission_payload: dict[str, JsonValue] | None = None
 
     @field_validator("text", "model", "provider")
     @classmethod
@@ -1858,16 +1995,61 @@ class ScriptedAgentExecutor:
             response = ScriptedAgentResponse(text=scripted)
 
         now = self.clock()
-        review_tool_calls = (
+        tool_calls = (
             response.tool_calls or (_scripted_review_tool_call(),)
             if request.capability is AgentCapability.REVIEW
-            else ()
+            else response.tool_calls
         )
+        submission_payload = response.submission_payload
+        if submission_payload is None and request.submission_contract is not None:
+            try:
+                candidate = json.loads(response.text)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                candidate = None
+            if isinstance(candidate, dict):
+                submission_payload = candidate
+        semantic_submission: AgentSemanticSubmission | None = None
+        submission_evidence: AgentSubmissionEvidence | None = None
+        if request.submission_contract is not None and submission_payload is not None:
+            external_id = f"scripted-submission-{len(tool_calls) + 1:03d}"
+            output = b"scripted-semantic-submission"
+            submission_call = AgentToolCallEvidence(
+                id=f"tool-{len(tool_calls) + 1:03d}",
+                tool_name=request.submission_contract.tool_name,
+                external_call_sha256=hashlib.sha256(
+                    external_id.encode("utf-8")
+                ).hexdigest(),
+                arguments_sha256=canonical_json_sha256(submission_payload),
+                outcome=AgentToolCallOutcome.SUCCEEDED,
+                is_error=False,
+                output_sha256=hashlib.sha256(output).hexdigest(),
+                output_bytes=len(output),
+                output_excerpt=output.decode("utf-8"),
+            )
+            tool_calls = (*tool_calls, submission_call)
+            binding_sha256 = hashlib.sha256(
+                (
+                    f"{request.session_key}\x00"
+                    f"{request.submission_contract.schema_sha256}"
+                ).encode()
+            ).hexdigest()
+            submission_evidence = AgentSubmissionEvidence(
+                purpose=request.submission_contract.purpose,
+                status=AgentSubmissionStatus.ACCEPTED,
+                schema_sha256=request.submission_contract.schema_sha256,
+                binding_sha256=binding_sha256,
+                tool_call_id=submission_call.id,
+                payload_sha256=canonical_json_sha256(submission_payload),
+            )
+            semantic_submission = AgentSemanticSubmission(
+                payload=submission_payload,
+                evidence=submission_evidence,
+            )
         transcript_sha256 = (
             hashlib.sha256(
                 f"{request.session_key}\n{request.prompt}\n{response.text}".encode()
             ).hexdigest()
-            if request.capability is AgentCapability.REVIEW
+            if tool_calls
             else None
         )
         telemetry = AgentExecutionTelemetry(
@@ -1891,19 +2073,19 @@ class ScriptedAgentExecutor:
             usage=response.usage,
             tool_evidence_status=(
                 AgentToolEvidenceStatus.CAPTURED
-                if request.capability is AgentCapability.REVIEW
+                if tool_calls
                 else AgentToolEvidenceStatus.NOT_CAPTURED
             ),
             session_transcript_sha256=transcript_sha256,
-            session_record_count=(
-                3 if request.capability is AgentCapability.REVIEW else None
-            ),
-            tool_calls=review_tool_calls,
+            session_record_count=(max(3, 2 + len(tool_calls)) if tool_calls else None),
+            tool_calls=tool_calls,
         )
         return AgentExecutionResult(
             status=AgentExecutionStatus.COMPLETED,
             response_text=response.text,
             telemetry=telemetry,
+            semantic_submission=semantic_submission,
+            submission_evidence=submission_evidence,
         )
 
 

@@ -65,6 +65,13 @@ from software_agent_team.scheduling import (
     ScheduledAgentState,
     ScheduleStatus,
 )
+from software_agent_team.submissions import (
+    AgentSemanticSubmission,
+    AgentSubmissionEvidence,
+    AgentSubmissionStatus,
+    canonical_json_sha256,
+    rejected_submission_evidence,
+)
 from software_agent_team.teams import (
     AgentCapability,
     AgentSpec,
@@ -489,6 +496,7 @@ class DynamicExecutor:
                 unresolved_issues=(),
             ).model_dump(mode="json")
             response_text = json.dumps(valid_payload)
+            submission_payload: dict[str, object] | None = valid_payload
             if self.writer_presentation_arrays:
                 response_text = (
                     'Verified setup ["uv", "sync", "--dev"] and tests '
@@ -496,23 +504,26 @@ class DynamicExecutor:
                 )
             if self.invalid_writer_transport:
                 response_text = "not valid JSON"
+                submission_payload = None
             elif self.invalid_writer_once:
                 invalid_payload = dict(valid_payload)
                 invalid_payload["completed_tasks"] = ["TASK_UNKNOWN"]
-                response_text = (
-                    json.dumps(invalid_payload)
-                    if count == 1
-                    else semantic_correction_response(
+                if count == 1:
+                    submission_payload = invalid_payload
+                    response_text = json.dumps(invalid_payload)
+                else:
+                    response_text = semantic_correction_response(
                         invalid_payload,
                         {"/completed_tasks": valid_payload["completed_tasks"]},
                     )
-                )
+                    submission_payload = json.loads(response_text)
         elif request.agent_id == "tester":
             self._wait_for_quality_peer()
-            response_text = SemanticTestReportResponse(
+            submission_payload = SemanticTestReportResponse(
                 findings=(),
                 summary="Deterministic evidence covers the implemented behavior.",
-            ).model_dump_json()
+            ).model_dump(mode="json")
+            response_text = json.dumps(submission_payload)
         elif request.agent_id == "reviewer":
             if self.mutate_reader == request.agent_id:
                 (self.workspace / "MUTATION.txt").write_text(
@@ -565,25 +576,28 @@ class DynamicExecutor:
                     },
                 ]
             response_text = json.dumps(valid_payload)
+            submission_payload = valid_payload
             if self.invalid_review_response_once:
                 invalid_payload = dict(valid_payload)
                 invalid_payload["summary"] = ""
-                response_text = (
-                    json.dumps(invalid_payload)
-                    if count == 1
-                    else semantic_correction_response(
+                if count == 1:
+                    submission_payload = invalid_payload
+                    response_text = json.dumps(invalid_payload)
+                else:
+                    response_text = semantic_correction_response(
                         invalid_payload,
                         {"/summary": valid_payload["summary"]},
                     )
-                )
+                    submission_payload = json.loads(response_text)
             elif self.zero_review_tool_calls_once and count == 2:
                 response_text = semantic_correction_response(
                     valid_payload,
                     {"/criterion_assessments": valid_payload["criterion_assessments"]},
                 )
+                submission_payload = json.loads(response_text)
         else:  # pragma: no cover - the fixture owns the complete team
             raise AssertionError(f"unexpected Agent: {request.agent_id}")
-        return self._result(request, response_text)
+        return self._result(request, response_text, submission_payload)
 
     def _wait_for_quality_peer(self) -> None:
         if self._quality_barrier is None:
@@ -594,6 +608,7 @@ class DynamicExecutor:
         self,
         request: AgentExecutionRequest,
         response_text: str,
+        submission_payload: dict[str, object] | None,
     ) -> AgentExecutionResult:
         is_review = request.capability is AgentCapability.REVIEW
         omit_review_call = is_review and (
@@ -604,57 +619,127 @@ class DynamicExecutor:
             )
         )
         invalid_review_evidence = is_review and self.invalid_review_evidence
+        contract = request.submission_contract
+        assert contract is not None
+        binding_sha256 = hashlib.sha256(
+            f"{request.session_key}\x00{contract.schema_sha256}".encode()
+        ).hexdigest()
+        review_calls = (
+            ()
+            if omit_review_call or invalid_review_evidence
+            else ((review_tool_call(),) if is_review else ())
+        )
+        semantic_submission = None
+        submission_evidence = None
+        tool_calls = review_calls
+        if submission_payload is not None and not invalid_review_evidence:
+            external_id = f"fake-submission-{len(review_calls) + 1:03d}"
+            output = b"fake-semantic-submission"
+            submission_call = AgentToolCallEvidence(
+                id=f"tool-{len(review_calls) + 1:03d}",
+                tool_name=contract.tool_name,
+                external_call_sha256=hashlib.sha256(external_id.encode()).hexdigest(),
+                arguments_sha256=canonical_json_sha256(submission_payload),
+                outcome="succeeded",
+                is_error=False,
+                output_sha256=hashlib.sha256(output).hexdigest(),
+                output_bytes=len(output),
+                output_excerpt=output.decode(),
+            )
+            tool_calls = (*review_calls, submission_call)
+            submission_evidence = AgentSubmissionEvidence(
+                purpose=contract.purpose,
+                status=AgentSubmissionStatus.ACCEPTED,
+                schema_sha256=contract.schema_sha256,
+                binding_sha256=binding_sha256,
+                tool_call_id=submission_call.id,
+                payload_sha256=canonical_json_sha256(submission_payload),
+            )
+            semantic_submission = AgentSemanticSubmission(
+                payload=submission_payload,
+                evidence=submission_evidence,
+            )
+        elif invalid_review_evidence:
+            submission_evidence = rejected_submission_evidence(
+                contract,
+                binding_sha256=binding_sha256,
+                status=AgentSubmissionStatus.UNAUTHORIZED,
+                code="tool_evidence_unavailable",
+                detail=(
+                    "submission cannot be attributed because tool evidence is invalid"
+                ),
+            )
+        else:
+            submission_evidence = rejected_submission_evidence(
+                contract,
+                binding_sha256=binding_sha256,
+                status=AgentSubmissionStatus.MISSING,
+                code="submission_missing",
+                detail=(
+                    "the Agent completed without calling the required submission tool"
+                ),
+            )
+        telemetry = AgentExecutionTelemetry(
+            role=None,
+            agent_id=request.agent_id,
+            capability=request.capability,
+            session_key=request.session_key,
+            command=("fake-agent", request.agent_id),
+            started_at=FIXED_TIME,
+            finished_at=FIXED_TIME,
+            duration_ms=10,
+            exit_code=0,
+            stdout=response_text,
+            stderr="",
+            session_id=f"session-{request.agent_id}",
+            provider="test",
+            model=(None if self.omit_model_for == request.agent_id else request.model),
+            usage=AgentTokenUsage(
+                input_tokens=10,
+                output_tokens=5,
+                total_tokens=15,
+            ),
+            tool_evidence_status=(
+                AgentToolEvidenceStatus.INVALID
+                if invalid_review_evidence
+                else (
+                    AgentToolEvidenceStatus.CAPTURED
+                    if tool_calls
+                    else AgentToolEvidenceStatus.NOT_CAPTURED
+                )
+            ),
+            session_transcript_sha256=(
+                "d" * 64 if tool_calls and not invalid_review_evidence else None
+            ),
+            session_record_count=(
+                max(3, 2 + len(tool_calls))
+                if tool_calls and not invalid_review_evidence
+                else None
+            ),
+            tool_calls=tool_calls,
+            tool_evidence_error=(
+                "session transcript identity mismatch"
+                if invalid_review_evidence
+                else None
+            ),
+        )
+        if semantic_submission is None:
+            assert submission_evidence is not None
+            return AgentExecutionResult(
+                status=AgentExecutionStatus.INVALID_RESPONSE,
+                error=(
+                    "typed artifact submission rejected: "
+                    f"{submission_evidence.diagnostic_code}"
+                ),
+                telemetry=telemetry,
+                submission_evidence=submission_evidence,
+            )
         return AgentExecutionResult(
             status=AgentExecutionStatus.COMPLETED,
             response_text=response_text,
-            telemetry=AgentExecutionTelemetry(
-                role=None,
-                agent_id=request.agent_id,
-                capability=request.capability,
-                session_key=request.session_key,
-                command=("fake-agent", request.agent_id),
-                started_at=FIXED_TIME,
-                finished_at=FIXED_TIME,
-                duration_ms=10,
-                exit_code=0,
-                stdout=response_text,
-                stderr="",
-                session_id=f"session-{request.agent_id}",
-                provider="test",
-                model=(
-                    None if self.omit_model_for == request.agent_id else request.model
-                ),
-                usage=AgentTokenUsage(
-                    input_tokens=10,
-                    output_tokens=5,
-                    total_tokens=15,
-                ),
-                tool_evidence_status=(
-                    AgentToolEvidenceStatus.INVALID
-                    if invalid_review_evidence
-                    else (
-                        AgentToolEvidenceStatus.CAPTURED
-                        if is_review
-                        else AgentToolEvidenceStatus.NOT_CAPTURED
-                    )
-                ),
-                session_transcript_sha256=(
-                    "d" * 64 if is_review and not invalid_review_evidence else None
-                ),
-                session_record_count=(
-                    3 if is_review and not invalid_review_evidence else None
-                ),
-                tool_calls=(
-                    ()
-                    if omit_review_call or invalid_review_evidence
-                    else ((review_tool_call(),) if is_review else ())
-                ),
-                tool_evidence_error=(
-                    "session transcript identity mismatch"
-                    if invalid_review_evidence
-                    else None
-                ),
-            ),
+            telemetry=telemetry,
+            semantic_submission=semantic_submission,
+            submission_evidence=submission_evidence,
         )
 
 
@@ -939,7 +1024,7 @@ def test_dynamic_writer_targeted_correction_keeps_timeout_and_git_evidence(
     assert writer_records[1].response_artifact == runner.outputs["builder"]
 
 
-def test_dynamic_writer_transport_failure_does_not_trigger_semantic_correction(
+def test_dynamic_writer_missing_typed_submission_fails_without_correction(
     tmp_path: Path,
 ) -> None:
     runner, team_plan, executor, _, _ = runtime(
@@ -960,9 +1045,10 @@ def test_dynamic_writer_transport_failure_does_not_trigger_semantic_correction(
         if "/implement/builder-" in reference.path
     )
     assert isinstance(writer_record, AgentExecutionRecord)
-    assert writer_record.response_validation is not None
-    assert writer_record.response_validation.failure_class == "transport"
-    assert writer_record.response_validation.correction_paths == ()
+    assert writer_record.response_validation is None
+    assert writer_record.submission_evidence is not None
+    assert writer_record.submission_evidence.status is AgentSubmissionStatus.MISSING
+    assert writer_record.submission_evidence.diagnostic_code == "submission_missing"
     assert writer_record.semantic_correction_request is None
 
 
@@ -998,14 +1084,20 @@ def test_dynamic_reviewer_repairs_a_zero_call_fabricated_tool_citation(
     assert isinstance(reviewer_records[0], AgentExecutionRecord)
     assert reviewer_records[0].tool_evidence_status is AgentToolEvidenceStatus.CAPTURED
     assert reviewer_records[0].response_contract == "semantic_body_v4"
-    assert reviewer_records[0].tool_calls == ()
+    assert reviewer_records[0].response_transport == "typed_submission_v1"
+    assert [call.tool_name for call in reviewer_records[0].tool_calls] == [
+        "sat_submit_artifact"
+    ]
     assert "does not match any eligible review-chain tool result" in (
         reviewer_records[0].error or ""
     )
     assert isinstance(reviewer_records[1], AgentExecutionRecord)
     assert reviewer_records[1].semantic_correction_request is not None
     assert reviewer_records[1].semantic_correction_outcome == "accepted"
-    assert len(reviewer_records[1].tool_calls) == 1
+    assert [call.tool_name for call in reviewer_records[1].tool_calls] == [
+        "read",
+        "sat_submit_artifact",
+    ]
     assert reviewer_records[1].response_artifact == runner.outputs["reviewer"]
 
 
@@ -1034,14 +1126,19 @@ def test_dynamic_reviewer_repair_reuses_prior_attempt_tool_evidence(
     ]
     assert len(reviewer_records) == 2
     assert isinstance(reviewer_records[0], AgentExecutionRecord)
-    assert len(reviewer_records[0].tool_calls) == 1
+    assert [call.tool_name for call in reviewer_records[0].tool_calls] == [
+        "read",
+        "sat_submit_artifact",
+    ]
     assert "summary: String should have at least 1 character" in (
         reviewer_records[0].error or ""
     )
     assert reviewer_records[0].response_validation is not None
     assert reviewer_records[0].response_validation.correction_paths == ("/summary",)
     assert isinstance(reviewer_records[1], AgentExecutionRecord)
-    assert reviewer_records[1].tool_calls == ()
+    assert [call.tool_name for call in reviewer_records[1].tool_calls] == [
+        "sat_submit_artifact"
+    ]
     assert reviewer_records[1].response_artifact == runner.outputs["reviewer"]
     review = runner.artifact_store.load(runner.outputs["reviewer"])
     assert isinstance(review, ReviewReport)
@@ -1073,7 +1170,15 @@ def test_dynamic_reviewer_session_integrity_failure_is_not_semantically_repaired
     assert isinstance(reviewer_record, AgentExecutionRecord)
     assert reviewer_record.tool_evidence_status is AgentToolEvidenceStatus.INVALID
     assert reviewer_record.tool_evidence_error == "session transcript identity mismatch"
-    assert "failed integrity validation" in (reviewer_record.error or "")
+    assert reviewer_record.submission_evidence is not None
+    assert (
+        reviewer_record.submission_evidence.status is AgentSubmissionStatus.UNAUTHORIZED
+    )
+    assert (
+        reviewer_record.submission_evidence.diagnostic_code
+        == "tool_evidence_unavailable"
+    )
+    assert "tool_evidence_unavailable" in (reviewer_record.error or "")
     assert "reviewer" not in runner.outputs
 
 

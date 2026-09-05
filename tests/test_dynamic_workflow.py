@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 from datetime import UTC, datetime
@@ -74,6 +75,12 @@ from software_agent_team.run_control import RunControlError, RunPhase, Terminati
 from software_agent_team.runtime_controls import RuntimeControlDecision
 from software_agent_team.scheduling import ScheduleStatus
 from software_agent_team.schema_compatibility import supported_schemas
+from software_agent_team.submissions import (
+    AgentSemanticSubmission,
+    AgentSubmissionEvidence,
+    AgentSubmissionStatus,
+    canonical_json_sha256,
+)
 from software_agent_team.teams import (
     AgentCapability,
     AgentSpec,
@@ -501,6 +508,35 @@ class AdaptiveExecutor:
         else:  # pragma: no cover - the fixture owns every Agent
             raise AssertionError(f"unexpected Agent: {request.agent_id}")
         is_review = request.capability is AgentCapability.REVIEW
+        contract = request.submission_contract
+        assert contract is not None
+        submission_payload = json.loads(body)
+        review_calls = (review_tool_call(),) if is_review else ()
+        external_id = f"workflow-submission-{len(review_calls) + 1:03d}"
+        output = b"workflow-semantic-submission"
+        submission_call = AgentToolCallEvidence(
+            id=f"tool-{len(review_calls) + 1:03d}",
+            tool_name=contract.tool_name,
+            external_call_sha256=hashlib.sha256(external_id.encode()).hexdigest(),
+            arguments_sha256=canonical_json_sha256(submission_payload),
+            outcome="succeeded",
+            is_error=False,
+            output_sha256=hashlib.sha256(output).hexdigest(),
+            output_bytes=len(output),
+            output_excerpt=output.decode(),
+        )
+        tool_calls = (*review_calls, submission_call)
+        binding_sha256 = hashlib.sha256(
+            f"{request.session_key}\x00{contract.schema_sha256}".encode()
+        ).hexdigest()
+        submission_evidence = AgentSubmissionEvidence(
+            purpose=contract.purpose,
+            status=AgentSubmissionStatus.ACCEPTED,
+            schema_sha256=contract.schema_sha256,
+            binding_sha256=binding_sha256,
+            tool_call_id=submission_call.id,
+            payload_sha256=canonical_json_sha256(submission_payload),
+        )
         return AgentExecutionResult(
             status=AgentExecutionStatus.COMPLETED,
             response_text=body,
@@ -526,15 +562,16 @@ class AdaptiveExecutor:
                     output_tokens=5,
                     total_tokens=15,
                 ),
-                tool_evidence_status=(
-                    AgentToolEvidenceStatus.CAPTURED
-                    if is_review
-                    else AgentToolEvidenceStatus.NOT_CAPTURED
-                ),
-                session_transcript_sha256=("d" * 64 if is_review else None),
-                session_record_count=(3 if is_review else None),
-                tool_calls=((review_tool_call(),) if is_review else ()),
+                tool_evidence_status=AgentToolEvidenceStatus.CAPTURED,
+                session_transcript_sha256="d" * 64,
+                session_record_count=max(3, 2 + len(tool_calls)),
+                tool_calls=tool_calls,
             ),
+            semantic_submission=AgentSemanticSubmission(
+                payload=submission_payload,
+                evidence=submission_evidence,
+            ),
+            submission_evidence=submission_evidence,
         )
 
 

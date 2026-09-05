@@ -24,9 +24,13 @@ from software_agent_team.response_corrections import (
     SemanticCorrectionOutcome,
     SemanticCorrectionRequestEvidence,
 )
+from software_agent_team.submissions import (
+    AgentSubmissionEvidence,
+    AgentSubmissionStatus,
+)
 from software_agent_team.versioning import SoftwareVersionReport
 
-ARTIFACT_SCHEMA_VERSION = 3
+ARTIFACT_SCHEMA_VERSION = 4
 MINIMUM_READABLE_ARTIFACT_SCHEMA_VERSION = 2
 COMMIT_PATTERN = r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
 AGENT_ID_PATTERN = r"^[a-z][a-z0-9_]*$"
@@ -375,7 +379,7 @@ class HandoffEnvelope(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, ARTIFACT_SCHEMA_VERSION] = ARTIFACT_SCHEMA_VERSION
+    schema_version: Literal[2, 3, ARTIFACT_SCHEMA_VERSION] = ARTIFACT_SCHEMA_VERSION
     kind: Literal[ArtifactKind.HANDOFF_ENVELOPE] = ArtifactKind.HANDOFF_ENVELOPE
     run_id: str = Field(min_length=1, pattern=r"^[a-z0-9][a-z0-9_-]*$")
     team_id: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9_]*$")
@@ -438,7 +442,7 @@ class PhaseArtifact(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, ARTIFACT_SCHEMA_VERSION] = ARTIFACT_SCHEMA_VERSION
+    schema_version: Literal[2, 3, ARTIFACT_SCHEMA_VERSION] = ARTIFACT_SCHEMA_VERSION
     kind: ArtifactKind
     run_id: str = Field(min_length=1, pattern=r"^[a-z0-9][a-z0-9_-]*$")
     team_id: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9_]*$")
@@ -597,7 +601,7 @@ class AgentExecutionRecord(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, ARTIFACT_SCHEMA_VERSION] = ARTIFACT_SCHEMA_VERSION
+    schema_version: Literal[2, 3, ARTIFACT_SCHEMA_VERSION] = ARTIFACT_SCHEMA_VERSION
     kind: Literal[ArtifactKind.AGENT_EXECUTION_RECORD] = (
         ArtifactKind.AGENT_EXECUTION_RECORD
     )
@@ -635,6 +639,10 @@ class AgentExecutionRecord(BaseModel):
         ]
         | None
     ) = None
+    response_transport: Literal["typed_submission_v1"] | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     controller_supplied_fields: tuple[str, ...] = ()
     ignored_controller_fields: tuple[str, ...] = ()
     response_normalizations: tuple[str, ...] = Field(
@@ -650,6 +658,10 @@ class AgentExecutionRecord(BaseModel):
         exclude_if=lambda value: value is None,
     )
     semantic_correction_outcome: SemanticCorrectionOutcome | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    submission_evidence: AgentSubmissionEvidence | None = Field(
         default=None,
         exclude_if=lambda value: value is None,
     )
@@ -756,8 +768,49 @@ class AgentExecutionRecord(BaseModel):
             or self.response_normalizations
             or self.response_validation is not None
             or self.semantic_correction_request is not None
+            or self.submission_evidence is not None
+            or self.response_transport is not None
         ):
             raise ValueError("response binding fields require a response contract")
+        if (
+            self.submission_evidence is not None
+            and self.response_transport != "typed_submission_v1"
+        ):
+            raise ValueError(
+                "submission evidence requires the typed submission transport"
+            )
+        if (
+            self.response_transport == "typed_submission_v1"
+            and self.execution_status is AgentExecutionStatus.COMPLETED
+            and self.submission_evidence is None
+        ):
+            raise ValueError(
+                "completed typed submission transport requires submission evidence"
+            )
+        if (
+            self.submission_evidence is not None
+            and self.submission_evidence.status is AgentSubmissionStatus.ACCEPTED
+        ):
+            matching_submission_calls = tuple(
+                call
+                for call in self.tool_calls
+                if call.id == self.submission_evidence.tool_call_id
+                and call.tool_name == self.submission_evidence.tool_name
+            )
+            if (
+                self.tool_evidence_status is not AgentToolEvidenceStatus.CAPTURED
+                or len(matching_submission_calls) != 1
+                or self.tool_calls[-1] is not matching_submission_calls[0]
+                or matching_submission_calls[0].outcome
+                is not AgentToolCallOutcome.SUCCEEDED
+                or matching_submission_calls[0].is_error
+                or matching_submission_calls[0].arguments_sha256
+                != self.submission_evidence.payload_sha256
+            ):
+                raise ValueError(
+                    "accepted submission evidence must bind the final successful "
+                    "captured tool call"
+                )
         if (self.semantic_correction_request is None) != (
             self.semantic_correction_outcome is None
         ):

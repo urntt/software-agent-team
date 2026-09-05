@@ -1,0 +1,19 @@
+{
+  "id": "sat-artifact-submission",
+  "activation": {
+    "onStartup": true
+  },
+  "name": "SAT Artifact Submission",
+  "description": "Submits one schema-checked semantic artifact to the SAT controller.",
+  "version": "0.1.0",
+  "contracts": {
+    "tools": [
+      "sat_submit_artifact"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

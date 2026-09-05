@@ -202,6 +202,12 @@ Execution records label this grounded Reviewer shape `semantic_body_v4`; other
 current semantic bodies remain `semantic_body_v1`. `semantic_body_v2` and
 `semantic_body_v3` remain valid historical evidence for the attempt-qualified
 tool-only and deterministic-command grounding contracts, respectively.
+`response_contract` continues to identify this semantic schema independently
+of transport. Dynamic execution records additionally name
+`typed_submission_v1` as `response_transport` and retain a content-free
+submission status, invocation/schema binding digests, normalized tool-call ID,
+and payload digest. An accepted submission must bind the final successful
+captured `sat_submit_artifact` call and its canonical arguments digest.
 Existing schema-v2 Review artifacts that predate attempt qualification or
 command references serialize without invented fields, preserving their
 canonical content and digests. Newly grounded references record actual
@@ -217,8 +223,32 @@ ineligible evidence remain typed model-owned failures.
 
 ## Semantic Response Boundary
 
-Transport normalization is deterministic. The controller accepts one
-unambiguous semantic JSON object in any of these forms:
+Dynamic execution Agents deliver semantic values through an invocation-bound
+`sat_submit_artifact` tool, not through assistant-message framing. Before each
+call, the controller freezes the exact response JSON Schema, writes it to an
+owner-private temporary directory, creates a fresh invocation binding, and
+starts the isolated OpenClaw process with only those paths and digests. The
+SAT-owned OpenClaw plugin registers the tool with that exact schema. A
+successful call exclusively writes one private envelope and terminates the
+Agent turn. After the process exits, the controller requires exactly one
+successful final submission-tool call in the attributable session transcript
+and cross-checks its provider call identity and canonical arguments digest
+against the private envelope, invocation binding, schema digest, and payload
+digest. A missing, duplicate, failed, non-final, malformed, unsafe, or
+unattributable submission fails closed. The plugin neither writes the project
+workspace nor changes the Agent's permission profile.
+
+Visible assistant text is retained as raw execution evidence but has no
+semantic authority for a typed runtime call. It may be empty, explanatory,
+truncated, or malformed without replacing the tool arguments. The controller
+still validates those submitted arguments against the semantic Pydantic model,
+controller-owned identity, approved tasks and criteria, Git state, and evidence
+rules before assembling an artifact. Thus typed transport removes presentation
+framing as a source of semantic failure without weakening content validation.
+
+Bootstrap Planning and the fixed-role compatibility path still use a
+deterministic text transport. On that compatibility boundary, the controller
+accepts one unambiguous semantic JSON object in any of these forms:
 
 - Raw JSON;
 - One `json` code fence;
@@ -243,31 +273,34 @@ invalid semantic content remain invalid. A field that the authoritative schema
 forbids may be removed deterministically only when its removal cannot grant or
 hide controller/evidence authority; the execution record names every removal.
 
-OpenClaw transport may contain more than one visible payload when a semantic
-answer is followed by an ancillary tool diagnostic. SAT retains the raw JSON
+Compatibility transport may contain more than one visible payload when a
+semantic answer is followed by an ancillary tool diagnostic. SAT retains the raw JSON
 envelope and payload boundaries in telemetry, concatenates visible text in
 order, and applies the object rules above to the combined presentation. It
 therefore accepts one semantic object plus non-object diagnostic text but still
 rejects two competing objects. Payload count alone is not a semantic verdict.
 
-The pinned OpenClaw `agent` and `infer model run` commands do not expose a
-response-schema flag at the tool-using Agent boundary. The optional `llm-task`
-tool can validate a separate no-tools nested model call, so SAT does not treat
-it as the final response contract for an Agent that has inspected or changed a
-workspace. SAT therefore validates the returned semantic object in its
-controller.
+The pinned OpenClaw `agent` command does not expose a response-schema CLI flag
+for a tool-using Agent. SAT therefore supplies the dynamic schema through its
+isolated plugin tool and still performs authoritative semantic validation in
+the controller. The optional `llm-task` tool validates a separate no-tools
+nested model call and is never substituted for the final response of an Agent
+that inspected or changed a workspace.
 
 A targetable model-owned failure becomes a versioned, content-free diagnostic
 with a validator-owned invariant ID, structured affected-entity subjects, and
 exact model-owned JSON-pointer paths. Human-readable error text explains the
-failure but never defines its identity. The controller retains the invalid semantic object,
+failure but never defines its identity. The controller retains the invalid
+semantic object,
 binds its canonical SHA-256 into a `semantic_correction_v2` request, assigns the
 exact paths to ordered Controller-owned slots, and asks the model to return only
-the corresponding semantic values—never paths or the complete object. The
-runtime schema requires the exact slot count, so the model cannot widen field
-authority; the Controller applies each value to its pre-authorized path on a
-copy and preserves every unrelated field,
-and revalidates the compiled result. A writer's verified commit and snapshot
+the corresponding semantic values—never paths or the complete object. For a
+dynamic Agent, the controller replaces the tool parameters with the exact
+correction-envelope schema for that invocation; the schema requires the exact
+slot count, so the model cannot widen field authority. The model calls the same
+submission tool once, and assistant prose is again non-authoritative. The
+Controller applies each value to its pre-authorized path on a copy, preserves
+every unrelated field, and revalidates the compiled result. A writer's verified commit and snapshot
 are frozen before correction and must remain unchanged. A missing user-owned
 decision returns through the typed Planning-question path and never enters this
 protocol. Transport failures, unlocated errors, invalid envelopes, repeated
@@ -379,10 +412,11 @@ workspaces/<run_id>/
 └── detached self-contained Git clone and generated result
 ```
 
-Artifact schema v3 adds typed response diagnostics, deterministic normalization,
-targeted-correction requests, and correction outcomes while retaining read
-support for schema v2. Both versions attribute handoffs, execution telemetry,
-and Agent-owned artifacts to run-scoped Agent IDs. The Agent namespace prevents two Agents with
+Artifact schema v4 adds the independent response-transport identity and bound
+submission evidence. Schema v3 introduced typed response diagnostics,
+deterministic normalization, targeted-correction requests, and correction
+outcomes; SAT retains read support for schema v2 and v3. All readable versions
+attribute handoffs, execution telemetry, and Agent-owned artifacts to run-scoped Agent IDs. The Agent namespace prevents two Agents with
 the same output kind from claiming the same immutable path. On every write and
 load, the store checks producer identity, stage membership, capability, and
 handoff endpoints against the approved `TeamPlan`.

@@ -208,20 +208,27 @@ eligible only for digest-bound correction of the exact typed fields identified
 by validation; the model never regenerates the complete retained object or
 selects the fields it may replace.
 
-OpenClaw may deliver the semantic response and an ancillary tool diagnostic as
-separate visible payloads. The execution boundary preserves their original
-payloads in raw telemetry and combines the visible text in order for strict
-semantic parsing. One unambiguous top-level object plus presentation-only text
-is valid; two object candidates remain ambiguous and are rejected. Transport
-payload count is therefore not mistaken for semantic object count.
+Dynamic execution Agents call the invocation-bound `sat_submit_artifact` tool
+exactly once with their semantic response. SAT gives the plugin the exact
+AgentSpec-derived JSON Schema and a fresh controller binding, then requires the
+private envelope to match the final successful attributable tool call. Visible
+assistant payloads remain raw telemetry but are not parsed as the dynamic
+artifact, so prose, truncation, or ancillary diagnostics cannot compete with
+the submitted object. Missing, duplicate, non-final, malformed, failed, or
+unattributable submissions fail closed. Bootstrap Planning and fixed-role
+compatibility calls retain the bounded single-object text parser; on that path,
+payload count is not mistaken for semantic object count and two real object
+candidates remain ambiguous.
 
 The pinned OpenClaw Agent CLI does not expose a response-schema parameter for a
-tool-using turn. SAT therefore compiles responses at the controller boundary.
+tool-using turn. SAT supplies that schema through its isolated submission plugin
+and then compiles the submitted values at the controller boundary.
 Transport failures and unlocated errors stop. A targetable model-owned failure
 produces a content-free diagnostic and a `semantic_correction_v2` request bound
 to the retained object's SHA-256. The Controller assigns an ordered slot to
 each exact validator-owned JSON-pointer path; the model returns only one value
-per slot and cannot submit, widen, or reorder path authority. Derived parent
+per slot through the same typed tool under a correction-only schema and cannot
+widen or reorder path authority. Derived parent
 errors are not copied into a child-field request. Every other value remains
 immutable. Product
 Planning continues only after every prior validator-owned invariant/subject
@@ -807,7 +814,8 @@ every approved writer, deterministic evidence from every approved Tester or
 from the controller when no Tester exists, evidence from every approved
 Reviewer, one immutable quality commit, and complete manual-review coverage.
 The dynamic runner now binds each scheduler-approved Agent to its exact model,
-time authority, prompt, semantic-correction policy, Git or read-only boundary, aggregate
+time authority, prompt, invocation-scoped typed submission schema,
+semantic-correction policy, Git or read-only boundary, aggregate
 budget, execution record, and durable handoffs. Its persisted events distinguish
 provider activity, tool start/completion, degraded observation, suspected stall,
 grace recovery, and terminal provider stall. A confirmed stall preserves typed

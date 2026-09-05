@@ -1,0 +1,12 @@
+{
+  "name": "@software-agent-team/artifact-submission",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Invocation-bound typed artifact submission for SAT",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.js"
+    ]
+  }
+}

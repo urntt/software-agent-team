@@ -129,8 +129,10 @@ RESPONSE_SCHEMA_JSON
 ${response_schema_json}
 
 FINAL_RESPONSE_CONTRACT
-Return exactly one JSON object containing only the semantic fields in the
-response schema. The controller supplies `${expected_kind}`, Agent and run
-identity, iteration, timestamps, commit, and review scope. Use every key once.
-Do not wrap the object in Markdown, add prose, modify project source, emit
-progress messages, or return more than one object.
+Call `${submission_tool}` exactly once with the semantic fields in the response
+schema as its arguments. The controller supplies `${expected_kind}`, Agent and
+run identity, iteration, timestamps, commit, and review scope. The submission
+tool writes only to a controller-owned invocation file; it does not modify the
+read-only project snapshot or expand Review authority. Its success ends this
+invocation. Do not serialize the artifact in assistant text, wrap it in
+Markdown, add closing prose, or call the submission tool more than once.

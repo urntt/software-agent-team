@@ -43,6 +43,7 @@ from software_agent_team.responses import (
     WorkResultResponse,
     parse_dynamic_agent_response,
 )
+from software_agent_team.submissions import AgentSubmissionPurpose
 from software_agent_team.teams import (
     AgentCapability,
     AgentSpec,
@@ -334,6 +335,13 @@ def test_dynamic_prompt_is_compiled_from_the_approved_agent_spec() -> None:
     assert request.expected_kind is ArtifactKind.WORK_RESULT
     assert request.timeout_seconds == 600
     assert request.model == "provider/model"
+    assert request.submission_contract is not None
+    assert request.submission_contract.purpose is AgentSubmissionPurpose.ARTIFACT
+    assert request.submission_contract.parameters_schema()["type"] == "object"
+    assert "Call `sat_submit_artifact` exactly once" in rendered
+    assert "Do not serialize the artifact in assistant text" in " ".join(
+        rendered.split()
+    )
     assert "top-level user input" in rendered
     assert '"review_boundary_definitions": {' in rendered
     assert "root itself is the top-level input" in rendered
@@ -2121,6 +2129,37 @@ def test_dynamic_response_binds_identity_and_exact_assigned_tasks() -> None:
 
     assert isinstance(parsed.body, WorkResultResponse)
     assert parsed.body.completed_tasks == ("TASK_LINKS",)
+
+
+def test_dynamic_response_uses_typed_submission_not_assistant_framing() -> None:
+    execution_request = build_dynamic_agent_execution_request(developer_inputs())
+    payload = WorkResultResponse(
+        summary="Implemented the local-link checker.",
+        completed_tasks=("TASK_LINKS",),
+    ).model_dump(mode="json")
+    result = ScriptedAgentExecutor(
+        [
+            ScriptedAgentResponse(
+                text=('Here is a malformed presentation copy: {"summary":"truncated"'),
+                submission_payload=payload,
+                model="provider/model",
+            )
+        ],
+        clock=lambda: CREATED_AT,
+    ).execute(execution_request)
+
+    parsed = parse_dynamic_agent_response(
+        result,
+        execution_request,
+        task_brief=task_brief(),
+        team_plan=team_plan(),
+        assigned_task_ids=("TASK_LINKS",),
+    )
+
+    assert isinstance(parsed.body, WorkResultResponse)
+    assert parsed.body.summary == "Implemented the local-link checker."
+    assert result.semantic_submission is not None
+    assert result.response_text != result.semantic_submission.payload
 
 
 def test_dynamic_response_rejects_unassigned_tasks_and_fixed_role_aliases() -> None:

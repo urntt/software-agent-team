@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import PurePosixPath
@@ -97,7 +96,6 @@ from software_agent_team.responses import (
     WorkResultResponse,
     controller_fields_for,
     parse_dynamic_agent_response,
-    parse_json_object_response,
 )
 from software_agent_team.run_control import TerminationReason
 from software_agent_team.scheduling import (
@@ -625,24 +623,19 @@ class DynamicAgentRunner:
                     )
                 else:
                     try:
-                        parse_result = result
+                        controller_semantic_payload: dict[str, object] | None = None
                         if correction_plan is not None:
-                            envelope = parse_json_object_response(result.response_text)
-                            corrected_payload = apply_semantic_correction(
-                                envelope,
+                            if result.semantic_submission is None:
+                                raise AgentArtifactResponseError(
+                                    "semantic correction omitted its typed submission"
+                                )
+                            controller_semantic_payload = apply_semantic_correction(
+                                result.semantic_submission.payload,
                                 correction_plan,
                             )
                             correction_applied = True
-                            parse_result = result.model_copy(
-                                update={
-                                    "response_text": json.dumps(
-                                        corrected_payload,
-                                        ensure_ascii=False,
-                                    )
-                                }
-                            )
                         parsed = parse_dynamic_agent_response(
-                            parse_result,
+                            result,
                             request,
                             task_brief=self.task_brief,
                             team_plan=self.team_plan,
@@ -657,6 +650,7 @@ class DynamicAgentRunner:
                                 ),
                             ),
                             review_command_evidence=commands,
+                            controller_semantic_payload=controller_semantic_payload,
                         )
                     except AgentArtifactResponseError as error:
                         record_error = self._error_detail(error)

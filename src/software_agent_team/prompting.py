@@ -40,8 +40,14 @@ from software_agent_team.planning import (
 from software_agent_team.response_corrections import (
     SemanticCorrectionPlan,
     correction_prompt,
+    semantic_correction_schema,
 )
 from software_agent_team.responses import RESPONSE_BODY_MODELS
+from software_agent_team.submissions import (
+    ARTIFACT_SUBMISSION_TOOL,
+    AgentSubmissionContract,
+    AgentSubmissionPurpose,
+)
 from software_agent_team.teams import (
     AgentCapability,
     AgentSpec,
@@ -679,8 +685,23 @@ def build_semantic_correction_request(
 ) -> AgentExecutionRequest:
     """Request replacements for only the controller-identified invalid fields."""
 
+    contract = request.submission_contract
+    if contract is None:
+        return request.model_copy(
+            update={"prompt": f"{request.prompt}{correction_prompt(plan)}"}
+        )
+    correction_contract = AgentSubmissionContract.from_schema(
+        semantic_correction_schema(plan),
+        purpose=AgentSubmissionPurpose.SEMANTIC_CORRECTION,
+    )
     return request.model_copy(
-        update={"prompt": f"{request.prompt}{correction_prompt(plan)}"}
+        update={
+            "prompt": (
+                f"{request.prompt}"
+                f"{correction_prompt(plan, submission_tool=contract.tool_name)}"
+            ),
+            "submission_contract": correction_contract,
+        }
     )
 
 
@@ -758,23 +779,9 @@ def _dynamic_prompt_context(inputs: DynamicAgentPromptInputs) -> dict[str, objec
     return context
 
 
-def render_dynamic_agent_prompt(
-    inputs: DynamicAgentPromptInputs,
-    *,
-    template_root: Path = TEMPLATE_ROOT,
-) -> str:
-    """Render a capability prompt from one approved run-scoped AgentSpec."""
+def _dynamic_response_schema(agent: AgentSpec) -> dict[str, object]:
+    """Build the one schema shared by the prompt and submission tool."""
 
-    agent = inputs.agent
-    template_name = DYNAMIC_CAPABILITY_TEMPLATES.get(agent.capability)
-    if template_name is None:
-        raise AgentPromptError(f"no dynamic prompt exists for {agent.capability.value}")
-    try:
-        source = (template_root / template_name).read_text(encoding="utf-8")
-    except OSError as error:
-        raise AgentPromptError(
-            f"cannot load dynamic prompt template: {template_name}"
-        ) from error
     response_model = RESPONSE_BODY_MODELS.get(agent.expected_output)
     if response_model is None:
         raise AgentPromptError(
@@ -818,11 +825,33 @@ def render_dynamic_agent_prompt(
             raise AgentPromptError("dynamic Review assessment requirements are invalid")
         if "boundary_checks" not in assessment_required:
             assessment_required.append("boundary_checks")
+    return response_schema
+
+
+def render_dynamic_agent_prompt(
+    inputs: DynamicAgentPromptInputs,
+    *,
+    template_root: Path = TEMPLATE_ROOT,
+) -> str:
+    """Render a capability prompt from one approved run-scoped AgentSpec."""
+
+    agent = inputs.agent
+    template_name = DYNAMIC_CAPABILITY_TEMPLATES.get(agent.capability)
+    if template_name is None:
+        raise AgentPromptError(f"no dynamic prompt exists for {agent.capability.value}")
+    try:
+        source = (template_root / template_name).read_text(encoding="utf-8")
+    except OSError as error:
+        raise AgentPromptError(
+            f"cannot load dynamic prompt template: {template_name}"
+        ) from error
+    response_schema = _dynamic_response_schema(agent)
     values = {
         "agent_id": agent.id,
         "agent_label": agent.label,
         "capability": agent.capability.value,
         "expected_kind": agent.expected_output.value,
+        "submission_tool": ARTIFACT_SUBMISSION_TOOL,
         "context_json": json.dumps(
             _dynamic_prompt_context(inputs),
             ensure_ascii=False,
@@ -868,4 +897,8 @@ def build_dynamic_agent_execution_request(
         prompt=render_dynamic_agent_prompt(inputs, template_root=template_root),
         timeout_seconds=agent.timeout_seconds,
         model=route.model,
+        submission_contract=AgentSubmissionContract.from_schema(
+            _dynamic_response_schema(agent),
+            purpose=AgentSubmissionPurpose.ARTIFACT,
+        ),
     )

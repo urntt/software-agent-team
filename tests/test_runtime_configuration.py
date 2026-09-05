@@ -215,6 +215,7 @@ def test_materialized_config_binds_every_role_to_one_run_workspace(
         "fallbacks": [],
     }
     assert "models" not in payload
+    assert "plugins" not in payload
     assert defaults["sandbox"]["scope"] == "session"
     assert defaults["sandbox"]["docker"] == {
         "image": "sat-agent:phase1",
@@ -294,6 +295,16 @@ def test_materialized_config_contains_only_approved_run_scoped_agents(
         for agent in agents
     )
     assert all("sessions_spawn" in agent["tools"]["deny"] for agent in agents)
+    assert payload["plugins"]["enabled"] is True
+    assert payload["plugins"]["allow"] == ["sat-artifact-submission"]
+    assert payload["plugins"]["entries"] == {
+        "sat-artifact-submission": {"enabled": True}
+    }
+    plugin_paths = payload["plugins"]["load"]["paths"]
+    assert len(plugin_paths) == 1
+    assert Path(plugin_paths[0]).name == "artifact_submission"
+    assert (Path(plugin_paths[0]) / "openclaw.plugin.json").is_file()
+    assert payload["tools"]["sandbox"]["tools"]["alsoAllow"] == ["sat_submit_artifact"]
     reviewer = next(agent for agent in agents if agent["id"] == "quality_reviewer")
     tester = next(agent for agent in agents if agent["id"] == "acceptance_tester")
     assert "exec" not in reviewer["tools"]["deny"]
@@ -332,6 +343,7 @@ def test_bootstrap_runtime_contains_only_the_selected_read_only_capability(
         "fallbacks": [],
     }
     assert "generalist_developer" not in json.dumps(agents)
+    assert "plugins" not in payload
 
 
 def test_bootstrap_runtime_cannot_mix_with_an_approved_team(tmp_path: Path) -> None:

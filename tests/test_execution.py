@@ -31,6 +31,11 @@ from software_agent_team.execution import (
     stable_session_key,
 )
 from software_agent_team.process_lifecycle import ProcessLeaseStore
+from software_agent_team.submissions import (
+    AgentSubmissionContract,
+    AgentSubmissionPurpose,
+    AgentSubmissionStatus,
+)
 from software_agent_team.teams import AgentCapability
 
 STARTED = datetime(2026, 8, 10, 12, 0, tzinfo=UTC)
@@ -363,6 +368,159 @@ def test_openclaw_adapter_captures_runtime_telemetry() -> None:
         reasoning_tokens=7,
         total_tokens=159,
     )
+
+
+def test_openclaw_adapter_uses_bound_submission_not_visible_text(
+    tmp_path: Path,
+) -> None:
+    state = tmp_path / "state"
+    state.mkdir()
+    semantic_payload = {"summary": "typed result"}
+    submission_contract = AgentSubmissionContract.from_schema(
+        {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {"summary": {"type": "string"}},
+            "required": ["summary"],
+        },
+        purpose=AgentSubmissionPurpose.ARTIFACT,
+    )
+
+    def runner(
+        command: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        environment = kwargs["env"]
+        assert isinstance(environment, dict)
+        session_id = "typed-session"
+        agent_id = command[command.index("--agent") + 1]
+        session_key = command[command.index("--session-key") + 1]
+        prompt_path = Path(command[command.index("--message-file") + 1])
+        prompt = prompt_path.read_text(encoding="utf-8")
+        external_id = "provider-call-1"
+        output_path = Path(environment["SAT_ARTIFACT_SUBMISSION_OUTPUT_PATH"])
+        output_path.write_text(
+            json.dumps(
+                {
+                    "protocol": "sat_artifact_submission_v1",
+                    "binding_sha256": environment[
+                        "SAT_ARTIFACT_SUBMISSION_BINDING_SHA256"
+                    ],
+                    "schema_sha256": environment[
+                        "SAT_ARTIFACT_SUBMISSION_SCHEMA_SHA256"
+                    ],
+                    "tool_call_id": external_id,
+                    "payload": semantic_payload,
+                }
+            ),
+            encoding="utf-8",
+        )
+        output_path.chmod(0o600)
+        sessions = state / "agents" / agent_id / "sessions"
+        sessions.mkdir(parents=True)
+        records = [
+            {"type": "session", "id": session_id},
+            {"type": "message", "message": {"role": "user", "content": prompt}},
+            {
+                "type": "message",
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "toolCall",
+                            "id": external_id,
+                            "name": "sat_submit_artifact",
+                            "arguments": semantic_payload,
+                        }
+                    ],
+                },
+            },
+            {
+                "type": "message",
+                "message": {
+                    "role": "toolResult",
+                    "toolCallId": external_id,
+                    "toolName": "sat_submit_artifact",
+                    "isError": False,
+                    "content": [{"type": "text", "text": "accepted"}],
+                    "details": {"status": "completed"},
+                },
+            },
+            {
+                "type": "message",
+                "message": {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "not valid JSON"}],
+                },
+            },
+        ]
+        transcript = sessions / f"{session_id}.jsonl"
+        transcript.write_text(
+            "\n".join(json.dumps(record) for record in records) + "\n",
+            encoding="utf-8",
+        )
+        (sessions / "sessions.json").write_text(
+            json.dumps(
+                {
+                    session_key: {
+                        "sessionId": session_id,
+                        "sessionFile": str(transcript),
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        response = json.loads(openclaw_result("not valid JSON"))
+        response["meta"]["agentMeta"]["sessionId"] = session_id
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=json.dumps(response),
+            stderr="",
+        )
+
+    result = executor_with_clocks(
+        runner,
+        environment={"OPENCLAW_STATE_DIR": str(state)},
+    ).execute(request(submission_contract=submission_contract))
+
+    assert result.status is AgentExecutionStatus.COMPLETED
+    assert result.response_text == "not valid JSON"
+    assert result.semantic_submission is not None
+    assert result.semantic_submission.payload == semantic_payload
+    assert result.submission_evidence is not None
+    assert result.submission_evidence.status is AgentSubmissionStatus.ACCEPTED
+    assert result.telemetry.tool_calls[-1].tool_name == "sat_submit_artifact"
+
+
+def test_openclaw_adapter_rejects_missing_required_submission() -> None:
+    submission_contract = AgentSubmissionContract.from_schema(
+        {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {"summary": {"type": "string"}},
+            "required": ["summary"],
+        },
+        purpose=AgentSubmissionPurpose.ARTIFACT,
+    )
+
+    def runner(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=openclaw_result("fallback prose"),
+            stderr="",
+        )
+
+    result = executor_with_clocks(runner).execute(
+        request(submission_contract=submission_contract)
+    )
+
+    assert result.status is AgentExecutionStatus.INVALID_RESPONSE
+    assert result.response_text is None
+    assert result.semantic_submission is None
+    assert result.submission_evidence is not None
+    assert result.submission_evidence.status is AgentSubmissionStatus.MISSING
+    assert result.submission_evidence.diagnostic_code == "submission_missing"
 
 
 def test_live_openclaw_process_acquires_and_releases_durable_ownership(

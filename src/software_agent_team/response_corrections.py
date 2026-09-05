@@ -605,7 +605,23 @@ def build_semantic_correction_plan(
     )
 
 
-def correction_prompt(plan: SemanticCorrectionPlan) -> str:
+def semantic_correction_schema(
+    plan: SemanticCorrectionPlan,
+) -> dict[str, JsonValue]:
+    """Return the exact bounded schema for one controller-authorized correction."""
+
+    schema = SemanticCorrectionEnvelope.model_json_schema()
+    value_schema = schema["properties"]["replacement_values"]
+    value_schema["minItems"] = len(plan.evidence.target_paths)
+    value_schema["maxItems"] = len(plan.evidence.target_paths)
+    return schema
+
+
+def correction_prompt(
+    plan: SemanticCorrectionPlan,
+    *,
+    submission_tool: str | None = None,
+) -> str:
     """Render the small correction envelope contract without echoing content."""
 
     target_slots = [
@@ -627,12 +643,20 @@ def correction_prompt(plan: SemanticCorrectionPlan) -> str:
         }
         for index, path in enumerate(plan.evidence.target_paths)
     ]
-    schema = SemanticCorrectionEnvelope.model_json_schema()
-    value_schema = schema["properties"]["replacement_values"]
-    value_schema["minItems"] = len(plan.evidence.target_paths)
-    value_schema["maxItems"] = len(plan.evidence.target_paths)
+    schema = semantic_correction_schema(plan)
+    transport_instruction = (
+        "Return exactly one JSON object and no prose or Markdown fence."
+        if submission_tool is None
+        else (
+            f"Call `{submission_tool}` exactly once with the correction envelope as "
+            "its arguments. Do not serialize the envelope in assistant text. The "
+            "successful submission ends this invocation."
+        )
+    )
     return (
         "\n\nTARGETED_SEMANTIC_CORRECTION_V2\n"
+        "This correction contract supersedes the earlier FINAL_RESPONSE_CONTRACT "
+        "for this invocation. "
         "The prior semantic JSON object was parsed and retained by the controller. "
         "Do not regenerate or repeat that object. Return only a correction envelope "
         "matching CORRECTION_SCHEMA_JSON. Provide one semantic value for each slot, "
@@ -644,7 +668,7 @@ def correction_prompt(plan: SemanticCorrectionPlan) -> str:
         f"{json.dumps(target_slots, ensure_ascii=False, indent=2)}\n"
         "CORRECTION_SCHEMA_JSON\n"
         f"{json.dumps(schema, ensure_ascii=False, indent=2)}\n"
-        "Return exactly one JSON object and no prose or Markdown fence."
+        f"{transport_instruction}"
     )
 
 
