@@ -34,6 +34,17 @@ writing a terminal outcome, the next invocation marks that started report
 `incomplete_observed_on_recovery`; it does not infer a cause from a later
 successful run.
 
+Diagnostic report schema v2 gives every stage a private, non-credential
+ownership identity inherited by its subprocesses. Linux process inventory uses
+that identity together with a process-local child-subreaper boundary, process
+groups, live ancestry, and PID/start-time identities. A child that creates a
+new session is adopted by the supervisor when its parent exits, matched against
+the inherited identity, terminated by exact identity, and reaped. It therefore
+cannot disappear between topology samples or turn a leaking stage into a false
+success. If the kernel boundary is unavailable, the report says so and falls
+back to marker attribution. Reports retain only a SHA-256 digest of the
+identity; they never capture a process environment.
+
 Each stage has a 30-minute developer-gate infrastructure ceiling so an
 unattended repository check cannot remain stuck forever. That ceiling is not a
 product-run deadline or an Agent invocation work limit. A timeout or terminal
@@ -264,7 +275,7 @@ runtime/python/
   requirements.in             Direct runtime dependencies
   requirements.lock           Exact transitive dependency lock
 src/software_agent_team/
-  artifacts.py                 Persisted schemas
+  artifacts.py                 ProductDefinition, TaskBrief, and persisted schemas
   artifact_store.py            Write-once artifact and output persistence
   assembly.py                  Semantic response and verified-fact assembly
   budgets.py                   Agent and pricing budgets

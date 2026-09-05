@@ -162,8 +162,14 @@ The user may answer in ordinary language. SAT then:
 4. Requires explicit authorization before model-backed Planning begins;
 5. Lets the read-only bootstrap Planning capability ask only questions whose
    answers can materially change requirements, acceptance, architecture, team
-   composition, dependencies, permissions, budget, or model use;
-6. Presents one complete overview containing requirements, acceptance criteria,
+   composition, dependencies, permissions, budget, or model use. Missing
+   material target users, primary workflow, or delivery maturity must be
+   clarified, while an explicit throwaway prototype does not trigger a fixed
+   questionnaire;
+6. Presents one complete overview beginning with target users, killer workflow,
+   delivery maturity, usability/operational/delivery expectations, non-goals,
+   and architecture/team/cost/delivery effects, then containing requirements,
+   acceptance criteria,
    Agent work assignments and their derived write/read-only authority, proposed
    Agents and rationales, dependencies, permissions, workspace scopes, model,
    provider-liveness and optional whole-run deadline authority,
@@ -190,7 +196,7 @@ After plan approval, the controller automatically and atomically:
 - Generates a unique internal run ID;
 - Persists the authorized request, append-only Planning turns, immutable plan
   revisions, exact resource approval and liveness authority, confirmed
-  TaskBrief, implementation intent, and approved TeamPlan;
+  ProductDefinition, TaskBrief, implementation intent, and approved TeamPlan;
 - Creates only the approved run-scoped AgentSpecs; it does not select a fixed
   product team;
 - Creates a fresh isolated source baseline and run workspace;

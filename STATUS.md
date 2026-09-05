@@ -23,6 +23,12 @@ evidence-bounded unknown cause rather than a retroactively invented diagnosis.
 The latest clean batch gate at `65518d9` passed all 1,014 tests after a
 deadline-crossing cleanup race was reproduced, fixed, and regression-tested;
 it likewise recorded no new OOM evidence or residual owned resources.
+A later diagnostic gate over the ProductDefinition candidate passed all 1,030
+tests. Its schema-v2 report recorded exact inherited stage ownership,
+process-local Linux subreaper attribution, successful boundary restoration,
+zero residual stage processes or SAT resources, and no new cgroup or kernel OOM
+event. That run was intentionally a dirty-tree implementation gate; final
+closure still requires repeated clean gates on one frozen revision.
 
 The current development head implements configuration schema v8 model metadata
 with attributable price/context sources, task-scoped route snapshots, one
@@ -253,10 +259,16 @@ The Phase 3B Planning engine is also implemented. A versioned `PlanningRequest`
 proves explicit model-work authorization before the first invocation. The
 read-only bootstrap Planner may return either one decision-value question with
 two or three suggestions and a custom-answer path, or one complete proposal.
-Planning schema v4 records each question's decision category and owner, missing
-evidence, material consequences, and alternatives. The controller enforces the
-fixed responsibility matrix before showing a question, and every answered
-question must resolve to one proposal decision with unchanged ownership.
+Planning schema v5 records each question's decision category and owner, missing
+evidence, material consequences, alternatives, and the exact ProductDefinition
+dimensions it can resolve. The controller enforces the fixed responsibility
+matrix before showing a question, and every answered question must resolve to
+one proposal decision with unchanged ownership. Current proposals must carry
+an attributable ProductDefinition covering target users, primary workflow,
+delivery maturity, usability, operations, and delivery expectations. Each
+dimension records whether it came from explicit input, a resolved question, a
+Planner recommendation, or a justified not-material judgment, plus real
+downstream requirement, criterion, or decision references.
 Strict proposal validation covers stable requirement IDs, explicit non-goals,
 decision-owned assumptions, acceptance criteria and their requirement links,
 Agent work assignments, task ownership, dynamic Agent responsibilities,
@@ -284,16 +296,19 @@ cross-plan bindings at its execution boundary, so mutated approved inputs
 cannot be substituted before runtime.
 The bootstrap Planner still cannot create an Agent or advance run state.
 
-The approval overview now separates user decisions, Planning recommendations,
-Agent/Controller autonomy, and non-negotiable Controller policy. It renders
-requirements and non-goals, visible assumptions, each
+The approval overview now begins with the approved audience, killer workflow,
+delivery maturity, quality and delivery expectations, non-goals, and their
+architecture, team, cost, and delivery effects. It then separates user
+decisions, Planning recommendations, Agent/Controller autonomy, and
+non-negotiable Controller policy. It renders requirements, visible assumptions, each
 requirement-to-criterion-to-writer-to-independent-verifier path, and every
 Agent's inputs, expected output, and handoff, followed by risks and the failure
 and delivery boundary. Current proposals fail closed when any trace is missing
-or a writer claims its own independent verification. Planning schema v2 remains
-readable without changing its canonical serialization; safe edits retain the
-legacy version rather than relabeling it as v3. Ambiguous-task provider behavior
-and real-user comprehension are not established by these offline contracts.
+or a writer claims its own independent verification. Planning schema v2 through
+v4 remain readable without changing their canonical serialization; safe edits
+retain the legacy version rather than relabeling it. Ambiguous-task provider
+behavior and real-user comprehension are not established by these offline
+contracts.
 
 Planning criterion ownership is now explicit. The response schema requires
 every Planner-defined criterion to have implementation-task coverage and

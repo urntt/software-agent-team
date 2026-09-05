@@ -79,9 +79,14 @@ On first use, SAT guides you through:
 5. Explicit task-wide USD/deadline authorization and a persisted task-admission
    self-check before model-backed Planning;
 6. A bounded conversation containing only questions that can materially change
-   the result, with the missing information and consequence shown before each
-   question;
-7. One overview of requirements, explicit non-goals and assumptions,
+   the result. When a short request leaves them material and unknown, SAT asks
+   about target users, the primary workflow, or whether the delivery is a
+   throwaway prototype, reusable local product, or releasable small product;
+   each question shows the missing information and consequence first;
+7. One overview that begins with the approved audience, killer workflow,
+   delivery maturity, usability/operational/delivery expectations, non-goals,
+   and their architecture, team, cost, and delivery effects, followed by
+   requirements, explicit assumptions,
    requirement-to-evidence traceability, acceptance criteria, controller-owned
    execution-profile constraints separated from additional task constraints,
    Agent work assignments with their controller-derived write or read-only

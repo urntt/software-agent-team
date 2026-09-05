@@ -49,7 +49,8 @@ The product accepts either:
 A run also receives:
 
 - A clean or seeded Git repository;
-- A confirmed `TaskBrief` and user-approved `TeamPlan`;
+- A confirmed `TaskBrief`, including its approved `ProductDefinition`, and a
+  user-approved `TeamPlan`;
 - Run-scoped `AgentSpec` entries and a `ModelRoutePlan`;
 - Allowed tools and sandbox policy;
 - Fixed validation commands;
@@ -109,10 +110,12 @@ environment, guides first-run provider configuration, asks what the user wants
 to build, and conducts a bounded multi-round Planning dialogue. Questions may
 use normal conversation or suggested choices with a custom answer path.
 
-Before execution, SAT shows one editable overview of requirements,
-implementation intent, task-defined Agents, dependencies, permissions, budgets,
-and model routes. After approval, the controller validates and creates the
-run-scoped team. During execution, SAT shows configurable run-level and
+Before execution, SAT shows one editable overview that begins with target
+users, the killer workflow, delivery maturity, quality expectations, non-goals,
+and their architecture, team, cost, and delivery effects, then shows detailed
+requirements, implementation intent, task-defined Agents, dependencies,
+permissions, budgets, and model routes. After approval, the controller validates
+and creates the run-scoped team. During execution, SAT shows configurable run-level and
 per-Agent progress and accepts user guidance, correction, pause, resume,
 interrupt, or cancellation. It returns a runnable result or an honest terminal
 report with exact next commands.
@@ -184,7 +187,9 @@ when code, usability evidence, or controlled experiments justify a replacement.
   `collecting_evidence`, then `stopped`. Initialization is observed through
   attributable private-state checkpoints and has its own no-progress guard;
   provider inactivity begins only after the exact current turn or private stream
-  is attributable. These guards never become a productive-work deadline.
+  is attributable. Both observations enter provider wait through that single
+  initialization readiness authority, so observer order cannot move a lifecycle
+  backwards. These guards never become a productive-work deadline.
 - Interrupt, cancel, user deadline, controlled-evaluation timeout,
   initialization stall, provider stall, and process failure remain distinct
   stop authorities. A terminal result is not published until the exact process
@@ -310,7 +315,7 @@ Each concept has one authoritative owner.
 | Adaptive Planning dialogue, proposal compilation, overview, approval, and write-once evidence | `src/software_agent_team/planning.py` |
 | Task-admission and plan-execution self-check schema, dependency freshness, rendering, and write-once evidence | `src/software_agent_team/self_check.py` |
 | Provider subprocess identity leases and orphan recovery | `src/software_agent_team/process_lifecycle.py` |
-| Phase and handoff artifact schemas | `src/software_agent_team/artifacts.py` |
+| ProductDefinition, TaskBrief, phase, and handoff artifact schemas | `src/software_agent_team/artifacts.py` |
 | Canonical persisted-model integrity digest | `src/software_agent_team/integrity.py` |
 | Immutable artifact, handoff, and output persistence | `src/software_agent_team/artifact_store.py` |
 | Controller binding of Agent semantics to verified runtime facts | `src/software_agent_team/assembly.py` |
@@ -463,6 +468,7 @@ change in the same controlled trial.
 | Require independent quality coverage without imposing a permanent Tester/Reviewer pair | Every writing path needs a downstream read-only quality judgment before acceptance, but a small cohesive task may justify one quality Agent while a higher-risk task may justify independent testing and review. Fixed dual-quality fixtures remain useful experimental controls rather than product topology. |
 | Let the approved Agent DAG express quality handoffs | Independence means a writer cannot be its own sole acceptance authority; it does not require every Testing and Review Agent to be peer nodes. A Reviewer may depend on a Tester when the user-approved plan needs that completed analysis, while both remain read-only and downstream of every writer. The controller validates the DAG and the scheduler launches only ready Agents, so quality sequencing is explicit rather than hidden policy. |
 | Admit Planning questions through a deterministic responsibility matrix | The user owns product intent, material trade-offs, privacy, external actions, and organization policy; Planning recommends acceptance, delivery, team, and routes; execution handles reversible implementation choices; Controller policy alone owns safety and evidence integrity. Recording category, owner, missing evidence, material consequences, and alternatives lets the controller reject misplaced questions without pretending it can judge their semantic usefulness from prose alone. |
+| Require an attributable ProductDefinition before team design | A feature list does not establish who will use the result, its killer workflow, or whether the user expects a throwaway prototype, a reusable local product, or a releasable small product. Current Planning therefore records target users, primary workflow, delivery maturity, usability, operations, and delivery expectations with `explicit_input`, `resolved_question`, `planner_recommendation`, or `not_material` provenance and downstream requirement, criterion, and decision references. Missing material user-owned depth becomes a bounded question; Planner-owned quality recommendations become visible approval choices. The overview must expose architecture, team, cost, and delivery effects, while an explicit throwaway prototype remains eligible for a lean plan rather than a fixed questionnaire or inflated team. |
 | Require a deterministic Planning clarity gate before approval | A syntactically executable plan may still conceal scope or responsibility. Current proposals therefore need stable requirement and decision references, explicit non-goals and assumptions, and a complete requirement-to-criterion-to-writer-to-independent-verifier graph. The overview projects those facts together with Agent inputs, outputs, handoffs, resources, risks, and delivery boundaries; real comprehensibility still requires user validation rather than another model score. |
 | Show one editable plan overview before execution | Requirements, implementation intent, Agent responsibilities, dependencies, permissions, budgets, and model routes affect quality and cost. The user must be able to approve or revise them before the controller creates the team. Controller-owned execution-profile constraints and additional task-specific Planning constraints are shown under distinct authority labels; the Planner must not restate or paraphrase the former, and the compiled TaskBrief preserves both without concealing an approved addition. |
 | Use OpenClaw as the Agent runtime, not the orchestrator | OpenClaw provides model/provider integration, sessions, tools, and sandboxing; the experiment still needs a model-independent control plane. |
@@ -791,6 +797,8 @@ creation.
 
 - Add model-work authorization followed by bounded multi-round dialogue;
 - Combine free-form conversation with suggested options and custom answers;
+- Establish an attributable ProductDefinition before deriving requirements and
+  the execution team;
 - Generate one requirements, implementation, team, dependency, budget, and
   model overview;
 - Let the user approve, request a natural-language revision, or edit safe

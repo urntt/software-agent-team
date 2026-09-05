@@ -456,15 +456,18 @@ seconds. Approval revalidates that authority against the TeamPlan at the
 execution boundary.
 The bootstrap Planner cannot create Agents or change lifecycle state.
 
-Planning schema v4 adds the same typed normalization and correction evidence;
-schema v2 and v3 remain readable. Compatibility fields omit themselves when
-absent so loading historical evidence does not change its canonical bytes or
-digest. A structured edit of historical evidence preserves its schema identity;
-a new model-authored replacement uses the current schema.
+Planning schema v5 adds an attributable ProductDefinition to current proposals,
+adaptive implementation plans, and confirmed TaskBriefs, plus the exact
+product-definition dimensions resolved by each question. Schema v2 through v4
+remain readable. Compatibility fields omit themselves when absent so loading
+historical evidence does not change its canonical bytes or digest. Schema v4
+introduced the typed normalization and correction evidence retained by v5. A
+structured edit of historical evidence preserves its schema identity; a new
+model-authored replacement uses the current schema.
 The live response schema, unlike the backward-readable persistence models,
-requires non-null question category and owner, admission rationale, stable
-requirement references, non-goals, assumption ownership, decision provenance,
-and criterion verifier references.
+requires non-null question category and owner, admission rationale,
+ProductDefinition, stable requirement references, non-goals, assumption
+ownership, decision provenance, and criterion verifier references.
 
 Before a question reaches the user, the controller checks its declared category
 against the fixed responsibility matrix and rejects autonomous implementation,
@@ -472,6 +475,10 @@ scheduling, safety, or evidence-integrity questions. Before a proposal can be
 shown, persisted, or approved, the controller requires every answered question
 to map to one unchanged decision record and validates the complete
 requirement-to-criterion-to-writer-to-downstream-read-only-verifier graph.
+For the current schema it also rejects missing product depth, a Planner-owned
+target user/workflow/maturity, an explicit-input statement that expands beyond
+its quoted source, a question-backed dimension absent from that question's
+declared scope, and any product-definition reference outside the proposal.
 These structural checks cannot prove that free text was classified wisely;
 provider-backed ambiguous-task and user-comprehension evidence remain separate
 acceptance boundaries.
@@ -887,6 +894,11 @@ when investigating it rather than editing artifacts in place.
   only monotonic, attributable checkpoints: process launch, session directory,
   session index, session binding, transcript header, and exact current-turn
   prompt digest; the private provider stream is an equivalent ready boundary.
+  This initialization monitor is the sole readiness authority: both the session
+  activity observer and private-stream observer submit their trusted checkpoint
+  through it before provider wait can begin. A faster observer therefore cannot
+  publish provider wait and leave a slower observer to move the lifecycle back
+  to initialization.
   Prompt content is neither retained nor emitted. Ninety seconds without a new
   checkpoint enters a visible final 15-second grace, after which the exact
   process is stopped as `initialization_stall`. Observer absence or malformed

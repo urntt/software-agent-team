@@ -176,6 +176,38 @@ decision with the original category and owner. Assumptions may reference only
 local implementation or scheduling decisions inside the approved boundary;
 they cannot substitute for a user authorization or Controller invariant.
 
+Before team design, every current proposal also carries one `ProductDefinition`
+with six dimensions:
+
+- `target_users`;
+- `primary_workflow`;
+- `delivery_maturity`, exactly `throwaway_prototype`,
+  `usable_local_product`, or `releasable_small_product`;
+- `usability_expectations`;
+- `operational_expectations`; and
+- `delivery_expectations`.
+
+Each dimension records a statement or maturity level, one of
+`explicit_input`, `resolved_question`, `planner_recommendation`, or
+`not_material`, attributable source and rationale, and stable downstream
+requirement, criterion, and decision references. An explicit-input statement
+preserves the quoted user wording. A question declares the exact dimensions it
+resolves; each resolved statement must be an exact fragment of that answer, and
+the answer must reach one unchanged user-owned product decision. If an answer
+does not cover a declared dimension, Planning must ask again rather than infer it.
+Planning cannot silently recommend target users, primary workflow, or maturity.
+Target users or workflow may be `not_material` only for an explicitly approved
+throwaway prototype. Usability, operations, and delivery may be reasoned
+Planner recommendations that become user-approved with the overview.
+
+This is a dependency contract, not a questionnaire count. An explicit
+throwaway prototype can proceed directly with a lean proposal. An
+under-specified reusable product must clarify material user-owned depth first.
+Every material dimension must change downstream requirements, criteria, or
+decisions; the proposal also states its architecture, team, cost, and delivery
+effects. A `ProductDefinition` that merely fills fields without changing the
+plan is invalid.
+
 ### Planning Response Boundary
 
 Planning responses remain strict, but harmless presentation differences are
@@ -312,22 +344,25 @@ from the user before approval.
 
 ### Overview Before Execution
 
-The proposal shown before execution contains:
+The proposal shown before execution contains, in this order:
 
-1. The requested outcome and explicit non-goals;
-2. Success conditions, constraints, assumptions, and decision provenance split
+1. Target users, killer workflow, delivery maturity, usability, operational and
+   delivery expectations, explicit non-goals, and the resulting architecture,
+   team, cost, and delivery effects;
+2. The requested outcome and requirements;
+3. Success conditions, constraints, assumptions, and decision provenance split
    by user, Planning, execution autonomy, and non-negotiable Controller policy;
-3. The implementation approach, major deliverables, and each task's criterion
+4. The implementation approach, major deliverables, and each task's criterion
    bindings and dependencies;
-4. The proposed Agents, why each exists, and what each owns;
-5. Agent dependencies, expected handoffs, and independent quality coverage;
-6. Permission and workspace boundaries in plain language;
-7. Model choices or routing preferences, including any authorized automatic
+5. The proposed Agents, why each exists, and what each owns;
+6. Agent dependencies, expected handoffs, and independent quality coverage;
+7. Permission and workspace boundaries in plain language;
+8. Model choices or routing preferences, including any authorized automatic
    selection or switching;
-8. The user-approved task USD authorization and optional deadline; controlled
+9. The user-approved task USD authorization and optional deadline; controlled
    evaluations additionally show their frozen call, token, duration, and cost
    limits;
-9. The delivery destination and expected validation commands.
+10. The delivery destination and expected validation commands.
 
 The clarity gate requires every requirement to reach at least one observable
 criterion, every criterion to reach a responsible writer task, and every such
@@ -784,12 +819,13 @@ deterministically deconflicts an echo whose model-owned relationship is still
 needed. The canonical profile text remains controller-owned, both task bindings
 are retained, and the raw response plus every normalization remain recorded in
 the Planning turn.
-Planning schema v4 adds typed validation diagnostics, deterministic
-normalization, and targeted-correction evidence while retaining read support
-for schema-v2 and schema-v3 evidence. Current live response schemas make the
-responsibility and clarity fields mandatory and non-null. Structured edits of
-historical evidence preserve its schema identity rather than relabeling it as
-current.
+Planning schema v5 adds the attributable ProductDefinition and question-to-
+dimension contract. It retains read support and canonical serialization for
+schema-v2 through schema-v4 evidence. Schema v4 introduced typed validation
+diagnostics, deterministic normalization, and targeted-correction evidence.
+Current live response schemas make ProductDefinition, responsibility, and
+clarity fields mandatory and non-null. Structured edits of historical evidence
+preserve its schema identity rather than relabeling it as current.
 Blocking model waits emit a concise heartbeat every ten seconds, record when a
 response returns, show contract validation, and explicitly announce each exact
 correction target. These messages expose elapsed time and controller state, not
