@@ -87,8 +87,10 @@ The controller derives actual launch order from the approved dependency graph,
 enforces concurrency and shared-workspace safety, monitors provider activity and
 any user-authorized whole-run deadline, records verified Git snapshots and
 quality evidence, and owns revision and termination decisions. On success, SAT reports the delivered
-directory and exact setup, run, and test commands. On failure, it preserves an
-auditable report instead of presenting unfinished work as successful.
+directory and exact setup, run, and test commands. Every new terminal report
+also records the exact SAT release and source identity that controlled the run.
+On failure, SAT preserves an auditable report instead of presenting unfinished
+work as successful.
 
 While execution is active, the same terminal accepts optional slash commands:
 

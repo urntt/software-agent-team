@@ -56,7 +56,13 @@ from software_agent_team.responses import (
     TestReportResponse as SemanticTestReport,
 )
 from software_agent_team.run_control import RunControlError, RunPhase, TerminationReason
+from software_agent_team.schema_compatibility import supported_schemas
 from software_agent_team.teams import load_team_manifest
+from software_agent_team.versioning import (
+    IdentityStatus,
+    InstallMode,
+    SoftwareVersionReport,
+)
 from software_agent_team.workflow import WorkflowCoordinator
 
 REPOSITORY_ROOT = Path(__file__).parents[1]
@@ -65,6 +71,27 @@ POLICY = REPOSITORY_ROOT / "configs" / "run-policy.json"
 BENCHMARK = REPOSITORY_ROOT / "benchmarks" / "task_manager" / "benchmark.json"
 SEED = REPOSITORY_ROOT / "benchmarks" / "task_manager" / "seed"
 FIXED_TIME = datetime(2026, 8, 10, 12, 0, tzinfo=UTC)
+
+
+def software_version() -> SoftwareVersionReport:
+    """Return exact deterministic SAT provenance for workflow evidence."""
+
+    return SoftwareVersionReport(
+        release_version="0.1.0",
+        display_version="0.1.0+gaaaaaaaaaaaa",
+        source_revision="a" * 40,
+        dirty=False,
+        install_mode=InstallMode.SOURCE,
+        channel=None,
+        source_ref=None,
+        repository_url=None,
+        application_path="/opt/software-agent-team",
+        artifact_digest=None,
+        installed_at=None,
+        identity_status=IdentityStatus.VERIFIED,
+        provenance_source="git",
+        schema_support=supported_schemas(),
+    )
 
 
 def git(repository: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -425,6 +452,7 @@ def coordinator(
             input_cost_per_million_usd="0",
             output_cost_per_million_usd="0",
         ),
+        software_version=software_version(),
         manual_review_criteria=configuration.benchmark.manual_review_criteria,
         clock=lambda: FIXED_TIME,
         role_timeout_seconds=configuration.policy.agent_stage_timeouts_seconds,
@@ -466,6 +494,8 @@ def test_offline_workflow_completes_with_parallel_independent_verification(
     assert (run_directory / "final-report.json").is_file()
     markdown = (run_directory / outcome.human_report_path).read_text(encoding="utf-8")
     assert "Status: `completed`" in markdown
+    assert "SAT version: `0.1.0+gaaaaaaaaaaaa`" in markdown
+    assert f"SAT source revision: `{'a' * 40}`" in markdown
     assert "Agent calls: 4" in markdown
     assert "Complete-journey model calls: 4" in markdown
     assert "Cost by call, Agent, phase, and route" in markdown
@@ -486,6 +516,7 @@ def test_offline_workflow_completes_with_parallel_independent_verification(
     final_report = json.loads(
         (run_directory / "final-report.json").read_text(encoding="utf-8")
     )
+    assert final_report["software_version"]["source_revision"] == "a" * 40
     expected_manual = ["AC_DOCUMENTATION", "AC_ACCESSIBILITY"]
     assert test_report["manual_review_criteria"] == expected_manual
     assert review_report["reviewed_criteria"] == expected_manual

@@ -73,6 +73,7 @@ from software_agent_team.responses import (
 from software_agent_team.run_control import RunControlError, RunPhase, TerminationReason
 from software_agent_team.runtime_controls import RuntimeControlDecision
 from software_agent_team.scheduling import ScheduleStatus
+from software_agent_team.schema_compatibility import supported_schemas
 from software_agent_team.teams import (
     AgentCapability,
     AgentSpec,
@@ -84,9 +85,35 @@ from software_agent_team.teams import (
     TeamPlan,
     TeamPlanOrigin,
 )
+from software_agent_team.versioning import (
+    IdentityStatus,
+    InstallMode,
+    SoftwareVersionReport,
+)
 
 FIXED_TIME = datetime(2026, 8, 26, 12, 0, tzinfo=UTC)
 MODEL = "test/provider-model"
+
+
+def software_version() -> SoftwareVersionReport:
+    """Return exact deterministic SAT provenance for dynamic run evidence."""
+
+    return SoftwareVersionReport(
+        release_version="0.1.0",
+        display_version="0.1.0+gaaaaaaaaaaaa",
+        source_revision="a" * 40,
+        dirty=False,
+        install_mode=InstallMode.SOURCE,
+        channel=None,
+        source_ref=None,
+        repository_url=None,
+        application_path="/opt/software-agent-team",
+        artifact_digest=None,
+        installed_at=None,
+        identity_status=IdentityStatus.VERIFIED,
+        provenance_source="git",
+        schema_support=supported_schemas(),
+    )
 
 
 def review_tool_claim() -> ReviewToolEvidenceClaim:
@@ -536,6 +563,7 @@ def coordinator(
         executor=executor,
         quality_gate_factory=gates,
         pricing_by_model={MODEL: ModelPricing(model=MODEL)},
+        software_version=software_version(),
         budget_ledger=budget_ledger,
         manual_review_criteria=manual,
         control_store_handler=control_store_handler,
@@ -578,6 +606,12 @@ def test_dynamic_workflow_accepts_one_iteration_with_live_lifecycle_order(
 
     assert outcome.record.phase is RunPhase.COMPLETED
     assert report.status is FinalStatus.COMPLETED
+    assert report.software_version == software_version()
+    markdown = (
+        tmp_path / "runs" / approved.task_brief.run_id / outcome.human_report_path
+    ).read_text(encoding="utf-8")
+    assert "SAT version: `0.1.0+gaaaaaaaaaaaa`" in markdown
+    assert f"SAT source revision: `{'a' * 40}`" in markdown
     assert all(item.status is CheckStatus.PASSED for item in report.acceptance_results)
     assert gates.calls == [1]
     assert len(outcome.schedules) == 1

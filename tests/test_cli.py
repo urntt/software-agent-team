@@ -111,6 +111,27 @@ def task_resource_authorization(
     )
 
 
+def software_version_report(application_path: Path) -> SoftwareVersionReport:
+    """Return deterministic source provenance for CLI launch tests."""
+
+    return SoftwareVersionReport(
+        release_version="0.1.0",
+        display_version="0.1.0+gaaaaaaaaaaaa",
+        source_revision="a" * 40,
+        dirty=False,
+        install_mode=InstallMode.SOURCE,
+        channel=None,
+        source_ref=None,
+        repository_url=None,
+        application_path=str(application_path),
+        artifact_digest=None,
+        installed_at=None,
+        identity_status=IdentityStatus.VERIFIED,
+        provenance_source="git",
+        schema_support=supported_schemas(),
+    )
+
+
 def test_cost_prompts_do_not_reintroduce_an_arbitrary_product_ceiling(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -476,26 +497,8 @@ def test_cli_no_command_runs_the_guided_product_journey(
         )
 
     monkeypatch.setattr(cli, "inspect_task_admission_update", fake_update)
-    monkeypatch.setattr(
-        cli,
-        "_software_version_report",
-        lambda: SoftwareVersionReport(
-            release_version="0.1.0",
-            display_version="0.1.0+gaaaaaaaaaaaa",
-            source_revision="a" * 40,
-            dirty=False,
-            install_mode=InstallMode.SOURCE,
-            channel=None,
-            source_ref=None,
-            repository_url=None,
-            application_path=str(tmp_path / "application"),
-            artifact_digest=None,
-            installed_at=None,
-            identity_status=IdentityStatus.VERIFIED,
-            provenance_source="git",
-            schema_support=supported_schemas(),
-        ),
-    )
+    version = software_version_report(tmp_path / "application")
+    monkeypatch.setattr(cli, "_software_version_report", lambda: version)
     monkeypatch.setattr(
         cli,
         "_plan_execution_checkpoint",
@@ -600,6 +603,7 @@ def test_cli_no_command_runs_the_guided_product_journey(
     assert options.quality_manifest == cli.DEFAULT_PRODUCT_PROFILE
     assert planning_kwargs["budget_ledger"] is options.budget_ledger
     assert options.budget_ledger is not None
+    assert observed["execution_kwargs"]["software_version"] is version
     output = capsys.readouterr().out
     assert "What would you like to build?" in output
     assert "task-management" not in output
@@ -1091,13 +1095,19 @@ def test_dynamic_product_launch_uses_approved_agents_and_manual_scope(
         lambda **kwargs: cleanup_calls.append(kwargs) or SimpleNamespace(removed=()),
     )
 
-    outcome = cli._execute_dynamic_workflow(approved, options)
+    version = software_version_report(tmp_path / "application")
+    outcome = cli._execute_dynamic_workflow(
+        approved,
+        options,
+        software_version=version,
+    )
 
     assert outcome == "dynamic-outcome"
     assert observed["boundary"]["team_plan"] is team_plan
     coordinator = observed["coordinator"]
     assert coordinator["manual_review_criteria"] == ("AC_USER", "AC_TESTS")
     assert set(coordinator["pricing_by_model"]) == {"provider/model"}
+    assert coordinator["software_version"] is version
     assert observed["approved"] is approved
     assert observed["execute"] == {
         "source_repository": options.source_repository,
@@ -2185,7 +2195,11 @@ def test_execute_workflow_cleans_run_sandboxes_after_interruption(
     )
 
     with pytest.raises(KeyboardInterrupt):
-        cli._execute_workflow(task_brief, options)
+        cli._execute_workflow(
+            task_brief,
+            options,
+            software_version=software_version_report(tmp_path / "application"),
+        )
 
     assert cleanup_calls == [
         {

@@ -426,6 +426,16 @@ the workspace and delivery boundaries. Failed approved-plan preflight is
 persisted as blocking evidence instead of becoming a late Agent-launch error.
 Neither checkpoint makes a semantic provider request.
 
+Every new completed, failed, or user-cancelled `FinalReport` embeds the same
+typed `SoftwareVersionReport` captured at task admission (or immediately before
+an explicit evaluation run). This binds the controlling release, full source
+revision, install mode, channel, artifact provenance, identity status, and
+schema support into `final-report.json`; the human report renders the exact
+display version and full revision. JSON, Markdown, and the model-spend ledger
+are then committed through the same rollback-capable terminal bundle. Older
+reports without software identity remain readable and keep their original
+canonical serialization.
+
 Every compatibility-workflow status update is first enriched into a versioned
 `RunEvent`. It stores its run ID, contiguous sequence, UTC timestamp, lifecycle
 revision, category, minimum visibility, phase, and attributable Agent attempt

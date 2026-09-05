@@ -112,6 +112,7 @@ from software_agent_team.run_control import (
 )
 from software_agent_team.runtime_configuration import RuntimeConfigurationError
 from software_agent_team.teams import TeamManifest, TeamPlan, compile_fixed_team_plan
+from software_agent_team.versioning import SoftwareVersionReport
 
 PHASE1_TEAM_ID = "function_specialized"
 PHASE1_ITERATION_LIMIT = 2
@@ -205,6 +206,7 @@ class WorkflowCoordinator:
         quality_gate_factory: QualityGateFactory,
         budget: AgentBudget,
         pricing: ModelPricing,
+        software_version: SoftwareVersionReport,
         runtime_setup: RuntimeSetup | None = None,
         manual_review_criteria: tuple[str, ...] = (),
         role_timeout_seconds: Mapping[AgentRole, int],
@@ -255,6 +257,7 @@ class WorkflowCoordinator:
         self.quality_gate_factory = quality_gate_factory
         self.budget = budget
         self.pricing = pricing
+        self.software_version = software_version
         self.runtime_setup = runtime_setup
         self.manual_review_criteria = cleaned_manual_criteria
         self.agent_stage_timeouts_seconds = {
@@ -1190,6 +1193,7 @@ class WorkflowCoordinator:
             run_id=record.run_id,
             team_id=record.team_id,
             created_at=_utc(self.clock),
+            software_version=self.software_version,
             status=FinalStatus.COMPLETED,
             termination_reason=TerminationReason.SUCCEEDED.value,
             final_commit=record.current_commit,
@@ -1255,6 +1259,7 @@ class WorkflowCoordinator:
             run_id=record.run_id,
             team_id=record.team_id,
             created_at=_utc(self.clock),
+            software_version=self.software_version,
             status=FinalStatus.FAILED,
             termination_reason=reason.value,
             final_commit=record.current_commit,

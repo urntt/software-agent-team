@@ -94,6 +94,7 @@ from software_agent_team.scheduling import (
     ScheduleStatus,
 )
 from software_agent_team.teams import AgentCapability, TeamPlan, TeamPlanOrigin
+from software_agent_team.versioning import SoftwareVersionReport
 
 
 class DynamicWorkflowError(RuntimeError):
@@ -192,6 +193,7 @@ class DynamicWorkflowCoordinator:
         executor: AgentExecutor,
         quality_gate_factory: DynamicQualityGateFactory,
         pricing_by_model: Mapping[str, ModelPricing],
+        software_version: SoftwareVersionReport,
         budget_ledger: AgentBudgetLedger | None = None,
         runtime_setup: RuntimeSetup | None = None,
         manual_review_criteria: tuple[str, ...] = (),
@@ -220,6 +222,7 @@ class DynamicWorkflowCoordinator:
         self.executor = executor
         self.quality_gate_factory = quality_gate_factory
         self.pricing_by_model = prices
+        self.software_version = software_version
         self.budget_ledger = budget_ledger
         self.runtime_setup = runtime_setup
         self.manual_review_criteria = criteria
@@ -1012,6 +1015,7 @@ class DynamicWorkflowCoordinator:
             run_id=record.run_id,
             team_id=record.team_id,
             created_at=_utc(self.clock),
+            software_version=self.software_version,
             status=FinalStatus.COMPLETED,
             termination_reason=TerminationReason.SUCCEEDED.value,
             final_commit=record.current_commit,
@@ -1089,6 +1093,7 @@ class DynamicWorkflowCoordinator:
             run_id=record.run_id,
             team_id=record.team_id,
             created_at=_utc(self.clock),
+            software_version=self.software_version,
             status=FinalStatus.FAILED,
             termination_reason=reason.value,
             final_commit=record.current_commit,
@@ -1147,6 +1152,7 @@ class DynamicWorkflowCoordinator:
             run_id=record.run_id,
             team_id=record.team_id,
             created_at=_utc(self.clock),
+            software_version=self.software_version,
             status=FinalStatus.CANCELLED,
             termination_reason=reason.value,
             final_commit=record.current_commit,

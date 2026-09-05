@@ -19,6 +19,8 @@ from pydantic import (
     model_validator,
 )
 
+from software_agent_team.versioning import SoftwareVersionReport
+
 ARTIFACT_SCHEMA_VERSION = 2
 COMMIT_PATTERN = r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
 AGENT_ID_PATTERN = r"^[a-z][a-z0-9_]*$"
@@ -1485,6 +1487,10 @@ class FinalReport(PhaseArtifact):
 
     kind: Literal[ArtifactKind.FINAL_REPORT] = ArtifactKind.FINAL_REPORT
     producer: Literal["controller"] = "controller"
+    software_version: SoftwareVersionReport | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     status: FinalStatus
     termination_reason: str = Field(min_length=1)
     final_commit: str | None = Field(default=None, pattern=COMMIT_PATTERN)

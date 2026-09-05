@@ -1613,6 +1613,8 @@ def _prepare_runtime_boundary(
 def _execute_workflow(
     task_brief: TaskBrief,
     options: _WorkflowLaunchOptions,
+    *,
+    software_version: SoftwareVersionReport,
 ) -> WorkflowOutcome:
     """Execute one fixed evaluation brief through the compatibility engine."""
 
@@ -1635,6 +1637,7 @@ def _execute_workflow(
             input_cost_per_million_usd=options.input_cost_per_million_usd,
             output_cost_per_million_usd=options.output_cost_per_million_usd,
         ),
+        software_version=software_version,
         runtime_setup=boundary.runtime_setup,
         manual_review_criteria=configuration.manifest.manual_review_criteria,
         role_timeout_seconds=configuration.policy.evaluation_timeouts,
@@ -1689,6 +1692,7 @@ def _execute_dynamic_workflow(
     approved: ApprovedPlanningResult,
     options: _AdaptiveWorkflowLaunchOptions,
     *,
+    software_version: SoftwareVersionReport,
     control_store_handler: (
         Callable[[ControlCommandStore, TeamPlan], Callable[[], None] | None] | None
     ) = None,
@@ -1720,6 +1724,7 @@ def _execute_dynamic_workflow(
         executor=boundary.executor,
         quality_gate_factory=boundary.quality_gate_factory,
         pricing_by_model=pricing_by_model,
+        software_version=software_version,
         budget_ledger=options.budget_ledger,
         runtime_setup=boundary.runtime_setup,
         manual_review_criteria=manual_review_criteria,
@@ -1855,6 +1860,7 @@ def _run_workflow(args: argparse.Namespace) -> int:
             iteration_limit=EVALUATION_ITERATION_LIMIT,
             verification_concurrency=concurrency,
         ),
+        software_version=_software_version_report(),
     )
     print(
         f"run {outcome.record.phase.value}: run={outcome.record.run_id} "
@@ -2570,7 +2576,11 @@ def _task_admission_checkpoint(
     model_inspections: tuple[OpenClawModelInspection, ...],
     resource_authorization: TaskResourceAuthorization,
     update_observation: ForegroundUpdateObservation | None = None,
-) -> tuple[TaskSelfCheckReport, ForegroundUpdateObservation]:
+) -> tuple[
+    TaskSelfCheckReport,
+    ForegroundUpdateObservation,
+    SoftwareVersionReport,
+]:
     """Persist and render one complete pre-Planning readiness snapshot."""
 
     version = _software_version_report()
@@ -2614,7 +2624,7 @@ def _task_admission_checkpoint(
         )
     )
     print(f"  Evidence: {path}")
-    return report, update_observation
+    return report, update_observation, version
 
 
 def _plan_execution_checkpoint(
@@ -2702,7 +2712,7 @@ def _run_product() -> int:
     if request is None:
         return 0
     planning_request, destination, resource_authorization = request
-    admission_report, update_observation = _task_admission_checkpoint(
+    admission_report, update_observation, software_version = _task_admission_checkpoint(
         planning_request=planning_request,
         destination=destination,
         state_paths=state_paths,
@@ -2798,6 +2808,7 @@ def _run_product() -> int:
                     budget_ledger=budget_ledger,
                     run_deadline_at=resource_authorization.deadline_at,
                 ),
+                software_version=software_version,
                 control_store_handler=start_controls,
             )
             report_path = (
@@ -2841,7 +2852,7 @@ def _run_product() -> int:
                 )
                 for profile in configuration.model_profiles
             )
-            admission_report, _ = _task_admission_checkpoint(
+            admission_report, _, software_version = _task_admission_checkpoint(
                 planning_request=planning_request,
                 destination=destination,
                 state_paths=state_paths,

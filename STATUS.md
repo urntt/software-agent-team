@@ -28,10 +28,14 @@ workspace, or runtime-Agent creation. The first report includes full SAT
 release/source identity, local/schema/model/task/budget facts, and exactly one
 foreground managed-channel observation; the second covers every approved
 route, Agent authority, runtime policy, sandbox, source, and delivery boundary.
-Formatter, lint, doctor, and **880 offline tests** pass for this implementation.
-Changed-fact resume remediation, final-report version bundling, and fresh
-provider/device cost, liveness, self-check, and managed-release validation
-remain incomplete; the corresponding issues are not closed by offline evidence.
+Every new completed, failed, or cancelled terminal report embeds the same typed
+SAT release/source/install/channel/artifact/schema identity and commits it with
+the Markdown view and model-spend ledger through the rollback-capable terminal
+bundle. Changed-fact resume remediation and fresh provider/device cost,
+liveness, self-check, and managed-release validation remain incomplete; the
+corresponding issues are not closed by offline evidence.
+
+Formatter, lint, doctor, and **881 offline tests** pass for this implementation.
 
 ## Phase 1 Result
 
@@ -1272,8 +1276,8 @@ The acceptance contract is
   concurrency; and configuration-schema migrations from superseded product
   caps;
 - Explicit completed and failed terminal outcomes with machine-readable and
-  human-readable reports, committed with their model-spend ledger through a
-  rollback-capable terminal bundle;
+  human-readable reports, exact controlling SAT software identity, and their
+  model-spend ledger committed through a rollback-capable terminal bundle;
 - Remote one-command Linux/WSL bootstrap into an owned user-local application
   directory, plus the pinned toolchain, locked environment, fixed Docker image,
   stable launchers, update validation, and a checkout-based contributor path;
@@ -1335,7 +1339,6 @@ derived from the task.
 - A published stable GitHub Release and fresh supported-device evidence for
   stable install, stable update, stable↔dev switch, failed-activation rollback,
   and versioned uninstall;
-- SAT identity bundling inside terminal run reports and diagnostic exports;
 - Changed-fact self-check refresh during durable resume, plus fresh installed
   device evidence for task-admission and approved-plan remediation;
 - An independent-device live demonstration of the activated Adaptive Planning

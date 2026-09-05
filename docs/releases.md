@@ -31,6 +31,14 @@ commit movement remains detailed provenance only. A remote resolution failure
 is recorded as unavailable and cannot make an otherwise safe task unavailable.
 `sat --version`, help, and other local-only commands do not use this path.
 
+The task-admission self-check and every newly created terminal `FinalReport`
+carry the same `SoftwareVersionReport` object. The machine-readable final report
+therefore binds release, full source revision, install mode, channel, artifact
+digest, identity status, and schema support into the rollback-capable terminal
+bundle; the Markdown report renders its exact release and revision. Legacy final
+reports remain readable and retain their original canonical hashes when this
+optional field is absent.
+
 ## When to Change the Version
 
 Do not change the release number for every commit. Normal development advances

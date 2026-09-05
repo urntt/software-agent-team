@@ -534,6 +534,16 @@ def terminal_failure_report() -> FinalReport:
     )
 
 
+def test_legacy_final_report_omits_optional_software_identity_from_its_hash() -> None:
+    legacy = terminal_failure_report()
+    payload = legacy.model_dump(mode="json")
+
+    assert "software_version" not in payload
+    restored = FinalReport.model_validate(payload)
+    assert restored.software_version is None
+    assert canonical_model_sha256(restored) == canonical_model_sha256(legacy)
+
+
 def test_store_commits_the_terminal_report_bundle_together(tmp_path: Path) -> None:
     store = make_store(tmp_path)
 

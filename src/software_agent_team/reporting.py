@@ -24,6 +24,25 @@ def _pricing_source(call: ModelCallCostRecord) -> str:
     return "unknown" if call.pricing_source is None else call.pricing_source.value
 
 
+def _software_identity_lines(report: FinalReport) -> tuple[str, ...]:
+    """Render exact SAT provenance without inventing facts for legacy evidence."""
+
+    version = report.software_version
+    if version is None:
+        return ("- SAT version: `not recorded (legacy report)`",)
+    channel = "not managed" if version.channel is None else version.channel.value
+    revision = version.source_revision or "not available"
+    artifact = version.artifact_digest or "not available"
+    return (
+        f"- SAT version: `{version.display_version}`",
+        f"- SAT release: `{version.release_version}`",
+        f"- SAT source revision: `{revision}`",
+        f"- SAT install mode / channel: `{version.install_mode.value} / {channel}`",
+        f"- SAT artifact digest: `{artifact}`",
+        f"- SAT identity status: `{version.identity_status.value}`",
+    )
+
+
 def render_run_report(
     *,
     artifact_store: ArtifactStore,
@@ -73,6 +92,7 @@ def render_run_report(
         f"- Team: `{report.team_id}`",
         f"- Termination reason: `{report.termination_reason}`",
         f"- Final commit: `{report.final_commit or 'not available'}`",
+        *_software_identity_lines(report),
         f"- Iterations recorded: {len(report.iterations)}",
         "",
         "## Summary",
@@ -229,6 +249,7 @@ def render_minimal_terminal_report(
             f"- Team: `{report.team_id}`",
             f"- Termination reason: `{report.termination_reason}`",
             f"- Final commit: `{report.final_commit or 'not available'}`",
+            *_software_identity_lines(report),
             "",
             "## Summary",
             "",
