@@ -12,6 +12,7 @@ from software_agent_team.response_corrections import (
     build_semantic_correction_plan,
     correction_outcome,
     deterministically_remove_forbidden_fields,
+    diagnostic_from_message,
     diagnostic_from_validation_error,
     semantic_payload_sha256,
 )
@@ -133,6 +134,42 @@ def test_outcome_requires_targeted_errors_to_disappear_and_rejects_cycles() -> N
             seen_fingerprints=frozenset({first_diagnostic.fingerprint}),
         )
         is SemanticCorrectionOutcome.ACCEPTED
+    )
+
+
+def test_outcome_distinguishes_a_new_container_error_from_the_fixed_child() -> None:
+    payload: dict[str, object] = {
+        "summary": "",
+        "tasks": ["TASK_ONE"],
+        "preserved": "keep",
+    }
+    first_diagnostic = diagnostic(payload)
+    plan = build_semantic_correction_plan(payload, first_diagnostic)
+    assert plan is not None
+    corrected = apply_semantic_correction(
+        {
+            "kind": "semantic_correction_v1",
+            "base_response_sha256": semantic_payload_sha256(payload),
+            "replacements": [{"path": "/summary", "value": "valid"}],
+        },
+        plan,
+    )
+    relational = diagnostic_from_message(
+        corrected,
+        failure_class=ResponseFailureClass.SEMANTIC_CONTEXT,
+        authority=ResponseIssueAuthority.MODEL,
+        code="relational_context",
+        message="the collection needs another authority field",
+        paths=("/",),
+    )
+
+    assert (
+        correction_outcome(
+            plan,
+            relational,
+            seen_fingerprints=frozenset({first_diagnostic.fingerprint}),
+        )
+        is SemanticCorrectionOutcome.IMPROVED
     )
 
 

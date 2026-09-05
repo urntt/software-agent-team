@@ -68,7 +68,7 @@ its explicit zero-or-one cap. Transport, unlocated, repeated, invalid-envelope,
 and non-improving failures stop without a full-response retry. Fresh
 provider-backed correction evidence remains pending.
 
-Formatter, lint, doctor, and **926 offline tests** pass for this implementation.
+Formatter, lint, doctor, and **928 offline tests** pass for this implementation.
 
 ## Phase 1 Result
 

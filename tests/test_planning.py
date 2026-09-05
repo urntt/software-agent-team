@@ -2269,6 +2269,62 @@ def test_product_planning_continues_only_when_targeted_correction_improves(
     )
 
 
+def test_product_planning_preserves_normalization_and_targets_new_root_cause(
+    tmp_path: Path,
+) -> None:
+    valid_payload = proposal_response().model_dump(mode="json")
+    invalid_payload = json.loads(json.dumps(valid_payload))
+    requirement_ids = invalid_payload["proposal"].pop("requirement_ids")
+    invalid_payload["proposal"]["requirent_ids"] = requirement_ids
+    invalid_payload["proposal"]["acceptance_criteria"][0]["requirement_ids"] = [
+        "REQ_scan"
+    ]
+
+    first_base = json.loads(json.dumps(invalid_payload))
+    first_base["proposal"].pop("requirent_ids")
+    second_base = json.loads(json.dumps(first_base))
+    second_base["proposal"]["acceptance_criteria"][0]["requirement_ids"] = ["REQ_SCAN"]
+    executor = ScriptedAgentExecutor(
+        [
+            json.dumps(invalid_payload),
+            correction_response(
+                first_base,
+                {"/proposal/acceptance_criteria/0/requirement_ids": ["REQ_SCAN"]},
+            ),
+            correction_response(
+                second_base,
+                {"/proposal/requirement_ids": requirement_ids},
+            ),
+        ]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(response_repair_limit=None),
+        clock=AdvancingClock(),
+    )
+
+    created = coordinator.start(
+        request(),
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+
+    assert created is not None
+    assert len(executor.requests) == 3
+    first = store.load_turn(request().run_id, 1)
+    assert first.response_normalizations == (
+        "removed schema-forbidden field /proposal/requirent_ids",
+    )
+    second = store.load_turn(request().run_id, 2)
+    assert second.semantic_correction_outcome == "improved"
+    assert second.response_validation is not None
+    assert second.response_validation.correction_paths == ("/proposal/requirement_ids",)
+    assert store.load_turn(request().run_id, 3).semantic_correction_outcome == (
+        "accepted"
+    )
+
+
 def test_product_planning_stops_after_a_non_improving_correction(
     tmp_path: Path,
 ) -> None:

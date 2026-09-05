@@ -195,7 +195,8 @@ may perform only these bounded, semantics-preserving normalizations:
   controller/evidence authority.
 
 The immutable turn retains the exact raw response and records every normalized
-field or removed profile-owned definition separately. The active policy is the
+field or removed profile-owned definition separately, including normalizations
+completed before a later validation failure. The active policy is the
 only source of IDs eligible for criterion-ownership normalization; the
 controller does not compare or adopt the model-authored description,
 verification text, or Review boundaries. Absolute paths, backslashes, parent
@@ -217,10 +218,13 @@ Transport failures and unlocated errors stop. A targetable model-owned failure
 produces a content-free diagnostic and a `semantic_correction_v1` envelope bound
 to the retained object's SHA-256. The model supplies values for exactly the
 listed JSON-pointer paths; every other value remains immutable. Product
-Planning continues only after the prior target set disappears and a distinct
-targetable failure remains within the task budget. A repeated fingerprint or
-unresolved target stops, while controlled evaluation may intentionally impose
-a zero-or-one correction cap.
+Planning continues only after every prior typed issue identity disappears and a
+distinct targetable failure remains within the task budget. A newly exposed
+relational error at a broader container is not treated as the same defect merely
+because its JSON pointer overlaps the corrected child; the controller locates
+the smallest authority field it can justify. A repeated fingerprint or the same
+typed issue stops, while controlled evaluation may intentionally impose a
+zero-or-one correction cap.
 
 Every workspace scope describes controller authority inside the generated
 repository: `repository` grants whole-project access and `repository/path`

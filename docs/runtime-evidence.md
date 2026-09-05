@@ -260,12 +260,17 @@ and revalidates the compiled result. A writer's verified commit and snapshot
 are frozen before correction and must remain unchanged. A missing user-owned
 decision returns through the typed Planning-question path and never enters this
 protocol. Transport failures, unlocated errors, invalid envelopes, repeated
-error fingerprints, and corrections that leave a targeted defect in place stop
-rather than consuming a random full-response retry. Ordinary product flow may continue
-after a correction only when the previous typed defects disappeared, a distinct
-targetable defect remains, and the task USD/deadline authority permits the next
-call. Controlled evaluations may intentionally freeze a zero-or-one correction
-cap; each permitted invocation receives the frozen per-invocation timeout.
+error fingerprints, and corrections that leave the same typed defect in place
+stop rather than consuming a random full-response retry. JSON-pointer ancestry
+alone does not identify the same defect: a newly exposed container relation may
+be a different root cause, and Planning maps known relations such as a missing
+requirement-ID list to the smallest authority field. Ordinary product flow may
+continue after a correction only when the previous typed defects disappeared,
+a distinct targetable defect remains, and the task USD/deadline authority
+permits the next call. Every deterministic normalization is retained even when
+later validation still fails. Controlled evaluations may intentionally freeze a
+zero-or-one correction cap; each permitted invocation receives the frozen
+per-invocation timeout.
 The 64-field protocol ceiling rejects an over-wide diagnostic as one invalid
 submission instead of partially patching it; it is a schema-safety bound, not a
 task, Agent, call, token, or cost budget.

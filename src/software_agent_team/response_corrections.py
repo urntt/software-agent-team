@@ -585,17 +585,22 @@ def correction_outcome(
     *,
     seen_fingerprints: frozenset[str],
 ) -> SemanticCorrectionOutcome:
-    """Continue only after every targeted prior issue was actually removed."""
+    """Continue only after every targeted prior typed issue was removed."""
 
     if diagnostic is None:
         return SemanticCorrectionOutcome.ACCEPTED
     if diagnostic.fingerprint in seen_fingerprints:
         return SemanticCorrectionOutcome.NO_IMPROVEMENT
-    unresolved = any(
-        _paths_overlap(issue.path, target)
-        for issue in diagnostic.issues
-        for target in plan.evidence.target_paths
-    )
-    if unresolved:
+    prior_issues = {
+        (issue.path, issue.code, issue.authority)
+        for issue in plan.diagnostic.issues
+        if any(
+            _paths_overlap(issue.path, target) for target in plan.evidence.target_paths
+        )
+    }
+    current_issues = {
+        (issue.path, issue.code, issue.authority) for issue in diagnostic.issues
+    }
+    if prior_issues & current_issues:
         return SemanticCorrectionOutcome.NO_IMPROVEMENT
     return SemanticCorrectionOutcome.IMPROVED

@@ -629,6 +629,8 @@ def _planning_proposal_error_paths(
         return _planning_context_paths(detail, None)
     tasks = proposal.get("tasks")
     agents = proposal.get("agents")
+    if "one stable ID for every requirement" in detail:
+        return ("/proposal/requirement_ids",)
     if (
         "tasks reference unknown Agent owners" in detail
         and isinstance(tasks, list)
@@ -3642,6 +3644,7 @@ class AdaptivePlanningCoordinator:
                         )
                     )
                     normalization_list = list(initial_normalizations)
+                    response_normalizations = tuple(normalization_list)
                     while True:
                         try:
                             parsed = PlanningModelResponse.model_validate(payload)
@@ -3660,6 +3663,7 @@ class AdaptivePlanningCoordinator:
                                 f"removed schema-forbidden field {path}"
                                 for path in removed
                             )
+                            response_normalizations = tuple(normalization_list)
                     response_normalizations = tuple(normalization_list)
                     question_contracts = self._question_contracts(
                         transcript,
@@ -3720,7 +3724,18 @@ class AdaptivePlanningCoordinator:
                             authority=ResponseIssueAuthority.MODEL,
                             code="planning_context",
                             message=validation_error,
-                            paths=_planning_context_paths(validation_error, parsed),
+                            paths=(
+                                _planning_proposal_error_paths(
+                                    validation_error,
+                                    payload,
+                                )
+                                if parsed is not None
+                                and parsed.kind is PlanningResponseKind.PROPOSAL
+                                else _planning_context_paths(
+                                    validation_error,
+                                    parsed,
+                                )
+                            ),
                         )
                     if correction_plan is not None and not correction_applied:
                         current_correction_outcome = (
