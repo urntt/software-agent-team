@@ -93,6 +93,7 @@ from software_agent_team.quality_gates import (
 )
 from software_agent_team.releases import (
     DEFAULT_LATEST_RELEASE_API_URL,
+    ReleaseResolutionError,
     resolve_latest_stable_release,
 )
 from software_agent_team.run_control import RunPhase
@@ -1193,12 +1194,20 @@ def _bootstrap_managed_install(args: argparse.Namespace) -> int:
     if channel is ManagedChannel.STABLE:
         if args.ref is not None:
             raise ValueError("a source ref cannot override the stable release")
-        target = target_from_stable_release(
-            resolve_latest_stable_release(
-                release_api_url=args.release_api_url,
-                expected_repository_url=args.repository,
+        try:
+            target = target_from_stable_release(
+                resolve_latest_stable_release(
+                    release_api_url=args.release_api_url,
+                    expected_repository_url=args.repository,
+                )
             )
-        )
+        except ReleaseResolutionError as error:
+            raise ReleaseResolutionError(
+                "stable channel could not resolve a verified published release: "
+                f"{error}. SAT did not install or substitute a dev build. Check "
+                "the published release and network, or deliberately rerun the "
+                "bootstrap with SAT_INSTALL_CHANNEL=dev"
+            ) from error
     else:
         target = resolve_dev_target(
             repository_url=args.repository,

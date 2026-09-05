@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
+import urllib.error
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -17,6 +18,7 @@ from software_agent_team.releases import (
     ReleaseResolutionError,
     UpdateAvailability,
     compare_stable_target,
+    fetch_https_bytes,
     git_archive_digest,
     release_manifest_bytes,
     resolve_latest_stable_release,
@@ -86,6 +88,30 @@ def test_latest_stable_release_requires_matching_asset_digest_and_identity() -> 
     assert target.manifest_digest == (
         "sha256:" + hashlib.sha256(encoded_manifest).hexdigest()
     )
+
+
+def test_release_fetch_distinguishes_an_unpublished_resource(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unavailable(*_args: object, **_kwargs: object) -> None:
+        raise urllib.error.HTTPError(
+            "https://example.invalid/latest",
+            404,
+            "Not Found",
+            hdrs=None,
+            fp=None,
+        )
+
+    monkeypatch.setattr(
+        "software_agent_team.releases.urllib.request.urlopen",
+        unavailable,
+    )
+
+    with pytest.raises(
+        ReleaseResolutionError,
+        match="HTTP 404; it is not published or is inaccessible",
+    ):
+        fetch_https_bytes("https://example.invalid/latest", 1_000)
 
 
 @pytest.mark.parametrize(

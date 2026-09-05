@@ -48,6 +48,12 @@ normal installation resolves the latest published stable release and binds it
 to an exact source revision and artifact digest; it does not install a moving
 `main` checkout as stable.
 
+If no stable release has been published yet, the command stops without
+installing `main` and explains that the stable channel is unavailable. A
+developer may explicitly choose the separate dev channel as documented in the
+[installation guide](docs/installation.md#managed-one-command-installation);
+SAT never makes that channel change silently.
+
 ## Build a Project
 
 Enter a directory that may receive a new project folder, then run `sat`:

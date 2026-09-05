@@ -95,10 +95,12 @@ assessments in one pass and records removal of the five unapproved arrays. This
 proves the captured regression path offline, not a corrected provider journey;
 the issue remains open until a fresh run crosses Review without that call.
 
-Doctor, formatter, lint, and the complete **935-test offline suite** pass with
+Doctor, formatter, lint, and the complete **937-test offline suite** pass with
 the diagnostic-v2 change, including the exact captured two-invariant Planning
-sequence and a three-call correction regression. Provider-backed validation of
-the corrected journey remains pending.
+sequence and a three-call correction regression. The managed stable resolver
+also distinguishes an unpublished/inaccessible HTTP 404, refuses silent dev
+fallback, and explains the explicit dev-channel choice. Provider-backed
+validation of the corrected journey remains pending.
 
 ## Phase 1 Result
 

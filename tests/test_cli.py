@@ -24,6 +24,7 @@ from software_agent_team.product import (
     DiagnosticState,
     StartupDiagnostics,
 )
+from software_agent_team.releases import ReleaseResolutionError
 from software_agent_team.run_control import RunPhase
 from software_agent_team.runtime_configuration import (
     OpenClawModelInspection,
@@ -223,6 +224,42 @@ def stable_cli_target() -> ManagedTarget:
         artifact_digest="sha256:" + "d" * 64,
         schema_support=supported_schemas(),
     )
+
+
+def test_stable_bootstrap_explains_an_unavailable_channel_without_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def unavailable(**_kwargs: object) -> None:
+        raise ReleaseResolutionError(
+            "release resource returned HTTP 404; it is not published"
+        )
+
+    monkeypatch.setattr(cli, "resolve_latest_stable_release", unavailable)
+    monkeypatch.setattr(
+        cli,
+        "install_managed_target",
+        lambda *_args, **_kwargs: pytest.fail("stable failure installed a target"),
+    )
+
+    assert (
+        main(
+            [
+                "_managed-install",
+                "--channel",
+                "stable",
+                "--repository",
+                "https://example.invalid/software-agent-team.git",
+                "--release-api-url",
+                "https://example.invalid/latest",
+            ]
+        )
+        == 1
+    )
+    output = capsys.readouterr().out
+    assert "stable channel could not resolve a verified published release" in output
+    assert "did not install or substitute a dev build" in output
+    assert "SAT_INSTALL_CHANNEL=dev" in output
 
 
 def test_update_check_is_read_only_and_machine_readable(

@@ -107,6 +107,21 @@ configuration and state remain outside version storage. A sandbox image that
 builds but exits before OpenClaw can execute tools is rejected before SAT
 reports installation success or creates a new launcher.
 
+If the stable release endpoint returns HTTP 404, SAT reports that the stable
+channel has no published or accessible verified release and stops without
+substituting `main`. Development evaluators may deliberately choose the separate
+dev channel:
+
+```bash
+curl -fsSL \
+  https://raw.githubusercontent.com/urntt/software-agent-team/main/scripts/bootstrap.sh \
+  | env SAT_INSTALL_CHANNEL=dev bash
+```
+
+For a reproducible candidate rehearsal, also set `SAT_INSTALL_REF` to its full
+Git revision. This is an explicit channel choice, not a recovery fallback; a
+normal user should wait for a published stable release.
+
 Contributors installing from a source checkout should follow
 [`Checkout Installation`](development.md#checkout-installation) instead.
 

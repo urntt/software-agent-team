@@ -214,6 +214,15 @@ def fetch_https_bytes(url: str, maximum_bytes: int) -> bytes:
             if declared_length is not None and int(declared_length) > maximum_bytes:
                 raise ReleaseResolutionError("release response exceeds its size limit")
             payload = response.read(maximum_bytes + 1)
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            raise ReleaseResolutionError(
+                "release resource returned HTTP 404; it is not published or "
+                f"is inaccessible: {url}"
+            ) from error
+        raise ReleaseResolutionError(
+            f"release metadata request returned HTTP {error.code}: {url}"
+        ) from error
     except (OSError, ValueError, urllib.error.URLError) as error:
         if isinstance(error, ReleaseResolutionError):
             raise
