@@ -37,12 +37,15 @@ ceiling as a minimum, make the existing disk guard blocking as declared, and
 read-only inventory existing containers proven to mount SAT-owned state. The
 approved-plan restricted container probe remains the readiness authority for
 actual sandbox execution. These machine checks do not cap Agent count, call
-count, or total model-work time. Changed-fact resume
-remediation and fresh provider/device cost,
+count, or total model-work time. A failed task-admission or approved-plan check
+can be repaired and rechecked in the same foreground task. Changed input
+digests append an immutable revision that refreshes only the invalidated result
+and its transitive dependents; an unchanged retry creates no duplicate
+evidence. Durable process-restart resume and fresh provider/device cost,
 liveness, self-check, and managed-release validation remain incomplete; the
 corresponding issues are not closed by offline evidence.
 
-Formatter, lint, doctor, and **885 offline tests** pass for this implementation.
+Formatter, lint, doctor, and **886 offline tests** pass for this implementation.
 
 ## Phase 1 Result
 
@@ -1346,8 +1349,9 @@ derived from the task.
 - A published stable GitHub Release and fresh supported-device evidence for
   stable install, stable update, stable↔dev switch, failed-activation rollback,
   and versioned uninstall;
-- Changed-fact self-check refresh during durable resume, plus fresh installed
-  device evidence for task-admission and approved-plan remediation;
+- Changed-fact self-check refresh during durable process-restart resume, plus
+  fresh installed-device evidence for task-admission and approved-plan
+  remediation;
 - An independent-device live demonstration of the activated Adaptive Planning
   and Dynamic Team journey;
 - Durable control recovery after a foreground process crash and a

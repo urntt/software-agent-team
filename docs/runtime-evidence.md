@@ -433,6 +433,17 @@ the workspace and delivery boundaries. Failed approved-plan preflight is
 persisted as blocking evidence instead of becoming a late Agent-launch error.
 Neither checkpoint makes a semantic provider request.
 
+When either checkpoint is not ready, the ordinary foreground journey can
+recheck the same task after the user applies the displayed remediation. SAT
+compares the fresh observation with the previous report by typed input digest,
+invalidates every changed result and its transitive dependents, and appends an
+immutable revision containing fresh evidence for exactly that invalidated set.
+Unrelated results retain their previous evidence and timestamp. Stable check
+definitions cannot change during reconciliation, and a recheck whose inputs
+did not change does not create a redundant revision. Task-admission retries
+reuse the single foreground update observation made for that task instead of
+polling the release endpoint again.
+
 Every new completed, failed, or user-cancelled `FinalReport` embeds the same
 typed `SoftwareVersionReport` captured at task admission (or immediately before
 an explicit evaluation run). This binds the controlling release, full source

@@ -120,6 +120,7 @@ from software_agent_team.self_check import (
     TaskResourceAuthorization,
     TaskSelfCheckReport,
     TaskSelfCheckStore,
+    reconcile_self_check_report,
     render_self_check_report,
 )
 from software_agent_team.self_check_evaluation import (
@@ -2576,6 +2577,7 @@ def _task_admission_checkpoint(
     model_inspections: tuple[OpenClawModelInspection, ...],
     resource_authorization: TaskResourceAuthorization,
     update_observation: ForegroundUpdateObservation | None = None,
+    previous_report: TaskSelfCheckReport | None = None,
 ) -> tuple[
     TaskSelfCheckReport,
     ForegroundUpdateObservation,
@@ -2602,7 +2604,7 @@ def _task_admission_checkpoint(
             observations=(),
             problems=(str(error),),
         )
-    report = build_task_admission_report(
+    observed = build_task_admission_report(
         run_id=planning_request.run_id,
         diagnostics=diagnostics,
         software_version=version,
@@ -2615,7 +2617,16 @@ def _task_admission_checkpoint(
         state_root=state_paths.root,
         resource_authorization=resource_authorization,
     )
-    path = TaskSelfCheckStore(state_paths.self_checks).persist(report)
+    report = observed
+    if previous_report is not None:
+        reconciled = reconcile_self_check_report(
+            previous_report,
+            observed,
+            reason="one or more task-admission inputs changed",
+        )
+        report = previous_report if reconciled is None else reconciled
+    store = TaskSelfCheckStore(state_paths.self_checks)
+    path = None if report is previous_report else store.persist(report)
     print()
     print(
         render_self_check_report(
@@ -2623,7 +2634,10 @@ def _task_admission_checkpoint(
             visibility=configuration.progress_visibility,
         )
     )
-    print(f"  Evidence: {path}")
+    if path is None:
+        print(f"  Evidence unchanged at revision {report.revision}")
+    else:
+        print(f"  Evidence: {path}")
     return report, update_observation, version
 
 
@@ -2635,6 +2649,7 @@ def _plan_execution_checkpoint(
     state_paths: ProductStatePaths,
     quality: QualityGateConfiguration,
     configuration: UserConfiguration,
+    previous_report: TaskSelfCheckReport | None = None,
 ) -> TaskSelfCheckReport:
     """Persist and render approved-plan readiness before workspace mutation."""
 
@@ -2649,7 +2664,7 @@ def _plan_execution_checkpoint(
         )
     except (OSError, RuntimeConfigurationError, ValueError) as error:
         error_text = f"approved-plan runtime check failed: {error}"
-    report = build_plan_execution_report(
+    observed = build_plan_execution_report(
         admission_report=admission_report,
         team_plan=approved.team_plan,
         runtime_preflight=preflight,
@@ -2657,7 +2672,16 @@ def _plan_execution_checkpoint(
         source_repository=DEFAULT_PRODUCT_SEED.resolve(strict=True),
         destination=destination,
     )
-    path = TaskSelfCheckStore(state_paths.self_checks).persist(report)
+    report = observed
+    if previous_report is not None:
+        reconciled = reconcile_self_check_report(
+            previous_report,
+            observed,
+            reason="one or more approved-plan readiness inputs changed",
+        )
+        report = previous_report if reconciled is None else reconciled
+    store = TaskSelfCheckStore(state_paths.self_checks)
+    path = None if report is previous_report else store.persist(report)
     print()
     print(
         render_self_check_report(
@@ -2665,7 +2689,10 @@ def _plan_execution_checkpoint(
             visibility=configuration.progress_visibility,
         )
     )
-    print(f"  Evidence: {path}")
+    if path is None:
+        print(f"  Evidence unchanged at revision {report.revision}")
+    else:
+        print(f"  Evidence: {path}")
     return report
 
 
@@ -2724,9 +2751,43 @@ def _run_product() -> int:
         model_inspections=model_inspections,
         resource_authorization=resource_authorization,
     )
-    if not admission_report.ready:
+    while not admission_report.ready:
         print("\nSAT did not start Planning because required self-checks failed.")
-        return 2
+        if not _prompt_yes_no(
+            "Apply the listed actions, then recheck this task now?",
+            default=True,
+        ):
+            return 2
+        diagnostics = inspect_startup_environment(
+            working_directory=working_directory,
+            openclaw_binary=DEFAULT_OPENCLAW_BINARY,
+            sandbox_image=quality.policy.sandbox.image,
+            state_root=state_paths.root,
+            required_memory_mb=quality.policy.limits.memory_mb,
+            required_pids=quality.policy.limits.pids,
+        )
+        model_inspections = tuple(
+            _inspect_selected_model(
+                DEFAULT_OPENCLAW_BINARY,
+                profile.model,
+                state_dir=state_paths.openclaw,
+                config_path=state_paths.openclaw / "openclaw.json",
+            )
+            for profile in configuration.model_profiles
+        )
+        admission_report, update_observation, software_version = (
+            _task_admission_checkpoint(
+                planning_request=planning_request,
+                destination=destination,
+                state_paths=state_paths,
+                diagnostics=diagnostics,
+                configuration=configuration,
+                model_inspections=model_inspections,
+                resource_authorization=resource_authorization,
+                update_observation=update_observation,
+                previous_report=admission_report,
+            )
+        )
     budget_ledger = AgentBudgetLedger(
         AgentBudget(
             authority=BudgetAuthority.USER_TASK,
@@ -2760,12 +2821,25 @@ def _run_product() -> int:
                 quality=quality,
                 configuration=configuration,
             )
-            if not execution_report.ready:
+            while not execution_report.ready:
                 print(
                     "\nSAT did not create runtime Agents or a workspace because "
                     "required self-checks failed."
                 )
-                return 2
+                if not _prompt_yes_no(
+                    "Apply the listed actions, then recheck the approved plan now?",
+                    default=True,
+                ):
+                    return 2
+                execution_report = _plan_execution_checkpoint(
+                    admission_report=admission_report,
+                    approved=approved,
+                    destination=destination,
+                    state_paths=state_paths,
+                    quality=quality,
+                    configuration=configuration,
+                    previous_report=execution_report,
+                )
             source_repository = prepare_product_source(
                 seed=DEFAULT_PRODUCT_SEED,
                 state_paths=state_paths,
@@ -2868,12 +2942,44 @@ def _run_product() -> int:
                 resource_authorization=resource_authorization,
                 update_observation=update_observation,
             )
-            if not admission_report.ready:
+            while not admission_report.ready:
                 print(
                     "\nReplacement Planning did not start because a refreshed "
                     "self-check failed."
                 )
-                return 2
+                if not _prompt_yes_no(
+                    "Apply the listed actions, then recheck this replacement task?",
+                    default=True,
+                ):
+                    return 2
+                refreshed_diagnostics = inspect_startup_environment(
+                    working_directory=working_directory,
+                    openclaw_binary=DEFAULT_OPENCLAW_BINARY,
+                    sandbox_image=quality.policy.sandbox.image,
+                    state_root=state_paths.root,
+                    required_memory_mb=quality.policy.limits.memory_mb,
+                    required_pids=quality.policy.limits.pids,
+                )
+                refreshed_inspections = tuple(
+                    _inspect_selected_model(
+                        DEFAULT_OPENCLAW_BINARY,
+                        profile.model,
+                        state_dir=state_paths.openclaw,
+                        config_path=state_paths.openclaw / "openclaw.json",
+                    )
+                    for profile in configuration.model_profiles
+                )
+                admission_report, _, software_version = _task_admission_checkpoint(
+                    planning_request=planning_request,
+                    destination=destination,
+                    state_paths=state_paths,
+                    diagnostics=refreshed_diagnostics,
+                    configuration=configuration,
+                    model_inspections=refreshed_inspections,
+                    resource_authorization=resource_authorization,
+                    update_observation=update_observation,
+                    previous_report=admission_report,
+                )
     finally:
         renderer.close()
 

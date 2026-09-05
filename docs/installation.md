@@ -139,6 +139,14 @@ Every failed condition includes a corrective action. SAT does not rebuild the
 toolchain or image during normal startup; a missing installed component points
 back to the installer.
 
+If task admission or approved-plan readiness is not ready, SAT stops before
+the next model call, Agent creation, source preparation, or workspace mutation.
+The foreground prompt lets the user apply the reported remediation and recheck
+the same task. A changed observation appends a new immutable self-check
+revision: only the changed result and its transitive dependents receive fresh
+evidence, while unrelated results retain their original evidence and
+timestamps. A recheck with no changed input creates no duplicate revision.
+
 After the user confirms a build and before the first Agent call, the run
 preflight repeats the restricted container and tool-execution probe against the
 exact immutable image ID recorded for that run. It also verifies that the

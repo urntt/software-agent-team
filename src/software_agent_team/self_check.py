@@ -444,6 +444,65 @@ def refresh_stale_self_checks(
     return tuple(refreshed)
 
 
+def reconcile_self_check_report(
+    previous: TaskSelfCheckReport,
+    observed: TaskSelfCheckReport,
+    *,
+    reason: str,
+) -> TaskSelfCheckReport | None:
+    """Append only changed facts and their dependents to one report chain.
+
+    ``observed`` is a fresh evaluator snapshot. Its revision metadata is ignored;
+    stable check definitions must match the previous report exactly. Returning
+    ``None`` means the attempted recheck observed no input change and therefore
+    must not create a redundant evidence revision.
+    """
+
+    if previous.run_id != observed.run_id:
+        raise SelfCheckError("self-check recheck changed the task identity")
+    if previous.checkpoint is not observed.checkpoint:
+        raise SelfCheckError("self-check recheck changed the checkpoint")
+    previous_by_id = {check.id: check for check in previous.checks}
+    observed_by_id = {check.id: check for check in observed.checks}
+    if set(previous_by_id) != set(observed_by_id):
+        raise SelfCheckError("self-check recheck changed the check set")
+    for check_id, prior in previous_by_id.items():
+        current = observed_by_id[check_id]
+        if (
+            current.checkpoint is not prior.checkpoint
+            or current.category is not prior.category
+            or current.owner is not prior.owner
+            or current.dependencies != prior.dependencies
+            or current.rerun_rule != prior.rerun_rule
+        ):
+            raise SelfCheckError(
+                f"self-check recheck changed its stable definition: {check_id}"
+            )
+
+    changed = {
+        check_id
+        for check_id, prior in previous_by_id.items()
+        if observed_by_id[check_id].input_sha256 != prior.input_sha256
+    }
+    if not changed:
+        return None
+    stale = invalidate_self_check_results(previous.checks, changed, reason=reason)
+    stale_ids = {check.id for check in stale if check.status is SelfCheckStatus.STALE}
+    refreshed = refresh_stale_self_checks(
+        stale,
+        {check_id: observed_by_id[check_id] for check_id in stale_ids},
+    )
+    return TaskSelfCheckReport(
+        run_id=previous.run_id,
+        checkpoint=previous.checkpoint,
+        revision=previous.revision + 1,
+        previous_report_sha256=previous.sha256,
+        created_at=observed.created_at,
+        resource_authorization=observed.resource_authorization,
+        checks=refreshed,
+    )
+
+
 class TaskSelfCheckStore:
     """Write-once report chain beneath one SAT-owned state root."""
 

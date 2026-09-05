@@ -431,6 +431,7 @@ def test_cli_no_command_runs_the_guided_product_journey(
             "no",
             "yes",
             "yes",
+            "yes",
         )
     )
     monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
@@ -505,11 +506,20 @@ def test_cli_no_command_runs_the_guided_product_journey(
     monkeypatch.setattr(cli, "inspect_task_admission_update", fake_update)
     version = software_version_report(tmp_path / "application")
     monkeypatch.setattr(cli, "_software_version_report", lambda: version)
-    monkeypatch.setattr(
-        cli,
-        "_plan_execution_checkpoint",
-        lambda **_kwargs: order.append("plan-check") or SimpleNamespace(ready=True),
-    )
+    plan_check_calls = 0
+    plan_check_reports: list[SimpleNamespace] = []
+    plan_check_arguments: list[dict[str, object]] = []
+
+    def fake_plan_check(**kwargs: object) -> SimpleNamespace:
+        nonlocal plan_check_calls
+        plan_check_calls += 1
+        order.append("plan-check")
+        plan_check_arguments.append(kwargs)
+        report = SimpleNamespace(ready=plan_check_calls > 1)
+        plan_check_reports.append(report)
+        return report
+
+    monkeypatch.setattr(cli, "_plan_execution_checkpoint", fake_plan_check)
     source = tmp_path / "prepared-source"
     source.mkdir()
     monkeypatch.setattr(
@@ -581,9 +591,12 @@ def test_cli_no_command_runs_the_guided_product_journey(
 
     assert main([]) == 0
     assert update_calls == 1
+    assert "previous_report" not in plan_check_arguments[0]
+    assert plan_check_arguments[1]["previous_report"] is plan_check_reports[0]
     assert order == [
         "update",
         "planning",
+        "plan-check",
         "plan-check",
         "prepare-source",
         "execute",

@@ -23,6 +23,7 @@ from software_agent_team.self_check import (
     TaskSelfCheckStore,
     invalidate_self_check_results,
     observation_sha256,
+    reconcile_self_check_report,
     refresh_stale_self_checks,
     render_self_check_report,
 )
@@ -172,6 +173,51 @@ def test_refresh_requires_exact_stale_set_and_preserves_stable_definitions() -> 
             stale,
             {**replacements, "runtime.sandbox": changed_definition},
         )
+
+
+def test_recheck_appends_only_changed_facts_and_transitive_dependents() -> None:
+    previous = report(
+        result("tool.docker"),
+        result("runtime.sandbox", dependencies=("tool.docker",)),
+        result("task.destination"),
+    )
+    observed = report(
+        result("tool.docker", checked_at=NOW + timedelta(minutes=1)),
+        result(
+            "runtime.sandbox",
+            dependencies=("tool.docker",),
+            checked_at=NOW + timedelta(minutes=1),
+        ),
+        result("task.destination"),
+    )
+
+    reconciled = reconcile_self_check_report(
+        previous,
+        observed,
+        reason="the Docker observation changed",
+    )
+
+    assert reconciled is not None
+    assert reconciled.revision == 2
+    assert reconciled.previous_report_sha256 == previous.sha256
+    by_id = {check.id: check for check in reconciled.checks}
+    assert by_id["tool.docker"].checked_at == NOW + timedelta(minutes=1)
+    assert by_id["runtime.sandbox"].checked_at == NOW + timedelta(minutes=1)
+    assert by_id["task.destination"] == previous.checks[2]
+    assert by_id["task.destination"].checked_at == NOW
+    assert (
+        reconcile_self_check_report(
+            reconciled,
+            reconciled.model_copy(
+                update={
+                    "revision": 1,
+                    "previous_report_sha256": None,
+                }
+            ),
+            reason="nothing changed",
+        )
+        is None
+    )
 
 
 def test_store_persists_and_verifies_one_write_once_digest_chain(
