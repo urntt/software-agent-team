@@ -160,6 +160,22 @@ Questions should be selected for decision value. The planner must not turn
 every implementation detail into a user prompt or silently decide a missing
 product requirement on the user's behalf.
 
+Every focused question carries a stable decision category and owner, the
+evidence that is missing, the material consequences of choosing differently,
+and two or three alternatives plus a custom-answer path. The controller owns
+the category-to-authority mapping. It rejects questions about reversible local
+implementation or scheduling, rejects any attempt to delegate safety or
+evidence-integrity policy, and rejects a category whose declared owner does not
+match the mapping. This is an admission boundary, not a claim that deterministic
+code can infer the semantic value of arbitrary prose; ambiguous real tasks
+remain the usability test for under- and over-questioning.
+
+A current proposal records one stable ID per requirement, explicit non-goals,
+and attributable decision records. Every answered question resolves exactly one
+decision with the original category and owner. Assumptions may reference only
+local implementation or scheduling decisions inside the approved boundary;
+they cannot substitute for a user authorization or Controller invariant.
+
 ### Planning Response Boundary
 
 Planning responses remain strict, but harmless presentation differences are
@@ -262,7 +278,8 @@ from the user before approval.
 The proposal shown before execution contains:
 
 1. The requested outcome and explicit non-goals;
-2. Success conditions, constraints, and unresolved assumptions;
+2. Success conditions, constraints, assumptions, and decision provenance split
+   by user, Planning, execution autonomy, and non-negotiable Controller policy;
 3. The implementation approach, major deliverables, and each task's criterion
    bindings and dependencies;
 4. The proposed Agents, why each exists, and what each owns;
@@ -274,6 +291,13 @@ The proposal shown before execution contains:
    evaluations additionally show their frozen call, token, duration, and cost
    limits;
 9. The delivery destination and expected validation commands.
+
+The clarity gate requires every requirement to reach at least one observable
+criterion, every criterion to reach a responsible writer task, and every such
+writer to reach a named downstream read-only verifier. The overview renders
+that graph and each Agent's inputs, expected output, and handoff. Completeness
+is deterministic; whether the presentation is understandable remains a real
+user test.
 
 The overview presents controller-owned execution-profile constraints separately
 from additional task-specific constraints proposed during Planning. The Planner
@@ -708,6 +732,11 @@ presentation, and removes exact active-profile criterion-definition echoes
 without removing their legal task bindings or adopting model-authored profile
 text. The raw response and every normalization remain recorded in the Planning
 turn.
+Planning schema v3 adds the responsibility and clarity contracts while retaining
+read support and canonical serialization for schema-v2 evidence. Current live
+response schemas make the new fields mandatory and non-null. Structured edits
+of v2 evidence preserve its schema identity rather than relabeling an incomplete
+legacy body as v3.
 Blocking model waits emit a concise heartbeat every ten seconds, record when a
 response returns, show contract validation, and explicitly announce the one
 bounded repair. These messages expose elapsed time and controller state, not

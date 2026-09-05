@@ -45,7 +45,7 @@ evidence. Durable process-restart resume and fresh provider/device cost,
 liveness, self-check, and managed-release validation remain incomplete; the
 corresponding issues are not closed by offline evidence.
 
-Formatter, lint, doctor, and **886 offline tests** pass for this implementation.
+Formatter, lint, doctor, and **897 offline tests** pass for this implementation.
 
 ## Phase 1 Result
 
@@ -120,7 +120,12 @@ The Phase 3B Planning engine is also implemented. A versioned `PlanningRequest`
 proves explicit model-work authorization before the first invocation. The
 read-only bootstrap Planner may return either one decision-value question with
 two or three suggestions and a custom-answer path, or one complete proposal.
-Strict proposal validation covers requirements, acceptance criteria,
+Planning schema v3 records each question's decision category and owner, missing
+evidence, material consequences, and alternatives. The controller enforces the
+fixed responsibility matrix before showing a question, and every answered
+question must resolve to one proposal decision with unchanged ownership.
+Strict proposal validation covers stable requirement IDs, explicit non-goals,
+decision-owned assumptions, acceptance criteria and their requirement links,
 Agent work assignments, task ownership, dynamic Agent responsibilities,
 dependencies, workspace scopes, independent quality coverage, user-approved
 concurrency, proposed iterations, per-Agent workload classes, the configured
@@ -145,6 +150,17 @@ The resulting `ApprovedPlanningResult` revalidates those exact digests and
 cross-plan bindings at its execution boundary, so mutated approved inputs
 cannot be substituted before runtime.
 The bootstrap Planner still cannot create an Agent or advance run state.
+
+The approval overview now separates user decisions, Planning recommendations,
+Agent/Controller autonomy, and non-negotiable Controller policy. It renders
+requirements and non-goals, visible assumptions, each
+requirement-to-criterion-to-writer-to-independent-verifier path, and every
+Agent's inputs, expected output, and handoff, followed by risks and the failure
+and delivery boundary. Current proposals fail closed when any trace is missing
+or a writer claims its own independent verification. Planning schema v2 remains
+readable without changing its canonical serialization; safe edits retain the
+legacy version rather than relabeling it as v3. Ambiguous-task provider behavior
+and real-user comprehension are not established by these offline contracts.
 
 Planning criterion ownership is now explicit. The response schema requires
 every Planner-defined criterion to have implementation-task coverage and

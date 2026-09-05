@@ -38,8 +38,13 @@ def test_only_configuration_declares_historical_read_support() -> None:
     assert configuration.supports(USER_CONFIGURATION_SCHEMA_VERSION)
     assert not configuration.supports(USER_CONFIGURATION_SCHEMA_VERSION + 1)
 
+    planning = support[SchemaFamily.PLANNING]
+    assert planning.minimum_readable == 2
+    assert planning.current == planning.maximum_readable == 3
+    assert planning.supports(2)
+
     for family, item in support.items():
-        if family is SchemaFamily.USER_CONFIGURATION:
+        if family in {SchemaFamily.USER_CONFIGURATION, SchemaFamily.PLANNING}:
             continue
         assert item.minimum_readable == item.current == item.maximum_readable
 

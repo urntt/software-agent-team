@@ -84,7 +84,10 @@ def supported_schemas() -> tuple[SchemaSupport, ...]:
     from software_agent_team.artifacts import ARTIFACT_SCHEMA_VERSION
     from software_agent_team.budgets import BUDGET_SCHEMA_VERSION
     from software_agent_team.controls import CONTROL_COMMAND_SCHEMA_VERSION
-    from software_agent_team.planning import PLANNING_SCHEMA_VERSION
+    from software_agent_team.planning import (
+        MINIMUM_READABLE_PLANNING_SCHEMA_VERSION,
+        PLANNING_SCHEMA_VERSION,
+    )
     from software_agent_team.progress import RUN_EVENT_SCHEMA_VERSION
     from software_agent_team.run_control import RUN_SCHEMA_VERSION
     from software_agent_team.self_check import SELF_CHECK_SCHEMA_VERSION
@@ -113,6 +116,19 @@ def supported_schemas() -> tuple[SchemaSupport, ...]:
             maximum_readable=version,
         )
         for family, version in exact
+    ]
+    support = [
+        (
+            SchemaSupport(
+                family=item.family,
+                current=item.current,
+                minimum_readable=MINIMUM_READABLE_PLANNING_SCHEMA_VERSION,
+                maximum_readable=item.maximum_readable,
+            )
+            if item.family is SchemaFamily.PLANNING
+            else item
+        )
+        for item in support
     ]
     support.append(
         SchemaSupport(

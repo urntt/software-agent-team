@@ -78,7 +78,8 @@ from software_agent_team.teams import (
     permission_for_capability,
 )
 
-PLANNING_SCHEMA_VERSION = 2
+PLANNING_SCHEMA_VERSION = 3
+MINIMUM_READABLE_PLANNING_SCHEMA_VERSION = 2
 PLANNING_TEMPLATE = Path(__file__).with_name("prompt_templates") / "adaptive_planner.md"
 MAX_PLANNING_EVIDENCE_CHARACTERS = 1_000_000
 MAX_RESPONSE_NORMALIZATIONS = 100
@@ -108,6 +109,62 @@ class PlanningResponseKind(StrEnum):
 
     QUESTION = "question"
     PROPOSAL = "proposal"
+
+
+class PlanningDecisionCategory(StrEnum):
+    """Stable category used to assign one Planning decision owner."""
+
+    PRODUCT_REQUIREMENT = "product_requirement"
+    RISK_TRADEOFF = "risk_tradeoff"
+    PRIVACY_OR_DATA = "privacy_or_data"
+    EXTERNAL_ACTION = "external_action"
+    ORGANIZATION_POLICY = "organization_policy"
+    ACCEPTANCE_SCOPE = "acceptance_scope"
+    DELIVERY = "delivery"
+    RESOURCE_BUDGET = "resource_budget"
+    TEAM = "team"
+    MODEL_ROUTE = "model_route"
+    LOCAL_IMPLEMENTATION = "local_implementation"
+    SCHEDULING = "scheduling"
+    SAFETY_INVARIANT = "safety_invariant"
+    EVIDENCE_INTEGRITY = "evidence_integrity"
+
+
+class PlanningDecisionAuthority(StrEnum):
+    """Authority that may resolve one category of Planning decision."""
+
+    USER = "user"
+    PLANNER_PROPOSAL = "planner_proposal_user_approval"
+    AGENT_AUTONOMY = "agent_or_controller_autonomy"
+    CONTROLLER_POLICY = "controller_policy"
+
+
+_DECISION_AUTHORITY = {
+    PlanningDecisionCategory.PRODUCT_REQUIREMENT: PlanningDecisionAuthority.USER,
+    PlanningDecisionCategory.RISK_TRADEOFF: PlanningDecisionAuthority.USER,
+    PlanningDecisionCategory.PRIVACY_OR_DATA: PlanningDecisionAuthority.USER,
+    PlanningDecisionCategory.EXTERNAL_ACTION: PlanningDecisionAuthority.USER,
+    PlanningDecisionCategory.ORGANIZATION_POLICY: PlanningDecisionAuthority.USER,
+    PlanningDecisionCategory.ACCEPTANCE_SCOPE: (
+        PlanningDecisionAuthority.PLANNER_PROPOSAL
+    ),
+    PlanningDecisionCategory.DELIVERY: PlanningDecisionAuthority.PLANNER_PROPOSAL,
+    PlanningDecisionCategory.RESOURCE_BUDGET: (
+        PlanningDecisionAuthority.PLANNER_PROPOSAL
+    ),
+    PlanningDecisionCategory.TEAM: PlanningDecisionAuthority.PLANNER_PROPOSAL,
+    PlanningDecisionCategory.MODEL_ROUTE: PlanningDecisionAuthority.PLANNER_PROPOSAL,
+    PlanningDecisionCategory.LOCAL_IMPLEMENTATION: (
+        PlanningDecisionAuthority.AGENT_AUTONOMY
+    ),
+    PlanningDecisionCategory.SCHEDULING: PlanningDecisionAuthority.AGENT_AUTONOMY,
+    PlanningDecisionCategory.SAFETY_INVARIANT: (
+        PlanningDecisionAuthority.CONTROLLER_POLICY
+    ),
+    PlanningDecisionCategory.EVIDENCE_INTEGRITY: (
+        PlanningDecisionAuthority.CONTROLLER_POLICY
+    ),
+}
 
 
 class PlanningProposalSource(StrEnum):
@@ -464,7 +521,7 @@ class PlanningRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[PLANNING_SCHEMA_VERSION] = PLANNING_SCHEMA_VERSION
+    schema_version: Literal[2, PLANNING_SCHEMA_VERSION] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     project_name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
     source_request: str = Field(min_length=1, max_length=2000)
@@ -528,6 +585,24 @@ class PlanningQuestion(BaseModel):
     id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     text: str = Field(min_length=1, max_length=500)
     why: str = Field(min_length=1, max_length=500)
+    decision_category: PlanningDecisionCategory | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    decision_owner: PlanningDecisionAuthority | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    missing_evidence: tuple[str, ...] = Field(
+        default=(),
+        min_length=1,
+        exclude_if=lambda values: not values,
+    )
+    material_consequences: tuple[str, ...] = Field(
+        default=(),
+        min_length=1,
+        exclude_if=lambda values: not values,
+    )
     options: tuple[PlanningOption, ...] = Field(min_length=2, max_length=3)
     allow_custom: Literal[True] = True
 
@@ -536,11 +611,63 @@ class PlanningQuestion(BaseModel):
     def require_clean_text(cls, value: str) -> str:
         return _clean_text(value, label="Planning question text")
 
+    @field_validator("missing_evidence", "material_consequences")
+    @classmethod
+    def require_clean_context(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        return _clean_unique(values, label="Planning question context")
+
     @model_validator(mode="after")
     def require_unique_options(self) -> Self:
         option_ids = [option.id for option in self.options]
         if len(option_ids) != len(set(option_ids)):
             raise ValueError("Planning question option IDs must be unique")
+        return self
+
+
+class PlanningDecisionRecord(BaseModel):
+    """Attributable resolution or proposal for one material decision."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: str = Field(pattern=r"^DECISION_[A-Z0-9_]+$")
+    category: PlanningDecisionCategory
+    authority: PlanningDecisionAuthority
+    summary: str = Field(min_length=1, max_length=500)
+    rationale: str = Field(min_length=1, max_length=500)
+    question_id: str | None = Field(
+        default=None,
+        pattern=r"^[a-z][a-z0-9_]*$",
+        exclude_if=lambda value: value is None,
+    )
+
+    @field_validator("summary", "rationale")
+    @classmethod
+    def require_clean_text(cls, value: str) -> str:
+        return _clean_text(value, label="Planning decision text")
+
+    @model_validator(mode="after")
+    def require_category_authority(self) -> Self:
+        expected = _DECISION_AUTHORITY[self.category]
+        if self.authority is not expected:
+            raise ValueError(
+                f"decision category {self.category.value} belongs to {expected.value}"
+            )
+        if (
+            self.authority is PlanningDecisionAuthority.USER
+            and self.question_id is None
+        ):
+            raise ValueError("user decisions must reference their Planning question")
+        if (
+            self.authority
+            in {
+                PlanningDecisionAuthority.AGENT_AUTONOMY,
+                PlanningDecisionAuthority.CONTROLLER_POLICY,
+            }
+            and self.question_id is not None
+        ):
+            raise ValueError(
+                "autonomous or controller-policy decisions cannot claim a user question"
+            )
         return self
 
 
@@ -562,6 +689,16 @@ class ProposedCriterion(BaseModel):
     id: str = Field(pattern=r"^[A-Z][A-Z0-9_-]*$")
     description: str = Field(min_length=1, max_length=500)
     verification: str = Field(min_length=1, max_length=500)
+    requirement_ids: tuple[str, ...] = Field(
+        default=(),
+        min_length=1,
+        exclude_if=lambda values: not values,
+    )
+    verification_agent_ids: tuple[str, ...] = Field(
+        default=(),
+        min_length=1,
+        exclude_if=lambda values: not values,
+    )
     review_boundaries: tuple[ReviewBoundaryKind, ...] = ()
 
     @field_validator("description", "verification")
@@ -578,6 +715,25 @@ class ProposedCriterion(BaseModel):
         if len(values) != len(set(values)):
             raise ValueError("proposed Review boundaries must be unique")
         return values
+
+    @field_validator("requirement_ids")
+    @classmethod
+    def require_requirement_ids(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        cleaned = _clean_unique(values, label="criterion requirement")
+        if any(re.fullmatch(r"REQ_[A-Z0-9_]+", value) is None for value in cleaned):
+            raise ValueError("criterion requirements must use stable REQ_ IDs")
+        return cleaned
+
+    @field_validator("verification_agent_ids")
+    @classmethod
+    def require_verification_agents(
+        cls,
+        values: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        cleaned = _clean_unique(values, label="criterion verifier")
+        if any(re.fullmatch(r"[a-z][a-z0-9_]*", value) is None for value in cleaned):
+            raise ValueError("criterion verifiers must use stable Agent IDs")
+        return cleaned
 
 
 class ProposedAgent(BaseModel):
@@ -792,11 +948,30 @@ class PlanningProposalBody(BaseModel):
 
     title: str = Field(min_length=1, max_length=120)
     requirements: tuple[str, ...] = Field(min_length=1)
+    requirement_ids: tuple[str, ...] = Field(
+        default=(),
+        min_length=1,
+        exclude_if=lambda values: not values,
+    )
+    non_goals: tuple[str, ...] = Field(
+        default=(),
+        min_length=1,
+        exclude_if=lambda values: not values,
+    )
     acceptance_criteria: tuple[ProposedCriterion, ...] = Field(
         min_length=1,
     )
     constraints: tuple[str, ...] = ()
     assumptions: tuple[str, ...] = ()
+    assumption_decision_ids: tuple[str, ...] = Field(
+        default=(),
+        exclude_if=lambda values: not values,
+    )
+    decisions: tuple[PlanningDecisionRecord, ...] = Field(
+        default=(),
+        min_length=1,
+        exclude_if=lambda values: not values,
+    )
     objective: str = Field(min_length=1, max_length=1000)
     approach: tuple[str, ...] = Field(min_length=1)
     tasks: tuple[ProposedTask, ...] = Field(
@@ -819,6 +994,7 @@ class PlanningProposalBody(BaseModel):
 
     @field_validator(
         "requirements",
+        "non_goals",
         "constraints",
         "assumptions",
         "approach",
@@ -828,6 +1004,27 @@ class PlanningProposalBody(BaseModel):
     def require_clean_unique_text(cls, values: tuple[str, ...]) -> tuple[str, ...]:
         return _clean_unique(values, label="proposal")
 
+    @field_validator("requirement_ids")
+    @classmethod
+    def require_stable_requirement_ids(
+        cls,
+        values: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        cleaned = _clean_unique(values, label="proposal requirement ID")
+        if any(re.fullmatch(r"REQ_[A-Z0-9_]+", value) is None for value in cleaned):
+            raise ValueError("proposal requirements must use stable REQ_ IDs")
+        return cleaned
+
+    @field_validator("assumption_decision_ids")
+    @classmethod
+    def require_assumption_decision_ids(
+        cls,
+        values: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        if any(re.fullmatch(r"DECISION_[A-Z0-9_]+", value) is None for value in values):
+            raise ValueError("assumptions must reference stable DECISION_ IDs")
+        return values
+
     @model_validator(mode="after")
     def validate_complete_proposal(self) -> Self:
         criterion_ids = tuple(item.id for item in self.acceptance_criteria)
@@ -836,6 +1033,9 @@ class PlanningProposalBody(BaseModel):
         agent_ids = tuple(agent.id for agent in self.agents)
         if len(agent_ids) != len(set(agent_ids)):
             raise ValueError("proposed Agent IDs must be unique")
+        decision_ids = tuple(item.id for item in self.decisions)
+        if len(decision_ids) != len(set(decision_ids)):
+            raise ValueError("proposal decision IDs must be unique")
         _validate_dag(
             agent_ids,
             {agent.id: agent.dependencies for agent in self.agents},
@@ -907,6 +1107,210 @@ class PlanningProposalBody(BaseModel):
         return self
 
 
+def validate_question_admission(
+    question: PlanningQuestion,
+    *,
+    previous_question_ids: Collection[str] = (),
+) -> None:
+    """Reject questions outside the deterministic responsibility matrix."""
+
+    if question.id in set(previous_question_ids):
+        raise PlanningError(f"Planning question ID was already used: {question.id}")
+    if question.decision_category is None or question.decision_owner is None:
+        raise PlanningError("Planning question is missing decision category or owner")
+    expected = _DECISION_AUTHORITY[question.decision_category]
+    if question.decision_owner is not expected:
+        raise PlanningError(
+            f"Planning question category {question.decision_category.value} belongs "
+            f"to {expected.value}, not {question.decision_owner.value}"
+        )
+    if expected in {
+        PlanningDecisionAuthority.AGENT_AUTONOMY,
+        PlanningDecisionAuthority.CONTROLLER_POLICY,
+    }:
+        raise PlanningError(
+            f"Planning cannot ask the user to decide {question.decision_category.value}"
+        )
+    if not question.missing_evidence:
+        raise PlanningError("Planning question must name the missing evidence")
+    if not question.material_consequences:
+        raise PlanningError("Planning question must name a material consequence")
+
+
+def validate_planning_clarity(
+    body: PlanningProposalBody,
+    *,
+    question_contracts: Mapping[
+        str,
+        tuple[PlanningDecisionCategory, PlanningDecisionAuthority],
+    ]
+    | None = None,
+) -> None:
+    """Enforce the current decision and requirement-to-evidence contract."""
+
+    if len(body.requirement_ids) != len(body.requirements):
+        raise PlanningError(
+            "current proposals require one stable ID for every requirement"
+        )
+    if not body.non_goals:
+        raise PlanningError("current proposals must state at least one non-goal")
+    if not body.decisions:
+        raise PlanningError("current proposals must record decision provenance")
+
+    decisions = {decision.id: decision for decision in body.decisions}
+    if len(decisions) != len(body.decisions):
+        raise PlanningError("proposal decision IDs must be unique")
+    if any(
+        decision.authority is PlanningDecisionAuthority.CONTROLLER_POLICY
+        for decision in body.decisions
+    ):
+        raise PlanningError(
+            "Planner output cannot claim controller-policy decision authority"
+        )
+
+    required_recommendations = {
+        PlanningDecisionCategory.ACCEPTANCE_SCOPE,
+        PlanningDecisionCategory.DELIVERY,
+        PlanningDecisionCategory.TEAM,
+        PlanningDecisionCategory.MODEL_ROUTE,
+    }
+    recorded_recommendations = {
+        decision.category
+        for decision in body.decisions
+        if decision.authority is PlanningDecisionAuthority.PLANNER_PROPOSAL
+    }
+    missing_recommendations = required_recommendations - recorded_recommendations
+    if missing_recommendations:
+        raise PlanningError(
+            "proposal omits Planner recommendation provenance for: "
+            + ", ".join(sorted(item.value for item in missing_recommendations))
+        )
+
+    if len(body.assumption_decision_ids) != len(body.assumptions):
+        raise PlanningError(
+            "every assumption must identify its autonomous decision record"
+        )
+    for decision_id in body.assumption_decision_ids:
+        decision = decisions.get(decision_id)
+        if decision is None:
+            raise PlanningError(
+                f"assumption references an unknown decision: {decision_id}"
+            )
+        if decision.authority is not PlanningDecisionAuthority.AGENT_AUTONOMY:
+            raise PlanningError(
+                f"assumption {decision_id} is not an autonomous implementation choice"
+            )
+
+    requirement_ids = set(body.requirement_ids)
+    covered_requirements: set[str] = set()
+    agents = {agent.id: agent for agent in body.agents}
+    tasks_by_criterion: dict[str, list[ProposedTask]] = {
+        criterion.id: [] for criterion in body.acceptance_criteria
+    }
+    for task in body.tasks:
+        for criterion_id in task.acceptance_criteria:
+            if criterion_id in tasks_by_criterion:
+                tasks_by_criterion[criterion_id].append(task)
+
+    dependencies = {agent.id: agent.dependencies for agent in body.agents}
+
+    def transitively_depends(agent_id: str, target: str) -> bool:
+        pending = list(dependencies[agent_id])
+        seen: set[str] = set()
+        while pending:
+            current = pending.pop()
+            if current == target:
+                return True
+            if current not in seen:
+                seen.add(current)
+                pending.extend(dependencies[current])
+        return False
+
+    for criterion in body.acceptance_criteria:
+        unknown_requirements = set(criterion.requirement_ids) - requirement_ids
+        if unknown_requirements:
+            raise PlanningError(
+                f"criterion {criterion.id} references unknown requirements: "
+                + ", ".join(sorted(unknown_requirements))
+            )
+        if not criterion.requirement_ids:
+            raise PlanningError(
+                f"criterion {criterion.id} must reference at least one requirement"
+            )
+        covered_requirements.update(criterion.requirement_ids)
+        writers = {
+            task.owner_agent_id
+            for task in tasks_by_criterion[criterion.id]
+            if agents[task.owner_agent_id].capability
+            in {AgentCapability.IMPLEMENTATION, AgentCapability.INTEGRATION}
+        }
+        if not writers:
+            raise PlanningError(
+                f"criterion {criterion.id} has no responsible writer task"
+            )
+        if not criterion.verification_agent_ids:
+            raise PlanningError(
+                f"criterion {criterion.id} must name an independent verifier"
+            )
+        for verifier_id in criterion.verification_agent_ids:
+            verifier = agents.get(verifier_id)
+            if verifier is None:
+                raise PlanningError(
+                    f"criterion {criterion.id} references unknown verifier "
+                    f"{verifier_id}"
+                )
+            if verifier.capability not in {
+                AgentCapability.TESTING,
+                AgentCapability.REVIEW,
+            }:
+                raise PlanningError(
+                    f"criterion {criterion.id} verifier {verifier_id} is not "
+                    "read-only quality"
+                )
+            if any(not transitively_depends(verifier_id, writer) for writer in writers):
+                raise PlanningError(
+                    f"criterion {criterion.id} verifier {verifier_id} is not "
+                    "downstream "
+                    "of every responsible writer"
+                )
+
+    missing_requirement_coverage = requirement_ids - covered_requirements
+    if missing_requirement_coverage:
+        raise PlanningError(
+            "requirements lack observable acceptance coverage: "
+            + ", ".join(sorted(missing_requirement_coverage))
+        )
+
+    if question_contracts is None:
+        return
+    linked = {
+        decision.question_id: decision
+        for decision in body.decisions
+        if decision.question_id is not None
+    }
+    if len(linked) != sum(
+        decision.question_id is not None for decision in body.decisions
+    ):
+        raise PlanningError("a Planning question can resolve only one decision record")
+    if set(linked) != set(question_contracts):
+        missing = set(question_contracts) - set(linked)
+        invented = set(linked) - set(question_contracts)
+        details = []
+        if missing:
+            details.append("missing " + ", ".join(sorted(missing)))
+        if invented:
+            details.append("unknown " + ", ".join(sorted(invented)))
+        raise PlanningError(
+            "proposal question-decision provenance is incomplete: " + "; ".join(details)
+        )
+    for question_id, (category, owner) in question_contracts.items():
+        decision = linked[question_id]
+        if decision.category is not category or decision.authority is not owner:
+            raise PlanningError(
+                f"decision for question {question_id} changed its category or owner"
+            )
+
+
 class PlanningModelResponse(BaseModel):
     """Strict either-question-or-proposal response from bootstrap Planning."""
 
@@ -927,26 +1331,66 @@ class PlanningModelResponse(BaseModel):
 
 
 def _planning_response_schema() -> dict[str, object]:
-    """Require explicit boundary declarations in every live proposal criterion."""
+    """Require every field in the current live Planning contract."""
 
     schema = PlanningModelResponse.model_json_schema()
     definitions = schema.get("$defs")
     if not isinstance(definitions, dict):
         raise PlanningError("Planning response schema has no definitions")
-    criterion = definitions.get("ProposedCriterion")
-    if not isinstance(criterion, dict):
-        raise PlanningError("Planning response schema has no proposed criterion")
-    properties = criterion.get("properties")
-    if not isinstance(properties, dict) or not isinstance(
-        properties.get("review_boundaries"), dict
-    ):
-        raise PlanningError("Planning response schema has no Review boundaries")
-    properties["review_boundaries"].pop("default", None)
-    required = criterion.setdefault("required", [])
-    if not isinstance(required, list):
-        raise PlanningError("Planning criterion requirements are invalid")
-    if "review_boundaries" not in required:
-        required.append("review_boundaries")
+    required_by_definition = {
+        "PlanningQuestion": (
+            "decision_category",
+            "decision_owner",
+            "missing_evidence",
+            "material_consequences",
+        ),
+        "ProposedCriterion": (
+            "requirement_ids",
+            "verification_agent_ids",
+            "review_boundaries",
+        ),
+        "PlanningProposalBody": (
+            "requirement_ids",
+            "non_goals",
+            "assumption_decision_ids",
+            "decisions",
+        ),
+    }
+    for definition_name, field_names in required_by_definition.items():
+        definition = definitions.get(definition_name)
+        if not isinstance(definition, dict):
+            raise PlanningError(
+                f"Planning response schema has no {definition_name} definition"
+            )
+        properties = definition.get("properties")
+        required = definition.setdefault("required", [])
+        if not isinstance(properties, dict) or not isinstance(required, list):
+            raise PlanningError(
+                f"Planning response schema has invalid {definition_name} fields"
+            )
+        for field_name in field_names:
+            field_schema = properties.get(field_name)
+            if not isinstance(field_schema, dict):
+                raise PlanningError(
+                    f"Planning response schema has no {definition_name}.{field_name}"
+                )
+            field_schema.pop("default", None)
+            if field_name not in required:
+                required.append(field_name)
+    question_properties = definitions["PlanningQuestion"]["properties"]
+    for field_name in ("decision_category", "decision_owner"):
+        field_schema = question_properties[field_name]
+        options = field_schema.get("anyOf")
+        if not isinstance(options, list):
+            raise PlanningError(
+                f"Planning response schema has no nullable {field_name} union"
+            )
+        non_null = [option for option in options if option.get("type") != "null"]
+        if len(non_null) != 1:
+            raise PlanningError(
+                f"Planning response schema has an invalid {field_name} union"
+            )
+        question_properties[field_name] = non_null[0]
     return schema
 
 
@@ -955,16 +1399,40 @@ class AdaptiveImplementationPlan(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[PLANNING_SCHEMA_VERSION] = PLANNING_SCHEMA_VERSION
+    schema_version: Literal[2, PLANNING_SCHEMA_VERSION] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     team_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     revision: int = Field(ge=1)
     created_at: datetime
     objective: str
+    requirement_ids: tuple[str, ...] = Field(
+        default=(),
+        exclude_if=lambda values: not values,
+    )
+    requirements: tuple[str, ...] = Field(
+        default=(),
+        exclude_if=lambda values: not values,
+    )
+    acceptance_criteria: tuple[ProposedCriterion, ...] = Field(
+        default=(),
+        exclude_if=lambda values: not values,
+    )
+    non_goals: tuple[str, ...] = Field(
+        default=(),
+        exclude_if=lambda values: not values,
+    )
     approach: tuple[str, ...]
     tasks: tuple[ProposedTask, ...]
     risks: tuple[str, ...]
     assumptions: tuple[str, ...]
+    assumption_decision_ids: tuple[str, ...] = Field(
+        default=(),
+        exclude_if=lambda values: not values,
+    )
+    decisions: tuple[PlanningDecisionRecord, ...] = Field(
+        default=(),
+        exclude_if=lambda values: not values,
+    )
 
     @field_validator("created_at")
     @classmethod
@@ -1004,7 +1472,7 @@ class PlanningTurn(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[PLANNING_SCHEMA_VERSION] = PLANNING_SCHEMA_VERSION
+    schema_version: Literal[2, PLANNING_SCHEMA_VERSION] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     sequence: int = Field(ge=1)
     previous_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
@@ -1065,7 +1533,7 @@ class PlanningProposal(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[PLANNING_SCHEMA_VERSION] = PLANNING_SCHEMA_VERSION
+    schema_version: Literal[2, PLANNING_SCHEMA_VERSION] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     revision: int = Field(ge=1)
     created_at: datetime
@@ -1123,7 +1591,7 @@ class PlanningSession(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[PLANNING_SCHEMA_VERSION] = PLANNING_SCHEMA_VERSION
+    schema_version: Literal[2, PLANNING_SCHEMA_VERSION] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     request_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     status: PlanningSessionStatus
@@ -1302,7 +1770,7 @@ class PlanningApproval(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[PLANNING_SCHEMA_VERSION] = PLANNING_SCHEMA_VERSION
+    schema_version: Literal[2, PLANNING_SCHEMA_VERSION] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     revision: int = Field(ge=1)
     approved_at: datetime
@@ -1530,6 +1998,8 @@ def preview_adaptive_proposal(
     if proposal.run_id != request.run_id:
         raise PlanningError("proposal belongs to a different Planning request")
     body = proposal.body
+    if proposal.schema_version == PLANNING_SCHEMA_VERSION:
+        validate_planning_clarity(body)
     if policy.max_agents is not None and len(body.agents) > policy.max_agents:
         raise PlanningError(
             f"proposal has {len(body.agents)} Agents; policy permits "
@@ -1619,7 +2089,12 @@ def preview_adaptive_proposal(
         source_request=request.source_request,
         requirements=list(body.requirements),
         acceptance_criteria=[
-            AcceptanceCriterion.model_validate(item.model_dump(mode="json"))
+            AcceptanceCriterion(
+                id=item.id,
+                description=item.description,
+                verification=item.verification,
+                review_boundaries=item.review_boundaries,
+            )
             for item in body.acceptance_criteria
         ]
         + list(policy.profile_acceptance_criteria),
@@ -1629,15 +2104,22 @@ def preview_adaptive_proposal(
         confirmed=True,
     )
     implementation_plan = AdaptiveImplementationPlan(
+        schema_version=proposal.schema_version,
         run_id=request.run_id,
         team_id="adaptive_team",
         revision=proposal.revision,
         created_at=created_at,
         objective=body.objective,
+        requirement_ids=body.requirement_ids,
+        requirements=body.requirements,
+        acceptance_criteria=body.acceptance_criteria,
+        non_goals=body.non_goals,
         approach=body.approach,
         tasks=body.tasks,
         risks=body.risks,
         assumptions=body.assumptions,
+        assumption_decision_ids=body.assumption_decision_ids,
+        decisions=body.decisions,
     )
 
     routing_policy = policy.model_routing or ModelRoutingPolicy(
@@ -1844,6 +2326,7 @@ def apply_structured_edit(
         description = f"Set {edit.agent_id} model profile to {edit.value}."
     body = PlanningProposalBody.model_validate(body.model_dump(mode="json"))
     return PlanningProposal(
+        schema_version=proposal.schema_version,
         run_id=proposal.run_id,
         revision=proposal.revision + 1,
         created_at=created_at,
@@ -1876,15 +2359,39 @@ def render_planning_overview(
     brief = preview.task_brief
     implementation = preview.implementation_plan
     plan = preview.team_plan
+    requirement_pairs = (
+        tuple(
+            zip(
+                implementation.requirement_ids,
+                implementation.requirements,
+                strict=True,
+            )
+        )
+        if implementation.requirement_ids
+        else tuple(
+            (f"REQ_LEGACY_{index}", text)
+            for index, text in enumerate(brief.requirements, start=1)
+        )
+    )
     lines = [
         "Planning overview",
+        "  Outcome and scope:",
         f"  Product: {brief.title}",
         f"  Request: {brief.source_request}",
         f"  Destination: {preview.destination}",
         "  Execution profile:",
         *(f"    - {item}" for item in preview.execution_profile),
         "  Requirements:",
-        *(f"    - {item}" for item in brief.requirements),
+        *(
+            f"    - {requirement_id}: {text}"
+            for requirement_id, text in requirement_pairs
+        ),
+        "  Non-goals:",
+        *(
+            (f"    - {item}" for item in implementation.non_goals)
+            if implementation.non_goals
+            else ("    - unavailable in legacy Planning evidence",)
+        ),
     ]
     if preview.execution_profile_constraints:
         lines.append("  Execution-profile constraints (controller-owned):")
@@ -1892,6 +2399,67 @@ def render_planning_overview(
     if preview.planner_constraints:
         lines.append("  Additional task constraints proposed by Planning:")
         lines.extend(f"    - {item}" for item in preview.planner_constraints)
+    lines.append("  Decisions and assumptions:")
+    decision_groups = (
+        (
+            PlanningDecisionAuthority.USER,
+            "Additional user decisions resolved during clarification",
+        ),
+        (
+            PlanningDecisionAuthority.PLANNER_PROPOSAL,
+            "Planning recommendations requiring approval",
+        ),
+        (
+            PlanningDecisionAuthority.AGENT_AUTONOMY,
+            "Agent or Controller autonomy within the approved boundary",
+        ),
+    )
+    for authority, label in decision_groups:
+        records = tuple(
+            decision
+            for decision in implementation.decisions
+            if decision.authority is authority
+        )
+        lines.append(f"    {label}:")
+        if not records:
+            lines.append(
+                "      - none beyond the user-owned source request shown above"
+                if authority is PlanningDecisionAuthority.USER
+                else "      - none"
+            )
+        for decision in records:
+            question = (
+                ""
+                if decision.question_id is None
+                else f"; question={decision.question_id}"
+            )
+            lines.append(
+                f"      - {decision.id} [{decision.category.value}{question}]: "
+                f"{decision.summary} (why: {decision.rationale})"
+            )
+    lines.append("    Assumptions:")
+    if not implementation.assumptions:
+        lines.append("      - none")
+    if implementation.assumption_decision_ids:
+        for assumption, decision_id in zip(
+            implementation.assumptions,
+            implementation.assumption_decision_ids,
+            strict=True,
+        ):
+            lines.append(f"      - {decision_id}: {assumption}")
+    else:
+        lines.extend(
+            f"      - legacy/unowned: {item}" for item in implementation.assumptions
+        )
+    lines.extend(
+        (
+            "    Non-negotiable Controller policy:",
+            "      - secret isolation and least-privilege permissions",
+            "      - immutable evidence and fail-closed lifecycle transitions",
+            "      - cleanup limited to resources proven to be SAT-owned",
+            "      - only a verified accepted workspace may be delivered",
+        )
+    )
     lines.extend(
         (
             "  Acceptance criteria:",
@@ -1925,6 +2493,37 @@ def render_planning_overview(
                 ),
             )
         )
+    lines.append("  Requirement-to-evidence traceability:")
+    if not implementation.acceptance_criteria:
+        lines.append("    - unavailable in legacy Planning evidence")
+    proposal_criteria = {item.id: item for item in implementation.acceptance_criteria}
+    rendered_criterion_ids: set[str] = set()
+    for requirement_id, _ in requirement_pairs:
+        criteria = tuple(
+            item
+            for item in implementation.acceptance_criteria
+            if requirement_id in item.requirement_ids
+        )
+        rendered_criterion_ids.update(item.id for item in criteria)
+        lines.append(f"    - {requirement_id}")
+        for criterion in criteria:
+            writers = tuple(
+                task
+                for task in implementation.tasks
+                if criterion.id in task.acceptance_criteria
+                and plan.get_agent(task.owner_agent_id).capability
+                in {AgentCapability.IMPLEMENTATION, AgentCapability.INTEGRATION}
+            )
+            writer_text = ", ".join(
+                f"{task.id}->{task.owner_agent_id}" for task in writers
+            )
+            verifier_text = ", ".join(criterion.verification_agent_ids)
+            lines.append(
+                f"      - {criterion.id}: writers={writer_text}; "
+                f"independent verification={verifier_text}"
+            )
+    if set(proposal_criteria) != rendered_criterion_ids:
+        raise PlanningError("rendered traceability omitted a proposal criterion")
     lines.extend(
         (
             "  Implementation approach:",
@@ -1987,6 +2586,21 @@ def render_planning_overview(
                 f"allowed {minimum_timeout}..{timeout.ceiling_seconds})"
             )
         )
+        inputs = (
+            "approved TaskBrief and implementation plan"
+            if not agent.dependencies
+            else "durable outputs from " + ", ".join(agent.dependencies)
+        )
+        dependents = tuple(
+            candidate.id
+            for candidate in plan.agents
+            if agent.id in candidate.dependencies
+        )
+        handoff = (
+            "Controller terminal decision"
+            if not dependents
+            else "durable artifact to " + ", ".join(dependents)
+        )
         lines.extend(
             (
                 f"    - {agent.id} ({agent.label})",
@@ -1996,6 +2610,9 @@ def render_planning_overview(
                 f"      dependencies: {dependencies}",
                 f"      permission: {agent.permission_profile.value}",
                 f"      workspace: {agent.workspace_scope}",
+                f"      inputs: {inputs}",
+                f"      output: {agent.expected_output.value}",
+                f"      handoff: {handoff}",
                 f"      model: {route.model} (profile {route.id}; "
                 f"{assignment.selection_source.value})",
                 f"      model reason: {assignment.reason}",
@@ -2078,6 +2695,19 @@ def render_planning_overview(
     if implementation.risks:
         lines.append("  Risks:")
         lines.extend(f"    - {item}" for item in implementation.risks)
+    else:
+        lines.extend(("  Risks:", "    - none identified"))
+    lines.extend(
+        (
+            "  Failure and delivery boundary:",
+            "    - failed or cancelled work remains inspectable evidence and is "
+            "not delivered",
+            "    - only the Controller may accept evidence and publish the "
+            "verified workspace",
+            "    - destination mutation begins only after the approved-plan "
+            "readiness checkpoint",
+        )
+    )
     return "\n".join(lines)
 
 
@@ -2644,6 +3274,44 @@ class AdaptivePlanningCoordinator:
         except (ValueError, PlanningError) as error:
             raise PlanningError(f"proposed TeamPlan is invalid: {error}") from error
 
+    @staticmethod
+    def _question_contracts(
+        transcript: list[dict[str, object]],
+        current_proposal: PlanningProposal | None,
+    ) -> dict[
+        str,
+        tuple[PlanningDecisionCategory, PlanningDecisionAuthority],
+    ]:
+        """Recover every answered question contract without trusting prose."""
+
+        contracts: dict[
+            str,
+            tuple[PlanningDecisionCategory, PlanningDecisionAuthority],
+        ] = {}
+        if current_proposal is not None:
+            for decision in current_proposal.body.decisions:
+                if decision.question_id is None:
+                    continue
+                contracts[decision.question_id] = (
+                    decision.category,
+                    decision.authority,
+                )
+        for entry in transcript:
+            question = PlanningQuestion.model_validate(entry["question"])
+            if question.decision_category is None or question.decision_owner is None:
+                raise PlanningError(
+                    "persisted Planning transcript has an incomplete question contract"
+                )
+            if question.id in contracts:
+                raise PlanningError(
+                    f"Planning question ID was already used: {question.id}"
+                )
+            contracts[question.id] = (
+                question.decision_category,
+                question.decision_owner,
+            )
+        return contracts
+
     def _invoke(
         self,
         request: PlanningRequest,
@@ -2794,8 +3462,22 @@ class AdaptivePlanningCoordinator:
                         )
                     )
                     parsed = PlanningModelResponse.model_validate(payload)
-                    if parsed.kind is PlanningResponseKind.PROPOSAL:
+                    question_contracts = self._question_contracts(
+                        transcript,
+                        current_proposal,
+                    )
+                    if parsed.kind is PlanningResponseKind.QUESTION:
+                        assert parsed.question is not None
+                        validate_question_admission(
+                            parsed.question,
+                            previous_question_ids=question_contracts,
+                        )
+                    else:
                         assert parsed.proposal is not None
+                        validate_planning_clarity(
+                            parsed.proposal,
+                            question_contracts=question_contracts,
+                        )
                         candidate = PlanningProposal(
                             run_id=request.run_id,
                             revision=(
@@ -3052,7 +3734,19 @@ def _interactive_question_answerer(
     def answer(question: PlanningQuestion) -> str | None:
         write("")
         write(f"Planning question: {question.text}")
+        assert question.decision_category is not None
+        assert question.decision_owner is not None
+        write(
+            "Decision boundary: "
+            f"{question.decision_category.value} / {question.decision_owner.value}"
+        )
         write(f"Why this matters: {question.why}")
+        write("Missing evidence:")
+        for item in question.missing_evidence:
+            write(f"  - {item}")
+        write("What this can change:")
+        for item in question.material_consequences:
+            write(f"  - {item}")
         for index, option in enumerate(question.options, start=1):
             write(f"  {index}. {option.label} — {option.description}")
         write("  c. Custom answer")

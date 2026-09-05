@@ -364,6 +364,25 @@ seconds. Approval revalidates that authority against the TeamPlan at the
 execution boundary.
 The bootstrap Planner cannot create Agents or change lifecycle state.
 
+Planning schema v3 is the current write contract and schema v2 remains readable.
+Compatibility fields omit themselves when absent so loading v2 evidence does
+not change its canonical bytes or digest. A structured edit of v2 evidence
+preserves version 2; a new model-authored replacement uses the current schema.
+The live response schema, unlike the backward-readable persistence models,
+requires non-null question category and owner, admission rationale, stable
+requirement references, non-goals, assumption ownership, decision provenance,
+and criterion verifier references.
+
+Before a question reaches the user, the controller checks its declared category
+against the fixed responsibility matrix and rejects autonomous implementation,
+scheduling, safety, or evidence-integrity questions. Before a proposal can be
+shown, persisted, or approved, the controller requires every answered question
+to map to one unchanged decision record and validates the complete
+requirement-to-criterion-to-writer-to-downstream-read-only-verifier graph.
+These structural checks cannot prove that free text was classified wisely;
+provider-backed ambiguous-task and user-comprehension evidence remain separate
+acceptance boundaries.
+
 Task-criterion binding is context-aware without transferring profile ownership
 to the model. A proposal must cover every Planner-owned criterion it defines.
 An exact definition echo of an active profile ID is discarded and audited

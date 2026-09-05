@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 from datetime import UTC, datetime, timedelta
@@ -42,6 +43,9 @@ from software_agent_team.planning import (
     CapabilityTimeoutPolicy,
     PlanningActivity,
     PlanningActivityKind,
+    PlanningDecisionAuthority,
+    PlanningDecisionCategory,
+    PlanningDecisionRecord,
     PlanningError,
     PlanningIntegrityError,
     PlanningModelResponse,
@@ -76,6 +80,7 @@ from software_agent_team.teams import (
 )
 
 FIXED_TIME = datetime(2026, 8, 26, 12, 0, tzinfo=UTC)
+AMBIGUOUS_LINK_REQUEST = "Build a CLI that checks Markdown links."
 
 
 class AdvancingClock:
@@ -90,13 +95,19 @@ class AdvancingClock:
         return value
 
 
-def request() -> PlanningRequest:
+def request(
+    *,
+    source_request: str = (
+        "Build a local-only CLI that checks Markdown file and fragment links "
+        "without fetching remote URLs."
+    ),
+) -> PlanningRequest:
     """Return direct input with explicit pre-model authorization."""
 
     return PlanningRequest(
         run_id="sat-adaptive-001",
         project_name="link-checker",
-        source_request="Build a CLI that checks Markdown links.",
+        source_request=source_request,
         destination="/tmp/link-checker",
         execution_profile=(
             "Small greenfield Python 3.12 project",
@@ -143,29 +154,90 @@ def policy(**updates: object) -> PlanningPolicy:
     return PlanningPolicy.model_validate(values)
 
 
-def proposal_body(*, title: str = "Markdown Link Checker") -> PlanningProposalBody:
+def proposal_body(
+    *,
+    title: str = "Markdown Link Checker",
+    question_id: str | None = None,
+) -> PlanningProposalBody:
     """Return one complete task-defined team proposal."""
 
+    decisions = (
+        PlanningDecisionRecord(
+            id="DECISION_ACCEPTANCE",
+            category=PlanningDecisionCategory.ACCEPTANCE_SCOPE,
+            authority=PlanningDecisionAuthority.PLANNER_PROPOSAL,
+            summary="Verify observable scan failures and diagnostic locations.",
+            rationale="These behaviors make the requested CLI testable.",
+        ),
+        PlanningDecisionRecord(
+            id="DECISION_DELIVERY",
+            category=PlanningDecisionCategory.DELIVERY,
+            authority=PlanningDecisionAuthority.PLANNER_PROPOSAL,
+            summary="Deliver one runnable local CLI project.",
+            rationale="The request is for a local command-line tool.",
+        ),
+        PlanningDecisionRecord(
+            id="DECISION_TEAM",
+            category=PlanningDecisionCategory.TEAM,
+            authority=PlanningDecisionAuthority.PLANNER_PROPOSAL,
+            summary="Use one writer and two downstream quality Agents.",
+            rationale="The cohesive implementation still needs independent checks.",
+        ),
+        PlanningDecisionRecord(
+            id="DECISION_MODEL_ROUTE",
+            category=PlanningDecisionCategory.MODEL_ROUTE,
+            authority=PlanningDecisionAuthority.PLANNER_PROPOSAL,
+            summary="Use capability-compatible configured model routes.",
+            rationale="No task evidence justifies a route override.",
+        ),
+        PlanningDecisionRecord(
+            id="DECISION_SCAN_STRUCTURE",
+            category=PlanningDecisionCategory.LOCAL_IMPLEMENTATION,
+            authority=PlanningDecisionAuthority.AGENT_AUTONOMY,
+            summary="Use one single-process scan before considering parallelism.",
+            rationale="The small initial workload does not justify added coordination.",
+        ),
+    )
+    if question_id is not None:
+        decisions = (
+            *decisions,
+            PlanningDecisionRecord(
+                id="DECISION_LINK_SCOPE_ANSWER",
+                category=PlanningDecisionCategory.PRODUCT_REQUIREMENT,
+                authority=PlanningDecisionAuthority.USER,
+                summary="Keep the first release limited to local links.",
+                rationale="The user selected the deterministic local-only option.",
+                question_id=question_id,
+            ),
+        )
     return PlanningProposalBody(
         title=title,
         requirements=(
             "Scan Markdown files below a selected path.",
             "Report broken local links with source locations.",
         ),
+        requirement_ids=("REQ_SCAN", "REQ_REPORT"),
+        non_goals=("Fetching or validating remote web links is not included.",),
         acceptance_criteria=(
             ProposedCriterion(
                 id="AC_SCAN",
                 description="Broken local links produce a non-zero exit status.",
                 verification="Run the CLI against valid and broken fixtures.",
+                requirement_ids=("REQ_SCAN",),
+                verification_agent_ids=("acceptance_tester",),
             ),
             ProposedCriterion(
                 id="AC_REPORT",
                 description="Every failure includes the file and line number.",
                 verification="Assert structured output for a broken fixture.",
+                requirement_ids=("REQ_REPORT",),
+                verification_agent_ids=("acceptance_tester", "quality_reviewer"),
             ),
         ),
         constraints=("Use only the standard library at runtime.",),
-        assumptions=("Only local file and fragment links are in scope.",),
+        assumptions=("The initial implementation uses a single-process scan.",),
+        assumption_decision_ids=("DECISION_SCAN_STRUCTURE",),
+        decisions=decisions,
         objective="Deliver a documented, tested Markdown link-checking CLI.",
         approach=(
             "Parse Markdown link targets without fetching network resources.",
@@ -262,6 +334,22 @@ def test_planning_overview_separates_constraint_authority_without_losing_data() 
     assert preview.planner_constraints == ("Use only the standard library at runtime.",)
     assert overview.count("Use the versioned uv environment") == 1
     assert overview.count("Use only the standard library at runtime.") == 1
+    assert "Outcome and scope:" in overview
+    assert "REQ_SCAN: Scan Markdown files" in overview
+    assert "Non-goals:" in overview
+    assert "Decisions and assumptions:" in overview
+    assert "Planning recommendations requiring approval:" in overview
+    assert "none beyond the user-owned source request shown above" in overview
+    assert "Non-negotiable Controller policy:" in overview
+    assert "Requirement-to-evidence traceability:" in overview
+    assert "AC_SCAN: writers=TASK_IMPLEMENT->cli_developer" in overview
+    assert "independent verification=acceptance_tester" in overview
+    assert "inputs: approved TaskBrief and implementation plan" in overview
+    assert "output: work_result" in overview
+    assert (
+        "handoff: durable artifact to acceptance_tester, quality_reviewer" in overview
+    )
+    assert "Failure and delivery boundary:" in overview
 
 
 def response(value: PlanningModelResponse) -> str:
@@ -275,6 +363,14 @@ def question_response() -> PlanningModelResponse:
             id="link_scope",
             text="Should the first version check web links too?",
             why="Network access changes reliability and test architecture.",
+            decision_category=PlanningDecisionCategory.PRODUCT_REQUIREMENT,
+            decision_owner=PlanningDecisionAuthority.USER,
+            missing_evidence=(
+                "The request does not state whether remote URLs are in scope.",
+            ),
+            material_consequences=(
+                "The answer changes acceptance, network access, and retry behavior.",
+            ),
             options=(
                 PlanningOption(
                     id="local_only",
@@ -316,12 +412,214 @@ def test_question_requires_suggestions_and_preserves_custom_answers() -> None:
     assert question.allow_custom
 
 
+@pytest.mark.parametrize(
+    ("category", "owner", "message"),
+    (
+        (
+            PlanningDecisionCategory.LOCAL_IMPLEMENTATION,
+            PlanningDecisionAuthority.AGENT_AUTONOMY,
+            "cannot ask the user to decide",
+        ),
+        (
+            PlanningDecisionCategory.PRODUCT_REQUIREMENT,
+            PlanningDecisionAuthority.PLANNER_PROPOSAL,
+            "belongs to user",
+        ),
+    ),
+)
+def test_controller_rejects_questions_outside_the_responsibility_matrix(
+    tmp_path: Path,
+    category: PlanningDecisionCategory,
+    owner: PlanningDecisionAuthority,
+    message: str,
+) -> None:
+    question = question_response().question
+    assert question is not None
+    invalid = question.model_copy(
+        update={
+            "decision_category": category,
+            "decision_owner": owner,
+        }
+    )
+    coordinator = AdaptivePlanningCoordinator(
+        executor=ScriptedAgentExecutor(
+            [
+                response(
+                    PlanningModelResponse(
+                        kind=PlanningResponseKind.QUESTION,
+                        question=invalid,
+                    )
+                )
+            ]
+        ),
+        store=PlanningStore(tmp_path / "planning"),
+        policy=policy(response_repair_limit=0),
+        clock=AdvancingClock(),
+    )
+
+    with pytest.raises(PlanningError, match=message):
+        coordinator.start(
+            request(source_request=AMBIGUOUS_LINK_REQUEST),
+            answer_question=lambda _question: pytest.fail(
+                "inadmissible question reached the user"
+            ),
+        )
+
+
+def test_answered_question_must_have_exact_decision_provenance(tmp_path: Path) -> None:
+    coordinator = AdaptivePlanningCoordinator(
+        executor=ScriptedAgentExecutor(
+            [
+                response(question_response()),
+                response(proposal_response()),
+            ]
+        ),
+        store=PlanningStore(tmp_path / "planning"),
+        policy=policy(response_repair_limit=0),
+        clock=AdvancingClock(),
+    )
+
+    with pytest.raises(PlanningError, match="question-decision provenance"):
+        coordinator.start(
+            request(source_request=AMBIGUOUS_LINK_REQUEST),
+            answer_question=lambda _question: "Only local links.",
+        )
+
+
+@pytest.mark.parametrize(
+    ("invalid_body", "message"),
+    (
+        (
+            proposal_body().model_copy(update={"non_goals": ()}),
+            "must state at least one non-goal",
+        ),
+        (
+            proposal_body().model_copy(update={"requirement_ids": ("REQ_SCAN",)}),
+            "one stable ID for every requirement",
+        ),
+        (
+            proposal_body().model_copy(
+                update={
+                    "acceptance_criteria": (
+                        proposal_body()
+                        .acceptance_criteria[0]
+                        .model_copy(update={"verification_agent_ids": ()}),
+                        proposal_body().acceptance_criteria[1],
+                    )
+                }
+            ),
+            "must name an independent verifier",
+        ),
+        (
+            proposal_body().model_copy(
+                update={
+                    "decisions": (
+                        *proposal_body().decisions,
+                        PlanningDecisionRecord(
+                            id="DECISION_SAFETY_POLICY",
+                            category=PlanningDecisionCategory.SAFETY_INVARIANT,
+                            authority=PlanningDecisionAuthority.CONTROLLER_POLICY,
+                            summary="Let the Planner redefine the safety boundary.",
+                            rationale="This is intentionally invalid.",
+                        ),
+                    )
+                }
+            ),
+            "cannot claim controller-policy decision authority",
+        ),
+    ),
+)
+def test_clarity_gate_rejects_incomplete_or_misowned_proposals(
+    invalid_body: PlanningProposalBody,
+    message: str,
+) -> None:
+    with pytest.raises(PlanningError, match=message):
+        preview_adaptive_proposal(
+            request(),
+            proposal(body=invalid_body),
+            policy(),
+            created_at=FIXED_TIME,
+        )
+
+
+def test_clarity_gate_rejects_a_writer_claimed_as_independent_verifier() -> None:
+    body = proposal_body()
+    criteria = (
+        body.acceptance_criteria[0].model_copy(
+            update={"verification_agent_ids": ("cli_developer",)}
+        ),
+        body.acceptance_criteria[1],
+    )
+
+    with pytest.raises(PlanningError, match="not read-only quality"):
+        preview_adaptive_proposal(
+            request(),
+            proposal(body=body.model_copy(update={"acceptance_criteria": criteria})),
+            policy(),
+            created_at=FIXED_TIME,
+        )
+
+
+def test_clarity_gate_rejects_an_authorized_choice_hidden_as_an_assumption() -> None:
+    body = proposal_body()
+    decisions = (
+        *(
+            decision
+            for decision in body.decisions
+            if decision.id != "DECISION_SCAN_STRUCTURE"
+        ),
+        PlanningDecisionRecord(
+            id="DECISION_SCAN_STRUCTURE",
+            category=PlanningDecisionCategory.RISK_TRADEOFF,
+            authority=PlanningDecisionAuthority.USER,
+            summary="Assume the user accepts network reliability risk.",
+            rationale="This deliberately hides an unresolved risk decision.",
+            question_id="network_risk",
+        ),
+    )
+
+    with pytest.raises(PlanningError, match="not an autonomous implementation choice"):
+        preview_adaptive_proposal(
+            request(),
+            proposal(
+                body=body.model_copy(
+                    update={
+                        "assumptions": (
+                            "Assume the user accepts network reliability risk.",
+                        ),
+                        "decisions": decisions,
+                    }
+                )
+            ),
+            policy(),
+            created_at=FIXED_TIME,
+        )
+
+
+def test_clarity_gate_requires_acceptance_coverage_for_every_requirement() -> None:
+    body = proposal_body()
+    criteria = tuple(
+        criterion.model_copy(update={"requirement_ids": ("REQ_SCAN",)})
+        for criterion in body.acceptance_criteria
+    )
+
+    with pytest.raises(PlanningError, match="requirements lack observable"):
+        preview_adaptive_proposal(
+            request(),
+            proposal(body=body.model_copy(update={"acceptance_criteria": criteria})),
+            policy(),
+            created_at=FIXED_TIME,
+        )
+
+
 def test_absolute_criterion_requires_all_review_entry_boundaries() -> None:
     body = proposal_body()
     absolute = ProposedCriterion(
         id="AC_LINK_SAFETY",
         description="The scanner must not follow a symlink at any depth.",
         verification="Challenge every entry boundary with symlink fixtures.",
+        requirement_ids=("REQ_SCAN",),
+        verification_agent_ids=("quality_reviewer",),
     )
 
     tasks = (
@@ -1098,6 +1396,8 @@ def test_controller_rejects_profile_criterion_echo_and_missing_reviewer() -> Non
         id="AC_PROFILE",
         description=profile_criterion.description,
         verification=profile_criterion.verification,
+        requirement_ids=("REQ_SCAN",),
+        verification_agent_ids=("quality_reviewer",),
     )
     echoed_tasks = (
         body.tasks[0].model_copy(
@@ -1133,6 +1433,12 @@ def test_controller_rejects_profile_criterion_echo_and_missing_reviewer() -> Non
                     for agent in body.agents
                     if agent.capability is not AgentCapability.REVIEW
                 ),
+                "acceptance_criteria": tuple(
+                    criterion.model_copy(
+                        update={"verification_agent_ids": ("acceptance_tester",)}
+                    )
+                    for criterion in body.acceptance_criteria
+                ),
                 "max_concurrency": 1,
             }
         )
@@ -1149,7 +1455,17 @@ def test_controller_rejects_profile_criterion_echo_and_missing_reviewer() -> Non
 def test_small_task_may_use_one_independent_quality_agent() -> None:
     body = proposal_body()
     agents = tuple(agent for agent in body.agents if agent.id != "acceptance_tester")
-    smaller = body.model_copy(update={"agents": agents, "max_concurrency": 1})
+    criteria = tuple(
+        criterion.model_copy(update={"verification_agent_ids": ("quality_reviewer",)})
+        for criterion in body.acceptance_criteria
+    )
+    smaller = body.model_copy(
+        update={
+            "acceptance_criteria": criteria,
+            "agents": agents,
+            "max_concurrency": 1,
+        }
+    )
 
     preview = preview_adaptive_proposal(
         request(),
@@ -1360,6 +1676,54 @@ def test_store_detects_changed_append_only_turn_evidence(tmp_path: Path) -> None
         store.load_session(request().run_id)
 
 
+def test_schema_two_proposal_keeps_hash_and_structured_edit_compatibility() -> None:
+    payload = proposal().model_dump(mode="json")
+    payload["schema_version"] = 2
+    body = payload["body"]
+    assert isinstance(body, dict)
+    for field in (
+        "requirement_ids",
+        "non_goals",
+        "assumption_decision_ids",
+        "decisions",
+    ):
+        body.pop(field)
+    criteria = body["acceptance_criteria"]
+    assert isinstance(criteria, list)
+    for criterion in criteria:
+        criterion.pop("requirement_ids")
+        criterion.pop("verification_agent_ids")
+    expected = hashlib.sha256(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+
+    loaded = PlanningProposal.model_validate(payload)
+
+    assert loaded.schema_version == 2
+    assert loaded.model_dump(mode="json") == payload
+    assert canonical_model_sha256(loaded) == expected
+
+    edited = apply_structured_edit(
+        loaded,
+        StructuredPlanEdit(kind=StructuredEditKind.MAX_CONCURRENCY, value=1),
+        created_at=FIXED_TIME + timedelta(seconds=1),
+    )
+    assert edited.schema_version == 2
+    assert edited.body.max_concurrency == 1
+    preview = preview_adaptive_proposal(
+        request(),
+        edited,
+        policy(),
+        created_at=FIXED_TIME + timedelta(seconds=1),
+    )
+    assert preview.implementation_plan.schema_version == 2
+
+
 def test_planning_store_accepts_evidence_indexes_beyond_three_digits(
     tmp_path: Path,
 ) -> None:
@@ -1547,11 +1911,16 @@ def test_store_rejects_unanchored_planning_evidence(tmp_path: Path) -> None:
 def test_dialogue_revision_structured_edit_and_approval_are_recoverable(
     tmp_path: Path,
 ) -> None:
-    revised_body = proposal_body(title="Local Markdown Link Checker")
+    planning_request = request(source_request=AMBIGUOUS_LINK_REQUEST)
+    answered_body = proposal_body(question_id="link_scope")
+    revised_body = proposal_body(
+        title="Local Markdown Link Checker",
+        question_id="link_scope",
+    )
     executor = ScriptedAgentExecutor(
         [
             response(question_response()),
-            response(proposal_response()),
+            response(proposal_response(answered_body)),
             response(proposal_response(revised_body)),
         ]
     )
@@ -1568,21 +1937,21 @@ def test_dialogue_revision_structured_edit_and_approval_are_recoverable(
         questions.append(question.text)
         return "Only local file and fragment links."
 
-    first = coordinator.start(request(), answer_question=answer)
+    first = coordinator.start(planning_request, answer_question=answer)
     assert first is not None
     second = coordinator.revise(
-        request(),
+        planning_request,
         first,
         "Make the local-only scope explicit in the title.",
         answer_question=answer,
     )
     assert second is not None
     third = coordinator.structured_edit(
-        request(),
+        planning_request,
         second,
         StructuredPlanEdit(kind=StructuredEditKind.MAX_CONCURRENCY, value=1),
     )
-    approved = coordinator.approve(request(), third)
+    approved = coordinator.approve(planning_request, third)
 
     assert questions == ["Should the first version check web links too?"]
     assert approved.task_brief.title == "Local Markdown Link Checker"
@@ -1643,9 +2012,32 @@ def test_dialogue_revision_structured_edit_and_approval_are_recoverable(
         .split("\n\nREPAIR_CONTEXT_JSON", 1)[0]
     )
     response_schema = json.loads(schema_text)
+    question_schema = response_schema["$defs"]["PlanningQuestion"]
     criterion_schema = response_schema["$defs"]["ProposedCriterion"]
+    proposal_schema = response_schema["$defs"]["PlanningProposalBody"]
+    assert {
+        "decision_category",
+        "decision_owner",
+        "missing_evidence",
+        "material_consequences",
+    }.issubset(question_schema["required"])
+    assert question_schema["properties"]["decision_category"] == {
+        "$ref": "#/$defs/PlanningDecisionCategory"
+    }
+    assert question_schema["properties"]["decision_owner"] == {
+        "$ref": "#/$defs/PlanningDecisionAuthority"
+    }
+    assert {"requirement_ids", "verification_agent_ids"}.issubset(
+        criterion_schema["required"]
+    )
     assert "review_boundaries" in criterion_schema["required"]
     assert "default" not in criterion_schema["properties"]["review_boundaries"]
+    assert {
+        "requirement_ids",
+        "non_goals",
+        "assumption_decision_ids",
+        "decisions",
+    }.issubset(proposal_schema["required"])
 
     tampered = approved.model_dump(mode="json")
     tampered["team_plan"]["agents"][0]["timeout_seconds"] += 1
@@ -1965,6 +2357,7 @@ def test_profile_criterion_echo_does_not_consume_a_model_repair_call(
 
 
 def test_cancellation_stops_before_a_proposal_or_approval(tmp_path: Path) -> None:
+    planning_request = request(source_request=AMBIGUOUS_LINK_REQUEST)
     store = PlanningStore(tmp_path / "planning")
     coordinator = AdaptivePlanningCoordinator(
         executor=ScriptedAgentExecutor([response(question_response())]),
@@ -1973,7 +2366,10 @@ def test_cancellation_stops_before_a_proposal_or_approval(tmp_path: Path) -> Non
         clock=AdvancingClock(),
     )
 
-    created = coordinator.start(request(), answer_question=lambda _question: None)
+    created = coordinator.start(
+        planning_request,
+        answer_question=lambda _question: None,
+    )
 
     assert created is None
     session = store.load_session(request().run_id)
@@ -1984,12 +2380,19 @@ def test_cancellation_stops_before_a_proposal_or_approval(tmp_path: Path) -> Non
 def test_ordinary_user_can_answer_revise_edit_and_approve_without_json(
     tmp_path: Path,
 ) -> None:
+    planning_request = request(source_request=AMBIGUOUS_LINK_REQUEST)
+    answered_body = proposal_body(question_id="link_scope")
     executor = ScriptedAgentExecutor(
         [
             response(question_response()),
-            response(proposal_response()),
+            response(proposal_response(answered_body)),
             response(
-                proposal_response(proposal_body(title="Local Markdown Link Checker"))
+                proposal_response(
+                    proposal_body(
+                        title="Local Markdown Link Checker",
+                        question_id="link_scope",
+                    )
+                )
             ),
         ]
     )
@@ -2019,7 +2422,7 @@ def test_ordinary_user_can_answer_revise_edit_and_approve_without_json(
 
     approved = run_interactive_planning(
         coordinator,
-        request(),
+        planning_request,
         read=read,
         write=output.append,
     )
@@ -2029,10 +2432,18 @@ def test_ordinary_user_can_answer_revise_edit_and_approve_without_json(
     assert approved.team_plan.max_concurrency == 1
     rendered = "\n".join(output)
     assert "Planning question" in rendered
+    assert "Decision boundary: product_requirement / user" in rendered
+    assert "Missing evidence:" in rendered
+    assert "What this can change:" in rendered
     assert "Planning is waiting for provider/model" in rendered
     assert "Planning response validated" in rendered
     assert "Custom answer" in rendered
     assert "Planning overview" in rendered
+    assert "Additional user decisions resolved during clarification:" in rendered
+    assert (
+        "DECISION_LINK_SCOPE_ANSWER [product_requirement; question=link_scope]"
+        in rendered
+    )
     assert "Runtime Agents" in rendered
     assert "Request changes in your own words" in rendered
     assert "Edit safe limits" in rendered

@@ -68,8 +68,10 @@ On first use, SAT guides you through:
 5. Explicit task-wide USD/deadline authorization and a persisted task-admission
    self-check before model-backed Planning;
 6. A bounded conversation containing only questions that can materially change
-   the result;
-7. One overview of requirements, acceptance criteria, controller-owned
+   the result, with the missing information and consequence shown before each
+   question;
+7. One overview of requirements, explicit non-goals and assumptions,
+   requirement-to-evidence traceability, acceptance criteria, controller-owned
    execution-profile constraints separated from additional task constraints,
    Agent work assignments with their controller-derived write or read-only
    authority, proposed Agents, dependencies, permissions, explicit Review entry
