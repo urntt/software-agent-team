@@ -135,7 +135,15 @@ bare-product entry also holds a shared kernel lifecycle lease through terminal
 cleanup while activation requires the exclusive form; offline tests cover
 version-skew authority, incompatible and malformed results, stale loaded
 releases, active-task exclusion, rollback, and kernel release after a process
-crash. Recovery and concurrency still require a fresh managed-device journey.
+crash. A fresh non-root managed installation retained its original run lock and
+persisted state while the public fixed-ref bootstrap recovered an updater that
+predated candidate-owned compatibility; the exact-ref retry was idempotent and
+the prior release remained available. In a separate live concurrency check, a
+bare `sat` held the shared lease at the task-input prompt before run creation;
+both channel activation and the public bootstrap were rejected clearly, and
+the same bootstrap succeeded after the foreground process exited. These checks
+validate candidate recovery and task/activation exclusion without a daemon or
+manual lock cleanup.
 
 ## Phase 1 Result
 
