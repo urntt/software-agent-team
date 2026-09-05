@@ -571,6 +571,8 @@ def test_active_terminal_run_does_not_block_activation(tmp_path: Path) -> None:
         json.dumps({"schema_version": 6, "phase": "completed"}),
         encoding="utf-8",
     )
+    run_lock = install_paths.state_root / "runs/.lock"
+    run_lock.touch(mode=0o644)
 
     record = install_managed_target(
         dev_target(repository, revision),
@@ -579,6 +581,7 @@ def test_active_terminal_run_does_not_block_activation(tmp_path: Path) -> None:
 
     assert record.source_revision == revision
     assert install_paths.application_link.is_symlink()
+    assert run_lock.is_file()
 
 
 def test_unsupported_persisted_schema_blocks_before_activation(tmp_path: Path) -> None:

@@ -457,6 +457,10 @@ obtain confirmation, hold the lifecycle lock, claim the immutable final release
 path before creating path-bound Python or OpenClaw runtime files, install and
 verify the complete application there, check every persisted schema family,
 and atomically replace the logical application link and installation record.
+Schema discovery recognizes the owner-bound, empty `runs/.lock` file as
+RunStore coordination metadata rather than a run. It still rejects unsafe lock
+shapes, unknown root entries, invalid run identities, and run directories
+without the required `run.json` instead of broadly ignoring non-schema files.
 SAT then executes the final user-facing launcher; failure restores the prior
 link and record and removes only launchers created by that transaction. An
 active run, unsupported newer state, conflicting launcher, source drift, or

@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
+import re
+import stat
 from enum import StrEnum
 from pathlib import Path
 
@@ -10,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 MAX_SCHEMA_FILE_BYTES = 16 * 1024 * 1024
 MAX_SCHEMA_FILES = 100_000
+RUN_STATE_ENTRY_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
 
 class SchemaFamily(StrEnum):
@@ -232,11 +236,18 @@ def _persisted_schema_paths(
     if runs.exists():
         _require_real_directory(runs, "run state root")
         for run in sorted(runs.iterdir()):
+            if run.name == ".lock":
+                _require_controller_lock(run, "run store lock")
+                continue
             if run.is_symlink() or not run.is_dir():
                 raise SchemaCompatibilityError(
                     f"run state entry is not a real directory: {run}"
                 )
-            _append_if_present(candidates, SchemaFamily.RUN, run / "run.json")
+            if RUN_STATE_ENTRY_PATTERN.fullmatch(run.name) is None:
+                raise SchemaCompatibilityError(
+                    f"run state directory has an invalid identity: {run}"
+                )
+            candidates.append((SchemaFamily.RUN, run / "run.json"))
             _append_if_present(
                 candidates, SchemaFamily.TEAM_PLAN, run / "team-plan.json"
             )
@@ -281,6 +292,27 @@ def _persisted_schema_paths(
         for path in sorted(process_leases.glob("*.json")):
             candidates.append((SchemaFamily.PROCESS_LEASE, path))
     return candidates
+
+
+def _require_controller_lock(path: Path, label: str) -> None:
+    """Recognize one content-free lock without treating it as persisted JSON."""
+
+    try:
+        metadata = path.lstat()
+    except OSError as error:
+        raise SchemaCompatibilityError(f"cannot inspect {label}: {path}") from error
+    effective_uid = getattr(os, "geteuid", lambda: metadata.st_uid)()
+    if (
+        stat.S_ISLNK(metadata.st_mode)
+        or not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != effective_uid
+        or metadata.st_nlink != 1
+        or metadata.st_size != 0
+        or stat.S_IMODE(metadata.st_mode) & 0o111
+    ):
+        raise SchemaCompatibilityError(
+            f"{label} is not a safe owner-bound empty lock file: {path}"
+        )
 
 
 def _append_if_present(

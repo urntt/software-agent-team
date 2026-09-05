@@ -91,6 +91,8 @@ def test_persisted_schema_scan_classifies_known_state_paths(tmp_path: Path) -> N
     }
     for path, version in paths.items():
         write_schema(path, version)
+    run_lock = state / "runs/.lock"
+    run_lock.touch(mode=0o644)
 
     report = inspect_persisted_schema_compatibility(
         configuration_path=configuration,
@@ -101,6 +103,7 @@ def test_persisted_schema_scan_classifies_known_state_paths(tmp_path: Path) -> N
 
     assert report.compatible
     assert len(report.observations) == len(paths)
+    assert run_lock.is_file()
     assert {item.family for item in report.observations} >= {
         SchemaFamily.USER_CONFIGURATION,
         SchemaFamily.INSTALLATION,
@@ -175,3 +178,55 @@ def test_persisted_schema_scan_requires_a_complete_candidate_registry(
             state_root=tmp_path / "state",
             candidate_support=incomplete,
         )
+
+
+@pytest.mark.parametrize("unsafe_lock", ["nonempty", "symlink", "executable"])
+def test_persisted_schema_scan_rejects_unsafe_run_store_lock(
+    tmp_path: Path,
+    unsafe_lock: str,
+) -> None:
+    runs = tmp_path / "state/runs"
+    runs.mkdir(parents=True)
+    lock = runs / ".lock"
+    if unsafe_lock == "symlink":
+        target = tmp_path / "outside-lock"
+        target.touch()
+        lock.symlink_to(target)
+    else:
+        lock.write_text("content" if unsafe_lock == "nonempty" else "")
+        if unsafe_lock == "executable":
+            lock.chmod(0o700)
+
+    with pytest.raises(SchemaCompatibilityError, match="owner-bound empty lock"):
+        inspect_persisted_schema_compatibility(
+            configuration_path=tmp_path / "missing-config.json",
+            installation_record_path=tmp_path / "missing-installation.json",
+            state_root=tmp_path / "state",
+            candidate_support=supported_schemas(),
+        )
+
+
+def test_persisted_schema_scan_rejects_unknown_or_incomplete_run_entries(
+    tmp_path: Path,
+) -> None:
+    runs = tmp_path / "state/runs"
+    unknown = runs / ".abandoned.tmp"
+    unknown.mkdir(parents=True)
+
+    with pytest.raises(SchemaCompatibilityError, match="invalid identity"):
+        inspect_persisted_schema_compatibility(
+            configuration_path=tmp_path / "missing-config.json",
+            installation_record_path=tmp_path / "missing-installation.json",
+            state_root=tmp_path / "state",
+            candidate_support=supported_schemas(),
+        )
+
+    unknown.rename(runs / "incomplete-run")
+    report = inspect_persisted_schema_compatibility(
+        configuration_path=tmp_path / "missing-config.json",
+        installation_record_path=tmp_path / "missing-installation.json",
+        state_root=tmp_path / "state",
+        candidate_support=supported_schemas(),
+    )
+    assert not report.compatible
+    assert "not a regular file" in report.problems[0]
