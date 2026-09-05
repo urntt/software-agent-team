@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import socket
 import subprocess
 import sys
 import threading
@@ -1552,15 +1553,22 @@ def test_default_openclaw_process_can_be_interrupted_by_agent_identity(
 def test_interrupt_escalates_when_the_process_ignores_termination(
     tmp_path: Path,
 ) -> None:
-    ready = tmp_path / "ready"
+    ready_socket_path = tmp_path / "ready.sock"
+    ready_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    ready_socket.bind(str(ready_socket_path))
+    ready_socket.listen(1)
+    ready_socket.settimeout(15)
     binary = tmp_path / "stubborn-openclaw"
     binary.write_text(
         "#!/usr/bin/env python3\n"
         "import signal\n"
+        "import socket\n"
         "import time\n"
-        "from pathlib import Path\n"
         "signal.signal(signal.SIGTERM, lambda *_: None)\n"
-        f"Path({str(ready)!r}).write_text('ready')\n"
+        "ready = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)\n"
+        f"ready.connect({str(ready_socket_path)!r})\n"
+        "ready.sendall(b'ready')\n"
+        "ready.close()\n"
         "time.sleep(30)\n",
         encoding="utf-8",
     )
@@ -1574,11 +1582,23 @@ def test_interrupt_escalates_when_the_process_ignores_termination(
         target=lambda: observed.setdefault("result", executor.execute(request()))
     )
     worker.start()
-    for _ in range(100):
-        if ready.exists():
-            break
-        time.sleep(0.01)
-    assert ready.exists()
+    with ready_socket:
+        try:
+            connection, _ = ready_socket.accept()
+        except TimeoutError:
+            diagnostic = (
+                "fake OpenClaw did not reach its explicit signal-ready checkpoint "
+                f"(worker_alive={worker.is_alive()}, "
+                f"result_available={'result' in observed})"
+            )
+            for _ in range(100):
+                if executor.interrupt("planner") or not worker.is_alive():
+                    break
+                time.sleep(0.02)
+            worker.join(timeout=5)
+            pytest.fail(diagnostic + f", cleanup_finished={not worker.is_alive()}")
+        with connection:
+            assert connection.recv(5) == b"ready"
 
     assert executor.interrupt("planner") == 1
     worker.join(timeout=5)
