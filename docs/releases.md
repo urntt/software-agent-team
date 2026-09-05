@@ -114,7 +114,11 @@ tag reuse, incomplete schema metadata, or a tag bound to another commit.
 
    Verify that SAT resolves and displays the new exact revision before
    confirmation, stages it through the normal managed transaction, and keeps an
-   unchanged revision as a no-op. A rehearsal failure returns the issue to
+   unchanged revision as a no-op. After every activation, invoke `sat --version`
+   from outside the managed application, verify the reported revision against
+   `sat channel status`, and confirm the Python entry point and isolated OpenClaw
+   wrapper resolve entirely inside the active immutable release path rather than
+   a removed `.stage-*` directory. A rehearsal failure returns the issue to
    development; it is not authorization to publish.
 
 ## Publish Stable
