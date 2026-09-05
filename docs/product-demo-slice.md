@@ -74,8 +74,9 @@ The product installation command must:
 2. Create a stable `sat` launcher on the user's command path;
 3. Detect supported platform and architecture, unprivileged identity,
    filesystem suitability, required system commands, writable locations,
-   Docker daemon access and Linux-container mode, available storage, launcher
-   conflicts, and required download connectivity;
+   Docker daemon access and Linux-container mode, available disk/memory/PID
+   capacity, existing SAT-owned sandbox resources, launcher conflicts, and
+   required download connectivity;
 4. Install and verify the pinned application toolchain;
 5. Build or obtain the pinned sandbox image and prove that its restricted
    runtime container remains alive for tool execution;

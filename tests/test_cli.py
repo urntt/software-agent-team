@@ -445,6 +445,12 @@ def test_cli_no_command_runs_the_guided_product_journey(
         "docker_daemon": ("Docker daemon", "available"),
         "sandbox_image": ("Pinned sandbox image", "sha256:" + "a" * 64),
         "storage": ("Available storage", "2048 MiB free"),
+        "memory_capacity": ("Available host memory", "2048 MiB available"),
+        "pid_capacity": ("Available process capacity", "1024 PIDs available"),
+        "sat_sandbox_resources": (
+            "Existing SAT sandbox resources",
+            "no SAT-owned OpenClaw sandbox containers",
+        ),
         "launcher": ("sat launcher", "available on PATH"),
     }
     diagnostics = StartupDiagnostics(

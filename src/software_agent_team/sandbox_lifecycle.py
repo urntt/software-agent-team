@@ -41,6 +41,31 @@ class SandboxCleanupResult:
     removed: tuple[RemovedSandbox, ...]
 
 
+@dataclass(frozen=True)
+class ObservedSandbox:
+    """One OpenClaw container proven to mount SAT-owned state or workspace."""
+
+    container_id: str
+    container_name: str
+    session_key: str
+    running: bool
+
+
+@dataclass(frozen=True)
+class SandboxResourceObservation:
+    """Read-only snapshot of existing SAT-owned Agent containers."""
+
+    containers: tuple[ObservedSandbox, ...]
+
+    @property
+    def running(self) -> tuple[ObservedSandbox, ...]:
+        return tuple(item for item in self.containers if item.running)
+
+    @property
+    def stopped(self) -> tuple[ObservedSandbox, ...]:
+        return tuple(item for item in self.containers if not item.running)
+
+
 ProcessRunner = Callable[..., subprocess.CompletedProcess[str]]
 
 
@@ -120,6 +145,112 @@ def _owned_mount(
         source in (state_root, workspace_root)
         or source.is_relative_to(state_root)
         or source.is_relative_to(workspace_root)
+    )
+
+
+def inspect_sat_sandbox_resources(
+    *,
+    sandbox_binary: str,
+    state_root: Path,
+    timeout_seconds: int = 30,
+    runner: ProcessRunner = subprocess.run,
+) -> SandboxResourceObservation:
+    """Observe existing SAT-owned OpenClaw containers without changing them."""
+
+    if not sandbox_binary.strip():
+        raise SandboxCleanupError("sandbox binary must not be blank")
+    if not state_root.is_absolute():
+        raise SandboxCleanupError("SAT state root must be absolute")
+    if timeout_seconds < 1:
+        raise SandboxCleanupError("sandbox observation timeout must be positive")
+
+    listed = _run_command(
+        [
+            sandbox_binary,
+            "container",
+            "ls",
+            "--all",
+            "--quiet",
+            "--filter",
+            "label=openclaw.sandbox=1",
+        ],
+        runner=runner,
+        timeout_seconds=timeout_seconds,
+    )
+    if listed.returncode != 0:
+        raise SandboxCleanupError("Docker could not list OpenClaw sandboxes")
+    container_ids = tuple(
+        sorted({line.strip() for line in listed.stdout.splitlines() if line.strip()})
+    )
+    if any(_CONTAINER_ID.fullmatch(item) is None for item in container_ids):
+        raise SandboxCleanupError("Docker returned an invalid container ID")
+    if not container_ids:
+        return SandboxResourceObservation(containers=())
+
+    inspected = _run_command(
+        [sandbox_binary, "container", "inspect", *container_ids],
+        runner=runner,
+        timeout_seconds=timeout_seconds,
+    )
+    if inspected.returncode != 0:
+        raise SandboxCleanupError("Docker could not inspect OpenClaw sandboxes")
+    try:
+        payload = json.loads(inspected.stdout)
+    except json.JSONDecodeError as error:
+        raise SandboxCleanupError(
+            "Docker sandbox inspection was not valid JSON"
+        ) from error
+    if not isinstance(payload, list):
+        raise SandboxCleanupError("Docker sandbox inspection must be a JSON array")
+
+    resolved_state = state_root.resolve(strict=False)
+    workspace_root = (resolved_state / "workspaces").resolve(strict=False)
+    observed: list[ObservedSandbox] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            raise SandboxCleanupError("Docker returned an invalid sandbox record")
+        config = item.get("Config")
+        labels = config.get("Labels") if isinstance(config, dict) else None
+        mounts = item.get("Mounts")
+        if not isinstance(labels, dict) or not isinstance(mounts, list):
+            continue
+        owned = any(
+            isinstance(mount, dict)
+            and _owned_mount(
+                mount.get("Source"),
+                state_root=resolved_state,
+                workspace_root=workspace_root,
+            )
+            for mount in mounts
+        )
+        if not owned:
+            continue
+        container_id = item.get("Id")
+        container_name = item.get("Name")
+        session_key = labels.get("openclaw.sessionKey")
+        state = item.get("State")
+        running = state.get("Running") if isinstance(state, dict) else None
+        if (
+            not isinstance(container_id, str)
+            or _CONTAINER_ID.fullmatch(container_id) is None
+            or not isinstance(container_name, str)
+            or not isinstance(session_key, str)
+            or not session_key
+            or not isinstance(running, bool)
+        ):
+            raise SandboxCleanupError(
+                "Docker returned incomplete SAT sandbox ownership data"
+            )
+        observed.append(
+            ObservedSandbox(
+                container_id=container_id,
+                container_name=container_name,
+                session_key=session_key,
+                running=running,
+            )
+        )
+    return SandboxResourceObservation(
+        containers=tuple(sorted(observed, key=lambda item: item.container_id))
     )
 
 

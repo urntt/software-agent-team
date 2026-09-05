@@ -105,12 +105,19 @@ _STARTUP_CHECK_IDS = {
     "docker_daemon": ("runtime.docker", SelfCheckCategory.RUNTIME),
     "sandbox_image": ("runtime.sandbox_image", SelfCheckCategory.RUNTIME),
     "storage": ("system.storage", SelfCheckCategory.SYSTEM),
+    "memory_capacity": ("system.memory_capacity", SelfCheckCategory.SYSTEM),
+    "pid_capacity": ("system.pid_capacity", SelfCheckCategory.SYSTEM),
+    "sat_sandbox_resources": (
+        "runtime.sat_sandbox_resources",
+        SelfCheckCategory.RUNTIME,
+    ),
     "launcher": ("application.launcher", SelfCheckCategory.APPLICATION),
 }
 
 _STARTUP_DEPENDENCIES = {
     "runtime.docker": ("tool.docker",),
     "runtime.sandbox_image": ("runtime.docker",),
+    "runtime.sat_sandbox_resources": ("runtime.docker",),
 }
 
 

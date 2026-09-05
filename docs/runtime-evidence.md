@@ -414,7 +414,14 @@ The ordinary product entry now consumes that contract at both mandatory
 boundaries. Revision 1 is persisted after request/model metadata/USD/deadline
 authorization and before the first Planning model call. It includes startup
 facts, the complete SAT release/source identity, persisted-schema
-compatibility, and one fresh foreground managed-channel observation. A release
+compatibility, Linux/cgroup memory and PID headroom for one configured sandbox,
+a read-only inventory of existing SAT-owned OpenClaw containers, and one fresh
+foreground managed-channel observation. Known insufficient disk blocks before
+Planning. Memory or PID headroom below the configured sandbox ceiling remains
+an explicit warning—not a false minimum requirement—because the approved-plan
+restricted container probe is the executable resource check. Existing
+containers are reported without
+automatic removal or interference with another foreground task. A release
 endpoint failure is a non-blocking warning; a locally inconsistent managed
 identity or unreadable schema is blocking. Source and unmanaged package modes
 do not contact the updater. Revision 2 extends the same digest chain after the

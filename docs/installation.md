@@ -128,7 +128,11 @@ SAT first performs a fast, non-provider startup inspection covering:
 - Git and Docker commands;
 - The pinned OpenClaw runtime;
 - Docker daemon access and the pinned sandbox image;
-- Available storage;
+- Available storage plus Linux/cgroup memory and PID headroom for at least one
+  policy-bounded sandbox;
+- Existing OpenClaw containers whose bind mounts prove that they belong to
+  SAT's state boundary, reported without inspecting or changing another
+  OpenClaw installation;
 - `sat` launcher visibility.
 
 Every failed condition includes a corrective action. SAT does not rebuild the
@@ -156,6 +160,11 @@ containers before returning a completed or failed result, and also attempts
 the same cleanup after interruption. Selection requires both SAT's exact
 session key and a bind mount inside SAT-owned state or the run workspace; an
 existing OpenClaw installation is never a cleanup target.
+At the next task admission, SAT also performs a read-only inventory of any
+such containers that already exist. It distinguishes running from stopped
+resources and shows exact abbreviated container IDs. This observation never
+silently removes a container because another foreground SAT process may still
+own a running task.
 
 On the first configured run, SAT then:
 

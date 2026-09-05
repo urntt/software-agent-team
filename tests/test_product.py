@@ -12,18 +12,34 @@ import pytest
 import software_agent_team.product as product
 from software_agent_team.product import (
     DiagnosticState,
+    HostCapacitySnapshot,
     ProductFlowError,
     ProductStatePaths,
     deliver_product_workspace,
     ensure_product_state,
     generate_product_run_id,
+    inspect_host_capacity,
     inspect_startup_environment,
     load_project_commands,
     prepare_product_source,
     validate_project_destination,
 )
+from software_agent_team.sandbox_lifecycle import (
+    ObservedSandbox,
+    SandboxResourceObservation,
+)
 
 REPOSITORY_ROOT = Path(__file__).parents[1]
+
+
+def ready_host_capacity() -> HostCapacitySnapshot:
+    return HostCapacitySnapshot(
+        available_memory_bytes=4 * 1024 * 1024 * 1024,
+        available_pids=1024,
+        pids_unbounded=False,
+        memory_sources=("test memory",),
+        pid_sources=("test pids",),
+    )
 
 
 def completed(argv: object, returncode: int = 0) -> subprocess.CompletedProcess[str]:
@@ -57,9 +73,14 @@ def test_startup_diagnostics_report_a_ready_local_environment(
         working_directory=tmp_path,
         openclaw_binary=openclaw,
         sandbox_image="sat-image:v1",
+        state_root=(tmp_path / "state").resolve(),
+        required_memory_mb=512,
+        required_pids=128,
         command_finder=lambda name: str(bin_directory / name),
         command_runner=lambda argv, _timeout: completed(argv),
         environment={"PATH": str(bin_directory)},
+        host_capacity=ready_host_capacity(),
+        sandbox_resources=SandboxResourceObservation(containers=()),
     )
 
     assert diagnostics.ready
@@ -85,9 +106,14 @@ def test_startup_diagnostics_explain_unavailable_docker(
         working_directory=tmp_path,
         openclaw_binary=openclaw,
         sandbox_image="sat-image:v1",
+        state_root=(tmp_path / "state").resolve(),
+        required_memory_mb=512,
+        required_pids=128,
         command_finder=lambda name: f"/bin/{name}",
         command_runner=lambda argv, _timeout: completed(argv, returncode=1),
         environment={"PATH": "/bin"},
+        host_capacity=ready_host_capacity(),
+        sandbox_resources=SandboxResourceObservation(containers=()),
     )
 
     assert not diagnostics.ready
@@ -95,6 +121,150 @@ def test_startup_diagnostics_explain_unavailable_docker(
     assert docker.state is DiagnosticState.ACTION_REQUIRED
     assert docker.action is not None
     assert "Start Docker" in docker.action
+
+
+def test_host_capacity_uses_the_tightest_linux_and_cgroup_headroom() -> None:
+    gib = 1024 * 1024 * 1024
+    values = {
+        Path("/proc/meminfo"): "MemAvailable: 2097152 kB\n",
+        Path("/proc/self/cgroup"): "0::/user.slice\n",
+        Path("/sys/fs/cgroup/user.slice/memory.max"): str(gib),
+        Path("/sys/fs/cgroup/user.slice/memory.current"): str(gib // 4),
+        Path("/sys/fs/cgroup/user.slice/pids.max"): "200",
+        Path("/sys/fs/cgroup/user.slice/pids.current"): "20",
+    }
+
+    def read(path: Path) -> str:
+        try:
+            return values[path]
+        except KeyError as error:
+            raise FileNotFoundError(path) from error
+
+    capacity = inspect_host_capacity(file_reader=read)
+
+    assert capacity.available_memory_bytes == 3 * gib // 4
+    assert capacity.available_pids == 180
+    assert not capacity.pids_unbounded
+
+
+def test_startup_warns_when_headroom_is_below_sandbox_resource_ceilings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    binary = tmp_path / "bin"
+    binary.write_text("#!/bin/sh\n", encoding="utf-8")
+    binary.chmod(0o755)
+    monkeypatch.setattr(product.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(product.platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(product.os, "getuid", lambda: 1000)
+    monkeypatch.setattr(product.os, "getgid", lambda: 1000)
+    monkeypatch.setattr(
+        product.shutil,
+        "disk_usage",
+        lambda _path: product.shutil._ntuple_diskusage(10, 1, 2**30),
+    )
+    capacity = HostCapacitySnapshot(
+        available_memory_bytes=511 * 1024 * 1024,
+        available_pids=127,
+        pids_unbounded=False,
+        memory_sources=("test memory",),
+        pid_sources=("test pids",),
+    )
+
+    diagnostics = inspect_startup_environment(
+        working_directory=tmp_path,
+        openclaw_binary=binary,
+        sandbox_image="sat-image:v1",
+        state_root=(tmp_path / "state").resolve(),
+        required_memory_mb=512,
+        required_pids=128,
+        command_finder=lambda _name: str(binary),
+        command_runner=lambda argv, _timeout: completed(argv),
+        environment={"PATH": str(tmp_path)},
+        host_capacity=capacity,
+        sandbox_resources=SandboxResourceObservation(containers=()),
+    )
+
+    checks = {check.id: check for check in diagnostics.checks}
+    assert checks["memory_capacity"].state is DiagnosticState.WARNING
+    assert checks["pid_capacity"].state is DiagnosticState.WARNING
+    assert diagnostics.ready
+
+    monkeypatch.setattr(
+        product.shutil,
+        "disk_usage",
+        lambda _path: product.shutil._ntuple_diskusage(
+            10,
+            1,
+            product.MINIMUM_FREE_BYTES - 1,
+        ),
+    )
+    low_disk = inspect_startup_environment(
+        working_directory=tmp_path,
+        openclaw_binary=binary,
+        sandbox_image="sat-image:v1",
+        state_root=(tmp_path / "state").resolve(),
+        required_memory_mb=512,
+        required_pids=128,
+        command_finder=lambda _name: str(binary),
+        command_runner=lambda argv, _timeout: completed(argv),
+        environment={"PATH": str(tmp_path)},
+        host_capacity=ready_host_capacity(),
+        sandbox_resources=SandboxResourceObservation(containers=()),
+    )
+    storage = next(item for item in low_disk.checks if item.id == "storage")
+    assert storage.state is DiagnosticState.ACTION_REQUIRED
+    assert not low_disk.ready
+
+
+def test_startup_reports_existing_owned_sandboxes_without_removing_them(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    binary = tmp_path / "bin"
+    binary.write_text("#!/bin/sh\n", encoding="utf-8")
+    binary.chmod(0o755)
+    monkeypatch.setattr(product.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(product.platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(product.os, "getuid", lambda: 1000)
+    monkeypatch.setattr(product.os, "getgid", lambda: 1000)
+    monkeypatch.setattr(
+        product.shutil,
+        "disk_usage",
+        lambda _path: product.shutil._ntuple_diskusage(10, 1, 2**30),
+    )
+    observation = SandboxResourceObservation(
+        containers=(
+            ObservedSandbox(
+                container_id="a" * 64,
+                container_name="/sat-sandbox",
+                session_key="agent:builder:sat-example-i1-work-result",
+                running=True,
+            ),
+        )
+    )
+
+    diagnostics = inspect_startup_environment(
+        working_directory=tmp_path,
+        openclaw_binary=binary,
+        sandbox_image="sat-image:v1",
+        state_root=(tmp_path / "state").resolve(),
+        required_memory_mb=512,
+        required_pids=128,
+        command_finder=lambda _name: str(binary),
+        command_runner=lambda argv, _timeout: completed(argv),
+        environment={"PATH": str(tmp_path)},
+        host_capacity=ready_host_capacity(),
+        sandbox_resources=observation,
+    )
+
+    existing = next(
+        item for item in diagnostics.checks if item.id == "sat_sandbox_resources"
+    )
+    assert existing.state is DiagnosticState.WARNING
+    assert "1 running" in existing.detail
+    assert "aaaaaaaaaaaa" in existing.detail
+    assert diagnostics.ready
 
 
 def test_product_state_is_private_and_rejects_a_symlink(tmp_path: Path) -> None:

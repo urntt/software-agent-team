@@ -21,6 +21,11 @@ from typing import Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from software_agent_team.benchmark_seed import prepare_seed_repository
+from software_agent_team.sandbox_lifecycle import (
+    SandboxCleanupError,
+    SandboxResourceObservation,
+    inspect_sat_sandbox_resources,
+)
 
 MINIMUM_FREE_BYTES = 1_073_741_824
 PROJECT_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
@@ -66,6 +71,25 @@ class StartupDiagnostics:
         return all(
             check.state is not DiagnosticState.ACTION_REQUIRED for check in self.checks
         )
+
+
+@dataclass(frozen=True)
+class HostCapacitySnapshot:
+    """Current process memory and PID capacity discovered from Linux controls."""
+
+    available_memory_bytes: int | None
+    available_pids: int | None
+    pids_unbounded: bool
+    memory_sources: tuple[str, ...]
+    pid_sources: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if self.available_memory_bytes is not None and self.available_memory_bytes < 0:
+            raise ValueError("available memory cannot be negative")
+        if self.available_pids is not None and self.available_pids < 0:
+            raise ValueError("available PIDs cannot be negative")
+        if self.pids_unbounded and self.available_pids is not None:
+            raise ValueError("unbounded PID capacity cannot also be finite")
 
 
 class ProjectCommands(BaseModel):
@@ -206,6 +230,7 @@ def ensure_product_state(paths: ProductStatePaths) -> None:
 
 
 CommandRunner = Callable[[Sequence[str], float], subprocess.CompletedProcess[str]]
+FileReader = Callable[[Path], str]
 
 
 def _run_command(
@@ -222,17 +247,137 @@ def _run_command(
     )
 
 
+def _read_text(path: Path) -> str:
+    return path.read_text(encoding="utf-8")
+
+
+def _nonnegative_integer(value: str) -> int | None:
+    cleaned = value.strip()
+    if not cleaned.isascii() or not cleaned.isdigit():
+        return None
+    return int(cleaned)
+
+
+def inspect_host_capacity(
+    *,
+    file_reader: FileReader = _read_text,
+) -> HostCapacitySnapshot:
+    """Discover effective memory and PID headroom without changing the host."""
+
+    memory_candidates: list[tuple[int, str]] = []
+    pid_candidates: list[tuple[int, str]] = []
+    pids_unbounded = False
+
+    try:
+        meminfo = file_reader(Path("/proc/meminfo"))
+    except OSError:
+        meminfo = ""
+    match = re.search(r"(?m)^MemAvailable:\s+([0-9]+)\s+kB\s*$", meminfo)
+    if match is not None:
+        memory_candidates.append((int(match.group(1)) * 1024, "/proc/meminfo"))
+
+    try:
+        cgroup = file_reader(Path("/proc/self/cgroup"))
+    except OSError:
+        cgroup = ""
+    relative: Path | None = None
+    for line in cgroup.splitlines():
+        parts = line.split(":", 2)
+        if len(parts) == 3 and parts[0] == "0" and parts[1] == "":
+            candidate = Path(parts[2].lstrip("/"))
+            if ".." not in candidate.parts:
+                relative = candidate
+            break
+
+    if relative is not None:
+        cgroup_root = Path("/sys/fs/cgroup")
+        current = cgroup_root / relative
+        paths: list[Path] = []
+        while current == cgroup_root or current.is_relative_to(cgroup_root):
+            paths.append(current)
+            if current == cgroup_root:
+                break
+            current = current.parent
+        saw_unbounded_pid_limit = False
+        saw_pid_limit = False
+        for path in paths:
+            try:
+                memory_max = _nonnegative_integer(file_reader(path / "memory.max"))
+                memory_current = _nonnegative_integer(
+                    file_reader(path / "memory.current")
+                )
+            except OSError:
+                memory_max = None
+                memory_current = None
+            if memory_max is not None and memory_current is not None:
+                memory_candidates.append(
+                    (max(0, memory_max - memory_current), str(path / "memory.max"))
+                )
+
+            try:
+                raw_pids_max = file_reader(path / "pids.max").strip()
+                pids_current = _nonnegative_integer(file_reader(path / "pids.current"))
+            except OSError:
+                raw_pids_max = ""
+                pids_current = None
+            if raw_pids_max == "max" and pids_current is not None:
+                saw_unbounded_pid_limit = True
+            else:
+                pids_max = _nonnegative_integer(raw_pids_max)
+                if pids_max is not None and pids_current is not None:
+                    saw_pid_limit = True
+                    pid_candidates.append(
+                        (max(0, pids_max - pids_current), str(path / "pids.max"))
+                    )
+        pids_unbounded = saw_unbounded_pid_limit and not saw_pid_limit
+
+    memory_value, memory_sources = _minimum_capacity(memory_candidates)
+    pid_value, pid_sources = _minimum_capacity(pid_candidates)
+    return HostCapacitySnapshot(
+        available_memory_bytes=memory_value,
+        available_pids=pid_value,
+        pids_unbounded=pids_unbounded,
+        memory_sources=memory_sources,
+        pid_sources=pid_sources,
+    )
+
+
+def _minimum_capacity(
+    candidates: list[tuple[int, str]],
+) -> tuple[int | None, tuple[str, ...]]:
+    if not candidates:
+        return None, ()
+    minimum = min(value for value, _source in candidates)
+    sources = tuple(source for value, source in candidates if value == minimum)
+    return minimum, sources
+
+
 def inspect_startup_environment(
     *,
     working_directory: Path,
     openclaw_binary: Path,
     sandbox_image: str,
+    state_root: Path,
+    required_memory_mb: int,
+    required_pids: int,
     sandbox_binary: str = "docker",
     command_finder: Callable[[str], str | None] = shutil.which,
     command_runner: CommandRunner = _run_command,
     environment: Mapping[str, str] | None = None,
+    host_capacity: HostCapacitySnapshot | None = None,
+    sandbox_resources: SandboxResourceObservation | None = None,
 ) -> StartupDiagnostics:
     """Inspect local prerequisites without changing them or calling a provider."""
+
+    if (
+        isinstance(required_memory_mb, bool)
+        or required_memory_mb < 1
+        or isinstance(required_pids, bool)
+        or required_pids < 1
+    ):
+        raise ValueError("required memory and PID capacity must be positive")
+    if not state_root.is_absolute():
+        raise ValueError("SAT state root must be absolute")
 
     values = os.environ if environment is None else environment
     checks: list[DiagnosticCheck] = []
@@ -424,7 +569,9 @@ def inspect_startup_environment(
             id="storage",
             label="Available storage",
             state=(
-                DiagnosticState.READY if enough_storage else DiagnosticState.WARNING
+                DiagnosticState.READY
+                if enough_storage
+                else DiagnosticState.ACTION_REQUIRED
             ),
             detail=f"{free_bytes // (1024 * 1024)} MiB free",
             action=(
@@ -432,6 +579,129 @@ def inspect_startup_environment(
             ),
         )
     )
+
+    capacity = host_capacity or inspect_host_capacity()
+    required_memory_bytes = required_memory_mb * 1024 * 1024
+    memory_available = capacity.available_memory_bytes
+    memory_ready = (
+        memory_available is not None and memory_available >= required_memory_bytes
+    )
+    memory_sources = ", ".join(capacity.memory_sources) or "unavailable"
+    checks.append(
+        DiagnosticCheck(
+            id="memory_capacity",
+            label="Available host memory",
+            state=(DiagnosticState.READY if memory_ready else DiagnosticState.WARNING),
+            detail=(
+                f"{memory_available // (1024 * 1024)} MiB available; "
+                f"{required_memory_mb} MiB configured sandbox ceiling; "
+                f"source={memory_sources}"
+                if memory_available is not None
+                else f"capacity unavailable; source={memory_sources}"
+            ),
+            action=(
+                None
+                if memory_ready
+                else (
+                    "Free host memory or increase the WSL/Docker allocation before "
+                    "a resource-intensive build; the restricted runtime probe will "
+                    "decide whether this task can start."
+                    if memory_available is not None
+                    else "Restore Linux /proc and cgroup capacity reporting; the "
+                    "restricted runtime probe will still test the sandbox."
+                )
+            ),
+        )
+    )
+
+    pids_available = capacity.available_pids
+    pids_ready = capacity.pids_unbounded or (
+        pids_available is not None and pids_available >= required_pids
+    )
+    pid_sources = ", ".join(capacity.pid_sources) or "current cgroup"
+    checks.append(
+        DiagnosticCheck(
+            id="pid_capacity",
+            label="Available process capacity",
+            state=(DiagnosticState.READY if pids_ready else DiagnosticState.WARNING),
+            detail=(
+                f"no finite PID limit discovered; {required_pids} is the "
+                "configured sandbox ceiling"
+                if capacity.pids_unbounded
+                else (
+                    f"{pids_available} PIDs available; {required_pids} is the "
+                    f"configured sandbox ceiling; source={pid_sources}"
+                    if pids_available is not None
+                    else "capacity unavailable; source=current cgroup"
+                )
+            ),
+            action=(
+                None
+                if pids_ready
+                else (
+                    "Stop unneeded processes or increase WSL/Docker PID capacity "
+                    "before a resource-intensive build; the restricted runtime "
+                    "probe will decide whether this task can start."
+                    if pids_available is not None
+                    else "Restore Linux cgroup PID-capacity reporting; the "
+                    "restricted runtime probe will still test the sandbox."
+                )
+            ),
+        )
+    )
+
+    observation_error: str | None = None
+    if sandbox_resources is None and docker_ready:
+        try:
+            sandbox_resources = inspect_sat_sandbox_resources(
+                sandbox_binary=sandbox_binary,
+                state_root=state_root,
+                runner=lambda argv, **kwargs: command_runner(
+                    tuple(argv), float(kwargs["timeout"])
+                ),
+            )
+        except SandboxCleanupError as error:
+            observation_error = str(error)
+    if sandbox_resources is None:
+        checks.append(
+            DiagnosticCheck(
+                id="sat_sandbox_resources",
+                label="Existing SAT sandbox resources",
+                state=DiagnosticState.WARNING,
+                detail=observation_error
+                or "not inspected because Docker is unavailable",
+                action="Restore Docker access and rerun SAT's startup check.",
+            )
+        )
+    elif sandbox_resources.containers:
+        identifiers = ", ".join(
+            item.container_id[:12] for item in sandbox_resources.containers
+        )
+        checks.append(
+            DiagnosticCheck(
+                id="sat_sandbox_resources",
+                label="Existing SAT sandbox resources",
+                state=DiagnosticState.WARNING,
+                detail=(
+                    f"{len(sandbox_resources.running)} running and "
+                    f"{len(sandbox_resources.stopped)} stopped SAT-owned "
+                    f"container(s): {identifiers}"
+                ),
+                action=(
+                    "Finish any active SAT task. If none is active, inspect these "
+                    "exact containers before starting a resource-intensive build."
+                ),
+            )
+        )
+    else:
+        checks.append(
+            DiagnosticCheck(
+                id="sat_sandbox_resources",
+                label="Existing SAT sandbox resources",
+                state=DiagnosticState.READY,
+                detail="no SAT-owned OpenClaw sandbox containers",
+            )
+        )
 
     path_entries = values.get("PATH", "").split(os.pathsep)
     launcher_visible = any(

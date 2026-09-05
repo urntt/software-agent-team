@@ -275,13 +275,25 @@ DECISION_LIMIT_REGISTRY: tuple[DecisionLimitDefinition, ...] = (
             f"configs/product-policy.json#/limits/{field}",
             owner="product deterministic quality sandbox policy",
             rationale=(
-                "This bounds a non-model generated-code verification resource inside the isolated sandbox."
+                "This bounds a non-model generated-code verification resource inside the isolated sandbox; memory and PID capacity are also checked against current host headroom before task work."
             ),
             visibility=DecisionLimitVisibility.ON_TRIGGER,
             configurability=DecisionLimitConfigurability.MAINTAINER_POLICY,
-            consequence="The affected quality gate fails with retained command evidence.",
-            recovery="Inspect the gate evidence, reduce pathological output/work, or revise the policy with measurements.",
-            evidence="tests/test_quality_gates.py sandbox-limit coverage",
+            consequence=(
+                "Host headroom below the configured ceiling is shown as a warning because a ceiling is not a minimum; the executable sandbox probe or affected quality gate decides readiness and retains evidence."
+                if field in {"memory_mb", "pids"}
+                else "The affected quality gate fails with retained command evidence."
+            ),
+            recovery=(
+                "Free or increase host/WSL/Docker capacity, then rerun the executable sandbox probe; revise the sandbox policy only with measurements."
+                if field in {"memory_mb", "pids"}
+                else "Inspect the gate evidence, reduce pathological output/work, or revise the policy with measurements."
+            ),
+            evidence=(
+                "tests/test_product.py host-capacity admission coverage"
+                if field in {"memory_mb", "pids"}
+                else "tests/test_quality_gates.py sandbox-limit coverage"
+            ),
         )
         for field in (
             "command_timeout_seconds",

@@ -2687,6 +2687,9 @@ def _run_product() -> int:
         working_directory=working_directory,
         openclaw_binary=DEFAULT_OPENCLAW_BINARY,
         sandbox_image=quality.policy.sandbox.image,
+        state_root=user_state_root(),
+        required_memory_mb=quality.policy.limits.memory_mb,
+        required_pids=quality.policy.limits.pids,
     )
     render_startup_diagnostics(diagnostics)
     if not diagnostics.ready:
@@ -2842,6 +2845,9 @@ def _run_product() -> int:
                 working_directory=working_directory,
                 openclaw_binary=DEFAULT_OPENCLAW_BINARY,
                 sandbox_image=quality.policy.sandbox.image,
+                state_root=state_paths.root,
+                required_memory_mb=quality.policy.limits.memory_mb,
+                required_pids=quality.policy.limits.pids,
             )
             refreshed_inspections = tuple(
                 _inspect_selected_model(

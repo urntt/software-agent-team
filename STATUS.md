@@ -31,11 +31,18 @@ route, Agent authority, runtime policy, sandbox, source, and delivery boundary.
 Every new completed, failed, or cancelled terminal report embeds the same typed
 SAT release/source/install/channel/artifact/schema identity and commits it with
 the Markdown view and model-spend ledger through the rollback-capable terminal
-bundle. Changed-fact resume remediation and fresh provider/device cost,
+bundle. Startup diagnostics now discover the tightest Linux/cgroup memory and
+PID headroom, compare it visibly with the policy ceiling without treating that
+ceiling as a minimum, make the existing disk guard blocking as declared, and
+read-only inventory existing containers proven to mount SAT-owned state. The
+approved-plan restricted container probe remains the readiness authority for
+actual sandbox execution. These machine checks do not cap Agent count, call
+count, or total model-work time. Changed-fact resume
+remediation and fresh provider/device cost,
 liveness, self-check, and managed-release validation remain incomplete; the
 corresponding issues are not closed by offline evidence.
 
-Formatter, lint, doctor, and **881 offline tests** pass for this implementation.
+Formatter, lint, doctor, and **885 offline tests** pass for this implementation.
 
 ## Phase 1 Result
 

@@ -14,6 +14,7 @@ from software_agent_team.execution import stable_agent_session_key, stable_sessi
 from software_agent_team.sandbox_lifecycle import (
     SandboxCleanupError,
     cleanup_run_sandbox_containers,
+    inspect_sat_sandbox_resources,
 )
 from software_agent_team.teams import AgentCapability, AgentSpec, PermissionProfile
 
@@ -50,6 +51,7 @@ def sandbox_record(
     container_id: str,
     session_key: str,
     source: Path,
+    running: bool = True,
 ) -> dict[str, object]:
     """Build the ownership fields consumed from Docker inspect."""
 
@@ -63,7 +65,49 @@ def sandbox_record(
             }
         },
         "Mounts": [{"Source": str(source), "Destination": "/workspace"}],
+        "State": {"Running": running},
     }
+
+
+def test_resource_observation_is_read_only_and_ignores_other_openclaw(
+    tmp_path: Path,
+) -> None:
+    state = (tmp_path / "state").resolve()
+    owned_id = "a" * 64
+    unrelated_id = "b" * 64
+    runner = ScriptedRunner(
+        [
+            completed(f"{unrelated_id}\n{owned_id}\n"),
+            completed(
+                json.dumps(
+                    [
+                        sandbox_record(
+                            container_id=unrelated_id,
+                            session_key="agent:other:unrelated",
+                            source=(tmp_path / "other-openclaw").resolve(),
+                        ),
+                        sandbox_record(
+                            container_id=owned_id,
+                            session_key="agent:builder:sat-example-i1-work-result",
+                            source=state / "workspaces/example",
+                            running=False,
+                        ),
+                    ]
+                )
+            ),
+        ]
+    )
+
+    observation = inspect_sat_sandbox_resources(
+        sandbox_binary="docker",
+        state_root=state,
+        runner=runner,
+    )
+
+    assert [item.container_id for item in observation.containers] == [owned_id]
+    assert observation.running == ()
+    assert observation.stopped == observation.containers
+    assert all("rm" not in call for call in runner.calls)
 
 
 def test_cleanup_with_no_openclaw_containers_is_successful(tmp_path: Path) -> None:
