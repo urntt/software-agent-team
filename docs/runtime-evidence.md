@@ -429,6 +429,17 @@ consequence, remediation, and rerun rule. A changed fact invalidates only that
 result and its transitive dependents; a stale result cannot authorize Planning
 or execution.
 
+Rechecks reload the latest verified chain from disk instead of depending on a
+Python object retained by the current CLI process. A restarted foreground
+process therefore compares the new checkpoint observation with durable task
+history. It reuses only checks whose definition, input digest, authority, and
+dependency closure remain valid; a model/configuration change or a dynamic
+plan graph addition, removal, or redefinition refreshes the affected result
+and every transitive dependent. A checkpoint transition creates one linked
+revision, while an identical observation creates none. This is self-check
+recovery; automatic continuation of an interrupted Agent workflow remains a
+separate control-plane milestone.
+
 The ordinary product entry now consumes that contract at both mandatory
 boundaries. Revision 1 is persisted after request/model metadata/USD/deadline
 authorization and before the first Planning model call. It includes startup
@@ -458,10 +469,21 @@ compares the fresh observation with the previous report by typed input digest,
 invalidates every changed result and its transitive dependents, and appends an
 immutable revision containing fresh evidence for exactly that invalidated set.
 Unrelated results retain their previous evidence and timestamp. Stable check
-definitions cannot change during reconciliation, and a recheck whose inputs
-did not change does not create a redundant revision. Task-admission retries
-reuse the single foreground update observation made for that task instead of
-polling the release endpoint again.
+definitions cannot change silently: a changed definition, added or removed
+dynamic check, and each dependent are all refreshed from the new authoritative
+graph. A recheck whose inputs did not change creates no redundant revision.
+Task-admission retries reuse the single foreground update observation made for
+that task instead of polling the release endpoint again.
+
+`process-leases/*.json` is an ephemeral private ownership registry for live
+OpenClaw subprocesses. Each record binds the run, Agent, session key, command
+digest, controller identity, child PID/process group, and `/proc` start ticks.
+The record contains no prompt, response, credential, environment, or command
+arguments. Normal completion removes it. After controller failure, `sat
+cleanup --orphans` may reclaim only a child whose complete identity still
+matches and whose controller identity no longer exists. It holds a Linux pidfd
+across process-group signalling and retains the record until the exact
+SAT-owned sandbox session has also been handled.
 
 Every new completed, failed, or user-cancelled `FinalReport` embeds the same
 typed `SoftwareVersionReport` captured at task admission (or immediately before

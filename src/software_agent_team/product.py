@@ -21,6 +21,11 @@ from typing import Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from software_agent_team.benchmark_seed import prepare_seed_repository
+from software_agent_team.process_lifecycle import (
+    ProcessLeaseStore,
+    ProcessLifecycleError,
+    ProcessResourceObservation,
+)
 from software_agent_team.sandbox_lifecycle import (
     SandboxCleanupError,
     SandboxResourceObservation,
@@ -166,6 +171,7 @@ class ProductStatePaths:
     sources: Path
     planning: Path
     self_checks: Path
+    process_leases: Path
     openclaw: Path
 
     @classmethod
@@ -177,6 +183,7 @@ class ProductStatePaths:
             sources=root / "sources",
             planning=root / "planning",
             self_checks=root / "self-checks",
+            process_leases=root / "process-leases",
             openclaw=root / "openclaw",
         )
 
@@ -215,6 +222,7 @@ def ensure_product_state(paths: ProductStatePaths) -> None:
         paths.sources,
         paths.planning,
         paths.self_checks,
+        paths.process_leases,
         paths.openclaw,
     ):
         path.mkdir(exist_ok=True, mode=0o700)
@@ -366,6 +374,7 @@ def inspect_startup_environment(
     environment: Mapping[str, str] | None = None,
     host_capacity: HostCapacitySnapshot | None = None,
     sandbox_resources: SandboxResourceObservation | None = None,
+    process_resources: ProcessResourceObservation | None = None,
 ) -> StartupDiagnostics:
     """Inspect local prerequisites without changing them or calling a provider."""
 
@@ -700,6 +709,68 @@ def inspect_startup_environment(
                 label="Existing SAT sandbox resources",
                 state=DiagnosticState.READY,
                 detail="no SAT-owned OpenClaw sandbox containers",
+            )
+        )
+
+    process_observation_error: str | None = None
+    if process_resources is None:
+        try:
+            process_resources = ProcessLeaseStore(
+                state_root / "process-leases"
+            ).inspect()
+        except ProcessLifecycleError as error:
+            process_observation_error = str(error)
+    if process_resources is None:
+        checks.append(
+            DiagnosticCheck(
+                id="sat_process_resources",
+                label="Existing SAT provider processes",
+                state=DiagnosticState.WARNING,
+                detail=process_observation_error or "process leases could not be read",
+                action="Repair SAT's private process-lease state and run sat again.",
+            )
+        )
+    elif process_resources.orphaned:
+        identifiers = ", ".join(
+            f"{item.lease.agent_id}:{item.lease.child.pid}"
+            for item in process_resources.orphaned
+        )
+        checks.append(
+            DiagnosticCheck(
+                id="sat_process_resources",
+                label="Existing SAT provider processes",
+                state=DiagnosticState.ACTION_REQUIRED,
+                detail=(
+                    f"{len(process_resources.orphaned)} proven orphaned, "
+                    f"{len(process_resources.active)} active, "
+                    f"{len(process_resources.stale)} stale lease(s): {identifiers}"
+                ),
+                action="Run `sat cleanup --orphans`, then start this task again.",
+            )
+        )
+    elif process_resources.active or process_resources.stale:
+        checks.append(
+            DiagnosticCheck(
+                id="sat_process_resources",
+                label="Existing SAT provider processes",
+                state=DiagnosticState.WARNING,
+                detail=(
+                    f"{len(process_resources.active)} active and "
+                    f"{len(process_resources.stale)} stale SAT process lease(s)"
+                ),
+                action=(
+                    "Let active SAT tasks finish. Run `sat cleanup --orphans` to "
+                    "discard leases whose exact process no longer exists."
+                ),
+            )
+        )
+    else:
+        checks.append(
+            DiagnosticCheck(
+                id="sat_process_resources",
+                label="Existing SAT provider processes",
+                state=DiagnosticState.READY,
+                detail="no active, orphaned, or stale SAT provider processes",
             )
         )
 

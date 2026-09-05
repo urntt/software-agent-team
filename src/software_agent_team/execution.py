@@ -38,6 +38,10 @@ from software_agent_team.openclaw_session_evidence import (
     capture_openclaw_tool_evidence,
     inspect_openclaw_session_activity,
 )
+from software_agent_team.process_lifecycle import (
+    InvocationProcessLease,
+    ProcessLeaseStore,
+)
 from software_agent_team.teams import (
     AgentCapability,
     capability_for_legacy_role,
@@ -938,6 +942,7 @@ class OpenClawSubprocessExecutor:
         monotonic: MonotonicClock = time.monotonic,
         liveness_poll_seconds: float = DEFAULT_LIVENESS_POLL_SECONDS,
         liveness_policies: Mapping[str, ProviderLivenessPolicy] | None = None,
+        process_lease_store: ProcessLeaseStore | None = None,
     ) -> None:
         if process_grace_seconds < 1:
             raise AgentExecutionError("OpenClaw process grace period must be positive")
@@ -961,6 +966,7 @@ class OpenClawSubprocessExecutor:
         self.clock = clock
         self.monotonic = monotonic
         self.liveness_poll_seconds = liveness_poll_seconds
+        self.process_lease_store = process_lease_store
         self._liveness_policies = dict(liveness_policies or {})
         if any(key != policy.model for key, policy in self._liveness_policies.items()):
             raise AgentExecutionError("provider liveness policy keys must match models")
@@ -1280,6 +1286,20 @@ class OpenClawSubprocessExecutor:
             env=self._environment(raw_stream_path=raw_stream_path),
             start_new_session=os.name == "posix",
         )
+        process_lease: InvocationProcessLease | None = None
+        if self.process_lease_store is not None:
+            try:
+                process_lease = self.process_lease_store.acquire(
+                    run_id=request.run_id,
+                    agent_id=request.agent_id,
+                    session_key=request.session_key,
+                    child_pid=process.pid,
+                    command=command,
+                )
+            except BaseException:
+                self._kill_process(process)
+                process.communicate()
+                raise
         with self._process_lock:
             self._active_processes[request.session_key] = (request, process)
         process_timeout = (
@@ -1337,6 +1357,9 @@ class OpenClawSubprocessExecutor:
                 self._active_processes.pop(request.session_key, None)
                 interrupted = request.session_key in self._interrupt_requests
                 self._interrupt_requests.discard(request.session_key)
+            if process_lease is not None:
+                assert self.process_lease_store is not None
+                self.process_lease_store.release(process_lease)
         return (
             subprocess.CompletedProcess(
                 list(command),

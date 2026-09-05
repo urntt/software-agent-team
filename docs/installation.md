@@ -133,6 +133,8 @@ SAT first performs a fast, non-provider startup inspection covering:
 - Existing OpenClaw containers whose bind mounts prove that they belong to
   SAT's state boundary, reported without inspecting or changing another
   OpenClaw installation;
+- Active, orphaned, and stale SAT provider-process leases, identified by PID,
+  process group, and Linux process start time rather than PID alone;
 - `sat` launcher visibility.
 
 Every failed condition includes a corrective action. SAT does not rebuild the
@@ -173,6 +175,26 @@ such containers that already exist. It distinguishes running from stopped
 resources and shows exact abbreviated container IDs. This observation never
 silently removes a container because another foreground SAT process may still
 own a running task.
+
+SAT persists a private lease immediately after each isolated OpenClaw child is
+started and removes it after that exact child reaches a terminal state. A new
+foreground process can therefore distinguish a concurrently active invocation
+from a proven orphan whose controller identity no longer exists. PID reuse is
+classified as a stale lease and is never signalled. Inspect without changing
+anything, or explicitly recover only proven remnants:
+
+```bash
+sat cleanup
+sat cleanup --orphans
+```
+
+Recovery first terminates the exact orphaned process group, then revalidates
+and removes only containers with the leased session key and a bind mount under
+SAT's owned state root. Active leases and resources outside that root are left
+unchanged. If Docker cleanup fails, the lease remains so the operation can be
+retried rather than losing its ownership evidence. Recovery holds a Linux
+pidfd across signalling so a PID or process-group reuse race cannot redirect
+the action; without pidfd support it fails closed.
 
 On the first configured run, SAT then:
 

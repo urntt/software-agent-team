@@ -111,6 +111,10 @@ _STARTUP_CHECK_IDS = {
         "runtime.sat_sandbox_resources",
         SelfCheckCategory.RUNTIME,
     ),
+    "sat_process_resources": (
+        "runtime.sat_process_resources",
+        SelfCheckCategory.RUNTIME,
+    ),
     "launcher": ("application.launcher", SelfCheckCategory.APPLICATION),
 }
 
@@ -118,6 +122,7 @@ _STARTUP_DEPENDENCIES = {
     "runtime.docker": ("tool.docker",),
     "runtime.sandbox_image": ("runtime.docker",),
     "runtime.sat_sandbox_resources": ("runtime.docker",),
+    "runtime.sat_process_resources": ("application.state",),
 }
 
 

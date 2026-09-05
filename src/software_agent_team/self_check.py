@@ -447,54 +447,75 @@ def refresh_stale_self_checks(
 def reconcile_self_check_report(
     previous: TaskSelfCheckReport,
     observed: TaskSelfCheckReport,
-    *,
-    reason: str,
 ) -> TaskSelfCheckReport | None:
     """Append only changed facts and their dependents to one report chain.
 
     ``observed`` is a fresh evaluator snapshot. Its revision metadata is ignored;
-    stable check definitions must match the previous report exactly. Returning
-    ``None`` means the attempted recheck observed no input change and therefore
-    must not create a redundant evidence revision.
+    unchanged checks retain their original evidence and timestamp. Dynamic
+    plan revisions may add, remove, or redefine checks; those graph changes and
+    their transitive dependents are refreshed from the new observation. Returning
+    ``None`` means the attempted recheck observed the same checkpoint, graph,
+    inputs, and resource authority and therefore must not create a redundant
+    evidence revision.
     """
 
     if previous.run_id != observed.run_id:
         raise SelfCheckError("self-check recheck changed the task identity")
-    if previous.checkpoint is not observed.checkpoint:
-        raise SelfCheckError("self-check recheck changed the checkpoint")
     previous_by_id = {check.id: check for check in previous.checks}
     observed_by_id = {check.id: check for check in observed.checks}
-    if set(previous_by_id) != set(observed_by_id):
-        raise SelfCheckError("self-check recheck changed the check set")
-    for check_id, prior in previous_by_id.items():
-        current = observed_by_id[check_id]
-        if (
-            current.checkpoint is not prior.checkpoint
-            or current.category is not prior.category
-            or current.owner is not prior.owner
-            or current.dependencies != prior.dependencies
-            or current.rerun_rule != prior.rerun_rule
-        ):
-            raise SelfCheckError(
-                f"self-check recheck changed its stable definition: {check_id}"
-            )
+    previous_ids = set(previous_by_id)
+    observed_ids = set(observed_by_id)
 
-    changed = {
+    def semantic_result(check: SelfCheckResult) -> dict[str, object]:
+        return check.model_dump(
+            mode="json",
+            exclude={"checked_at", "input_sha256"},
+        )
+
+    changed = previous_ids.symmetric_difference(observed_ids)
+    changed.update(
         check_id
-        for check_id, prior in previous_by_id.items()
-        if observed_by_id[check_id].input_sha256 != prior.input_sha256
-    }
-    if not changed:
+        for check_id in previous_ids & observed_ids
+        if semantic_result(previous_by_id[check_id])
+        != semantic_result(observed_by_id[check_id])
+        or previous_by_id[check_id].input_sha256
+        != observed_by_id[check_id].input_sha256
+    )
+    authority_changed = (
+        previous.resource_authorization != observed.resource_authorization
+    )
+    checkpoint_changed = previous.checkpoint is not observed.checkpoint
+    if not changed and not authority_changed and not checkpoint_changed:
         return None
-    stale = invalidate_self_check_results(previous.checks, changed, reason=reason)
-    stale_ids = {check.id for check in stale if check.status is SelfCheckStatus.STALE}
-    refreshed = refresh_stale_self_checks(
-        stale,
-        {check_id: observed_by_id[check_id] for check_id in stale_ids},
+
+    # A removed or redefined dependency can affect checks in either graph.
+    # Traverse both so a plan edit cannot retain evidence that depended on a
+    # superseded route, Agent, or authority edge.
+    affected = set(changed)
+    for graph in (previous.checks, observed.checks):
+        dependents: dict[str, set[str]] = {}
+        for check in graph:
+            for dependency in check.dependencies:
+                dependents.setdefault(dependency, set()).add(check.id)
+        queue = deque(affected)
+        while queue:
+            for dependent in dependents.get(queue.popleft(), ()):
+                if dependent not in affected:
+                    affected.add(dependent)
+                    queue.append(dependent)
+
+    refreshed = tuple(
+        (
+            prior
+            if check.id not in affected
+            and (prior := previous_by_id.get(check.id)) is not None
+            else check
+        )
+        for check in observed.checks
     )
     return TaskSelfCheckReport(
         run_id=previous.run_id,
-        checkpoint=previous.checkpoint,
+        checkpoint=observed.checkpoint,
         revision=previous.revision + 1,
         previous_report_sha256=previous.sha256,
         created_at=observed.created_at,
@@ -584,6 +605,33 @@ class TaskSelfCheckStore:
                 raise SelfCheckError("self-check report digest chain is broken")
             previous = report
         return previous
+
+    def record_observation(
+        self,
+        observed: TaskSelfCheckReport,
+    ) -> tuple[TaskSelfCheckReport, Path | None]:
+        """Reconcile one fresh observation against durable task history.
+
+        The caller does not carry a previous report in memory. This method
+        reloads and verifies the immutable chain, making remediation retries and
+        checkpoint changes safe across CLI process restarts. ``None`` as the
+        returned path means the observation was identical and no new revision
+        was written.
+        """
+
+        latest = self.load_latest(observed.run_id)
+        if latest is None:
+            first = observed.model_copy(
+                update={
+                    "revision": 1,
+                    "previous_report_sha256": None,
+                }
+            )
+            return first, self.persist(first)
+        reconciled = reconcile_self_check_report(latest, observed)
+        if reconciled is None:
+            return latest, None
+        return reconciled, self.persist(reconciled)
 
     def _run_directory(self, run_id: str, *, create: bool) -> Path | None:
         if re.fullmatch(_RUN_ID_PATTERN, run_id) is None:

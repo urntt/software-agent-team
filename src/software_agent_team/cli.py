@@ -63,6 +63,7 @@ from software_agent_team.planning import (
     PlanningStore,
     run_interactive_planning,
 )
+from software_agent_team.process_lifecycle import ProcessLeaseStore
 from software_agent_team.product import (
     ProductFlowError,
     ProductStatePaths,
@@ -109,7 +110,10 @@ from software_agent_team.runtime_configuration import (
     persist_runtime_preflight,
 )
 from software_agent_team.runtime_controls import RuntimeControlDecision
-from software_agent_team.sandbox_lifecycle import cleanup_run_sandbox_containers
+from software_agent_team.sandbox_lifecycle import (
+    cleanup_run_sandbox_containers,
+    cleanup_sat_sandbox_sessions,
+)
 from software_agent_team.schema_compatibility import (
     PersistedSchemaCompatibilityReport,
     SchemaCompatibilityError,
@@ -120,7 +124,6 @@ from software_agent_team.self_check import (
     TaskResourceAuthorization,
     TaskSelfCheckReport,
     TaskSelfCheckStore,
-    reconcile_self_check_report,
     render_self_check_report,
 )
 from software_agent_team.self_check_evaluation import (
@@ -190,6 +193,7 @@ class _RuntimeLaunchOptions:
     workspaces_root: Path
     openclaw_binary: Path
     openclaw_state_dir: Path
+    process_leases_root: Path
     sandbox_binary: str
     model: str
     input_cost_per_million_usd: Decimal | None
@@ -1300,6 +1304,58 @@ def _prepare_benchmark(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cleanup_owned_resources(args: argparse.Namespace) -> int:
+    """Inspect or explicitly reclaim only proven orphaned SAT resources."""
+
+    state_paths = ProductStatePaths.below(user_state_root())
+    ensure_product_state(state_paths)
+    store = ProcessLeaseStore(state_paths.process_leases)
+    observation = store.inspect()
+    print("SAT provider-process ownership")
+    print(f"  Active: {len(observation.active)}")
+    print(f"  Orphaned: {len(observation.orphaned)}")
+    print(f"  Stale leases: {len(observation.stale)}")
+    for item in observation.processes:
+        print(
+            f"  - {item.status.value}: run={item.lease.run_id} "
+            f"agent={item.lease.agent_id} pid={item.lease.child.pid}"
+        )
+    if not args.orphans:
+        if observation.orphaned or observation.stale:
+            print("Run `sat cleanup --orphans` to reclaim only these proven remnants.")
+        return 0
+    candidates = (*observation.orphaned, *observation.stale)
+    if not candidates:
+        print("No orphaned process or stale lease requires cleanup.")
+        return 0
+    if not args.yes and not _prompt_yes_no(
+        "Stop the proven orphaned process groups and their SAT sandboxes?",
+        default=False,
+    ):
+        print("Cleanup cancelled; no process or container was changed.")
+        return 0
+
+    recovery = store.reclaim_orphans(
+        lease_ids=tuple(item.lease.lease_id for item in candidates),
+        release_leases=False,
+    )
+    sessions = tuple(dict.fromkeys(item.session_key for item in recovery.reclaimed))
+    sandbox_cleanup = cleanup_sat_sandbox_sessions(
+        sandbox_binary="docker",
+        session_keys=sessions,
+        state_root=state_paths.root,
+    )
+    for lease in recovery.reclaimed:
+        store.release(lease)
+    print(
+        f"Recovered {len(recovery.reclaimed)} process lease(s) and removed "
+        f"{len(sandbox_cleanup.removed)} sandbox container(s)."
+    )
+    if recovery.active:
+        print(f"Left {len(recovery.active)} active SAT invocation(s) unchanged.")
+    return 0
+
+
 def _preflight(args: argparse.Namespace) -> int:
     state_paths = ProductStatePaths.below(user_state_root())
     ensure_product_state(state_paths)
@@ -1476,6 +1532,7 @@ def _prepare_runtime_boundary(
         environment=openclaw_environment,
         local=True,
         run_deadline_at=getattr(options, "run_deadline_at", None),
+        process_lease_store=ProcessLeaseStore(options.process_leases_root),
     )
 
     def runtime_setup(workspace: GitWorkspace, run_directory: Path) -> None:
@@ -1852,6 +1909,7 @@ def _run_workflow(args: argparse.Namespace) -> int:
             workspaces_root=args.workspaces_root,
             openclaw_binary=DEFAULT_OPENCLAW_BINARY,
             openclaw_state_dir=state_paths.openclaw,
+            process_leases_root=state_paths.process_leases,
             sandbox_binary=args.sandbox_binary,
             model=model,
             input_cost_per_million_usd=input_cost,
@@ -2437,6 +2495,7 @@ def _run_product_planning(
             ),
             local=True,
             run_deadline_at=resource_authorization.deadline_at,
+            process_lease_store=ProcessLeaseStore(state_paths.process_leases),
         )
         executor.register_model_liveness(
             model=configuration.model,
@@ -2577,7 +2636,6 @@ def _task_admission_checkpoint(
     model_inspections: tuple[OpenClawModelInspection, ...],
     resource_authorization: TaskResourceAuthorization,
     update_observation: ForegroundUpdateObservation | None = None,
-    previous_report: TaskSelfCheckReport | None = None,
 ) -> tuple[
     TaskSelfCheckReport,
     ForegroundUpdateObservation,
@@ -2617,16 +2675,8 @@ def _task_admission_checkpoint(
         state_root=state_paths.root,
         resource_authorization=resource_authorization,
     )
-    report = observed
-    if previous_report is not None:
-        reconciled = reconcile_self_check_report(
-            previous_report,
-            observed,
-            reason="one or more task-admission inputs changed",
-        )
-        report = previous_report if reconciled is None else reconciled
     store = TaskSelfCheckStore(state_paths.self_checks)
-    path = None if report is previous_report else store.persist(report)
+    report, path = store.record_observation(observed)
     print()
     print(
         render_self_check_report(
@@ -2649,7 +2699,6 @@ def _plan_execution_checkpoint(
     state_paths: ProductStatePaths,
     quality: QualityGateConfiguration,
     configuration: UserConfiguration,
-    previous_report: TaskSelfCheckReport | None = None,
 ) -> TaskSelfCheckReport:
     """Persist and render approved-plan readiness before workspace mutation."""
 
@@ -2672,16 +2721,8 @@ def _plan_execution_checkpoint(
         source_repository=DEFAULT_PRODUCT_SEED.resolve(strict=True),
         destination=destination,
     )
-    report = observed
-    if previous_report is not None:
-        reconciled = reconcile_self_check_report(
-            previous_report,
-            observed,
-            reason="one or more approved-plan readiness inputs changed",
-        )
-        report = previous_report if reconciled is None else reconciled
     store = TaskSelfCheckStore(state_paths.self_checks)
-    path = None if report is previous_report else store.persist(report)
+    report, path = store.record_observation(observed)
     print()
     print(
         render_self_check_report(
@@ -2785,7 +2826,6 @@ def _run_product() -> int:
                 model_inspections=model_inspections,
                 resource_authorization=resource_authorization,
                 update_observation=update_observation,
-                previous_report=admission_report,
             )
         )
     budget_ledger = AgentBudgetLedger(
@@ -2838,7 +2878,6 @@ def _run_product() -> int:
                     state_paths=state_paths,
                     quality=quality,
                     configuration=configuration,
-                    previous_report=execution_report,
                 )
             source_repository = prepare_product_source(
                 seed=DEFAULT_PRODUCT_SEED,
@@ -2872,6 +2911,7 @@ def _run_product() -> int:
                     workspaces_root=state_paths.workspaces,
                     openclaw_binary=DEFAULT_OPENCLAW_BINARY,
                     openclaw_state_dir=state_paths.openclaw,
+                    process_leases_root=state_paths.process_leases,
                     sandbox_binary="docker",
                     model=configuration.model,
                     input_cost_per_million_usd=(
@@ -2978,7 +3018,6 @@ def _run_product() -> int:
                     model_inspections=refreshed_inspections,
                     resource_authorization=resource_authorization,
                     update_observation=update_observation,
-                    previous_report=admission_report,
                 )
     finally:
         renderer.close()
@@ -3111,6 +3150,25 @@ def build_parser() -> argparse.ArgumentParser:
         help="Apply the channel switch without interactive confirmation.",
     )
     channel_switch.set_defaults(handler=_switch_channel)
+
+    cleanup = commands.add_parser(
+        "cleanup",
+        help="Inspect or reclaim only proven orphaned SAT runtime resources.",
+    )
+    cleanup.add_argument(
+        "--orphans",
+        action="store_true",
+        help=(
+            "Stop proven orphaned SAT process groups, remove their exact sandbox "
+            "sessions, and discard stale leases."
+        ),
+    )
+    cleanup.add_argument(
+        "--yes",
+        action="store_true",
+        help="Apply orphan cleanup without an interactive confirmation.",
+    )
+    cleanup.set_defaults(handler=_cleanup_owned_resources)
 
     managed_bootstrap = commands.add_parser(
         "_managed-install",

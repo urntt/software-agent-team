@@ -42,6 +42,13 @@ class SandboxCleanupResult:
 
 
 @dataclass(frozen=True)
+class SandboxSessionCleanupResult:
+    """Containers removed for an explicit set of recovered session keys."""
+
+    removed: tuple[RemovedSandbox, ...]
+
+
+@dataclass(frozen=True)
 class ObservedSandbox:
     """One OpenClaw container proven to mount SAT-owned state or workspace."""
 
@@ -252,6 +259,135 @@ def inspect_sat_sandbox_resources(
     return SandboxResourceObservation(
         containers=tuple(sorted(observed, key=lambda item: item.container_id))
     )
+
+
+def cleanup_sat_sandbox_sessions(
+    *,
+    sandbox_binary: str,
+    session_keys: Sequence[str],
+    state_root: Path,
+    timeout_seconds: int = 30,
+    runner: ProcessRunner = subprocess.run,
+) -> SandboxSessionCleanupResult:
+    """Remove exact recovered sessions only beneath the SAT-owned state root."""
+
+    expected_sessions = frozenset(session_keys)
+    if not sandbox_binary.strip():
+        raise SandboxCleanupError("sandbox binary must not be blank")
+    if not expected_sessions or any(
+        not key or len(key) > 1000 or "\n" in key or "\r" in key
+        for key in expected_sessions
+    ):
+        raise SandboxCleanupError(
+            "sandbox recovery requires non-empty safe session keys"
+        )
+    if not state_root.is_absolute():
+        raise SandboxCleanupError("SAT state root must be absolute")
+    if timeout_seconds < 1:
+        raise SandboxCleanupError("sandbox cleanup timeout must be positive")
+
+    discovered_ids: set[str] = set()
+    for session_key in sorted(expected_sessions):
+        listed = _run_command(
+            [
+                sandbox_binary,
+                "container",
+                "ls",
+                "--all",
+                "--quiet",
+                "--filter",
+                "label=openclaw.sandbox=1",
+                "--filter",
+                f"label=openclaw.sessionKey={session_key}",
+            ],
+            runner=runner,
+            timeout_seconds=timeout_seconds,
+        )
+        if listed.returncode != 0:
+            raise SandboxCleanupError("Docker could not list recovered sandboxes")
+        discovered_ids.update(
+            line.strip() for line in listed.stdout.splitlines() if line.strip()
+        )
+    container_ids = tuple(sorted(discovered_ids))
+    if any(_CONTAINER_ID.fullmatch(item) is None for item in container_ids):
+        raise SandboxCleanupError("Docker returned an invalid container ID")
+    if not container_ids:
+        return SandboxSessionCleanupResult(removed=())
+
+    inspected = _run_command(
+        [sandbox_binary, "container", "inspect", *container_ids],
+        runner=runner,
+        timeout_seconds=timeout_seconds,
+    )
+    if inspected.returncode != 0:
+        raise SandboxCleanupError("Docker could not inspect recovered sandboxes")
+    try:
+        payload = json.loads(inspected.stdout)
+    except json.JSONDecodeError as error:
+        raise SandboxCleanupError(
+            "Docker sandbox inspection was not valid JSON"
+        ) from error
+    if not isinstance(payload, list):
+        raise SandboxCleanupError("Docker sandbox inspection must be a JSON array")
+
+    resolved_state = state_root.resolve(strict=False)
+    workspace_root = (resolved_state / "workspaces").resolve(strict=False)
+    targets: list[RemovedSandbox] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            raise SandboxCleanupError("Docker returned an invalid sandbox record")
+        config = item.get("Config")
+        labels = config.get("Labels") if isinstance(config, dict) else None
+        session_key = (
+            labels.get("openclaw.sessionKey") if isinstance(labels, dict) else None
+        )
+        if session_key not in expected_sessions:
+            continue
+        container_id = item.get("Id")
+        container_name = item.get("Name")
+        mounts = item.get("Mounts")
+        if (
+            not isinstance(container_id, str)
+            or _CONTAINER_ID.fullmatch(container_id) is None
+            or not isinstance(container_name, str)
+            or not isinstance(mounts, list)
+        ):
+            raise SandboxCleanupError(
+                "Docker returned incomplete sandbox ownership data"
+            )
+        if not any(
+            isinstance(mount, dict)
+            and _owned_mount(
+                mount.get("Source"),
+                state_root=resolved_state,
+                workspace_root=workspace_root,
+            )
+            for mount in mounts
+        ):
+            raise SandboxCleanupError(
+                "refusing to remove a recovered sandbox outside SAT-owned paths"
+            )
+        targets.append(
+            RemovedSandbox(
+                container_id=container_id,
+                container_name=container_name.removeprefix("/"),
+                session_key=session_key,
+            )
+        )
+
+    removed: list[RemovedSandbox] = []
+    for target in targets:
+        completed = _run_command(
+            [sandbox_binary, "container", "rm", "--force", target.container_id],
+            runner=runner,
+            timeout_seconds=timeout_seconds,
+        )
+        if completed.returncode != 0:
+            raise SandboxCleanupError(
+                "Docker could not remove a recovered sandbox container"
+            )
+        removed.append(target)
+    return SandboxSessionCleanupResult(removed=tuple(removed))
 
 
 def cleanup_run_sandbox_containers(

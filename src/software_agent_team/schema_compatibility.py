@@ -25,6 +25,7 @@ class SchemaFamily(StrEnum):
     TEAM_PLAN = "team_plan"
     BUDGET = "budget"
     SELF_CHECK = "self_check"
+    PROCESS_LEASE = "process_lease"
 
 
 class SchemaSupport(BaseModel):
@@ -88,6 +89,7 @@ def supported_schemas() -> tuple[SchemaSupport, ...]:
         MINIMUM_READABLE_PLANNING_SCHEMA_VERSION,
         PLANNING_SCHEMA_VERSION,
     )
+    from software_agent_team.process_lifecycle import PROCESS_LEASE_SCHEMA_VERSION
     from software_agent_team.progress import RUN_EVENT_SCHEMA_VERSION
     from software_agent_team.run_control import RUN_SCHEMA_VERSION
     from software_agent_team.self_check import SELF_CHECK_SCHEMA_VERSION
@@ -107,6 +109,7 @@ def supported_schemas() -> tuple[SchemaSupport, ...]:
         (SchemaFamily.TEAM_PLAN, TEAM_PLAN_SCHEMA_VERSION),
         (SchemaFamily.BUDGET, BUDGET_SCHEMA_VERSION),
         (SchemaFamily.SELF_CHECK, SELF_CHECK_SCHEMA_VERSION),
+        (SchemaFamily.PROCESS_LEASE, PROCESS_LEASE_SCHEMA_VERSION),
     )
     support = [
         SchemaSupport(
@@ -256,6 +259,11 @@ def _persisted_schema_paths(
             _require_real_directory(run, "self-check task directory")
             for path in sorted(run.glob("*.json")):
                 candidates.append((SchemaFamily.SELF_CHECK, path))
+    process_leases = state_root / "process-leases"
+    if process_leases.exists():
+        _require_real_directory(process_leases, "process lease root")
+        for path in sorted(process_leases.glob("*.json")):
+            candidates.append((SchemaFamily.PROCESS_LEASE, path))
     return candidates
 
 

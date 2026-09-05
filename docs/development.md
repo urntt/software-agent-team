@@ -248,6 +248,7 @@ src/software_agent_team/
   planning.py                  Adaptive dialogue, proposals, approval, and evidence
   product.py                   Diagnostics, source preparation, and delivery
   progress.py                  RunEvent journal and terminal rendering
+  process_lifecycle.py         Durable provider-process ownership and recovery
   prompting.py                 Fixed-role and task-defined capability prompts
   quality_gates.py             Fixed sandboxed command runner
   reporting.py                 Shared terminal report rendering
@@ -283,8 +284,9 @@ VISION.md                      Product, architecture, experiment, and roadmap
 
 `openclaw/workspaces/` contains stable ignored role workspace boundaries. The
 installed private OpenClaw binary lives under ignored `.sat/openclaw/`.
-Product `planning/`, `runs/`, `workspaces/`, `sources/`, and isolated OpenClaw
-provider state live under the private user-state root. Provider credentials,
+Product `planning/`, `self-checks/`, `process-leases/`, `runs/`, `workspaces/`,
+`sources/`, and isolated OpenClaw provider state live under the private
+user-state root. Provider credentials,
 active OpenClaw state, generated state, and runtime configuration never enter
 Git.
 

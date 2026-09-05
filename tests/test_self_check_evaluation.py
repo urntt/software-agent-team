@@ -77,6 +77,10 @@ def ready_diagnostics(tmp_path: Path) -> StartupDiagnostics:
             "Existing SAT sandbox resources",
             "no SAT-owned OpenClaw sandbox containers",
         ),
+        "sat_process_resources": (
+            "Existing SAT provider processes",
+            "no active, orphaned, or stale SAT provider processes",
+        ),
         "launcher": ("sat launcher", "available on PATH"),
     }
     return StartupDiagnostics(

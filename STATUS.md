@@ -41,11 +41,20 @@ count, or total model-work time. A failed task-admission or approved-plan check
 can be repaired and rechecked in the same foreground task. Changed input
 digests append an immutable revision that refreshes only the invalidated result
 and its transitive dependents; an unchanged retry creates no duplicate
-evidence. Durable process-restart resume and fresh provider/device cost,
-liveness, self-check, and managed-release validation remain incomplete; the
-corresponding issues are not closed by offline evidence.
+evidence. Rechecks now load the verified latest report from disk, so a new CLI
+process can preserve unchanged evidence while refreshing model/configuration
+changes and dynamic plan-graph additions, removals, or redefinitions. Every
+live SAT-launched OpenClaw child also has a private PID/start-time/process-group
+lease. A real controller-kill test proves that a new process can distinguish
+and reclaim the exact orphan while holding a Linux pidfd across signalling;
+active owners and PID-reused processes are not signalled, and sandbox recovery
+additionally requires the exact leased session under SAT-owned state. Automatic
+continuation of an interrupted Agent workflow
+and fresh provider/device cost, liveness, self-check, process cleanup, and
+managed-release validation remain incomplete; the corresponding issues are not
+closed by offline evidence.
 
-Formatter, lint, doctor, and **897 offline tests** pass for this implementation.
+Formatter, lint, doctor, and **911 offline tests** pass for this implementation.
 
 ## Phase 1 Result
 
@@ -1365,9 +1374,8 @@ derived from the task.
 - A published stable GitHub Release and fresh supported-device evidence for
   stable install, stable update, stable↔dev switch, failed-activation rollback,
   and versioned uninstall;
-- Changed-fact self-check refresh during durable process-restart resume, plus
-  fresh installed-device evidence for task-admission and approved-plan
-  remediation;
+- Fresh installed-device evidence for task-admission/approved-plan remediation
+  and process-orphan recovery;
 - An independent-device live demonstration of the activated Adaptive Planning
   and Dynamic Team journey;
 - Durable control recovery after a foreground process crash and a

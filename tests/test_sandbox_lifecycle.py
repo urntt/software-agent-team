@@ -14,6 +14,7 @@ from software_agent_team.execution import stable_agent_session_key, stable_sessi
 from software_agent_team.sandbox_lifecycle import (
     SandboxCleanupError,
     cleanup_run_sandbox_containers,
+    cleanup_sat_sandbox_sessions,
     inspect_sat_sandbox_resources,
 )
 from software_agent_team.teams import AgentCapability, AgentSpec, PermissionProfile
@@ -237,6 +238,78 @@ def test_cleanup_removes_only_the_exact_owned_run_container(tmp_path: Path) -> N
         "--force",
         owned_id,
     )
+
+
+def test_recovery_removes_only_exact_leased_session_under_sat_state(
+    tmp_path: Path,
+) -> None:
+    container_id = "e" * 64
+    session = "agent:builder:sat-recovered-i1-work-result"
+    state = (tmp_path / "state").resolve()
+    runner = ScriptedRunner(
+        [
+            completed(f"{container_id}\n"),
+            completed(
+                json.dumps(
+                    [
+                        sandbox_record(
+                            container_id=container_id,
+                            session_key=session,
+                            source=state / "workspaces/sat-recovered",
+                        )
+                    ]
+                )
+            ),
+            completed(container_id),
+        ]
+    )
+
+    result = cleanup_sat_sandbox_sessions(
+        sandbox_binary="docker",
+        session_keys=(session,),
+        state_root=state,
+        runner=runner,
+    )
+
+    assert [item.container_id for item in result.removed] == [container_id]
+    assert runner.calls[-1] == (
+        "docker",
+        "container",
+        "rm",
+        "--force",
+        container_id,
+    )
+
+
+def test_recovery_refuses_exact_session_outside_sat_state(tmp_path: Path) -> None:
+    container_id = "f" * 64
+    session = "agent:builder:sat-recovered-i1-work-result"
+    runner = ScriptedRunner(
+        [
+            completed(f"{container_id}\n"),
+            completed(
+                json.dumps(
+                    [
+                        sandbox_record(
+                            container_id=container_id,
+                            session_key=session,
+                            source=tmp_path / "unrelated",
+                        )
+                    ]
+                )
+            ),
+        ]
+    )
+
+    with pytest.raises(SandboxCleanupError, match="outside SAT-owned paths"):
+        cleanup_sat_sandbox_sessions(
+            sandbox_binary="docker",
+            session_keys=(session,),
+            state_root=(tmp_path / "state").resolve(),
+            runner=runner,
+        )
+
+    assert all(call[2:4] != ("rm", "--force") for call in runner.calls)
 
 
 def test_cleanup_refuses_a_matching_session_outside_sat_paths(tmp_path: Path) -> None:

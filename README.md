@@ -161,6 +161,15 @@ applies a whole-run deadline only when the user explicitly authorized one for
 that task. If catalog inspection expires, SAT reports that no provider request
 was made and does not create an Agent.
 
+Every live OpenClaw subprocess launched by SAT also receives a private durable
+ownership lease. Startup distinguishes invocations owned by another live SAT
+process from an exact orphan left by a crashed process and from a stale PID;
+the identity includes Linux process start time, and recovery pins it with a
+Linux pidfd, so PID reuse cannot authorize termination. Inspect locally with
+`sat cleanup`. If startup reports a proven
+orphan, `sat cleanup --orphans` asks before stopping only that process group and
+removing only its exact SAT-owned sandbox session.
+
 See the [installation and configuration guide](docs/installation.md) for
 configuration paths, provider setup, saved defaults, and recovery boundaries.
 

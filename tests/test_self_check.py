@@ -191,11 +191,7 @@ def test_recheck_appends_only_changed_facts_and_transitive_dependents() -> None:
         result("task.destination"),
     )
 
-    reconciled = reconcile_self_check_report(
-        previous,
-        observed,
-        reason="the Docker observation changed",
-    )
+    reconciled = reconcile_self_check_report(previous, observed)
 
     assert reconciled is not None
     assert reconciled.revision == 2
@@ -214,10 +210,80 @@ def test_recheck_appends_only_changed_facts_and_transitive_dependents() -> None:
                     "previous_report_sha256": None,
                 }
             ),
-            reason="nothing changed",
         )
         is None
     )
+
+
+def test_recheck_accepts_dynamic_plan_graph_changes_without_reusing_dependents() -> (
+    None
+):
+    previous = report(
+        result("task.request"),
+        result(
+            "plan.approval",
+            dependencies=("task.request",),
+            checkpoint=SelfCheckCheckpoint.PLAN_EXECUTION,
+        ),
+        result(
+            "route.default",
+            dependencies=("plan.approval",),
+            checkpoint=SelfCheckCheckpoint.PLAN_EXECUTION,
+        ),
+        revision=2,
+        previous="a" * 64,
+        checkpoint=SelfCheckCheckpoint.PLAN_EXECUTION,
+    )
+    observed = report(
+        result("task.request"),
+        result(
+            "plan.approval",
+            dependencies=("task.request",),
+            checkpoint=SelfCheckCheckpoint.PLAN_EXECUTION,
+            checked_at=NOW + timedelta(minutes=2),
+        ),
+        result(
+            "route.review",
+            dependencies=("plan.approval",),
+            checkpoint=SelfCheckCheckpoint.PLAN_EXECUTION,
+            checked_at=NOW + timedelta(minutes=2),
+        ),
+        revision=1,
+        checkpoint=SelfCheckCheckpoint.PLAN_EXECUTION,
+    )
+
+    reconciled = reconcile_self_check_report(previous, observed)
+
+    assert reconciled is not None
+    assert reconciled.revision == 3
+    by_id = {check.id: check for check in reconciled.checks}
+    assert set(by_id) == {"task.request", "plan.approval", "route.review"}
+    assert by_id["task.request"] == previous.checks[0]
+    assert by_id["plan.approval"].checked_at == NOW + timedelta(minutes=2)
+    assert by_id["route.review"].checked_at == NOW + timedelta(minutes=2)
+
+
+def test_recheck_records_changed_semantics_but_ignores_timestamp_only_noise() -> None:
+    previous_check = result("tool.docker")
+    previous = report(previous_check)
+    timestamp_only = report(
+        previous_check.model_copy(update={"checked_at": NOW + timedelta(minutes=1)})
+    )
+
+    assert reconcile_self_check_report(previous, timestamp_only) is None
+
+    changed_conclusion = report(
+        previous_check.model_copy(
+            update={
+                "checked_at": NOW + timedelta(minutes=1),
+                "observed_fact": "observed a different Docker daemon",
+            }
+        )
+    )
+    reconciled = reconcile_self_check_report(previous, changed_conclusion)
+
+    assert reconciled is not None
+    assert reconciled.checks[0].observed_fact == "observed a different Docker daemon"
 
 
 def test_store_persists_and_verifies_one_write_once_digest_chain(
@@ -252,6 +318,45 @@ def test_store_persists_and_verifies_one_write_once_digest_chain(
     first_path.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(SelfCheckError, match="digest chain is broken"):
         store.load_latest(first.run_id)
+
+
+def test_store_reconciles_from_disk_after_process_restart(tmp_path: Path) -> None:
+    root = tmp_path / "self-checks"
+    initial_store = TaskSelfCheckStore(root)
+    first = report(
+        result("tool.docker"),
+        result("runtime.sandbox", dependencies=("tool.docker",)),
+        result("task.destination"),
+    )
+    recorded, path = initial_store.record_observation(first)
+    assert path is not None
+    assert recorded == first
+
+    # A distinct store instance represents a restarted foreground CLI. It has
+    # no in-memory previous report and must recover the verified chain itself.
+    restarted_store = TaskSelfCheckStore(root)
+    changed = report(
+        result("tool.docker", checked_at=NOW + timedelta(minutes=1)),
+        result(
+            "runtime.sandbox",
+            dependencies=("tool.docker",),
+            checked_at=NOW + timedelta(minutes=1),
+        ),
+        result("task.destination"),
+    )
+    second, second_path = restarted_store.record_observation(changed)
+
+    assert second_path is not None
+    assert second.revision == 2
+    assert second.previous_report_sha256 == first.sha256
+    by_id = {check.id: check for check in second.checks}
+    assert by_id["tool.docker"].checked_at == NOW + timedelta(minutes=1)
+    assert by_id["runtime.sandbox"].checked_at == NOW + timedelta(minutes=1)
+    assert by_id["task.destination"] == first.checks[2]
+
+    unchanged, duplicate_path = TaskSelfCheckStore(root).record_observation(changed)
+    assert duplicate_path is None
+    assert unchanged == second
 
 
 def test_store_rejects_a_symlinked_root(tmp_path: Path) -> None:

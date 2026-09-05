@@ -409,6 +409,22 @@ def test_cli_no_command_requires_an_interactive_terminal(
     assert not configuration.exists()
 
 
+def test_cleanup_command_is_local_and_reports_no_orphaned_resources(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("SAT_STATE_ROOT", str(tmp_path / "state"))
+
+    assert main(["cleanup"]) == 0
+
+    output = capsys.readouterr().out
+    assert "Active: 0" in output
+    assert "Orphaned: 0" in output
+    assert "Stale leases: 0" in output
+    assert (tmp_path / "state/process-leases").is_dir()
+
+
 def test_cli_no_command_runs_the_guided_product_journey(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -451,6 +467,10 @@ def test_cli_no_command_runs_the_guided_product_journey(
         "sat_sandbox_resources": (
             "Existing SAT sandbox resources",
             "no SAT-owned OpenClaw sandbox containers",
+        ),
+        "sat_process_resources": (
+            "Existing SAT provider processes",
+            "no active, orphaned, or stale SAT provider processes",
         ),
         "launcher": ("sat launcher", "available on PATH"),
     }
@@ -592,7 +612,7 @@ def test_cli_no_command_runs_the_guided_product_journey(
     assert main([]) == 0
     assert update_calls == 1
     assert "previous_report" not in plan_check_arguments[0]
-    assert plan_check_arguments[1]["previous_report"] is plan_check_reports[0]
+    assert "previous_report" not in plan_check_arguments[1]
     assert order == [
         "update",
         "planning",
@@ -781,6 +801,8 @@ def test_product_planning_uses_one_bootstrap_agent_and_cleans_it(
     assert materialize["model"] == "provider/model"
     coordinator = observed["coordinator"]
     assert coordinator.store.root == state_paths.planning
+    assert coordinator.executor.process_lease_store is not None
+    assert coordinator.executor.process_lease_store.root == state_paths.process_leases
     assert coordinator.policy.max_concurrency == 4
     assert coordinator.policy.max_review_agents is None
     assert coordinator.policy.require_review_agent
@@ -1080,6 +1102,7 @@ def test_dynamic_product_launch_uses_approved_agents_and_manual_scope(
         workspaces_root=tmp_path / "workspaces",
         openclaw_binary=Path("/opt/openclaw"),
         openclaw_state_dir=tmp_path / "openclaw",
+        process_leases_root=tmp_path / "process-leases",
         sandbox_binary="docker",
         model="provider/model",
         input_cost_per_million_usd=None,
@@ -1175,6 +1198,7 @@ def test_dynamic_runtime_preflight_checks_every_approved_model_route(
         workspaces_root=tmp_path / "workspaces",
         openclaw_binary=Path("/opt/openclaw"),
         openclaw_state_dir=tmp_path / "openclaw",
+        process_leases_root=tmp_path / "process-leases",
         sandbox_binary="docker",
         model="provider/default",
         input_cost_per_million_usd=None,
@@ -1242,6 +1266,8 @@ def test_dynamic_runtime_preflight_checks_every_approved_model_route(
         options=options,
         team_plan=team_plan,
     )
+    assert boundary.executor.process_lease_store is not None
+    assert boundary.executor.process_lease_store.root == options.process_leases_root
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     run_directory = options.runs_root / "sat-routing-preflight"
@@ -2203,6 +2229,7 @@ def test_execute_workflow_cleans_run_sandboxes_after_interruption(
         workspaces_root=workspaces,
         openclaw_binary=Path("/opt/openclaw"),
         openclaw_state_dir=state,
+        process_leases_root=tmp_path / "process-leases",
         sandbox_binary="docker",
         model="provider/model",
         input_cost_per_million_usd=None,

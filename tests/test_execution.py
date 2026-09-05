@@ -30,6 +30,7 @@ from software_agent_team.execution import (
     stable_agent_session_key,
     stable_session_key,
 )
+from software_agent_team.process_lifecycle import ProcessLeaseStore
 from software_agent_team.teams import AgentCapability
 
 STARTED = datetime(2026, 8, 10, 12, 0, tzinfo=UTC)
@@ -362,6 +363,43 @@ def test_openclaw_adapter_captures_runtime_telemetry() -> None:
         reasoning_tokens=7,
         total_tokens=159,
     )
+
+
+def test_live_openclaw_process_acquires_and_releases_durable_ownership(
+    tmp_path: Path,
+) -> None:
+    binary = tmp_path / "fake-openclaw"
+    binary.write_text(
+        f"#!{sys.executable}\nimport json\nprint({openclaw_result()!r})\n",
+        encoding="utf-8",
+    )
+    binary.chmod(0o700)
+
+    class TrackingStore(ProcessLeaseStore):
+        acquired = 0
+        released = 0
+
+        def acquire(self, **kwargs):  # type: ignore[no-untyped-def]
+            lease = super().acquire(**kwargs)
+            self.acquired += 1
+            return lease
+
+        def release(self, lease):  # type: ignore[no-untyped-def]
+            super().release(lease)
+            self.released += 1
+
+    store = TrackingStore(tmp_path / "process-leases")
+    executor = OpenClawSubprocessExecutor(
+        openclaw_binary=binary,
+        process_lease_store=store,
+    )
+
+    result = executor.execute(request())
+
+    assert result.status is AgentExecutionStatus.COMPLETED
+    assert store.acquired == 1
+    assert store.released == 1
+    assert store.inspect().processes == ()
 
 
 def test_openclaw_adapter_ignores_reasoning_payload_for_artifact_text() -> None:

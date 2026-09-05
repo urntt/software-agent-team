@@ -10,6 +10,13 @@ from pathlib import Path
 import pytest
 
 import software_agent_team.product as product
+from software_agent_team.process_lifecycle import (
+    InvocationProcessLease,
+    ObservedInvocationProcess,
+    ProcessIdentity,
+    ProcessLeaseStatus,
+    ProcessResourceObservation,
+)
 from software_agent_team.product import (
     DiagnosticState,
     HostCapacitySnapshot,
@@ -267,6 +274,69 @@ def test_startup_reports_existing_owned_sandboxes_without_removing_them(
     assert diagnostics.ready
 
 
+def test_startup_blocks_on_proven_orphaned_provider_process(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    binary = tmp_path / "bin"
+    binary.write_text("#!/bin/sh\n", encoding="utf-8")
+    binary.chmod(0o755)
+    monkeypatch.setattr(product.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(product.platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(product.os, "getuid", lambda: 1000)
+    monkeypatch.setattr(product.os, "getgid", lambda: 1000)
+    monkeypatch.setattr(
+        product.shutil,
+        "disk_usage",
+        lambda _path: product.shutil._ntuple_diskusage(10, 1, 2**30),
+    )
+    identity = ProcessIdentity(pid=1234, process_group_id=1234, start_time_ticks=5)
+    process_resources = ProcessResourceObservation(
+        processes=(
+            ObservedInvocationProcess(
+                lease=InvocationProcessLease(
+                    lease_id="a" * 32,
+                    run_id="sat-orphaned",
+                    agent_id="builder",
+                    session_key="agent:builder:sat-orphaned-i1-work-result",
+                    owner=ProcessIdentity(
+                        pid=1200,
+                        process_group_id=1200,
+                        start_time_ticks=4,
+                    ),
+                    child=identity,
+                    command_sha256="b" * 64,
+                    created_at=datetime(2026, 9, 5, 12, 0, tzinfo=UTC),
+                ),
+                status=ProcessLeaseStatus.ORPHANED,
+            ),
+        )
+    )
+
+    diagnostics = inspect_startup_environment(
+        working_directory=tmp_path,
+        openclaw_binary=binary,
+        sandbox_image="sat-image:v1",
+        state_root=(tmp_path / "state").resolve(),
+        required_memory_mb=512,
+        required_pids=128,
+        command_finder=lambda _name: str(binary),
+        command_runner=lambda argv, _timeout: completed(argv),
+        environment={"PATH": str(tmp_path)},
+        host_capacity=ready_host_capacity(),
+        sandbox_resources=SandboxResourceObservation(containers=()),
+        process_resources=process_resources,
+    )
+
+    existing = next(
+        item for item in diagnostics.checks if item.id == "sat_process_resources"
+    )
+    assert existing.state is DiagnosticState.ACTION_REQUIRED
+    assert "builder:1234" in existing.detail
+    assert existing.action == "Run `sat cleanup --orphans`, then start this task again."
+    assert not diagnostics.ready
+
+
 def test_product_state_is_private_and_rejects_a_symlink(tmp_path: Path) -> None:
     paths = ProductStatePaths.below(tmp_path / "state")
 
@@ -281,6 +351,7 @@ def test_product_state_is_private_and_rejects_a_symlink(tmp_path: Path) -> None:
             paths.sources,
             paths.planning,
             paths.self_checks,
+            paths.process_leases,
             paths.openclaw,
         )
     )
@@ -293,6 +364,7 @@ def test_product_state_is_private_and_rejects_a_symlink(tmp_path: Path) -> None:
             paths.sources,
             paths.planning,
             paths.self_checks,
+            paths.process_leases,
             paths.openclaw,
         )
     )

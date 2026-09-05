@@ -73,6 +73,7 @@ def test_persisted_schema_scan_classifies_known_state_paths(tmp_path: Path) -> N
         state / "runs/run-1/iterations/01/iteration-record.json": 2,
         state / "planning/plan-1/request.json": 2,
         state / "self-checks/run-1/0001-task_admission.json": 1,
+        state / "process-leases/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json": 1,
     }
     for path, version in paths.items():
         write_schema(path, version)
@@ -96,6 +97,7 @@ def test_persisted_schema_scan_classifies_known_state_paths(tmp_path: Path) -> N
         SchemaFamily.ARTIFACT,
         SchemaFamily.PLANNING,
         SchemaFamily.SELF_CHECK,
+        SchemaFamily.PROCESS_LEASE,
     }
 
 
