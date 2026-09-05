@@ -98,6 +98,13 @@ may explicitly select `dev`, and only that channel accepts `SAT_INSTALL_REF`.
 The OpenClaw prefix is intentionally not configurable: accepting an arbitrary
 prefix would allow installation to mutate a pre-existing OpenClaw runtime.
 
+Rerunning the same one-command bootstrap is also the recovery path when an
+installed predecessor cannot complete its own updater. The freshly downloaded
+helper supplies the current transaction engine, but it still resolves and
+installs the requested immutable target and preserves the active installation
+until that target proves compatibility. Recovery never requires deleting a run
+lock, configuration, provider state, or prior release.
+
 If Docker, a download, or an offline check interrupts installation, correct the
 reported condition and rerun the same command. A lifecycle ownership marker
 makes that retry distinguish SAT staging from unrelated files. The current
@@ -453,14 +460,27 @@ no `--ref`, switching to the already active channel is a local no-op and
 
 Install, update, and channel switch use one transaction: validate lifecycle
 ownership, resolve an immutable target, show the current and target identities,
-obtain confirmation, hold the lifecycle lock, claim the immutable final release
-path before creating path-bound Python or OpenClaw runtime files, install and
-verify the complete application there, check every persisted schema family,
-and atomically replace the logical application link and installation record.
-Schema discovery recognizes the owner-bound, empty `runs/.lock` file as
-RunStore coordination metadata rather than a run. It still rejects unsafe lock
-shapes, unknown root entries, invalid run identities, and run directories
+obtain confirmation, hold the exclusive lifecycle lock, claim the immutable
+final release path before creating path-bound Python or OpenClaw runtime files,
+and install and verify the complete application there. The verified candidate,
+not the older active updater, then runs its versioned read-only compatibility
+entry point against every persisted schema family. The transaction engine
+requires one strict result bound to the candidate revision and the advertised
+complete schema registry. The candidate also interprets persisted run phases
+with its own lifecycle enum and reports every active run identity. Only then may
+the transaction engine atomically replace the logical application link and
+installation record. A missing, malformed, inconsistent, failed, mismatched, or
+active-run result stops activation.
+
+Candidate schema discovery recognizes the owner-bound, empty `runs/.lock` file
+as RunStore coordination metadata rather than a run. It still rejects unsafe
+lock shapes, unknown root entries, invalid run identities, and run directories
 without the required `run.json` instead of broadly ignoring non-schema files.
+Every managed bare `sat` holds the shared form of the same lifecycle lock from
+task entry through terminal cleanup. Activation therefore cannot pass an
+admitted task, a new task cannot enter during activation, and a process that
+loaded an inactive predecessor is told to rerun `sat` instead of continuing
+under mixed versions. Kernel process exit releases the lease after a crash.
 SAT then executes the final user-facing launcher; failure restores the prior
 link and record and removes only launchers created by that transaction. An
 active run, unsupported newer state, conflicting launcher, source drift, or

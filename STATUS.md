@@ -110,7 +110,7 @@ assessments in one pass and records removal of the five unapproved arrays. This
 proves the captured regression path offline, not a corrected provider journey;
 the issue remains open until a fresh run crosses Review without that call.
 
-Doctor, formatter, lint, and the complete **945-test offline suite** pass with
+Doctor, formatter, lint, and the complete **980-test offline suite** pass with
 diagnostic-v2 and slot-bound semantic correction v2, including the exact
 captured two-invariant Planning sequence, a three-call correction regression,
 collision-safe decision-token canonicalization, and multi-field Controller path
@@ -126,7 +126,16 @@ installation now claims the immutable final release path before creating the
 Python environment or isolated OpenClaw runtime, so path-bound entry points are
 never relocated after verification. Activation executes the final `sat`
 launcher and restores the prior link, installation record, and transaction-created
-launchers if that probe fails.
+launchers if that probe fails. Persisted-state activation is now evaluated by a
+versioned read-only entry point from the verified candidate rather than by the
+older active process. The same result uses the candidate lifecycle enum to
+report active run identities. The transaction engine cross-checks its revision
+and full schema registry before activation and fails closed on invalid output. Managed
+bare-product entry also holds a shared kernel lifecycle lease through terminal
+cleanup while activation requires the exclusive form; offline tests cover
+version-skew authority, incompatible and malformed results, stale loaded
+releases, active-task exclusion, rollback, and kernel release after a process
+crash. Recovery and concurrency still require a fresh managed-device journey.
 
 ## Phase 1 Result
 
@@ -1267,9 +1276,10 @@ The acceptance contract is
   `sat channel status`, and explicit `sat channel switch stable|dev`, all using
   one immutable target resolver and one staged activation transaction;
 - Managed lifecycle ownership for default and custom application paths,
-  exclusive install/update/uninstall locking, pre-activation persisted-schema
-  compatibility, active-run refusal, atomic application-link and install-record
-  rollback, source-checkout refusal, and v1 managed-layout migration;
+  shared foreground-task and exclusive activation locking, candidate-owned
+  pre-activation persisted-schema compatibility, active-run and stale-release
+  refusal, atomic application-link and install-record rollback, source-checkout
+  refusal, and v1 managed-layout migration;
 - Versioned managed uninstall that cross-checks the lifecycle root, active
   release, installation record, logical link, and recorded launchers before
   removing all retained application versions while preserving configuration,

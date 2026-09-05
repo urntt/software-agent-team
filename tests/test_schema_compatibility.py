@@ -13,9 +13,12 @@ from software_agent_team.artifacts import (
 )
 from software_agent_team.planning import PLANNING_SCHEMA_VERSION
 from software_agent_team.schema_compatibility import (
+    CANDIDATE_COMPATIBILITY_PROTOCOL_VERSION,
+    CandidateCompatibilityEnvelope,
     SchemaCompatibilityError,
     SchemaFamily,
     SchemaSupport,
+    inspect_candidate_persisted_state,
     inspect_persisted_schema_compatibility,
     schema_support_map,
     supported_schemas,
@@ -230,3 +233,83 @@ def test_persisted_schema_scan_rejects_unknown_or_incomplete_run_entries(
     )
     assert not report.compatible
     assert "not a regular file" in report.problems[0]
+
+
+def test_candidate_envelope_attributes_its_complete_compatibility_result(
+    tmp_path: Path,
+) -> None:
+    runs = tmp_path / "state/runs"
+    runs.mkdir(parents=True)
+    (runs / ".unexpected").write_text("unknown\n", encoding="utf-8")
+
+    envelope = inspect_candidate_persisted_state(
+        source_revision="a" * 40,
+        configuration_path=tmp_path / "missing-config.json",
+        installation_record_path=tmp_path / "missing-installation.json",
+        state_root=tmp_path / "state",
+    )
+
+    assert envelope.protocol_version == CANDIDATE_COMPATIBILITY_PROTOCOL_VERSION
+    assert envelope.source_revision == "a" * 40
+    assert len(envelope.schema_support) == len(SchemaFamily)
+    assert not envelope.compatibility.compatible
+    assert "not a real directory" in envelope.compatibility.problems[0]
+
+
+def test_candidate_envelope_rejects_incomplete_or_unattributed_results() -> None:
+    payload = inspect_candidate_persisted_state(
+        source_revision="a" * 40,
+        configuration_path=Path("/missing-config.json"),
+        installation_record_path=Path("/missing-installation.json"),
+        state_root=Path("/missing-state"),
+    ).model_dump(mode="json")
+
+    payload["source_revision"] = "short"
+    with pytest.raises(ValueError, match="source revision"):
+        CandidateCompatibilityEnvelope.model_validate(payload)
+
+    payload["source_revision"] = "a" * 40
+    payload["schema_support"] = payload["schema_support"][:-1]
+    with pytest.raises(ValueError, match="every family"):
+        CandidateCompatibilityEnvelope.model_validate(payload)
+
+
+def test_candidate_not_the_active_updater_interprets_run_liveness(
+    tmp_path: Path,
+) -> None:
+    active = tmp_path / "state/runs/active/run.json"
+    terminal = tmp_path / "state/runs/terminal/run.json"
+    write_schema(active, 6)
+    write_schema(terminal, 6)
+    for path, phase in ((active, "reviewing"), (terminal, "failed")):
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["phase"] = phase
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+    envelope = inspect_candidate_persisted_state(
+        source_revision="a" * 40,
+        configuration_path=tmp_path / "missing-config.json",
+        installation_record_path=tmp_path / "missing-installation.json",
+        state_root=tmp_path / "state",
+    )
+
+    assert envelope.compatibility.compatible
+    assert envelope.active_run_ids == ("active",)
+
+
+def test_candidate_fails_closed_when_run_liveness_cannot_be_interpreted(
+    tmp_path: Path,
+) -> None:
+    run = tmp_path / "state/runs/run-1/run.json"
+    write_schema(run, 6)
+
+    envelope = inspect_candidate_persisted_state(
+        source_revision="a" * 40,
+        configuration_path=tmp_path / "missing-config.json",
+        installation_record_path=tmp_path / "missing-installation.json",
+        state_root=tmp_path / "state",
+    )
+
+    assert not envelope.compatibility.compatible
+    assert envelope.active_run_ids == ()
+    assert "phase is invalid" in envelope.compatibility.problems[0]

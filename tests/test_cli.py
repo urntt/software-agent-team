@@ -190,6 +190,71 @@ def test_cli_version_commands_are_local_and_machine_readable(
     assert payload["identity_status"] == "partial"
 
 
+def test_candidate_compatibility_command_emits_only_attributed_json(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    version = software_version_report(REPOSITORY_ROOT)
+    monkeypatch.setattr(cli, "inspect_software_version", lambda **_kwargs: version)
+
+    assert (
+        main(
+            [
+                "_managed-state-compatibility",
+                "--expected-source-revision",
+                "a" * 40,
+                "--configuration-path",
+                str(tmp_path / "config/config.json"),
+                "--installation-record-path",
+                str(tmp_path / "data/installation.json"),
+                "--state-root",
+                str(tmp_path / "state"),
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["protocol_version"] == 1
+    assert payload["source_revision"] == "a" * 40
+    assert payload["active_run_ids"] == []
+    assert payload["compatibility"] == {
+        "compatible": True,
+        "observations": [],
+        "problems": [],
+    }
+    assert len(payload["schema_support"]) == len(supported_schemas())
+
+
+def test_candidate_compatibility_command_rejects_revision_mismatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    version = software_version_report(REPOSITORY_ROOT)
+    monkeypatch.setattr(cli, "inspect_software_version", lambda **_kwargs: version)
+
+    assert (
+        main(
+            [
+                "_managed-state-compatibility",
+                "--expected-source-revision",
+                "b" * 40,
+                "--configuration-path",
+                str(tmp_path / "config/config.json"),
+                "--installation-record-path",
+                str(tmp_path / "data/installation.json"),
+                "--state-root",
+                str(tmp_path / "state"),
+            ]
+        )
+        == 1
+    )
+    assert "does not match the expected immutable source revision" in (
+        capsys.readouterr().out
+    )
+
+
 def managed_cli_fixture(tmp_path: Path):
     paths = ManagedInstallPaths(
         managed_root=tmp_path / "managed",

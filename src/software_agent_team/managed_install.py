@@ -26,8 +26,8 @@ from software_agent_team.releases import (
     git_archive_digest,
 )
 from software_agent_team.schema_compatibility import (
+    CandidateCompatibilityEnvelope,
     SchemaSupport,
-    inspect_persisted_schema_compatibility,
 )
 from software_agent_team.user_configuration import user_configuration_path
 from software_agent_team.versioning import (
@@ -48,6 +48,8 @@ INSTALL_ROOT_ENVIRONMENT_VARIABLE = "SAT_INSTALL_ROOT"
 BIN_DIRECTORY_ENVIRONMENT_VARIABLE = "SAT_BIN_DIR"
 LATEST_RELEASE_API_ENVIRONMENT_VARIABLE = "SAT_RELEASE_API_URL"
 DEFAULT_MANAGED_DIRECTORY_NAME = "software-agent-team"
+CANDIDATE_COMPATIBILITY_TIMEOUT_SECONDS = 30
+MAX_CANDIDATE_COMPATIBILITY_OUTPUT_BYTES = 16 * 1024 * 1024
 _SOURCE_REF_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$")
 _SOURCE_REVISION_PATTERN = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
 
@@ -570,6 +572,62 @@ def install_managed_target(
             raise
 
 
+@contextmanager
+def managed_foreground_task_lease(project_root: Path):
+    """Keep one active managed release fixed for a complete foreground task."""
+
+    root = project_root.resolve(strict=True)
+    release_marker_path = root / MANAGED_MARKER_NAME
+    if not release_marker_path.exists() and not release_marker_path.is_symlink():
+        yield
+        return
+    release_marker = load_managed_marker(release_marker_path)
+    application_link = Path(release_marker.application_link)
+    root_candidates = (
+        application_link.parent,
+        application_link.parent / f".{application_link.name}.sat-managed",
+    )
+    roots: list[tuple[Path, ManagedRootMarker]] = []
+    for candidate in root_candidates:
+        marker_path = candidate / MANAGED_ROOT_MARKER_NAME
+        if not marker_path.exists() and not marker_path.is_symlink():
+            continue
+        marker = load_managed_root_marker(marker_path)
+        if (
+            Path(marker.managed_root) == candidate
+            and Path(marker.application_link) == application_link
+        ):
+            roots.append((candidate, marker))
+    if len(roots) != 1:
+        raise ManagedInstallError(
+            "managed release does not resolve to one owned lifecycle root"
+        )
+    managed_root, root_marker = roots[0]
+    versions_root = Path(root_marker.versions_root).resolve(strict=True)
+    if root.parent != versions_root:
+        raise ManagedInstallError(
+            "managed release is not a direct entry in its versions root"
+        )
+    lock_path = managed_root / "update.lock"
+    with _lifecycle_file_lock(lock_path, shared=True):
+        current_marker = load_managed_marker(release_marker_path)
+        if current_marker != release_marker:
+            raise ManagedInstallError(
+                "managed application identity changed before task admission"
+            )
+        try:
+            active_root = application_link.resolve(strict=True)
+        except OSError as error:
+            raise ManagedInstallError(
+                "managed application changed before task admission; rerun sat"
+            ) from error
+        if active_root != root:
+            raise ManagedInstallError(
+                "managed application changed before task admission; rerun sat"
+            )
+        yield
+
+
 def _activate_staged_application_locked(
     staged: StagedApplication,
     paths: ManagedInstallPaths,
@@ -581,18 +639,29 @@ def _activate_staged_application_locked(
     _validate_staged_application(staged.path, staged.marker)
     if Path(staged.marker.application_link) != paths.application_link:
         raise ManagedInstallError("staged application targets a different active link")
-    _assert_no_active_runs(paths.state_root)
-    compatibility = inspect_persisted_schema_compatibility(
-        configuration_path=paths.configuration_path,
-        installation_record_path=paths.installation_record,
-        state_root=paths.state_root,
-        candidate_support=staged.schema_support,
-    )
+    envelope = _inspect_state_with_candidate(staged, paths)
+    if envelope.source_revision != staged.marker.source_revision:
+        raise ManagedInstallError(
+            "candidate compatibility result has a different source revision"
+        )
+    if _schema_support_identity(envelope.schema_support) != _schema_support_identity(
+        staged.schema_support
+    ):
+        raise ManagedInstallError(
+            "candidate compatibility result differs from advertised schema support"
+        )
+    compatibility = envelope.compatibility
     if not compatibility.compatible:
         raise ManagedInstallError(
             "candidate cannot read current persisted state: "
             + "; ".join(compatibility.problems)
         )
+    if envelope.active_run_ids:
+        raise ManagedInstallError(
+            "managed application cannot change while a run is active: "
+            + ", ".join(envelope.active_run_ids)
+        )
+    _validate_staged_application(staged.path, staged.marker)
     previous_record = _read_optional_bytes(paths.installation_record)
     previous_target = _prepare_active_link(paths)
     final_path = _final_release_path(paths, staged.marker)
@@ -651,6 +720,77 @@ def load_managed_marker(path: Path) -> ManagedApplicationMarker:
         raise ManagedInstallError(
             f"managed application marker is invalid: {path}"
         ) from error
+
+
+def _inspect_state_with_candidate(
+    staged: StagedApplication,
+    paths: ManagedInstallPaths,
+) -> CandidateCompatibilityEnvelope:
+    """Run the verified candidate's read-only compatibility implementation."""
+
+    command = (
+        str(staged.path / ".venv/bin/sat"),
+        "_managed-state-compatibility",
+        "--expected-source-revision",
+        staged.marker.source_revision,
+        "--configuration-path",
+        str(paths.configuration_path),
+        "--installation-record-path",
+        str(paths.installation_record),
+        "--state-root",
+        str(paths.state_root),
+    )
+    environment = {
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "HOME": "/nonexistent",
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "PATH": "/usr/bin:/bin",
+    }
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=staged.path,
+            env=environment,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=CANDIDATE_COMPATIBILITY_TIMEOUT_SECONDS,
+        )
+        if len(completed.stdout.encode()) > MAX_CANDIDATE_COMPATIBILITY_OUTPUT_BYTES:
+            raise ManagedInstallError(
+                "candidate compatibility result exceeds the output safety limit"
+            )
+        return CandidateCompatibilityEnvelope.model_validate_json(completed.stdout)
+    except ManagedInstallError:
+        raise
+    except (
+        OSError,
+        UnicodeError,
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        ValueError,
+    ) as error:
+        raise ManagedInstallError(
+            "verified candidate did not produce a valid state compatibility result"
+        ) from error
+
+
+def _schema_support_identity(
+    support: Sequence[SchemaSupport],
+) -> tuple[tuple[str, int, int, int], ...]:
+    return tuple(
+        sorted(
+            (
+                item.family.value,
+                item.current,
+                item.minimum_readable,
+                item.maximum_readable,
+            )
+            for item in support
+        )
+    )
 
 
 def load_managed_root_marker(path: Path) -> ManagedRootMarker:
@@ -1041,51 +1181,35 @@ def _validate_active_application(paths: ManagedInstallPaths) -> None:
     _capture_command((str(launcher), "--version"))
 
 
-def _assert_no_active_runs(state_root: Path) -> None:
-    runs = state_root / "runs"
-    if not runs.exists():
-        return
-    if runs.is_symlink() or not runs.is_dir():
-        raise ManagedInstallError("run state root is not a real directory")
-    active: list[Path] = []
-    for path in sorted(runs.glob("*/run.json")):
-        if path.is_symlink() or not path.is_file():
-            raise ManagedInstallError(f"run state is not a regular file: {path}")
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            phase = payload["phase"]
-        except (OSError, KeyError, json.JSONDecodeError, TypeError) as error:
-            raise ManagedInstallError(
-                f"run state cannot be verified: {path}"
-            ) from error
-        if phase not in {"completed", "failed"}:
-            active.append(path)
-    if active:
-        raise ManagedInstallError(
-            "managed application cannot change while a run is active: "
-            + ", ".join(str(path.parent.name) for path in active)
-        )
-
-
 @contextmanager
 def _exclusive_update_lock(paths: ManagedInstallPaths):
     _require_managed_root(paths)
-    paths.lock.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    _require_real_directory(paths.lock.parent, "managed application root")
-    if paths.lock.is_symlink() or (paths.lock.exists() and not paths.lock.is_file()):
-        raise ManagedInstallError("managed update lock must be a regular file")
+    with _lifecycle_file_lock(paths.lock, shared=False):
+        yield
+
+
+@contextmanager
+def _lifecycle_file_lock(path: Path, *, shared: bool):
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    _require_real_directory(path.parent, "managed application root")
+    if path.is_symlink() or (path.exists() and not path.is_file()):
+        raise ManagedInstallError("managed lifecycle lock must be a regular file")
     descriptor = os.open(
-        paths.lock,
+        path,
         os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
         0o600,
     )
     try:
         try:
-            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            operation = fcntl.LOCK_SH if shared else fcntl.LOCK_EX
+            fcntl.flock(descriptor, operation | fcntl.LOCK_NB)
         except BlockingIOError as error:
-            raise ManagedInstallError(
-                "another managed install or update is active"
-            ) from error
+            message = (
+                "a managed install or update is active; rerun sat when it finishes"
+                if shared
+                else "a SAT task, managed install, or update is active"
+            )
+            raise ManagedInstallError(message) from error
         yield
     finally:
         os.close(descriptor)

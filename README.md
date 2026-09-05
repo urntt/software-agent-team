@@ -48,6 +48,11 @@ normal installation resolves the latest published stable release and binds it
 to an exact source revision and artifact digest; it does not install a moving
 `main` checkout as stable.
 
+The command is safe to rerun for an owned installation. It stages and verifies
+the requested target before activation, preserves the prior version on failure,
+and can refresh an outdated update engine without asking the user to delete
+configuration or run state.
+
 If no stable release has been published yet, the command stops without
 installing `main` and explains that the stable channel is unavailable. A
 developer may explicitly choose the separate dev channel as documented in the

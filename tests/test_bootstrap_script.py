@@ -174,6 +174,29 @@ def test_bootstrap_propagates_failure_and_is_idempotently_retryable(
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="bootstrap supports Linux/WSL")
+def test_bootstrap_recovery_uses_fresh_helper_not_installed_predecessor(
+    tmp_path: Path,
+) -> None:
+    source = prepare_helper_repository(tmp_path)
+    environment, _ = fake_environment(tmp_path, source)
+    stale_bin = Path(environment["HOME"]) / ".local/bin"
+    stale_bin.mkdir(parents=True)
+    stale_call = tmp_path / "stale-sat-called"
+    write_executable(
+        stale_bin / "sat",
+        f"#!/usr/bin/env bash\ntouch {stale_call}\nexit 91\n",
+    )
+    environment["PATH"] = f"{stale_bin}:{environment['PATH']}"
+
+    completed = run_bootstrap(environment)
+
+    assert completed.returncode == 0, completed.stderr
+    assert not stale_call.exists()
+    call = (tmp_path / "install.log").read_text(encoding="utf-8")
+    assert "_managed-install --channel stable" in call
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="bootstrap supports Linux/WSL")
 @pytest.mark.parametrize(
     ("variable", "value", "message"),
     [

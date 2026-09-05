@@ -8,12 +8,15 @@ import re
 import stat
 from enum import StrEnum
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 MAX_SCHEMA_FILE_BYTES = 16 * 1024 * 1024
 MAX_SCHEMA_FILES = 100_000
 RUN_STATE_ENTRY_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+SOURCE_REVISION_PATTERN = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
+CANDIDATE_COMPATIBILITY_PROTOCOL_VERSION = 1
 
 
 class SchemaFamily(StrEnum):
@@ -73,6 +76,54 @@ class PersistedSchemaCompatibilityReport(BaseModel):
     compatible: bool
     observations: tuple[PersistedSchemaObservation, ...]
     problems: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def require_consistent_result(self) -> PersistedSchemaCompatibilityReport:
+        expected = not self.problems and all(
+            observation.supported for observation in self.observations
+        )
+        if self.compatible != expected:
+            raise ValueError("persisted schema compatibility result is inconsistent")
+        return self
+
+
+class CandidateCompatibilityEnvelope(BaseModel):
+    """Versioned result produced by the staged candidate itself."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    protocol_version: Literal[CANDIDATE_COMPATIBILITY_PROTOCOL_VERSION] = (
+        CANDIDATE_COMPATIBILITY_PROTOCOL_VERSION
+    )
+    source_revision: str
+    schema_support: tuple[SchemaSupport, ...]
+    compatibility: PersistedSchemaCompatibilityReport
+    active_run_ids: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def require_complete_attributed_registry(self) -> CandidateCompatibilityEnvelope:
+        if SOURCE_REVISION_PATTERN.fullmatch(self.source_revision) is None:
+            raise ValueError("candidate source revision is invalid")
+        families = tuple(item.family for item in self.schema_support)
+        if len(set(families)) != len(families) or set(families) != set(SchemaFamily):
+            raise ValueError(
+                "candidate schema support must contain every family exactly once"
+            )
+        support = {item.family: item for item in self.schema_support}
+        if any(
+            observation.supported
+            != support[observation.family].supports(observation.version)
+            for observation in self.compatibility.observations
+        ):
+            raise ValueError(
+                "candidate compatibility observations disagree with schema support"
+            )
+        if tuple(sorted(set(self.active_run_ids))) != self.active_run_ids or any(
+            RUN_STATE_ENTRY_PATTERN.fullmatch(run_id) is None
+            for run_id in self.active_run_ids
+        ):
+            raise ValueError("candidate active run identities are invalid")
+        return self
 
 
 class SchemaCompatibilityError(RuntimeError):
@@ -223,6 +274,71 @@ def inspect_persisted_schema_compatibility(
     )
 
 
+def inspect_candidate_persisted_state(
+    *,
+    source_revision: str,
+    configuration_path: Path,
+    installation_record_path: Path,
+    state_root: Path,
+) -> CandidateCompatibilityEnvelope:
+    """Inspect persisted state with the candidate's own schema implementation."""
+
+    support = supported_schemas()
+    active_run_ids: tuple[str, ...] = ()
+    try:
+        compatibility = inspect_persisted_schema_compatibility(
+            configuration_path=configuration_path,
+            installation_record_path=installation_record_path,
+            state_root=state_root,
+            candidate_support=support,
+        )
+    except SchemaCompatibilityError as error:
+        compatibility = PersistedSchemaCompatibilityReport(
+            compatible=False,
+            observations=(),
+            problems=(str(error),),
+        )
+    if compatibility.compatible:
+        try:
+            active_run_ids = _active_persisted_run_ids(state_root)
+        except SchemaCompatibilityError as error:
+            compatibility = PersistedSchemaCompatibilityReport(
+                compatible=False,
+                observations=compatibility.observations,
+                problems=(str(error),),
+            )
+    return CandidateCompatibilityEnvelope(
+        source_revision=source_revision,
+        schema_support=support,
+        compatibility=compatibility,
+        active_run_ids=active_run_ids,
+    )
+
+
+def _active_persisted_run_ids(state_root: Path) -> tuple[str, ...]:
+    """Interpret run liveness with the candidate's own lifecycle enum."""
+
+    from software_agent_team.run_control import RunPhase
+
+    runs = state_root / "runs"
+    if not runs.exists():
+        return ()
+    active: list[str] = []
+    for run in sorted(runs.iterdir()):
+        if run.name == ".lock":
+            continue
+        payload = _read_schema_object(run / "run.json")
+        try:
+            phase = RunPhase(payload.get("phase"))
+        except (TypeError, ValueError) as error:
+            raise SchemaCompatibilityError(
+                f"run state phase is invalid: {run / 'run.json'}"
+            ) from error
+        if not phase.is_terminal:
+            active.append(run.name)
+    return tuple(active)
+
+
 def _persisted_schema_paths(
     *,
     configuration_path: Path,
@@ -325,6 +441,14 @@ def _append_if_present(
 
 
 def _read_schema_version(path: Path) -> int:
+    payload = _read_schema_object(path)
+    version = payload.get("schema_version")
+    if isinstance(version, bool) or not isinstance(version, int) or version < 1:
+        raise SchemaCompatibilityError(f"persisted schema version is invalid: {path}")
+    return version
+
+
+def _read_schema_object(path: Path) -> dict[str, object]:
     if path.is_symlink() or not path.is_file():
         raise SchemaCompatibilityError(
             f"persisted schema is not a regular file: {path}"
@@ -345,10 +469,7 @@ def _read_schema_version(path: Path) -> int:
         ) from error
     if not isinstance(payload, dict):
         raise SchemaCompatibilityError(f"persisted schema is not a JSON object: {path}")
-    version = payload.get("schema_version")
-    if isinstance(version, bool) or not isinstance(version, int) or version < 1:
-        raise SchemaCompatibilityError(f"persisted schema version is invalid: {path}")
-    return version
+    return payload
 
 
 def _require_real_directory(path: Path, label: str) -> None:

@@ -47,6 +47,7 @@ from software_agent_team.git_workspace import GitWorkspace, GitWorkspaceManager
 from software_agent_team.managed_install import (
     ManagedInstallPaths,
     install_managed_target,
+    managed_foreground_task_lease,
     resolve_dev_target,
     target_from_stable_release,
 )
@@ -116,8 +117,10 @@ from software_agent_team.sandbox_lifecycle import (
     cleanup_sat_sandbox_sessions,
 )
 from software_agent_team.schema_compatibility import (
+    CandidateCompatibilityEnvelope,
     PersistedSchemaCompatibilityReport,
     SchemaCompatibilityError,
+    inspect_candidate_persisted_state,
     inspect_persisted_schema_compatibility,
 )
 from software_agent_team.self_check import (
@@ -155,6 +158,7 @@ from software_agent_team.user_configuration import (
     user_configuration_path,
 )
 from software_agent_team.versioning import (
+    IdentityStatus,
     ManagedChannel,
     SoftwareVersionReport,
     inspect_software_version,
@@ -1226,6 +1230,43 @@ def _bootstrap_managed_install(args: argparse.Namespace) -> int:
         f"{installed.channel.value} {installed.release_version} "
         f"g{installed.source_revision[:12]}"
     )
+    return 0
+
+
+def _inspect_candidate_managed_state(args: argparse.Namespace) -> int:
+    """Emit the staged candidate's own persisted-state compatibility result."""
+
+    paths = {
+        "configuration": args.configuration_path,
+        "installation record": args.installation_record_path,
+        "state root": args.state_root,
+    }
+    for label, path in paths.items():
+        if (
+            not path.is_absolute()
+            or path == Path(path.anchor)
+            or Path(os.path.normpath(path)) != path
+        ):
+            raise ValueError(f"candidate {label} path must be specific and absolute")
+    version = inspect_software_version(
+        project_root=PROJECT_ROOT,
+        environment={"SAT_INSTALL_METADATA_PATH": str(args.installation_record_path)},
+    )
+    if (
+        version.source_revision != args.expected_source_revision
+        or version.dirty is not False
+        or version.identity_status is not IdentityStatus.VERIFIED
+    ):
+        raise ValueError(
+            "candidate runtime does not match the expected immutable source revision"
+        )
+    envelope: CandidateCompatibilityEnvelope = inspect_candidate_persisted_state(
+        source_revision=args.expected_source_revision,
+        configuration_path=args.configuration_path,
+        installation_record_path=args.installation_record_path,
+        state_root=args.state_root,
+    )
+    print(envelope.model_dump_json())
     return 0
 
 
@@ -3199,6 +3240,24 @@ def build_parser() -> argparse.ArgumentParser:
     )
     managed_bootstrap.set_defaults(handler=_bootstrap_managed_install)
 
+    candidate_compatibility = commands.add_parser(
+        "_managed-state-compatibility",
+        help=argparse.SUPPRESS,
+    )
+    candidate_compatibility.add_argument("--expected-source-revision", required=True)
+    candidate_compatibility.add_argument(
+        "--configuration-path",
+        required=True,
+        type=Path,
+    )
+    candidate_compatibility.add_argument(
+        "--installation-record-path",
+        required=True,
+        type=Path,
+    )
+    candidate_compatibility.add_argument("--state-root", required=True, type=Path)
+    candidate_compatibility.set_defaults(handler=_inspect_candidate_managed_state)
+
     configure = commands.add_parser(
         "configure",
         help="Create or replace secret-free model and advanced run defaults.",
@@ -3476,7 +3535,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(render_short_version(_software_version_report()))
             return 0
         if args.command is None:
-            return _run_product()
+            with managed_foreground_task_lease(PROJECT_ROOT):
+                return _run_product()
         return args.handler(args)
     except KeyboardInterrupt:
         print("\nBuild interrupted. SAT did not claim a successful delivery.")

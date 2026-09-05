@@ -6,11 +6,13 @@ import fcntl
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 import software_agent_team.managed_install as managed_install_module
+import software_agent_team.schema_compatibility as schema_compatibility_module
 from software_agent_team.managed_install import (
     MANAGED_ROOT_MARKER_NAME,
     ManagedInstallError,
@@ -19,6 +21,7 @@ from software_agent_team.managed_install import (
     ManagedTarget,
     activate_staged_application,
     install_managed_target,
+    managed_foreground_task_lease,
     resolve_dev_target,
     stage_managed_target,
 )
@@ -50,18 +53,68 @@ def prepare_repository(tmp_path: Path, *, version: str = "0.1.0") -> tuple[Path,
     )
     installer = repository / "scripts/install.sh"
     installer.write_text(
-        """#!/usr/bin/env bash
+        f"""#!/usr/bin/env bash
 set -euo pipefail
-[[ "${SAT_MANAGED_INSTALL:-}" == "1" ]]
-[[ "${SAT_INSTALL_STAGE_ONLY:-}" == "1" ]]
+[[ "${{SAT_MANAGED_INSTALL:-}}" == "1" ]]
+[[ "${{SAT_INSTALL_STAGE_ONLY:-}}" == "1" ]]
 mkdir -p .venv/bin
-printf '%s\n' '#!/usr/bin/env bash' 'exec /usr/bin/env bash "$@"' > .venv/bin/python
-printf '#!%s/.venv/bin/python\nexit 0\n' "$PWD" > .venv/bin/sat
+printf '%s\n' '#!/usr/bin/env bash' 'exec {sys.executable} "$@"' > .venv/bin/python
+printf '#!%s/.venv/bin/python\n' "$PWD" > .venv/bin/sat
+tail -n +3 scripts/fake-sat.py >> .venv/bin/sat
 chmod 755 .venv/bin/python .venv/bin/sat
 """,
         encoding="utf-8",
     )
     installer.chmod(0o755)
+    (repository / "scripts/fake-sat.py").write_text(
+        f"""#!{sys.executable}
+# Test-only staged application used to exercise the candidate protocol.
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+sys.path.insert(0, {str(Path(__file__).parents[1] / "src")!r})
+
+from software_agent_team.schema_compatibility import (
+    inspect_candidate_persisted_state,
+    supported_schemas,
+)
+
+
+def main() -> int:
+    if sys.argv[1:] == ["version", "--json"]:
+        print(json.dumps({{
+            "schema_support": [
+                item.model_dump(mode="json") for item in supported_schemas()
+            ]
+        }}))
+        return 0
+    if sys.argv[1:2] != ["_managed-state-compatibility"]:
+        return 0
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--expected-source-revision", required=True)
+    parser.add_argument("--configuration-path", required=True, type=Path)
+    parser.add_argument("--installation-record-path", required=True, type=Path)
+    parser.add_argument("--state-root", required=True, type=Path)
+    args = parser.parse_args(sys.argv[2:])
+    envelope = inspect_candidate_persisted_state(
+        source_revision=args.expected_source_revision,
+        configuration_path=args.configuration_path,
+        installation_record_path=args.installation_record_path,
+        state_root=args.state_root,
+    )
+    print(envelope.model_dump_json())
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+""",
+        encoding="utf-8",
+    )
     uninstaller = repository / "scripts/uninstall.sh"
     uninstaller.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
     uninstaller.chmod(0o755)
@@ -445,7 +498,10 @@ def test_active_run_blocks_activation_before_the_link_changes(tmp_path: Path) ->
     )
     run_state = install_paths.state_root / "runs/active/run.json"
     run_state.parent.mkdir(parents=True)
-    run_state.write_text(json.dumps({"phase": "implementing"}), encoding="utf-8")
+    run_state.write_text(
+        json.dumps({"schema_version": 6, "phase": "implementing"}),
+        encoding="utf-8",
+    )
 
     with pytest.raises(ManagedInstallError, match="while a run is active"):
         activate_staged_application(staged, install_paths)
@@ -582,6 +638,158 @@ def test_active_terminal_run_does_not_block_activation(tmp_path: Path) -> None:
     assert record.source_revision == revision
     assert install_paths.application_link.is_symlink()
     assert run_lock.is_file()
+
+
+def test_candidate_not_current_process_owns_persisted_schema_interpretation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository, revision = prepare_repository(tmp_path)
+    install_paths = paths(tmp_path)
+    run_state = install_paths.state_root / "runs/done/run.json"
+    run_state.parent.mkdir(parents=True)
+    run_state.write_text(
+        json.dumps({"schema_version": 6, "phase": "completed"}),
+        encoding="utf-8",
+    )
+
+    def reject_from_current_process(**_kwargs: object) -> None:
+        raise AssertionError("the current process must not interpret candidate state")
+
+    monkeypatch.setattr(
+        schema_compatibility_module,
+        "inspect_persisted_schema_compatibility",
+        reject_from_current_process,
+    )
+
+    record = install_managed_target(
+        dev_target(repository, revision),
+        install_paths,
+    )
+
+    assert record.source_revision == revision
+
+
+def test_invalid_candidate_compatibility_result_preserves_active_release(
+    tmp_path: Path,
+) -> None:
+    repository, first_revision = prepare_repository(tmp_path)
+    install_paths = paths(tmp_path)
+    first_record = install_managed_target(
+        dev_target(repository, first_revision),
+        install_paths,
+    )
+    first_release = install_paths.application_link.resolve(strict=True)
+    candidate_helper = repository / "scripts/fake-sat.py"
+    content = candidate_helper.read_text(encoding="utf-8")
+    candidate_helper.write_text(
+        content.replace(
+            "print(envelope.model_dump_json())",
+            'print("not-json")',
+        ),
+        encoding="utf-8",
+    )
+    git(repository, "add", ".")
+    git(repository, "commit", "-m", "test: corrupt candidate response")
+    bad_revision = git(repository, "rev-parse", "HEAD")
+
+    with pytest.raises(ManagedInstallError, match="valid state compatibility"):
+        install_managed_target(
+            dev_target(repository, bad_revision),
+            install_paths,
+        )
+
+    assert install_paths.application_link.resolve(strict=True) == first_release
+    assert load_installation_record(install_paths.installation_record) == first_record
+    assert not (install_paths.versions_root / f"0.1.0-g{bad_revision[:12]}").exists()
+
+
+def test_foreground_task_lease_blocks_activation_until_task_exit(
+    tmp_path: Path,
+) -> None:
+    repository, first_revision = prepare_repository(tmp_path)
+    install_paths = paths(tmp_path)
+    first_record = install_managed_target(
+        dev_target(repository, first_revision),
+        install_paths,
+    )
+    active = install_paths.application_link.resolve(strict=True)
+    (repository / "change.txt").write_text("second\n", encoding="utf-8")
+    git(repository, "add", ".")
+    git(repository, "commit", "-m", "test: add second managed revision")
+    second_revision = git(repository, "rev-parse", "HEAD")
+
+    with managed_foreground_task_lease(active):
+        with pytest.raises(ManagedInstallError, match="SAT task"):
+            install_managed_target(
+                dev_target(repository, second_revision),
+                install_paths,
+            )
+        assert (
+            load_installation_record(install_paths.installation_record) == first_record
+        )
+
+    second_record = install_managed_target(
+        dev_target(repository, second_revision),
+        install_paths,
+    )
+    assert second_record.source_revision == second_revision
+
+
+def test_stale_loaded_release_refuses_new_task_after_activation(
+    tmp_path: Path,
+) -> None:
+    repository, first_revision = prepare_repository(tmp_path)
+    install_paths = paths(tmp_path)
+    install_managed_target(dev_target(repository, first_revision), install_paths)
+    first_release = install_paths.application_link.resolve(strict=True)
+    (repository / "change.txt").write_text("second\n", encoding="utf-8")
+    git(repository, "add", ".")
+    git(repository, "commit", "-m", "test: add replacement revision")
+    second_revision = git(repository, "rev-parse", "HEAD")
+    install_managed_target(dev_target(repository, second_revision), install_paths)
+
+    with (
+        pytest.raises(ManagedInstallError, match="changed before task admission"),
+        managed_foreground_task_lease(first_release),
+    ):
+        pytest.fail("a stale loaded release must not enter the product flow")
+
+
+def test_foreground_task_lease_is_released_by_kernel_after_process_crash(
+    tmp_path: Path,
+) -> None:
+    repository, revision = prepare_repository(tmp_path)
+    install_paths = paths(tmp_path)
+    install_managed_target(dev_target(repository, revision), install_paths)
+    active = install_paths.application_link.resolve(strict=True)
+    program = """
+import os
+import sys
+from pathlib import Path
+from software_agent_team.managed_install import managed_foreground_task_lease
+
+with managed_foreground_task_lease(Path(sys.argv[1])):
+    print("lease-acquired", flush=True)
+    os._exit(23)
+"""
+
+    completed = subprocess.run(
+        [sys.executable, "-c", program, str(active)],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert completed.returncode == 23
+    assert completed.stdout == "lease-acquired\n"
+    descriptor = os.open(install_paths.lock, os.O_RDWR)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+    finally:
+        os.close(descriptor)
 
 
 def test_unsupported_persisted_schema_blocks_before_activation(tmp_path: Path) -> None:
