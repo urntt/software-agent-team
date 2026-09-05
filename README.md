@@ -127,8 +127,9 @@ terminal and never delivers partial work.
 
 ## Configure a Model
 
-The first `sat` launch includes guided setup. You can repeat setup or inspect
-SAT's non-secret settings later:
+The first `sat` launch includes guided setup. Later launches recheck the exact
+saved profile and continue without repeating setup when it is ready. You can
+explicitly repeat setup or inspect SAT's non-secret settings with:
 
 ```bash
 sat configure

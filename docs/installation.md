@@ -266,7 +266,7 @@ SAT configuration is stored atomically with mode `0600` at:
 ${XDG_CONFIG_HOME:-$HOME/.config}/software-agent-team/config.json
 ```
 
-Schema version 7 stores one or more secret-free model profiles, the default
+Schema version 8 stores one or more secret-free model profiles, the default
 bootstrap profile, strict or policy routing, optional capability and stage
 overrides, and the only currently supported runtime switch condition:
 `provider_failure`. A profile contains a canonical OpenClaw `provider/model`,
@@ -280,8 +280,8 @@ unknown price as zero. It never contains a credential.
 The same configuration may contain an adaptive `max_concurrency` from 1
 through 16 and `compact`, `standard`, or `detailed` progress visibility. The
 guided first-use flow writes one strict default profile and uses controller
-defaults for other fields. Existing schema-v1 through schema-v6 values migrate
-one way into schema 7;
+defaults for other fields. Existing schema-v1 through schema-v7 values migrate
+one way into schema 8;
 the former scalar model and price fields become the default profile rather
 than a second source of truth.
 
@@ -311,6 +311,10 @@ metadata to its private run configuration without copying a credential. An
 available trusted provider environment variable is represented only by its
 variable name; otherwise OpenClaw resolves the provider through SAT's isolated
 auth profiles. SAT checks the resulting exact model locally before continuing.
+The persistent `openclaw.json` file is optional: when it is absent, SAT
+materializes a private, temporary, secret-free model-check configuration from
+the saved profile and its versioned compatibility data. File presence is not a
+configuration-complete flag. A present symlink or non-regular file is rejected.
 
 Reconfigure or inspect the secret-free values with:
 
@@ -327,8 +331,14 @@ sat configure --non-interactive --model provider/model
 
 Non-interactive configuration records the requested reference; the next
 `sat` launch validates its exact catalog/auth route before asking project
-questions. Interactive `sat configure` performs that validation before saving.
-Normal startup blocks only when the default bootstrap profile is unavailable.
+questions. Every later launch repeats that local validation without reopening
+the configuration dialogue while the saved bootstrap profile remains ready.
+Interactive `sat configure` performs validation before saving. If a saved
+bootstrap route becomes unavailable, SAT enters an explicit repair dialogue;
+the saved model remains the proposed value even when OpenClaw reports a
+different default, so pressing Enter cannot silently switch providers or
+models. Normal startup blocks only when the default bootstrap profile is
+unavailable.
 It warns about an unavailable optional profile without deleting or resetting
 the saved policy; if Planning selects that profile, run preflight stops before
 the first execution Agent call.

@@ -907,10 +907,7 @@ def _configure(args: argparse.Namespace) -> int:
         state_paths = ProductStatePaths.below(user_state_root())
         ensure_product_state(state_paths)
         openclaw_config = state_paths.openclaw / "openclaw.json"
-        if openclaw_config.is_symlink():
-            raise RuntimeConfigurationError(
-                "SAT OpenClaw configuration must not be a symbolic link"
-            )
+        _validate_optional_openclaw_configuration(openclaw_config)
         print("SAT uses its own isolated OpenClaw runtime and provider state.")
         print("Existing OpenClaw installations and configuration are never used.")
         if _prompt_yes_no(
@@ -930,7 +927,7 @@ def _configure(args: argparse.Namespace) -> int:
         if discovered_model is not None:
             print(f"OpenClaw default model detected: {discovered_model}")
         print("Press Enter to keep a value shown in brackets.")
-        default_model = discovered_model or (current.model if current else None)
+        default_model = current.model if current is not None else discovered_model
         model = _prompt_value(
             "OpenClaw model reference",
             default_model,
@@ -2193,6 +2190,19 @@ def _discover_openclaw_default_model(
     return None
 
 
+def _validate_optional_openclaw_configuration(config_path: Path) -> None:
+    """Reject unsafe persistent provider configuration without requiring it."""
+
+    if config_path.is_symlink():
+        raise RuntimeConfigurationError(
+            "SAT OpenClaw configuration must not be a symbolic link"
+        )
+    if config_path.exists() and not config_path.is_file():
+        raise RuntimeConfigurationError(
+            "SAT OpenClaw configuration must be a regular file when present"
+        )
+
+
 def _ensure_product_configuration(
     state_paths: ProductStatePaths,
 ) -> tuple[UserConfiguration, tuple[OpenClawModelInspection, ...]]:
@@ -2201,11 +2211,8 @@ def _ensure_product_configuration(
     path = user_configuration_path()
     current = _load_user_configuration(path)
     openclaw_config = state_paths.openclaw / "openclaw.json"
-    if openclaw_config.is_symlink():
-        raise RuntimeConfigurationError(
-            "SAT OpenClaw configuration must not be a symbolic link"
-        )
-    if current is not None and openclaw_config.is_file():
+    _validate_optional_openclaw_configuration(openclaw_config)
+    if current is not None:
         _render_model_inspection_start(len(current.model_profiles))
         default_profile = current.default_model_profile
         default_inspection = _inspect_selected_model(
@@ -2257,7 +2264,11 @@ def _ensure_product_configuration(
         print("! Saved bootstrap model is not locally ready:")
         print(f"  {default_inspection.model}: {default_inspection.error}")
 
-    print("\nFirst-run model setup")
+    print(
+        "\nModel configuration repair"
+        if current is not None
+        else "\nFirst-run model setup"
+    )
     print("SAT uses an isolated OpenClaw runtime and private provider state.")
     print(
         "Existing OpenClaw installations, credentials, and configuration "
@@ -2282,7 +2293,7 @@ def _ensure_product_configuration(
     )
     if discovered_model is not None:
         print(f"✓ OpenClaw default model detected: {discovered_model}")
-    default_model = discovered_model or (current.model if current else None)
+    default_model = current.model if current is not None else discovered_model
     model = _prompt_value(
         "OpenClaw model reference (provider/model)",
         default_model,

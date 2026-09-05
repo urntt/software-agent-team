@@ -2,6 +2,10 @@
 
 from pathlib import Path
 
+from software_agent_team.user_configuration import (
+    USER_CONFIGURATION_SCHEMA_VERSION,
+)
+
 REPOSITORY_ROOT = Path(__file__).parents[1]
 
 
@@ -29,3 +33,16 @@ def test_user_and_maintainer_release_guides_have_distinct_entries() -> None:
     assert "release/change-impact.json" in release_guide
     assert "scripts/release.py" in release_guide
     assert "[`releases.md`](releases.md)" in index
+
+
+def test_installation_guide_tracks_the_authoritative_configuration_schema() -> None:
+    installation = (REPOSITORY_ROOT / "docs/installation.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert f"Schema version {USER_CONFIGURATION_SCHEMA_VERSION} stores" in installation
+    assert (
+        "Existing schema-v1 through "
+        f"schema-v{USER_CONFIGURATION_SCHEMA_VERSION - 1} values migrate\n"
+        f"one way into schema {USER_CONFIGURATION_SCHEMA_VERSION};"
+    ) in installation

@@ -1782,6 +1782,51 @@ def test_first_run_setup_keeps_credentials_outside_sat_and_saves_model_metadata(
     assert "Each cold local model check may take up to 90 seconds" in output
 
 
+def test_saved_model_is_rechecked_without_a_persistent_openclaw_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    configuration_path = tmp_path / "config.json"
+    configured = ready_user_configuration(model="deepseek/deepseek-v4-flash-vision-exp")
+    monkeypatch.setenv("SAT_CONFIG_PATH", str(configuration_path))
+    save_user_configuration(configured, configuration_path)
+    state_paths = cli.ProductStatePaths.below(tmp_path / "state")
+    cli.ensure_product_state(state_paths)
+    observed_paths: list[Path] = []
+
+    def inspect_saved_model(
+        _binary: Path,
+        model: str,
+        *,
+        config_path: Path,
+        **_kwargs: object,
+    ) -> OpenClawModelInspection:
+        observed_paths.append(config_path)
+        return OpenClawModelInspection(
+            model=model,
+            available=True,
+            context_window_tokens=1_000_000,
+        )
+
+    monkeypatch.setattr(cli, "_inspect_selected_model", inspect_saved_model)
+    monkeypatch.setattr(
+        "builtins.input",
+        lambda _prompt: pytest.fail("saved ready configuration must not prompt"),
+    )
+
+    result, inspections = cli._ensure_product_configuration(state_paths)
+
+    assert result.model == "deepseek/deepseek-v4-flash-vision-exp"
+    assert tuple(item.model for item in inspections) == (result.model,)
+    assert observed_paths == [state_paths.openclaw / "openclaw.json"]
+    assert not observed_paths[0].exists()
+    output = capsys.readouterr().out
+    assert "Bootstrap model: deepseek/deepseek-v4-flash-vision-exp" in output
+    assert "First-run model setup" not in output
+    assert "Model configuration repair" not in output
+
+
 def test_saved_model_is_rechecked_before_the_product_questions(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1827,7 +1872,144 @@ def test_saved_model_is_rechecked_before_the_product_questions(
     output = capsys.readouterr().out
     assert output.count("Checking SAT's isolated model configuration") == 2
     assert "Saved bootstrap model is not locally ready" in output
-    assert "First-run model setup" in output
+    assert "Model configuration repair" in output
+    assert "First-run model setup" not in output
+
+
+def test_saved_model_repair_prefers_it_over_an_unrelated_discovered_default(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    configuration_path = tmp_path / "config.json"
+    configured = ready_user_configuration(model="provider/saved")
+    monkeypatch.setenv("SAT_CONFIG_PATH", str(configuration_path))
+    save_user_configuration(configured, configuration_path)
+    state_paths = cli.ProductStatePaths.below(tmp_path / "state")
+    cli.ensure_product_state(state_paths)
+    prompts: list[str] = []
+    answers = iter(("no", "", "no", "no"))
+
+    def answer(prompt: str) -> str:
+        prompts.append(prompt)
+        return next(answers)
+
+    inspections = iter(
+        (
+            OpenClawModelInspection(
+                model="provider/saved",
+                available=False,
+                error="saved route needs repair",
+            ),
+            OpenClawModelInspection(
+                model="provider/saved",
+                available=True,
+                context_window_tokens=120_000,
+            ),
+        )
+    )
+    monkeypatch.setattr("builtins.input", answer)
+    monkeypatch.setattr(
+        cli,
+        "_inspect_selected_model",
+        lambda *_args, **_kwargs: next(inspections),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_discover_openclaw_default_model",
+        lambda *_args, **_kwargs: "provider/unrelated",
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_openclaw_configuration",
+        lambda *_args, **_kwargs: pytest.fail("provider setup was declined"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_provider_smoke",
+        lambda *_args, **_kwargs: pytest.fail("provider smoke was declined"),
+    )
+
+    result, result_inspections = cli._ensure_product_configuration(state_paths)
+
+    assert result.model == "provider/saved"
+    assert tuple(item.model for item in result_inspections) == ("provider/saved",)
+    model_prompt = next(
+        prompt for prompt in prompts if prompt.startswith("OpenClaw model reference")
+    )
+    assert "[provider/saved]" in model_prompt
+    assert "[provider/unrelated]" not in model_prompt
+    output = capsys.readouterr().out
+    assert "OpenClaw default model detected: provider/unrelated" in output
+    assert "Model configuration repair" in output
+
+
+def test_interactive_reconfigure_keeps_saved_model_over_discovered_default(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configuration_path = tmp_path / "config.json"
+    configured = ready_user_configuration(model="provider/saved")
+    monkeypatch.setenv("SAT_CONFIG_PATH", str(configuration_path))
+    monkeypatch.setenv("SAT_STATE_ROOT", str(tmp_path / "state"))
+    save_user_configuration(configured, configuration_path)
+    monkeypatch.setattr(cli.sys, "stdin", SimpleNamespace(isatty=lambda: True))
+    prompts: list[str] = []
+    answers = iter(("no", "", "no"))
+
+    def answer(prompt: str) -> str:
+        prompts.append(prompt)
+        return next(answers)
+
+    monkeypatch.setattr("builtins.input", answer)
+    monkeypatch.setattr(
+        cli,
+        "_discover_openclaw_default_model",
+        lambda *_args, **_kwargs: "provider/unrelated",
+    )
+    monkeypatch.setattr(
+        cli,
+        "_inspect_selected_model",
+        lambda _binary, model, **_kwargs: OpenClawModelInspection(
+            model=model,
+            available=True,
+            context_window_tokens=120_000,
+        ),
+    )
+
+    assert main(["configure"]) == 0
+
+    loaded = load_user_configuration(configuration_path)
+    assert loaded is not None
+    assert loaded.model == "provider/saved"
+    model_prompt = next(
+        prompt for prompt in prompts if prompt.startswith("OpenClaw model reference")
+    )
+    assert "[provider/saved]" in model_prompt
+    assert "[provider/unrelated]" not in model_prompt
+
+
+@pytest.mark.parametrize("unsafe_kind", ("directory", "symlink"))
+def test_saved_configuration_rejects_an_unsafe_persistent_openclaw_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    unsafe_kind: str,
+) -> None:
+    configuration_path = tmp_path / "config.json"
+    monkeypatch.setenv("SAT_CONFIG_PATH", str(configuration_path))
+    save_user_configuration(ready_user_configuration(), configuration_path)
+    state_paths = cli.ProductStatePaths.below(tmp_path / "state")
+    cli.ensure_product_state(state_paths)
+    openclaw_config = state_paths.openclaw / "openclaw.json"
+    if unsafe_kind == "directory":
+        openclaw_config.mkdir()
+        expected = "must be a regular file when present"
+    else:
+        openclaw_config.symlink_to(tmp_path / "outside.json")
+        expected = "must not be a symbolic link"
+
+    with pytest.raises(cli.RuntimeConfigurationError, match=expected):
+        cli._ensure_product_configuration(state_paths)
 
 
 def test_unavailable_optional_model_profile_warns_without_resetting_configuration(
@@ -1866,7 +2048,6 @@ def test_unavailable_optional_model_profile_warns_without_resetting_configuratio
     save_user_configuration(configured, configuration_path)
     state_paths = cli.ProductStatePaths.below(tmp_path / "state")
     cli.ensure_product_state(state_paths)
-    (state_paths.openclaw / "openclaw.json").write_text("{}", encoding="utf-8")
     monkeypatch.setattr(
         cli,
         "_inspect_selected_model",
@@ -1980,6 +2161,41 @@ def test_provider_smoke_registers_the_deepseek_vision_compatibility_model(
     assert observed["effective_path"] != configured_path
     assert observed["argv"][observed["argv"].index("--model") + 1] == (
         "deepseek/deepseek-v4-flash-vision-exp"
+    )
+
+
+def test_model_inspection_materializes_compatibility_without_persistent_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, object] = {}
+    model = "deepseek/deepseek-v4-flash-vision-exp"
+    state = tmp_path / "state"
+    state.mkdir()
+    configured_path = state / "openclaw.json"
+
+    def inspect(**kwargs: object) -> OpenClawModelInspection:
+        effective_path = Path(kwargs["config_path"])
+        observed["effective_path"] = effective_path
+        observed["payload"] = json.loads(effective_path.read_text(encoding="utf-8"))
+        return OpenClawModelInspection(model=model, available=True)
+
+    monkeypatch.setattr(cli, "inspect_openclaw_model", inspect)
+
+    result = cli._inspect_selected_model(
+        Path("/opt/openclaw"),
+        model,
+        state_dir=state,
+        config_path=configured_path,
+    )
+
+    assert result.available is True
+    assert not configured_path.exists()
+    assert observed["effective_path"] != configured_path
+    payload = observed["payload"]
+    assert payload["agents"]["defaults"]["model"]["primary"] == model
+    assert payload["models"]["providers"]["deepseek"]["models"][0]["id"] == (
+        "deepseek-v4-flash-vision-exp"
     )
 
 

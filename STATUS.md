@@ -399,7 +399,11 @@ with project-specific commands.
 
 The normal first-use path starts with one strict selected model profile; an
 advanced user can configure multiple capability-authorized profiles and policy
-routing before Planning. The product path also uses a user-configurable
+routing before Planning. Subsequent launches now revalidate the exact saved
+profile even when no persistent OpenClaw config file exists; a temporary
+secret-free effective config supplies supported catalog compatibility, while
+missing or unsafe persistent config cannot silently select a different
+discovered default. The product path also uses a user-configurable
 controller progress renderer. Its active foreground control channel and model
 routing are implemented and offline verified, including cancellation and
 correction reports, one-shot guidance, safe pause/resume checkpoints, live
