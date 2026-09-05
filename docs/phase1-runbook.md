@@ -125,7 +125,10 @@ make check
 
 `git status --short` should print nothing. `make check` validates all checked-in
 configuration and offline behavior without requiring Docker or provider
-credentials.
+credentials. It streams each canonical stage and writes a terminal diagnostic
+report beneath the ignored `artifacts/generated/full-gate/` directory. Record
+that report path with evaluation evidence; a successful later gate must not be
+used to infer the cause of an earlier incomplete report.
 
 ## 2. Verify or Rebuild the Frozen Sandbox Image
 

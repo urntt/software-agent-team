@@ -41,4 +41,5 @@ lint:
 test:
 	$(UV) run pytest
 
-check: doctor format-check lint test
+check:
+	SAT_UV_BIN="$(UV)" $(UV) run --frozen python -m software_agent_team.full_gate

@@ -9,6 +9,18 @@ supports that claim, and what remains unavailable. It does not redefine the
 product, architecture, experiment, or roadmap; those decisions belong to
 [`VISION.md`](VISION.md).
 
+The canonical repository `make check` entry now runs doctor, formatting, lint,
+and pytest through one diagnostic supervisor. It streams original stage output
+and writes an atomic ignored report containing exact commands, Git and time
+identity, per-stage terminal state, current/last pytest node, aggregate process
+and memory observations, typed cgroup/kernel availability, and post-run
+SAT-owned resource inventories. Signal, hang, detached-child, unavailable
+observer, and abandoned-started-record paths have regression coverage. The
+first complete supervised gate passed all 997 tests with no residual stage
+process, process lease, sandbox container, or volume; it observed no new cgroup
+or kernel OOM event. The two historical incomplete suites still have an
+evidence-bounded unknown cause rather than a retroactively invented diagnosis.
+
 The current development head implements configuration schema v8 model metadata
 with attributable price/context sources, task-scoped route snapshots, one
 explicit per-task USD authorization and optional deadline prompt, and separate

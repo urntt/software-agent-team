@@ -22,6 +22,31 @@ boundaries, configuration contracts, formatting, lint, the complete test
 suite, and all offline workflow paths. It does not call a model or require
 provider credentials.
 
+`make check` is also the canonical diagnostic full gate. Its supervisor streams
+each stage's original output while atomically recording a report beneath the
+ignored `artifacts/generated/full-gate/` directory. The report binds the exact
+argument vectors, working directory, Git revision, stage outcomes, current and
+last-completed pytest node, aggregate peak RSS and process/thread counts,
+cgroup/OOM observations, and the terminal SAT-owned process-lease and Docker
+inventory. Observer failures are recorded as typed unavailable facts and do
+not replace a command's real exit status. If the supervisor disappears before
+writing a terminal outcome, the next invocation marks that started report
+`incomplete_observed_on_recovery`; it does not infer a cause from a later
+successful run.
+
+Each stage has a 30-minute developer-gate infrastructure ceiling so an
+unattended repository check cannot remain stuck forever. That ceiling is not a
+product-run deadline or an Agent invocation work limit. A timeout or terminal
+signal is forwarded to the exact stage process group, followed by a bounded
+cleanup and residual inventory. To diagnose the supervisor itself or place
+evidence elsewhere, run its explicit contributor entry point:
+
+```bash
+uv run --frozen python -m software_agent_team.full_gate \
+  --evidence-root /absolute/private/evidence/root \
+  --stage-timeout-seconds 1800
+```
+
 Useful targets are:
 
 ```bash
