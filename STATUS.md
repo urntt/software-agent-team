@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** Phase 3E implemented; twenty fresh installed adaptive rehearsals include two accepted strict-route Adaptive Planning deliveries and one provider-backed foreground-control rehearsal; the latest delivery-boundary, Review-recovery, and cold model-inspection repairs are live-validated
+**Current milestone:** Phase 3E implemented; twenty fresh installed adaptive rehearsals include two accepted strict-route Adaptive Planning deliveries and one provider-backed foreground-control rehearsal; the latest managed-lifecycle and saved-profile startup repairs are live-validated
 
 **Last updated:** September 5, 2026
 
@@ -110,7 +110,7 @@ assessments in one pass and records removal of the five unapproved arrays. This
 proves the captured regression path offline, not a corrected provider journey;
 the issue remains open until a fresh run crosses Review without that call.
 
-Doctor, formatter, lint, and the complete **980-test offline suite** pass with
+Doctor, formatter, lint, and the complete **987-test offline suite** pass with
 diagnostic-v2 and slot-bound semantic correction v2, including the exact
 captured two-invariant Planning sequence, a three-call correction regression,
 collision-safe decision-token canonicalization, and multi-field Controller path
@@ -144,6 +144,18 @@ both channel activation and the public bootstrap were rejected clearly, and
 the same bootstrap succeeded after the foreground process exited. These checks
 validate candidate recovery and task/activation exclusion without a daemon or
 manual lock cleanup.
+
+Saved secret-free model profiles no longer depend on the accidental presence of
+a persistent OpenClaw configuration file. Ordinary startup revalidates the exact
+saved route through the isolated, versioned materialization path; first-run
+dialogue appears only when no SAT profile exists, and repair or explicit
+reconfiguration keeps the saved model ahead of an unrelated discovered default.
+A fresh non-root managed installation at `841ce15` completed initial model,
+context, and price setup without a persistent OpenClaw configuration, exited at
+task input, and then reached task input again on a second bare `sat` invocation
+without repeating provider, model, price, or smoke-test questions. Both exits
+were user cancellations before run creation, so this validates repeated startup
+and isolation but not provider generation or task delivery.
 
 ## Phase 1 Result
 
