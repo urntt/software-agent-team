@@ -310,6 +310,7 @@ class StagedApplication:
     path: Path
     marker: ManagedApplicationMarker
     schema_support: tuple[SchemaSupport, ...]
+    created_candidate: bool
 
 
 CommandRunner = Callable[[Sequence[str], Path | None, Mapping[str, str] | None], None]
@@ -378,10 +379,30 @@ def stage_managed_target(
     """Clone and fully install one target without changing active launchers."""
 
     _ensure_managed_root(paths)
+    with _exclusive_update_lock(paths):
+        return _stage_managed_target_locked(
+            target,
+            paths,
+            environment=environment,
+            command_runner=command_runner,
+        )
+
+
+def _stage_managed_target_locked(
+    target: ManagedTarget,
+    paths: ManagedInstallPaths,
+    *,
+    environment: Mapping[str, str] | None = None,
+    command_runner: CommandRunner | None = None,
+) -> StagedApplication:
+    """Prepare one immutable final-path candidate while holding the lock."""
+
+    _require_managed_root(paths)
     _validate_managed_destination(paths)
     paths.versions_root.mkdir(parents=True, exist_ok=True, mode=0o700)
     _require_real_directory(paths.versions_root, "managed versions root")
     stage = Path(tempfile.mkdtemp(prefix=".stage-", dir=paths.versions_root)).resolve()
+    cleanup_path: Path | None = stage
     runner = command_runner or _run_command
     try:
         runner(("git", "init", "-b", "sat-managed", str(stage)), None, None)
@@ -442,6 +463,36 @@ def stage_managed_target(
             artifact_digest=archive_digest,
         )
         _write_marker(stage / MANAGED_MARKER_NAME, marker)
+        final_path = _final_release_path(paths, marker)
+        if final_path.exists() or final_path.is_symlink():
+            if final_path.is_symlink() or not final_path.is_dir():
+                raise ManagedInstallError(
+                    "managed release destination is not a directory"
+                )
+            existing = load_managed_marker(final_path / MANAGED_MARKER_NAME)
+            if existing != marker:
+                raise ManagedInstallError(
+                    "managed release destination has conflicting provenance"
+                )
+            _validate_staged_application(final_path, marker)
+            schema_support = target.schema_support or _read_staged_schema_support(
+                final_path
+            )
+            shutil.rmtree(stage)
+            cleanup_path = None
+            return StagedApplication(
+                path=final_path,
+                marker=marker,
+                schema_support=schema_support,
+                created_candidate=False,
+            )
+
+        # Python console scripts, editable package metadata, and the isolated
+        # OpenClaw wrapper all bind absolute installation paths.  Claim the
+        # immutable release path before creating any of them; an installed
+        # application must never be relocated afterward.
+        os.replace(stage, final_path)
+        cleanup_path = final_path
         install_environment = {
             **(os.environ if environment is None else environment),
             "SAT_MANAGED_INSTALL": "1",
@@ -450,16 +501,25 @@ def stage_managed_target(
             "SAT_INSTALL_METADATA_PATH": str(paths.installation_record),
         }
         install_environment.pop("VIRTUAL_ENV", None)
-        runner((str(stage / "scripts" / "install.sh"),), stage, install_environment)
-        _validate_staged_application(stage, marker)
-        schema_support = target.schema_support or _read_staged_schema_support(stage)
+        runner(
+            (str(final_path / "scripts" / "install.sh"),),
+            final_path,
+            install_environment,
+        )
+        _validate_staged_application(final_path, marker)
+        schema_support = target.schema_support or _read_staged_schema_support(
+            final_path
+        )
+        cleanup_path = None
         return StagedApplication(
-            path=stage,
+            path=final_path,
             marker=marker,
             schema_support=schema_support,
+            created_candidate=True,
         )
     except BaseException:
-        shutil.rmtree(stage, ignore_errors=True)
+        if cleanup_path is not None:
+            shutil.rmtree(cleanup_path, ignore_errors=True)
         raise
 
 
@@ -496,7 +556,7 @@ def install_managed_target(
 
     _ensure_managed_root(paths)
     with _exclusive_update_lock(paths):
-        staged = stage_managed_target(
+        staged = _stage_managed_target_locked(
             target,
             paths,
             environment=environment,
@@ -505,7 +565,8 @@ def install_managed_target(
         try:
             return _activate_staged_application_locked(staged, paths)
         except BaseException:
-            shutil.rmtree(staged.path, ignore_errors=True)
+            if staged.created_candidate:
+                shutil.rmtree(staged.path, ignore_errors=True)
             raise
 
 
@@ -543,10 +604,12 @@ def _activate_staged_application_locked(
             raise ManagedInstallError(
                 "managed release destination has conflicting provenance"
             )
-        shutil.rmtree(staged.path)
+        if staged.path != final_path:
+            shutil.rmtree(staged.path)
     else:
         os.replace(staged.path, final_path)
     switched = False
+    created_launchers: tuple[Path, ...] = ()
     try:
         _replace_application_link(paths.application_link, final_path)
         switched = True
@@ -563,9 +626,13 @@ def _activate_staged_application_locked(
             installed_at=installed_at or datetime.now(UTC),
         )
         save_installation_record(record, paths.installation_record)
-        _activate_launchers(paths)
+        created_launchers = _activate_launchers(paths)
+        _validate_active_application(paths)
         return record
     except BaseException:
+        for launcher in created_launchers:
+            if launcher.is_symlink():
+                launcher.unlink()
         if switched:
             _restore_application_link(paths.application_link, previous_target)
         _restore_optional_bytes(paths.installation_record, previous_record)
@@ -829,6 +896,7 @@ def _validate_staged_application(
             raise ManagedInstallError(
                 f"staged application is missing executable {relative}"
             )
+    _capture_command((str(path / ".venv/bin/sat"), "--help"))
 
 
 def _final_release_path(
@@ -925,7 +993,7 @@ def _restore_application_link(link: Path, target: Path | None) -> None:
     _replace_application_link(link, target)
 
 
-def _activate_launchers(paths: ManagedInstallPaths) -> None:
+def _activate_launchers(paths: ManagedInstallPaths) -> tuple[Path, ...]:
     paths.bin_directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     _require_real_directory(paths.bin_directory, "launcher directory")
     targets = {
@@ -957,6 +1025,20 @@ def _activate_launchers(paths: ManagedInstallPaths) -> None:
         for link in created:
             link.unlink(missing_ok=True)
         raise
+    return tuple(created)
+
+
+def _validate_active_application(paths: ManagedInstallPaths) -> None:
+    """Prove the final user-facing launcher after link and record activation."""
+
+    _require_managed_release_target(
+        paths.application_link.resolve(strict=True),
+        paths,
+    )
+    launcher = paths.bin_directory / "sat"
+    if not launcher.is_symlink():
+        raise ManagedInstallError("managed sat launcher is not a symbolic link")
+    _capture_command((str(launcher), "--version"))
 
 
 def _assert_no_active_runs(state_root: Path) -> None:

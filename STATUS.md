@@ -95,7 +95,7 @@ assessments in one pass and records removal of the five unapproved arrays. This
 proves the captured regression path offline, not a corrected provider journey;
 the issue remains open until a fresh run crosses Review without that call.
 
-Doctor, formatter, lint, and the complete **940-test offline suite** pass with
+Doctor, formatter, lint, and the complete **941-test offline suite** pass with
 the diagnostic-v2 change, including the exact captured two-invariant Planning
 sequence and a three-call correction regression. The managed stable resolver
 also distinguishes an unpublished/inaccessible HTTP 404, refuses silent dev
@@ -104,7 +104,12 @@ the caller's active `VIRTUAL_ENV` only from the install child so the candidate
 owns its `.venv` without changing the caller or other environment. Provider-backed
 validation of the corrected journey remains pending. An explicit dev ref now
 retargets an existing dev installation through the same staged activation and
-rollback transaction; an unchanged resolved revision remains a no-op.
+rollback transaction; an unchanged resolved revision remains a no-op. Managed
+installation now claims the immutable final release path before creating the
+Python environment or isolated OpenClaw runtime, so path-bound entry points are
+never relocated after verification. Activation executes the final `sat`
+launcher and restores the prior link, installation record, and transaction-created
+launchers if that probe fails.
 
 ## Phase 1 Result
 

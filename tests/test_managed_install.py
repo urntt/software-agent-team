@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+import software_agent_team.managed_install as managed_install_module
 from software_agent_team.managed_install import (
     MANAGED_ROOT_MARKER_NAME,
     ManagedInstallError,
@@ -54,8 +55,9 @@ set -euo pipefail
 [[ "${SAT_MANAGED_INSTALL:-}" == "1" ]]
 [[ "${SAT_INSTALL_STAGE_ONLY:-}" == "1" ]]
 mkdir -p .venv/bin
-printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > .venv/bin/sat
-chmod 755 .venv/bin/sat
+printf '%s\n' '#!/usr/bin/env bash' 'exec /usr/bin/env bash "$@"' > .venv/bin/python
+printf '#!%s/.venv/bin/python\nexit 0\n' "$PWD" > .venv/bin/sat
+chmod 755 .venv/bin/python .venv/bin/sat
 """,
         encoding="utf-8",
     )
@@ -315,6 +317,15 @@ def test_initial_install_stages_verifies_and_activates_one_logical_link(
     assert (install_paths.bin_directory / "sat").readlink() == (
         install_paths.application_link / ".venv/bin/sat"
     )
+    sat_target = active / ".venv/bin/sat"
+    assert sat_target.read_text(encoding="utf-8").splitlines()[0] == (
+        f"#!{active}/.venv/bin/python"
+    )
+    subprocess.run(
+        [install_paths.bin_directory / "sat", "--version"],
+        check=True,
+        timeout=30,
+    )
     report = inspect_software_version(
         project_root=active,
         environment={
@@ -394,6 +405,35 @@ def test_activation_failure_restores_previous_link_and_record(tmp_path: Path) ->
 
     assert install_paths.application_link.resolve(strict=True) == first_target
     assert load_installation_record(install_paths.installation_record) == first_record
+
+
+def test_failed_final_launcher_probe_rolls_back_initial_activation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository, revision = prepare_repository(tmp_path)
+    install_paths = paths(tmp_path)
+
+    def fail_final_launcher(_paths: ManagedInstallPaths) -> None:
+        raise ManagedInstallError("injected final launcher failure")
+
+    monkeypatch.setattr(
+        managed_install_module,
+        "_validate_active_application",
+        fail_final_launcher,
+    )
+
+    with pytest.raises(ManagedInstallError, match="injected final launcher"):
+        install_managed_target(
+            dev_target(repository, revision),
+            install_paths,
+        )
+
+    assert not install_paths.application_link.exists()
+    assert not install_paths.installation_record.exists()
+    assert not (install_paths.bin_directory / "sat").exists()
+    assert not (install_paths.bin_directory / "sat-uninstall").exists()
+    assert not tuple(install_paths.versions_root.glob("0.1.0-g*"))
 
 
 def test_active_run_blocks_activation_before_the_link_changes(tmp_path: Path) -> None:

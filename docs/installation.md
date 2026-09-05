@@ -453,10 +453,14 @@ no `--ref`, switching to the already active channel is a local no-op and
 
 Install, update, and channel switch use one transaction: validate lifecycle
 ownership, resolve an immutable target, show the current and target identities,
-obtain confirmation, hold the lifecycle lock, stage and verify the complete
-application, check every persisted schema family, and atomically replace the
-logical application link and installation record. An active run, unsupported
-newer state, conflicting launcher, source drift, or failed candidate stops
+obtain confirmation, hold the lifecycle lock, claim the immutable final release
+path before creating path-bound Python or OpenClaw runtime files, install and
+verify the complete application there, check every persisted schema family,
+and atomically replace the logical application link and installation record.
+SAT then executes the final user-facing launcher; failure restores the prior
+link and record and removes only launchers created by that transaction. An
+active run, unsupported newer state, conflicting launcher, source drift, or
+failed candidate stops
 before activation. If activation itself fails, the previous link and record are
 restored. A successful change retains older release storage until uninstall;
 user configuration and isolated provider state are not rewritten.
