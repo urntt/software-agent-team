@@ -130,6 +130,19 @@ def test_hung_stage_is_bounded_and_records_cleanup(tmp_path: Path) -> None:
     assert stage["process"]["residual_after_cleanup"] == []
 
 
+def test_cleanup_sleep_never_passes_a_crossed_deadline_to_sleep(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sleeps: list[float] = []
+    monkeypatch.setattr(full_gate.time, "monotonic", lambda: 10.2)
+    monkeypatch.setattr(full_gate.time, "sleep", sleeps.append)
+
+    slept = full_gate._sleep_before_deadline(10.1)
+
+    assert not slept
+    assert sleeps == []
+
+
 def test_recovery_marks_abandoned_started_record_incomplete(tmp_path: Path) -> None:
     evidence_root = tmp_path / "evidence"
     abandoned = evidence_root / "abandoned"

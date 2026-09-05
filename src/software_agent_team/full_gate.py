@@ -448,6 +448,16 @@ def _pytest_state(path: Path) -> dict[str, Any]:
     }
 
 
+def _sleep_before_deadline(deadline: float) -> bool:
+    """Sleep only when one fresh clock reading leaves positive time."""
+
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        return False
+    time.sleep(min(DEFAULT_SAMPLE_INTERVAL_SECONDS, remaining))
+    return True
+
+
 def _terminate_owned_processes(
     process: subprocess.Popen[bytes],
     tracked: dict[tuple[int, int], ProcessSnapshot],
@@ -466,7 +476,8 @@ def _terminate_owned_processes(
         alive = _owned_processes(process.pid, process.pid, tracked=tracked)
         if not alive:
             break
-        time.sleep(min(DEFAULT_SAMPLE_INTERVAL_SECONDS, deadline - time.monotonic()))
+        if not _sleep_before_deadline(deadline):
+            break
     alive = _owned_processes(process.pid, process.pid, tracked=tracked)
     if alive:
         try:
@@ -487,9 +498,8 @@ def _terminate_owned_processes(
         while time.monotonic() < deadline:
             if not _owned_processes(process.pid, process.pid, tracked=tracked):
                 break
-            time.sleep(
-                min(DEFAULT_SAMPLE_INTERVAL_SECONDS, deadline - time.monotonic())
-            )
+            if not _sleep_before_deadline(deadline):
+                break
     return {"actions": actions}
 
 
