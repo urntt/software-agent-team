@@ -54,6 +54,34 @@ class AgentRole(StrEnum):
     REVIEWER = "reviewer"
 
 
+class ProductDefinitionDisposition(StrEnum):
+    """Attributable authority for one approved product-definition dimension."""
+
+    EXPLICIT_INPUT = "explicit_input"
+    RESOLVED_QUESTION = "resolved_question"
+    PLANNER_RECOMMENDATION = "planner_recommendation"
+    NOT_MATERIAL = "not_material"
+
+
+class ProductDefinitionDimension(StrEnum):
+    """Stable product-depth dimensions checked before plan approval."""
+
+    TARGET_USERS = "target_users"
+    PRIMARY_WORKFLOW = "primary_workflow"
+    DELIVERY_MATURITY = "delivery_maturity"
+    USABILITY_EXPECTATIONS = "usability_expectations"
+    OPERATIONAL_EXPECTATIONS = "operational_expectations"
+    DELIVERY_EXPECTATIONS = "delivery_expectations"
+
+
+class DeliveryMaturity(StrEnum):
+    """User-visible maturity levels that imply materially different deliveries."""
+
+    THROWAWAY_PROTOTYPE = "throwaway_prototype"
+    USABLE_LOCAL_PRODUCT = "usable_local_product"
+    RELEASABLE_SMALL_PRODUCT = "releasable_small_product"
+
+
 class HandoffStatus(StrEnum):
     """Terminal status for one Agent execution."""
 
@@ -312,6 +340,140 @@ class AcceptanceCriterion(BaseModel):
         return serialized
 
 
+class ProductDefinitionBasis(BaseModel):
+    """Provenance and downstream trace for one product-depth statement."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    disposition: ProductDefinitionDisposition
+    source: str = Field(min_length=1, max_length=500)
+    rationale: str = Field(min_length=1, max_length=500)
+    requirement_ids: tuple[str, ...] = ()
+    criterion_ids: tuple[str, ...] = ()
+    decision_ids: tuple[str, ...] = ()
+
+    @field_validator("source", "rationale")
+    @classmethod
+    def require_clean_text(cls, value: str) -> str:
+        cleaned = value.strip()
+        if cleaned != value or not cleaned:
+            raise ValueError("product-definition text must be stripped and non-empty")
+        return cleaned
+
+    @field_validator("requirement_ids", "criterion_ids", "decision_ids")
+    @classmethod
+    def require_unique_references(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        if len(values) != len(set(values)):
+            raise ValueError("product-definition references must be unique")
+        return values
+
+    @model_validator(mode="after")
+    def require_downstream_trace(self) -> Self:
+        if not (self.requirement_ids or self.criterion_ids or self.decision_ids):
+            raise ValueError(
+                "each product-definition dimension requires a downstream reference"
+            )
+        if any(
+            re.fullmatch(r"REQ_[A-Z0-9_]+", value) is None
+            for value in self.requirement_ids
+        ):
+            raise ValueError("product-definition requirements must use REQ_ IDs")
+        if any(
+            re.fullmatch(r"[A-Z][A-Z0-9_-]*", value) is None
+            for value in self.criterion_ids
+        ):
+            raise ValueError(
+                "product-definition criteria must use stable uppercase IDs"
+            )
+        if any(
+            re.fullmatch(r"DECISION_[A-Z0-9_]+", value) is None
+            for value in self.decision_ids
+        ):
+            raise ValueError("product-definition decisions must use DECISION_ IDs")
+        return self
+
+
+class ProductDefinitionStatement(ProductDefinitionBasis):
+    """One approved natural-language product-definition dimension."""
+
+    statement: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("statement")
+    @classmethod
+    def require_clean_statement(cls, value: str) -> str:
+        cleaned = value.strip()
+        if cleaned != value or not cleaned:
+            raise ValueError(
+                "product-definition statements must be stripped and non-empty"
+            )
+        return cleaned
+
+
+class ProductMaturityDefinition(ProductDefinitionBasis):
+    """Approved delivery maturity with the same provenance contract."""
+
+    level: DeliveryMaturity
+
+
+class ProductDefinitionImpact(BaseModel):
+    """User-visible consequences of the approved product definition."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    architecture: str = Field(min_length=1, max_length=1000)
+    team: str = Field(min_length=1, max_length=1000)
+    cost: str = Field(min_length=1, max_length=1000)
+    delivery: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("architecture", "team", "cost", "delivery")
+    @classmethod
+    def require_clean_impact(cls, value: str) -> str:
+        cleaned = value.strip()
+        if cleaned != value or not cleaned:
+            raise ValueError("product-definition impact must be stripped and non-empty")
+        return cleaned
+
+
+class ProductDefinition(BaseModel):
+    """Approved audience, workflow, maturity, quality, and delivery contract."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    target_users: ProductDefinitionStatement
+    primary_workflow: ProductDefinitionStatement
+    delivery_maturity: ProductMaturityDefinition
+    usability_expectations: ProductDefinitionStatement
+    operational_expectations: ProductDefinitionStatement
+    delivery_expectations: ProductDefinitionStatement
+    impact: ProductDefinitionImpact
+
+    def dimensions(
+        self,
+    ) -> tuple[
+        tuple[ProductDefinitionDimension, ProductDefinitionBasis],
+        ...,
+    ]:
+        """Return every dimension with its stable identifier."""
+
+        return (
+            (ProductDefinitionDimension.TARGET_USERS, self.target_users),
+            (ProductDefinitionDimension.PRIMARY_WORKFLOW, self.primary_workflow),
+            (ProductDefinitionDimension.DELIVERY_MATURITY, self.delivery_maturity),
+            (
+                ProductDefinitionDimension.USABILITY_EXPECTATIONS,
+                self.usability_expectations,
+            ),
+            (
+                ProductDefinitionDimension.OPERATIONAL_EXPECTATIONS,
+                self.operational_expectations,
+            ),
+            (
+                ProductDefinitionDimension.DELIVERY_EXPECTATIONS,
+                self.delivery_expectations,
+            ),
+        )
+
+
 class TaskBrief(BaseModel):
     """Confirmed requirements passed unchanged to comparable team runs."""
 
@@ -322,6 +484,10 @@ class TaskBrief(BaseModel):
     source_request: str = Field(min_length=1)
     requirements: list[str] = Field(min_length=1)
     acceptance_criteria: list[AcceptanceCriterion] = Field(min_length=1)
+    product_definition: ProductDefinition | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     constraints: list[str] = Field(default_factory=list)
     assumptions: list[str] = Field(default_factory=list)
     open_questions: list[str] = Field(default_factory=list)

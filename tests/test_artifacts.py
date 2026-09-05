@@ -119,10 +119,13 @@ def test_handoff_must_cross_an_agent_boundary() -> None:
 
 
 def test_confirmed_task_brief_is_accepted() -> None:
-    task_brief = TaskBrief.model_validate(valid_task_brief_payload())
+    payload = valid_task_brief_payload()
+    task_brief = TaskBrief.model_validate(payload)
 
     assert task_brief.confirmed
     assert task_brief.acceptance_criteria[0].id == "AC_PERSIST"
+    assert task_brief.product_definition is None
+    assert task_brief.model_dump(mode="json") == payload
 
 
 def test_review_boundary_protocol_has_controller_owned_exact_meanings() -> None:

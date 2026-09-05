@@ -32,6 +32,10 @@ from software_agent_team.artifacts import (
     AcceptanceCriterion,
     AgentRole,
     ArtifactKind,
+    DeliveryMaturity,
+    ProductDefinition,
+    ProductDefinitionDimension,
+    ProductDefinitionDisposition,
     ProviderLivenessEvidence,
     ReviewBoundaryKind,
     TaskBrief,
@@ -100,7 +104,7 @@ from software_agent_team.teams import (
     permission_for_capability,
 )
 
-PLANNING_SCHEMA_VERSION = 4
+PLANNING_SCHEMA_VERSION = 5
 MINIMUM_READABLE_PLANNING_SCHEMA_VERSION = 2
 PLANNING_TEMPLATE = Path(__file__).with_name("prompt_templates") / "adaptive_planner.md"
 MAX_PLANNING_EVIDENCE_CHARACTERS = 1_000_000
@@ -980,7 +984,7 @@ class PlanningRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, PLANNING_SCHEMA_VERSION] = PLANNING_SCHEMA_VERSION
+    schema_version: Literal[2, 3, 4, PLANNING_SCHEMA_VERSION] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     project_name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
     source_request: str = Field(min_length=1, max_length=2000)
@@ -1062,6 +1066,14 @@ class PlanningQuestion(BaseModel):
         min_length=1,
         exclude_if=lambda values: not values,
     )
+    product_definition_dimensions: tuple[ProductDefinitionDimension, ...] = Field(
+        default=(),
+        exclude_if=lambda values: not values,
+        description=(
+            "Product-depth dimensions this answer resolves; empty for a material "
+            "product decision outside the six adequacy dimensions."
+        ),
+    )
     options: tuple[PlanningOption, ...] = Field(min_length=2, max_length=3)
     allow_custom: Literal[True] = True
 
@@ -1080,7 +1092,24 @@ class PlanningQuestion(BaseModel):
         option_ids = [option.id for option in self.options]
         if len(option_ids) != len(set(option_ids)):
             raise ValueError("Planning question option IDs must be unique")
+        if len(self.product_definition_dimensions) != len(
+            set(self.product_definition_dimensions)
+        ):
+            raise ValueError(
+                "Planning question product-definition dimensions must be unique"
+            )
         return self
+
+
+@dataclass(frozen=True)
+class _PlanningQuestionContract:
+    """Controller-recovered authority and adequacy scope for one question."""
+
+    category: PlanningDecisionCategory
+    owner: PlanningDecisionAuthority
+    product_definition_dimensions: tuple[ProductDefinitionDimension, ...] = ()
+    answer: str | None = None
+    approved_dimension_values: tuple[tuple[ProductDefinitionDimension, str], ...] = ()
 
 
 class PlanningDecisionRecord(BaseModel):
@@ -1495,6 +1524,10 @@ class PlanningProposalBody(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     title: str = Field(min_length=1, max_length=120)
+    product_definition: ProductDefinition | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     requirements: tuple[str, ...] = Field(min_length=1)
     requirement_ids: tuple[str, ...] = Field(
         default=(),
@@ -1814,6 +1847,22 @@ def validate_question_admission(
                 (ResponseIssueSubjectKind.QUESTION, question.id)
             ),
         )
+    if (
+        question.product_definition_dimensions
+        and question.decision_category
+        is not PlanningDecisionCategory.PRODUCT_REQUIREMENT
+    ):
+        raise _planning_context_invariant(
+            "planning_product_question_authority",
+            "product-definition clarification belongs to user product requirements",
+            paths=(
+                "/question/decision_category",
+                "/question/product_definition_dimensions",
+            ),
+            subjects=_planning_subjects(
+                (ResponseIssueSubjectKind.QUESTION, question.id)
+            ),
+        )
     if not question.missing_evidence:
         raise _planning_context_invariant(
             "planning_question_missing_evidence",
@@ -1834,14 +1883,280 @@ def validate_question_admission(
         )
 
 
+def _normalized_evidence_text(value: str) -> str:
+    """Normalize user-visible text only enough for attributable quote matching."""
+
+    return " ".join(value.casefold().split())
+
+
+def _validate_product_definition(
+    body: PlanningProposalBody,
+    *,
+    decisions: Mapping[str, PlanningDecisionRecord],
+    user_inputs: Collection[str],
+    question_contracts: Mapping[str, _PlanningQuestionContract] | None,
+) -> None:
+    """Require attributable product depth with real downstream plan effects."""
+
+    definition = body.product_definition
+    if definition is None:
+        raise _planning_context_invariant(
+            "planning_product_definition_required",
+            "current proposals require an approved product definition",
+            paths=("/proposal/product_definition",),
+        )
+
+    requirement_ids = set(body.requirement_ids)
+    criterion_ids = {criterion.id for criterion in body.acceptance_criteria}
+    decision_ids = set(decisions)
+    normalized_inputs = tuple(_normalized_evidence_text(value) for value in user_inputs)
+    core_dimensions = {
+        ProductDefinitionDimension.TARGET_USERS,
+        ProductDefinitionDimension.PRIMARY_WORKFLOW,
+        ProductDefinitionDimension.DELIVERY_MATURITY,
+    }
+
+    for dimension, item in definition.dimensions():
+        path = f"/proposal/product_definition/{dimension.value}"
+        unknown_requirements = set(item.requirement_ids) - requirement_ids
+        unknown_criteria = set(item.criterion_ids) - criterion_ids
+        unknown_decisions = set(item.decision_ids) - decision_ids
+        if unknown_requirements or unknown_criteria or unknown_decisions:
+            details = []
+            if unknown_requirements:
+                details.append(
+                    "requirements " + ", ".join(sorted(unknown_requirements))
+                )
+            if unknown_criteria:
+                details.append("criteria " + ", ".join(sorted(unknown_criteria)))
+            if unknown_decisions:
+                details.append("decisions " + ", ".join(sorted(unknown_decisions)))
+            raise _planning_context_invariant(
+                "planning_product_definition_reference",
+                f"{dimension.value} references unknown downstream "
+                + "; ".join(details),
+                paths=(path,),
+            )
+
+        if item.disposition is ProductDefinitionDisposition.EXPLICIT_INPUT:
+            if not normalized_inputs or not any(
+                _normalized_evidence_text(item.source) in value
+                for value in normalized_inputs
+            ):
+                raise _planning_context_invariant(
+                    "planning_product_explicit_source",
+                    f"{dimension.value} explicit-input source is not in the "
+                    "user request",
+                    paths=(f"{path}/source",),
+                )
+            statement = getattr(item, "statement", None)
+            if statement is not None and _normalized_evidence_text(
+                statement
+            ) != _normalized_evidence_text(item.source):
+                raise _planning_context_invariant(
+                    "planning_product_explicit_statement",
+                    f"{dimension.value} explicit-input statement must preserve "
+                    "the exact user wording",
+                    paths=(f"{path}/statement", f"{path}/source"),
+                )
+            if dimension is ProductDefinitionDimension.DELIVERY_MATURITY:
+                maturity_phrase = definition.delivery_maturity.level.value.replace(
+                    "_", " "
+                )
+                if maturity_phrase not in _normalized_evidence_text(item.source):
+                    raise _planning_context_invariant(
+                        "planning_product_maturity_source",
+                        "explicit delivery maturity must preserve its exact "
+                        "controller vocabulary",
+                        paths=(f"{path}/level", f"{path}/source"),
+                    )
+        elif item.disposition is ProductDefinitionDisposition.RESOLVED_QUESTION:
+            linked = tuple(
+                decision
+                for decision in decisions.values()
+                if decision.question_id == item.source
+            )
+            if (
+                len(linked) != 1
+                or linked[0].authority is not PlanningDecisionAuthority.USER
+                or linked[0].category
+                is not PlanningDecisionCategory.PRODUCT_REQUIREMENT
+            ):
+                raise _planning_context_invariant(
+                    "planning_product_question_source",
+                    f"{dimension.value} must reference one user-owned question "
+                    "decision",
+                    paths=(f"{path}/source", f"{path}/decision_ids"),
+                )
+            if linked[0].id not in item.decision_ids:
+                raise _planning_context_invariant(
+                    "planning_product_question_decision_trace",
+                    f"{dimension.value} omits its resolved question decision",
+                    paths=(f"{path}/decision_ids",),
+                )
+            if question_contracts is not None:
+                contract = question_contracts.get(item.source)
+                if (
+                    contract is None
+                    or contract.category
+                    is not PlanningDecisionCategory.PRODUCT_REQUIREMENT
+                    or contract.owner is not PlanningDecisionAuthority.USER
+                    or dimension not in contract.product_definition_dimensions
+                ):
+                    raise _planning_context_invariant(
+                        "planning_product_question_dimension",
+                        f"{dimension.value} was not resolved by its declared question",
+                        paths=(f"{path}/source",),
+                        subjects=_planning_subjects(
+                            (ResponseIssueSubjectKind.QUESTION, item.source)
+                        ),
+                    )
+                resolved_value = (
+                    definition.delivery_maturity.level.value.replace("_", " ")
+                    if dimension is ProductDefinitionDimension.DELIVERY_MATURITY
+                    else item.statement
+                )
+                if contract.answer is not None:
+                    if _normalized_evidence_text(
+                        resolved_value
+                    ) not in _normalized_evidence_text(contract.answer):
+                        raise _planning_context_invariant(
+                            "planning_product_question_answer",
+                            f"{dimension.value} is not preserved in its user answer",
+                            paths=(f"{path}/source",),
+                            subjects=_planning_subjects(
+                                (ResponseIssueSubjectKind.QUESTION, item.source)
+                            ),
+                        )
+                else:
+                    approved_values = dict(contract.approved_dimension_values)
+                    previous_value = approved_values.get(dimension)
+                    if previous_value is None or _normalized_evidence_text(
+                        resolved_value
+                    ) != _normalized_evidence_text(previous_value):
+                        raise _planning_context_invariant(
+                            "planning_product_question_revision",
+                            f"{dimension.value} changed without a new user answer",
+                            paths=(f"{path}/source",),
+                            subjects=_planning_subjects(
+                                (ResponseIssueSubjectKind.QUESTION, item.source)
+                            ),
+                        )
+        elif item.disposition is ProductDefinitionDisposition.PLANNER_RECOMMENDATION:
+            if dimension in core_dimensions:
+                raise _planning_context_invariant(
+                    "planning_product_user_decision_required",
+                    f"{dimension.value} cannot be silently chosen by Planning",
+                    paths=(f"{path}/disposition",),
+                )
+            if item.source != "planner" or not item.decision_ids:
+                raise _planning_context_invariant(
+                    "planning_product_recommendation_source",
+                    f"{dimension.value} Planner recommendation needs decision "
+                    "provenance",
+                    paths=(f"{path}/source", f"{path}/decision_ids"),
+                )
+            if any(
+                decisions[decision_id].authority
+                is not PlanningDecisionAuthority.PLANNER_PROPOSAL
+                for decision_id in item.decision_ids
+            ):
+                raise _planning_context_invariant(
+                    "planning_product_recommendation_authority",
+                    f"{dimension.value} references a non-Planner decision",
+                    paths=(f"{path}/decision_ids",),
+                )
+            expected_category = {
+                ProductDefinitionDimension.USABILITY_EXPECTATIONS: (
+                    PlanningDecisionCategory.ACCEPTANCE_SCOPE
+                ),
+                ProductDefinitionDimension.OPERATIONAL_EXPECTATIONS: (
+                    PlanningDecisionCategory.ACCEPTANCE_SCOPE
+                ),
+                ProductDefinitionDimension.DELIVERY_EXPECTATIONS: (
+                    PlanningDecisionCategory.DELIVERY
+                ),
+            }[dimension]
+            if not any(
+                decisions[decision_id].category is expected_category
+                for decision_id in item.decision_ids
+            ):
+                raise _planning_context_invariant(
+                    "planning_product_recommendation_category",
+                    f"{dimension.value} lacks its corresponding Planner decision",
+                    paths=(f"{path}/decision_ids",),
+                )
+        else:
+            if dimension is ProductDefinitionDimension.DELIVERY_MATURITY:
+                raise _planning_context_invariant(
+                    "planning_product_maturity_required",
+                    "delivery maturity is always material to the approved product",
+                    paths=(f"{path}/disposition",),
+                )
+            if (
+                dimension
+                in {
+                    ProductDefinitionDimension.TARGET_USERS,
+                    ProductDefinitionDimension.PRIMARY_WORKFLOW,
+                }
+                and definition.delivery_maturity.level
+                is not DeliveryMaturity.THROWAWAY_PROTOTYPE
+            ):
+                raise _planning_context_invariant(
+                    "planning_product_user_decision_required",
+                    f"{dimension.value} may be not_material only for a throwaway "
+                    "prototype",
+                    paths=(f"{path}/disposition",),
+                )
+            if item.source != "planner":
+                raise _planning_context_invariant(
+                    "planning_product_not_material_source",
+                    f"{dimension.value} not_material disposition must be "
+                    "attributable to Planning",
+                    paths=(f"{path}/source",),
+                )
+
+    if not definition.target_users.requirement_ids:
+        raise _planning_context_invariant(
+            "planning_product_audience_effect",
+            "target users must affect at least one requirement",
+            paths=("/proposal/product_definition/target_users/requirement_ids",),
+        )
+    if not definition.primary_workflow.requirement_ids:
+        raise _planning_context_invariant(
+            "planning_product_workflow_effect",
+            "primary workflow must affect at least one requirement",
+            paths=("/proposal/product_definition/primary_workflow/requirement_ids",),
+        )
+    for dimension, item in (
+        (
+            ProductDefinitionDimension.USABILITY_EXPECTATIONS,
+            definition.usability_expectations,
+        ),
+        (
+            ProductDefinitionDimension.OPERATIONAL_EXPECTATIONS,
+            definition.operational_expectations,
+        ),
+    ):
+        if (
+            item.disposition is not ProductDefinitionDisposition.NOT_MATERIAL
+            and not item.criterion_ids
+        ):
+            raise _planning_context_invariant(
+                "planning_product_quality_effect",
+                f"{dimension.value} must affect at least one acceptance criterion",
+                paths=(
+                    f"/proposal/product_definition/{dimension.value}/criterion_ids",
+                ),
+            )
+
+
 def validate_planning_clarity(
     body: PlanningProposalBody,
     *,
-    question_contracts: Mapping[
-        str,
-        tuple[PlanningDecisionCategory, PlanningDecisionAuthority],
-    ]
-    | None = None,
+    source_request: str | None = None,
+    additional_user_inputs: Collection[str] = (),
+    question_contracts: Mapping[str, _PlanningQuestionContract] | None = None,
 ) -> None:
     """Enforce the current decision and requirement-to-evidence contract."""
 
@@ -1907,6 +2222,17 @@ def validate_planning_clarity(
                 )
             ),
         )
+
+    _validate_product_definition(
+        body,
+        decisions=decisions,
+        user_inputs=tuple(
+            value
+            for value in (source_request, *additional_user_inputs)
+            if value is not None
+        ),
+        question_contracts=question_contracts,
+    )
 
     required_recommendations = {
         PlanningDecisionCategory.ACCEPTANCE_SCOPE,
@@ -2188,9 +2514,12 @@ def validate_planning_clarity(
                 *((ResponseIssueSubjectKind.QUESTION, item) for item in invented),
             ),
         )
-    for question_id, (category, owner) in question_contracts.items():
+    for question_id, contract in question_contracts.items():
         decision = linked[question_id]
-        if decision.category is not category or decision.authority is not owner:
+        if (
+            decision.category is not contract.category
+            or decision.authority is not contract.owner
+        ):
             decision_index = tuple(item.id for item in body.decisions).index(
                 decision.id
             )
@@ -2240,6 +2569,7 @@ def _planning_response_schema() -> dict[str, object]:
             "decision_owner",
             "missing_evidence",
             "material_consequences",
+            "product_definition_dimensions",
         ),
         "ProposedCriterion": (
             "requirement_ids",
@@ -2247,6 +2577,7 @@ def _planning_response_schema() -> dict[str, object]:
             "review_boundaries",
         ),
         "PlanningProposalBody": (
+            "product_definition",
             "requirement_ids",
             "non_goals",
             "assumption_decision_ids",
@@ -2288,6 +2619,21 @@ def _planning_response_schema() -> dict[str, object]:
                 f"Planning response schema has an invalid {field_name} union"
             )
         question_properties[field_name] = non_null[0]
+    proposal_properties = definitions["PlanningProposalBody"]["properties"]
+    product_definition_schema = proposal_properties["product_definition"]
+    product_options = product_definition_schema.get("anyOf")
+    if not isinstance(product_options, list):
+        raise PlanningError(
+            "Planning response schema has no nullable product_definition union"
+        )
+    product_non_null = [
+        option for option in product_options if option.get("type") != "null"
+    ]
+    if len(product_non_null) != 1:
+        raise PlanningError(
+            "Planning response schema has an invalid product_definition union"
+        )
+    proposal_properties["product_definition"] = product_non_null[0]
     return schema
 
 
@@ -2296,12 +2642,16 @@ class AdaptiveImplementationPlan(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, PLANNING_SCHEMA_VERSION] = PLANNING_SCHEMA_VERSION
+    schema_version: Literal[2, 3, 4, PLANNING_SCHEMA_VERSION] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     team_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     revision: int = Field(ge=1)
     created_at: datetime
     objective: str
+    product_definition: ProductDefinition | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     requirement_ids: tuple[str, ...] = Field(
         default=(),
         exclude_if=lambda values: not values,
@@ -2369,7 +2719,7 @@ class PlanningTurn(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, PLANNING_SCHEMA_VERSION] = PLANNING_SCHEMA_VERSION
+    schema_version: Literal[2, 3, 4, PLANNING_SCHEMA_VERSION] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     sequence: int = Field(ge=1)
     previous_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
@@ -2448,7 +2798,7 @@ class PlanningProposal(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, PLANNING_SCHEMA_VERSION] = PLANNING_SCHEMA_VERSION
+    schema_version: Literal[2, 3, 4, PLANNING_SCHEMA_VERSION] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     revision: int = Field(ge=1)
     created_at: datetime
@@ -2506,7 +2856,7 @@ class PlanningSession(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, PLANNING_SCHEMA_VERSION] = PLANNING_SCHEMA_VERSION
+    schema_version: Literal[2, 3, 4, PLANNING_SCHEMA_VERSION] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     request_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     status: PlanningSessionStatus
@@ -2685,7 +3035,7 @@ class PlanningApproval(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, PLANNING_SCHEMA_VERSION] = PLANNING_SCHEMA_VERSION
+    schema_version: Literal[2, 3, 4, PLANNING_SCHEMA_VERSION] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     revision: int = Field(ge=1)
     approved_at: datetime
@@ -2914,7 +3264,13 @@ def preview_adaptive_proposal(
         raise PlanningError("proposal belongs to a different Planning request")
     body = proposal.body
     if proposal.schema_version == PLANNING_SCHEMA_VERSION:
-        validate_planning_clarity(body)
+        validate_planning_clarity(
+            body,
+            source_request=request.source_request,
+            additional_user_inputs=(
+                () if proposal.change_request is None else (proposal.change_request,)
+            ),
+        )
     if policy.max_agents is not None and len(body.agents) > policy.max_agents:
         raise PlanningError(
             f"proposal has {len(body.agents)} Agents; policy permits "
@@ -3005,6 +3361,7 @@ def preview_adaptive_proposal(
         title=body.title,
         source_request=request.source_request,
         requirements=list(body.requirements),
+        product_definition=body.product_definition,
         acceptance_criteria=[
             AcceptanceCriterion(
                 id=item.id,
@@ -3027,6 +3384,7 @@ def preview_adaptive_proposal(
         revision=proposal.revision,
         created_at=created_at,
         objective=body.objective,
+        product_definition=body.product_definition,
         requirement_ids=body.requirement_ids,
         requirements=body.requirements,
         acceptance_criteria=body.acceptance_criteria,
@@ -3292,24 +3650,61 @@ def render_planning_overview(
     )
     lines = [
         "Planning overview",
-        "  Outcome and scope:",
+        "  Product definition and scope:",
         f"  Product: {brief.title}",
         f"  Request: {brief.source_request}",
-        f"  Destination: {preview.destination}",
-        "  Execution profile:",
-        *(f"    - {item}" for item in preview.execution_profile),
-        "  Requirements:",
-        *(
-            f"    - {requirement_id}: {text}"
-            for requirement_id, text in requirement_pairs
-        ),
-        "  Non-goals:",
-        *(
-            (f"    - {item}" for item in implementation.non_goals)
-            if implementation.non_goals
-            else ("    - unavailable in legacy Planning evidence",)
-        ),
     ]
+    definition = implementation.product_definition
+    if definition is None:
+        lines.append("  Product depth: unavailable in legacy Planning evidence")
+    else:
+        lines.extend(
+            (
+                "  Audience and killer workflow:",
+                "    - target users "
+                f"[{definition.target_users.disposition.value}]: "
+                + definition.target_users.statement,
+                "    - primary workflow "
+                f"[{definition.primary_workflow.disposition.value}]: "
+                + definition.primary_workflow.statement,
+                "    - delivery maturity: "
+                + definition.delivery_maturity.level.value
+                + f" [{definition.delivery_maturity.disposition.value}]",
+                "  Quality and delivery expectations:",
+                "    - usability "
+                f"[{definition.usability_expectations.disposition.value}]: "
+                + definition.usability_expectations.statement,
+                "    - operations "
+                f"[{definition.operational_expectations.disposition.value}]: "
+                + definition.operational_expectations.statement,
+                "    - delivery "
+                f"[{definition.delivery_expectations.disposition.value}]: "
+                + definition.delivery_expectations.statement,
+                "  Product-definition effects:",
+                "    - architecture: " + definition.impact.architecture,
+                "    - team: " + definition.impact.team,
+                "    - cost: " + definition.impact.cost,
+                "    - delivery: " + definition.impact.delivery,
+            )
+        )
+    lines.extend(
+        (
+            "  Non-goals:",
+            *(
+                (f"    - {item}" for item in implementation.non_goals)
+                if implementation.non_goals
+                else ("    - unavailable in legacy Planning evidence",)
+            ),
+            f"  Destination: {preview.destination}",
+            "  Execution profile:",
+            *(f"    - {item}" for item in preview.execution_profile),
+            "  Requirements:",
+            *(
+                f"    - {requirement_id}: {text}"
+                for requirement_id, text in requirement_pairs
+            ),
+        )
+    )
     if preview.execution_profile_constraints:
         lines.append("  Execution-profile constraints (controller-owned):")
         lines.extend(f"    - {item}" for item in preview.execution_profile_constraints)
@@ -4205,26 +4600,58 @@ class AdaptivePlanningCoordinator:
     def _question_contracts(
         transcript: list[dict[str, object]],
         current_proposal: PlanningProposal | None,
-    ) -> dict[
-        str,
-        tuple[PlanningDecisionCategory, PlanningDecisionAuthority],
-    ]:
+    ) -> dict[str, _PlanningQuestionContract]:
         """Recover every answered question contract without trusting prose."""
 
-        contracts: dict[
-            str,
-            tuple[PlanningDecisionCategory, PlanningDecisionAuthority],
-        ] = {}
+        contracts: dict[str, _PlanningQuestionContract] = {}
         if current_proposal is not None:
+            dimensions_by_question: dict[str, list[ProductDefinitionDimension]] = {}
+            values_by_question: dict[
+                str,
+                list[tuple[ProductDefinitionDimension, str]],
+            ] = {}
+            if current_proposal.body.product_definition is not None:
+                for (
+                    dimension,
+                    item,
+                ) in current_proposal.body.product_definition.dimensions():
+                    if (
+                        item.disposition
+                        is ProductDefinitionDisposition.RESOLVED_QUESTION
+                    ):
+                        dimensions_by_question.setdefault(item.source, []).append(
+                            dimension
+                        )
+                        value = (
+                            current_proposal.body.product_definition.delivery_maturity.level.value.replace(
+                                "_", " "
+                            )
+                            if dimension is ProductDefinitionDimension.DELIVERY_MATURITY
+                            else item.statement
+                        )
+                        values_by_question.setdefault(item.source, []).append(
+                            (dimension, value)
+                        )
             for decision in current_proposal.body.decisions:
                 if decision.question_id is None:
                     continue
-                contracts[decision.question_id] = (
-                    decision.category,
-                    decision.authority,
+                contracts[decision.question_id] = _PlanningQuestionContract(
+                    category=decision.category,
+                    owner=decision.authority,
+                    product_definition_dimensions=tuple(
+                        dimensions_by_question.get(decision.question_id, ())
+                    ),
+                    approved_dimension_values=tuple(
+                        values_by_question.get(decision.question_id, ())
+                    ),
                 )
         for entry in transcript:
             question = PlanningQuestion.model_validate(entry["question"])
+            answer = entry.get("answer")
+            if not isinstance(answer, str) or not answer.strip():
+                raise PlanningError(
+                    "persisted Planning transcript has an invalid user answer"
+                )
             if question.decision_category is None or question.decision_owner is None:
                 raise PlanningError(
                     "persisted Planning transcript has an incomplete question contract"
@@ -4233,9 +4660,11 @@ class AdaptivePlanningCoordinator:
                 raise PlanningError(
                     f"Planning question ID was already used: {question.id}"
                 )
-            contracts[question.id] = (
-                question.decision_category,
-                question.decision_owner,
+            contracts[question.id] = _PlanningQuestionContract(
+                category=question.decision_category,
+                owner=question.decision_owner,
+                product_definition_dimensions=(question.product_definition_dimensions),
+                answer=answer,
             )
         return contracts
 
@@ -4446,6 +4875,10 @@ class AdaptivePlanningCoordinator:
                         assert parsed.proposal is not None
                         validate_planning_clarity(
                             parsed.proposal,
+                            source_request=request.source_request,
+                            additional_user_inputs=(
+                                () if change_request is None else (change_request,)
+                            ),
                             question_contracts=question_contracts,
                         )
                         candidate = PlanningProposal(
@@ -4836,6 +5269,14 @@ def _interactive_question_answerer(
             "Decision boundary: "
             f"{question.decision_category.value} / {question.decision_owner.value}"
         )
+        if question.product_definition_dimensions:
+            write(
+                "Product definition affected: "
+                + ", ".join(
+                    dimension.value
+                    for dimension in question.product_definition_dimensions
+                )
+            )
         write(f"Why this matters: {question.why}")
         write("Missing evidence:")
         for item in question.missing_evidence:

@@ -21,6 +21,31 @@ Choose the next response by decision value:
   always allowed.
 - Do not turn Planning into an exhaustive form. When the request is sufficiently
   clear, return a complete proposal.
+- Before proposing, establish a product-depth contract for `target_users`,
+  `primary_workflow`, `delivery_maturity`, `usability_expectations`,
+  `operational_expectations`, and `delivery_expectations`. Delivery maturity is
+  exactly `throwaway_prototype`, `usable_local_product`, or
+  `releasable_small_product`. Target users, primary workflow, and maturity are
+  user-owned whenever they materially distinguish the result: use an exact
+  quote from the original request as `explicit_input`, or ask a
+  `product_requirement` question and list every dimension it resolves in
+  `product_definition_dimensions`. Never silently choose those three as a
+  Planner recommendation. For `resolved_question`, copy each natural-language
+  statement as an exact fragment of the user's answer, and use the exact
+  space-separated maturity value from that answer. If the answer does not
+  resolve a declared dimension, ask a follow-up instead of inferring it. A target
+  user or workflow may be `not_material` only for an explicitly approved
+  throwaway prototype. Acceptance, usability,
+  operations, and delivery details may be a reasoned `planner_recommendation`
+  that the user approves in the overview, or `not_material` when the rationale
+  explains why. Use `source: "planner"` for either Planner disposition and the
+  answered question ID for `resolved_question`.
+- Every product-definition dimension must reference the stable requirements,
+  criteria, and decisions it affects. Target users and primary workflow must
+  affect requirements; material usability and operational expectations must
+  affect acceptance criteria. Explain the resulting architecture, team, cost,
+  and delivery impacts. Do not fill the ProductDefinition with decorative prose
+  that changes no downstream plan field.
 - On revision, replace the complete proposal and honor the user's stated change.
 - Give every requirement a stable `REQ_` ID. Every proposed acceptance
   criterion must reference one or more requirement IDs, one or more responsible

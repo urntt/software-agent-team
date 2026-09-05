@@ -15,6 +15,13 @@ from pydantic import ValidationError
 import software_agent_team.planning as planning
 from software_agent_team.artifacts import (
     AcceptanceCriterion,
+    DeliveryMaturity,
+    ProductDefinition,
+    ProductDefinitionDimension,
+    ProductDefinitionDisposition,
+    ProductDefinitionImpact,
+    ProductDefinitionStatement,
+    ProductMaturityDefinition,
     ProviderLivenessEvidence,
     ReviewBoundaryKind,
 )
@@ -82,7 +89,10 @@ from software_agent_team.teams import (
 )
 
 FIXED_TIME = datetime(2026, 8, 26, 12, 0, tzinfo=UTC)
-AMBIGUOUS_LINK_REQUEST = "Build a CLI that checks Markdown links."
+AMBIGUOUS_LINK_REQUEST = (
+    "For developers who will use it repeatedly, build a usable local product that "
+    "checks Markdown links."
+)
 
 
 class AdvancingClock:
@@ -100,8 +110,9 @@ class AdvancingClock:
 def request(
     *,
     source_request: str = (
-        "Build a local-only CLI that checks Markdown file and fragment links "
-        "without fetching remote URLs."
+        "For developers who will use it repeatedly, build a usable local product "
+        "that checks Markdown links in files and fragments without fetching "
+        "remote URLs."
     ),
 ) -> PlanningRequest:
     """Return direct input with explicit pre-model authorization."""
@@ -214,6 +225,60 @@ def proposal_body(
         )
     return PlanningProposalBody(
         title=title,
+        product_definition=ProductDefinition(
+            target_users=ProductDefinitionStatement(
+                statement="developers",
+                disposition=ProductDefinitionDisposition.EXPLICIT_INPUT,
+                source="developers",
+                rationale="The request names developers as the recurring users.",
+                requirement_ids=("REQ_SCAN",),
+            ),
+            primary_workflow=ProductDefinitionStatement(
+                statement="checks Markdown links",
+                disposition=ProductDefinitionDisposition.EXPLICIT_INPUT,
+                source="checks Markdown links",
+                rationale="The requested scan is the primary repeated workflow.",
+                requirement_ids=("REQ_SCAN", "REQ_REPORT"),
+            ),
+            delivery_maturity=ProductMaturityDefinition(
+                level=DeliveryMaturity.USABLE_LOCAL_PRODUCT,
+                disposition=ProductDefinitionDisposition.EXPLICIT_INPUT,
+                source="usable local product",
+                rationale="The request explicitly asks for a reusable local tool.",
+                requirement_ids=("REQ_SCAN",),
+                decision_ids=("DECISION_DELIVERY",),
+            ),
+            usability_expectations=ProductDefinitionStatement(
+                statement="Failures are actionable from ordinary terminal output.",
+                disposition=ProductDefinitionDisposition.PLANNER_RECOMMENDATION,
+                source="planner",
+                rationale="A repeatedly used CLI needs understandable diagnostics.",
+                criterion_ids=("AC_REPORT",),
+                decision_ids=("DECISION_ACCEPTANCE",),
+            ),
+            operational_expectations=ProductDefinitionStatement(
+                statement="Local scans are deterministic and avoid network access.",
+                disposition=ProductDefinitionDisposition.PLANNER_RECOMMENDATION,
+                source="planner",
+                rationale="Deterministic local operation matches the approved scope.",
+                criterion_ids=("AC_SCAN",),
+                decision_ids=("DECISION_ACCEPTANCE",),
+            ),
+            delivery_expectations=ProductDefinitionStatement(
+                statement="Deliver a documented, runnable local CLI project.",
+                disposition=ProductDefinitionDisposition.PLANNER_RECOMMENDATION,
+                source="planner",
+                rationale="The user needs a repeatable project rather than a snippet.",
+                requirement_ids=("REQ_SCAN",),
+                decision_ids=("DECISION_DELIVERY",),
+            ),
+            impact=ProductDefinitionImpact(
+                architecture="Separate scanning from terminal presentation.",
+                team="Use one cohesive writer with downstream quality authority.",
+                cost="Keep the small cohesive implementation within the task budget.",
+                delivery="Include runnable commands, tests, and user documentation.",
+            ),
+        ),
         requirements=(
             "Scan Markdown files below a selected path.",
             "Report broken local links with source locations.",
@@ -336,7 +401,12 @@ def test_planning_overview_separates_constraint_authority_without_losing_data() 
     assert preview.planner_constraints == ("Use only the standard library at runtime.",)
     assert overview.count("Use the versioned uv environment") == 1
     assert overview.count("Use only the standard library at runtime.") == 1
-    assert "Outcome and scope:" in overview
+    assert "Product definition and scope:" in overview
+    assert "target users [explicit_input]: developers" in overview
+    assert "primary workflow [explicit_input]: checks Markdown links" in overview
+    assert "delivery maturity: usable_local_product [explicit_input]" in overview
+    assert "Product-definition effects:" in overview
+    assert "architecture: Separate scanning from terminal presentation." in overview
     assert "REQ_SCAN: Scan Markdown files" in overview
     assert "Non-goals:" in overview
     assert "Decisions and assumptions:" in overview
@@ -402,6 +472,106 @@ def question_response() -> PlanningModelResponse:
     )
 
 
+def product_intent_question_response() -> PlanningModelResponse:
+    """Ask one user-owned question that resolves the three core dimensions."""
+
+    return PlanningModelResponse(
+        kind=PlanningResponseKind.QUESTION,
+        question=PlanningQuestion(
+            id="product_intent",
+            text=(
+                "Who will use this, what repeated workflow matters most, and how "
+                "mature should the delivery be?"
+            ),
+            why="Those choices change quality, architecture, team, and delivery.",
+            decision_category=PlanningDecisionCategory.PRODUCT_REQUIREMENT,
+            decision_owner=PlanningDecisionAuthority.USER,
+            missing_evidence=(
+                "The short request does not identify audience, workflow, or maturity.",
+            ),
+            material_consequences=(
+                "A throwaway script and a reusable local product need different plans.",
+            ),
+            product_definition_dimensions=(
+                ProductDefinitionDimension.TARGET_USERS,
+                ProductDefinitionDimension.PRIMARY_WORKFLOW,
+                ProductDefinitionDimension.DELIVERY_MATURITY,
+            ),
+            options=(
+                PlanningOption(
+                    id="personal_prototype",
+                    label="Personal prototype",
+                    description=(
+                        "One person runs a throwaway prototype once for an "
+                        "exploratory result."
+                    ),
+                ),
+                PlanningOption(
+                    id="reusable_local",
+                    label="Reusable local tool",
+                    description=(
+                        "Developers and researchers repeatedly scan local Markdown "
+                        "collections and inspect actionable failures as a usable "
+                        "local product."
+                    ),
+                ),
+            ),
+        ),
+    )
+
+
+def resolved_product_body() -> PlanningProposalBody:
+    """Return a proposal whose core depth came from product_intent."""
+
+    body = proposal_body(question_id="product_intent")
+    definition = body.product_definition
+    assert definition is not None
+    decision_id = "DECISION_LINK_SCOPE_ANSWER"
+    return body.model_copy(
+        update={
+            "product_definition": definition.model_copy(
+                update={
+                    "target_users": definition.target_users.model_copy(
+                        update={
+                            "statement": "Developers and researchers",
+                            "disposition": (
+                                ProductDefinitionDisposition.RESOLVED_QUESTION
+                            ),
+                            "source": "product_intent",
+                            "decision_ids": (decision_id,),
+                        }
+                    ),
+                    "primary_workflow": definition.primary_workflow.model_copy(
+                        update={
+                            "statement": (
+                                "Repeatedly scan local Markdown collections and "
+                                "inspect actionable failures"
+                            ),
+                            "disposition": (
+                                ProductDefinitionDisposition.RESOLVED_QUESTION
+                            ),
+                            "source": "product_intent",
+                            "decision_ids": (decision_id,),
+                        }
+                    ),
+                    "delivery_maturity": (
+                        definition.delivery_maturity.model_copy(
+                            update={
+                                "level": DeliveryMaturity.USABLE_LOCAL_PRODUCT,
+                                "disposition": (
+                                    ProductDefinitionDisposition.RESOLVED_QUESTION
+                                ),
+                                "source": "product_intent",
+                                "decision_ids": (decision_id,),
+                            }
+                        )
+                    ),
+                }
+            )
+        }
+    )
+
+
 def proposal_response(
     body: PlanningProposalBody | None = None,
 ) -> PlanningModelResponse:
@@ -425,6 +595,218 @@ def test_question_requires_suggestions_and_preserves_custom_answers() -> None:
     assert question is not None
     assert len(question.options) == 2
     assert question.allow_custom
+
+
+def test_product_question_declares_every_core_dimension_it_resolves() -> None:
+    question = product_intent_question_response().question
+
+    assert question is not None
+    assert question.product_definition_dimensions == (
+        ProductDefinitionDimension.TARGET_USERS,
+        ProductDefinitionDimension.PRIMARY_WORKFLOW,
+        ProductDefinitionDimension.DELIVERY_MATURITY,
+    )
+    output: list[str] = []
+    answer = planning._interactive_question_answerer(
+        read=lambda _prompt: "2",
+        write=output.append,
+    )(question)
+    assert answer is not None
+    assert (
+        "Product definition affected: target_users, primary_workflow, delivery_maturity"
+    ) in output
+
+
+def test_product_dimensions_cannot_be_attached_to_non_product_questions(
+    tmp_path: Path,
+) -> None:
+    question = product_intent_question_response().question
+    assert question is not None
+    invalid = question.model_copy(
+        update={
+            "decision_category": PlanningDecisionCategory.ACCEPTANCE_SCOPE,
+            "decision_owner": PlanningDecisionAuthority.PLANNER_PROPOSAL,
+        }
+    )
+    coordinator = AdaptivePlanningCoordinator(
+        executor=ScriptedAgentExecutor(
+            [
+                response(
+                    PlanningModelResponse(
+                        kind=PlanningResponseKind.QUESTION,
+                        question=invalid,
+                    )
+                )
+            ]
+        ),
+        store=PlanningStore(tmp_path / "planning"),
+        policy=policy(response_repair_limit=0),
+        clock=AdvancingClock(),
+    )
+
+    with pytest.raises(PlanningError, match="product-definition clarification"):
+        coordinator.start(
+            request(),
+            answer_question=lambda _question: pytest.fail(
+                "misowned product question reached the user"
+            ),
+        )
+
+
+def test_under_specified_request_requires_question_backed_core_dimensions(
+    tmp_path: Path,
+) -> None:
+    source = "Build a CLI that summarizes a Markdown notes directory."
+    definition = proposal_body().product_definition
+    assert definition is not None
+    invented = definition.model_copy(
+        update={
+            "target_users": definition.target_users.model_copy(
+                update={
+                    "statement": "Developers",
+                    "disposition": ProductDefinitionDisposition.PLANNER_RECOMMENDATION,
+                    "source": "planner",
+                }
+            ),
+            "primary_workflow": definition.primary_workflow.model_copy(
+                update={
+                    "statement": "Repeatedly summarize notes",
+                    "disposition": ProductDefinitionDisposition.PLANNER_RECOMMENDATION,
+                    "source": "planner",
+                }
+            ),
+            "delivery_maturity": definition.delivery_maturity.model_copy(
+                update={
+                    "disposition": ProductDefinitionDisposition.PLANNER_RECOMMENDATION,
+                    "source": "planner",
+                }
+            ),
+        }
+    )
+    coordinator = AdaptivePlanningCoordinator(
+        executor=ScriptedAgentExecutor(
+            [
+                response(
+                    proposal_response(
+                        proposal_body().model_copy(
+                            update={"product_definition": invented}
+                        )
+                    )
+                )
+            ]
+        ),
+        store=PlanningStore(tmp_path / "planning"),
+        policy=policy(response_repair_limit=0),
+        clock=AdvancingClock(),
+    )
+
+    with pytest.raises(PlanningError, match="cannot be silently chosen"):
+        coordinator.start(
+            request(source_request=source),
+            answer_question=lambda _question: pytest.fail("unexpected question"),
+        )
+
+
+def test_question_backed_product_definition_reaches_confirmed_task_brief(
+    tmp_path: Path,
+) -> None:
+    planning_request = request(
+        source_request="Build a CLI that summarizes a Markdown notes directory."
+    )
+    coordinator = AdaptivePlanningCoordinator(
+        executor=ScriptedAgentExecutor(
+            [
+                response(product_intent_question_response()),
+                response(proposal_response(resolved_product_body())),
+            ]
+        ),
+        store=PlanningStore(tmp_path / "planning"),
+        policy=policy(response_repair_limit=0),
+        clock=AdvancingClock(),
+    )
+
+    created = coordinator.start(
+        planning_request,
+        answer_question=lambda _question: (
+            "Developers and researchers will repeatedly scan local Markdown "
+            "collections and inspect actionable failures as a usable local product."
+        ),
+    )
+
+    assert created is not None
+    preview = preview_adaptive_proposal(
+        planning_request,
+        created,
+        policy(),
+        created_at=FIXED_TIME,
+    )
+    definition = preview.task_brief.product_definition
+    assert definition is not None
+    assert definition.delivery_maturity.level is DeliveryMaturity.USABLE_LOCAL_PRODUCT
+    assert (
+        definition.target_users.disposition
+        is ProductDefinitionDisposition.RESOLVED_QUESTION
+    )
+    assert preview.implementation_plan.product_definition == definition
+
+
+def test_question_backed_product_depth_cannot_invent_beyond_the_user_answer(
+    tmp_path: Path,
+) -> None:
+    coordinator = AdaptivePlanningCoordinator(
+        executor=ScriptedAgentExecutor(
+            [
+                response(product_intent_question_response()),
+                response(proposal_response(resolved_product_body())),
+            ]
+        ),
+        store=PlanningStore(tmp_path / "planning"),
+        policy=policy(response_repair_limit=0),
+        clock=AdvancingClock(),
+    )
+
+    with pytest.raises(PlanningError, match="not preserved in its user answer"):
+        coordinator.start(
+            request(
+                source_request="Build a CLI that summarizes a Markdown notes directory."
+            ),
+            answer_question=lambda _question: "Developers need a usable local product.",
+        )
+
+
+def test_resolved_dimension_must_be_declared_by_its_question(tmp_path: Path) -> None:
+    question = product_intent_question_response().question
+    assert question is not None
+    narrowed = question.model_copy(
+        update={
+            "product_definition_dimensions": (ProductDefinitionDimension.TARGET_USERS,)
+        }
+    )
+    coordinator = AdaptivePlanningCoordinator(
+        executor=ScriptedAgentExecutor(
+            [
+                response(
+                    PlanningModelResponse(
+                        kind=PlanningResponseKind.QUESTION,
+                        question=narrowed,
+                    )
+                ),
+                response(proposal_response(resolved_product_body())),
+            ]
+        ),
+        store=PlanningStore(tmp_path / "planning"),
+        policy=policy(response_repair_limit=0),
+        clock=AdvancingClock(),
+    )
+
+    with pytest.raises(PlanningError, match="was not resolved"):
+        coordinator.start(
+            request(source_request="Build a CLI that summarizes a Markdown directory."),
+            answer_question=lambda _question: (
+                "Developers and researchers will repeatedly scan local Markdown "
+                "collections and inspect actionable failures as a usable local product."
+            ),
+        )
 
 
 @pytest.mark.parametrize(
@@ -555,6 +937,219 @@ def test_clarity_gate_rejects_incomplete_or_misowned_proposals(
             policy(),
             created_at=FIXED_TIME,
         )
+
+
+def test_explicit_product_statement_cannot_expand_beyond_user_wording() -> None:
+    body = proposal_body()
+    definition = body.product_definition
+    assert definition is not None
+    expanded = definition.model_copy(
+        update={
+            "target_users": definition.target_users.model_copy(
+                update={"statement": "Developers and enterprise operators"}
+            )
+        }
+    )
+
+    with pytest.raises(PlanningError, match="preserve the exact user wording"):
+        preview_adaptive_proposal(
+            request(),
+            proposal(body=body.model_copy(update={"product_definition": expanded})),
+            policy(),
+            created_at=FIXED_TIME,
+        )
+
+
+def test_explicit_maturity_requires_the_controller_vocabulary() -> None:
+    body = proposal_body()
+    definition = body.product_definition
+    assert definition is not None
+    inferred_maturity = definition.model_copy(
+        update={
+            "delivery_maturity": definition.delivery_maturity.model_copy(
+                update={"source": "reusable local tool"}
+            )
+        }
+    )
+
+    with pytest.raises(PlanningError, match="exact controller vocabulary"):
+        preview_adaptive_proposal(
+            request(
+                source_request=(
+                    "For developers who will use it repeatedly, build a reusable "
+                    "local tool that checks Markdown links in files and fragments "
+                    "without fetching remote URLs."
+                )
+            ),
+            proposal(
+                body=body.model_copy(update={"product_definition": inferred_maturity})
+            ),
+            policy(),
+            created_at=FIXED_TIME,
+        )
+
+
+def test_product_definition_references_must_resolve_to_the_proposal() -> None:
+    body = proposal_body()
+    definition = body.product_definition
+    assert definition is not None
+    invalid = definition.model_copy(
+        update={
+            "usability_expectations": definition.usability_expectations.model_copy(
+                update={"criterion_ids": ("AC_INVENTED",)}
+            )
+        }
+    )
+
+    with pytest.raises(PlanningError, match="unknown downstream criteria"):
+        preview_adaptive_proposal(
+            request(),
+            proposal(body=body.model_copy(update={"product_definition": invalid})),
+            policy(),
+            created_at=FIXED_TIME,
+        )
+
+
+def test_explicit_throwaway_prototype_can_form_a_lean_plan_without_questions(
+    tmp_path: Path,
+) -> None:
+    source = (
+        "Build a throwaway prototype that counts Markdown links for one experiment."
+    )
+    body = proposal_body()
+    definition = body.product_definition
+    assert definition is not None
+    prototype = definition.model_copy(
+        update={
+            "target_users": definition.target_users.model_copy(
+                update={
+                    "statement": "No persistent target user is material.",
+                    "disposition": ProductDefinitionDisposition.NOT_MATERIAL,
+                    "source": "planner",
+                }
+            ),
+            "primary_workflow": definition.primary_workflow.model_copy(
+                update={
+                    "statement": "No repeated workflow is material.",
+                    "disposition": ProductDefinitionDisposition.NOT_MATERIAL,
+                    "source": "planner",
+                }
+            ),
+            "delivery_maturity": definition.delivery_maturity.model_copy(
+                update={
+                    "level": DeliveryMaturity.THROWAWAY_PROTOTYPE,
+                    "disposition": ProductDefinitionDisposition.EXPLICIT_INPUT,
+                    "source": "throwaway prototype",
+                }
+            ),
+        }
+    )
+    prototype_body = body.model_copy(update={"product_definition": prototype})
+    coordinator = AdaptivePlanningCoordinator(
+        executor=ScriptedAgentExecutor([response(proposal_response(prototype_body))]),
+        store=PlanningStore(tmp_path / "planning"),
+        policy=policy(response_repair_limit=0),
+        clock=AdvancingClock(),
+    )
+
+    created = coordinator.start(
+        request(source_request=source),
+        answer_question=lambda _question: pytest.fail(
+            "an explicit prototype should not trigger a fixed questionnaire"
+        ),
+    )
+
+    assert created is not None
+    assert created.body.product_definition == prototype
+
+
+def test_natural_language_revision_revalidates_the_complete_product_definition(
+    tmp_path: Path,
+) -> None:
+    invalid_revision = proposal_body(title="Revised Link Checker").model_copy(
+        update={"product_definition": None}
+    )
+    coordinator = AdaptivePlanningCoordinator(
+        executor=ScriptedAgentExecutor(
+            [
+                response(proposal_response()),
+                response(proposal_response(invalid_revision)),
+            ]
+        ),
+        store=PlanningStore(tmp_path / "planning"),
+        policy=policy(response_repair_limit=0),
+        clock=AdvancingClock(),
+    )
+    planning_request = request()
+    first = coordinator.start(
+        planning_request,
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+    assert first is not None
+
+    with pytest.raises(PlanningError, match="approved product definition"):
+        coordinator.revise(
+            planning_request,
+            first,
+            "Make the delivery a releasable small product.",
+            answer_question=lambda _question: pytest.fail("unexpected question"),
+        )
+
+
+def test_natural_language_revision_can_supply_new_explicit_product_depth(
+    tmp_path: Path,
+) -> None:
+    body = proposal_body(title="Releasable Link Checker")
+    definition = body.product_definition
+    assert definition is not None
+    revised_definition = definition.model_copy(
+        update={
+            "delivery_maturity": definition.delivery_maturity.model_copy(
+                update={
+                    "level": DeliveryMaturity.RELEASABLE_SMALL_PRODUCT,
+                    "disposition": ProductDefinitionDisposition.EXPLICIT_INPUT,
+                    "source": "releasable small product",
+                }
+            )
+        }
+    )
+    coordinator = AdaptivePlanningCoordinator(
+        executor=ScriptedAgentExecutor(
+            [
+                response(proposal_response()),
+                response(
+                    proposal_response(
+                        body.model_copy(
+                            update={"product_definition": revised_definition}
+                        )
+                    )
+                ),
+            ]
+        ),
+        store=PlanningStore(tmp_path / "planning"),
+        policy=policy(response_repair_limit=0),
+        clock=AdvancingClock(),
+    )
+    planning_request = request()
+    first = coordinator.start(
+        planning_request,
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+    assert first is not None
+
+    revised = coordinator.revise(
+        planning_request,
+        first,
+        "Make the delivery a releasable small product.",
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+
+    assert revised is not None
+    assert revised.body.product_definition is not None
+    assert (
+        revised.body.product_definition.delivery_maturity.level
+        is DeliveryMaturity.RELEASABLE_SMALL_PRODUCT
+    )
 
 
 def test_clarity_gate_rejects_a_writer_claimed_as_independent_verifier() -> None:
@@ -694,7 +1289,9 @@ def test_absolute_criterion_requires_all_review_entry_boundaries() -> None:
     assert "immediate first-level child, is nested input" in overview
 
     absolute_request = request().model_copy(
-        update={"source_request": "Build a scanner that must not follow symlinks."}
+        update={
+            "source_request": request().source_request + " It must not follow symlinks."
+        }
     )
     with pytest.raises(PlanningError, match="no proposed acceptance criterion"):
         preview_adaptive_proposal(
@@ -1740,6 +2337,7 @@ def test_schema_two_proposal_keeps_hash_and_structured_edit_compatibility() -> N
     body = payload["body"]
     assert isinstance(body, dict)
     for field in (
+        "product_definition",
         "requirement_ids",
         "non_goals",
         "assumption_decision_ids",
@@ -1780,6 +2378,43 @@ def test_schema_two_proposal_keeps_hash_and_structured_edit_compatibility() -> N
         created_at=FIXED_TIME + timedelta(seconds=1),
     )
     assert preview.implementation_plan.schema_version == 2
+
+
+def test_schema_four_proposal_keeps_canonical_bytes_without_product_definition() -> (
+    None
+):
+    payload = proposal().model_dump(mode="json")
+    payload["schema_version"] = 4
+    body = payload["body"]
+    assert isinstance(body, dict)
+    body.pop("product_definition")
+    expected = hashlib.sha256(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+
+    loaded = PlanningProposal.model_validate(payload)
+
+    assert loaded.schema_version == 4
+    assert loaded.body.product_definition is None
+    assert loaded.model_dump(mode="json") == payload
+    assert canonical_model_sha256(loaded) == expected
+    preview = preview_adaptive_proposal(
+        request(),
+        loaded,
+        policy(),
+        created_at=FIXED_TIME,
+    )
+    assert preview.implementation_plan.schema_version == 4
+    assert preview.implementation_plan.product_definition is None
+    assert preview.task_brief.product_definition is None
+    assert "unavailable in legacy Planning evidence" in render_planning_overview(
+        preview
+    )
 
 
 def test_schema_three_turn_remains_readable_without_correction_evidence(
@@ -2084,6 +2719,9 @@ def test_dialogue_revision_structured_edit_and_approval_are_recoverable(
     assert "quality-owned task may describe only inspection" in compact_prompt
     assert "protocol identifiers, not informal descriptions of depth" in compact_prompt
     assert "do not repeat, paraphrase, shorten, or broaden" in compact_prompt
+    assert "establish a product-depth contract" in compact_prompt
+    assert "Never silently choose those three" in compact_prompt
+    assert "decorative prose" in compact_prompt
     planning_context_text = (
         executor.requests[0]
         .prompt.split("PLANNING_CONTEXT_JSON\n", 1)[1]
@@ -2117,6 +2755,7 @@ def test_dialogue_revision_structured_edit_and_approval_are_recoverable(
         "decision_owner",
         "missing_evidence",
         "material_consequences",
+        "product_definition_dimensions",
     }.issubset(question_schema["required"])
     assert question_schema["properties"]["decision_category"] == {
         "$ref": "#/$defs/PlanningDecisionCategory"
@@ -2130,11 +2769,15 @@ def test_dialogue_revision_structured_edit_and_approval_are_recoverable(
     assert "review_boundaries" in criterion_schema["required"]
     assert "default" not in criterion_schema["properties"]["review_boundaries"]
     assert {
+        "product_definition",
         "requirement_ids",
         "non_goals",
         "assumption_decision_ids",
         "decisions",
     }.issubset(proposal_schema["required"])
+    assert proposal_schema["properties"]["product_definition"] == {
+        "$ref": "#/$defs/ProductDefinition"
+    }
 
     tampered = approved.model_dump(mode="json")
     tampered["team_plan"]["agents"][0]["timeout_seconds"] += 1
