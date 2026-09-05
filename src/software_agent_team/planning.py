@@ -61,6 +61,21 @@ from software_agent_team.model_routing import (
     ModelRoutingPolicy,
     resolve_model_route_plan,
 )
+from software_agent_team.response_corrections import (
+    ResponseFailureClass,
+    ResponseIssueAuthority,
+    ResponseValidationDiagnostic,
+    SemanticCorrectionOutcome,
+    SemanticCorrectionPlan,
+    SemanticCorrectionRequestEvidence,
+    apply_semantic_correction,
+    build_semantic_correction_plan,
+    correction_outcome,
+    correction_prompt,
+    deterministically_remove_forbidden_fields,
+    diagnostic_from_message,
+    diagnostic_from_validation_error,
+)
 from software_agent_team.responses import (
     AgentArtifactResponseError,
     parse_json_object_response,
@@ -78,7 +93,7 @@ from software_agent_team.teams import (
     permission_for_capability,
 )
 
-PLANNING_SCHEMA_VERSION = 3
+PLANNING_SCHEMA_VERSION = 4
 MINIMUM_READABLE_PLANNING_SCHEMA_VERSION = 2
 PLANNING_TEMPLATE = Path(__file__).with_name("prompt_templates") / "adaptive_planner.md"
 MAX_PLANNING_EVIDENCE_CHARACTERS = 1_000_000
@@ -203,7 +218,7 @@ class PlanningActivityKind(StrEnum):
     PROVIDER_STALLED = "provider_stalled"
     RESPONSE_RECEIVED = "response_received"
     BUDGET_UPDATED = "budget_updated"
-    REPAIR_SCHEDULED = "repair_scheduled"
+    CORRECTION_SCHEDULED = "correction_scheduled"
     RESPONSE_VALIDATED = "response_validated"
 
 
@@ -213,7 +228,7 @@ class PlanningActivity:
 
     kind: PlanningActivityKind
     attempt: int
-    maximum_attempts: int
+    maximum_attempts: int | None
     model: str
     duration_ms: int | None = None
     execution_status: AgentExecutionStatus | None = None
@@ -251,10 +266,13 @@ class TerminalPlanningProgress:
     def __call__(self, activity: PlanningActivity) -> None:
         if activity.kind is PlanningActivityKind.WAITING_MODEL:
             self.close()
+            attempt_label = (
+                str(activity.attempt)
+                if activity.maximum_attempts is None
+                else f"{activity.attempt}/{activity.maximum_attempts}"
+            )
             self._print(
-                "● Planning is waiting for "
-                f"{activity.model} (attempt {activity.attempt}/"
-                f"{activity.maximum_attempts})"
+                f"● Planning is waiting for {activity.model} (attempt {attempt_label})"
             )
             stop = threading.Event()
             started = self.monotonic()
@@ -338,11 +356,16 @@ class TerminalPlanningProgress:
             self._print(
                 f"→ Planning response received in {duration / 1000:.1f}s ({status})"
             )
-        elif activity.kind is PlanningActivityKind.REPAIR_SCHEDULED:
+        elif activity.kind is PlanningActivityKind.CORRECTION_SCHEDULED:
+            next_attempt = activity.attempt + 1
+            attempt_label = (
+                str(next_attempt)
+                if activity.maximum_attempts is None
+                else f"{next_attempt}/{activity.maximum_attempts}"
+            )
             self._print(
-                "↻ Planning response did not satisfy the plan contract; "
-                f"starting bounded repair {activity.attempt + 1}/"
-                f"{activity.maximum_attempts}"
+                "↻ Planning response has targeted model-owned fields; "
+                f"requesting correction attempt {attempt_label}"
             )
         else:
             self._print("✓ Planning response validated")
@@ -364,10 +387,14 @@ class TerminalPlanningProgress:
         while not stop.wait(self.heartbeat_seconds):
             elapsed = max(0, int(self.monotonic() - started))
             minutes, seconds = divmod(elapsed, 60)
+            attempt_label = (
+                str(activity.attempt)
+                if activity.maximum_attempts is None
+                else f"{activity.attempt}/{activity.maximum_attempts}"
+            )
             self._print(
                 "  Planning is still waiting for the model "
-                f"(attempt {activity.attempt}/{activity.maximum_attempts}): "
-                f"{minutes:02d}:{seconds:02d} elapsed"
+                f"(attempt {attempt_label}): {minutes:02d}:{seconds:02d} elapsed"
             )
 
     def _print(self, value: str) -> None:
@@ -516,12 +543,119 @@ def _safe_validation_detail(error: ValueError) -> str:
     return str(error)[:1500]
 
 
+def _planning_context_paths(
+    detail: str,
+    parsed: PlanningModelResponse | None,
+) -> tuple[str, ...]:
+    """Map controller post-schema checks to the smallest useful model fields."""
+
+    lowered = detail.casefold()
+    if parsed is not None and parsed.kind is PlanningResponseKind.QUESTION:
+        if "category" in lowered or "owner" in lowered:
+            return ("/question/decision_category", "/question/decision_owner")
+        if "missing evidence" in lowered:
+            return ("/question/missing_evidence",)
+        if "material consequence" in lowered:
+            return ("/question/material_consequences",)
+        if "already used" in lowered:
+            return ("/question/id",)
+        return ("/question",)
+    if "assumption" in lowered:
+        return (
+            "/proposal/assumption_decision_ids",
+            "/proposal/assumptions",
+            "/proposal/decisions",
+        )
+    if "decision" in lowered or "question" in lowered or "provenance" in lowered:
+        return ("/proposal/decisions",)
+    if "criterion" in lowered or "acceptance" in lowered or "requirement" in lowered:
+        return (
+            "/proposal/acceptance_criteria",
+            "/proposal/requirement_ids",
+            "/proposal/requirements",
+            "/proposal/tasks",
+        )
+    if "concurrency" in lowered:
+        return ("/proposal/max_concurrency",)
+    if "iteration" in lowered or "revision" in lowered:
+        return ("/proposal/iteration_limit", "/proposal/revision_enabled")
+    if "agent" in lowered or "task" in lowered or "workspace" in lowered:
+        return ("/proposal/agents", "/proposal/tasks")
+    return (
+        "/proposal/acceptance_criteria",
+        "/proposal/agents",
+        "/proposal/decisions",
+        "/proposal/tasks",
+    )
+
+
+def _planning_validation_diagnostic(
+    error: ValidationError,
+    payload: dict[str, object],
+) -> ResponseValidationDiagnostic:
+    """Recover precise fields from proposal-level relational validators."""
+
+    issues = error.errors(
+        include_url=False,
+        include_context=False,
+        include_input=False,
+    )
+    if (
+        len(issues) == 1
+        and tuple(issues[0]["loc"]) == ("proposal",)
+        and str(issues[0]["type"]).startswith("value_error")
+    ):
+        detail = _safe_validation_detail(error)
+        paths = _planning_proposal_error_paths(detail, payload)
+        return diagnostic_from_message(
+            payload,
+            failure_class=ResponseFailureClass.SEMANTIC_CONTEXT,
+            authority=ResponseIssueAuthority.MODEL,
+            code="planning_context",
+            message=detail,
+            paths=paths,
+        )
+    return diagnostic_from_validation_error(error, payload)
+
+
+def _planning_proposal_error_paths(
+    detail: str,
+    payload: dict[str, object],
+) -> tuple[str, ...]:
+    """Locate relational proposal failures when their values are unambiguous."""
+
+    proposal = payload.get("proposal")
+    if not isinstance(proposal, dict):
+        return _planning_context_paths(detail, None)
+    tasks = proposal.get("tasks")
+    agents = proposal.get("agents")
+    if (
+        "tasks reference unknown Agent owners" in detail
+        and isinstance(tasks, list)
+        and isinstance(agents, list)
+    ):
+        known_agent_ids = {
+            item.get("id")
+            for item in agents
+            if isinstance(item, dict) and isinstance(item.get("id"), str)
+        }
+        paths = tuple(
+            f"/proposal/tasks/{index}/owner_agent_id"
+            for index, task in enumerate(tasks)
+            if isinstance(task, dict)
+            and task.get("owner_agent_id") not in known_agent_ids
+        )
+        if paths:
+            return paths
+    return _planning_context_paths(detail, None)
+
+
 class PlanningRequest(BaseModel):
     """Direct user input and explicit authorization before any model work."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, PLANNING_SCHEMA_VERSION] = PLANNING_SCHEMA_VERSION
+    schema_version: Literal[2, 3, PLANNING_SCHEMA_VERSION] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     project_name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
     source_request: str = Field(min_length=1, max_length=2000)
@@ -1399,7 +1533,7 @@ class AdaptiveImplementationPlan(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, PLANNING_SCHEMA_VERSION] = PLANNING_SCHEMA_VERSION
+    schema_version: Literal[2, 3, PLANNING_SCHEMA_VERSION] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     team_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     revision: int = Field(ge=1)
@@ -1472,7 +1606,7 @@ class PlanningTurn(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, PLANNING_SCHEMA_VERSION] = PLANNING_SCHEMA_VERSION
+    schema_version: Literal[2, 3, PLANNING_SCHEMA_VERSION] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     sequence: int = Field(ge=1)
     previous_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
@@ -1490,6 +1624,18 @@ class PlanningTurn(BaseModel):
         exclude_if=lambda values: not values,
     )
     validation_error: str | None = Field(default=None, min_length=1, max_length=2000)
+    response_validation: ResponseValidationDiagnostic | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    semantic_correction_request: SemanticCorrectionRequestEvidence | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    semantic_correction_outcome: SemanticCorrectionOutcome | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     execution: PlanningExecutionEvidence
 
     @field_validator("response_normalizations")
@@ -1516,6 +1662,12 @@ class PlanningTurn(BaseModel):
             raise ValueError("Planning response digest does not match its content")
         if self.parsed_response is not None and self.validation_error is not None:
             raise ValueError("valid Planning turns cannot contain a validation error")
+        if (self.semantic_correction_request is None) != (
+            self.semantic_correction_outcome is None
+        ):
+            raise ValueError(
+                "Planning correction request and outcome must appear together"
+            )
         if self.execution.status is AgentExecutionStatus.COMPLETED:
             if self.response_text is None:
                 raise ValueError("completed Planning execution requires response text")
@@ -1533,7 +1685,7 @@ class PlanningProposal(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, PLANNING_SCHEMA_VERSION] = PLANNING_SCHEMA_VERSION
+    schema_version: Literal[2, 3, PLANNING_SCHEMA_VERSION] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     revision: int = Field(ge=1)
     created_at: datetime
@@ -1591,7 +1743,7 @@ class PlanningSession(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, PLANNING_SCHEMA_VERSION] = PLANNING_SCHEMA_VERSION
+    schema_version: Literal[2, 3, PLANNING_SCHEMA_VERSION] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     request_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     status: PlanningSessionStatus
@@ -1770,7 +1922,7 @@ class PlanningApproval(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, PLANNING_SCHEMA_VERSION] = PLANNING_SCHEMA_VERSION
+    schema_version: Literal[2, 3, PLANNING_SCHEMA_VERSION] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     revision: int = Field(ge=1)
     approved_at: datetime
@@ -1805,7 +1957,7 @@ class PlanningPolicy(BaseModel):
 
     max_clarification_rounds: int | None = Field(default=3, ge=0)
     max_proposal_revisions: int | None = Field(default=3, ge=1)
-    response_repair_limit: int = Field(default=1, ge=0, le=2)
+    response_repair_limit: int | None = Field(default=None, ge=0, le=2)
     planning_timeout_seconds: int = Field(default=180, ge=0)
     max_agents: int | None = Field(default=8, ge=2)
     max_concurrency: int = Field(default=4, ge=1)
@@ -2891,6 +3043,9 @@ class PlanningStore:
         response_normalizations: tuple[str, ...],
         validation_error: str | None,
         now: datetime,
+        response_validation: ResponseValidationDiagnostic | None = None,
+        semantic_correction_request: SemanticCorrectionRequestEvidence | None = None,
+        semantic_correction_outcome: SemanticCorrectionOutcome | None = None,
         estimated_cost_usd: Decimal | None = None,
         pricing_source: ModelMetadataSource | None = None,
         budget_usage: AgentBudgetUsage | None = None,
@@ -2919,6 +3074,9 @@ class PlanningStore:
             parsed_response=parsed_response,
             response_normalizations=response_normalizations,
             validation_error=validation_error,
+            response_validation=response_validation,
+            semantic_correction_request=semantic_correction_request,
+            semantic_correction_outcome=semantic_correction_outcome,
             execution=PlanningExecutionEvidence(
                 status=result.status,
                 session_key=result.telemetry.session_key,
@@ -3322,15 +3480,22 @@ class AdaptivePlanningCoordinator:
         change_request: str | None = None,
         activity_handler: PlanningActivityHandler | None = None,
     ) -> _Invocation:
-        previous_error: str | None = None
-        maximum_attempts = self.policy.response_repair_limit + 1
-        for attempt in range(1, maximum_attempts + 1):
+        correction_plan: SemanticCorrectionPlan | None = None
+        seen_correction_fingerprints: set[str] = set()
+        semantic_corrections = 0
+        maximum_attempts = (
+            None
+            if self.policy.response_repair_limit is None
+            else self.policy.response_repair_limit + 1
+        )
+        attempt = 1
+        while True:
             prompt = self._prompt(
                 request,
                 transcript=transcript,
                 current_proposal=current_proposal,
                 change_request=change_request,
-                previous_error=previous_error,
+                correction_plan=correction_plan,
             )
             execution_request = AgentExecutionRequest(
                 run_id=request.run_id,
@@ -3406,6 +3571,17 @@ class AdaptivePlanningCoordinator:
             parsed: PlanningModelResponse | None = None
             response_normalizations: tuple[str, ...] = ()
             validation_error: str | None = None
+            response_validation: ResponseValidationDiagnostic | None = None
+            correction_request = (
+                None if correction_plan is None else correction_plan.evidence
+            )
+            current_correction_outcome = (
+                None
+                if correction_plan is None
+                else SemanticCorrectionOutcome.NOT_EVALUATED
+            )
+            correction_applied = correction_plan is None
+            next_correction_plan: SemanticCorrectionPlan | None = None
             estimated_cost: Decimal | None = None
             budget_usage: AgentBudgetUsage | None = None
             budget_error: str | None = None
@@ -3450,9 +3626,13 @@ class AdaptivePlanningCoordinator:
                     result.error or f"Planning execution ended as {result.status.value}"
                 )
             else:
+                payload: dict[str, object] | None = None
                 try:
                     payload = parse_json_object_response(result.response_text)
-                    payload, response_normalizations = (
+                    if correction_plan is not None:
+                        payload = apply_semantic_correction(payload, correction_plan)
+                        correction_applied = True
+                    payload, initial_normalizations = (
                         _normalize_planning_response_payload(
                             payload,
                             profile_criterion_ids=(
@@ -3461,7 +3641,26 @@ class AdaptivePlanningCoordinator:
                             ),
                         )
                     )
-                    parsed = PlanningModelResponse.model_validate(payload)
+                    normalization_list = list(initial_normalizations)
+                    while True:
+                        try:
+                            parsed = PlanningModelResponse.model_validate(payload)
+                            break
+                        except ValidationError as error:
+                            normalized, removed = (
+                                deterministically_remove_forbidden_fields(
+                                    payload,
+                                    error,
+                                )
+                            )
+                            if not removed:
+                                raise
+                            payload = normalized
+                            normalization_list.extend(
+                                f"removed schema-forbidden field {path}"
+                                for path in removed
+                            )
+                    response_normalizations = tuple(normalization_list)
                     question_contracts = self._question_contracts(
                         transcript,
                         current_proposal,
@@ -3492,14 +3691,73 @@ class AdaptivePlanningCoordinator:
                             body=parsed.proposal,
                         )
                         self._validate_preview(request, candidate)
-                except (
-                    AgentArtifactResponseError,
-                    PlanningError,
-                    ValidationError,
-                    ValueError,
-                ) as error:
+                except AgentArtifactResponseError as error:
                     validation_error = _safe_validation_detail(error)
+                    response_validation = error.diagnostic
+                    if correction_plan is not None:
+                        current_correction_outcome = (
+                            SemanticCorrectionOutcome.INVALID_SUBMISSION
+                        )
                     parsed = None
+                except ValidationError as error:
+                    validation_error = _safe_validation_detail(error)
+                    assert payload is not None
+                    response_validation = _planning_validation_diagnostic(
+                        error,
+                        payload,
+                    )
+                    if correction_plan is not None and not correction_applied:
+                        current_correction_outcome = (
+                            SemanticCorrectionOutcome.INVALID_SUBMISSION
+                        )
+                    parsed = None
+                except (PlanningError, ValueError) as error:
+                    validation_error = _safe_validation_detail(error)
+                    if payload is not None:
+                        response_validation = diagnostic_from_message(
+                            payload,
+                            failure_class=ResponseFailureClass.SEMANTIC_CONTEXT,
+                            authority=ResponseIssueAuthority.MODEL,
+                            code="planning_context",
+                            message=validation_error,
+                            paths=_planning_context_paths(validation_error, parsed),
+                        )
+                    if correction_plan is not None and not correction_applied:
+                        current_correction_outcome = (
+                            SemanticCorrectionOutcome.INVALID_SUBMISSION
+                        )
+                    parsed = None
+
+                if parsed is None and response_validation is not None:
+                    if correction_plan is None:
+                        if payload is not None:
+                            next_correction_plan = build_semantic_correction_plan(
+                                payload,
+                                response_validation,
+                            )
+                        seen_correction_fingerprints.add(
+                            response_validation.fingerprint
+                        )
+                    elif correction_applied:
+                        current_correction_outcome = correction_outcome(
+                            correction_plan,
+                            response_validation,
+                            seen_fingerprints=frozenset(seen_correction_fingerprints),
+                        )
+                        if (
+                            current_correction_outcome
+                            is SemanticCorrectionOutcome.IMPROVED
+                            and payload is not None
+                        ):
+                            next_correction_plan = build_semantic_correction_plan(
+                                payload,
+                                response_validation,
+                            )
+                            seen_correction_fingerprints.add(
+                                response_validation.fingerprint
+                            )
+                elif parsed is not None and correction_plan is not None:
+                    current_correction_outcome = SemanticCorrectionOutcome.ACCEPTED
             turn = self.store.append_turn(
                 run_id=request.run_id,
                 user_message=user_message,
@@ -3508,6 +3766,9 @@ class AdaptivePlanningCoordinator:
                 parsed_response=parsed,
                 response_normalizations=response_normalizations,
                 validation_error=validation_error,
+                response_validation=response_validation,
+                semantic_correction_request=correction_request,
+                semantic_correction_outcome=current_correction_outcome,
                 now=self.clock(),
                 estimated_cost_usd=estimated_cost,
                 pricing_source=(
@@ -3529,21 +3790,26 @@ class AdaptivePlanningCoordinator:
                     ),
                 )
                 return _Invocation(response=parsed, turn=turn)
-            previous_error = validation_error
-            if attempt > self.policy.response_repair_limit:
+            correction_allowed = next_correction_plan is not None and (
+                self.policy.response_repair_limit is None
+                or semantic_corrections < self.policy.response_repair_limit
+            )
+            if not correction_allowed:
                 raise PlanningError(
                     f"Planning response remained invalid: {validation_error}"
                 )
+            semantic_corrections += 1
+            correction_plan = next_correction_plan
             self._emit_activity(
                 activity_handler,
                 PlanningActivity(
-                    kind=PlanningActivityKind.REPAIR_SCHEDULED,
+                    kind=PlanningActivityKind.CORRECTION_SCHEDULED,
                     attempt=attempt,
                     maximum_attempts=maximum_attempts,
                     model=request.model,
                 ),
             )
-        raise AssertionError("unreachable Planning repair state")
+            attempt += 1
 
     @staticmethod
     def _emit_activity(
@@ -3565,7 +3831,7 @@ class AdaptivePlanningCoordinator:
         activity: AgentExecutionActivity,
         *,
         attempt: int,
-        maximum_attempts: int,
+        maximum_attempts: int | None,
         model: str,
     ) -> None:
         kind = {
@@ -3612,7 +3878,7 @@ class AdaptivePlanningCoordinator:
         transcript: list[dict[str, object]],
         current_proposal: PlanningProposal | None,
         change_request: str | None,
-        previous_error: str | None,
+        correction_plan: SemanticCorrectionPlan | None,
     ) -> str:
         template = Template(PLANNING_TEMPLATE.read_text(encoding="utf-8"))
         context = {
@@ -3704,26 +3970,18 @@ class AdaptivePlanningCoordinator:
                 ),
             },
         }
-        repair = (
-            None
-            if previous_error is None
-            else {
-                "previous_response_rejected": previous_error,
-                "instruction": (
-                    "Revalidate the complete response against the schema and policy. "
-                    "Return one corrected object, not a patch."
-                ),
-            }
-        )
-        return template.substitute(
+        rendered = template.substitute(
             planning_context_json=json.dumps(context, ensure_ascii=False, indent=2),
             response_schema_json=json.dumps(
                 _planning_response_schema(),
                 ensure_ascii=False,
                 indent=2,
             ),
-            repair_context_json=json.dumps(repair, ensure_ascii=False, indent=2),
+            repair_context_json="null",
         )
+        if correction_plan is not None:
+            rendered += correction_prompt(correction_plan)
+        return rendered
 
 
 def _interactive_question_answerer(

@@ -252,6 +252,7 @@ src/software_agent_team/
   prompting.py                 Fixed-role and task-defined capability prompts
   quality_gates.py             Fixed sandboxed command runner
   reporting.py                 Shared terminal report rendering
+  response_corrections.py      Typed validation and field-targeted correction
   responses.py                 Strict fixed and run-scoped Agent response parser
   run_control.py               Lifecycle state and atomic persistence
   runtime_configuration.py     Run-scoped OpenClaw config and preflight

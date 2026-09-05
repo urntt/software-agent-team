@@ -212,6 +212,21 @@ def test_valid_agent_execution_record_is_accepted() -> None:
     assert record.duration_ms == 2000
 
 
+def test_schema_two_execution_record_remains_readable_without_correction_evidence() -> (
+    None
+):
+    payload = valid_execution_payload()
+    payload["schema_version"] = 2
+
+    record = AgentExecutionRecord.model_validate(payload)
+
+    assert record.schema_version == 2
+    assert record.response_normalizations == ()
+    assert record.response_validation is None
+    assert record.semantic_correction_request is None
+    assert record.semantic_correction_outcome is None
+
+
 def test_execution_record_preserves_response_binding_and_stage_budget() -> None:
     payload = valid_execution_payload()
     payload.update(

@@ -59,6 +59,7 @@ from software_agent_team.planning import (
     PlanningResponseKind,
     PlanningSessionStatus,
     PlanningStore,
+    PlanningTurn,
     ProposedAgent,
     ProposedCriterion,
     ProposedTask,
@@ -70,6 +71,7 @@ from software_agent_team.planning import (
     render_planning_overview,
     run_interactive_planning,
 )
+from software_agent_team.response_corrections import semantic_payload_sha256
 from software_agent_team.teams import (
     AgentCapability,
     ModelRouteSelectionSource,
@@ -354,6 +356,21 @@ def test_planning_overview_separates_constraint_authority_without_losing_data() 
 
 def response(value: PlanningModelResponse) -> str:
     return value.model_dump_json()
+
+
+def correction_response(
+    base_payload: dict[str, object],
+    replacements: dict[str, object],
+) -> str:
+    return json.dumps(
+        {
+            "kind": "semantic_correction_v1",
+            "base_response_sha256": semantic_payload_sha256(base_payload),
+            "replacements": [
+                {"path": path, "value": value} for path, value in replacements.items()
+            ],
+        }
+    )
 
 
 def question_response() -> PlanningModelResponse:
@@ -1724,6 +1741,45 @@ def test_schema_two_proposal_keeps_hash_and_structured_edit_compatibility() -> N
     assert preview.implementation_plan.schema_version == 2
 
 
+def test_schema_three_turn_remains_readable_without_correction_evidence(
+    tmp_path: Path,
+) -> None:
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=ScriptedAgentExecutor([response(proposal_response())]),
+        store=store,
+        policy=policy(),
+        clock=AdvancingClock(),
+    )
+    coordinator.start(
+        request(),
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+    payload = store.load_turn(request().run_id, 1).model_dump(mode="json")
+    payload["schema_version"] = 3
+    payload.pop("response_validation", None)
+    payload.pop("semantic_correction_request", None)
+    payload.pop("semantic_correction_outcome", None)
+
+    loaded = PlanningTurn.model_validate(payload)
+
+    assert loaded.schema_version == 3
+    assert (
+        canonical_model_sha256(loaded)
+        == hashlib.sha256(
+            json.dumps(
+                payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()
+    )
+    assert loaded.response_validation is None
+    assert loaded.semantic_correction_request is None
+    assert loaded.semantic_correction_outcome is None
+
+
 def test_planning_store_accepts_evidence_indexes_beyond_three_digits(
     tmp_path: Path,
 ) -> None:
@@ -2094,12 +2150,23 @@ def test_store_loads_approval_written_before_scope_timeout_evidence(
 def test_invalid_complete_proposal_is_repaired_before_it_is_shown(
     tmp_path: Path,
 ) -> None:
+    valid_payload = proposal_response().model_dump(mode="json")
     invalid_payload = proposal_response().model_dump(mode="json")
     invalid_payload["proposal"]["tasks"][0]["owner_agent_id"] = "absent_agent"
+    correction = {
+        "kind": "semantic_correction_v1",
+        "base_response_sha256": semantic_payload_sha256(invalid_payload),
+        "replacements": [
+            {
+                "path": "/proposal/tasks/0/owner_agent_id",
+                "value": valid_payload["proposal"]["tasks"][0]["owner_agent_id"],
+            },
+        ],
+    }
     executor = ScriptedAgentExecutor(
         [
             json.dumps(invalid_payload),
-            response(proposal_response()),
+            json.dumps(correction),
         ]
     )
     store = PlanningStore(tmp_path / "planning")
@@ -2125,11 +2192,19 @@ def test_invalid_complete_proposal_is_repaired_before_it_is_shown(
     assert "tasks reference unknown Agent owners: absent_agent" in (
         rejected.validation_error
     )
-    assert "previous_response_rejected" in executor.requests[1].prompt
+    assert "TARGETED_SEMANTIC_CORRECTION_V1" in executor.requests[1].prompt
+    assert "Do not regenerate or repeat that object" in executor.requests[1].prompt
+    assert rejected.response_validation is not None
+    assert rejected.response_validation.correction_paths == (
+        "/proposal/tasks/0/owner_agent_id",
+    )
+    corrected = store.load_turn(request().run_id, 2)
+    assert corrected.semantic_correction_request is not None
+    assert corrected.semantic_correction_outcome == "accepted"
     assert [activity.kind for activity in activities] == [
         PlanningActivityKind.WAITING_MODEL,
         PlanningActivityKind.RESPONSE_RECEIVED,
-        PlanningActivityKind.REPAIR_SCHEDULED,
+        PlanningActivityKind.CORRECTION_SCHEDULED,
         PlanningActivityKind.WAITING_MODEL,
         PlanningActivityKind.RESPONSE_RECEIVED,
         PlanningActivityKind.RESPONSE_VALIDATED,
@@ -2137,6 +2212,95 @@ def test_invalid_complete_proposal_is_repaired_before_it_is_shown(
     assert [
         (activity.attempt, activity.maximum_attempts) for activity in activities
     ] == [(1, 2), (1, 2), (1, 2), (2, 2), (2, 2), (2, 2)]
+
+
+def test_product_planning_continues_only_when_targeted_correction_improves(
+    tmp_path: Path,
+) -> None:
+    valid_payload = proposal_response().model_dump(mode="json")
+    invalid_payload = proposal_response().model_dump(mode="json")
+    invalid_payload["proposal"]["tasks"][0]["owner_agent_id"] = "absent_agent"
+    invalid_payload["proposal"]["max_concurrency"] = 99
+    first_corrected = json.loads(json.dumps(invalid_payload))
+    first_corrected["proposal"]["tasks"][0]["owner_agent_id"] = valid_payload[
+        "proposal"
+    ]["tasks"][0]["owner_agent_id"]
+    executor = ScriptedAgentExecutor(
+        [
+            json.dumps(invalid_payload),
+            correction_response(
+                invalid_payload,
+                {
+                    "/proposal/tasks/0/owner_agent_id": valid_payload["proposal"][
+                        "tasks"
+                    ][0]["owner_agent_id"]
+                },
+            ),
+            correction_response(
+                first_corrected,
+                {
+                    "/proposal/max_concurrency": valid_payload["proposal"][
+                        "max_concurrency"
+                    ]
+                },
+            ),
+        ]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(response_repair_limit=None),
+        clock=AdvancingClock(),
+    )
+
+    created = coordinator.start(
+        request(),
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+
+    assert created is not None
+    assert len(executor.requests) == 3
+    assert store.load_turn(request().run_id, 2).semantic_correction_outcome == (
+        "improved"
+    )
+    assert store.load_turn(request().run_id, 3).semantic_correction_outcome == (
+        "accepted"
+    )
+
+
+def test_product_planning_stops_after_a_non_improving_correction(
+    tmp_path: Path,
+) -> None:
+    invalid_payload = proposal_response().model_dump(mode="json")
+    invalid_payload["proposal"]["tasks"][0]["owner_agent_id"] = "absent_agent"
+    executor = ScriptedAgentExecutor(
+        [
+            json.dumps(invalid_payload),
+            correction_response(
+                invalid_payload,
+                {"/proposal/tasks/0/owner_agent_id": "absent_agent"},
+            ),
+        ]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(response_repair_limit=None),
+        clock=AdvancingClock(),
+    )
+
+    with pytest.raises(PlanningError, match="remained invalid"):
+        coordinator.start(
+            request(),
+            answer_question=lambda _question: pytest.fail("unexpected question"),
+        )
+
+    assert len(executor.requests) == 2
+    assert store.load_turn(request().run_id, 2).semantic_correction_outcome == (
+        "no_improvement"
+    )
 
 
 def test_terminal_planning_progress_shows_heartbeat_and_stops_cleanly() -> None:

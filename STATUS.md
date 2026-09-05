@@ -54,7 +54,21 @@ and fresh provider/device cost, liveness, self-check, process cleanup, and
 managed-release validation remain incomplete; the corresponding issues are not
 closed by offline evidence.
 
-Formatter, lint, doctor, and **911 offline tests** pass for this implementation.
+The response compiler now distinguishes transport, schema, contextual, and
+evidence-grounding failures; a missing user-owned decision remains on the
+typed Planning-question path instead of entering correction. It deterministically
+removes only schema-forbidden fields that cannot carry controller/evidence
+authority and records each normalization. A remaining targetable model-owned
+failure creates a typed JSON-pointer diagnostic and a SHA-bound
+`semantic_correction_v1` envelope; the controller retains every unrelated
+field, freezes a writer's verified Git result, and records each request and
+outcome. Product Planning and dynamic execution continue only after measurable
+improvement within the task budget, while the fixed evaluation surface retains
+its explicit zero-or-one cap. Transport, unlocated, repeated, invalid-envelope,
+and non-improving failures stop without a full-response retry. Fresh
+provider-backed correction evidence remains pending.
+
+Formatter, lint, doctor, and **926 offline tests** pass for this implementation.
 
 ## Phase 1 Result
 
@@ -129,7 +143,7 @@ The Phase 3B Planning engine is also implemented. A versioned `PlanningRequest`
 proves explicit model-work authorization before the first invocation. The
 read-only bootstrap Planner may return either one decision-value question with
 two or three suggestions and a custom-answer path, or one complete proposal.
-Planning schema v3 records each question's decision category and owner, missing
+Planning schema v4 records each question's decision category and owner, missing
 evidence, material consequences, and alternatives. The controller enforces the
 fixed responsibility matrix before showing a question, and every answered
 question must resolve to one proposal decision with unchanged ownership.
@@ -230,7 +244,7 @@ The Phase 3C dynamic runner is now implemented behind the general DAG
 scheduler. The scheduler remains the only owner of readiness, launch order,
 bounded concurrency, and shared-Git writer exclusion. The runner invokes only
 the supplied approved `AgentSpec`, preserves its exact authorized model set and
-time authority, allows at most one currently configured semantic repair,
+time authority, applies improvement-gated targeted semantic correction,
 accounts for every call in one thread-safe aggregate ledger, and persists raw
 output plus telemetry before a
 post-call budget rejection stops the schedule. Agents cannot create another
@@ -245,7 +259,7 @@ controller-owned evidence and final commit; when a justified small team has no
 Tester, the controller persists the deterministic TestReport itself. Dynamic
 source-to-target and terminal handoffs are write-once and include attributable
 phase and execution evidence. Offline integration tests exercise real Git
-commits, parallel quality, semantic repair, missing telemetry, budget
+commits, parallel quality, semantic correction, missing telemetry, budget
 exhaustion, read-only mutation, and write-scope violations.
 
 The Phase 3C adaptive lifecycle coordinator is now implemented. It consumes
@@ -1227,7 +1241,7 @@ The acceptance contract is
   consequences, provider-cost caveats, and cancelled final reports;
 - Versioned, explicitly authorized Adaptive Planning requests; strict
   question-or-proposal responses; high-value focused questions with suggested
-  and custom answers; controller validation and bounded semantic repair;
+  and custom answers; controller validation and targeted semantic correction;
 - Task-defined proposal compilation into confirmed requirements, adaptive
   implementation intent, least-privilege AgentSpecs, exact primary and
   fallback model assignments, dependency waves, qualitative per-Agent workload
@@ -1258,7 +1272,7 @@ The acceptance contract is
 - Fixed-role and task-defined capability minimum-context prompts, strict
   semantic JSON response parsing, dynamic identity/task/route/time-authority binding,
   controller assembly of persisted envelope, Git, test, and scope facts, and
-  one independently timed semantic response repair;
+  digest-bound field correction with controlled-evaluation caps;
 - Contract-aware response normalization that permits presentation argv arrays
   around one semantic object while rejecting any additional object candidate;
 - Exact Dynamic Reviewer criterion assessments with adversarial checks,
@@ -1337,7 +1351,7 @@ The acceptance contract is
 - Controller-backed role, elapsed-waiting, Git-snapshot, quality-gate,
   independent-review, decision, revision, completion, and failure progress,
   plus adaptive Agent queue, readiness, provider wait/activity, tool lifecycle,
-  liveness degradation, suspected stall/grace/recovery, repair, duration,
+  liveness degradation, suspected stall/grace/recovery, correction, duration,
   dependency, route, budget, and terminal-state projection;
 - Accepted-result-only delivery through a same-parent staging directory into a
   new non-overwriting project child, followed by exact setup, start, and test
@@ -1347,7 +1361,7 @@ The acceptance contract is
   evidence preservation/export/purge,
   managed-application removal, and preservation of every other OpenClaw
   installation;
-- Offline end-to-end coverage for success, revision, response repair,
+- Offline end-to-end coverage for success, revision, targeted response correction,
   invalid-response failure, timeout, evidence tampering, non-convergence,
   iteration exhaustion, no-change failure, missing model or token telemetry,
   cost exhaustion, and trusted sandbox-runtime loss classification.

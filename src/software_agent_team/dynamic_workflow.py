@@ -198,14 +198,14 @@ class DynamicWorkflowCoordinator:
         runtime_setup: RuntimeSetup | None = None,
         manual_review_criteria: tuple[str, ...] = (),
         review_scope_by_agent: Mapping[str, tuple[str, ...]] | None = None,
-        artifact_repair_limit: int = 1,
+        artifact_repair_limit: int | None = None,
         progress_handler: ProgressHandler | None = None,
         control_store_handler: ControlStoreHandler | None = None,
         clock: Clock = _system_clock,
     ) -> None:
-        if artifact_repair_limit not in {0, 1}:
+        if artifact_repair_limit not in {None, 0, 1}:
             raise DynamicWorkflowError(
-                "dynamic execution permits zero or one semantic repair"
+                "controlled dynamic evaluation permits zero or one correction"
             )
         criteria = tuple(item.strip() for item in manual_review_criteria)
         if any(not item for item in criteria) or len(criteria) != len(set(criteria)):

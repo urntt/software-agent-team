@@ -82,7 +82,10 @@ def supported_schemas() -> tuple[SchemaSupport, ...]:
     registry and cannot form an import cycle.
     """
 
-    from software_agent_team.artifacts import ARTIFACT_SCHEMA_VERSION
+    from software_agent_team.artifacts import (
+        ARTIFACT_SCHEMA_VERSION,
+        MINIMUM_READABLE_ARTIFACT_SCHEMA_VERSION,
+    )
     from software_agent_team.budgets import BUDGET_SCHEMA_VERSION
     from software_agent_team.controls import CONTROL_COMMAND_SCHEMA_VERSION
     from software_agent_team.planning import (
@@ -119,6 +122,19 @@ def supported_schemas() -> tuple[SchemaSupport, ...]:
             maximum_readable=version,
         )
         for family, version in exact
+    ]
+    support = [
+        (
+            SchemaSupport(
+                family=item.family,
+                current=item.current,
+                minimum_readable=MINIMUM_READABLE_ARTIFACT_SCHEMA_VERSION,
+                maximum_readable=item.maximum_readable,
+            )
+            if item.family is SchemaFamily.ARTIFACT
+            else item
+        )
+        for item in support
     ]
     support = [
         (

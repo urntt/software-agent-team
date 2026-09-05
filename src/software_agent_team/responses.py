@@ -37,11 +37,33 @@ from software_agent_team.execution import (
     AgentExecutionStatus,
 )
 from software_agent_team.integrity import canonical_model_sha256
+from software_agent_team.response_corrections import (
+    ResponseFailureClass,
+    ResponseIssueAuthority,
+    ResponseValidationDiagnostic,
+    deterministically_remove_forbidden_fields,
+    diagnostic_from_message,
+    diagnostic_from_transport,
+    diagnostic_from_validation_error,
+)
 from software_agent_team.teams import TeamPlan, capability_for_legacy_role
 
 
 class AgentArtifactResponseError(ValueError):
     """Raised when an Agent response cannot become attributable run evidence."""
+
+    def __init__(
+        self,
+        detail: str,
+        *,
+        semantic_payload: dict[str, object] | None = None,
+        diagnostic: ResponseValidationDiagnostic | None = None,
+        response_normalizations: tuple[str, ...] = (),
+    ) -> None:
+        super().__init__(detail)
+        self.semantic_payload = semantic_payload
+        self.diagnostic = diagnostic
+        self.response_normalizations = response_normalizations
 
 
 class _UnsafeSatisfiedEvidenceError(ValueError):
@@ -779,6 +801,14 @@ _CONTROLLER_FIELDS: dict[ArtifactKind, frozenset[str]] = {
         _COMMON_CONTROLLER_FIELDS | {"input_commit", "reviewed_criteria"}
     ),
 }
+_PROTECTED_CONTROLLER_FIELD_NAMES = frozenset(
+    {
+        *(field for fields in _CONTROLLER_FIELDS.values() for field in fields),
+        "command_evidence_ids",
+        "execution_attempt",
+        "tool_call_id",
+    }
+)
 
 
 def controller_fields_for(kind: ArtifactKind) -> tuple[str, ...]:
@@ -796,6 +826,8 @@ class ParsedAgentResponse:
 
     body: AgentResponseBody
     ignored_controller_fields: tuple[str, ...]
+    semantic_payload: dict[str, object]
+    response_normalizations: tuple[str, ...] = ()
 
 
 def _parse_semantic_body(
@@ -810,16 +842,58 @@ def _parse_semantic_body(
             f"no response body contract exists for {expected_kind.value}"
         )
     ignored = tuple(sorted(controller_fields.intersection(payload)))
-    semantic_payload = {
+    semantic_payload: dict[str, object] = {
         key: item for key, item in payload.items() if key not in controller_fields
     }
-    try:
-        body = model.model_validate(semantic_payload)
-    except (ValueError, ValidationError) as error:
-        raise AgentArtifactResponseError(
-            f"Agent semantic response is invalid: {_safe_validation_detail(error)}"
-        ) from error
-    return ParsedAgentResponse(body=body, ignored_controller_fields=ignored)
+    normalizations: list[str] = []
+    while True:
+        try:
+            body = model.model_validate(semantic_payload)
+            break
+        except ValidationError as error:
+            normalized, removed = deterministically_remove_forbidden_fields(
+                semantic_payload,
+                error,
+                protected_field_names=_PROTECTED_CONTROLLER_FIELD_NAMES,
+            )
+            if removed:
+                semantic_payload = normalized
+                normalizations.extend(
+                    f"removed schema-forbidden field {path}" for path in removed
+                )
+                continue
+            diagnostic = diagnostic_from_validation_error(
+                error,
+                semantic_payload,
+                protected_field_names=_PROTECTED_CONTROLLER_FIELD_NAMES,
+            )
+            raise AgentArtifactResponseError(
+                f"Agent semantic response is invalid: {_safe_validation_detail(error)}",
+                semantic_payload=semantic_payload,
+                diagnostic=diagnostic,
+                response_normalizations=tuple(normalizations),
+            ) from error
+        except ValueError as error:
+            diagnostic = diagnostic_from_message(
+                semantic_payload,
+                failure_class=ResponseFailureClass.SEMANTIC_SCHEMA,
+                authority=ResponseIssueAuthority.MODEL,
+                code="semantic_validation",
+                message=_safe_validation_detail(error),
+                paths=("/",),
+            )
+            raise AgentArtifactResponseError(
+                f"Agent semantic response is invalid: {_safe_validation_detail(error)}",
+                semantic_payload=semantic_payload,
+                diagnostic=diagnostic,
+                response_normalizations=tuple(normalizations),
+            ) from error
+    return ParsedAgentResponse(
+        body=body,
+        ignored_controller_fields=ignored,
+        semantic_payload=semantic_payload,
+        response_normalizations=tuple(normalizations),
+    )
 
 
 def _safe_validation_detail(error: ValueError) -> str:
@@ -954,16 +1028,32 @@ def parse_json_object_response(value: str) -> dict[str, object]:
             parse_constant=_reject_nonstandard_constant,
         )
     except (TypeError, ValueError) as error:
-        raise AgentArtifactResponseError(
+        detail = (
             "Agent response JSON is invalid: "
             f"{_safe_json_detail(error)}. The response must contain exactly one "
             "unambiguous JSON object; a single json fence or presentation-only "
             "surrounding prose and a bounded redundant closing-delimiter suffix "
             "are normalized, but multiple fences or outside JSON object "
             "candidates are forbidden"
+        )
+        raise AgentArtifactResponseError(
+            detail,
+            diagnostic=diagnostic_from_transport(
+                value,
+                code="invalid_json_transport",
+                message=detail,
+            ),
         ) from error
     if not isinstance(payload, dict):
-        raise AgentArtifactResponseError("Agent response must be a JSON object")
+        detail = "Agent response must be a JSON object"
+        raise AgentArtifactResponseError(
+            detail,
+            diagnostic=diagnostic_from_transport(
+                value,
+                code="non_object_transport",
+                message=detail,
+            ),
+        )
     return payload
 
 
@@ -1021,6 +1111,42 @@ def _validate_response_context(
     )
 
 
+def _context_failure_diagnostic(
+    parsed: ParsedAgentResponse,
+    error: ValueError,
+) -> ResponseValidationDiagnostic:
+    """Locate post-schema semantic failures without authorizing whole replacement."""
+
+    detail = _safe_validation_detail(error)
+    body = parsed.body
+    failure_class = ResponseFailureClass.SEMANTIC_CONTEXT
+    if isinstance(body, ImplementationPlanResponse):
+        paths = ("/tasks",)
+    elif isinstance(body, WorkResultResponse):
+        paths = ("/completed_tasks",)
+    elif isinstance(body, TestReportResponse):
+        paths = ("/findings", "/summary")
+    else:
+        lowered = detail.casefold()
+        if "evidence" in lowered or "tool" in lowered or "command" in lowered:
+            failure_class = ResponseFailureClass.EVIDENCE_GROUNDING
+            paths = ("/criterion_assessments",)
+        elif "finding" in lowered:
+            paths = ("/findings",)
+        elif "verdict" in lowered or "assessment" in lowered:
+            paths = ("/criterion_assessments", "/findings", "/verdict")
+        else:
+            paths = ("/criterion_assessments", "/findings")
+    return diagnostic_from_message(
+        parsed.semantic_payload,
+        failure_class=failure_class,
+        authority=ResponseIssueAuthority.MODEL,
+        code="context_validation",
+        message=detail,
+        paths=paths,
+    )
+
+
 def parse_agent_response(
     result: AgentExecutionResult,
     request: AgentExecutionRequest,
@@ -1074,6 +1200,8 @@ def parse_agent_response(
             parsed = ParsedAgentResponse(
                 body=body,
                 ignored_controller_fields=parsed.ignored_controller_fields,
+                semantic_payload=parsed.semantic_payload,
+                response_normalizations=parsed.response_normalizations,
             )
         _validate_response_context(
             body,
@@ -1084,8 +1212,12 @@ def parse_agent_response(
             iteration_limit=iteration_limit,
         )
     except (ValueError, ValidationError) as error:
+        diagnostic = _context_failure_diagnostic(parsed, error)
         raise AgentArtifactResponseError(
-            f"Agent semantic response is invalid: {_safe_validation_detail(error)}"
+            f"Agent semantic response is invalid: {_safe_validation_detail(error)}",
+            semantic_payload=parsed.semantic_payload,
+            diagnostic=diagnostic,
+            response_normalizations=parsed.response_normalizations,
         ) from error
     return parsed
 
@@ -1174,12 +1306,18 @@ def parse_dynamic_agent_response(
                 command_evidence=review_command_evidence,
             )
         except (ValueError, ValidationError) as error:
+            diagnostic = _context_failure_diagnostic(parsed, error)
             raise AgentArtifactResponseError(
-                f"Agent semantic response is invalid: {_safe_validation_detail(error)}"
+                f"Agent semantic response is invalid: {_safe_validation_detail(error)}",
+                semantic_payload=parsed.semantic_payload,
+                diagnostic=diagnostic,
+                response_normalizations=parsed.response_normalizations,
             ) from error
         parsed = ParsedAgentResponse(
             body=body,
             ignored_controller_fields=parsed.ignored_controller_fields,
+            semantic_payload=parsed.semantic_payload,
+            response_normalizations=parsed.response_normalizations,
         )
     criterion_ids = {criterion.id for criterion in task_brief.acceptance_criteria}
     try:
@@ -1313,7 +1451,11 @@ def parse_dynamic_agent_response(
                     "non-accepted reviews require a blocked criterion assessment"
                 )
     except ValueError as error:
+        diagnostic = _context_failure_diagnostic(parsed, error)
         raise AgentArtifactResponseError(
-            f"Agent semantic response is invalid: {_safe_validation_detail(error)}"
+            f"Agent semantic response is invalid: {_safe_validation_detail(error)}",
+            semantic_payload=parsed.semantic_payload,
+            diagnostic=diagnostic,
+            response_normalizations=parsed.response_normalizations,
         ) from error
     return parsed

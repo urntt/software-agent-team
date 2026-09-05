@@ -133,6 +133,9 @@ Planning dialogue, proposal compilation, and approval evidence.
 `src/software_agent_team/responses.py` owns the smaller semantic response
 bodies and the explicit mapping of controller-owned fields for each artifact
 kind. These are different boundaries, not duplicate persisted schemas.
+`src/software_agent_team/response_corrections.py` owns typed validation
+diagnostics, deterministic extra-field removal, and the digest-bound targeted
+correction envelope. It does not own artifact meaning or runtime authority.
 `src/software_agent_team/assembly.py` is the shared binding layer that combines
 those semantic bodies with controller-owned Git, command, identity, commit,
 and review-scope facts for both fixed and task-defined teams.
@@ -151,7 +154,9 @@ and review scope come from controller state. A model may redundantly return
 these fields for compatibility, but the parser strips them, records which ones
 were ignored, and never lets them override authoritative values. Missing or
 incorrect controller-owned fields are therefore neither model-quality failures
-nor reasons to spend a repair call.
+nor reasons to spend a correction call. A controller/evidence-owned name placed
+inside model-owned content is rejected rather than normalized away, so a model
+cannot smuggle an authority-bearing ID through an extra field.
 
 A blocking Review finding remains unresolved until a later independent Review
 accepts the changed commit. If execution stops after a writer produced a new
@@ -171,7 +176,7 @@ for a keyed JSON fragment; values, punctuation, ordering, and string content
 remain exact. The fixed-fixture compatibility path searches the current
 sanitized execution record. The adaptive path also searches controller-owned
 deterministic command stdout/stderr from the same immutable iteration; during
-its one controlled semantic repair, it may additionally search
+a targeted correction, it may additionally search
 integrity-checked attempts from the same Reviewer, role stage, immutable commit,
 and invocation chain. The controller requires every fragment to occur in at
 least one eligible output and binds every protocol-eligible
@@ -189,8 +194,9 @@ controller changes only that assessment to `blocked`, binds the same evidence
 under blocked semantics, and adds a criterion-scoped evidence-gap finding. It
 never applies this monotonic downgrade to `accept`, `fail`, a no-match selector,
 or an otherwise-invalid blocker relationship. Evidence never crosses an
-Agent, stage, iteration, commit, or repair chain. A no-match selector uses or
-exhausts the one bounded semantic repair; multiple real matches do not.
+Agent, stage, iteration, commit, or correction chain. A no-match selector is a
+typed evidence-grounding failure; multiple real matches are retained and do
+not require the model to reword the claim.
 
 Execution records label this grounded Reviewer shape `semantic_body_v4`; other
 current semantic bodies remain `semantic_body_v1`. `semantic_body_v2` and
@@ -226,8 +232,10 @@ fence in surrounding prose while permitting contract-ineligible arrays. A
 closing-delimiter suffix is discarded only after the decoder has already
 recovered exactly one complete top-level object; raw transport output remains
 immutable evidence. The parser never guesses between multiple objects.
-Duplicate keys, multiple objects, multiple fences, non-standard constants,
-unknown semantic fields, and invalid semantic content remain invalid.
+Duplicate keys, multiple objects, multiple fences, non-standard constants, and
+invalid semantic content remain invalid. A field that the authoritative schema
+forbids may be removed deterministically only when its removal cannot grant or
+hide controller/evidence authority; the execution record names every removal.
 
 OpenClaw transport may contain more than one visible payload when a semantic
 answer is followed by an ancillary tool diagnostic. SAT retains the raw JSON
@@ -236,18 +244,36 @@ order, and applies the object rules above to the combined presentation. It
 therefore accepts one semantic object plus non-object diagnostic text but still
 rejects two competing objects. Payload count alone is not a semantic verdict.
 
-One controlled repair may address only the semantic contract. It receives a
-bounded, value-free structural diagnostic, such as the duplicate key name,
-while the immutable execution record retains the raw provider output. In
-controlled evaluations, the initial response and optional repair each receive
-the frozen per-invocation timeout. Product calls instead share the
-user-authorized USD ceiling and optional whole-run deadline; their call,
-duration, and token counts remain telemetry.
+The pinned OpenClaw `agent` and `infer model run` commands do not expose a
+response-schema flag at the tool-using Agent boundary. The optional `llm-task`
+tool can validate a separate no-tools nested model call, so SAT does not treat
+it as the final response contract for an Agent that has inspected or changed a
+workspace. SAT therefore validates the returned semantic object in its
+controller.
+
+A targetable model-owned failure becomes a typed, content-free diagnostic with
+exact JSON-pointer paths. The controller retains the invalid semantic object,
+binds its canonical SHA-256 into a `semantic_correction_v1` envelope, and asks
+the model to return replacements for exactly those paths—never the complete
+object. It applies the replacements to a copy, preserves every unrelated field,
+and revalidates the compiled result. A writer's verified commit and snapshot
+are frozen before correction and must remain unchanged. A missing user-owned
+decision returns through the typed Planning-question path and never enters this
+protocol. Transport failures, unlocated errors, invalid envelopes, repeated
+error fingerprints, and corrections that leave a targeted defect in place stop
+rather than consuming a random full-response retry. Ordinary product flow may continue
+after a correction only when the previous typed defects disappeared, a distinct
+targetable defect remains, and the task USD/deadline authority permits the next
+call. Controlled evaluations may intentionally freeze a zero-or-one correction
+cap; each permitted invocation receives the frozen per-invocation timeout.
+The 64-field protocol ceiling rejects an over-wide diagnostic as one invalid
+submission instead of partially patching it; it is a schema-safety bound, not a
+task, Agent, call, token, or cost budget.
 
 If a model returns controller-owned fields, they are ignored and recorded in
 the execution record. Missing or incorrect echoes such as `kind`, commit
 hashes, test status, command lists, criterion identifiers, or review scope do
-not trigger repair.
+not trigger correction.
 
 For an isolated OpenClaw invocation, SAT reads the session index and exact
 session ID returned by the pinned runtime, verifies direct non-symlink paths,
@@ -269,8 +295,8 @@ is invalid. Size and record-count limits apply before parsing.
 A complete session with zero tool calls is valid captured evidence, but it
 cannot satisfy a citation by itself. A missing, substituted, incomplete,
 malformed, or unpaired session is invalid runtime evidence and stops Review at
-the safety boundary rather than spending a semantic repair. On the adaptive
-path, a repair may reuse an earlier eligible attempt without repeating an
+the safety boundary rather than spending a semantic correction. On the adaptive
+path, a correction may reuse an earlier eligible attempt without repeating an
 unchanged probe; every reference records the originating execution attempt.
 Raw OpenClaw session JSONL is never copied into run artifacts; the sanitized
 records, transcript SHA-256, and current-turn record count make the accepted
@@ -332,8 +358,10 @@ workspaces/<run_id>/
 └── detached self-contained Git clone and generated result
 ```
 
-Artifact schema v2 attributes handoffs, execution telemetry, and Agent-owned
-artifacts to run-scoped Agent IDs. The Agent namespace prevents two Agents with
+Artifact schema v3 adds typed response diagnostics, deterministic normalization,
+targeted-correction requests, and correction outcomes while retaining read
+support for schema v2. Both versions attribute handoffs, execution telemetry,
+and Agent-owned artifacts to run-scoped Agent IDs. The Agent namespace prevents two Agents with
 the same output kind from claiming the same immutable path. On every write and
 load, the store checks producer identity, stage membership, capability, and
 handoff endpoints against the approved `TeamPlan`.
@@ -364,10 +392,11 @@ seconds. Approval revalidates that authority against the TeamPlan at the
 execution boundary.
 The bootstrap Planner cannot create Agents or change lifecycle state.
 
-Planning schema v3 is the current write contract and schema v2 remains readable.
-Compatibility fields omit themselves when absent so loading v2 evidence does
-not change its canonical bytes or digest. A structured edit of v2 evidence
-preserves version 2; a new model-authored replacement uses the current schema.
+Planning schema v4 adds the same typed normalization and correction evidence;
+schema v2 and v3 remain readable. Compatibility fields omit themselves when
+absent so loading historical evidence does not change its canonical bytes or
+digest. A structured edit of historical evidence preserves its schema identity;
+a new model-authored replacement uses the current schema.
 The live response schema, unlike the backward-readable persistence models,
 requires non-null question category and owner, admission rationale, stable
 requirement references, non-goals, assumption ownership, decision provenance,
@@ -559,10 +588,11 @@ active, the same `AgentExecutionRecord` stores its typed execution status,
 content-free provider-liveness policy and counters, collection status,
 transcript digest, current-turn record count, ordered sanitized tool records,
 and any bounded integrity error. Missing model, provider, token, or required
-Reviewer tool evidence is never treated as zero usage or success. A repair is
-permitted only for a semantic-body failure. Product repair uses the same
+Reviewer tool evidence is never treated as zero usage or success. A model call
+for correction is permitted only for a typed model-owned semantic failure with
+exact correction paths. Product correction uses the same
 provider-liveness and remaining whole-run deadline authority; controlled
-evaluation repair receives its frozen invocation timeout. Both remain inside
+evaluation correction receives its frozen invocation timeout. Both remain inside
 the applicable budget. Bootstrap Planning turns persist the same liveness
 evidence in `PlanningExecutionEvidence`, so a stall or degraded observer cannot
 disappear before the execution run exists.
@@ -578,7 +608,7 @@ ReviewReport remains unchanged. The separate 500-character terminal event
 projection normalizes whitespace, ends at a word boundary when possible, and
 adds `… [truncated]` instead of silently ending mid-sentence. Projection
 therefore cannot turn successful verified work into an artifact failure or
-spend a model repair call.
+spend a model correction call.
 
 For policy routing, `team-plan.json` freezes one primary route and an ordered,
 bounded fallback list for every Agent, plus the controller's attributable
@@ -587,7 +617,7 @@ route. Only an execution classified as an attributable provider failure may
 advance to the next explicitly approved fallback, and only when the TeamPlan
 authorizes `provider_failure`. The failed invocation, usage, route reference,
 switch event, next route, and possible billable consequence remain evidence.
-Semantic response repair does not itself authorize a route switch.
+Semantic response correction does not itself authorize a route switch.
 
 Writers are serialized for the current single-clone Git backend. The
 controller verifies their clean input commit, descendant output commit,
@@ -809,7 +839,7 @@ when investigating it rather than editing artifacts in place.
   positive role-specific invocation limits so comparisons can freeze and vary
   time as an explicit experiment variable.
 - In controlled evaluations, an initial semantic response and its optional
-  repair each receive the frozen evaluation timeout, while call count and
+  targeted correction each receive the frozen evaluation timeout, while call count and
   Agent duration remain measured experiment variables. The ordinary product
   path does not treat call count or Agent duration as user budgets.
 - Model compatibility supplements do not set a second provider-transport
@@ -833,8 +863,8 @@ when investigating it rather than editing artifacts in place.
   route has a frozen paired price or the user explicitly confirms that route
   as zero-cost. Unknown is never converted to zero. Controlled comparisons
   likewise require an explicit paired price table.
-- The shared ledger covers Planning, dynamic execution, correction Planning,
-  semantic repair, and authorized route switching in one process. Standard
+- The shared ledger covers Planning, dynamic execution, targeted semantic
+  correction, and authorized route switching in one process. Standard
   progress shows recorded spend, authorization remaining, and price source.
   Terminal `budget-ledger.json` preserves every call in reservation order, and
   the human report breaks it down by run, phase, Agent, attempt, route, model,

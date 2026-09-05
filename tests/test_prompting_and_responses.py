@@ -38,6 +38,7 @@ from software_agent_team.prompting import (
     build_agent_execution_request,
     render_agent_prompt,
 )
+from software_agent_team.response_corrections import ResponseFailureClass
 from software_agent_team.responses import (
     AgentArtifactResponseError,
     GroundedReviewReportResponse,
@@ -811,6 +812,19 @@ def test_strict_parser_rejects_the_wrong_artifact_kind() -> None:
         )
 
 
+def test_non_object_transport_is_typed_and_has_no_semantic_correction_path() -> None:
+    with pytest.raises(AgentArtifactResponseError) as captured:
+        parse_scripted(
+            '["not", "a", "semantic", "object"]',
+            execution_request(AgentRole.PLANNER, ArtifactKind.IMPLEMENTATION_PLAN),
+        )
+
+    assert captured.value.semantic_payload is None
+    assert captured.value.diagnostic is not None
+    assert captured.value.diagnostic.failure_class is ResponseFailureClass.TRANSPORT
+    assert captured.value.diagnostic.correction_paths == ()
+
+
 def test_parser_does_not_require_an_artifact_kind_from_the_agent() -> None:
     payload = plan().model_dump(mode="json")
     del payload["kind"]
@@ -847,15 +861,19 @@ def test_parser_ignores_conflicting_controller_owned_fields() -> None:
     )
 
 
-def test_parser_rejects_an_unknown_semantic_field() -> None:
+def test_parser_deterministically_discards_an_unknown_semantic_field() -> None:
     payload = semantic_body(plan()).model_dump(mode="json")
     payload["unsupported_claim"] = True
 
-    with pytest.raises(AgentArtifactResponseError, match="Extra inputs"):
-        parse_scripted(
-            json.dumps(payload),
-            execution_request(AgentRole.PLANNER, ArtifactKind.IMPLEMENTATION_PLAN),
-        )
+    parsed = parse_scripted(
+        json.dumps(payload),
+        execution_request(AgentRole.PLANNER, ArtifactKind.IMPLEMENTATION_PLAN),
+    )
+
+    assert parsed.body == semantic_body(plan())
+    assert parsed.response_normalizations == (
+        "removed schema-forbidden field /unsupported_claim",
+    )
 
 
 def test_parser_ignores_a_model_supplied_producer() -> None:

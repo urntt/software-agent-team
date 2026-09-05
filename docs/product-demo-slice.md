@@ -36,7 +36,7 @@ start the computer
 
 The user must not need to understand or manually edit an internal run ID,
 TaskBrief JSON, benchmark source path, team manifest, concurrency setting,
-timeout policy, repair limit, runs root, or workspaces root during this flow.
+timeout policy, controlled correction cap, runs root, or workspaces root during this flow.
 
 ## Product and Evaluation Surfaces
 

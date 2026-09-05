@@ -118,7 +118,7 @@ def render_run_report(
             "## Execution metrics",
             "",
             f"- Agent calls: {calls}",
-            f"- Controlled response repairs: {retries}",
+            f"- Additional Agent-stage calls: {retries}",
             f"- Failed Agent attempts: {failures}",
             f"- Agent duration: {duration_ms} ms",
             f"- Deterministic-gate duration: {gate_duration_ms} ms",

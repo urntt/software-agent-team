@@ -84,7 +84,7 @@ unowned model choices. Responsibility is divided explicitly:
 | Maximum concurrency | Bootstrap Planning proposes a bounded value | User may edit it; policy caps it | Controller decides which ready Agents actually start without exceeding the cap |
 | Whole-run time | Planning may explain likely duration but does not invent a deadline | SAT asks before the first model call; default is no deadline unless the user has a real one | Controller applies only the explicitly authorized task deadline |
 | Provider-call liveness | The model does not choose its own watchdog | Provider/model capability and measured evidence define a renewable inactivity lease plus probe/grace behavior | Controller renews only from trustworthy activity and interrupts only after sustained verified silence |
-| Task model cost | Planning may explain route use and cost exposure | User authorizes one total USD ceiling covering the complete task journey | One monotonic ledger accounts for Planning, execution, correction, repair, and switching; calls, tokens, Agent count, iterations, and duration remain telemetry |
+| Task model cost | Planning may explain route use and cost exposure | User authorizes one total USD ceiling covering the complete task journey | One monotonic ledger accounts for Planning, execution, targeted correction, and switching; calls, tokens, Agent count, iterations, and duration remain telemetry |
 | Model route | Planning may recommend task needs; configured profiles and routing policy provide candidates | User approves effective routes and switch conditions | Controller resolves and records the authorized route; there is no silent fallback |
 | Replanning or team changes during execution | User correction or an Agent recommendation may request a change | Material changes require a new validated revision and user confirmation | Controller applies a revision only at a safe checkpoint |
 
@@ -190,16 +190,19 @@ may perform only these bounded, semantics-preserving normalizations:
 - Canonicalize safe relative `expected_paths` values such as `tests/` to
   `tests`;
 - Canonicalize safe `workspace_scope` presentation such as `repository/` to
-  `repository`.
+  `repository`;
+- Remove a schema-forbidden field only when removing it cannot grant or hide
+  controller/evidence authority.
 
 The immutable turn retains the exact raw response and records every normalized
 field or removed profile-owned definition separately. The active policy is the
 only source of IDs eligible for criterion-ownership normalization; the
 controller does not compare or adopt the model-authored description,
 verification text, or Review boundaries. Absolute paths, backslashes, parent
-traversal, ambiguous response bodies, unknown fields outside such an ignored
-definition, and other semantic defects remain invalid. They may consume the
-one bounded semantic repair when policy permits it.
+traversal and ambiguous response bodies remain invalid. Protected authority
+fields are rejected rather than normalized away. Other model-owned defects are
+eligible only for digest-bound correction of the exact typed paths identified
+by validation; the model never regenerates the complete retained object.
 
 OpenClaw may deliver the semantic response and an ancillary tool diagnostic as
 separate visible payloads. The execution boundary preserves their original
@@ -207,6 +210,17 @@ payloads in raw telemetry and combines the visible text in order for strict
 semantic parsing. One unambiguous top-level object plus presentation-only text
 is valid; two object candidates remain ambiguous and are rejected. Transport
 payload count is therefore not mistaken for semantic object count.
+
+The pinned OpenClaw Agent CLI does not expose a response-schema parameter for a
+tool-using turn. SAT therefore compiles responses at the controller boundary.
+Transport failures and unlocated errors stop. A targetable model-owned failure
+produces a content-free diagnostic and a `semantic_correction_v1` envelope bound
+to the retained object's SHA-256. The model supplies values for exactly the
+listed JSON-pointer paths; every other value remains immutable. Product
+Planning continues only after the prior target set disappears and a distinct
+targetable failure remains within the task budget. A repeated fingerprint or
+unresolved target stops, while controlled evaluation may intentionally impose
+a zero-or-one correction cap.
 
 Every workspace scope describes controller authority inside the generated
 repository: `repository` grants whole-project access and `repository/path`
@@ -451,16 +465,16 @@ cannot add or remove obligations. This makes entry coverage a controller-
 validated contract rather than a summary claim. The response schema makes the fragment
 structurally required and forbids model-supplied attempt, tool, or command IDs.
 Exact text is preferred; a keyed JSON fragment may differ only in RFC JSON
-whitespace outside quoted strings. An initial
-response uses its current invocation. During the one controlled semantic
-repair, the same Reviewer may also reuse integrity-checked results captured by
+whitespace outside quoted strings. An initial response uses its current
+invocation. During a targeted correction, the same Reviewer may also reuse
+integrity-checked results captured by
 an earlier attempt in that same role-stage, immutable-commit, and invocation
 chain. Deterministic command stdout/stderr from the same immutable iteration is
 also eligible. The controller requires every fragment to occur in at least one
 eligible output, enriches the persisted assessment with every protocol-eligible
 actual attempt-qualified tool ID or command ID and available provenance, and
 deduplicates repeated or overlapping selectors. Evidence cannot cross an Agent,
-stage, iteration, commit, or repair chain. A zero match is invalid; multiple
+stage, iteration, commit, or correction chain. A zero match is invalid; multiple
 real matches are preserved instead of delegated back to model wording. Review may
 run bounded foreground
 probes in the no-network sandbox against the read-only source and temporary
@@ -672,8 +686,8 @@ Runtime switching is currently permitted only after an attributable
 `provider_failure`, only when the approved Agent assignment lists a next route,
 and only within that finite approved route list. The failed invocation is
 persisted and budget-accounted before the UI announces the switch and its
-possible provider-cost consequence. Semantic response repair is a separate
-bounded mechanism. There is no silent fallback.
+possible provider-cost consequence. Targeted semantic correction is a separate,
+improvement-gated mechanism. There is no silent fallback.
 
 Controlled evaluation mode remains stricter: one canonical model and price
 table are pinned for the run, switching is disabled, and topology trials remain
@@ -732,14 +746,15 @@ presentation, and removes exact active-profile criterion-definition echoes
 without removing their legal task bindings or adopting model-authored profile
 text. The raw response and every normalization remain recorded in the Planning
 turn.
-Planning schema v3 adds the responsibility and clarity contracts while retaining
-read support and canonical serialization for schema-v2 evidence. Current live
-response schemas make the new fields mandatory and non-null. Structured edits
-of v2 evidence preserve its schema identity rather than relabeling an incomplete
-legacy body as v3.
+Planning schema v4 adds typed validation diagnostics, deterministic
+normalization, and targeted-correction evidence while retaining read support
+for schema-v2 and schema-v3 evidence. Current live response schemas make the
+responsibility and clarity fields mandatory and non-null. Structured edits of
+historical evidence preserve its schema identity rather than relabeling it as
+current.
 Blocking model waits emit a concise heartbeat every ten seconds, record when a
-response returns, show contract validation, and explicitly announce the one
-bounded repair. These messages expose elapsed time and controller state, not
+response returns, show contract validation, and explicitly announce each exact
+correction target. These messages expose elapsed time and controller state, not
 prompts or hidden reasoning. The execution adapter additionally projects
 content-free provider stream and attributable tool lifecycle activity. A
 provider/model-aware renewable silence lease emits a policy-attributed warning,
@@ -772,7 +787,7 @@ every approved writer, deterministic evidence from every approved Tester or
 from the controller when no Tester exists, evidence from every approved
 Reviewer, one immutable quality commit, and complete manual-review coverage.
 The dynamic runner now binds each scheduler-approved Agent to its exact model,
-time authority, prompt, semantic repair limit, Git or read-only boundary, aggregate
+time authority, prompt, semantic-correction policy, Git or read-only boundary, aggregate
 budget, execution record, and durable handoffs. Its persisted events distinguish
 provider activity, tool start/completion, degraded observation, suspected stall,
 grace recovery, and terminal provider stall. A confirmed stall preserves typed
@@ -787,7 +802,7 @@ that actually exists in the foreground execution surface. `sat-probe-run`
 provides the matching fixed, bounded, controller-verifiable execution path; the
 runtime also contains pinned `uv` for relevant bounded probes. The OpenClaw adapter validates
 each exact session turn, pairs actual tool calls and results, and persists only
-bounded sanitized records. Dynamic semantic repair may carry those records
+bounded sanitized records. Dynamic semantic correction may carry those records
 forward only within one Reviewer, role stage, immutable commit, and invocation
 chain. Every protocol-eligible semantic fragment is bound to an
 attempt-qualified controller-owned tool ID; overlapping selectors are
@@ -833,7 +848,7 @@ level with deterministic event evidence; an authorized live run demonstrates
 at least guidance and cooperative pause/resume without losing integrity.
 
 **Implementation note:** append-only events now project scheduler queue and
-readiness, invocation and provider wait, bounded semantic repair, completion,
+readiness, invocation and provider wait, targeted semantic correction, completion,
 failure, and blocked states with Agent dependencies, capability, stage, model,
 duration, evidence, and aggregate budget data. Configuration schema v8 selects
 compact, standard, or detailed terminal projection. The foreground palette can

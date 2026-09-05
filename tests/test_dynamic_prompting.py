@@ -31,6 +31,7 @@ from software_agent_team.prompting import (
     build_dynamic_agent_execution_request,
     render_dynamic_agent_prompt,
 )
+from software_agent_team.response_corrections import ResponseIssueAuthority
 from software_agent_team.responses import (
     AgentArtifactResponseError,
     GroundedReviewReportResponse,
@@ -1765,7 +1766,10 @@ def test_dynamic_review_response_rejects_a_model_supplied_controller_tool_id() -
     }
     request, result = _review_result(json.dumps(response))
 
-    with pytest.raises(AgentArtifactResponseError, match="tool_call_id"):
+    with pytest.raises(
+        AgentArtifactResponseError,
+        match="tool_call_id",
+    ) as captured:
         parse_dynamic_agent_response(
             result,
             request,
@@ -1773,6 +1777,11 @@ def test_dynamic_review_response_rejects_a_model_supplied_controller_tool_id() -
             team_plan=team_plan(),
             reviewed_criterion_ids=("AC_LINKS",),
         )
+
+    diagnostic = captured.value.diagnostic
+    assert diagnostic is not None
+    assert diagnostic.correction_paths == ()
+    assert diagnostic.issues[0].authority is ResponseIssueAuthority.CONTROLLER
 
 
 def test_dynamic_review_response_rejects_a_citation_when_no_tool_was_called() -> None:

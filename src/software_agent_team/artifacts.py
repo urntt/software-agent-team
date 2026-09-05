@@ -19,9 +19,15 @@ from pydantic import (
     model_validator,
 )
 
+from software_agent_team.response_corrections import (
+    ResponseValidationDiagnostic,
+    SemanticCorrectionOutcome,
+    SemanticCorrectionRequestEvidence,
+)
 from software_agent_team.versioning import SoftwareVersionReport
 
-ARTIFACT_SCHEMA_VERSION = 2
+ARTIFACT_SCHEMA_VERSION = 3
+MINIMUM_READABLE_ARTIFACT_SCHEMA_VERSION = 2
 COMMIT_PATTERN = r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
 AGENT_ID_PATTERN = r"^[a-z][a-z0-9_]*$"
 
@@ -369,7 +375,7 @@ class HandoffEnvelope(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[ARTIFACT_SCHEMA_VERSION] = ARTIFACT_SCHEMA_VERSION
+    schema_version: Literal[2, ARTIFACT_SCHEMA_VERSION] = ARTIFACT_SCHEMA_VERSION
     kind: Literal[ArtifactKind.HANDOFF_ENVELOPE] = ArtifactKind.HANDOFF_ENVELOPE
     run_id: str = Field(min_length=1, pattern=r"^[a-z0-9][a-z0-9_-]*$")
     team_id: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9_]*$")
@@ -432,7 +438,7 @@ class PhaseArtifact(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[ARTIFACT_SCHEMA_VERSION] = ARTIFACT_SCHEMA_VERSION
+    schema_version: Literal[2, ARTIFACT_SCHEMA_VERSION] = ARTIFACT_SCHEMA_VERSION
     kind: ArtifactKind
     run_id: str = Field(min_length=1, pattern=r"^[a-z0-9][a-z0-9_-]*$")
     team_id: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9_]*$")
@@ -591,7 +597,7 @@ class AgentExecutionRecord(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[ARTIFACT_SCHEMA_VERSION] = ARTIFACT_SCHEMA_VERSION
+    schema_version: Literal[2, ARTIFACT_SCHEMA_VERSION] = ARTIFACT_SCHEMA_VERSION
     kind: Literal[ArtifactKind.AGENT_EXECUTION_RECORD] = (
         ArtifactKind.AGENT_EXECUTION_RECORD
     )
@@ -631,6 +637,22 @@ class AgentExecutionRecord(BaseModel):
     ) = None
     controller_supplied_fields: tuple[str, ...] = ()
     ignored_controller_fields: tuple[str, ...] = ()
+    response_normalizations: tuple[str, ...] = Field(
+        default=(),
+        exclude_if=lambda values: not values,
+    )
+    response_validation: ResponseValidationDiagnostic | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    semantic_correction_request: SemanticCorrectionRequestEvidence | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    semantic_correction_outcome: SemanticCorrectionOutcome | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     tool_evidence_status: AgentToolEvidenceStatus = AgentToolEvidenceStatus.NOT_CAPTURED
     session_transcript_sha256: str | None = Field(
         default=None,
@@ -690,6 +712,20 @@ class AgentExecutionRecord(BaseModel):
             raise ValueError("response binding fields must be valid and unique")
         return values
 
+    @field_validator("response_normalizations")
+    @classmethod
+    def require_unique_response_normalizations(
+        cls,
+        values: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        if (
+            len(values) > 100
+            or len(values) != len(set(values))
+            or any(not value.strip() or len(value) > 500 for value in values)
+        ):
+            raise ValueError("response normalizations must be bounded and unique")
+        return values
+
     @model_validator(mode="after")
     def validate_execution(self) -> Self:
         """Keep timing, exit, timeout, and response evidence coherent."""
@@ -715,9 +751,19 @@ class AgentExecutionRecord(BaseModel):
         ):
             raise ValueError("ignored response fields must be controller-owned")
         if self.response_contract is None and (
-            self.controller_supplied_fields or self.ignored_controller_fields
+            self.controller_supplied_fields
+            or self.ignored_controller_fields
+            or self.response_normalizations
+            or self.response_validation is not None
+            or self.semantic_correction_request is not None
         ):
             raise ValueError("response binding fields require a response contract")
+        if (self.semantic_correction_request is None) != (
+            self.semantic_correction_outcome is None
+        ):
+            raise ValueError(
+                "semantic correction request and outcome must appear together"
+            )
         validate_tool_evidence_collection(
             status=self.tool_evidence_status,
             transcript_sha256=self.session_transcript_sha256,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import PurePosixPath
@@ -73,12 +74,20 @@ from software_agent_team.prompting import (
     DynamicUpstreamResult,
     DynamicUserGuidance,
     build_dynamic_agent_execution_request,
-    build_semantic_repair_request,
+    build_semantic_correction_request,
 )
 from software_agent_team.quality_gates import (
     QualityGateBudgetExceeded,
     QualityGateError,
     SandboxUnavailableError,
+)
+from software_agent_team.response_corrections import (
+    ResponseValidationDiagnostic,
+    SemanticCorrectionOutcome,
+    SemanticCorrectionPlan,
+    apply_semantic_correction,
+    build_semantic_correction_plan,
+    correction_outcome,
 )
 from software_agent_team.responses import (
     AgentArtifactResponseError,
@@ -88,6 +97,7 @@ from software_agent_team.responses import (
     WorkResultResponse,
     controller_fields_for,
     parse_dynamic_agent_response,
+    parse_json_object_response,
 )
 from software_agent_team.run_control import TerminationReason
 from software_agent_team.scheduling import (
@@ -183,7 +193,7 @@ class DynamicAgentRunner:
         review_scope_by_agent: Mapping[str, tuple[str, ...]] | None = None,
         iteration: int = 1,
         input_commit: str | None = None,
-        artifact_repair_limit: int = 1,
+        artifact_repair_limit: int | None = None,
         revision_feedback: DynamicRevisionFeedback | None = None,
         guidance_provider: GuidanceProvider | None = None,
         activity_handler: ProgressDraftHandler | None = None,
@@ -217,8 +227,10 @@ class DynamicAgentRunner:
             raise ValueError("artifact store binds different dynamic inputs")
         if not 1 <= iteration <= team_plan.iteration_limit:
             raise ValueError("dynamic iteration exceeds the approved TeamPlan")
-        if artifact_repair_limit not in {0, 1}:
-            raise ValueError("dynamic execution permits zero or one semantic repair")
+        if artifact_repair_limit not in {None, 0, 1}:
+            raise ValueError(
+                "controlled dynamic evaluation permits zero or one correction"
+            )
 
         writer_ids = {
             agent.id
@@ -481,8 +493,11 @@ class DynamicAgentRunner:
         )
         guidance_by_id: dict[str, DynamicUserGuidance] = {}
         previous_error = "Agent did not return a semantic response"
-        repair_detail: str | None = None
-        semantic_repairs = 0
+        correction_plan: SemanticCorrectionPlan | None = None
+        seen_correction_fingerprints: set[str] = set()
+        semantic_corrections = 0
+        frozen_writer_snapshot: GitSnapshot | None = None
+        frozen_writer_commit: str | None = None
         attempt = 1
         review_evidence_attempts: list[ReviewToolEvidenceAttempt] = []
         route_ids = self.team_plan.model_routes.authorized_route_ids(agent.id)
@@ -514,8 +529,8 @@ class DynamicAgentRunner:
             base_request = build_dynamic_agent_execution_request(prompt_inputs)
             request = (
                 base_request
-                if repair_detail is None
-                else build_semantic_repair_request(base_request, repair_detail)
+                if correction_plan is None
+                else build_semantic_correction_request(base_request, correction_plan)
             )
             pricing = self.pricing_by_model[cast(str, request.model)]
             reservation = self.budget_ledger.reserve_call(
@@ -555,8 +570,19 @@ class DynamicAgentRunner:
             )
             response_reference: ArtifactReference | None = None
             ignored_fields: tuple[str, ...] = ()
+            response_normalizations: tuple[str, ...] = ()
+            response_validation: ResponseValidationDiagnostic | None = None
+            correction_request = (
+                None if correction_plan is None else correction_plan.evidence
+            )
+            current_correction_outcome = (
+                None
+                if correction_plan is None
+                else SemanticCorrectionOutcome.NOT_EVALUATED
+            )
+            correction_applied = correction_plan is None
+            next_correction_plan: SemanticCorrectionPlan | None = None
             record_error: str | None = None
-            repairable = False
             failure: Exception | None = None
             current_review_evidence: ReviewToolEvidenceAttempt | None = None
             try:
@@ -569,24 +595,54 @@ class DynamicAgentRunner:
                         execution_attempt=attempt,
                         tool_calls=result.telemetry.tool_calls,
                     )
-                snapshot = (
-                    None
-                    if result.status is AgentExecutionStatus.INTERRUPTED
-                    else self._verify_workspace_after_call(agent, input_commit)
-                )
+                if result.status is AgentExecutionStatus.INTERRUPTED:
+                    snapshot = None
+                elif (
+                    correction_plan is not None
+                    and agent.permission_profile is PermissionProfile.WORKSPACE_WRITE
+                ):
+                    assert frozen_writer_commit is not None
+                    self.workspace_manager.verify_workspace(
+                        self.workspace,
+                        expected_commit=frozen_writer_commit,
+                        require_clean=True,
+                    )
+                    snapshot = frozen_writer_snapshot
+                else:
+                    snapshot = self._verify_workspace_after_call(agent, input_commit)
+                    if agent.permission_profile is PermissionProfile.WORKSPACE_WRITE:
+                        frozen_writer_snapshot = snapshot
+                        frozen_writer_commit = (
+                            input_commit if snapshot is None else snapshot.output_commit
+                        )
                 if result.status is not AgentExecutionStatus.COMPLETED:
                     record_error = result.error or (
                         f"Agent execution ended as {result.status.value}"
                     )
-                    repairable = result.status is AgentExecutionStatus.INVALID_RESPONSE
                     failure = DynamicAgentRunnerError(
                         record_error,
                         self._execution_termination_reason(result.status),
                     )
                 else:
                     try:
+                        parse_result = result
+                        if correction_plan is not None:
+                            envelope = parse_json_object_response(result.response_text)
+                            corrected_payload = apply_semantic_correction(
+                                envelope,
+                                correction_plan,
+                            )
+                            correction_applied = True
+                            parse_result = result.model_copy(
+                                update={
+                                    "response_text": json.dumps(
+                                        corrected_payload,
+                                        ensure_ascii=False,
+                                    )
+                                }
+                            )
                         parsed = parse_dynamic_agent_response(
-                            result,
+                            parse_result,
                             request,
                             task_brief=self.task_brief,
                             team_plan=self.team_plan,
@@ -604,10 +660,63 @@ class DynamicAgentRunner:
                         )
                     except AgentArtifactResponseError as error:
                         record_error = self._error_detail(error)
-                        repairable = True
+                        response_normalizations = error.response_normalizations
+                        response_validation = error.diagnostic
+                        if correction_plan is None:
+                            if (
+                                error.semantic_payload is not None
+                                and error.diagnostic is not None
+                            ):
+                                next_correction_plan = build_semantic_correction_plan(
+                                    error.semantic_payload,
+                                    error.diagnostic,
+                                )
+                                seen_correction_fingerprints.add(
+                                    error.diagnostic.fingerprint
+                                )
+                        elif not correction_applied:
+                            current_correction_outcome = (
+                                SemanticCorrectionOutcome.INVALID_SUBMISSION
+                            )
+                        elif error.diagnostic is not None:
+                            current_correction_outcome = correction_outcome(
+                                correction_plan,
+                                error.diagnostic,
+                                seen_fingerprints=frozenset(
+                                    seen_correction_fingerprints
+                                ),
+                            )
+                            if (
+                                current_correction_outcome
+                                is SemanticCorrectionOutcome.IMPROVED
+                                and error.semantic_payload is not None
+                            ):
+                                next_correction_plan = build_semantic_correction_plan(
+                                    error.semantic_payload,
+                                    error.diagnostic,
+                                )
+                                seen_correction_fingerprints.add(
+                                    error.diagnostic.fingerprint
+                                )
+                        else:
+                            current_correction_outcome = (
+                                SemanticCorrectionOutcome.INVALID_SUBMISSION
+                            )
+                        failure = error
+                    except (ValueError, ValidationError) as error:
+                        record_error = self._error_detail(error)
+                        if correction_plan is not None:
+                            current_correction_outcome = (
+                                SemanticCorrectionOutcome.INVALID_SUBMISSION
+                            )
                         failure = error
                     else:
                         ignored_fields = parsed.ignored_controller_fields
+                        response_normalizations = parsed.response_normalizations
+                        if correction_plan is not None:
+                            current_correction_outcome = (
+                                SemanticCorrectionOutcome.ACCEPTED
+                            )
                         artifact = self._assemble_response(
                             agent,
                             parsed.body,
@@ -640,6 +749,10 @@ class DynamicAgentRunner:
                 controller_supplied_fields=controller_fields_for(request.expected_kind),
                 ignored_controller_fields=ignored_fields,
                 pricing=pricing,
+                response_normalizations=response_normalizations,
+                response_validation=response_validation,
+                semantic_correction_request=correction_request,
+                semantic_correction_outcome=current_correction_outcome,
             )
             self._record_execution_reference(agent.id, persisted.reference)
             if current_review_evidence is not None:
@@ -732,15 +845,20 @@ class DynamicAgentRunner:
                 )
                 continue
             previous_error = record_error or previous_error
-            if repairable and semantic_repairs < self.artifact_repair_limit:
-                semantic_repairs += 1
-                repair_detail = previous_error
+            correction_allowed = next_correction_plan is not None and (
+                self.artifact_repair_limit is None
+                or semantic_corrections < self.artifact_repair_limit
+            )
+            if correction_allowed:
+                semantic_corrections += 1
+                correction_plan = next_correction_plan
                 self._emit_activity(
                     agent,
                     kind=ProgressEventKind.AGENT_RETRY,
                     message=(
-                        f"{agent.label} response failed validation; "
-                        "starting one bounded repair"
+                        f"{agent.label} response failed validation; requesting "
+                        "only controller-identified semantic fields: "
+                        + ", ".join(correction_plan.evidence.target_paths)
                     ),
                     attempt=attempt,
                     model=request.model,
@@ -748,7 +866,7 @@ class DynamicAgentRunner:
                 attempt += 1
                 continue
             if failure is not None:
-                if repairable:
+                if response_validation is not None:
                     raise DynamicAgentRunnerError(
                         previous_error,
                         TerminationReason.ARTIFACT_INVALID,

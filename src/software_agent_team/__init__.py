@@ -168,7 +168,7 @@ from software_agent_team.prompting import (
     DynamicUserGuidance,
     build_agent_execution_request,
     build_dynamic_agent_execution_request,
-    build_semantic_repair_request,
+    build_semantic_correction_request,
     render_agent_prompt,
     render_dynamic_agent_prompt,
 )
@@ -474,7 +474,7 @@ __all__ = [
     "assemble_work_result",
     "build_agent_execution_request",
     "build_dynamic_agent_execution_request",
-    "build_semantic_repair_request",
+    "build_semantic_correction_request",
     "capability_for_legacy_role",
     "control_help",
     "expected_output_for_capability",

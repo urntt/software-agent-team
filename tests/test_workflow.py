@@ -47,6 +47,7 @@ from software_agent_team.quality_gates import (
     SandboxExecution,
     load_quality_gate_configuration,
 )
+from software_agent_team.response_corrections import semantic_payload_sha256
 from software_agent_team.responses import (
     ImplementationPlanResponse,
     ReviewReportResponse,
@@ -71,6 +72,24 @@ POLICY = REPOSITORY_ROOT / "configs" / "run-policy.json"
 BENCHMARK = REPOSITORY_ROOT / "benchmarks" / "task_manager" / "benchmark.json"
 SEED = REPOSITORY_ROOT / "benchmarks" / "task_manager" / "seed"
 FIXED_TIME = datetime(2026, 8, 10, 12, 0, tzinfo=UTC)
+
+
+def semantic_correction_response(
+    base_payload: dict[str, object],
+    replacements: dict[str, object],
+) -> str:
+    """Return a controller-bound field correction for an offline Agent."""
+
+    return json.dumps(
+        {
+            "kind": "semantic_correction_v1",
+            "base_response_sha256": semantic_payload_sha256(base_payload),
+            "replacements": [
+                {"path": path, "value": value} for path, value in replacements.items()
+            ],
+        },
+        ensure_ascii=False,
+    )
 
 
 def software_version() -> SoftwareVersionReport:
@@ -145,6 +164,8 @@ class DynamicWorkflowExecutor:
         *,
         review_verdicts: dict[int, ReviewVerdict] | None = None,
         invalid_plan_once: bool = False,
+        invalid_work_once: bool = False,
+        mutate_work_correction: bool = False,
         invalid_tester_status_once: bool = False,
         tamper_test_commands: bool = False,
         inject_fake_git_fields: bool = False,
@@ -158,6 +179,8 @@ class DynamicWorkflowExecutor:
         self.workspace = workspace
         self.review_verdicts = review_verdicts or {}
         self.invalid_plan_once = invalid_plan_once
+        self.invalid_work_once = invalid_work_once
+        self.mutate_work_correction = mutate_work_correction
         self.invalid_tester_status_once = invalid_tester_status_once
         self.tamper_test_commands = tamper_test_commands
         self.inject_fake_git_fields = inject_fake_git_fields
@@ -182,10 +205,54 @@ class DynamicWorkflowExecutor:
             self.requests.append(request)
             count = self._counts.get(request.role, 0) + 1
             self._counts[request.role] = count
-        if request.role is AgentRole.PLANNER and self.invalid_plan_once and count == 1:
-            return self._result(request, "not valid JSON")
         if request.role is AgentRole.PLANNER:
             artifact = self._plan(request)
+            if self.invalid_plan_once:
+                valid_payload = artifact.model_dump(mode="json")
+                invalid_payload = dict(valid_payload)
+                invalid_payload["objective"] = ""
+                return self._result(
+                    request,
+                    (
+                        json.dumps(invalid_payload, ensure_ascii=False)
+                        if count == 1
+                        else semantic_correction_response(
+                            invalid_payload,
+                            {"/objective": valid_payload["objective"]},
+                        )
+                    ),
+                )
+        elif (
+            request.role is AgentRole.GENERALIST_DEVELOPER
+            and self.invalid_work_once
+            and count > 1
+        ):
+            valid_payload = WorkResultResponse(
+                summary=f"Implemented iteration {request.iteration}.",
+                completed_tasks=("TASK_BUILD",),
+            ).model_dump(mode="json")
+            invalid_payload = dict(valid_payload)
+            invalid_payload["summary"] = ""
+            if self.mutate_work_correction:
+                (self.workspace / "CORRECTION_MUTATION.txt").write_text(
+                    "correction changed the workspace\n",
+                    encoding="utf-8",
+                )
+                git(self.workspace, "add", "CORRECTION_MUTATION.txt")
+                git(
+                    self.workspace,
+                    "commit",
+                    "--no-verify",
+                    "-m",
+                    "test: mutate during response correction",
+                )
+            return self._result(
+                request,
+                semantic_correction_response(
+                    invalid_payload,
+                    {"/summary": valid_payload["summary"]},
+                ),
+            )
         elif request.role is AgentRole.GENERALIST_DEVELOPER:
             artifact = self._work(request)
         elif request.role is AgentRole.TESTER:
@@ -206,6 +273,12 @@ class DynamicWorkflowExecutor:
         else:  # pragma: no cover - the Phase 1 team is fixed
             raise AssertionError(f"unexpected role: {request.role}")
         payload = artifact.model_dump(mode="json")
+        if (
+            request.role is AgentRole.GENERALIST_DEVELOPER
+            and self.invalid_work_once
+            and count == 1
+        ):
+            payload["summary"] = ""
         if (
             request.role is AgentRole.GENERALIST_DEVELOPER
             and self.inject_fake_git_fields
@@ -800,7 +873,7 @@ def test_workflow_stops_on_a_terminal_reviewer_boundary(tmp_path: Path) -> None:
     assert outcome.record.current_iteration == 1
 
 
-def test_workflow_repairs_one_invalid_agent_response(tmp_path: Path) -> None:
+def test_workflow_corrects_one_invalid_semantic_field(tmp_path: Path) -> None:
     source = initialize_source(tmp_path)
     workspace = tmp_path / "workspaces" / task_brief().run_id
     executor = DynamicWorkflowExecutor(workspace, invalid_plan_once=True)
@@ -818,12 +891,9 @@ def test_workflow_repairs_one_invalid_agent_response(tmp_path: Path) -> None:
     ]
     assert len(plan_records) == 2
     repair_prompt = executor.requests[1].prompt
-    assert "Revalidate the entire response" in repair_prompt
-    assert "Use each key exactly once" in repair_prompt
-    assert "every semantic field required" in repair_prompt
-    assert "Do not return controller-owned" in repair_prompt
-    assert "union of tasks[].acceptance_criteria" in repair_prompt
-    assert "tasks[].id to begin with TASK_" in repair_prompt
+    assert "TARGETED_SEMANTIC_CORRECTION_V1" in repair_prompt
+    assert "Do not regenerate or repeat that object" in repair_prompt
+    assert '"/objective"' in repair_prompt
     first = json.loads(
         (tmp_path / "runs" / task_brief().run_id / plan_records[0].path).read_text(
             encoding="utf-8"
@@ -831,6 +901,80 @@ def test_workflow_repairs_one_invalid_agent_response(tmp_path: Path) -> None:
     )
     assert first["attempt"] == 1
     assert first["error"] is not None
+    assert first["response_validation"]["correction_paths"] == ["/objective"]
+    second = json.loads(
+        (tmp_path / "runs" / task_brief().run_id / plan_records[1].path).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert second["semantic_correction_outcome"] == "accepted"
+
+
+def test_fixed_writer_correction_cannot_change_the_frozen_workspace(
+    tmp_path: Path,
+) -> None:
+    source = initialize_source(tmp_path)
+    workspace = tmp_path / "workspaces" / task_brief().run_id
+    executor = DynamicWorkflowExecutor(
+        workspace,
+        invalid_work_once=True,
+        mutate_work_correction=True,
+    )
+
+    outcome = coordinator(tmp_path, executor).execute(
+        task_brief(),
+        source_repository=source,
+    )
+
+    assert outcome.record.phase is RunPhase.FAILED
+    assert (
+        outcome.record.termination_reason is TerminationReason.SAFETY_BOUNDARY_CROSSED
+    )
+    developer_requests = [
+        request
+        for request in executor.requests
+        if request.role is AgentRole.GENERALIST_DEVELOPER
+    ]
+    assert len(developer_requests) == 2
+    records = [
+        json.loads(
+            (tmp_path / "runs" / task_brief().run_id / reference.path).read_text(
+                encoding="utf-8"
+            )
+        )
+        for reference in outcome.execution_records
+        if "/implement/" in reference.path
+    ]
+    assert len(records) == 2
+    assert records[1]["semantic_correction_outcome"] == "not_evaluated"
+    assert "expected commit" in (records[1]["error"] or "")
+
+
+def test_fixed_writer_targeted_correction_reuses_the_frozen_workspace(
+    tmp_path: Path,
+) -> None:
+    source = initialize_source(tmp_path)
+    workspace = tmp_path / "workspaces" / task_brief().run_id
+    executor = DynamicWorkflowExecutor(workspace, invalid_work_once=True)
+
+    outcome = coordinator(tmp_path, executor).execute(
+        task_brief(),
+        source_repository=source,
+    )
+
+    assert outcome.record.phase is RunPhase.COMPLETED
+    records = [
+        json.loads(
+            (tmp_path / "runs" / task_brief().run_id / reference.path).read_text(
+                encoding="utf-8"
+            )
+        )
+        for reference in outcome.execution_records
+        if "/implement/" in reference.path
+    ]
+    assert len(records) == 2
+    assert records[0]["response_validation"]["correction_paths"] == ["/summary"]
+    assert records[1]["semantic_correction_outcome"] == "accepted"
 
 
 def test_response_repair_receives_a_full_independent_attempt_budget(

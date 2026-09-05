@@ -816,7 +816,7 @@ class TerminalProgressRenderer:
             ProgressEventKind.AGENT_PROVIDER_STALLED,
         }:
             # Scheduler terminal events currently identify the scheduling
-            # attempt, while bounded semantic repair may have advanced the
+            # attempt, while targeted semantic correction may have advanced the
             # invocation attempt. A terminal Agent state ends every heartbeat
             # for that Agent and iteration.
             self._stop_agent_waiting(event)

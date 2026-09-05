@@ -37,6 +37,10 @@ from software_agent_team.planning import (
     validate_task_agent_bindings,
     validate_task_criterion_references,
 )
+from software_agent_team.response_corrections import (
+    SemanticCorrectionPlan,
+    correction_prompt,
+)
 from software_agent_team.responses import RESPONSE_BODY_MODELS
 from software_agent_team.teams import (
     AgentCapability,
@@ -669,88 +673,15 @@ def build_agent_execution_request(
     )
 
 
-def build_semantic_repair_request(
+def build_semantic_correction_request(
     request: AgentExecutionRequest,
-    previous_error: str,
+    plan: SemanticCorrectionPlan,
 ) -> AgentExecutionRequest:
-    """Request one complete semantic-body regeneration within the same contract."""
+    """Request replacements for only the controller-identified invalid fields."""
 
-    detail = previous_error.strip()
-    if not detail:
-        raise AgentPromptError("semantic repair requires a rejection reason")
-    if request.capability is AgentCapability.PLANNING:
-        capability_check = (
-            "Recompute the union of tasks[].acceptance_criteria and make it equal "
-            "every criterion ID in the TaskBrief; require every tasks[].id to "
-            "begin with TASK_ and match ^TASK_[A-Z0-9_]+$; verify every task "
-            "dependency exactly names one of those task IDs in the same response."
-        )
-    elif request.capability in {
-        AgentCapability.IMPLEMENTATION,
-        AgentCapability.INTEGRATION,
-    }:
-        capability_check = (
-            "Recheck that summary, completed_tasks, and unresolved_issues describe "
-            "only committed work for the exact assigned tasks. Do not return Git "
-            "facts; the controller derives them."
-        )
-    elif request.capability is AgentCapability.TESTING:
-        capability_check = (
-            "Return only evidence-grounded findings and a summary. Do not return "
-            "commands, statuses, criteria, scope, or blockers; the controller "
-            "derives them."
-        )
-    elif request.capability is AgentCapability.REVIEW:
-        capability_check = (
-            "Recheck that criterion_assessments exactly cover the assigned scope, "
-            "each assessment includes a concrete adversarial check and observable "
-            "evidence, `boundary_checks` exactly covers every TaskBrief Review "
-            "boundary for a satisfied criterion (or at least one disproved "
-            "approved boundary for a blocked criterion), every boundary check "
-            "uses a distinct attributable fragment, and every blocked status maps "
-            "to a blocking finding. If "
-            "there is exactly one unscoped blocking finding, the controller binds "
-            "it to all otherwise-uncovered blocked criteria; multiple findings "
-            "require explicit criterion_ids. Repeat only tool checks whose evidence "
-            "is missing or changed; integrity-checked results from an earlier attempt "
-            "in this bounded repair chain remain eligible. Controller deterministic "
-            "command stdout/stderr from this immutable iteration is also eligible. "
-            "tool_evidence may contain only a bounded result fragment; prefer an "
-            "exact contiguous fragment. A JSON keyed fragment may differ only by "
-            "RFC JSON whitespace outside quoted strings. Do not predict a "
-            "controller attempt, tool ID, or command ID or echo controller-owned "
-            "tool names or outcomes. Every fragment must match at least one eligible "
-            "result; the controller binds every protocol-eligible match with its "
-            "actual attempt/tool ID or command ID and deduplicates repeated or "
-            "overlapping fragments. For a satisfied direct sat-probe-run claim, "
-            "only completely framed child stdout and the terminal result are positive "
-            "evidence; unframed or partial output and traceback text in child stderr "
-            "are not. When a failed direct probe and a "
-            "later successful direct probe emit the same fragment, the successful "
-            "emission supplies the claim while the failed attempt remains in audit "
-            "evidence. A satisfied assessment cannot select a passing substring "
-            "from any otherwise matched failed tool result, failed or timed-out "
-            "command, or failed sat-probe-run terminal marker. Correct or rerun an "
-            "invalid probe, then cite the successful result; preserve a real product "
-            "failure as "
-            "a blocked assessment and revise verdict. Use "
-            "revise for correctable defects; fail requires a terminal safety or "
-            "evidence-integrity reason."
-        )
-    else:
-        capability_check = "Recheck every field against the supplied run evidence."
-    repair = (
-        "\n\nCONTROLLED_RESPONSE_REPAIR\n"
-        "Your previous response was rejected for this reason: "
-        f"{detail}\n"
-        "Revalidate the entire response rather than only the reported error, then "
-        "regenerate it completely. Use each key exactly once and include every "
-        "semantic field required "
-        "by RESPONSE_SCHEMA_JSON. Do not return controller-owned envelope, Git, or "
-        "deterministic-evidence fields. "
-        f"{capability_check} Return one corrected semantic JSON object only."
+    return request.model_copy(
+        update={"prompt": f"{request.prompt}{correction_prompt(plan)}"}
     )
-    return request.model_copy(update={"prompt": f"{request.prompt}{repair}"})
 
 
 def _dynamic_prompt_context(inputs: DynamicAgentPromptInputs) -> dict[str, object]:

@@ -62,8 +62,8 @@ stop once that absolute claim is disproved. Never invent or add a boundary that
 was not approved in the TaskBrief.
 
 Each assessment must also contain at least one general `tool_evidence`
-reference to either a tool result from this invocation (or, during a controlled
-semantic repair, an earlier integrity-checked attempt in the same Reviewer
+reference to either a tool result from this invocation (or, during a targeted
+semantic correction, an earlier integrity-checked attempt in the same Reviewer
 chain) or controller-provided deterministic command stdout/stderr from this
 immutable iteration. Controller-owned attempt, tool, and command IDs are outside
 your response contract. For every reference, provide only a bounded result
@@ -84,7 +84,7 @@ remains visible in the invocation evidence. A `satisfied` assessment is still
 rejected when any other matched tool result failed, any matched deterministic
 command failed or timed out, or no successful probe emission exists. Do not
 select a passing substring from an overall failed result. Child stderr
-remains eligible when grounding a `blocked` counterexample. A semantic repair
+remains eligible when grounding a `blocked` counterexample. A semantic correction
 does not need to rerun an unchanged successful probe whose result was already
 captured in this chain. One call may
 support multiple criteria when it genuinely exercises them. If you cannot

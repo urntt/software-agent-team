@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -82,7 +83,7 @@ from software_agent_team.progress import (
 from software_agent_team.prompting import (
     AgentPromptInputs,
     build_agent_execution_request,
-    build_semantic_repair_request,
+    build_semantic_correction_request,
 )
 from software_agent_team.quality_gates import (
     QualityGateBudgetExceeded,
@@ -93,6 +94,15 @@ from software_agent_team.reporting import (
     render_minimal_terminal_report,
     render_run_report,
 )
+from software_agent_team.response_corrections import (
+    ResponseValidationDiagnostic,
+    SemanticCorrectionOutcome,
+    SemanticCorrectionPlan,
+    SemanticCorrectionRequestEvidence,
+    apply_semantic_correction,
+    build_semantic_correction_plan,
+    correction_outcome,
+)
 from software_agent_team.responses import (
     AgentArtifactResponseError,
     AgentResponseBody,
@@ -102,6 +112,7 @@ from software_agent_team.responses import (
     WorkResultResponse,
     controller_fields_for,
     parse_agent_response,
+    parse_json_object_response,
 )
 from software_agent_team.run_control import (
     RunController,
@@ -145,6 +156,7 @@ type QualityGateFactory = Callable[[Path, Path, ProgressDraftHandler], QualityGa
 type RuntimeSetup = Callable[[GitWorkspace, Path], None]
 type Clock = Callable[[], datetime]
 type ArtifactAssembler = Callable[[AgentResponseBody], PhaseArtifact]
+type InvocationGuard = Callable[[bool], None]
 
 
 def _system_clock() -> datetime:
@@ -469,17 +481,42 @@ class WorkflowCoordinator:
 
             def assemble_work(
                 body: AgentResponseBody,
+                snapshots: list[GitSnapshot] = verified_snapshot,
+            ) -> PhaseArtifact:
+                if len(snapshots) != 1:
+                    raise WorkflowEvidenceError(
+                        "Developer snapshot was not frozen after invocation"
+                    )
+                return self._assemble_work_result(
+                    context,
+                    body,
+                    snapshot=snapshots[0],
+                )
+
+            def guard_work_invocation(
+                is_correction: bool,
                 current_record: RunRecord = record,
                 current_input_commit: str = input_commit,
                 snapshots: list[GitSnapshot] = verified_snapshot,
-            ) -> PhaseArtifact:
-                snapshot = workspace_manager.verify_snapshot(
+            ) -> None:
+                if not snapshots:
+                    snapshots.append(
+                        workspace_manager.verify_snapshot(
+                            workspace,
+                            iteration=current_record.current_iteration,
+                            input_commit=current_input_commit,
+                        )
+                    )
+                    return
+                if not is_correction:
+                    raise WorkflowEvidenceError(
+                        "Developer workspace guard observed an unexpected invocation"
+                    )
+                workspace_manager.verify_workspace(
                     workspace,
-                    iteration=current_record.current_iteration,
-                    input_commit=current_input_commit,
+                    expected_commit=snapshots[0].output_commit,
+                    require_clean=True,
                 )
-                snapshots.append(snapshot)
-                return self._assemble_work_result(context, body, snapshot=snapshot)
 
             work_artifact, work_reference, work_execution = self._invoke(
                 context,
@@ -496,6 +533,7 @@ class WorkflowCoordinator:
                 ),
                 stage="implement",
                 assembler=assemble_work,
+                invocation_guard=guard_work_invocation,
             )
             work = cast(WorkResult, work_artifact)
             if len(verified_snapshot) != 1:
@@ -881,6 +919,7 @@ class WorkflowCoordinator:
         *,
         stage: str,
         assembler: ArtifactAssembler,
+        invocation_guard: InvocationGuard | None = None,
     ) -> tuple[PhaseArtifact, ArtifactReference, ArtifactReference]:
         stage_timeout = context.team_plan.timeout_for_role(inputs.role)
         base_request = build_agent_execution_request(
@@ -889,11 +928,16 @@ class WorkflowCoordinator:
             model=self.pricing.model,
         )
         last_error = "Agent did not return a semantic response"
+        correction_plan: SemanticCorrectionPlan | None = None
+        seen_correction_fingerprints: set[str] = set()
         for attempt in range(1, self.artifact_repair_limit + 2):
-            request = self._repair_request(
-                base_request,
-                last_error,
-                attempt,
+            request = (
+                base_request
+                if correction_plan is None
+                else build_semantic_correction_request(
+                    base_request,
+                    correction_plan,
+                )
             )
             assert context.budget_ledger is not None
             try:
@@ -925,9 +969,19 @@ class WorkflowCoordinator:
             response: PhaseArtifact | None = None
             response_reference: ArtifactReference | None = None
             record_error: str | None = None
-            repairable = False
             failure_reason: TerminationReason | None = None
             ignored_controller_fields: tuple[str, ...] = ()
+            response_normalizations: tuple[str, ...] = ()
+            response_validation: ResponseValidationDiagnostic | None = None
+            correction_request = (
+                None if correction_plan is None else correction_plan.evidence
+            )
+            current_correction_outcome = (
+                None
+                if correction_plan is None
+                else SemanticCorrectionOutcome.NOT_EVALUATED
+            )
+            next_correction_plan: SemanticCorrectionPlan | None = None
             assembly_error: Exception | None = None
             if result.status is AgentExecutionStatus.COMPLETED:
                 reported_model = result.telemetry.model
@@ -952,18 +1006,74 @@ class WorkflowCoordinator:
                     failure_reason = TerminationReason.DEPENDENCY_UNAVAILABLE
                 else:
                     try:
+                        if invocation_guard is not None:
+                            invocation_guard(correction_plan is not None)
+                        parse_result = result
+                        if correction_plan is not None:
+                            envelope = parse_json_object_response(result.response_text)
+                            corrected_payload = apply_semantic_correction(
+                                envelope,
+                                correction_plan,
+                            )
+                            parse_result = result.model_copy(
+                                update={
+                                    "response_text": json.dumps(
+                                        corrected_payload,
+                                        ensure_ascii=False,
+                                    )
+                                }
+                            )
                         parsed = parse_agent_response(
-                            result,
+                            parse_result,
                             request,
                             task_brief=context.brief,
                             team_roles=context.team_plan.legacy_roles,
                             iteration_limit=self.iteration_limit,
                         )
+                    except WorkspaceIntegrityError as error:
+                        assembly_error = error
+                        record_error = self._error_detail(error)
                     except AgentArtifactResponseError as error:
                         record_error = self._error_detail(error)
-                        repairable = True
+                        response_normalizations = error.response_normalizations
+                        response_validation = error.diagnostic
+                        if (
+                            correction_plan is None
+                            and error.semantic_payload is not None
+                            and error.diagnostic is not None
+                        ):
+                            next_correction_plan = build_semantic_correction_plan(
+                                error.semantic_payload,
+                                error.diagnostic,
+                            )
+                            seen_correction_fingerprints.add(
+                                error.diagnostic.fingerprint
+                            )
+                        elif correction_plan is not None:
+                            current_correction_outcome = (
+                                SemanticCorrectionOutcome.INVALID_SUBMISSION
+                                if error.diagnostic is None
+                                else correction_outcome(
+                                    correction_plan,
+                                    error.diagnostic,
+                                    seen_fingerprints=frozenset(
+                                        seen_correction_fingerprints
+                                    ),
+                                )
+                            )
+                    except (ValidationError, ValueError) as error:
+                        record_error = self._error_detail(error)
+                        if correction_plan is not None:
+                            current_correction_outcome = (
+                                SemanticCorrectionOutcome.INVALID_SUBMISSION
+                            )
                     else:
                         ignored_controller_fields = parsed.ignored_controller_fields
+                        response_normalizations = parsed.response_normalizations
+                        if correction_plan is not None:
+                            current_correction_outcome = (
+                                SemanticCorrectionOutcome.ACCEPTED
+                            )
                         try:
                             response = assembler(parsed.body)
                             response_reference = context.artifact_store.write(
@@ -980,7 +1090,6 @@ class WorkflowCoordinator:
                 record_error = result.error or (
                     f"Agent execution ended as {result.status.value}"
                 )
-                repairable = result.status is AgentExecutionStatus.INVALID_RESPONSE
                 if result.status in {
                     AgentExecutionStatus.PROVIDER_FAILED,
                     AgentExecutionStatus.PROVIDER_STALLED,
@@ -997,6 +1106,10 @@ class WorkflowCoordinator:
                 error=record_error,
                 controller_supplied_fields=controller_fields_for(request.expected_kind),
                 ignored_controller_fields=ignored_controller_fields,
+                response_normalizations=response_normalizations,
+                response_validation=response_validation,
+                semantic_correction_request=correction_request,
+                semantic_correction_outcome=current_correction_outcome,
                 stage_timeout_seconds=stage_timeout,
                 remaining_timeout_seconds=request.timeout_seconds,
                 reservation=reservation,
@@ -1020,12 +1133,19 @@ class WorkflowCoordinator:
             if response is not None and response_reference is not None:
                 return response, response_reference, execution_reference
             last_error = record_error or last_error
-            if repairable and attempt <= self.artifact_repair_limit:
+            if (
+                next_correction_plan is not None
+                and attempt <= self.artifact_repair_limit
+            ):
+                correction_plan = next_correction_plan
                 self._emit(
                     context,
                     ProgressEvent(
                         kind=ProgressEventKind.AGENT_RETRY,
-                        message=f"{role_name} response needs one bounded repair",
+                        message=(
+                            f"{role_name} response needs targeted correction for "
+                            + ", ".join(correction_plan.evidence.target_paths)
+                        ),
                         agent_id=request.role.value,
                         iteration=request.iteration,
                         attempt=attempt,
@@ -1035,19 +1155,12 @@ class WorkflowCoordinator:
             raise AgentInvocationError(
                 f"{request.role.value} failed: {last_error}",
                 failure_reason
-                or self._agent_termination_reason(result, repairable=repairable),
+                or self._agent_termination_reason(
+                    result,
+                    repairable=response_validation is not None,
+                ),
             )
         raise AssertionError("unreachable Agent repair state")
-
-    @staticmethod
-    def _repair_request(
-        request: AgentExecutionRequest,
-        previous_error: str,
-        attempt: int,
-    ) -> AgentExecutionRequest:
-        if attempt == 1:
-            return request
-        return build_semantic_repair_request(request, previous_error)
 
     def _record_execution(
         self,
@@ -1061,6 +1174,10 @@ class WorkflowCoordinator:
         error: str | None,
         controller_supplied_fields: tuple[str, ...],
         ignored_controller_fields: tuple[str, ...],
+        response_normalizations: tuple[str, ...],
+        response_validation: ResponseValidationDiagnostic | None,
+        semantic_correction_request: SemanticCorrectionRequestEvidence | None,
+        semantic_correction_outcome: SemanticCorrectionOutcome | None,
         stage_timeout_seconds: int,
         remaining_timeout_seconds: int,
         reservation: AgentCallReservation,
@@ -1078,6 +1195,10 @@ class WorkflowCoordinator:
             error=error,
             controller_supplied_fields=controller_supplied_fields,
             ignored_controller_fields=ignored_controller_fields,
+            response_normalizations=response_normalizations,
+            response_validation=response_validation,
+            semantic_correction_request=semantic_correction_request,
+            semantic_correction_outcome=semantic_correction_outcome,
             pricing=self.pricing,
             stage_timeout_seconds=stage_timeout_seconds,
             remaining_timeout_seconds=remaining_timeout_seconds,

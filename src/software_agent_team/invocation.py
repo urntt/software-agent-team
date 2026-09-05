@@ -17,6 +17,11 @@ from software_agent_team.budgets import (
     ModelPricing,
 )
 from software_agent_team.execution import AgentExecutionRequest, AgentExecutionResult
+from software_agent_team.response_corrections import (
+    ResponseValidationDiagnostic,
+    SemanticCorrectionOutcome,
+    SemanticCorrectionRequestEvidence,
+)
 
 
 @dataclass(frozen=True)
@@ -41,6 +46,10 @@ def persist_agent_invocation(
     controller_supplied_fields: tuple[str, ...],
     ignored_controller_fields: tuple[str, ...],
     pricing: ModelPricing | None,
+    response_normalizations: tuple[str, ...] = (),
+    response_validation: ResponseValidationDiagnostic | None = None,
+    semantic_correction_request: SemanticCorrectionRequestEvidence | None = None,
+    semantic_correction_outcome: SemanticCorrectionOutcome | None = None,
     stage_timeout_seconds: int | None = None,
     remaining_timeout_seconds: int | None = None,
 ) -> PersistedInvocation:
@@ -123,6 +132,10 @@ def persist_agent_invocation(
         ),
         controller_supplied_fields=controller_supplied_fields,
         ignored_controller_fields=ignored_controller_fields,
+        response_normalizations=response_normalizations,
+        response_validation=response_validation,
+        semantic_correction_request=semantic_correction_request,
+        semantic_correction_outcome=semantic_correction_outcome,
         tool_evidence_status=telemetry.tool_evidence_status,
         session_transcript_sha256=telemetry.session_transcript_sha256,
         session_record_count=telemetry.session_record_count,

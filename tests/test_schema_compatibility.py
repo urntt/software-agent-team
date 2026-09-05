@@ -7,6 +7,11 @@ from pathlib import Path
 
 import pytest
 
+from software_agent_team.artifacts import (
+    ARTIFACT_SCHEMA_VERSION,
+    MINIMUM_READABLE_ARTIFACT_SCHEMA_VERSION,
+)
+from software_agent_team.planning import PLANNING_SCHEMA_VERSION
 from software_agent_team.schema_compatibility import (
     SchemaCompatibilityError,
     SchemaFamily,
@@ -28,7 +33,7 @@ def test_schema_registry_has_one_unique_entry_per_family() -> None:
     )
 
 
-def test_only_configuration_declares_historical_read_support() -> None:
+def test_registry_declares_only_intentional_historical_read_support() -> None:
     support = schema_support_map()
 
     configuration = support[SchemaFamily.USER_CONFIGURATION]
@@ -40,11 +45,20 @@ def test_only_configuration_declares_historical_read_support() -> None:
 
     planning = support[SchemaFamily.PLANNING]
     assert planning.minimum_readable == 2
-    assert planning.current == planning.maximum_readable == 3
+    assert planning.current == planning.maximum_readable == PLANNING_SCHEMA_VERSION
     assert planning.supports(2)
 
+    artifact = support[SchemaFamily.ARTIFACT]
+    assert artifact.minimum_readable == MINIMUM_READABLE_ARTIFACT_SCHEMA_VERSION
+    assert artifact.current == artifact.maximum_readable == ARTIFACT_SCHEMA_VERSION
+    assert artifact.supports(MINIMUM_READABLE_ARTIFACT_SCHEMA_VERSION)
+
     for family, item in support.items():
-        if family in {SchemaFamily.USER_CONFIGURATION, SchemaFamily.PLANNING}:
+        if family in {
+            SchemaFamily.USER_CONFIGURATION,
+            SchemaFamily.PLANNING,
+            SchemaFamily.ARTIFACT,
+        }:
             continue
         assert item.minimum_readable == item.current == item.maximum_readable
 

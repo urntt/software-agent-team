@@ -215,7 +215,7 @@ class _WorkflowLaunchOptions(_RuntimeLaunchOptions):
 class _AdaptiveWorkflowLaunchOptions(_RuntimeLaunchOptions):
     """Resolved inputs for one user-approved dynamic workflow."""
 
-    artifact_repair_limit: int = 1
+    artifact_repair_limit: int | None = None
     progress_handler: ProgressHandler | None = None
     budget_ledger: AgentBudgetLedger | None = None
     run_deadline_at: datetime | None = None
@@ -307,7 +307,7 @@ def _timeout_flag(args: argparse.Namespace) -> tuple[bool, int | None]:
         print(
             "warning: --agent-timeout-seconds is deprecated; it now means one "
             "invocation timeout applied independently to a bounded response "
-            "repair. Use "
+            "correction. Use "
             "--stage-timeout-seconds instead."
         )
         return True, args.deprecated_agent_timeout_seconds
@@ -2920,7 +2920,7 @@ def _run_product() -> int:
                     output_cost_per_million_usd=(
                         configuration.output_cost_per_million_usd
                     ),
-                    artifact_repair_limit=1,
+                    artifact_repair_limit=None,
                     progress_handler=renderer,
                     budget_ledger=budget_ledger,
                     run_deadline_at=resource_authorization.deadline_at,
@@ -3425,7 +3425,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         help=(
             "Global timeout for each Agent invocation, applied independently "
-            "to one bounded response repair; defaults to the saved override "
+            "to one bounded response correction; defaults to the saved override "
             "or checked-in role defaults."
         ),
     )

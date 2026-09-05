@@ -216,13 +216,13 @@ The normal policy uses role-specific invocation timeouts from
 | Single Agent, Developers, and Integrator | 900 seconds |
 | Tester and Reviewer | 300 seconds |
 
-The resolved timeout applies independently to the initial response and its
-optional one-call semantic repair. A repair must regenerate the complete
-semantic response, so reducing it to whatever time happened to remain from the
-first call creates a provider-speed-dependent false failure. The controller
-records the timeout supplied to every invocation. Run-wide call-count, Agent
-duration, token, and cost budgets include both attempts, so a repair does not
-escape the frozen resource policy.
+The resolved timeout applies independently to the initial response and the
+optional one-call targeted correction frozen by this controlled evaluation.
+The controller retains the original semantic object and asks only for exact
+typed field replacements, so a correction never regenerates the complete
+response. It records the timeout supplied to every invocation. Run-wide
+call-count, Agent duration, token, and cost budgets include both attempts, so a
+correction does not escape the frozen resource policy.
 
 If a measured provider requires an intentionally uniform budget, add
 `--stage-timeout-seconds N` and record that override as an experimental

@@ -49,6 +49,7 @@ from software_agent_team.git_workspace import GitWorkspace, GitWorkspaceManager
 from software_agent_team.integrity import canonical_model_sha256
 from software_agent_team.planning import AdaptiveImplementationPlan, ProposedTask
 from software_agent_team.progress import ProgressEvent, ProgressEventKind
+from software_agent_team.response_corrections import semantic_payload_sha256
 from software_agent_team.responses import (
     ReviewCriterionAssessmentResponse,
     ReviewReportResponse,
@@ -81,6 +82,23 @@ from software_agent_team.teams import (
 
 FIXED_TIME = datetime(2026, 8, 26, 12, 0, tzinfo=UTC)
 MODEL = "test/provider-model"
+
+
+def semantic_correction_response(
+    base_payload: dict[str, object],
+    replacements: dict[str, object],
+) -> str:
+    """Return the exact field-only correction contract used by SAT."""
+
+    return json.dumps(
+        {
+            "kind": "semantic_correction_v1",
+            "base_response_sha256": semantic_payload_sha256(base_payload),
+            "replacements": [
+                {"path": path, "value": value} for path, value in replacements.items()
+            ],
+        }
+    )
 
 
 def review_tool_claim() -> ReviewToolEvidenceClaim:
@@ -336,6 +354,7 @@ class DynamicExecutor:
         workspace: Path,
         *,
         invalid_writer_once: bool = False,
+        invalid_writer_transport: bool = False,
         omit_model_for: str | None = None,
         mutate_reader: str | None = None,
         synchronize_quality: bool = False,
@@ -349,6 +368,7 @@ class DynamicExecutor:
     ) -> None:
         self.workspace = workspace
         self.invalid_writer_once = invalid_writer_once
+        self.invalid_writer_transport = invalid_writer_transport
         self.omit_model_for = omit_model_for
         self.mutate_reader = mutate_reader
         self.provider_fail_once_for = provider_fail_once_for
@@ -463,18 +483,30 @@ class DynamicExecutor:
                     readme.write("\nUse `greet(name)` to create a greeting.\n")
                 git(self.workspace, "add", "greeting.py", "README.md")
                 git(self.workspace, "commit", "-m", "feat: add greeting utility")
-            response_text = WorkResultResponse(
+            valid_payload = WorkResultResponse(
                 summary=self.writer_summary,
                 completed_tasks=("TASK_BUILD",),
                 unresolved_issues=(),
-            ).model_dump_json()
+            ).model_dump(mode="json")
+            response_text = json.dumps(valid_payload)
             if self.writer_presentation_arrays:
                 response_text = (
                     'Verified setup ["uv", "sync", "--dev"] and tests '
                     f'["uv", "run", "pytest"].\n{response_text}'
                 )
-            if self.invalid_writer_once and count == 1:
+            if self.invalid_writer_transport:
                 response_text = "not valid JSON"
+            elif self.invalid_writer_once:
+                invalid_payload = dict(valid_payload)
+                invalid_payload["completed_tasks"] = ["TASK_UNKNOWN"]
+                response_text = (
+                    json.dumps(invalid_payload)
+                    if count == 1
+                    else semantic_correction_response(
+                        invalid_payload,
+                        {"/completed_tasks": valid_payload["completed_tasks"]},
+                    )
+                )
         elif request.agent_id == "tester":
             self._wait_for_quality_peer()
             response_text = SemanticTestReportResponse(
@@ -488,7 +520,7 @@ class DynamicExecutor:
                     encoding="utf-8",
                 )
             self._wait_for_quality_peer()
-            response_text = ReviewReportResponse(
+            valid_payload = ReviewReportResponse(
                 verdict="accept",
                 criterion_assessments=(
                     ReviewCriterionAssessmentResponse(
@@ -506,11 +538,24 @@ class DynamicExecutor:
                 ),
                 findings=(),
                 summary="The final commit satisfies the assigned review scope.",
-            ).model_dump_json()
-            if self.invalid_review_response_once and count == 1:
-                payload = json.loads(response_text)
-                payload["unexpected_presentation_field"] = None
-                response_text = json.dumps(payload)
+            ).model_dump(mode="json")
+            response_text = json.dumps(valid_payload)
+            if self.invalid_review_response_once:
+                invalid_payload = dict(valid_payload)
+                invalid_payload["summary"] = ""
+                response_text = (
+                    json.dumps(invalid_payload)
+                    if count == 1
+                    else semantic_correction_response(
+                        invalid_payload,
+                        {"/summary": valid_payload["summary"]},
+                    )
+                )
+            elif self.zero_review_tool_calls_once and count == 2:
+                response_text = semantic_correction_response(
+                    valid_payload,
+                    {"/criterion_assessments": valid_payload["criterion_assessments"]},
+                )
         else:  # pragma: no cover - the fixture owns the complete team
             raise AssertionError(f"unexpected Agent: {request.agent_id}")
         return self._result(request, response_text)
@@ -832,7 +877,7 @@ def test_dynamic_runner_projects_long_artifact_summaries_without_failing_handoff
     assert all(writer_summary not in item.prompt for item in quality_requests)
 
 
-def test_dynamic_writer_semantic_repair_keeps_full_timeout_and_git_evidence(
+def test_dynamic_writer_targeted_correction_keeps_timeout_and_git_evidence(
     tmp_path: Path,
 ) -> None:
     runner, team_plan, executor, _, _ = runtime(
@@ -848,7 +893,8 @@ def test_dynamic_writer_semantic_repair_keeps_full_timeout_and_git_evidence(
     ]
     assert len(writer_requests) == 2
     assert [request.timeout_seconds for request in writer_requests] == [71, 71]
-    assert "CONTROLLED_RESPONSE_REPAIR" in writer_requests[1].prompt
+    assert "TARGETED_SEMANTIC_CORRECTION_V1" in writer_requests[1].prompt
+    assert "Do not regenerate or repeat that object" in writer_requests[1].prompt
     assert len(runner.execution_records) == 4
     writer_records = [
         runner.artifact_store.load(reference)
@@ -858,8 +904,41 @@ def test_dynamic_writer_semantic_repair_keeps_full_timeout_and_git_evidence(
     assert len(writer_records) == 2
     assert isinstance(writer_records[0], AgentExecutionRecord)
     assert writer_records[0].error is not None
+    assert writer_records[0].response_validation is not None
+    assert writer_records[0].response_validation.correction_paths == (
+        "/completed_tasks",
+    )
     assert isinstance(writer_records[1], AgentExecutionRecord)
+    assert writer_records[1].semantic_correction_request is not None
+    assert writer_records[1].semantic_correction_outcome == "accepted"
     assert writer_records[1].response_artifact == runner.outputs["builder"]
+
+
+def test_dynamic_writer_transport_failure_does_not_trigger_semantic_correction(
+    tmp_path: Path,
+) -> None:
+    runner, team_plan, executor, _, _ = runtime(
+        tmp_path,
+        executor_options={"invalid_writer_transport": True},
+    )
+
+    result = DagScheduler().execute(team_plan, runner)
+
+    assert result.status is ScheduleStatus.FAILED
+    writer_requests = [
+        request for request in executor.requests if request.agent_id == "builder"
+    ]
+    assert len(writer_requests) == 1
+    writer_record = next(
+        runner.artifact_store.load(reference)
+        for reference in runner.execution_records
+        if "/implement/builder-" in reference.path
+    )
+    assert isinstance(writer_record, AgentExecutionRecord)
+    assert writer_record.response_validation is not None
+    assert writer_record.response_validation.failure_class == "transport"
+    assert writer_record.response_validation.correction_paths == ()
+    assert writer_record.semantic_correction_request is None
 
 
 def test_dynamic_reviewer_repairs_a_zero_call_fabricated_tool_citation(
@@ -878,16 +957,13 @@ def test_dynamic_reviewer_repairs_a_zero_call_fabricated_tool_citation(
     ]
     assert len(reviewer_requests) == 2
     assert [request.timeout_seconds for request in reviewer_requests] == [47, 47]
-    assert "CONTROLLED_RESPONSE_REPAIR" in reviewer_requests[1].prompt
-    assert "tool_evidence may contain only a bounded result fragment" in (
-        reviewer_requests[1].prompt
-    )
+    assert "TARGETED_SEMANTIC_CORRECTION_V1" in reviewer_requests[1].prompt
+    normalized_prompt = " ".join(reviewer_requests[1].prompt.split())
+    assert "provide only a bounded result fragment" in normalized_prompt
     assert "deterministic command stdout/stderr from this immutable" in (
-        reviewer_requests[1].prompt
+        normalized_prompt
     )
-    assert "the controller binds every protocol-eligible match" in (
-        reviewer_requests[1].prompt
-    )
+    assert "controller binds every protocol-eligible result" in normalized_prompt
     reviewer_records = [
         runner.artifact_store.load(reference)
         for reference in runner.execution_records
@@ -902,6 +978,8 @@ def test_dynamic_reviewer_repairs_a_zero_call_fabricated_tool_citation(
         reviewer_records[0].error or ""
     )
     assert isinstance(reviewer_records[1], AgentExecutionRecord)
+    assert reviewer_records[1].semantic_correction_request is not None
+    assert reviewer_records[1].semantic_correction_outcome == "accepted"
     assert len(reviewer_records[1].tool_calls) == 1
     assert reviewer_records[1].response_artifact == runner.outputs["reviewer"]
 
@@ -921,8 +999,9 @@ def test_dynamic_reviewer_repair_reuses_prior_attempt_tool_evidence(
         request for request in executor.requests if request.agent_id == "reviewer"
     ]
     assert len(reviewer_requests) == 2
-    assert "earlier attempt" in reviewer_requests[1].prompt
-    assert "does not need to rerun" in reviewer_requests[1].prompt
+    normalized_prompt = " ".join(reviewer_requests[1].prompt.split())
+    assert "earlier integrity-checked attempt" in normalized_prompt
+    assert "does not need to rerun" in normalized_prompt
     reviewer_records = [
         runner.artifact_store.load(reference)
         for reference in runner.execution_records
@@ -931,7 +1010,11 @@ def test_dynamic_reviewer_repair_reuses_prior_attempt_tool_evidence(
     assert len(reviewer_records) == 2
     assert isinstance(reviewer_records[0], AgentExecutionRecord)
     assert len(reviewer_records[0].tool_calls) == 1
-    assert "unexpected_presentation_field" in (reviewer_records[0].error or "")
+    assert "summary: String should have at least 1 character" in (
+        reviewer_records[0].error or ""
+    )
+    assert reviewer_records[0].response_validation is not None
+    assert reviewer_records[0].response_validation.correction_paths == ("/summary",)
     assert isinstance(reviewer_records[1], AgentExecutionRecord)
     assert reviewer_records[1].tool_calls == ()
     assert reviewer_records[1].response_artifact == runner.outputs["reviewer"]
