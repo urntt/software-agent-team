@@ -467,8 +467,11 @@ or more bounded result fragments. A `semantic_body_v4` assessment returns
 `boundary_checks` explicitly. A satisfied criterion must check every boundary
 approved in its TaskBrief, with a distinct attributable fragment for each; a
 blocked absolute criterion may stop after one grounded counterexample. A
-criterion with no approved boundary must return an empty list, and a Reviewer
-cannot add or remove obligations. This makes entry coverage a controller-
+criterion with no approved boundary should return an empty list, and a Reviewer
+cannot add or remove obligations. If it nevertheless supplies extra boundary
+entries, the controller removes and records them against the frozen TaskBrief
+scope before validating their nested content; only approved entries can create
+coverage or correction obligations. This makes entry coverage a controller-
 validated contract rather than a summary claim. The response schema makes the fragment
 structurally required and forbids model-supplied attempt, tool, or command IDs.
 Exact text is preferred; a keyed JSON fragment may differ only in RFC JSON

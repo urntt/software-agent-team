@@ -833,6 +833,8 @@ class ParsedAgentResponse:
 def _parse_semantic_body(
     value: str,
     expected_kind: ArtifactKind,
+    *,
+    task_brief: TaskBrief | None = None,
 ) -> ParsedAgentResponse:
     payload = parse_json_object_response(value)
     model = RESPONSE_BODY_MODELS.get(expected_kind)
@@ -846,6 +848,14 @@ def _parse_semantic_body(
         key: item for key, item in payload.items() if key not in controller_fields
     }
     normalizations: list[str] = []
+    if expected_kind is ArtifactKind.REVIEW_REPORT and task_brief is not None:
+        semantic_payload, boundary_normalizations = (
+            _normalize_review_boundary_scope_payload(
+                semantic_payload,
+                task_brief=task_brief,
+            )
+        )
+        normalizations.extend(boundary_normalizations)
     while True:
         try:
             body = model.model_validate(semantic_payload)
@@ -894,6 +904,94 @@ def _parse_semantic_body(
         semantic_payload=semantic_payload,
         response_normalizations=tuple(normalizations),
     )
+
+
+def _normalize_review_boundary_scope_payload(
+    semantic_payload: dict[str, object],
+    *,
+    task_brief: TaskBrief,
+) -> tuple[dict[str, object], tuple[str, ...]]:
+    """Remove only Review boundary checks outside the approved TaskBrief scope.
+
+    The TaskBrief, rather than the Reviewer response, owns which entry
+    boundaries are acceptance obligations. This normalization runs before the
+    generic response model validates the contents of ``boundary_checks`` so an
+    unapproved model-authored check cannot create a semantic correction. Checks
+    for approved boundaries remain untouched and retain every structural and
+    evidence-grounding validator.
+    """
+
+    assessments = semantic_payload.get("criterion_assessments")
+    if not isinstance(assessments, list):
+        return semantic_payload, ()
+    approved_by_criterion = {
+        criterion.id: frozenset(
+            boundary.value for boundary in criterion.review_boundaries
+        )
+        for criterion in task_brief.acceptance_criteria
+    }
+    normalized_assessments: list[object] = []
+    normalizations: list[str] = []
+    changed = False
+    for assessment in assessments:
+        if not isinstance(assessment, dict):
+            normalized_assessments.append(assessment)
+            continue
+        criterion_id = assessment.get("criterion_id")
+        if (
+            not isinstance(criterion_id, str)
+            or criterion_id not in approved_by_criterion
+        ):
+            normalized_assessments.append(assessment)
+            continue
+        checks = assessment.get("boundary_checks")
+        if checks is None:
+            normalized_assessments.append(assessment)
+            continue
+        approved = approved_by_criterion[criterion_id]
+        if not approved:
+            if checks == []:
+                normalized_assessments.append(assessment)
+                continue
+            normalized = dict(assessment)
+            normalized["boundary_checks"] = []
+            normalized_assessments.append(normalized)
+            removed_count = len(checks) if isinstance(checks, list) else 1
+            normalizations.append(
+                "removed "
+                f"{removed_count} unapproved boundary_checks from criterion "
+                f"{criterion_id} (approved: none)"
+            )
+            changed = True
+            continue
+        if not isinstance(checks, list):
+            normalized_assessments.append(assessment)
+            continue
+        filtered_checks: list[object] = []
+        removed_boundaries: list[str] = []
+        for check in checks:
+            boundary = check.get("boundary") if isinstance(check, dict) else None
+            if isinstance(boundary, str) and boundary not in approved:
+                removed_boundaries.append(boundary)
+                continue
+            filtered_checks.append(check)
+        if not removed_boundaries:
+            normalized_assessments.append(assessment)
+            continue
+        normalized = dict(assessment)
+        normalized["boundary_checks"] = filtered_checks
+        normalized_assessments.append(normalized)
+        normalizations.append(
+            "removed "
+            f"{len(removed_boundaries)} unapproved boundary_checks from criterion "
+            f"{criterion_id} (approved: {', '.join(sorted(approved))})"
+        )
+        changed = True
+    if not changed:
+        return semantic_payload, ()
+    normalized_payload = dict(semantic_payload)
+    normalized_payload["criterion_assessments"] = normalized_assessments
+    return normalized_payload, tuple(normalizations)
 
 
 def _safe_validation_detail(error: ValueError) -> str:
@@ -1192,7 +1290,11 @@ def parse_agent_response(
     if not 1 <= iteration_limit <= 3 or request.iteration > iteration_limit:
         raise AgentArtifactResponseError("request exceeds the run iteration limit")
 
-    parsed = _parse_semantic_body(result.response_text, request.expected_kind)
+    parsed = _parse_semantic_body(
+        result.response_text,
+        request.expected_kind,
+        task_brief=task_brief,
+    )
     try:
         body = parsed.body
         if isinstance(body, ReviewReportResponse):
@@ -1295,7 +1397,11 @@ def parse_dynamic_agent_response(
             "execution telemetry model differs from the approved AgentSpec"
         )
 
-    parsed = _parse_semantic_body(result.response_text, request.expected_kind)
+    parsed = _parse_semantic_body(
+        result.response_text,
+        request.expected_kind,
+        task_brief=task_brief,
+    )
     body = parsed.body
     if isinstance(body, ReviewReportResponse):
         try:

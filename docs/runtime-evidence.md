@@ -207,7 +207,13 @@ command references serialize without invented fields, preserving their
 canonical content and digests. Newly grounded references record actual
 attempt-qualified tool IDs and command IDs explicitly. Version four also
 persists controller-approved entry-boundary checks and their distinct grounded
-evidence.
+evidence. Before the generic response model validates those nested checks, the
+controller filters each criterion against the exact boundary scope frozen in
+the TaskBrief. It records and removes model-authored checks outside that scope;
+an empty approved scope therefore cannot fail because an extra check reused or
+malformed evidence. Checks inside the approved scope are not repaired or
+weakened: duplicate boundaries, repeated fragments, missing coverage, and
+ineligible evidence remain typed model-owned failures.
 
 ## Semantic Response Boundary
 

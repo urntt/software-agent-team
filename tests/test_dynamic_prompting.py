@@ -1426,7 +1426,7 @@ def test_satisfied_review_requires_every_approved_boundary_with_distinct_evidenc
         )
 
 
-def test_review_rejects_unapproved_or_duplicate_boundary_evidence() -> None:
+def test_review_strips_unapproved_and_rejects_duplicate_approved_boundaries() -> None:
     duplicate = (
         ReviewBoundaryCheckResponse(
             boundary=ReviewBoundaryKind.TOP_LEVEL_INPUT,
@@ -1480,14 +1480,110 @@ def test_review_rejects_unapproved_or_duplicate_boundary_evidence() -> None:
         }
     )
 
-    with pytest.raises(AgentArtifactResponseError, match="unapproved Review"):
+    parsed = parse_dynamic_agent_response(
+        result,
+        request,
+        task_brief=task_brief(),
+        team_plan=team_plan(),
+        reviewed_criterion_ids=("AC_LINKS",),
+    )
+
+    assert isinstance(parsed.body, GroundedReviewReportResponse)
+    assert parsed.body.criterion_assessments[0].boundary_checks == ()
+    assert parsed.response_normalizations == (
+        "removed 1 unapproved boundary_checks from criterion AC_LINKS (approved: none)",
+    )
+
+    brief = task_brief()
+    criterion = brief.acceptance_criteria[0].model_copy(
+        update={
+            "review_boundaries": (
+                ReviewBoundaryKind.TOP_LEVEL_INPUT,
+                ReviewBoundaryKind.NESTED_INPUT,
+            )
+        }
+    )
+    brief = brief.model_copy(update={"acceptance_criteria": [criterion]})
+    raw_payload = ReviewReportResponse(
+        verdict="accept",
+        criterion_assessments=(
+            ReviewCriterionAssessmentResponse(
+                criterion_id="AC_LINKS",
+                status="satisfied",
+                adversarial_check="Claimed complete approved boundary coverage.",
+                evidence="Reused one ambiguous marker.",
+                tool_evidence=(review_tool_claim("GENERAL_OK"),),
+            ),
+        ),
+        summary="Claimed duplicate evidence for approved boundaries.",
+    ).model_dump(mode="json")
+    raw_payload["criterion_assessments"][0]["boundary_checks"] = [
+        check.model_dump(mode="json") for check in duplicate
+    ]
+    request, result = _review_result(json.dumps(raw_payload))
+
+    with pytest.raises(AgentArtifactResponseError, match="distinct evidence fragments"):
         parse_dynamic_agent_response(
             result,
             request,
-            task_brief=task_brief(),
-            team_plan=team_plan(),
+            task_brief=brief,
+            team_plan=team_plan(brief),
             reviewed_criterion_ids=("AC_LINKS",),
         )
+
+
+def test_review_strips_duplicate_boundary_content_when_scope_is_empty() -> None:
+    raw_payload = ReviewReportResponse(
+        verdict="accept",
+        criterion_assessments=(
+            ReviewCriterionAssessmentResponse(
+                criterion_id="AC_LINKS",
+                status="satisfied",
+                adversarial_check="Verified the approved criterion.",
+                evidence="The general result grounds the approved criterion.",
+                tool_evidence=(review_tool_claim("GENERAL_OK"),),
+            ),
+        ),
+        summary="The approved criterion is satisfied.",
+    ).model_dump(mode="json")
+    raw_payload["criterion_assessments"][0]["boundary_checks"] = [
+        {
+            "boundary": "top_level_input",
+            "adversarial_check": "Added an unapproved direct-input check.",
+            "tool_evidence": [{"observable": "REPEATED_MARKER"}],
+        },
+        {
+            "boundary": "nested_input",
+            "adversarial_check": "Added an unapproved nested-input check.",
+            "tool_evidence": [{"observable": "REPEATED_MARKER"}],
+        },
+    ]
+    request, result = _review_result(json.dumps(raw_payload))
+    result = result.model_copy(
+        update={
+            "telemetry": result.telemetry.model_copy(
+                update={
+                    "tool_calls": (
+                        captured_tool_call(1, "GENERAL_OK", executable="python"),
+                    )
+                }
+            )
+        }
+    )
+
+    parsed = parse_dynamic_agent_response(
+        result,
+        request,
+        task_brief=task_brief(),
+        team_plan=team_plan(),
+        reviewed_criterion_ids=("AC_LINKS",),
+    )
+
+    assert isinstance(parsed.body, GroundedReviewReportResponse)
+    assert parsed.body.criterion_assessments[0].boundary_checks == ()
+    assert parsed.response_normalizations == (
+        "removed 2 unapproved boundary_checks from criterion AC_LINKS (approved: none)",
+    )
 
 
 def test_blocked_absolute_criterion_may_stop_after_one_grounded_counterexample() -> (

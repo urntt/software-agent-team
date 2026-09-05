@@ -363,6 +363,7 @@ class DynamicExecutor:
         zero_review_tool_calls_once: bool = False,
         invalid_review_response_once: bool = False,
         invalid_review_evidence: bool = False,
+        unapproved_review_boundaries: bool = False,
         writer_presentation_arrays: bool = False,
         writer_summary: str = "Implemented and documented the greeting utility.",
     ) -> None:
@@ -376,6 +377,7 @@ class DynamicExecutor:
         self.zero_review_tool_calls_once = zero_review_tool_calls_once
         self.invalid_review_response_once = invalid_review_response_once
         self.invalid_review_evidence = invalid_review_evidence
+        self.unapproved_review_boundaries = unapproved_review_boundaries
         self.writer_presentation_arrays = writer_presentation_arrays
         self.writer_summary = writer_summary
         self.requests: list[AgentExecutionRequest] = []
@@ -539,6 +541,31 @@ class DynamicExecutor:
                 findings=(),
                 summary="The final commit satisfies the assigned review scope.",
             ).model_dump(mode="json")
+            if self.unapproved_review_boundaries:
+                assessments = valid_payload["criterion_assessments"]
+                assert isinstance(assessments, list)
+                assessment = assessments[0]
+                assert isinstance(assessment, dict)
+                assessment["boundary_checks"] = [
+                    {
+                        "boundary": "top_level_input",
+                        "adversarial_check": (
+                            "Added a direct-input check outside the approved scope."
+                        ),
+                        "tool_evidence": [
+                            {"observable": "duplicate-unapproved-marker"}
+                        ],
+                    },
+                    {
+                        "boundary": "nested_input",
+                        "adversarial_check": (
+                            "Added a nested-input check outside the approved scope."
+                        ),
+                        "tool_evidence": [
+                            {"observable": "duplicate-unapproved-marker"}
+                        ],
+                    },
+                ]
             response_text = json.dumps(valid_payload)
             if self.invalid_review_response_once:
                 invalid_payload = dict(valid_payload)
@@ -1076,6 +1103,38 @@ def test_dynamic_writer_argv_prose_does_not_spend_a_semantic_repair(
     assert isinstance(writer_records[0], AgentExecutionRecord)
     assert writer_records[0].error is None
     assert writer_records[0].response_artifact == runner.outputs["builder"]
+
+
+def test_dynamic_reviewer_unapproved_boundaries_do_not_spend_a_correction(
+    tmp_path: Path,
+) -> None:
+    runner, team_plan, executor, _, _ = runtime(
+        tmp_path,
+        executor_options={"unapproved_review_boundaries": True},
+    )
+
+    result = DagScheduler().execute(team_plan, runner)
+
+    assert result.status is ScheduleStatus.COMPLETED
+    reviewer_requests = [
+        request for request in executor.requests if request.agent_id == "reviewer"
+    ]
+    assert len(reviewer_requests) == 1
+    reviewer_record = next(
+        runner.artifact_store.load(reference)
+        for reference in runner.execution_records
+        if "/verify/reviewer-" in reference.path
+    )
+    assert isinstance(reviewer_record, AgentExecutionRecord)
+    assert reviewer_record.error is None
+    assert reviewer_record.response_normalizations == (
+        "removed 2 unapproved boundary_checks from criterion AC_REVIEW "
+        "(approved: none)",
+    )
+    assert reviewer_record.semantic_correction_request is None
+    review = runner.artifact_store.load(runner.outputs["reviewer"])
+    assert isinstance(review, ReviewReport)
+    assert review.criterion_assessments[0].boundary_checks == ()
 
 
 def test_dynamic_runner_switches_only_after_approved_provider_failure(

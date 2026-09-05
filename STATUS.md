@@ -62,6 +62,11 @@ authority and records each normalization. Profile-criterion ID collisions now
 remove only redundant echoes; a task-specific relation needed for requirement
 coverage receives a deterministic non-reserved ID while the canonical profile
 binding and all model-owned verification relationships remain intact. A
+Reviewer response is also compiled against the exact TaskBrief-owned boundary
+scope before nested boundary content is validated. Extra checks outside that
+scope are removed with an explicit normalization instead of creating new
+acceptance obligations or model correction calls; checks inside the approved
+scope retain strict completeness, uniqueness, and evidence-grounding rules. A
 remaining targetable model-owned
 failure creates a typed JSON-pointer diagnostic and a SHA-bound
 `semantic_correction_v1` envelope; the controller retains every unrelated
@@ -70,9 +75,21 @@ outcome. Product Planning and dynamic execution continue only after measurable
 improvement within the task budget, while the fixed evaluation surface retains
 its explicit zero-or-one cap. Transport, unlocated, repeated, invalid-envelope,
 and non-improving failures stop without a full-response retry. Fresh
-provider-backed correction evidence remains pending.
+provider-backed Planning correction evidence now exists; a corrected Reviewer
+provider run remains pending.
 
-Formatter, lint, doctor, and **929 offline tests** pass for this implementation.
+A fresh installed run at `54b0275` reached approved Planning, a clean writer
+commit, and five passing deterministic gates. Its Reviewer returned ten
+criterion assessments, but also supplied four boundary checks for each of five
+profile criteria whose frozen TaskBrief scope was empty. Two reused fragments
+failed nested schema validation and caused an unnecessary correction call; that
+call returned no JSON, so SAT withheld delivery. Exact offline replay of the
+preserved first response against the current compiler now validates all ten
+assessments in one pass and records removal of the five unapproved arrays. This
+proves the captured regression path offline, not a corrected provider journey;
+the issue remains open until a fresh run crosses Review without that call.
+
+Formatter, lint, doctor, and **931 offline tests** pass for this implementation.
 
 ## Phase 1 Result
 
@@ -716,7 +733,9 @@ them. `semantic_body_v4` requires explicit boundary checks; a satisfied
 assessment must ground every approved boundary with a distinct attributable
 fragment, while a blocked assessment may stop after one grounded
 counterexample. Controller validation rejects missing, duplicate, reused, or
-unapproved boundary claims. The complete 698-test offline suite passes. A fresh
+ungrounded approved boundary claims; checks outside the TaskBrief-owned scope
+are deterministically removed and recorded before nested validation. The
+complete 698-test offline suite passes. A fresh
 installed provider rerun remains required to verify the expanded Planning and
 Review contracts at the real provider boundary.
 
