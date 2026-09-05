@@ -105,8 +105,17 @@ tag reuse, incomplete schema metadata, or a tag bound to another commit.
    ```
 
    Exercise first launch, a representative task, update check, channel status,
-   failed-activation rollback, state preservation, and uninstall. A rehearsal
-   failure returns the issue to development; it is not authorization to publish.
+   failed-activation rollback, state preservation, and uninstall. If an earlier
+   fixed candidate is already installed, retarget it without repeating bootstrap:
+
+   ```bash
+   sat channel switch dev --ref "$candidate"
+   ```
+
+   Verify that SAT resolves and displays the new exact revision before
+   confirmation, stages it through the normal managed transaction, and keeps an
+   unchanged revision as a no-op. A rehearsal failure returns the issue to
+   development; it is not authorization to publish.
 
 ## Publish Stable
 
@@ -157,7 +166,9 @@ the release as validated.
   non-prerelease GitHub Release and verifies its manifest before cloning the
   tagged source.
 - `dev` is an explicit developer choice. It may follow `main`, another ref, or a
-  full candidate revision and always records the resolved commit.
+  full candidate revision and always records the resolved commit. An explicit
+  dev ref can retarget an installation already on dev; omitting the ref on a
+  same-channel switch remains a local no-op.
 - Install, update, and switch never change channels silently.
 - SAT has no updater daemon or scheduler. Update discovery runs only in a SAT
   foreground process. The ordinary product entry checks once per new task;
