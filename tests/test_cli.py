@@ -19,6 +19,11 @@ from software_agent_team.managed_install import (
 )
 from software_agent_team.model_metadata import ModelMetadataSource
 from software_agent_team.model_routing import ModelProfile
+from software_agent_team.product import (
+    DiagnosticCheck,
+    DiagnosticState,
+    StartupDiagnostics,
+)
 from software_agent_team.run_control import RunPhase
 from software_agent_team.runtime_configuration import (
     OpenClawModelInspection,
@@ -27,13 +32,23 @@ from software_agent_team.runtime_configuration import (
 )
 from software_agent_team.schema_compatibility import supported_schemas
 from software_agent_team.teams import AgentCapability, ModelRoutingMode
+from software_agent_team.updates import (
+    ForegroundUpdateObservation,
+    ForegroundUpdateStatus,
+)
 from software_agent_team.user_configuration import (
     USER_CONFIGURATION_SCHEMA_VERSION,
     UserConfiguration,
     load_user_configuration,
     save_user_configuration,
 )
-from software_agent_team.versioning import ManagedChannel, make_installation_record
+from software_agent_team.versioning import (
+    IdentityStatus,
+    InstallMode,
+    ManagedChannel,
+    SoftwareVersionReport,
+    make_installation_record,
+)
 
 REPOSITORY_ROOT = Path(__file__).parents[1]
 
@@ -380,6 +395,11 @@ def test_cli_no_command_runs_the_guided_product_journey(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("SAT_STATE_ROOT", str(tmp_path / "state"))
+    monkeypatch.setenv("SAT_CONFIG_PATH", str(tmp_path / "config.json"))
+    monkeypatch.setenv(
+        "SAT_INSTALL_METADATA_PATH",
+        str(tmp_path / "missing-installation.json"),
+    )
     monkeypatch.setattr(cli.sys, "stdin", SimpleNamespace(isatty=lambda: True))
     answers = iter(
         (
@@ -393,23 +413,101 @@ def test_cli_no_command_runs_the_guided_product_journey(
         )
     )
     monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+    diagnostic_values = {
+        "platform": ("Linux or WSL", "detected Linux"),
+        "architecture": ("Supported architecture", "detected x86_64"),
+        "identity": ("Unprivileged user", "uid=1000 gid=1000"),
+        "working_directory": ("Writable project parent", str(tmp_path)),
+        "command_git": ("git command", "/usr/bin/git"),
+        "command_docker": ("docker command", "/usr/bin/docker"),
+        "openclaw": ("OpenClaw runtime", "/opt/sat/openclaw"),
+        "docker_daemon": ("Docker daemon", "available"),
+        "sandbox_image": ("Pinned sandbox image", "sha256:" + "a" * 64),
+        "storage": ("Available storage", "2048 MiB free"),
+        "launcher": ("sat launcher", "available on PATH"),
+    }
+    diagnostics = StartupDiagnostics(
+        checks=tuple(
+            DiagnosticCheck(
+                id=check_id,
+                label=label,
+                state=DiagnosticState.READY,
+                detail=detail,
+            )
+            for check_id, (label, detail) in diagnostic_values.items()
+        )
+    )
     monkeypatch.setattr(
         cli,
         "inspect_startup_environment",
-        lambda **_kwargs: SimpleNamespace(ready=True, checks=()),
+        lambda **_kwargs: diagnostics,
     )
     monkeypatch.setattr(cli, "render_startup_diagnostics", lambda _report: None)
     monkeypatch.setattr(
         cli,
         "_ensure_product_configuration",
-        lambda _state_paths: ready_user_configuration(
-            model="provider/model",
-            progress_visibility="detailed",
+        lambda _state_paths: (
+            ready_user_configuration(
+                model="provider/model",
+                progress_visibility="detailed",
+            ),
+            (
+                OpenClawModelInspection(
+                    model="provider/model",
+                    available=True,
+                ),
+            ),
         ),
+    )
+    order: list[str] = []
+    update_calls = 0
+
+    def fake_update(**_kwargs: object) -> ForegroundUpdateObservation:
+        nonlocal update_calls
+        update_calls += 1
+        order.append("update")
+        return ForegroundUpdateObservation(
+            status=ForegroundUpdateStatus.NOT_APPLICABLE,
+            current_channel=None,
+            current_version="0.1.0",
+            current_revision="a" * 40,
+            network_attempted=False,
+            detail="source installations are not changed by the managed updater",
+        )
+
+    monkeypatch.setattr(cli, "inspect_task_admission_update", fake_update)
+    monkeypatch.setattr(
+        cli,
+        "_software_version_report",
+        lambda: SoftwareVersionReport(
+            release_version="0.1.0",
+            display_version="0.1.0+gaaaaaaaaaaaa",
+            source_revision="a" * 40,
+            dirty=False,
+            install_mode=InstallMode.SOURCE,
+            channel=None,
+            source_ref=None,
+            repository_url=None,
+            application_path=str(tmp_path / "application"),
+            artifact_digest=None,
+            installed_at=None,
+            identity_status=IdentityStatus.VERIFIED,
+            provenance_source="git",
+            schema_support=supported_schemas(),
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_plan_execution_checkpoint",
+        lambda **_kwargs: order.append("plan-check") or SimpleNamespace(ready=True),
     )
     source = tmp_path / "prepared-source"
     source.mkdir()
-    monkeypatch.setattr(cli, "prepare_product_source", lambda **_kwargs: source)
+    monkeypatch.setattr(
+        cli,
+        "prepare_product_source",
+        lambda **_kwargs: order.append("prepare-source") or source,
+    )
     observed: dict[str, object] = {}
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -417,6 +515,7 @@ def test_cli_no_command_runs_the_guided_product_journey(
     approved = SimpleNamespace(task_brief=SimpleNamespace(run_id="approved-run"))
 
     def fake_planning(request: object, **kwargs: object) -> object:
+        order.append("planning")
         observed["planning_request"] = request
         observed["planning_kwargs"] = kwargs
         return approved
@@ -426,6 +525,7 @@ def test_cli_no_command_runs_the_guided_product_journey(
         options: object,
         **kwargs: object,
     ) -> SimpleNamespace:
+        order.append("execute")
         observed["approved"] = supplied
         observed["options"] = options
         observed["execution_kwargs"] = kwargs
@@ -471,6 +571,17 @@ def test_cli_no_command_runs_the_guided_product_journey(
     )
 
     assert main([]) == 0
+    assert update_calls == 1
+    assert order == [
+        "update",
+        "planning",
+        "plan-check",
+        "prepare-source",
+        "execute",
+    ]
+    self_check_files = tuple((tmp_path / "state/self-checks").glob("*/*.json"))
+    assert len(self_check_files) == 1
+    assert self_check_files[0].name == "0001-task_admission.json"
 
     planning_request = observed["planning_request"]
     options = observed["options"]
@@ -686,6 +797,112 @@ def test_product_planning_uses_one_bootstrap_agent_and_cleans_it(
     assert "without generating content" in output
     assert "may take up to 90 seconds" in output
     assert "Planning runtime: isolated workspace, sandbox, and model ready" in output
+
+
+def test_approved_plan_runtime_check_covers_all_routes_before_workspace_creation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_paths = cli.ProductStatePaths.below(tmp_path / "state")
+    cli.ensure_product_state(state_paths)
+    source = tmp_path / "source"
+    source.mkdir()
+    routes = (
+        SimpleNamespace(id="default", model="provider/default"),
+        SimpleNamespace(id="review", model="provider/review"),
+    )
+
+    class Routes:
+        default_route_id = "default"
+
+        def __init__(self) -> None:
+            self.routes = routes
+
+        def get_route(self, route_id: str) -> object:
+            return next(item for item in routes if item.id == route_id)
+
+    team_plan = SimpleNamespace(
+        run_id="sat-plan-check",
+        model_routes=Routes(),
+    )
+    quality = cli.load_quality_gate_configuration(
+        cli.DEFAULT_PRODUCT_POLICY,
+        cli.DEFAULT_PRODUCT_PROFILE,
+    )
+    monkeypatch.setattr(
+        cli,
+        "inspect_sandbox_image",
+        lambda **_kwargs: SandboxImageInspection(
+            sandbox_binary="/usr/bin/docker",
+            sandbox_version="Docker test",
+            sandbox_image="sat-image:test",
+            sandbox_image_id="sha256:" + "a" * 64,
+            sandbox_image_present=True,
+        ),
+    )
+    runtime_paths: list[Path] = []
+
+    def fake_materialize(_template: Path, destination: Path, **kwargs: object) -> Path:
+        runtime_paths.append(destination)
+        assert kwargs["workspace"] == source
+        assert kwargs["team_plan"] is team_plan
+        destination.write_text("{}\n", encoding="utf-8")
+        return destination
+
+    monkeypatch.setattr(cli, "materialize_run_configuration", fake_materialize)
+    monkeypatch.setattr(
+        cli,
+        "inspect_runtime_preflight",
+        lambda **_kwargs: RuntimePreflight(
+            openclaw_binary="/opt/openclaw",
+            openclaw_version="OpenClaw test",
+            openclaw_state_dir=str(state_paths.openclaw),
+            runtime_config=str(runtime_paths[0]),
+            sandbox_binary="/usr/bin/docker",
+            sandbox_version="Docker test",
+            sandbox_image="sat-image:test",
+            sandbox_image_id="sha256:" + "a" * 64,
+            config_valid=True,
+            sandbox_image_present=True,
+            sandbox_container_ready=True,
+            model="provider/default",
+            model_available=True,
+            model_inspections=(
+                OpenClawModelInspection(
+                    model="provider/default",
+                    available=True,
+                ),
+            ),
+        ),
+    )
+    inspected: list[str] = []
+    monkeypatch.setattr(
+        cli,
+        "inspect_openclaw_model",
+        lambda **kwargs: (
+            inspected.append(str(kwargs["model"]))
+            or OpenClawModelInspection(
+                model=str(kwargs["model"]),
+                available=True,
+            )
+        ),
+    )
+
+    result = cli._inspect_approved_plan_runtime(
+        team_plan=team_plan,
+        source_repository=source,
+        state_paths=state_paths,
+        quality=quality,
+    )
+
+    assert tuple(item.model for item in result.model_inspections) == (
+        "provider/default",
+        "provider/review",
+    )
+    assert inspected == ["provider/review"]
+    assert len(runtime_paths) == 1
+    assert not runtime_paths[0].exists()
+    assert not list(state_paths.root.glob(".plan-self-check-*"))
 
 
 def test_product_planning_reports_model_timeout_before_creating_an_agent(
@@ -1280,11 +1497,12 @@ def test_first_run_setup_keeps_credentials_outside_sat_and_saves_model_metadata(
     state_paths = cli.ProductStatePaths.below(tmp_path / "state")
     cli.ensure_product_state(state_paths)
 
-    configured = cli._ensure_product_configuration(state_paths)
+    configured, inspections = cli._ensure_product_configuration(state_paths)
 
     assert configured.model == "provider/model"
     assert configured.input_cost_per_million_usd == Decimal("1.00")
     assert configured.default_model_profile.context_window_tokens == 120_000
+    assert tuple(item.model for item in inspections) == ("provider/model",)
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["schema_version"] == USER_CONFIGURATION_SCHEMA_VERSION
     assert "api_key" not in payload
@@ -1393,9 +1611,13 @@ def test_unavailable_optional_model_profile_warns_without_resetting_configuratio
         lambda _prompt: pytest.fail("optional profile must not restart setup"),
     )
 
-    result = cli._ensure_product_configuration(state_paths)
+    result, inspections = cli._ensure_product_configuration(state_paths)
 
     assert result == configured
+    assert tuple(item.model for item in inspections) == (
+        "provider/default",
+        "provider/optional",
+    )
     assert load_user_configuration(configuration_path) == configured
     output = capsys.readouterr().out
     assert "Checking SAT's isolated model configuration" in output

@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from enum import StrEnum
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from software_agent_team.managed_install import (
     LATEST_RELEASE_API_ENVIRONMENT_VARIABLE,
@@ -23,6 +23,7 @@ from software_agent_team.managed_install import (
 )
 from software_agent_team.releases import (
     DEFAULT_LATEST_RELEASE_API_URL,
+    ReleaseResolutionError,
     UpdateAvailability,
     compare_stable_target,
     git_archive_digest,
@@ -30,7 +31,10 @@ from software_agent_team.releases import (
 )
 from software_agent_team.versioning import (
     InstallationRecord,
+    InstallMode,
     ManagedChannel,
+    SoftwareVersionReport,
+    inspect_software_version,
     load_installation_record,
 )
 
@@ -43,6 +47,44 @@ class ManagedChangeStatus(StrEnum):
     CHANNEL_SWITCH = "channel_switch"
     LOCAL_NEWER = "local_newer"
     INCONSISTENT = "inconsistent"
+
+
+class ForegroundUpdateStatus(StrEnum):
+    """Task-admission update states with explicit user-facing semantics."""
+
+    NOT_APPLICABLE = "not_applicable"
+    CURRENT = "current"
+    UPDATE_AVAILABLE = "update_available"
+    PROVENANCE_CHANGED = "provenance_changed"
+    UNAVAILABLE = "unavailable"
+    INCONSISTENT = "inconsistent"
+
+
+class ForegroundUpdateObservation(BaseModel):
+    """One fresh, foreground-only update observation for a bare ``sat`` run."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    status: ForegroundUpdateStatus
+    current_channel: ManagedChannel | None
+    current_version: str
+    target_version: str | None = None
+    current_revision: str | None = None
+    target_revision: str | None = None
+    network_attempted: bool
+    detail: str = Field(min_length=1, max_length=2000)
+
+    @property
+    def blocks_task(self) -> bool:
+        """Return whether local installation provenance is unsafe to consume."""
+
+        return self.status is ForegroundUpdateStatus.INCONSISTENT
+
+    @property
+    def prompts_update(self) -> bool:
+        """Return whether a numeric stable release update should be shown."""
+
+        return self.status is ForegroundUpdateStatus.UPDATE_AVAILABLE
 
 
 class ManagedChangePlan(BaseModel):
@@ -245,6 +287,92 @@ def plan_managed_change(
         target_revision=target.source_revision,
         target_ref=target.source_ref,
         detail=detail,
+    )
+
+
+def inspect_task_admission_update(
+    *,
+    project_root: Path,
+    environment: Mapping[str, str] | None = None,
+    version_report: SoftwareVersionReport | None = None,
+) -> ForegroundUpdateObservation:
+    """Check the active managed channel once in the foreground task lifecycle.
+
+    Source checkouts and unmanaged packages are intentionally local-only.  A
+    remote resolution failure is observable but never makes an otherwise safe
+    task unavailable.  Local managed-install inconsistency remains blocking.
+    """
+
+    version = version_report or inspect_software_version(
+        project_root=project_root,
+        environment=environment,
+    )
+    if version.install_mode is not InstallMode.MANAGED:
+        return ForegroundUpdateObservation(
+            status=ForegroundUpdateStatus.NOT_APPLICABLE,
+            current_channel=version.channel,
+            current_version=version.release_version,
+            current_revision=version.source_revision,
+            network_attempted=False,
+            detail=(
+                f"{version.install_mode.value} installations are not changed by "
+                "the managed updater"
+            ),
+        )
+
+    try:
+        paths = ManagedInstallPaths.from_environment(environment)
+        record, _marker = validate_current_managed_install(
+            project_root=project_root,
+            paths=paths,
+        )
+    except ManagedInstallError as error:
+        return ForegroundUpdateObservation(
+            status=ForegroundUpdateStatus.INCONSISTENT,
+            current_channel=version.channel,
+            current_version=version.release_version,
+            current_revision=version.source_revision,
+            network_attempted=False,
+            detail=f"managed installation identity is inconsistent: {error}",
+        )
+
+    try:
+        target = resolve_requested_target(
+            record=record,
+            channel=record.channel,
+            environment=environment,
+        )
+    except (ManagedInstallError, ReleaseResolutionError) as error:
+        return ForegroundUpdateObservation(
+            status=ForegroundUpdateStatus.UNAVAILABLE,
+            current_channel=record.channel,
+            current_version=record.release_version,
+            current_revision=record.source_revision,
+            network_attempted=True,
+            detail=f"update metadata is unavailable: {error}",
+        )
+
+    plan = plan_managed_change(record, target)
+    if plan.status is ManagedChangeStatus.INCONSISTENT:
+        status = ForegroundUpdateStatus.INCONSISTENT
+    elif (
+        plan.status is ManagedChangeStatus.UPDATE_AVAILABLE
+        and record.channel is ManagedChannel.STABLE
+    ):
+        status = ForegroundUpdateStatus.UPDATE_AVAILABLE
+    elif plan.status is ManagedChangeStatus.UPDATE_AVAILABLE:
+        status = ForegroundUpdateStatus.PROVENANCE_CHANGED
+    else:
+        status = ForegroundUpdateStatus.CURRENT
+    return ForegroundUpdateObservation(
+        status=status,
+        current_channel=record.channel,
+        current_version=record.release_version,
+        target_version=plan.target_version,
+        current_revision=record.source_revision,
+        target_revision=plan.target_revision,
+        network_attempted=True,
+        detail=plan.detail,
     )
 
 

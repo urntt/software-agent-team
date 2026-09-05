@@ -60,12 +60,13 @@ sat
 
 On first use, SAT guides you through:
 
-1. Local environment diagnostics;
+1. Local environment diagnostics and a fresh foreground version/update check;
 2. Isolated model-provider configuration;
 3. A plain-language description of what you want to build;
 4. Confirmation of the installed execution profile and a new project-directory
    name;
-5. Explicit authorization for model-backed Planning;
+5. Explicit task-wide USD/deadline authorization and a persisted task-admission
+   self-check before model-backed Planning;
 6. A bounded conversation containing only questions that can materially change
    the result;
 7. One overview of requirements, acceptance criteria, controller-owned
@@ -78,7 +79,10 @@ On first use, SAT guides you through:
 8. Approval, a natural-language revision request, a supported safe edit, or
    cancellation before any execution Agent is created.
 
-After approval, SAT creates only the task-defined Agents in that exact plan.
+After approval, SAT first persists a second self-check covering every approved
+route, Agent capability, permission, runtime, sandbox, workspace, and delivery
+boundary. It creates only the task-defined Agents in that exact plan after the
+required checks pass.
 The controller derives actual launch order from the approved dependency graph,
 enforces concurrency and shared-workspace safety, monitors provider activity and
 any user-authorized whole-run deadline, records verified Git snapshots and
@@ -132,9 +136,14 @@ explicitly trusted caller environment; they are not written to the repository,
 generated project, run evidence, model profiles, or SAT exports.
 
 Before asking for a project, SAT checks that its isolated runtime recognizes
-the bootstrap model. Before starting an Agent, run preflight checks every model
-route authorized by the approved TeamPlan, with a local catalog/auth route for
-each. These checks do not generate content. An optional provider smoke check
+the bootstrap model. Task admission records the full local SAT version and
+source provenance. Managed installs check their current channel once in the
+foreground; only a newer stable SemVer produces the normal `sat update` prompt,
+and an unavailable release endpoint does not block the task. Source/package
+launches do not contact the managed updater. Before starting an Agent, the
+approved-plan preflight checks every model route authorized by the TeamPlan,
+with a local catalog/auth route for each. These checks do not generate content.
+An optional provider smoke check
 remains a separate, explicitly authorized action because it can incur usage.
 SAT announces the local inspection before waiting. A cold model-catalog check
 may use up to 90 seconds; that infrastructure boundary is separate from the

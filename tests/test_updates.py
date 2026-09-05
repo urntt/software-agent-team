@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+import software_agent_team.updates as updates_module
 from software_agent_team.managed_install import (
     MANAGED_ROOT_MARKER_NAME,
     ManagedApplicationMarker,
@@ -16,14 +17,20 @@ from software_agent_team.managed_install import (
     ManagedRootMarker,
     ManagedTarget,
 )
+from software_agent_team.releases import ReleaseResolutionError
 from software_agent_team.schema_compatibility import supported_schemas
 from software_agent_team.updates import (
+    ForegroundUpdateStatus,
     ManagedChangeStatus,
+    inspect_task_admission_update,
     plan_managed_change,
     validate_current_managed_install,
 )
 from software_agent_team.versioning import (
+    IdentityStatus,
+    InstallMode,
     ManagedChannel,
+    SoftwareVersionReport,
     make_installation_record,
     save_installation_record,
 )
@@ -97,6 +104,199 @@ def target(
             supported_schemas() if channel is ManagedChannel.STABLE else None
         ),
     )
+
+
+def software_version(
+    tmp_path: Path,
+    *,
+    mode: InstallMode,
+    channel: ManagedChannel | None,
+) -> SoftwareVersionReport:
+    return SoftwareVersionReport(
+        release_version="0.1.0",
+        display_version="0.1.0+gaaaaaaaaaaaa",
+        source_revision="a" * 40,
+        dirty=False,
+        install_mode=mode,
+        channel=channel,
+        source_ref=(
+            None
+            if channel is None
+            else "v0.1.0"
+            if channel is ManagedChannel.STABLE
+            else "main"
+        ),
+        repository_url=(
+            None
+            if channel is None
+            else "https://example.invalid/software-agent-team.git"
+        ),
+        application_path=str(tmp_path / "application"),
+        artifact_digest=(
+            "sha256:" + "c" * 64 if channel is ManagedChannel.STABLE else None
+        ),
+        installed_at=None,
+        identity_status=IdentityStatus.VERIFIED,
+        provenance_source="installation_record" if channel else "git",
+        schema_support=supported_schemas(),
+    )
+
+
+def test_task_admission_update_is_local_only_for_source_checkout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        updates_module,
+        "resolve_requested_target",
+        lambda **_kwargs: pytest.fail("source task admission attempted network"),
+    )
+
+    observation = inspect_task_admission_update(
+        project_root=tmp_path,
+        version_report=software_version(
+            tmp_path,
+            mode=InstallMode.SOURCE,
+            channel=None,
+        ),
+    )
+
+    assert observation.status is ForegroundUpdateStatus.NOT_APPLICABLE
+    assert not observation.network_attempted
+    assert not observation.prompts_update
+
+
+@pytest.mark.parametrize(
+    ("channel", "target_value", "expected", "prompts"),
+    (
+        (
+            ManagedChannel.STABLE,
+            target(),
+            ForegroundUpdateStatus.UPDATE_AVAILABLE,
+            True,
+        ),
+        (
+            ManagedChannel.DEV,
+            target(channel=ManagedChannel.DEV, version=None, ref="main"),
+            ForegroundUpdateStatus.PROVENANCE_CHANGED,
+            False,
+        ),
+    ),
+)
+def test_task_admission_update_only_prompts_for_numeric_stable_release(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    channel: ManagedChannel,
+    target_value: ManagedTarget,
+    expected: ForegroundUpdateStatus,
+    prompts: bool,
+) -> None:
+    paths = make_paths(tmp_path)
+    installed = record(tmp_path, channel=channel)
+    monkeypatch.setattr(
+        updates_module.ManagedInstallPaths,
+        "from_environment",
+        lambda _environment=None: paths,
+    )
+    monkeypatch.setattr(
+        updates_module,
+        "validate_current_managed_install",
+        lambda **_kwargs: (installed, object()),
+    )
+    monkeypatch.setattr(
+        updates_module,
+        "resolve_requested_target",
+        lambda **_kwargs: target_value,
+    )
+
+    observation = inspect_task_admission_update(
+        project_root=tmp_path,
+        version_report=software_version(
+            tmp_path,
+            mode=InstallMode.MANAGED,
+            channel=channel,
+        ),
+    )
+
+    assert observation.status is expected
+    assert observation.network_attempted
+    assert observation.prompts_update is prompts
+
+
+def test_task_admission_update_endpoint_failure_is_nonblocking(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = make_paths(tmp_path)
+    installed = record(tmp_path)
+    monkeypatch.setattr(
+        updates_module.ManagedInstallPaths,
+        "from_environment",
+        lambda _environment=None: paths,
+    )
+    monkeypatch.setattr(
+        updates_module,
+        "validate_current_managed_install",
+        lambda **_kwargs: (installed, object()),
+    )
+    monkeypatch.setattr(
+        updates_module,
+        "resolve_requested_target",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            ReleaseResolutionError("release endpoint timed out")
+        ),
+    )
+
+    observation = inspect_task_admission_update(
+        project_root=tmp_path,
+        version_report=software_version(
+            tmp_path,
+            mode=InstallMode.MANAGED,
+            channel=ManagedChannel.STABLE,
+        ),
+    )
+
+    assert observation.status is ForegroundUpdateStatus.UNAVAILABLE
+    assert observation.network_attempted
+    assert not observation.blocks_task
+    assert not observation.prompts_update
+
+
+def test_task_admission_update_local_identity_failure_blocks_without_network(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = make_paths(tmp_path)
+    monkeypatch.setattr(
+        updates_module.ManagedInstallPaths,
+        "from_environment",
+        lambda _environment=None: paths,
+    )
+    monkeypatch.setattr(
+        updates_module,
+        "validate_current_managed_install",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            ManagedInstallError("active application marker is inconsistent")
+        ),
+    )
+    monkeypatch.setattr(
+        updates_module,
+        "resolve_requested_target",
+        lambda **_kwargs: pytest.fail("unsafe local install attempted network"),
+    )
+
+    observation = inspect_task_admission_update(
+        project_root=tmp_path,
+        version_report=software_version(
+            tmp_path,
+            mode=InstallMode.MANAGED,
+            channel=ManagedChannel.STABLE,
+        ),
+    )
+
+    assert observation.status is ForegroundUpdateStatus.INCONSISTENT
+    assert observation.blocks_task
+    assert not observation.network_attempted
 
 
 def test_plan_distinguishes_stable_update_current_and_rebinding(

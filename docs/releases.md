@@ -23,6 +23,14 @@ The user-visible diagnostic form is `MAJOR.MINOR.PATCH+g<revision-prefix>`, but
 the revision suffix is provenance rather than another release. Ordinary stable
 update notifications compare only `MAJOR.MINOR.PATCH`.
 
+The bare `sat` product entry performs this comparison once, synchronously, in
+the current task-admission process. It does not install a daemon, schedule a
+job, continue after process exit, or silently activate the result. Stable
+SemVer growth is rendered as a non-blocking warning with `sat update`; dev
+commit movement remains detailed provenance only. A remote resolution failure
+is recorded as unavailable and cannot make an otherwise safe task unavailable.
+`sat --version`, help, and other local-only commands do not use this path.
+
 ## When to Change the Version
 
 Do not change the release number for every commit. Normal development advances

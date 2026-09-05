@@ -410,6 +410,22 @@ consequence, remediation, and rerun rule. A changed fact invalidates only that
 result and its transitive dependents; a stale result cannot authorize Planning
 or execution.
 
+The ordinary product entry now consumes that contract at both mandatory
+boundaries. Revision 1 is persisted after request/model metadata/USD/deadline
+authorization and before the first Planning model call. It includes startup
+facts, the complete SAT release/source identity, persisted-schema
+compatibility, and one fresh foreground managed-channel observation. A release
+endpoint failure is a non-blocking warning; a locally inconsistent managed
+identity or unreadable schema is blocking. Source and unmanaged package modes
+do not contact the updater. Revision 2 extends the same digest chain after the
+user approves a TeamPlan and before SAT creates a run source/workspace. It
+materializes and validates the approved dynamic OpenClaw policy against the
+read-only profile seed, probes the restricted sandbox, inspects every approved
+model route locally, and records each Agent capability/permission/route plus
+the workspace and delivery boundaries. Failed approved-plan preflight is
+persisted as blocking evidence instead of becoming a late Agent-launch error.
+Neither checkpoint makes a semantic provider request.
+
 Every compatibility-workflow status update is first enriched into a versioned
 `RunEvent`. It stores its run ID, contiguous sequence, UTC timestamp, lifecycle
 revision, category, minimum visibility, phase, and attributable Agent attempt

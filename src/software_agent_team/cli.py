@@ -66,6 +66,7 @@ from software_agent_team.planning import (
 from software_agent_team.product import (
     ProductFlowError,
     ProductStatePaths,
+    StartupDiagnostics,
     deliver_product_workspace,
     ensure_product_state,
     generate_product_run_id,
@@ -109,9 +110,21 @@ from software_agent_team.runtime_configuration import (
 )
 from software_agent_team.runtime_controls import RuntimeControlDecision
 from software_agent_team.sandbox_lifecycle import cleanup_run_sandbox_containers
+from software_agent_team.schema_compatibility import (
+    PersistedSchemaCompatibilityReport,
+    SchemaCompatibilityError,
+    inspect_persisted_schema_compatibility,
+)
 from software_agent_team.self_check import (
     TaskModelMetadata,
     TaskResourceAuthorization,
+    TaskSelfCheckReport,
+    TaskSelfCheckStore,
+    render_self_check_report,
+)
+from software_agent_team.self_check_evaluation import (
+    build_plan_execution_report,
+    build_task_admission_report,
 )
 from software_agent_team.teams import (
     AgentCapability,
@@ -122,8 +135,10 @@ from software_agent_team.teams import (
     load_team_manifest,
 )
 from software_agent_team.updates import (
+    ForegroundUpdateObservation,
     ManagedChangePlan,
     ManagedChangeStatus,
+    inspect_task_admission_update,
     plan_managed_change,
     resolve_requested_target,
     validate_current_managed_install,
@@ -138,6 +153,7 @@ from software_agent_team.versioning import (
     ManagedChannel,
     SoftwareVersionReport,
     inspect_software_version,
+    installation_record_path,
     render_short_version,
     render_version_report,
 )
@@ -1328,6 +1344,105 @@ def _preflight(args: argparse.Namespace) -> int:
     return 0 if result.ready else 2
 
 
+def _with_team_plan_model_inspections(
+    preflight: RuntimePreflight,
+    *,
+    team_plan: TeamPlan,
+    openclaw_binary: Path,
+    openclaw_state_dir: Path,
+    runtime_config: Path,
+) -> RuntimePreflight:
+    """Attach one local catalog/auth observation for every approved route."""
+
+    inspections: list[OpenClawModelInspection] = []
+    primary_inspection = next(
+        (item for item in preflight.model_inspections if item.model == preflight.model),
+        None,
+    )
+    for route in team_plan.model_routes.routes:
+        if route.model == preflight.model and primary_inspection is not None:
+            inspections.append(primary_inspection)
+        else:
+            inspections.append(
+                inspect_openclaw_model(
+                    openclaw_binary=openclaw_binary,
+                    openclaw_state_dir=openclaw_state_dir,
+                    config_path=runtime_config,
+                    model=route.model,
+                )
+            )
+    return RuntimePreflight.model_validate(
+        {
+            **preflight.model_dump(mode="json"),
+            "model_inspections": tuple(inspections),
+        }
+    )
+
+
+def _inspect_approved_plan_runtime(
+    *,
+    team_plan: TeamPlan,
+    source_repository: Path,
+    state_paths: ProductStatePaths,
+    quality: QualityGateConfiguration,
+) -> RuntimePreflight:
+    """Validate approved routes and policies before creating a run workspace."""
+
+    manifest = load_team_manifest(DEFAULT_TEAM_CONFIG)
+    sandbox = inspect_sandbox_image(
+        sandbox_binary="docker",
+        sandbox_image=quality.policy.sandbox.image,
+    )
+    if not sandbox.ready or sandbox.sandbox_image_id is None:
+        raise RuntimeConfigurationError(
+            "approved-plan self-check cannot resolve the pinned sandbox image"
+        )
+    descriptor, raw_path = tempfile.mkstemp(
+        prefix=f".plan-self-check-{team_plan.run_id}-",
+        suffix=".json",
+        dir=state_paths.root,
+    )
+    os.close(descriptor)
+    runtime_path = Path(raw_path)
+    runtime_path.unlink()
+    try:
+        limits = quality.policy.limits
+        materialize_run_configuration(
+            DEFAULT_OPENCLAW_CONFIG,
+            runtime_path,
+            manifest=manifest,
+            workspace=source_repository,
+            sandbox_image=sandbox.sandbox_image_id,
+            sandbox_memory_mb=limits.memory_mb,
+            sandbox_cpus=limits.cpu_cores,
+            sandbox_pids_limit=limits.pids,
+            sandbox_open_files=limits.open_files,
+            sandbox_tmpfs_mb=limits.writable_tmpfs_mb,
+            team_plan=team_plan,
+        )
+        default_model = team_plan.model_routes.get_route(
+            team_plan.model_routes.default_route_id
+        ).model
+        preflight = inspect_runtime_preflight(
+            openclaw_binary=DEFAULT_OPENCLAW_BINARY,
+            openclaw_state_dir=state_paths.openclaw,
+            runtime_config=runtime_path,
+            sandbox_binary="docker",
+            sandbox_image=quality.policy.sandbox.image,
+            expected_sandbox_image_id=sandbox.sandbox_image_id,
+            expected_model=default_model,
+        )
+        return _with_team_plan_model_inspections(
+            preflight,
+            team_plan=team_plan,
+            openclaw_binary=DEFAULT_OPENCLAW_BINARY,
+            openclaw_state_dir=state_paths.openclaw,
+            runtime_config=runtime_path,
+        )
+    finally:
+        runtime_path.unlink(missing_ok=True)
+
+
 def _prepare_runtime_boundary(
     *,
     run_id: str,
@@ -1395,32 +1510,12 @@ def _prepare_runtime_boundary(
             ),
         )
         if team_plan is not None:
-            inspections: list[OpenClawModelInspection] = []
-            primary_inspection = next(
-                (
-                    item
-                    for item in preflight.model_inspections
-                    if item.model == preflight.model
-                ),
-                None,
-            )
-            for route in team_plan.model_routes.routes:
-                if route.model == preflight.model and primary_inspection is not None:
-                    inspections.append(primary_inspection)
-                else:
-                    inspections.append(
-                        inspect_openclaw_model(
-                            openclaw_binary=options.openclaw_binary,
-                            openclaw_state_dir=options.openclaw_state_dir,
-                            config_path=runtime_path,
-                            model=route.model,
-                        )
-                    )
-            preflight = RuntimePreflight.model_validate(
-                {
-                    **preflight.model_dump(mode="json"),
-                    "model_inspections": tuple(inspections),
-                }
+            preflight = _with_team_plan_model_inspections(
+                preflight,
+                team_plan=team_plan,
+                openclaw_binary=options.openclaw_binary,
+                openclaw_state_dir=options.openclaw_state_dir,
+                runtime_config=runtime_path,
             )
         liveness_inspections = preflight.model_inspections
         if not liveness_inspections and preflight.model is not None:
@@ -1985,7 +2080,7 @@ def _discover_openclaw_default_model(
 
 def _ensure_product_configuration(
     state_paths: ProductStatePaths,
-) -> UserConfiguration:
+) -> tuple[UserConfiguration, tuple[OpenClawModelInspection, ...]]:
     """Load or guide the first secret-free product configuration."""
 
     path = user_configuration_path()
@@ -2043,7 +2138,7 @@ def _ensure_product_configuration(
             for profile in current.model_profiles:
                 print(f"  {profile.id}: {profile.model}")
             print(f"✓ Isolated OpenClaw state: {state_paths.openclaw}")
-            return current
+            return current, tuple(inspected)
         print("! Saved bootstrap model is not locally ready:")
         print(f"  {default_inspection.model}: {default_inspection.error}")
 
@@ -2128,7 +2223,7 @@ def _ensure_product_configuration(
             config_path=openclaw_config,
         )
         print("✓ Provider check completed")
-    return configuration
+    return configuration, inspections
 
 
 def _collect_product_request(
@@ -2465,6 +2560,105 @@ def _replacement_planning_request(
     )
 
 
+def _task_admission_checkpoint(
+    *,
+    planning_request: PlanningRequest,
+    destination: Path,
+    state_paths: ProductStatePaths,
+    diagnostics: StartupDiagnostics,
+    configuration: UserConfiguration,
+    model_inspections: tuple[OpenClawModelInspection, ...],
+    resource_authorization: TaskResourceAuthorization,
+    update_observation: ForegroundUpdateObservation | None = None,
+) -> tuple[TaskSelfCheckReport, ForegroundUpdateObservation]:
+    """Persist and render one complete pre-Planning readiness snapshot."""
+
+    version = _software_version_report()
+    if update_observation is None:
+        update_observation = inspect_task_admission_update(
+            project_root=PROJECT_ROOT,
+            version_report=version,
+        )
+    try:
+        schemas = inspect_persisted_schema_compatibility(
+            configuration_path=user_configuration_path(),
+            installation_record_path=installation_record_path(),
+            state_root=state_paths.root,
+            candidate_support=version.schema_support,
+        )
+    except SchemaCompatibilityError as error:
+        schemas = PersistedSchemaCompatibilityReport(
+            compatible=False,
+            observations=(),
+            problems=(str(error),),
+        )
+    report = build_task_admission_report(
+        run_id=planning_request.run_id,
+        diagnostics=diagnostics,
+        software_version=version,
+        schema_compatibility=schemas,
+        update_observation=update_observation,
+        configuration=configuration,
+        model_inspections=model_inspections,
+        source_request=planning_request.source_request,
+        destination=destination,
+        state_root=state_paths.root,
+        resource_authorization=resource_authorization,
+    )
+    path = TaskSelfCheckStore(state_paths.self_checks).persist(report)
+    print()
+    print(
+        render_self_check_report(
+            report,
+            visibility=configuration.progress_visibility,
+        )
+    )
+    print(f"  Evidence: {path}")
+    return report, update_observation
+
+
+def _plan_execution_checkpoint(
+    *,
+    admission_report: TaskSelfCheckReport,
+    approved: ApprovedPlanningResult,
+    destination: Path,
+    state_paths: ProductStatePaths,
+    quality: QualityGateConfiguration,
+    configuration: UserConfiguration,
+) -> TaskSelfCheckReport:
+    """Persist and render approved-plan readiness before workspace mutation."""
+
+    preflight: RuntimePreflight | None = None
+    error_text: str | None = None
+    try:
+        preflight = _inspect_approved_plan_runtime(
+            team_plan=approved.team_plan,
+            source_repository=DEFAULT_PRODUCT_SEED,
+            state_paths=state_paths,
+            quality=quality,
+        )
+    except (OSError, RuntimeConfigurationError, ValueError) as error:
+        error_text = f"approved-plan runtime check failed: {error}"
+    report = build_plan_execution_report(
+        admission_report=admission_report,
+        team_plan=approved.team_plan,
+        runtime_preflight=preflight,
+        runtime_error=error_text,
+        source_repository=DEFAULT_PRODUCT_SEED.resolve(strict=True),
+        destination=destination,
+    )
+    path = TaskSelfCheckStore(state_paths.self_checks).persist(report)
+    print()
+    print(
+        render_self_check_report(
+            report,
+            visibility=configuration.progress_visibility,
+        )
+    )
+    print(f"  Evidence: {path}")
+    return report
+
+
 def _run_product() -> int:
     """Run the primary diagnostics-to-delivery product journey."""
 
@@ -2491,7 +2685,7 @@ def _run_product() -> int:
 
     state_paths = ProductStatePaths.below(user_state_root())
     ensure_product_state(state_paths)
-    configuration = _ensure_product_configuration(state_paths)
+    configuration, model_inspections = _ensure_product_configuration(state_paths)
     run_id = generate_product_run_id()
     execution_profile = (
         "A new, small Python 3.12 project.",
@@ -2508,6 +2702,18 @@ def _run_product() -> int:
     if request is None:
         return 0
     planning_request, destination, resource_authorization = request
+    admission_report, update_observation = _task_admission_checkpoint(
+        planning_request=planning_request,
+        destination=destination,
+        state_paths=state_paths,
+        diagnostics=diagnostics,
+        configuration=configuration,
+        model_inspections=model_inspections,
+        resource_authorization=resource_authorization,
+    )
+    if not admission_report.ready:
+        print("\nSAT did not start Planning because required self-checks failed.")
+        return 2
     budget_ledger = AgentBudgetLedger(
         AgentBudget(
             authority=BudgetAuthority.USER_TASK,
@@ -2533,6 +2739,20 @@ def _run_product() -> int:
                 return 0
 
             run_id = planning_request.run_id
+            execution_report = _plan_execution_checkpoint(
+                admission_report=admission_report,
+                approved=approved,
+                destination=destination,
+                state_paths=state_paths,
+                quality=quality,
+                configuration=configuration,
+            )
+            if not execution_report.ready:
+                print(
+                    "\nSAT did not create runtime Agents or a workspace because "
+                    "required self-checks failed."
+                )
+                return 2
             source_repository = prepare_product_source(
                 seed=DEFAULT_PRODUCT_SEED,
                 state_paths=state_paths,
@@ -2607,6 +2827,36 @@ def _run_product() -> int:
                 run_id=generate_product_run_id(),
                 correction_instruction=instruction,
             )
+            refreshed_diagnostics = inspect_startup_environment(
+                working_directory=working_directory,
+                openclaw_binary=DEFAULT_OPENCLAW_BINARY,
+                sandbox_image=quality.policy.sandbox.image,
+            )
+            refreshed_inspections = tuple(
+                _inspect_selected_model(
+                    DEFAULT_OPENCLAW_BINARY,
+                    profile.model,
+                    state_dir=state_paths.openclaw,
+                    config_path=state_paths.openclaw / "openclaw.json",
+                )
+                for profile in configuration.model_profiles
+            )
+            admission_report, _ = _task_admission_checkpoint(
+                planning_request=planning_request,
+                destination=destination,
+                state_paths=state_paths,
+                diagnostics=refreshed_diagnostics,
+                configuration=configuration,
+                model_inspections=refreshed_inspections,
+                resource_authorization=resource_authorization,
+                update_observation=update_observation,
+            )
+            if not admission_report.ready:
+                print(
+                    "\nReplacement Planning did not start because a refreshed "
+                    "self-check failed."
+                )
+                return 2
     finally:
         renderer.close()
 

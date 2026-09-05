@@ -2,7 +2,7 @@
 
 **Current milestone:** Phase 3E implemented; twenty fresh installed adaptive rehearsals include two accepted strict-route Adaptive Planning deliveries and one provider-backed foreground-control rehearsal; the latest delivery-boundary, Review-recovery, and cold model-inspection repairs are live-validated
 
-**Last updated:** September 4, 2026
+**Last updated:** September 5, 2026
 
 This document records what the repository implements now, what evidence
 supports that claim, and what remains unavailable. It does not redefine the
@@ -22,10 +22,16 @@ controller-priced ledger now covers Planning through terminal execution,
 standard progress exposes spend and remaining authorization, and final reports
 include attributable per-call cost evidence. Terminal JSON, Markdown, and the
 ledger are prepared and published as one rollback-capable bundle before the
-controller transition. Formatter, lint, doctor, and **870 offline tests** pass
-for this implementation. The two mandatory self-check checkpoints and fresh
-provider/device cost and liveness validation remain incomplete; the
-corresponding issues are not closed by offline evidence.
+controller transition. The bare product entry now persists a typed
+task-admission report before Planning and an approved-plan report before source,
+workspace, or runtime-Agent creation. The first report includes full SAT
+release/source identity, local/schema/model/task/budget facts, and exactly one
+foreground managed-channel observation; the second covers every approved
+route, Agent authority, runtime policy, sandbox, source, and delivery boundary.
+Formatter, lint, doctor, and **880 offline tests** pass for this implementation.
+Changed-fact resume remediation, final-report version bundling, and fresh
+provider/device cost, liveness, self-check, and managed-release validation
+remain incomplete; the corresponding issues are not closed by offline evidence.
 
 ## Phase 1 Result
 
@@ -1329,11 +1335,9 @@ derived from the task.
 - A published stable GitHub Release and fresh supported-device evidence for
   stable install, stable update, stable↔dev switch, failed-activation rollback,
   and versioned uninstall;
-- Task-admission update checks plus SAT identity in run evidence, diagnostic
-  exports, and final reports;
-- Product wiring for the task-admission and plan-execution self-check
-  checkpoints, including interactive remediation, all-route capability checks,
-  and changed-fact revalidation;
+- SAT identity bundling inside terminal run reports and diagnostic exports;
+- Changed-fact self-check refresh during durable resume, plus fresh installed
+  device evidence for task-admission and approved-plan remediation;
 - An independent-device live demonstration of the activated Adaptive Planning
   and Dynamic Team journey;
 - Durable control recovery after a foreground process crash and a
