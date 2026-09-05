@@ -104,7 +104,7 @@ from software_agent_team.teams import (
     permission_for_capability,
 )
 
-PLANNING_SCHEMA_VERSION = 5
+PLANNING_SCHEMA_VERSION = 6
 MINIMUM_READABLE_PLANNING_SCHEMA_VERSION = 2
 PLANNING_TEMPLATE = Path(__file__).with_name("prompt_templates") / "adaptive_planner.md"
 MAX_PLANNING_EVIDENCE_CHARACTERS = 1_000_000
@@ -303,6 +303,7 @@ class PlanningActivityKind(StrEnum):
     INITIALIZATION_STALLED = "initialization_stalled"
     PROVIDER_WAIT = "provider_wait"
     TOOL_ACTIVE = "tool_active"
+    FINALIZING_RESPONSE = "finalizing_response"
     STOPPING = "stopping"
     COLLECTING_EVIDENCE = "collecting_evidence"
     STOPPED = "stopped"
@@ -313,6 +314,10 @@ class PlanningActivityKind(StrEnum):
     STALL_SUSPECTED = "stall_suspected"
     STALL_RECOVERED = "stall_recovered"
     PROVIDER_STALLED = "provider_stalled"
+    FINALIZATION_PROGRESS = "finalization_progress"
+    FINALIZATION_STALL_SUSPECTED = "finalization_stall_suspected"
+    FINALIZATION_STALL_RECOVERED = "finalization_stall_recovered"
+    RESPONSE_FINALIZATION_STALLED = "response_finalization_stalled"
     RESPONSE_RECEIVED = "response_received"
     BUDGET_UPDATED = "budget_updated"
     CORRECTION_SCHEDULED = "correction_scheduled"
@@ -386,6 +391,7 @@ class TerminalPlanningProgress:
             PlanningActivityKind.INITIALIZING,
             PlanningActivityKind.PROVIDER_WAIT,
             PlanningActivityKind.TOOL_ACTIVE,
+            PlanningActivityKind.FINALIZING_RESPONSE,
         }:
             label = {
                 PlanningActivityKind.INITIALIZING: (
@@ -396,6 +402,10 @@ class TerminalPlanningProgress:
                 ),
                 PlanningActivityKind.TOOL_ACTIVE: (
                     "Planning has attributable tool operations active"
+                ),
+                PlanningActivityKind.FINALIZING_RESPONSE: (
+                    "Planning received the terminal model response and OpenClaw "
+                    "is finalizing the result"
                 ),
             }[activity.kind]
             self._start_waiting(
@@ -462,6 +472,21 @@ class TerminalPlanningProgress:
             )
         elif activity.kind is PlanningActivityKind.PROVIDER_ACTIVITY:
             intermediate = "  Planning received provider stream activity"
+        elif activity.kind is PlanningActivityKind.FINALIZATION_PROGRESS:
+            intermediate = "  Planning result finalization made observable progress"
+        elif activity.kind is PlanningActivityKind.FINALIZATION_STALL_SUSPECTED:
+            intermediate = (
+                "? Planning result finalization has made no observable progress for "
+                f"{(activity.inactivity_ms or 0) / 1000:.1f}s; waiting the final "
+                f"{(activity.stall_grace_seconds or 0):g}s diagnostic window"
+            )
+        elif activity.kind is PlanningActivityKind.FINALIZATION_STALL_RECOVERED:
+            intermediate = "↻ Planning result finalization resumed during grace"
+        elif activity.kind is PlanningActivityKind.RESPONSE_FINALIZATION_STALLED:
+            intermediate = (
+                "! Planning received the terminal model response, but OpenClaw "
+                "result finalization remained stalled; a typed stop follows"
+            )
         elif activity.kind is PlanningActivityKind.TOOL_STARTED:
             intermediate = "  Planning started a sandboxed tool operation"
         elif activity.kind is PlanningActivityKind.TOOL_COMPLETED:
@@ -984,7 +1009,9 @@ class PlanningRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, PLANNING_SCHEMA_VERSION] = PLANNING_SCHEMA_VERSION
+    schema_version: Literal[2, 3, 4, 5, PLANNING_SCHEMA_VERSION] = (
+        PLANNING_SCHEMA_VERSION
+    )
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     project_name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
     source_request: str = Field(min_length=1, max_length=2000)
@@ -2642,7 +2669,9 @@ class AdaptiveImplementationPlan(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, PLANNING_SCHEMA_VERSION] = PLANNING_SCHEMA_VERSION
+    schema_version: Literal[2, 3, 4, 5, PLANNING_SCHEMA_VERSION] = (
+        PLANNING_SCHEMA_VERSION
+    )
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     team_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     revision: int = Field(ge=1)
@@ -2719,7 +2748,9 @@ class PlanningTurn(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, PLANNING_SCHEMA_VERSION] = PLANNING_SCHEMA_VERSION
+    schema_version: Literal[2, 3, 4, 5, PLANNING_SCHEMA_VERSION] = (
+        PLANNING_SCHEMA_VERSION
+    )
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     sequence: int = Field(ge=1)
     previous_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
@@ -2762,6 +2793,16 @@ class PlanningTurn(BaseModel):
 
     @model_validator(mode="after")
     def validate_evidence(self) -> Self:
+        if self.schema_version < 6 and (
+            self.execution.status is AgentExecutionStatus.RESPONSE_FINALIZATION_STALLED
+            or (
+                self.execution.provider_liveness is not None
+                and self.execution.provider_liveness.terminal_response_observed
+            )
+        ):
+            raise ValueError(
+                "legacy Planning turns cannot contain response-finalization state"
+            )
         if _digest_text(self.prompt) != self.prompt_sha256:
             raise ValueError("Planning prompt digest does not match its content")
         if self.response_text is None:
@@ -2798,7 +2839,9 @@ class PlanningProposal(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, PLANNING_SCHEMA_VERSION] = PLANNING_SCHEMA_VERSION
+    schema_version: Literal[2, 3, 4, 5, PLANNING_SCHEMA_VERSION] = (
+        PLANNING_SCHEMA_VERSION
+    )
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     revision: int = Field(ge=1)
     created_at: datetime
@@ -2856,7 +2899,9 @@ class PlanningSession(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, PLANNING_SCHEMA_VERSION] = PLANNING_SCHEMA_VERSION
+    schema_version: Literal[2, 3, 4, 5, PLANNING_SCHEMA_VERSION] = (
+        PLANNING_SCHEMA_VERSION
+    )
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     request_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     status: PlanningSessionStatus
@@ -3035,7 +3080,9 @@ class PlanningApproval(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, PLANNING_SCHEMA_VERSION] = PLANNING_SCHEMA_VERSION
+    schema_version: Literal[2, 3, 4, 5, PLANNING_SCHEMA_VERSION] = (
+        PLANNING_SCHEMA_VERSION
+    )
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     revision: int = Field(ge=1)
     approved_at: datetime
@@ -3263,7 +3310,7 @@ def preview_adaptive_proposal(
     if proposal.run_id != request.run_id:
         raise PlanningError("proposal belongs to a different Planning request")
     body = proposal.body
-    if proposal.schema_version == PLANNING_SCHEMA_VERSION:
+    if proposal.schema_version >= 5:
         validate_planning_clarity(
             body,
             source_request=request.source_request,
@@ -5092,6 +5139,9 @@ class AdaptivePlanningCoordinator:
             AgentExecutionActivityKind.INVOCATION_TOOL_ACTIVE: (
                 PlanningActivityKind.TOOL_ACTIVE
             ),
+            AgentExecutionActivityKind.INVOCATION_FINALIZING_RESPONSE: (
+                PlanningActivityKind.FINALIZING_RESPONSE
+            ),
             AgentExecutionActivityKind.INVOCATION_STOPPING: (
                 PlanningActivityKind.STOPPING
             ),
@@ -5119,6 +5169,18 @@ class AdaptivePlanningCoordinator:
             ),
             AgentExecutionActivityKind.PROVIDER_STALLED: (
                 PlanningActivityKind.PROVIDER_STALLED
+            ),
+            AgentExecutionActivityKind.FINALIZATION_PROGRESS: (
+                PlanningActivityKind.FINALIZATION_PROGRESS
+            ),
+            AgentExecutionActivityKind.FINALIZATION_STALL_SUSPECTED: (
+                PlanningActivityKind.FINALIZATION_STALL_SUSPECTED
+            ),
+            AgentExecutionActivityKind.FINALIZATION_STALL_RECOVERED: (
+                PlanningActivityKind.FINALIZATION_STALL_RECOVERED
+            ),
+            AgentExecutionActivityKind.RESPONSE_FINALIZATION_STALLED: (
+                PlanningActivityKind.RESPONSE_FINALIZATION_STALLED
             ),
         }[activity.kind]
         cls._emit_activity(

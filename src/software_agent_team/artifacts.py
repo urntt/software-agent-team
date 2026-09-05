@@ -34,7 +34,7 @@ from software_agent_team.submissions import (
 )
 from software_agent_team.versioning import SoftwareVersionReport
 
-ARTIFACT_SCHEMA_VERSION = 5
+ARTIFACT_SCHEMA_VERSION = 6
 MINIMUM_READABLE_ARTIFACT_SCHEMA_VERSION = 2
 COMMIT_PATTERN = r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
 AGENT_ID_PATTERN = r"^[a-z][a-z0-9_]*$"
@@ -98,6 +98,7 @@ class AgentExecutionStatus(StrEnum):
     PROVIDER_FAILED = "provider_failed"
     PROVIDER_STALLED = "provider_stalled"
     INITIALIZATION_STALLED = "initialization_stalled"
+    RESPONSE_FINALIZATION_STALLED = "response_finalization_stalled"
     TIMED_OUT = "timed_out"
     INVALID_RESPONSE = "invalid_response"
     LAUNCH_FAILED = "launch_failed"
@@ -124,6 +125,10 @@ class ProviderLivenessEvidence(BaseModel):
     stall_recovered_count: int = Field(ge=0)
     maximum_inactivity_ms: int = Field(default=0, ge=0)
     stalled: bool = False
+    terminal_response_observed: bool = Field(
+        default=False,
+        exclude_if=lambda value: not value,
+    )
     degradation_reason: str | None = Field(default=None, min_length=1, max_length=500)
 
     @model_validator(mode="after")
@@ -136,6 +141,8 @@ class ProviderLivenessEvidence(BaseModel):
             raise ValueError("started liveness requires exactly one start source")
         if self.stalled and not self.lease_started:
             raise ValueError("provider stall requires a started liveness lease")
+        if self.stalled and self.terminal_response_observed:
+            raise ValueError("a terminal provider response cannot be provider-stalled")
         return self
 
 
@@ -550,7 +557,9 @@ class HandoffEnvelope(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, ARTIFACT_SCHEMA_VERSION] = ARTIFACT_SCHEMA_VERSION
+    schema_version: Literal[2, 3, 4, 5, ARTIFACT_SCHEMA_VERSION] = (
+        ARTIFACT_SCHEMA_VERSION
+    )
     kind: Literal[ArtifactKind.HANDOFF_ENVELOPE] = ArtifactKind.HANDOFF_ENVELOPE
     run_id: str = Field(min_length=1, pattern=r"^[a-z0-9][a-z0-9_-]*$")
     team_id: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9_]*$")
@@ -613,7 +622,9 @@ class PhaseArtifact(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, ARTIFACT_SCHEMA_VERSION] = ARTIFACT_SCHEMA_VERSION
+    schema_version: Literal[2, 3, 4, 5, ARTIFACT_SCHEMA_VERSION] = (
+        ARTIFACT_SCHEMA_VERSION
+    )
     kind: ArtifactKind
     run_id: str = Field(min_length=1, pattern=r"^[a-z0-9][a-z0-9_-]*$")
     team_id: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9_]*$")
@@ -772,7 +783,9 @@ class AgentExecutionRecord(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, ARTIFACT_SCHEMA_VERSION] = ARTIFACT_SCHEMA_VERSION
+    schema_version: Literal[2, 3, 4, 5, ARTIFACT_SCHEMA_VERSION] = (
+        ARTIFACT_SCHEMA_VERSION
+    )
     kind: Literal[ArtifactKind.AGENT_EXECUTION_RECORD] = (
         ArtifactKind.AGENT_EXECUTION_RECORD
     )
@@ -1039,13 +1052,18 @@ class AgentExecutionRecord(BaseModel):
                 "terminal liveness evidence requires provider-stalled status"
             )
         if self.invocation_lifecycle is not None:
-            if self.schema_version < ARTIFACT_SCHEMA_VERSION:
+            if self.schema_version < 5:
                 raise ValueError(
                     "legacy execution records cannot contain invocation lifecycle"
                 )
             if self.execution_status is None:
                 raise ValueError(
                     "invocation lifecycle requires a typed execution status"
+                )
+            expected_lifecycle_schema = 1 if self.schema_version == 5 else 2
+            if self.invocation_lifecycle.schema_version != expected_lifecycle_schema:
+                raise ValueError(
+                    "execution-record schema does not match invocation-lifecycle schema"
                 )
             allowed_reasons = {
                 AgentExecutionStatus.COMPLETED: {InvocationStopReason.COMPLETED},
@@ -1060,6 +1078,9 @@ class AgentExecutionRecord(BaseModel):
                 },
                 AgentExecutionStatus.INITIALIZATION_STALLED: {
                     InvocationStopReason.INITIALIZATION_STALL
+                },
+                AgentExecutionStatus.RESPONSE_FINALIZATION_STALLED: {
+                    InvocationStopReason.RESPONSE_FINALIZATION_STALL
                 },
                 AgentExecutionStatus.TIMED_OUT: {
                     InvocationStopReason.RUN_DEADLINE,
@@ -1080,6 +1101,16 @@ class AgentExecutionRecord(BaseModel):
                 raise ValueError(
                     "invocation lifecycle reason does not match execution status"
                 )
+        if self.schema_version < 6 and (
+            self.execution_status is AgentExecutionStatus.RESPONSE_FINALIZATION_STALLED
+            or (
+                self.provider_liveness is not None
+                and self.provider_liveness.terminal_response_observed
+            )
+        ):
+            raise ValueError(
+                "legacy execution records cannot contain response-finalization state"
+            )
         return self
 
 

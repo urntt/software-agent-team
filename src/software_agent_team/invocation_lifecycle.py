@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Self
+from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -15,6 +15,7 @@ class InvocationPhase(StrEnum):
     INITIALIZING = "initializing"
     PROVIDER_WAIT = "provider_wait"
     TOOL_ACTIVE = "tool_active"
+    FINALIZING_RESPONSE = "finalizing_response"
     STOPPING = "stopping"
     COLLECTING_EVIDENCE = "collecting_evidence"
     STOPPED = "stopped"
@@ -26,6 +27,7 @@ class InvocationStopReason(StrEnum):
     COMPLETED = "completed"
     INITIALIZATION_STALL = "initialization_stall"
     PROVIDER_STALL = "provider_stall"
+    RESPONSE_FINALIZATION_STALL = "response_finalization_stall"
     USER_INTERRUPT = "user_interrupt"
     USER_CANCEL = "user_cancel"
     RUN_DEADLINE = "run_deadline"
@@ -67,6 +69,7 @@ _ALLOWED_PHASE_SUCCESSORS: dict[InvocationPhase, frozenset[InvocationPhase]] = {
     InvocationPhase.PROVIDER_WAIT: frozenset(
         {
             InvocationPhase.TOOL_ACTIVE,
+            InvocationPhase.FINALIZING_RESPONSE,
             InvocationPhase.STOPPING,
         }
     ),
@@ -74,9 +77,11 @@ _ALLOWED_PHASE_SUCCESSORS: dict[InvocationPhase, frozenset[InvocationPhase]] = {
         {
             InvocationPhase.PROVIDER_WAIT,
             InvocationPhase.TOOL_ACTIVE,
+            InvocationPhase.FINALIZING_RESPONSE,
             InvocationPhase.STOPPING,
         }
     ),
+    InvocationPhase.FINALIZING_RESPONSE: frozenset({InvocationPhase.STOPPING}),
     InvocationPhase.STOPPING: frozenset({InvocationPhase.COLLECTING_EVIDENCE}),
     InvocationPhase.COLLECTING_EVIDENCE: frozenset({InvocationPhase.STOPPED}),
     InvocationPhase.STOPPED: frozenset(),
@@ -189,18 +194,71 @@ class InvocationShutdownEvidence(BaseModel):
         return self
 
 
+class ResponseFinalizationEvidence(BaseModel):
+    """Content-free guard evidence after the provider response is complete."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    mode: Literal["not_observed", "enforced"]
+    policy_source: str = Field(min_length=1, max_length=300)
+    no_progress_seconds: float = Field(gt=0)
+    stall_grace_seconds: float = Field(gt=0)
+    terminal_response_observed: bool = False
+    output_progress_observations: int = Field(default=0, ge=0)
+    stall_suspected_count: int = Field(default=0, ge=0)
+    stall_recovered_count: int = Field(default=0, ge=0)
+    maximum_no_progress_ms: int = Field(default=0, ge=0)
+    stalled: bool = False
+
+    @model_validator(mode="after")
+    def validate_observation(self) -> Self:
+        if self.stall_grace_seconds >= self.no_progress_seconds:
+            raise ValueError(
+                "response-finalization grace must be shorter than its ceiling"
+            )
+        if (self.mode == "enforced") != self.terminal_response_observed:
+            raise ValueError(
+                "enforced response finalization requires an observed terminal response"
+            )
+        if self.mode == "not_observed" and any(
+            (
+                self.output_progress_observations,
+                self.stall_suspected_count,
+                self.stall_recovered_count,
+                self.maximum_no_progress_ms,
+                self.stalled,
+            )
+        ):
+            raise ValueError(
+                "unobserved response finalization cannot contain progress evidence"
+            )
+        if self.stall_recovered_count > self.stall_suspected_count:
+            raise ValueError("response-finalization recovery requires a suspicion")
+        if self.stalled and self.mode != "enforced":
+            raise ValueError("only enforced response finalization can stall")
+        return self
+
+
 class InvocationLifecycleEvidence(BaseModel):
     """Terminal lifecycle record shared by runtime and Planning invocations."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: int = Field(default=1, ge=1, le=1)
+    schema_version: int = Field(default=2, ge=1, le=2)
     transitions: tuple[InvocationLifecycleTransition, ...] = Field(min_length=2)
     initialization: InitializationLivenessEvidence
+    response_finalization: ResponseFinalizationEvidence | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     shutdown: InvocationShutdownEvidence
 
     @model_validator(mode="after")
     def validate_lifecycle(self) -> Self:
+        if (self.schema_version == 1) != (self.response_finalization is None):
+            raise ValueError(
+                "lifecycle schema v2 requires response-finalization evidence"
+            )
         if [item.sequence for item in self.transitions] != list(
             range(1, len(self.transitions) + 1)
         ):
@@ -246,4 +304,26 @@ class InvocationLifecycleEvidence(BaseModel):
             for item in self.transitions
         ):
             raise ValueError("invocation lifecycle cannot change its stop reason")
+        finalizing = tuple(
+            item
+            for item in self.transitions
+            if item.phase is InvocationPhase.FINALIZING_RESPONSE
+        )
+        assert self.response_finalization is not None or self.schema_version == 1
+        if self.schema_version == 2:
+            observed = self.response_finalization is not None and (
+                self.response_finalization.terminal_response_observed
+            )
+            if observed != (len(finalizing) == 1):
+                raise ValueError(
+                    "terminal-response observation requires one finalizing phase"
+                )
+            if (
+                self.shutdown.reason is InvocationStopReason.RESPONSE_FINALIZATION_STALL
+            ) != bool(
+                self.response_finalization and self.response_finalization.stalled
+            ):
+                raise ValueError(
+                    "response-finalization stall reason must match guard evidence"
+                )
         return self

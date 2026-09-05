@@ -181,7 +181,12 @@ Once the current turn or its private provider stream is attributable, OpenClaw
 retains its provider transport boundary and SAT watches content-free stream and
 tool-lifecycle signals. Trusted activity renews the provider lease regardless of
 total work time. Sustained silence first produces a visible warning and grace
-period. Any stop then remains visibly `stopping` and `collecting_evidence` until
+period. An attributable final assistant record transfers the invocation to a
+separate `finalizing_response` phase, so OpenClaw result serialization and exit
+cannot be mistaken for provider silence. Observable process output renews that
+60-second no-progress guard; a final 10-second diagnostic window precedes a
+typed finalization stall. Any stop then remains visibly `stopping` and
+`collecting_evidence` until
 the exact process outcome, output, evidence, and cleanup are known; only then is
 it `stopped` and terminal. SAT applies a whole-run deadline only when the user
 explicitly authorized one for that task. If catalog inspection expires, SAT

@@ -605,7 +605,8 @@ run
 ```
 
 Every Agent can be `queued`, `ready`, `running`, `launched`, `initializing`,
-`waiting_provider`, `tool_active`, `stopping`, `collecting_evidence`, `stopped`,
+`waiting_provider`, `tool_active`, `finalizing_response`, `stopping`,
+`collecting_evidence`, `stopped`,
 `waiting_dependency`, `blocked`, `paused`, `completed`, `waiting_repair`,
 `interrupted`, `cancelled`, or `failed`. The interface shows elapsed time, the
 last meaningful safe summary, and the dependency or blocker when known. It does
@@ -819,9 +820,10 @@ deterministically deconflicts an echo whose model-owned relationship is still
 needed. The canonical profile text remains controller-owned, both task bindings
 are retained, and the raw response plus every normalization remain recorded in
 the Planning turn.
-Planning schema v5 adds the attributable ProductDefinition and question-to-
-dimension contract. It retains read support and canonical serialization for
-schema-v2 through schema-v4 evidence. Schema v4 introduced typed validation
+Planning schema v6 adds terminal-response/finalization execution outcomes to
+Planning evidence. Schema v5 added the attributable ProductDefinition and
+question-to-dimension contract. It retains read support and canonical
+serialization for schema-v2 through schema-v5 evidence. Schema v4 introduced typed validation
 diagnostics, deterministic normalization, and targeted-correction evidence.
 Current live response schemas make ProductDefinition, responsibility, and
 clarity fields mandatory and non-null. Structured edits of historical evidence
@@ -865,9 +867,10 @@ time authority, prompt, invocation-scoped typed submission schema,
 semantic-correction policy, Git or read-only boundary, aggregate
 budget, execution record, and durable handoffs. Its persisted events distinguish
 launch, attributable initialization checkpoints, provider wait, tool activity,
-stopping, evidence collection, exact-process cleanup, and terminal status.
-Initialization and provider inactivity have separate warning, recovery, and
-typed failure authorities. A confirmed stall preserves typed content-free
+response finalization, stopping, evidence collection, exact-process cleanup,
+and terminal status. Initialization, provider inactivity, and post-response
+finalization have separate warning, recovery, and typed failure authorities.
+A confirmed stall preserves typed content-free
 evidence and may use only an already approved provider-failure fallback; total
 productive wall-clock time is not a stopping condition. Quality gates are shared once
 per immutable iteration, and every quality Agent must be downstream of every

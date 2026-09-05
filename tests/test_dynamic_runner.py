@@ -1448,6 +1448,57 @@ def test_dynamic_runner_can_use_approved_fallback_after_provider_stall(
     assert positions == sorted(positions)
 
 
+def test_dynamic_runner_projects_response_finalization_without_provider_claims(
+    tmp_path: Path,
+) -> None:
+    runner, team_plan, _, _, _ = runtime(tmp_path)
+    events: list[ProgressEvent] = []
+    runner.activity_handler = events.append
+    agent = next(item for item in team_plan.agents if item.id == "builder")
+
+    runner._observe_execution_activity(
+        agent,
+        attempt=1,
+        activity=AgentExecutionActivity(
+            kind=AgentExecutionActivityKind.INVOCATION_FINALIZING_RESPONSE,
+            agent_id=agent.id,
+            session_key="agent:builder:finalizing",
+            model=MODEL,
+            elapsed_ms=100,
+            invocation_phase=InvocationPhase.FINALIZING_RESPONSE,
+            action="Terminal response observed",
+        ),
+    )
+    runner._observe_execution_activity(
+        agent,
+        attempt=1,
+        activity=AgentExecutionActivity(
+            kind=AgentExecutionActivityKind.FINALIZATION_STALL_SUSPECTED,
+            agent_id=agent.id,
+            session_key="agent:builder:finalizing",
+            model=MODEL,
+            elapsed_ms=50_000,
+            inactivity_ms=50_000,
+            silence_seconds=60,
+            stall_grace_seconds=10,
+            policy_source="test response-finalization contract",
+        ),
+    )
+
+    assert [event.kind for event in events] == [
+        ProgressEventKind.AGENT_FINALIZING_RESPONSE,
+        ProgressEventKind.AGENT_FINALIZATION_STALL_SUSPECTED,
+    ]
+    assert all(
+        event.checkpoint is not None
+        and event.checkpoint.invocation_phase is InvocationPhase.FINALIZING_RESPONSE
+        for event in events
+    )
+    assert "terminal model response" in events[0].message
+    assert "50.0s" in events[1].message
+    assert "test response-finalization contract" in events[1].message
+
+
 def test_dynamic_runner_refuses_unapproved_provider_fallback(
     tmp_path: Path,
 ) -> None:

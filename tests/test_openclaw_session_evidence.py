@@ -271,6 +271,7 @@ def test_activity_inspection_tracks_current_tool_lifecycle_without_content(
     assert active.tool_started_count == 1
     assert active.tool_completed_count == 0
     assert active.active_tool_count == 1
+    assert not active.terminal_response_observed
     assert "SECRET_ACTIVITY_CONTENT" not in repr(active)
 
     records.append(tool_result_record("current-call", output="SECRET_ACTIVITY_CONTENT"))
@@ -290,7 +291,26 @@ def test_activity_inspection_tracks_current_tool_lifecycle_without_content(
     assert completed.tool_started_count == 1
     assert completed.tool_completed_count == 1
     assert completed.active_tool_count == 0
+    assert not completed.terminal_response_observed
     assert "SECRET_ACTIVITY_CONTENT" not in repr(completed)
+
+    records.append(assistant_record("SECRET_ACTIVITY_CONTENT"))
+    transcript.write_text(
+        "\n".join(json.dumps(item) for item in records) + "\n",
+        encoding="utf-8",
+    )
+    terminal = inspect_openclaw_session_activity(
+        state_dir=tmp_path,
+        agent_id=invocation.agent_id,
+        session_key=invocation.session_key,
+        prompt=invocation.prompt,
+    )
+
+    assert terminal is not None
+    assert terminal.trusted_record_count == 3
+    assert terminal.active_tool_count == 0
+    assert terminal.terminal_response_observed
+    assert "SECRET_ACTIVITY_CONTENT" not in repr(terminal)
 
 
 def test_activity_inspection_returns_none_until_current_session_exists(

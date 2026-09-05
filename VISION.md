@@ -183,15 +183,20 @@ when code, usability evidence, or controlled experiments justify a replacement.
   bound. Neither value is an Agent invocation timeout, and a local inspection
   failure must say that no provider request or Agent invocation occurred.
 - Every Planning or execution invocation uses one controller-owned lifecycle:
-  `launched`, `initializing`, `provider_wait`, `tool_active`, `stopping`,
-  `collecting_evidence`, then `stopped`. Initialization is observed through
+  `launched`, `initializing`, `provider_wait`, `tool_active`,
+  `finalizing_response`, `stopping`, `collecting_evidence`, then `stopped`.
+  Initialization is observed through
   attributable private-state checkpoints and has its own no-progress guard;
   provider inactivity begins only after the exact current turn or private stream
   is attributable. Both observations enter provider wait through that single
   initialization readiness authority, so observer order cannot move a lifecycle
-  backwards. These guards never become a productive-work deadline.
+  backwards. A final assistant record ends provider-generation authority and
+  starts a distinct renewable result-finalization guard; runtime serialization
+  and teardown therefore cannot consume the provider-silence lease. These
+  guards never become a productive-work deadline.
 - Interrupt, cancel, user deadline, controlled-evaluation timeout,
-  initialization stall, provider stall, and process failure remain distinct
+  initialization stall, provider stall, response-finalization stall, and
+  process failure remain distinct
   stop authorities. A terminal result is not published until the exact process
   is reaped and output, submission/session evidence, and cleanup outcome have
   been collected.
@@ -482,7 +487,7 @@ change in the same controlled trial.
 | Change SemVer at release-scope freeze, not on every commit | Dev provenance already identifies every commit. Impact classification, package/lock consistency, pre-tag gates, explicit tag authorization, and immutable GitHub publication make release significance enforceable without update-notification noise or reliance on a maintainer remembering an informal checklist. |
 | Validate and, when necessary, supplement the exact model catalog before Agent work | Saving a `provider/model` string does not prove that the pinned runtime can resolve it. A non-generation catalog/auth check catches unsupported or unauthenticated selections before a build, while a versioned secret-free supplement can bridge a known catalog lag without copying credentials or enabling fallback. |
 | Keep local readiness timeouts separate from Agent invocation timeouts | A cold local catalog process can take longer than a lightweight binary or Docker check without consuming provider tokens. The controller therefore records and enforces a dedicated 90-second model-inspection boundary, keeps ordinary preflight commands at 30 seconds, announces the wait, and never presents either value as time granted to an Agent. |
-| Separate user deadlines from provider liveness and process cleanup | An ordinary task has no whole-run deadline unless the user explicitly sets one before the first model call. A provider/model-aware inactivity lease is renewed only by trustworthy streaming, tool, artifact, or checkpoint activity; continued silence crosses a visible suspected-stall probe and grace period before best-effort interruption. SAT heartbeat text and process existence are not progress. Fixed per-invocation wall-clock limits remain controlled-evaluation inputs, while process shutdown grace remains an infrastructure cleanup guard. |
+| Separate user deadlines from initialization, provider liveness, response finalization, and process cleanup | An ordinary task has no whole-run deadline unless the user explicitly sets one before the first model call. A provider/model-aware inactivity lease is renewed only by trustworthy streaming, tool, artifact, or checkpoint activity; continued silence crosses a visible suspected-stall probe and grace period before best-effort interruption. An attributable final assistant record transfers authority to a separate renewable result-finalization guard, so runtime serialization is neither provider silence nor unbounded waiting. SAT heartbeat text and process existence are not progress. Fixed per-invocation wall-clock limits remain controlled-evaluation inputs, while process shutdown grace remains an infrastructure cleanup guard. |
 | Bind provider subprocess cleanup to durable kernel identity | An in-memory process map disappears when the foreground controller crashes, while PID alone can later identify an unrelated process. Every SAT-launched OpenClaw child therefore has a private lease binding controller and child PID, process group, Linux start ticks, run, Agent, and session. A later process may reclaim only a matching child whose exact controller is gone, must hold a Linux pidfd across signalling, and may remove only the leased sandbox session under SAT-owned state; active owners and PID-reused processes remain untouched. |
 | Start with `function_specialized` | It introduces independent planning, testing, and review without the merge conflicts that would confound the first vertical slice. |
 | Keep Tester and Reviewer independent, with configurable dispatch concurrency | They inspect the same immutable evidence and never consume each other's interpretation. Parallel dispatch reduces elapsed time when provider capacity permits; serial dispatch prevents overload without changing the semantic experiment. |

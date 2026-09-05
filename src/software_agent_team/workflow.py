@@ -1093,6 +1093,7 @@ class WorkflowCoordinator:
                 if result.status in {
                     AgentExecutionStatus.PROVIDER_FAILED,
                     AgentExecutionStatus.PROVIDER_STALLED,
+                    AgentExecutionStatus.RESPONSE_FINALIZATION_STALLED,
                 }:
                     failure_reason = TerminationReason.DEPENDENCY_UNAVAILABLE
 
@@ -1519,6 +1520,7 @@ class WorkflowCoordinator:
         if result.status in {
             AgentExecutionStatus.PROVIDER_FAILED,
             AgentExecutionStatus.PROVIDER_STALLED,
+            AgentExecutionStatus.RESPONSE_FINALIZATION_STALLED,
         }:
             return TerminationReason.DEPENDENCY_UNAVAILABLE
         return TerminationReason.EXECUTION_FAILED

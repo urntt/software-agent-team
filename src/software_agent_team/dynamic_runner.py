@@ -939,6 +939,9 @@ class DynamicAgentRunner:
             AgentExecutionActivityKind.INVOCATION_TOOL_ACTIVE: (
                 ProgressEventKind.AGENT_TOOL_ACTIVE
             ),
+            AgentExecutionActivityKind.INVOCATION_FINALIZING_RESPONSE: (
+                ProgressEventKind.AGENT_FINALIZING_RESPONSE
+            ),
             AgentExecutionActivityKind.INVOCATION_STOPPING: (
                 ProgressEventKind.AGENT_STOPPING
             ),
@@ -968,6 +971,18 @@ class DynamicAgentRunner:
             ),
             AgentExecutionActivityKind.PROVIDER_STALLED: (
                 ProgressEventKind.AGENT_PROVIDER_STALLED
+            ),
+            AgentExecutionActivityKind.FINALIZATION_PROGRESS: (
+                ProgressEventKind.AGENT_FINALIZATION_PROGRESS
+            ),
+            AgentExecutionActivityKind.FINALIZATION_STALL_SUSPECTED: (
+                ProgressEventKind.AGENT_FINALIZATION_STALL_SUSPECTED
+            ),
+            AgentExecutionActivityKind.FINALIZATION_STALL_RECOVERED: (
+                ProgressEventKind.AGENT_FINALIZATION_STALL_RECOVERED
+            ),
+            AgentExecutionActivityKind.RESPONSE_FINALIZATION_STALLED: (
+                ProgressEventKind.AGENT_RESPONSE_FINALIZATION_STALLED
             ),
         }[activity.kind]
         initialization_checkpoint = (
@@ -1018,6 +1033,10 @@ class DynamicAgentRunner:
                 f"{agent.label} has {activity.active_tool_count} attributable "
                 "tool operation(s) active"
             ),
+            AgentExecutionActivityKind.INVOCATION_FINALIZING_RESPONSE: (
+                f"{agent.label} received a terminal model response and OpenClaw "
+                "is finalizing the result"
+            ),
             AgentExecutionActivityKind.INVOCATION_STOPPING: (
                 f"{agent.label} is stopping ({stop_reason}); "
                 f"{activity.action}; shutdown ceiling "
@@ -1061,6 +1080,24 @@ class DynamicAgentRunner:
                 f"{silence_seconds:g}s; stall is confirmed and the "
                 "separate stopping transition follows"
             ),
+            AgentExecutionActivityKind.FINALIZATION_PROGRESS: (
+                f"{agent.label} OpenClaw result finalization made observable progress"
+            ),
+            AgentExecutionActivityKind.FINALIZATION_STALL_SUSPECTED: (
+                f"{agent.label} OpenClaw result finalization made no observable "
+                f"progress for {inactivity_seconds:.1f}s; waiting the final "
+                f"{stall_grace_seconds:g}s diagnostic window "
+                f"({activity.policy_source})"
+            ),
+            AgentExecutionActivityKind.FINALIZATION_STALL_RECOVERED: (
+                f"{agent.label} OpenClaw result finalization resumed during the "
+                f"{stall_grace_seconds:g}s grace period"
+            ),
+            AgentExecutionActivityKind.RESPONSE_FINALIZATION_STALLED: (
+                f"{agent.label} OpenClaw received the terminal model response but "
+                f"result finalization made no progress for {silence_seconds:g}s; "
+                "the exact invocation will be stopped"
+            ),
         }[activity.kind]
         phase = (
             activity.invocation_phase
@@ -1101,6 +1138,18 @@ class DynamicAgentRunner:
                 AgentExecutionActivityKind.PROVIDER_STALLED: (
                     InvocationPhase.PROVIDER_WAIT
                 ),
+                AgentExecutionActivityKind.FINALIZATION_PROGRESS: (
+                    InvocationPhase.FINALIZING_RESPONSE
+                ),
+                AgentExecutionActivityKind.FINALIZATION_STALL_SUSPECTED: (
+                    InvocationPhase.FINALIZING_RESPONSE
+                ),
+                AgentExecutionActivityKind.FINALIZATION_STALL_RECOVERED: (
+                    InvocationPhase.FINALIZING_RESPONSE
+                ),
+                AgentExecutionActivityKind.RESPONSE_FINALIZATION_STALLED: (
+                    InvocationPhase.FINALIZING_RESPONSE
+                ),
             }[activity.kind]
         )
         last_checkpoint: str | None = None
@@ -1116,6 +1165,12 @@ class DynamicAgentRunner:
                 f"Completed {activity.completed_tool_count} attributable tool "
                 "operation(s)"
             )
+        elif activity.kind in {
+            AgentExecutionActivityKind.INVOCATION_FINALIZING_RESPONSE,
+            AgentExecutionActivityKind.FINALIZATION_PROGRESS,
+            AgentExecutionActivityKind.FINALIZATION_STALL_RECOVERED,
+        }:
+            last_checkpoint = "Observed the terminal provider response"
         elif phase is InvocationPhase.STOPPING:
             last_checkpoint = f"Accepted typed stop reason {stop_reason}"
         elif phase is InvocationPhase.COLLECTING_EVIDENCE:
@@ -1134,6 +1189,10 @@ class DynamicAgentRunner:
             ),
             InvocationPhase.TOOL_ACTIVE: (
                 "Observe completion of the active attributable tool operation"
+            ),
+            InvocationPhase.FINALIZING_RESPONSE: (
+                "Observe OpenClaw result finalization or stop a confirmed no-progress "
+                "stall"
             ),
             InvocationPhase.STOPPING: (
                 "Confirm process exit or escalate at the shutdown ceiling"
@@ -1744,6 +1803,7 @@ class DynamicAgentRunner:
         if status in {
             AgentExecutionStatus.LAUNCH_FAILED,
             AgentExecutionStatus.INITIALIZATION_STALLED,
+            AgentExecutionStatus.RESPONSE_FINALIZATION_STALLED,
             AgentExecutionStatus.PROVIDER_FAILED,
             AgentExecutionStatus.PROVIDER_STALLED,
         }:

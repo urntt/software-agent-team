@@ -25,7 +25,7 @@ from software_agent_team.integrity import canonical_model_sha256
 from software_agent_team.invocation_lifecycle import InvocationPhase
 from software_agent_team.run_control import RunPhase
 
-RUN_EVENT_SCHEMA_VERSION = 3
+RUN_EVENT_SCHEMA_VERSION = 4
 MINIMUM_READABLE_RUN_EVENT_SCHEMA_VERSION = 2
 EVENTS_DIRECTORY = "events"
 EVENT_FILENAME_PATTERN = re.compile(r"^(?P<sequence>[0-9]{6})\.json$")
@@ -53,6 +53,11 @@ class ProgressEventKind(StrEnum):
     AGENT_TOOL_ACTIVE = "agent_tool_active"
     AGENT_TOOL_STARTED = "agent_tool_started"
     AGENT_TOOL_COMPLETED = "agent_tool_completed"
+    AGENT_FINALIZING_RESPONSE = "agent_finalizing_response"
+    AGENT_FINALIZATION_PROGRESS = "agent_finalization_progress"
+    AGENT_FINALIZATION_STALL_SUSPECTED = "agent_finalization_stall_suspected"
+    AGENT_FINALIZATION_STALL_RECOVERED = "agent_finalization_stall_recovered"
+    AGENT_RESPONSE_FINALIZATION_STALLED = "agent_response_finalization_stalled"
     AGENT_LIVENESS_DEGRADED = "agent_liveness_degraded"
     AGENT_STALL_SUSPECTED = "agent_stall_suspected"
     AGENT_STALL_RECOVERED = "agent_stall_recovered"
@@ -112,6 +117,7 @@ class AgentRunState(StrEnum):
     INITIALIZING = "initializing"
     WAITING_PROVIDER = "waiting_provider"
     TOOL_ACTIVE = "tool_active"
+    FINALIZING_RESPONSE = "finalizing_response"
     STOPPING = "stopping"
     COLLECTING_EVIDENCE = "collecting_evidence"
     STOPPED = "stopped"
@@ -232,6 +238,31 @@ _EVENT_METADATA: dict[
         RunEventCategory.AGENT,
         RunEventVisibility.STANDARD,
         AgentRunState.RUNNING,
+    ),
+    ProgressEventKind.AGENT_FINALIZING_RESPONSE: (
+        RunEventCategory.AGENT,
+        RunEventVisibility.STANDARD,
+        AgentRunState.FINALIZING_RESPONSE,
+    ),
+    ProgressEventKind.AGENT_FINALIZATION_PROGRESS: (
+        RunEventCategory.AGENT,
+        RunEventVisibility.DETAILED,
+        AgentRunState.FINALIZING_RESPONSE,
+    ),
+    ProgressEventKind.AGENT_FINALIZATION_STALL_SUSPECTED: (
+        RunEventCategory.AGENT,
+        RunEventVisibility.COMPACT,
+        AgentRunState.FINALIZING_RESPONSE,
+    ),
+    ProgressEventKind.AGENT_FINALIZATION_STALL_RECOVERED: (
+        RunEventCategory.AGENT,
+        RunEventVisibility.STANDARD,
+        AgentRunState.FINALIZING_RESPONSE,
+    ),
+    ProgressEventKind.AGENT_RESPONSE_FINALIZATION_STALLED: (
+        RunEventCategory.AGENT,
+        RunEventVisibility.COMPACT,
+        AgentRunState.FINALIZING_RESPONSE,
     ),
     ProgressEventKind.AGENT_LIVENESS_DEGRADED: (
         RunEventCategory.AGENT,
@@ -394,6 +425,11 @@ _ATTEMPT_EVENT_KINDS = {
     ProgressEventKind.AGENT_TOOL_ACTIVE,
     ProgressEventKind.AGENT_TOOL_STARTED,
     ProgressEventKind.AGENT_TOOL_COMPLETED,
+    ProgressEventKind.AGENT_FINALIZING_RESPONSE,
+    ProgressEventKind.AGENT_FINALIZATION_PROGRESS,
+    ProgressEventKind.AGENT_FINALIZATION_STALL_SUSPECTED,
+    ProgressEventKind.AGENT_FINALIZATION_STALL_RECOVERED,
+    ProgressEventKind.AGENT_RESPONSE_FINALIZATION_STALLED,
     ProgressEventKind.AGENT_LIVENESS_DEGRADED,
     ProgressEventKind.AGENT_STALL_SUSPECTED,
     ProgressEventKind.AGENT_STALL_RECOVERED,
@@ -407,6 +443,14 @@ _ATTEMPT_EVENT_KINDS = {
     ProgressEventKind.AGENT_RETRY,
     ProgressEventKind.AGENT_FAILED,
     ProgressEventKind.AGENT_INTERRUPTED,
+}
+
+_RUN_EVENT_SCHEMA_FOUR_KINDS = {
+    ProgressEventKind.AGENT_FINALIZING_RESPONSE,
+    ProgressEventKind.AGENT_FINALIZATION_PROGRESS,
+    ProgressEventKind.AGENT_FINALIZATION_STALL_SUSPECTED,
+    ProgressEventKind.AGENT_FINALIZATION_STALL_RECOVERED,
+    ProgressEventKind.AGENT_RESPONSE_FINALIZATION_STALLED,
 }
 
 
@@ -516,7 +560,7 @@ class RunEvent(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, RUN_EVENT_SCHEMA_VERSION] = RUN_EVENT_SCHEMA_VERSION
+    schema_version: Literal[2, 3, RUN_EVENT_SCHEMA_VERSION] = RUN_EVENT_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     sequence: int = Field(ge=1)
     occurred_at: datetime
@@ -618,6 +662,10 @@ class RunEvent(BaseModel):
 
     @model_validator(mode="after")
     def validate_event(self) -> Self:
+        if self.schema_version < 4 and self.kind in _RUN_EVENT_SCHEMA_FOUR_KINDS:
+            raise ValueError(
+                "legacy RunEvents cannot contain response-finalization state"
+            )
         category, visibility, agent_state = _EVENT_METADATA[self.kind]
         if self.category is not category:
             raise ValueError("RunEvent category does not match its kind")
@@ -652,7 +700,7 @@ class RunEvent(BaseModel):
         if self.checkpoint is not None:
             if self.agent_id is None:
                 raise ValueError("checkpoint snapshots require an Agent event")
-            if self.schema_version < RUN_EVENT_SCHEMA_VERSION:
+            if self.schema_version < 3:
                 raise ValueError("legacy RunEvents cannot contain checkpoint snapshots")
         control_kinds = {
             ProgressEventKind.CONTROL_RECEIVED,
@@ -983,6 +1031,7 @@ class TerminalProgressRenderer:
             ProgressEventKind.AGENT_WAITING_PROVIDER,
             ProgressEventKind.AGENT_TOOL_ACTIVE,
             ProgressEventKind.AGENT_TOOL_STARTED,
+            ProgressEventKind.AGENT_FINALIZING_RESPONSE,
         }:
             self._start_waiting(event)
             self._print_details(event)
@@ -1004,6 +1053,11 @@ class TerminalProgressRenderer:
             ProgressEventKind.AGENT_TOOL_ACTIVE: "⚙",
             ProgressEventKind.AGENT_TOOL_STARTED: "⚙",
             ProgressEventKind.AGENT_TOOL_COMPLETED: "✓",
+            ProgressEventKind.AGENT_FINALIZING_RESPONSE: "…",
+            ProgressEventKind.AGENT_FINALIZATION_PROGRESS: "·",
+            ProgressEventKind.AGENT_FINALIZATION_STALL_SUSPECTED: "?",
+            ProgressEventKind.AGENT_FINALIZATION_STALL_RECOVERED: "↻",
+            ProgressEventKind.AGENT_RESPONSE_FINALIZATION_STALLED: "!",
             ProgressEventKind.AGENT_LIVENESS_DEGRADED: "!",
             ProgressEventKind.AGENT_STALL_SUSPECTED: "?",
             ProgressEventKind.AGENT_STALL_RECOVERED: "↻",
@@ -1127,6 +1181,8 @@ class TerminalProgressRenderer:
             return f"{event.agent_id} has an attributable tool operation active"
         if event.kind is ProgressEventKind.AGENT_TOOL_ACTIVE:
             return f"{event.agent_id} has attributable tool operations active"
+        if event.kind is ProgressEventKind.AGENT_FINALIZING_RESPONSE:
+            return f"{event.agent_id} is finalizing the OpenClaw result"
         return f"{event.agent_id} is working"
 
     def _heartbeat(

@@ -29,6 +29,7 @@ from software_agent_team.execution import (
     InitializationLivenessPolicy,
     OpenClawSubprocessExecutor,
     ProviderLivenessPolicy,
+    ResponseFinalizationPolicy,
     ScriptedAgentExecutor,
     ScriptedResponseExhaustedError,
     resolve_provider_liveness_policy,
@@ -117,6 +118,7 @@ def live_liveness_executor(
     initialization_policy: InitializationLivenessPolicy | None = None,
     process_grace_seconds: float = 1,
     run_deadline_at: datetime | None = None,
+    response_finalization_policy: ResponseFinalizationPolicy | None = None,
 ) -> OpenClawSubprocessExecutor:
     binary = tmp_path / "fake-openclaw"
     binary.write_text(
@@ -140,6 +142,7 @@ def live_liveness_executor(
         liveness_poll_seconds=0.02,
         liveness_policies={policy.model: policy},
         initialization_policy=initialization_policy,
+        response_finalization_policy=response_finalization_policy,
     )
 
 
@@ -1157,6 +1160,202 @@ print(json.dumps({
     assert phases.count(InvocationPhase.PROVIDER_WAIT) == 1
     assert result.telemetry.provider_liveness is not None
     assert result.telemetry.provider_liveness.lease_start_source == "provider_stream"
+
+
+def test_private_stream_without_session_remains_enforced_and_stalls(
+    tmp_path: Path,
+) -> None:
+    executor = live_liveness_executor(
+        tmp_path,
+        r"""
+import json
+import os
+import time
+from pathlib import Path
+
+raw_path = Path(os.environ["OPENCLAW_RAW_STREAM_PATH"])
+raw_path.write_text(
+    json.dumps({"event": "assistant_text_stream", "content": "private"}) + "\n",
+    encoding="utf-8",
+)
+time.sleep(30)
+""",
+        process_grace_seconds=0.10,
+    )
+
+    result = executor.execute(request(timeout_seconds=0, model="provider/model"))
+
+    assert result.status is AgentExecutionStatus.PROVIDER_STALLED
+    liveness = result.telemetry.provider_liveness
+    assert liveness is not None
+    assert liveness.mode == "enforced"
+    assert liveness.lease_start_source == "provider_stream"
+    assert not liveness.session_observed
+    assert liveness.stalled
+
+
+def test_terminal_response_transfers_from_provider_to_finalization_guard(
+    tmp_path: Path,
+) -> None:
+    executor = live_liveness_executor(
+        tmp_path,
+        FAKE_OPENCLAW_SETUP + "\nfinish()\ntime.sleep(0.42)\n",
+        response_finalization_policy=ResponseFinalizationPolicy(
+            no_progress_seconds=0.70,
+            stall_grace_seconds=0.20,
+            source="test response-finalization contract",
+        ),
+    )
+    activities = []
+
+    result = executor.execute(
+        request(timeout_seconds=0, model="provider/model"),
+        activity_handler=activities.append,
+    )
+
+    assert result.status is AgentExecutionStatus.COMPLETED
+    assert result.telemetry.duration_ms >= 350
+    liveness = result.telemetry.provider_liveness
+    assert liveness is not None
+    assert liveness.terminal_response_observed
+    assert not liveness.stalled
+    lifecycle = result.telemetry.invocation_lifecycle
+    assert lifecycle is not None
+    finalization = lifecycle.response_finalization
+    assert finalization is not None
+    assert finalization.mode == "enforced"
+    assert finalization.terminal_response_observed
+    assert not finalization.stalled
+    assert liveness.maximum_inactivity_ms < finalization.maximum_no_progress_ms
+    phases = [transition.phase for transition in lifecycle.transitions]
+    assert phases.index(InvocationPhase.PROVIDER_WAIT) < phases.index(
+        InvocationPhase.FINALIZING_RESPONSE
+    )
+    assert phases.index(InvocationPhase.FINALIZING_RESPONSE) < phases.index(
+        InvocationPhase.STOPPING
+    )
+    assert AgentExecutionActivityKind.INVOCATION_FINALIZING_RESPONSE in {
+        activity.kind for activity in activities
+    }
+    assert AgentExecutionActivityKind.PROVIDER_STALLED not in {
+        activity.kind for activity in activities
+    }
+
+
+def test_response_finalization_progress_renews_guard_beyond_total_wall_clock(
+    tmp_path: Path,
+) -> None:
+    program = (
+        FAKE_OPENCLAW_SETUP
+        + r"""
+records.append({
+    "type": "message",
+    "message": {
+        "role": "assistant",
+        "content": [{"type": "text", "text": "done"}],
+    },
+})
+write_records()
+for index in range(3):
+    time.sleep(0.16)
+    print(f"finalization checkpoint {index}", file=sys.stderr, flush=True)
+print(json.dumps({
+    "payloads": [{"text": "{\"kind\":\"implementation_plan\"}"}],
+    "meta": {"agentMeta": {
+        "sessionId": session_id,
+        "provider": "provider",
+        "model": "model",
+        "usage": {"input": 1, "output": 1},
+    }},
+}))
+"""
+    )
+    executor = live_liveness_executor(
+        tmp_path,
+        program,
+        response_finalization_policy=ResponseFinalizationPolicy(
+            no_progress_seconds=0.22,
+            stall_grace_seconds=0.10,
+            source="test response-finalization contract",
+        ),
+    )
+    activities = []
+
+    result = executor.execute(
+        request(timeout_seconds=0, model="provider/model"),
+        activity_handler=activities.append,
+    )
+
+    assert result.status is AgentExecutionStatus.COMPLETED
+    assert result.telemetry.duration_ms >= 400
+    lifecycle = result.telemetry.invocation_lifecycle
+    assert lifecycle is not None
+    finalization = lifecycle.response_finalization
+    assert finalization is not None
+    assert finalization.output_progress_observations >= 2
+    assert finalization.stall_suspected_count >= 1
+    assert finalization.stall_recovered_count == finalization.stall_suspected_count
+    assert not finalization.stalled
+    kinds = [activity.kind for activity in activities]
+    assert AgentExecutionActivityKind.FINALIZATION_PROGRESS in kinds
+    assert AgentExecutionActivityKind.FINALIZATION_STALL_RECOVERED in kinds
+
+
+def test_response_finalization_hang_has_distinct_typed_stop_and_cleanup(
+    tmp_path: Path,
+) -> None:
+    executor = live_liveness_executor(
+        tmp_path,
+        FAKE_OPENCLAW_SETUP + "\nfinish()\ntime.sleep(30)\n",
+        process_grace_seconds=0.10,
+        response_finalization_policy=ResponseFinalizationPolicy(
+            no_progress_seconds=0.24,
+            stall_grace_seconds=0.08,
+            source="test response-finalization contract",
+        ),
+    )
+    activities = []
+
+    result = executor.execute(
+        request(timeout_seconds=0, model="provider/model"),
+        activity_handler=activities.append,
+    )
+
+    assert result.status is AgentExecutionStatus.RESPONSE_FINALIZATION_STALLED
+    liveness = result.telemetry.provider_liveness
+    assert liveness is not None
+    assert liveness.terminal_response_observed
+    assert not liveness.stalled
+    lifecycle = result.telemetry.invocation_lifecycle
+    assert lifecycle is not None
+    assert lifecycle.shutdown.reason is (
+        InvocationStopReason.RESPONSE_FINALIZATION_STALL
+    )
+    assert lifecycle.shutdown.cleanup_completed
+    finalization = lifecycle.response_finalization
+    assert finalization is not None
+    assert finalization.stalled
+    relevant = [
+        activity.kind
+        for activity in activities
+        if activity.kind
+        in {
+            AgentExecutionActivityKind.INVOCATION_FINALIZING_RESPONSE,
+            AgentExecutionActivityKind.FINALIZATION_STALL_SUSPECTED,
+            AgentExecutionActivityKind.RESPONSE_FINALIZATION_STALLED,
+            AgentExecutionActivityKind.INVOCATION_STOPPING,
+            AgentExecutionActivityKind.INVOCATION_COLLECTING_EVIDENCE,
+            AgentExecutionActivityKind.INVOCATION_STOPPED,
+        }
+    ]
+    assert relevant == [
+        AgentExecutionActivityKind.INVOCATION_FINALIZING_RESPONSE,
+        AgentExecutionActivityKind.FINALIZATION_STALL_SUSPECTED,
+        AgentExecutionActivityKind.RESPONSE_FINALIZATION_STALLED,
+        AgentExecutionActivityKind.INVOCATION_STOPPING,
+        AgentExecutionActivityKind.INVOCATION_COLLECTING_EVIDENCE,
+        AgentExecutionActivityKind.INVOCATION_STOPPED,
+    ]
 
 
 def test_missing_attributable_session_degrades_instead_of_guessing_stall(

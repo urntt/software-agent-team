@@ -9,15 +9,18 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
 from software_agent_team.budgets import AgentBudgetUsage
 from software_agent_team.integrity import canonical_model_sha256
 from software_agent_team.invocation_lifecycle import InvocationPhase
 from software_agent_team.progress import (
+    AgentRunState,
     ProgressCheckpointSnapshot,
     ProgressEvent,
     ProgressEventKind,
     RunEvent,
+    RunEventCategory,
     RunEventJournal,
     RunEventVisibility,
     TerminalProgressRenderer,
@@ -496,6 +499,64 @@ def test_schema_two_run_event_round_trips_without_new_checkpoint_bytes(
     assert restored.schema_version == 2
     assert restored.checkpoint is None
     assert restored.model_dump(mode="json") == payload
+
+
+def test_schema_three_checkpoint_event_remains_canonical() -> None:
+    event = RunEvent(
+        schema_version=3,
+        run_id="run-1",
+        sequence=1,
+        occurred_at=datetime(2026, 9, 5, tzinfo=UTC),
+        lifecycle_revision=3,
+        kind=ProgressEventKind.AGENT_TOOL_ACTIVE,
+        category=RunEventCategory.AGENT,
+        minimum_visibility=RunEventVisibility.STANDARD,
+        summary="Builder has one attributable tool active",
+        phase=RunPhase.IMPLEMENTING,
+        agent_id="builder",
+        agent_state=AgentRunState.TOOL_ACTIVE,
+        iteration=1,
+        attempt=1,
+        checkpoint=ProgressCheckpointSnapshot(
+            approved_task_ids=("TASK_BUILD",),
+            invocation_phase=InvocationPhase.TOOL_ACTIVE,
+            last_verified_checkpoint="Tool started",
+            next_controller_checkpoint="Observe tool completion",
+            completed_tool_operations=0,
+            git_state="working",
+            gate_state="not_started",
+            review_state="not_applicable",
+            known_estimated_cost_usd="0",
+            authorized_cost_usd="1",
+            remaining_estimated_cost_usd="1",
+        ),
+    )
+    payload = event.model_dump(mode="json")
+
+    restored = RunEvent.model_validate(payload)
+
+    assert restored.schema_version == 3
+    assert restored.model_dump(mode="json") == payload
+
+
+def test_legacy_run_event_rejects_response_finalization_state() -> None:
+    with pytest.raises(ValidationError, match="legacy RunEvents"):
+        RunEvent(
+            schema_version=3,
+            run_id="run-1",
+            sequence=1,
+            occurred_at=datetime(2026, 9, 5, tzinfo=UTC),
+            lifecycle_revision=3,
+            kind=ProgressEventKind.AGENT_FINALIZING_RESPONSE,
+            category=RunEventCategory.AGENT,
+            minimum_visibility=RunEventVisibility.STANDARD,
+            summary="Builder is finalizing the OpenClaw result",
+            phase=RunPhase.IMPLEMENTING,
+            agent_id="builder",
+            agent_state=AgentRunState.FINALIZING_RESPONSE,
+            iteration=1,
+            attempt=1,
+        )
 
 
 def test_journal_persists_a_contiguous_hash_chain(tmp_path: Path) -> None:

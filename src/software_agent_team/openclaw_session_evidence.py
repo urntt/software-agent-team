@@ -50,6 +50,7 @@ class OpenClawSessionActivity:
     tool_started_count: int
     tool_completed_count: int
     active_tool_count: int
+    terminal_response_observed: bool
 
 
 @dataclass(frozen=True)
@@ -397,6 +398,8 @@ def inspect_openclaw_session_activity(
     started: set[str] = set()
     completed: set[str] = set()
     trusted_records = 0
+    last_message_role: object = "user"
+    last_assistant_has_tool_call = False
     for record in invocation[1:]:
         if record.get("type") != "message":
             continue
@@ -404,14 +407,21 @@ def inspect_openclaw_session_activity(
         if not isinstance(message, dict):
             raise OpenClawSessionEvidenceError("OpenClaw message record is invalid")
         role = message.get("role")
+        last_message_role = role
         if role == "assistant":
             trusted_records += 1
             content = message.get("content")
-            if not isinstance(content, list):
+            last_assistant_has_tool_call = False
+            if isinstance(content, str):
                 continue
+            if not isinstance(content, list):
+                raise OpenClawSessionEvidenceError(
+                    "OpenClaw assistant content is invalid"
+                )
             for item in content:
                 if not isinstance(item, dict) or item.get("type") != "toolCall":
                     continue
+                last_assistant_has_tool_call = True
                 external_id = item.get("id")
                 if not isinstance(external_id, str) or not external_id:
                     raise OpenClawSessionEvidenceError(
@@ -440,6 +450,11 @@ def inspect_openclaw_session_activity(
         tool_started_count=len(started),
         tool_completed_count=len(completed),
         active_tool_count=len(started - completed),
+        terminal_response_observed=(
+            last_message_role == "assistant"
+            and not last_assistant_has_tool_call
+            and not (started - completed)
+        ),
     )
 
 

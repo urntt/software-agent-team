@@ -412,14 +412,18 @@ workspaces/<run_id>/
 └── detached self-contained Git clone and generated result
 ```
 
-Artifact schema v5 adds a versioned, content-free invocation lifecycle to
-execution telemetry. It records phase transitions, initialization liveness, the
-typed stop authority, signal or exit outcome, evidence collection, process-lease
-release, and cleanup completion. Schema v4 added the independent
+Artifact schema v6 adds terminal-response/finalization status and lifecycle-v2
+evidence while retaining schema-v2 through schema-v5 reads. Artifact schema v5
+added the versioned, content-free invocation lifecycle to execution telemetry.
+Lifecycle schema v2 adds terminal-response handoff and renewable
+response-finalization evidence while retaining schema-v1 reads. It
+records phase transitions, initialization liveness, provider terminal state,
+finalization progress or stall, the typed stop authority, signal or exit outcome,
+evidence collection, process-lease release, and cleanup completion. Schema v4 added the independent
 response-transport identity and bound submission evidence; schema v3 introduced
 typed response diagnostics, deterministic normalization, targeted-correction
 requests, and correction outcomes. SAT retains read support for schema v2
-through v4. Optional compatibility fields omit themselves when absent, so
+through v5. Optional compatibility fields omit themselves when absent, so
 loading and serializing historical evidence preserves its canonical bytes. All
 readable versions
 attribute handoffs, execution telemetry, and Agent-owned artifacts to run-scoped Agent IDs. The Agent namespace prevents two Agents with
@@ -456,12 +460,13 @@ seconds. Approval revalidates that authority against the TeamPlan at the
 execution boundary.
 The bootstrap Planner cannot create Agents or change lifecycle state.
 
-Planning schema v5 adds an attributable ProductDefinition to current proposals,
+Planning schema v6 adds response-finalization outcomes to current execution
+evidence. Schema v5 added an attributable ProductDefinition to proposals,
 adaptive implementation plans, and confirmed TaskBriefs, plus the exact
-product-definition dimensions resolved by each question. Schema v2 through v4
+product-definition dimensions resolved by each question. Schema v2 through v5
 remain readable. Compatibility fields omit themselves when absent so loading
 historical evidence does not change its canonical bytes or digest. Schema v4
-introduced the typed normalization and correction evidence retained by v5. A
+introduced the typed normalization and correction evidence retained by later versions. A
 structured edit of historical evidence preserves its schema identity; a new
 model-authored replacement uses the current schema.
 The live response schema, unlike the backward-readable persistence models,
@@ -597,8 +602,9 @@ reports without software identity remain readable and keep their original
 canonical serialization.
 
 Every compatibility-workflow status update is first enriched into a versioned
-`RunEvent`. Schema v3 adds an optional Controller-owned checkpoint snapshot and
-retains canonical read support for schema v2 events. It stores its run ID,
+`RunEvent`. Schema v4 adds response-finalization states and retains canonical
+read support for schema-v2 and schema-v3 events. Schema v3 added an optional
+Controller-owned checkpoint snapshot. It stores its run ID,
 contiguous sequence, UTC timestamp, lifecycle revision, category, minimum
 visibility, phase, and attributable Agent attempt when applicable. Dynamic
 events additionally record queue/readiness/initialization/provider/tool/stop/
@@ -890,7 +896,8 @@ when investigating it rather than editing artifacts in place.
   and counts only attributable current-turn assistant and tool lifecycle records.
 - Before that provider lease can exist, the same execution adapter owns a finite
   invocation lifecycle: `launched → initializing → provider_wait ↔ tool_active →
-  stopping → collecting_evidence → stopped`. The initialization observer accepts
+  finalizing_response → stopping → collecting_evidence → stopped`. The
+  initialization observer accepts
   only monotonic, attributable checkpoints: process launch, session directory,
   session index, session binding, transcript header, and exact current-turn
   prompt digest; the private provider stream is an equivalent ready boundary.
@@ -922,6 +929,17 @@ when investigating it rather than editing artifacts in place.
   turn or `AgentExecutionRecord`. If attribution or the private observer is
   unavailable, SAT records degraded liveness and does not guess that silence is
   a stall.
+- A complete final assistant record with no active tool calls is the attributable
+  provider-terminal boundary. It ends provider-stall enforcement and enters
+  `finalizing_response`; a tool-call assistant record or its tool result cannot
+  trigger this transition. OpenClaw may then serialize its result envelope and
+  tear down runtime resources without being charged against provider silence.
+  Process stdout or stderr growth renews a separate 60-second finalization
+  no-progress guard. The final 10 seconds are a visible diagnostic window;
+  recovery continues the same invocation, while continued inactivity becomes
+  typed `response_finalization_stall` and enters exact-process cleanup. A private
+  stream that arrives before the session observer remains sufficient to enforce
+  provider liveness; temporary observer ordering no longer disables the guard.
 - Before the first model call, SAT asks whether the user has a real whole-run
   deadline and recommends no deadline by default. When authorized, the exact
   deadline starts at resource authorization, covers Planning and execution, and
@@ -940,7 +958,8 @@ when investigating it rather than editing artifacts in place.
   OpenClaw; controlled evaluations pass their frozen timeout. The outer
   subprocess boundary applies a 35-second process-shutdown grace after a
   deadline, evaluation timeout, user interrupt, user cancel, initialization
-  stall, confirmed provider stall, or process failure; that cleanup guard is not
+  stall, confirmed provider stall, confirmed response-finalization stall, or
+  process failure; that cleanup guard is not
   productive work time. Every path first enters `stopping`, synchronously sends
   SIGTERM to the exact process group, escalates to SIGKILL only after the grace,
   reaps the process, collects stdout/stderr and typed session/submission evidence,

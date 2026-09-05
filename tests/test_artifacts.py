@@ -17,6 +17,7 @@ from software_agent_team.artifacts import (
     TaskBrief,
     review_boundary_definition_map,
 )
+from software_agent_team.invocation_lifecycle import InvocationLifecycleEvidence
 
 
 def valid_handoff_payload() -> dict[str, object]:
@@ -213,11 +214,12 @@ def lifecycle_payload(
     *,
     exit_code: int | None = 0,
     signal: int | None = None,
+    schema_version: int = 2,
 ) -> dict[str, object]:
     """Return minimal coherent lifecycle evidence for record binding tests."""
 
-    return {
-        "schema_version": 1,
+    payload: dict[str, object] = {
+        "schema_version": schema_version,
         "transitions": [
             {"sequence": 1, "phase": "launched", "elapsed_ms": 0},
             {
@@ -263,6 +265,14 @@ def lifecycle_payload(
             "cleanup_completed": True,
         },
     }
+    if schema_version == 2:
+        payload["response_finalization"] = {
+            "mode": "not_observed",
+            "policy_source": "test response-finalization policy",
+            "no_progress_seconds": 60,
+            "stall_grace_seconds": 10,
+        }
+    return payload
 
 
 def test_valid_agent_execution_record_is_accepted() -> None:
@@ -330,6 +340,41 @@ def test_current_execution_record_binds_lifecycle_reason_to_typed_status() -> No
     mismatched["invocation_lifecycle"] = lifecycle_payload("provider_failure")
     with pytest.raises(ValidationError, match="does not match execution status"):
         AgentExecutionRecord.model_validate(mismatched)
+
+
+def test_schema_five_execution_record_keeps_lifecycle_v1_canonical() -> None:
+    payload = AgentExecutionRecord.model_validate(valid_execution_payload()).model_dump(
+        mode="json"
+    )
+    payload["schema_version"] = 5
+    payload["execution_status"] = "completed"
+    payload["invocation_lifecycle"] = InvocationLifecycleEvidence.model_validate(
+        lifecycle_payload(schema_version=1)
+    ).model_dump(mode="json")
+
+    restored = AgentExecutionRecord.model_validate(payload)
+
+    assert restored.schema_version == 5
+    assert restored.invocation_lifecycle is not None
+    assert restored.invocation_lifecycle.schema_version == 1
+    assert restored.model_dump(mode="json") == payload
+
+
+def test_schema_versions_reject_mismatched_finalization_state() -> None:
+    legacy = valid_execution_payload()
+    legacy["schema_version"] = 5
+    legacy["execution_status"] = "completed"
+    legacy["invocation_lifecycle"] = lifecycle_payload(schema_version=2)
+
+    with pytest.raises(ValidationError, match="does not match"):
+        AgentExecutionRecord.model_validate(legacy)
+
+    current = valid_execution_payload()
+    current["execution_status"] = "completed"
+    current["invocation_lifecycle"] = lifecycle_payload(schema_version=1)
+
+    with pytest.raises(ValidationError, match="does not match"):
+        AgentExecutionRecord.model_validate(current)
 
 
 def test_timed_out_execution_record_accepts_actual_termination_signal() -> None:

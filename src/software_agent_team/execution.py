@@ -42,6 +42,7 @@ from software_agent_team.invocation_lifecycle import (
     InvocationPhase,
     InvocationShutdownEvidence,
     InvocationStopReason,
+    ResponseFinalizationEvidence,
 )
 from software_agent_team.openclaw_session_evidence import (
     CapturedOpenClawToolEvidence,
@@ -74,6 +75,8 @@ from software_agent_team.teams import (
 DEFAULT_PROCESS_SHUTDOWN_GRACE_SECONDS = 35
 DEFAULT_INITIALIZATION_NO_PROGRESS_SECONDS = 90.0
 DEFAULT_INITIALIZATION_STALL_GRACE_SECONDS = 15.0
+DEFAULT_RESPONSE_FINALIZATION_NO_PROGRESS_SECONDS = 60.0
+DEFAULT_RESPONSE_FINALIZATION_STALL_GRACE_SECONDS = 10.0
 DEFAULT_CLOUD_PROVIDER_SILENCE_SECONDS = 120.0
 DEFAULT_LOCAL_PROVIDER_SILENCE_SECONDS = 300.0
 DEFAULT_PROVIDER_STALL_GRACE_SECONDS = 30.0
@@ -113,6 +116,7 @@ class AgentExecutionActivityKind(StrEnum):
     INITIALIZATION_STALLED = "initialization_stalled"
     INVOCATION_PROVIDER_WAIT = "invocation_provider_wait"
     INVOCATION_TOOL_ACTIVE = "invocation_tool_active"
+    INVOCATION_FINALIZING_RESPONSE = "invocation_finalizing_response"
     INVOCATION_STOPPING = "invocation_stopping"
     INVOCATION_COLLECTING_EVIDENCE = "invocation_collecting_evidence"
     INVOCATION_STOPPED = "invocation_stopped"
@@ -123,6 +127,10 @@ class AgentExecutionActivityKind(StrEnum):
     STALL_SUSPECTED = "stall_suspected"
     STALL_RECOVERED = "stall_recovered"
     PROVIDER_STALLED = "provider_stalled"
+    FINALIZATION_PROGRESS = "finalization_progress"
+    FINALIZATION_STALL_SUSPECTED = "finalization_stall_suspected"
+    FINALIZATION_STALL_RECOVERED = "finalization_stall_recovered"
+    RESPONSE_FINALIZATION_STALLED = "response_finalization_stalled"
 
 
 class ProviderLivenessPolicy(BaseModel):
@@ -166,6 +174,30 @@ class InitializationLivenessPolicy(BaseModel):
     @property
     def suspect_after_seconds(self) -> float:
         """Return when the visible initialization diagnostic starts."""
+
+        return self.no_progress_seconds - self.stall_grace_seconds
+
+
+class ResponseFinalizationPolicy(BaseModel):
+    """Infrastructure guard after a terminal response leaves model generation."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    no_progress_seconds: float = Field(gt=0)
+    stall_grace_seconds: float = Field(gt=0)
+    source: str = Field(min_length=1, max_length=300)
+
+    @model_validator(mode="after")
+    def require_a_warning_window(self) -> Self:
+        if self.stall_grace_seconds >= self.no_progress_seconds:
+            raise ValueError(
+                "response-finalization grace must be shorter than its ceiling"
+            )
+        return self
+
+    @property
+    def suspect_after_seconds(self) -> float:
+        """Return when finalization enters its visible diagnostic window."""
 
         return self.no_progress_seconds - self.stall_grace_seconds
 
@@ -259,6 +291,12 @@ class AgentExecutionActivity(BaseModel):
             AgentExecutionActivityKind.INITIALIZATION_STALL_RECOVERED,
             AgentExecutionActivityKind.INITIALIZATION_STALLED,
         }
+        finalization_kinds = {
+            AgentExecutionActivityKind.FINALIZATION_PROGRESS,
+            AgentExecutionActivityKind.FINALIZATION_STALL_SUSPECTED,
+            AgentExecutionActivityKind.FINALIZATION_STALL_RECOVERED,
+            AgentExecutionActivityKind.RESPONSE_FINALIZATION_STALLED,
+        }
         if self.kind in provider_kinds and any(
             value is None
             for value in (
@@ -277,6 +315,15 @@ class AgentExecutionActivity(BaseModel):
             )
         ):
             raise ValueError("initialization activity requires its guard policy")
+        if self.kind in finalization_kinds and any(
+            value is None
+            for value in (
+                self.silence_seconds,
+                self.stall_grace_seconds,
+                self.policy_source,
+            )
+        ):
+            raise ValueError("response-finalization activity requires its guard policy")
         lifecycle_phases = {
             AgentExecutionActivityKind.INVOCATION_LAUNCHED: InvocationPhase.LAUNCHED,
             AgentExecutionActivityKind.INVOCATION_INITIALIZING: (
@@ -287,6 +334,9 @@ class AgentExecutionActivity(BaseModel):
             ),
             AgentExecutionActivityKind.INVOCATION_TOOL_ACTIVE: (
                 InvocationPhase.TOOL_ACTIVE
+            ),
+            AgentExecutionActivityKind.INVOCATION_FINALIZING_RESPONSE: (
+                InvocationPhase.FINALIZING_RESPONSE
             ),
             AgentExecutionActivityKind.INVOCATION_STOPPING: InvocationPhase.STOPPING,
             AgentExecutionActivityKind.INVOCATION_COLLECTING_EVIDENCE: (
@@ -884,6 +934,9 @@ class _InvocationLifecycleRecorder:
             AgentExecutionActivityKind.INVOCATION_PROVIDER_WAIT
         ),
         InvocationPhase.TOOL_ACTIVE: AgentExecutionActivityKind.INVOCATION_TOOL_ACTIVE,
+        InvocationPhase.FINALIZING_RESPONSE: (
+            AgentExecutionActivityKind.INVOCATION_FINALIZING_RESPONSE
+        ),
         InvocationPhase.STOPPING: AgentExecutionActivityKind.INVOCATION_STOPPING,
         InvocationPhase.COLLECTING_EVIDENCE: (
             AgentExecutionActivityKind.INVOCATION_COLLECTING_EVIDENCE
@@ -898,6 +951,7 @@ class _InvocationLifecycleRecorder:
         started_monotonic: float,
         process_grace_seconds: float,
         initialization_policy: InitializationLivenessPolicy,
+        response_finalization_policy: ResponseFinalizationPolicy,
         activity_handler: AgentExecutionActivityHandler | None,
         monotonic: MonotonicClock,
     ) -> None:
@@ -905,6 +959,7 @@ class _InvocationLifecycleRecorder:
         self.started_monotonic = started_monotonic
         self.process_grace_seconds = process_grace_seconds
         self.initialization_policy = initialization_policy
+        self.response_finalization_policy = response_finalization_policy
         self.activity_handler = activity_handler
         self.monotonic = monotonic
         self._lock = threading.RLock()
@@ -923,6 +978,12 @@ class _InvocationLifecycleRecorder:
             no_progress_seconds=initialization_policy.no_progress_seconds,
             stall_grace_seconds=initialization_policy.stall_grace_seconds,
             degradation_reason="subprocess initialization was not observed",
+        )
+        self.response_finalization_evidence = ResponseFinalizationEvidence(
+            mode="not_observed",
+            policy_source=response_finalization_policy.source,
+            no_progress_seconds=response_finalization_policy.no_progress_seconds,
+            stall_grace_seconds=response_finalization_policy.stall_grace_seconds,
         )
         self.transition(
             InvocationPhase.LAUNCHED,
@@ -1009,6 +1070,7 @@ class _InvocationLifecycleRecorder:
             if self.phase in {
                 InvocationPhase.PROVIDER_WAIT,
                 InvocationPhase.TOOL_ACTIVE,
+                InvocationPhase.FINALIZING_RESPONSE,
                 InvocationPhase.STOPPING,
                 InvocationPhase.COLLECTING_EVIDENCE,
                 InvocationPhase.STOPPED,
@@ -1027,6 +1089,7 @@ class _InvocationLifecycleRecorder:
                 InvocationPhase.STOPPING,
                 InvocationPhase.COLLECTING_EVIDENCE,
                 InvocationPhase.STOPPED,
+                InvocationPhase.FINALIZING_RESPONSE,
             }:
                 return
         if active_tool_count > 0:
@@ -1041,6 +1104,26 @@ class _InvocationLifecycleRecorder:
                 now=now,
                 action="Attributable tools completed; waiting for provider activity",
             )
+
+    def response_finalizing(self, *, now: float) -> None:
+        """Transfer authority away from provider liveness exactly once."""
+
+        with self._lock:
+            if self.phase in {
+                InvocationPhase.FINALIZING_RESPONSE,
+                InvocationPhase.STOPPING,
+                InvocationPhase.COLLECTING_EVIDENCE,
+                InvocationPhase.STOPPED,
+            }:
+                return
+        self.transition(
+            InvocationPhase.FINALIZING_RESPONSE,
+            now=now,
+            action=(
+                "Terminal provider response observed; OpenClaw is finalizing its "
+                "result envelope and process"
+            ),
+        )
 
     def request_stop(
         self,
@@ -1079,6 +1162,12 @@ class _InvocationLifecycleRecorder:
     ) -> None:
         with self._lock:
             self.initialization_evidence = evidence
+
+    def set_response_finalization_evidence(
+        self, evidence: ResponseFinalizationEvidence
+    ) -> None:
+        with self._lock:
+            self.response_finalization_evidence = evidence
 
     def finalize(
         self,
@@ -1140,6 +1229,7 @@ class _InvocationLifecycleRecorder:
         return InvocationLifecycleEvidence(
             transitions=tuple(self.transitions),
             initialization=self.initialization_evidence,
+            response_finalization=self.response_finalization_evidence,
             shutdown=shutdown,
         )
 
@@ -1422,12 +1512,13 @@ class _ProviderLivenessMonitor:
         self.maximum_inactivity_ms = 0
         self.suspected = False
         self.stalled = False
+        self.terminal_response_observed = False
         self.degradation_reason: str | None = None
 
     def poll(self, now: float, *, enforce_stall: bool = True) -> bool:
         """Observe activity and optionally enforce the live silence boundary."""
 
-        if self.last_activity is not None:
+        if self.last_activity is not None and not self.terminal_response_observed:
             inactivity_before_poll = max(0.0, now - self.last_activity)
             self.maximum_inactivity_ms = max(
                 self.maximum_inactivity_ms,
@@ -1484,6 +1575,13 @@ class _ProviderLivenessMonitor:
             self.active_tool_count = session.active_tool_count
             if started_delta > 0 or completed_delta > 0:
                 self.lifecycle.tool_state(self.active_tool_count, now=now)
+            if (
+                session.terminal_response_observed
+                and not self.terminal_response_observed
+            ):
+                self.terminal_response_observed = True
+                trusted_activity = True
+                self.lifecycle.response_finalizing(now=now)
 
         if trusted_activity:
             self.last_activity = now
@@ -1502,18 +1600,13 @@ class _ProviderLivenessMonitor:
             not enforce_stall
             or self.degradation_reason is not None
             or self.active_tool_count > 0
+            or self.terminal_response_observed
         ):
             return False
         if self.last_activity is None:
             return False
         inactive = max(0.0, now - self.last_activity)
         if not self.suspected and inactive >= self.policy.suspect_after_seconds:
-            if not self.session_observed:
-                self._degrade(
-                    "OpenClaw session observer was not ready before the stall probe",
-                    now,
-                )
-                return False
             self.suspected = True
             self.stall_suspected_count += 1
             self._emit(AgentExecutionActivityKind.STALL_SUSPECTED, now)
@@ -1603,7 +1696,164 @@ class _ProviderLivenessMonitor:
             stall_recovered_count=self.stall_recovered_count,
             maximum_inactivity_ms=self.maximum_inactivity_ms,
             stalled=self.stalled,
+            terminal_response_observed=self.terminal_response_observed,
             degradation_reason=self.degradation_reason,
+        )
+
+
+class _ResponseFinalizationMonitor:
+    """Guard OpenClaw result serialization after model generation is complete."""
+
+    def __init__(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        policy: ResponseFinalizationPolicy,
+        started_monotonic: float,
+        activity_handler: AgentExecutionActivityHandler | None,
+    ) -> None:
+        self.request = request
+        self.policy = policy
+        self.started_monotonic = started_monotonic
+        self.activity_handler = activity_handler
+        self.terminal_response_observed = False
+        self.last_progress: float | None = None
+        self.stdout_characters = 0
+        self.stderr_characters = 0
+        self.output_progress_observations = 0
+        self.stall_suspected_count = 0
+        self.stall_recovered_count = 0
+        self.maximum_no_progress_ms = 0
+        self.suspected = False
+        self.stalled = False
+
+    def observe_terminal(
+        self,
+        now: float,
+        *,
+        stdout: str,
+        stderr: str,
+    ) -> None:
+        """Begin finalization only from an attributable final assistant record."""
+
+        if self.terminal_response_observed:
+            return
+        self.terminal_response_observed = True
+        self.last_progress = now
+        self.stdout_characters = len(stdout)
+        self.stderr_characters = len(stderr)
+
+    def poll(
+        self,
+        now: float,
+        *,
+        stdout: str,
+        stderr: str,
+        enforce_stall: bool = True,
+    ) -> bool:
+        """Renew from process output and enforce only post-response no-progress."""
+
+        if not self.terminal_response_observed:
+            return False
+        if self.stalled:
+            return enforce_stall
+        assert self.last_progress is not None
+        output_progress = (
+            len(stdout) > self.stdout_characters or len(stderr) > self.stderr_characters
+        )
+        self.stdout_characters = max(self.stdout_characters, len(stdout))
+        self.stderr_characters = max(self.stderr_characters, len(stderr))
+        if output_progress:
+            self.last_progress = now
+            self.output_progress_observations += 1
+            self._emit(AgentExecutionActivityKind.FINALIZATION_PROGRESS, now)
+            if self.suspected:
+                self.suspected = False
+                self.stall_recovered_count += 1
+                self._emit(
+                    AgentExecutionActivityKind.FINALIZATION_STALL_RECOVERED,
+                    now,
+                )
+        inactive = max(0.0, now - self.last_progress)
+        self.maximum_no_progress_ms = max(
+            self.maximum_no_progress_ms,
+            round(inactive * 1000),
+        )
+        if not enforce_stall:
+            return False
+        if not self.suspected and inactive >= self.policy.suspect_after_seconds:
+            self.suspected = True
+            self.stall_suspected_count += 1
+            self._emit(
+                AgentExecutionActivityKind.FINALIZATION_STALL_SUSPECTED,
+                now,
+            )
+        if self.suspected and inactive >= self.policy.no_progress_seconds:
+            self.stalled = True
+            self._emit(
+                AgentExecutionActivityKind.RESPONSE_FINALIZATION_STALLED,
+                now,
+            )
+            return True
+        return False
+
+    def finalize(
+        self,
+        now: float,
+        *,
+        stdout: str,
+        stderr: str,
+    ) -> ResponseFinalizationEvidence:
+        """Collect terminal finalization counters without changing the outcome."""
+
+        self.poll(
+            now,
+            stdout=stdout,
+            stderr=stderr,
+            enforce_stall=False,
+        )
+        return self.evidence()
+
+    def _emit(self, kind: AgentExecutionActivityKind, now: float) -> None:
+        if self.activity_handler is None:
+            return
+        assert self.last_progress is not None
+        inactivity = max(0.0, now - self.last_progress)
+        try:
+            self.activity_handler(
+                AgentExecutionActivity(
+                    kind=kind,
+                    agent_id=self.request.agent_id,
+                    session_key=self.request.session_key,
+                    model=self.request.model,
+                    elapsed_ms=max(
+                        0,
+                        round((now - self.started_monotonic) * 1000),
+                    ),
+                    trusted_activity_count=self.output_progress_observations,
+                    inactivity_ms=max(0, round(inactivity * 1000)),
+                    silence_seconds=self.policy.no_progress_seconds,
+                    stall_grace_seconds=self.policy.stall_grace_seconds,
+                    policy_source=self.policy.source,
+                )
+            )
+        except Exception:
+            return
+
+    def evidence(self) -> ResponseFinalizationEvidence:
+        """Freeze content-free response-finalization evidence."""
+
+        return ResponseFinalizationEvidence(
+            mode=("enforced" if self.terminal_response_observed else "not_observed"),
+            policy_source=self.policy.source,
+            no_progress_seconds=self.policy.no_progress_seconds,
+            stall_grace_seconds=self.policy.stall_grace_seconds,
+            terminal_response_observed=self.terminal_response_observed,
+            output_progress_observations=self.output_progress_observations,
+            stall_suspected_count=self.stall_suspected_count,
+            stall_recovered_count=self.stall_recovered_count,
+            maximum_no_progress_ms=self.maximum_no_progress_ms,
+            stalled=self.stalled,
         )
 
 
@@ -1631,6 +1881,7 @@ class OpenClawSubprocessExecutor:
         liveness_poll_seconds: float = DEFAULT_LIVENESS_POLL_SECONDS,
         liveness_policies: Mapping[str, ProviderLivenessPolicy] | None = None,
         initialization_policy: InitializationLivenessPolicy | None = None,
+        response_finalization_policy: ResponseFinalizationPolicy | None = None,
         process_lease_store: ProcessLeaseStore | None = None,
     ) -> None:
         if process_grace_seconds <= 0:
@@ -1661,6 +1912,13 @@ class OpenClawSubprocessExecutor:
                 no_progress_seconds=DEFAULT_INITIALIZATION_NO_PROGRESS_SECONDS,
                 stall_grace_seconds=DEFAULT_INITIALIZATION_STALL_GRACE_SECONDS,
                 source="SAT/OpenClaw attributable initialization checkpoints",
+            )
+        )
+        self.response_finalization_policy = response_finalization_policy or (
+            ResponseFinalizationPolicy(
+                no_progress_seconds=(DEFAULT_RESPONSE_FINALIZATION_NO_PROGRESS_SECONDS),
+                stall_grace_seconds=(DEFAULT_RESPONSE_FINALIZATION_STALL_GRACE_SECONDS),
+                source=("SAT/OpenClaw terminal-response result finalization progress"),
             )
         )
         self._liveness_policies = dict(liveness_policies or {})
@@ -1708,6 +1966,7 @@ class OpenClawSubprocessExecutor:
             started_monotonic=started_monotonic,
             process_grace_seconds=self.process_grace_seconds,
             initialization_policy=self.initialization_policy,
+            response_finalization_policy=self.response_finalization_policy,
             activity_handler=activity_handler,
             monotonic=self.monotonic,
         )
@@ -1879,6 +2138,21 @@ class OpenClawSubprocessExecutor:
         if stop_reason is InvocationStopReason.PROVIDER_STALL:
             return self._finalize_lifecycle_result(
                 self._provider_stalled_result(
+                    request=request,
+                    command=command,
+                    started_at=started_at,
+                    started_monotonic=started_monotonic,
+                    exit_code=completed.returncode,
+                    stdout=stdout,
+                    stderr=stderr,
+                    provider_liveness=liveness,
+                ),
+                lifecycle=lifecycle,
+                reason=stop_reason,
+            )
+        if stop_reason is InvocationStopReason.RESPONSE_FINALIZATION_STALL:
+            return self._finalize_lifecycle_result(
+                self._response_finalization_stalled_result(
                     request=request,
                     command=command,
                     started_at=started_at,
@@ -2239,6 +2513,12 @@ class OpenClawSubprocessExecutor:
                 lifecycle=lifecycle,
             )
         )
+        finalization_monitor = _ResponseFinalizationMonitor(
+            request=request,
+            policy=self.response_finalization_policy,
+            started_monotonic=process_started,
+            activity_handler=activity_handler,
+        )
         process_lease: InvocationProcessLease | None = None
         if self.process_lease_store is not None:
             try:
@@ -2269,15 +2549,29 @@ class OpenClawSubprocessExecutor:
                     stdout, stderr = process.communicate(
                         timeout=self.liveness_poll_seconds
                     )
-                    initialization_monitor.finalize(self.monotonic())
+                    now = self.monotonic()
+                    initialization_monitor.finalize(now)
                     if liveness_monitor is not None:
                         # Initialization owns launch-to-turn ordering. Once it
                         # has advanced, collect final provider counters without
                         # retroactively turning a returned response into a stall.
-                        liveness_monitor.finalize(self.monotonic())
+                        liveness_monitor.finalize(now)
+                        if liveness_monitor.terminal_response_observed:
+                            finalization_monitor.observe_terminal(
+                                now,
+                                stdout=stdout,
+                                stderr=stderr,
+                            )
+                    finalization_monitor.finalize(
+                        now,
+                        stdout=stdout,
+                        stderr=stderr,
+                    )
                     break
-                except subprocess.TimeoutExpired:
+                except subprocess.TimeoutExpired as error:
                     now = self.monotonic()
+                    partial_stdout = _decode_process_output(error.stdout)
+                    partial_stderr = _decode_process_output(error.stderr)
                     with self._process_lock:
                         requested_reason = self._interrupt_requests.get(
                             request.session_key
@@ -2309,7 +2603,34 @@ class OpenClawSubprocessExecutor:
                         )
                         stdout, stderr = self._await_process_stop(process, lifecycle)
                         break
-                    if liveness_monitor is not None and liveness_monitor.poll(now):
+                    provider_stalled = (
+                        False
+                        if liveness_monitor is None
+                        else liveness_monitor.poll(now)
+                    )
+                    if (
+                        liveness_monitor is not None
+                        and liveness_monitor.terminal_response_observed
+                    ):
+                        finalization_monitor.observe_terminal(
+                            now,
+                            stdout=partial_stdout,
+                            stderr=partial_stderr,
+                        )
+                    if finalization_monitor.poll(
+                        now,
+                        stdout=partial_stdout,
+                        stderr=partial_stderr,
+                    ):
+                        self._begin_stop(
+                            process,
+                            lifecycle,
+                            reason=(InvocationStopReason.RESPONSE_FINALIZATION_STALL),
+                            now=now,
+                        )
+                        stdout, stderr = self._await_process_stop(process, lifecycle)
+                        break
+                    if provider_stalled:
                         self._begin_stop(
                             process,
                             lifecycle,
@@ -2344,6 +2665,13 @@ class OpenClawSubprocessExecutor:
             lifecycle.mark_process_lease_released()
             lifecycle.set_initialization_evidence(
                 initialization_monitor.finalize(self.monotonic())
+            )
+            lifecycle.set_response_finalization_evidence(
+                finalization_monitor.finalize(
+                    self.monotonic(),
+                    stdout=stdout,
+                    stderr=stderr,
+                )
             )
         return (
             subprocess.CompletedProcess(
@@ -2821,6 +3149,38 @@ class OpenClawSubprocessExecutor:
             telemetry=telemetry,
         )
 
+    def _response_finalization_stalled_result(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        command: tuple[str, ...],
+        started_at: datetime,
+        started_monotonic: float,
+        exit_code: int | None,
+        stdout: str,
+        stderr: str,
+        provider_liveness: ProviderLivenessEvidence | None,
+    ) -> AgentExecutionResult:
+        telemetry = self._telemetry(
+            request=request,
+            command=command,
+            started_at=started_at,
+            started_monotonic=started_monotonic,
+            exit_code=exit_code,
+            stdout=stdout,
+            stderr=stderr,
+            provider_liveness=provider_liveness,
+        )
+        return AgentExecutionResult(
+            status=AgentExecutionStatus.RESPONSE_FINALIZATION_STALLED,
+            error=(
+                "OpenClaw received a terminal provider response but made no "
+                "observable result-finalization progress through the visible "
+                "diagnostic grace period"
+            ),
+            telemetry=telemetry,
+        )
+
     @staticmethod
     def _emit_declared_provider_stall(
         *,
@@ -2966,6 +3326,11 @@ class ScriptedAgentExecutor:
             initialization_policy=InitializationLivenessPolicy(
                 no_progress_seconds=DEFAULT_INITIALIZATION_NO_PROGRESS_SECONDS,
                 stall_grace_seconds=DEFAULT_INITIALIZATION_STALL_GRACE_SECONDS,
+                source="scripted deterministic adapter",
+            ),
+            response_finalization_policy=ResponseFinalizationPolicy(
+                no_progress_seconds=(DEFAULT_RESPONSE_FINALIZATION_NO_PROGRESS_SECONDS),
+                stall_grace_seconds=(DEFAULT_RESPONSE_FINALIZATION_STALL_GRACE_SECONDS),
                 source="scripted deterministic adapter",
             ),
             activity_handler=activity_handler,

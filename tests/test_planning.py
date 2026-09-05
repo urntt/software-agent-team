@@ -33,6 +33,8 @@ from software_agent_team.budgets import (
     ModelPricing,
 )
 from software_agent_team.execution import (
+    AgentExecutionActivity,
+    AgentExecutionActivityKind,
     AgentExecutionResult,
     AgentExecutionStatus,
     AgentExecutionTelemetry,
@@ -41,6 +43,7 @@ from software_agent_team.execution import (
     ScriptedAgentResponse,
 )
 from software_agent_team.integrity import canonical_model_sha256
+from software_agent_team.invocation_lifecycle import InvocationPhase
 from software_agent_team.model_metadata import ModelMetadataSource
 from software_agent_team.model_routing import ModelProfile, ModelRoutingPolicy
 from software_agent_team.planning import (
@@ -2417,6 +2420,24 @@ def test_schema_four_proposal_keeps_canonical_bytes_without_product_definition()
     )
 
 
+def test_schema_five_product_definition_proposal_remains_canonical() -> None:
+    payload = proposal().model_dump(mode="json")
+    payload["schema_version"] = 5
+
+    loaded = PlanningProposal.model_validate(payload)
+    preview = preview_adaptive_proposal(
+        request(),
+        loaded,
+        policy(),
+        created_at=FIXED_TIME,
+    )
+
+    assert loaded.schema_version == 5
+    assert loaded.body.product_definition is not None
+    assert loaded.model_dump(mode="json") == payload
+    assert preview.implementation_plan.schema_version == 5
+
+
 def test_schema_three_turn_remains_readable_without_correction_evidence(
     tmp_path: Path,
 ) -> None:
@@ -2902,6 +2923,46 @@ def test_invalid_complete_proposal_is_repaired_before_it_is_shown(
     assert [
         (activity.attempt, activity.maximum_attempts) for activity in activities
     ] == [(1, 2)] * 9 + [(2, 2)] * 9
+
+
+def test_planning_projects_response_finalization_as_a_distinct_phase() -> None:
+    activities: list[PlanningActivity] = []
+    for activity in (
+        AgentExecutionActivity(
+            kind=AgentExecutionActivityKind.INVOCATION_FINALIZING_RESPONSE,
+            agent_id="planner",
+            session_key="agent:planner:finalizing",
+            model="provider/model",
+            elapsed_ms=100,
+            invocation_phase=InvocationPhase.FINALIZING_RESPONSE,
+            action="Terminal response observed",
+        ),
+        AgentExecutionActivity(
+            kind=AgentExecutionActivityKind.FINALIZATION_STALL_SUSPECTED,
+            agent_id="planner",
+            session_key="agent:planner:finalizing",
+            model="provider/model",
+            elapsed_ms=50_000,
+            inactivity_ms=50_000,
+            silence_seconds=60,
+            stall_grace_seconds=10,
+            policy_source="test response-finalization contract",
+        ),
+    ):
+        AdaptivePlanningCoordinator._emit_execution_activity(
+            activities.append,
+            activity,
+            attempt=1,
+            maximum_attempts=2,
+            model="provider/model",
+        )
+
+    assert [activity.kind for activity in activities] == [
+        PlanningActivityKind.FINALIZING_RESPONSE,
+        PlanningActivityKind.FINALIZATION_STALL_SUSPECTED,
+    ]
+    assert activities[0].invocation_phase is InvocationPhase.FINALIZING_RESPONSE
+    assert activities[1].inactivity_ms == 50_000
 
 
 def test_decision_identifier_case_is_normalized_without_a_model_call(
