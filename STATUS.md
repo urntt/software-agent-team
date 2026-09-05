@@ -67,16 +67,22 @@ scope before nested boundary content is validated. Extra checks outside that
 scope are removed with an explicit normalization instead of creating new
 acceptance obligations or model correction calls; checks inside the approved
 scope retain strict completeness, uniqueness, and evidence-grounding rules. A
-remaining targetable model-owned
-failure creates a typed JSON-pointer diagnostic and a SHA-bound
+remaining targetable model-owned failure creates a diagnostic-v2 invariant ID,
+structured affected-entity subjects, precise model-owned JSON-pointer authority,
+and a SHA-bound
 `semantic_correction_v1` envelope; the controller retains every unrelated
 field, freezes a writer's verified Git result, and records each request and
-outcome. Product Planning and dynamic execution continue only after measurable
+outcome. Planning relational validation no longer infers identity or correction
+scope from human error prose; unclassified relations fail closed. Product
+Planning and dynamic execution continue only after measurable
 improvement within the task budget, while the fixed evaluation surface retains
 its explicit zero-or-one cap. Transport, unlocated, repeated, invalid-envelope,
 and non-improving failures stop without a full-response retry. Fresh
-provider-backed Planning correction evidence now exists; a corrected Reviewer
-provider run remains pending.
+provider-backed Planning correction evidence now exists. Exact offline replay of
+the latest distinct writer-coverage then verifier-authority failure now yields
+different fingerprints and narrows correction from four proposal containers to
+`tasks`, followed by the exact criterion `verification_agent_ids`; a corrected
+Reviewer provider run remains pending.
 
 A fresh installed run at `54b0275` reached approved Planning, a clean writer
 commit, and five passing deterministic gates. Its Reviewer returned ten
@@ -89,7 +95,10 @@ assessments in one pass and records removal of the five unapproved arrays. This
 proves the captured regression path offline, not a corrected provider journey;
 the issue remains open until a fresh run crosses Review without that call.
 
-Formatter, lint, doctor, and **931 offline tests** pass for this implementation.
+Doctor, formatter, lint, and the complete **935-test offline suite** pass with
+the diagnostic-v2 change, including the exact captured two-invariant Planning
+sequence and a three-call correction regression. Provider-backed validation of
+the corrected journey remains pending.
 
 ## Phase 1 Result
 

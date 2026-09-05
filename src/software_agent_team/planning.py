@@ -64,6 +64,8 @@ from software_agent_team.model_routing import (
 from software_agent_team.response_corrections import (
     ResponseFailureClass,
     ResponseIssueAuthority,
+    ResponseIssueSubject,
+    ResponseIssueSubjectKind,
     ResponseValidationDiagnostic,
     SemanticCorrectionOutcome,
     SemanticCorrectionPlan,
@@ -73,7 +75,7 @@ from software_agent_team.response_corrections import (
     correction_outcome,
     correction_prompt,
     deterministically_remove_forbidden_fields,
-    diagnostic_from_message,
+    diagnostic_from_invariant,
     diagnostic_from_validation_error,
 )
 from software_agent_team.responses import (
@@ -107,6 +109,80 @@ class PlanningError(RuntimeError):
 
 class PlanningIntegrityError(PlanningError):
     """Raised when persisted Planning evidence is incomplete or changed."""
+
+
+@dataclass(frozen=True)
+class _PlanningInvariant:
+    """Validator-owned identity and correction authority for one defect."""
+
+    invariant_id: str
+    message: str
+    paths: tuple[str, ...]
+    subjects: tuple[ResponseIssueSubject, ...] = ()
+
+
+class _PlanningModelInvariantError(ValueError):
+    """Carry a typed proposal invariant through Pydantic validation."""
+
+    def __init__(self, invariant: _PlanningInvariant) -> None:
+        self.invariant = invariant
+        super().__init__(invariant.message)
+
+
+class _PlanningContextInvariantError(PlanningError):
+    """Carry a typed post-schema Planning invariant to response compilation."""
+
+    def __init__(self, invariant: _PlanningInvariant) -> None:
+        self.invariant = invariant
+        super().__init__(invariant.message)
+
+
+def _planning_subjects(
+    *items: tuple[ResponseIssueSubjectKind, str],
+) -> tuple[ResponseIssueSubject, ...]:
+    """Build one canonical structured subject set."""
+
+    return tuple(
+        ResponseIssueSubject(kind=kind, identifier=identifier)
+        for kind, identifier in sorted(
+            set(items),
+            key=lambda item: (item[0].value, item[1]),
+        )
+    )
+
+
+def _planning_model_invariant(
+    invariant_id: str,
+    message: str,
+    *,
+    paths: tuple[str, ...],
+    subjects: tuple[ResponseIssueSubject, ...] = (),
+) -> _PlanningModelInvariantError:
+    return _PlanningModelInvariantError(
+        _PlanningInvariant(
+            invariant_id=invariant_id,
+            message=message,
+            paths=tuple(sorted(set(paths))),
+            subjects=subjects,
+        )
+    )
+
+
+def _planning_context_invariant(
+    invariant_id: str,
+    message: str,
+    *,
+    paths: tuple[str, ...],
+    subjects: tuple[ResponseIssueSubject, ...] = (),
+) -> _PlanningContextInvariantError:
+    return _PlanningContextInvariantError(
+        _PlanningInvariant(
+            invariant_id=invariant_id,
+            message=message,
+            paths=tuple(sorted(set(paths))),
+            subjects=subjects,
+        )
+    )
 
 
 class PlanningSessionStatus(StrEnum):
@@ -662,49 +738,23 @@ def _safe_validation_detail(error: ValueError) -> str:
     return str(error)[:1500]
 
 
-def _planning_context_paths(
-    detail: str,
-    parsed: PlanningModelResponse | None,
-) -> tuple[str, ...]:
-    """Map controller post-schema checks to the smallest useful model fields."""
+def _planning_invariant_diagnostic(
+    payload: dict[str, object],
+    invariant: _PlanningInvariant,
+    *,
+    authority: ResponseIssueAuthority = ResponseIssueAuthority.MODEL,
+) -> ResponseValidationDiagnostic:
+    """Compile validator-owned identity without parsing human error text."""
 
-    lowered = detail.casefold()
-    if parsed is not None and parsed.kind is PlanningResponseKind.QUESTION:
-        if "category" in lowered or "owner" in lowered:
-            return ("/question/decision_category", "/question/decision_owner")
-        if "missing evidence" in lowered:
-            return ("/question/missing_evidence",)
-        if "material consequence" in lowered:
-            return ("/question/material_consequences",)
-        if "already used" in lowered:
-            return ("/question/id",)
-        return ("/question",)
-    if "assumption" in lowered:
-        return (
-            "/proposal/assumption_decision_ids",
-            "/proposal/assumptions",
-            "/proposal/decisions",
-        )
-    if "decision" in lowered or "question" in lowered or "provenance" in lowered:
-        return ("/proposal/decisions",)
-    if "criterion" in lowered or "acceptance" in lowered or "requirement" in lowered:
-        return (
-            "/proposal/acceptance_criteria",
-            "/proposal/requirement_ids",
-            "/proposal/requirements",
-            "/proposal/tasks",
-        )
-    if "concurrency" in lowered:
-        return ("/proposal/max_concurrency",)
-    if "iteration" in lowered or "revision" in lowered:
-        return ("/proposal/iteration_limit", "/proposal/revision_enabled")
-    if "agent" in lowered or "task" in lowered or "workspace" in lowered:
-        return ("/proposal/agents", "/proposal/tasks")
-    return (
-        "/proposal/acceptance_criteria",
-        "/proposal/agents",
-        "/proposal/decisions",
-        "/proposal/tasks",
+    return diagnostic_from_invariant(
+        payload,
+        failure_class=ResponseFailureClass.SEMANTIC_CONTEXT,
+        authority=authority,
+        code="planning_context",
+        invariant_id=invariant.invariant_id,
+        subjects=invariant.subjects,
+        message=invariant.message,
+        paths=invariant.paths,
     )
 
 
@@ -716,59 +766,47 @@ def _planning_validation_diagnostic(
 
     issues = error.errors(
         include_url=False,
-        include_context=False,
+        include_context=True,
         include_input=False,
     )
-    if (
-        len(issues) == 1
-        and tuple(issues[0]["loc"]) == ("proposal",)
-        and str(issues[0]["type"]).startswith("value_error")
-    ):
-        detail = _safe_validation_detail(error)
-        paths = _planning_proposal_error_paths(detail, payload)
-        return diagnostic_from_message(
+    typed = tuple(
+        context_error.invariant
+        for issue in issues
+        if isinstance((context := issue.get("ctx")), dict)
+        and isinstance(
+            (context_error := context.get("error")),
+            _PlanningModelInvariantError,
+        )
+    )
+    if len(typed) == 1:
+        return _planning_invariant_diagnostic(payload, typed[0])
+    if typed:
+        return diagnostic_from_invariant(
             payload,
             failure_class=ResponseFailureClass.SEMANTIC_CONTEXT,
-            authority=ResponseIssueAuthority.MODEL,
-            code="planning_context",
-            message=detail,
-            paths=paths,
+            authority=ResponseIssueAuthority.CONTROLLER,
+            code="planning_context_unclassified",
+            invariant_id="planning_multiple_invariants_unclassified",
+            subjects=(),
+            message="Planning validation produced multiple relational invariants",
+            paths=("/",),
+        )
+    if any(
+        tuple(issue["loc"]) == ("proposal",)
+        and str(issue["type"]).startswith("value_error")
+        for issue in issues
+    ):
+        return diagnostic_from_invariant(
+            payload,
+            failure_class=ResponseFailureClass.SEMANTIC_CONTEXT,
+            authority=ResponseIssueAuthority.CONTROLLER,
+            code="planning_context_unclassified",
+            invariant_id="planning_relational_invariant_unclassified",
+            subjects=(),
+            message="Planning relational validation has no typed correction authority",
+            paths=("/",),
         )
     return diagnostic_from_validation_error(error, payload)
-
-
-def _planning_proposal_error_paths(
-    detail: str,
-    payload: dict[str, object],
-) -> tuple[str, ...]:
-    """Locate relational proposal failures when their values are unambiguous."""
-
-    proposal = payload.get("proposal")
-    if not isinstance(proposal, dict):
-        return _planning_context_paths(detail, None)
-    tasks = proposal.get("tasks")
-    agents = proposal.get("agents")
-    if "one stable ID for every requirement" in detail:
-        return ("/proposal/requirement_ids",)
-    if (
-        "tasks reference unknown Agent owners" in detail
-        and isinstance(tasks, list)
-        and isinstance(agents, list)
-    ):
-        known_agent_ids = {
-            item.get("id")
-            for item in agents
-            if isinstance(item, dict) and isinstance(item.get("id"), str)
-        }
-        paths = tuple(
-            f"/proposal/tasks/{index}/owner_agent_id"
-            for index, task in enumerate(tasks)
-            if isinstance(task, dict)
-            and task.get("owner_agent_id") not in known_agent_ids
-        )
-        if paths:
-            return paths
-    return _planning_context_paths(detail, None)
 
 
 class PlanningRequest(BaseModel):
@@ -1096,27 +1134,50 @@ def _validate_dag(
     dependencies: Mapping[str, tuple[str, ...]],
     *,
     label: str,
+    path_prefix: str,
+    subject_kind: ResponseIssueSubjectKind,
 ) -> None:
     known = set(nodes)
+    indexes = {node: index for index, node in enumerate(nodes)}
     for node, required in dependencies.items():
         unknown = set(required) - known
         if unknown:
-            raise ValueError(
+            message = (
                 f"{label} {node} references unknown dependencies: "
                 f"{', '.join(sorted(unknown))}"
             )
-    visiting: set[str] = set()
+            raise _planning_model_invariant(
+                f"planning_{subject_kind.value}_dependency_reference",
+                message,
+                paths=(f"{path_prefix}/{indexes[node]}/dependencies",),
+                subjects=_planning_subjects(
+                    (subject_kind, node),
+                    *((subject_kind, item) for item in sorted(unknown)),
+                ),
+            )
+    visiting: list[str] = []
+    active: set[str] = set()
     visited: set[str] = set()
 
     def visit(node: str) -> None:
-        if node in visiting:
-            raise ValueError(f"{label} dependencies must be acyclic")
+        if node in active:
+            cycle = tuple(visiting[visiting.index(node) :])
+            raise _planning_model_invariant(
+                f"planning_{subject_kind.value}_dependency_cycle",
+                f"{label} dependencies must be acyclic",
+                paths=tuple(
+                    f"{path_prefix}/{indexes[item]}/dependencies" for item in cycle
+                ),
+                subjects=_planning_subjects(*((subject_kind, item) for item in cycle)),
+            )
         if node in visited:
             return
-        visiting.add(node)
+        visiting.append(node)
+        active.add(node)
         for dependency in dependencies[node]:
             visit(dependency)
-        visiting.remove(node)
+        visiting.pop()
+        active.remove(node)
         visited.add(node)
 
     for node in nodes:
@@ -1132,28 +1193,66 @@ def validate_task_agent_bindings(
 
     task_ids = tuple(task.id for task in tasks)
     if len(task_ids) != len(set(task_ids)):
-        raise ValueError("proposed task IDs must be unique")
+        duplicates = tuple(
+            sorted({task_id for task_id in task_ids if task_ids.count(task_id) > 1})
+        )
+        raise _planning_model_invariant(
+            "planning_task_id_unique",
+            "proposed task IDs must be unique",
+            paths=("/proposal/tasks",),
+            subjects=_planning_subjects(
+                *((ResponseIssueSubjectKind.TASK, item) for item in duplicates)
+            ),
+        )
     _validate_dag(
         task_ids,
         {task.id: task.dependencies for task in tasks},
         label="task",
+        path_prefix="/proposal/tasks",
+        subject_kind=ResponseIssueSubjectKind.TASK,
     )
 
     known_agent_ids = set(agent_dependencies)
     unknown_task_owners = {task.owner_agent_id for task in tasks} - known_agent_ids
     if unknown_task_owners:
-        raise ValueError(
-            "tasks reference unknown Agent owners: "
-            + ", ".join(sorted(unknown_task_owners))
+        message = "tasks reference unknown Agent owners: " + ", ".join(
+            sorted(unknown_task_owners)
+        )
+        raise _planning_model_invariant(
+            "planning_task_owner_reference",
+            message,
+            paths=tuple(
+                f"/proposal/tasks/{index}/owner_agent_id"
+                for index, task in enumerate(tasks)
+                if task.owner_agent_id in unknown_task_owners
+            ),
+            subjects=_planning_subjects(
+                *(
+                    (ResponseIssueSubjectKind.AGENT, item)
+                    for item in unknown_task_owners
+                ),
+                *(
+                    (ResponseIssueSubjectKind.TASK, task.id)
+                    for task in tasks
+                    if task.owner_agent_id in unknown_task_owners
+                ),
+            ),
         )
 
     writers = set(writer_agent_ids)
     task_owners = {task.owner_agent_id for task in tasks}
     unassigned_writers = writers - task_owners
     if unassigned_writers:
-        raise ValueError(
-            "every implementation Agent must own at least one task: "
-            + ", ".join(sorted(unassigned_writers))
+        message = "every implementation Agent must own at least one task: " + ", ".join(
+            sorted(unassigned_writers)
+        )
+        raise _planning_model_invariant(
+            "planning_writer_task_required",
+            message,
+            paths=("/proposal/tasks",),
+            subjects=_planning_subjects(
+                *((ResponseIssueSubjectKind.AGENT, item) for item in unassigned_writers)
+            ),
         )
 
     def transitively_depends(agent_id: str, target: str) -> bool:
@@ -1176,9 +1275,20 @@ def validate_task_agent_bindings(
                 task.owner_agent_id,
                 dependency_owner,
             ):
-                raise ValueError(
+                message = (
                     f"task {task.id} depends on {dependency_id}, but Agent "
                     f"{task.owner_agent_id} does not depend on {dependency_owner}"
+                )
+                raise _planning_model_invariant(
+                    "planning_task_owner_dependency",
+                    message,
+                    paths=(f"/proposal/tasks/{task_ids.index(task.id)}/dependencies",),
+                    subjects=_planning_subjects(
+                        (ResponseIssueSubjectKind.AGENT, dependency_owner),
+                        (ResponseIssueSubjectKind.AGENT, task.owner_agent_id),
+                        (ResponseIssueSubjectKind.TASK, dependency_id),
+                        (ResponseIssueSubjectKind.TASK, task.id),
+                    ),
                 )
 
 
@@ -1191,8 +1301,25 @@ def validate_task_criterion_references(
     covered = {criterion for task in tasks for criterion in task.acceptance_criteria}
     unknown = covered - set(known_criterion_ids)
     if unknown:
-        raise ValueError(
-            "tasks reference unknown acceptance criteria: " + ", ".join(sorted(unknown))
+        message = "tasks reference unknown acceptance criteria: " + ", ".join(
+            sorted(unknown)
+        )
+        raise _planning_model_invariant(
+            "planning_task_criterion_reference",
+            message,
+            paths=tuple(
+                f"/proposal/tasks/{index}/acceptance_criteria"
+                for index, task in enumerate(tasks)
+                if set(task.acceptance_criteria) & unknown
+            ),
+            subjects=_planning_subjects(
+                *((ResponseIssueSubjectKind.CRITERION, item) for item in unknown),
+                *(
+                    (ResponseIssueSubjectKind.TASK, task.id)
+                    for task in tasks
+                    if set(task.acceptance_criteria) & unknown
+                ),
+            ),
         )
 
 
@@ -1284,17 +1411,67 @@ class PlanningProposalBody(BaseModel):
     def validate_complete_proposal(self) -> Self:
         criterion_ids = tuple(item.id for item in self.acceptance_criteria)
         if len(criterion_ids) != len(set(criterion_ids)):
-            raise ValueError("proposal acceptance criterion IDs must be unique")
+            duplicates = tuple(
+                sorted(
+                    {
+                        criterion_id
+                        for criterion_id in criterion_ids
+                        if criterion_ids.count(criterion_id) > 1
+                    }
+                )
+            )
+            raise _planning_model_invariant(
+                "planning_criterion_id_unique",
+                "proposal acceptance criterion IDs must be unique",
+                paths=("/proposal/acceptance_criteria",),
+                subjects=_planning_subjects(
+                    *((ResponseIssueSubjectKind.CRITERION, item) for item in duplicates)
+                ),
+            )
         agent_ids = tuple(agent.id for agent in self.agents)
         if len(agent_ids) != len(set(agent_ids)):
-            raise ValueError("proposed Agent IDs must be unique")
+            duplicates = tuple(
+                sorted(
+                    {
+                        agent_id
+                        for agent_id in agent_ids
+                        if agent_ids.count(agent_id) > 1
+                    }
+                )
+            )
+            raise _planning_model_invariant(
+                "planning_agent_id_unique",
+                "proposed Agent IDs must be unique",
+                paths=("/proposal/agents",),
+                subjects=_planning_subjects(
+                    *((ResponseIssueSubjectKind.AGENT, item) for item in duplicates)
+                ),
+            )
         decision_ids = tuple(item.id for item in self.decisions)
         if len(decision_ids) != len(set(decision_ids)):
-            raise ValueError("proposal decision IDs must be unique")
+            duplicates = tuple(
+                sorted(
+                    {
+                        decision_id
+                        for decision_id in decision_ids
+                        if decision_ids.count(decision_id) > 1
+                    }
+                )
+            )
+            raise _planning_model_invariant(
+                "planning_decision_id_unique",
+                "proposal decision IDs must be unique",
+                paths=("/proposal/decisions",),
+                subjects=_planning_subjects(
+                    *((ResponseIssueSubjectKind.DECISION, item) for item in duplicates)
+                ),
+            )
         _validate_dag(
             agent_ids,
             {agent.id: agent.dependencies for agent in self.agents},
             label="Agent",
+            path_prefix="/proposal/agents",
+            subject_kind=ResponseIssueSubjectKind.AGENT,
         )
         implementation_agents = {
             agent.id
@@ -1303,14 +1480,28 @@ class PlanningProposalBody(BaseModel):
             in {AgentCapability.IMPLEMENTATION, AgentCapability.INTEGRATION}
         }
         if not implementation_agents:
-            raise ValueError("proposal requires an implementation Agent")
+            raise _planning_model_invariant(
+                "planning_implementation_agent_required",
+                "proposal requires an implementation Agent",
+                paths=("/proposal/agents",),
+                subjects=_planning_subjects(
+                    (ResponseIssueSubjectKind.CAPABILITY, "implementation")
+                ),
+            )
         quality_agents = {
             agent.id
             for agent in self.agents
             if agent.capability in {AgentCapability.TESTING, AgentCapability.REVIEW}
         }
         if not quality_agents:
-            raise ValueError("proposal requires an independent quality Agent")
+            raise _planning_model_invariant(
+                "planning_quality_agent_required",
+                "proposal requires an independent quality Agent",
+                paths=("/proposal/agents",),
+                subjects=_planning_subjects(
+                    (ResponseIssueSubjectKind.CAPABILITY, "read_only_quality")
+                ),
+            )
 
         dependencies = {agent.id: agent.dependencies for agent in self.agents}
 
@@ -1326,13 +1517,28 @@ class PlanningProposalBody(BaseModel):
                     pending.extend(dependencies[current])
             return False
 
-        for quality_agent in quality_agents:
-            if any(
-                not transitively_depends(quality_agent, implementation_agent)
-                for implementation_agent in implementation_agents
-            ):
-                raise ValueError(
-                    "every quality Agent must depend on every implementation path"
+        for quality_agent in sorted(quality_agents):
+            missing_dependencies = tuple(
+                sorted(
+                    implementation_agent
+                    for implementation_agent in implementation_agents
+                    if not transitively_depends(quality_agent, implementation_agent)
+                )
+            )
+            if missing_dependencies:
+                raise _planning_model_invariant(
+                    "planning_quality_dependency_coverage",
+                    "every quality Agent must depend on every implementation path",
+                    paths=(
+                        f"/proposal/agents/{agent_ids.index(quality_agent)}/dependencies",
+                    ),
+                    subjects=_planning_subjects(
+                        (ResponseIssueSubjectKind.AGENT, quality_agent),
+                        *(
+                            (ResponseIssueSubjectKind.AGENT, item)
+                            for item in missing_dependencies
+                        ),
+                    ),
                 )
 
         validate_task_agent_bindings(
@@ -1349,15 +1555,32 @@ class PlanningProposalBody(BaseModel):
         expected = set(criterion_ids)
         missing = expected - covered
         if missing:
-            raise ValueError(
+            message = (
                 "writer tasks do not cover proposal acceptance criteria: "
                 + ", ".join(sorted(missing))
             )
+            raise _planning_model_invariant(
+                "planning_writer_criterion_coverage",
+                message,
+                paths=("/proposal/tasks",),
+                subjects=_planning_subjects(
+                    *((ResponseIssueSubjectKind.CRITERION, item) for item in missing)
+                ),
+            )
         if self.max_concurrency > len(self.agents):
-            raise ValueError("proposal concurrency cannot exceed its Agent count")
+            raise _planning_model_invariant(
+                "planning_concurrency_agent_bound",
+                "proposal concurrency cannot exceed its Agent count",
+                paths=("/proposal/max_concurrency",),
+            )
         if self.revision_enabled != (self.iteration_limit > 1):
-            raise ValueError(
-                "revision_enabled must equal whether iteration_limit exceeds one"
+            raise _planning_model_invariant(
+                "planning_revision_iteration_consistency",
+                "revision_enabled must equal whether iteration_limit exceeds one",
+                paths=(
+                    "/proposal/iteration_limit",
+                    "/proposal/revision_enabled",
+                ),
             )
         return self
 
@@ -1370,26 +1593,79 @@ def validate_question_admission(
     """Reject questions outside the deterministic responsibility matrix."""
 
     if question.id in set(previous_question_ids):
-        raise PlanningError(f"Planning question ID was already used: {question.id}")
+        raise _planning_context_invariant(
+            "planning_question_id_reused",
+            f"Planning question ID was already used: {question.id}",
+            paths=("/question/id",),
+            subjects=_planning_subjects(
+                (ResponseIssueSubjectKind.QUESTION, question.id)
+            ),
+        )
     if question.decision_category is None or question.decision_owner is None:
-        raise PlanningError("Planning question is missing decision category or owner")
+        raise _planning_context_invariant(
+            "planning_question_contract_required",
+            "Planning question is missing decision category or owner",
+            paths=(
+                "/question/decision_category",
+                "/question/decision_owner",
+            ),
+            subjects=_planning_subjects(
+                (ResponseIssueSubjectKind.QUESTION, question.id)
+            ),
+        )
     expected = _DECISION_AUTHORITY[question.decision_category]
     if question.decision_owner is not expected:
-        raise PlanningError(
+        message = (
             f"Planning question category {question.decision_category.value} belongs "
             f"to {expected.value}, not {question.decision_owner.value}"
+        )
+        raise _planning_context_invariant(
+            "planning_question_authority",
+            message,
+            paths=(
+                "/question/decision_category",
+                "/question/decision_owner",
+            ),
+            subjects=_planning_subjects(
+                (ResponseIssueSubjectKind.QUESTION, question.id)
+            ),
         )
     if expected in {
         PlanningDecisionAuthority.AGENT_AUTONOMY,
         PlanningDecisionAuthority.CONTROLLER_POLICY,
     }:
-        raise PlanningError(
-            f"Planning cannot ask the user to decide {question.decision_category.value}"
+        raise _planning_context_invariant(
+            "planning_question_user_authority",
+            (
+                "Planning cannot ask the user to decide "
+                f"{question.decision_category.value}"
+            ),
+            paths=(
+                "/question/decision_category",
+                "/question/decision_owner",
+            ),
+            subjects=_planning_subjects(
+                (ResponseIssueSubjectKind.QUESTION, question.id)
+            ),
         )
     if not question.missing_evidence:
-        raise PlanningError("Planning question must name the missing evidence")
+        raise _planning_context_invariant(
+            "planning_question_missing_evidence",
+            "Planning question must name the missing evidence",
+            paths=("/question/missing_evidence",),
+            subjects=_planning_subjects(
+                (ResponseIssueSubjectKind.QUESTION, question.id)
+            ),
+        )
     if not question.material_consequences:
-        raise PlanningError("Planning question must name a material consequence")
+        raise _planning_context_invariant(
+            "planning_question_material_consequence",
+            "Planning question must name a material consequence",
+            paths=("/question/material_consequences",),
+            subjects=_planning_subjects(
+                (ResponseIssueSubjectKind.QUESTION, question.id)
+            ),
+        )
 
 
 def validate_planning_clarity(
@@ -1404,23 +1680,66 @@ def validate_planning_clarity(
     """Enforce the current decision and requirement-to-evidence contract."""
 
     if len(body.requirement_ids) != len(body.requirements):
-        raise PlanningError(
-            "current proposals require one stable ID for every requirement"
+        raise _planning_context_invariant(
+            "planning_requirement_id_cardinality",
+            "current proposals require one stable ID for every requirement",
+            paths=("/proposal/requirement_ids",),
         )
     if not body.non_goals:
-        raise PlanningError("current proposals must state at least one non-goal")
+        raise _planning_context_invariant(
+            "planning_non_goal_required",
+            "current proposals must state at least one non-goal",
+            paths=("/proposal/non_goals",),
+        )
     if not body.decisions:
-        raise PlanningError("current proposals must record decision provenance")
+        raise _planning_context_invariant(
+            "planning_decision_provenance_required",
+            "current proposals must record decision provenance",
+            paths=("/proposal/decisions",),
+        )
 
     decisions = {decision.id: decision for decision in body.decisions}
     if len(decisions) != len(body.decisions):
-        raise PlanningError("proposal decision IDs must be unique")
+        decision_ids = tuple(decision.id for decision in body.decisions)
+        duplicates = tuple(
+            sorted(
+                {
+                    decision_id
+                    for decision_id in decision_ids
+                    if decision_ids.count(decision_id) > 1
+                }
+            )
+        )
+        raise _planning_context_invariant(
+            "planning_decision_id_unique",
+            "proposal decision IDs must be unique",
+            paths=("/proposal/decisions",),
+            subjects=_planning_subjects(
+                *((ResponseIssueSubjectKind.DECISION, item) for item in duplicates)
+            ),
+        )
     if any(
         decision.authority is PlanningDecisionAuthority.CONTROLLER_POLICY
         for decision in body.decisions
     ):
-        raise PlanningError(
-            "Planner output cannot claim controller-policy decision authority"
+        invalid_decisions = tuple(
+            (index, decision)
+            for index, decision in enumerate(body.decisions)
+            if decision.authority is PlanningDecisionAuthority.CONTROLLER_POLICY
+        )
+        raise _planning_context_invariant(
+            "planning_controller_authority_claim",
+            "Planner output cannot claim controller-policy decision authority",
+            paths=tuple(
+                f"/proposal/decisions/{index}/authority"
+                for index, _decision in invalid_decisions
+            ),
+            subjects=_planning_subjects(
+                *(
+                    (ResponseIssueSubjectKind.DECISION, decision.id)
+                    for _index, decision in invalid_decisions
+                )
+            ),
         )
 
     required_recommendations = {
@@ -1436,24 +1755,49 @@ def validate_planning_clarity(
     }
     missing_recommendations = required_recommendations - recorded_recommendations
     if missing_recommendations:
-        raise PlanningError(
-            "proposal omits Planner recommendation provenance for: "
-            + ", ".join(sorted(item.value for item in missing_recommendations))
+        message = "proposal omits Planner recommendation provenance for: " + ", ".join(
+            sorted(item.value for item in missing_recommendations)
+        )
+        raise _planning_context_invariant(
+            "planning_recommendation_provenance",
+            message,
+            paths=("/proposal/decisions",),
+            subjects=_planning_subjects(
+                *(
+                    (ResponseIssueSubjectKind.DECISION, item.value)
+                    for item in missing_recommendations
+                )
+            ),
         )
 
     if len(body.assumption_decision_ids) != len(body.assumptions):
-        raise PlanningError(
-            "every assumption must identify its autonomous decision record"
+        raise _planning_context_invariant(
+            "planning_assumption_decision_cardinality",
+            "every assumption must identify its autonomous decision record",
+            paths=("/proposal/assumption_decision_ids",),
         )
     for decision_id in body.assumption_decision_ids:
         decision = decisions.get(decision_id)
         if decision is None:
-            raise PlanningError(
-                f"assumption references an unknown decision: {decision_id}"
+            raise _planning_context_invariant(
+                "planning_assumption_decision_reference",
+                f"assumption references an unknown decision: {decision_id}",
+                paths=("/proposal/assumption_decision_ids",),
+                subjects=_planning_subjects(
+                    (ResponseIssueSubjectKind.DECISION, decision_id)
+                ),
             )
         if decision.authority is not PlanningDecisionAuthority.AGENT_AUTONOMY:
-            raise PlanningError(
-                f"assumption {decision_id} is not an autonomous implementation choice"
+            decision_index = tuple(item.id for item in body.decisions).index(
+                decision_id
+            )
+            raise _planning_context_invariant(
+                "planning_assumption_decision_authority",
+                f"assumption {decision_id} is not an autonomous implementation choice",
+                paths=(f"/proposal/decisions/{decision_index}/authority",),
+                subjects=_planning_subjects(
+                    (ResponseIssueSubjectKind.DECISION, decision_id)
+                ),
             )
 
     requirement_ids = set(body.requirement_ids)
@@ -1481,16 +1825,38 @@ def validate_planning_clarity(
                 pending.extend(dependencies[current])
         return False
 
-    for criterion in body.acceptance_criteria:
+    agent_indexes = {agent.id: index for index, agent in enumerate(body.agents)}
+    for criterion_index, criterion in enumerate(body.acceptance_criteria):
         unknown_requirements = set(criterion.requirement_ids) - requirement_ids
         if unknown_requirements:
-            raise PlanningError(
+            message = (
                 f"criterion {criterion.id} references unknown requirements: "
                 + ", ".join(sorted(unknown_requirements))
             )
+            raise _planning_context_invariant(
+                "planning_criterion_requirement_reference",
+                message,
+                paths=(
+                    f"/proposal/acceptance_criteria/{criterion_index}/requirement_ids",
+                ),
+                subjects=_planning_subjects(
+                    (ResponseIssueSubjectKind.CRITERION, criterion.id),
+                    *(
+                        (ResponseIssueSubjectKind.REQUIREMENT, item)
+                        for item in unknown_requirements
+                    ),
+                ),
+            )
         if not criterion.requirement_ids:
-            raise PlanningError(
-                f"criterion {criterion.id} must reference at least one requirement"
+            raise _planning_context_invariant(
+                "planning_criterion_requirement_required",
+                f"criterion {criterion.id} must reference at least one requirement",
+                paths=(
+                    f"/proposal/acceptance_criteria/{criterion_index}/requirement_ids",
+                ),
+                subjects=_planning_subjects(
+                    (ResponseIssueSubjectKind.CRITERION, criterion.id)
+                ),
             )
         covered_requirements.update(criterion.requirement_ids)
         writers = {
@@ -1500,40 +1866,105 @@ def validate_planning_clarity(
             in {AgentCapability.IMPLEMENTATION, AgentCapability.INTEGRATION}
         }
         if not writers:
-            raise PlanningError(
-                f"criterion {criterion.id} has no responsible writer task"
+            raise _planning_context_invariant(
+                "planning_criterion_writer_required",
+                f"criterion {criterion.id} has no responsible writer task",
+                paths=("/proposal/tasks",),
+                subjects=_planning_subjects(
+                    (ResponseIssueSubjectKind.CRITERION, criterion.id)
+                ),
             )
         if not criterion.verification_agent_ids:
-            raise PlanningError(
-                f"criterion {criterion.id} must name an independent verifier"
+            raise _planning_context_invariant(
+                "planning_criterion_verifier_required",
+                f"criterion {criterion.id} must name an independent verifier",
+                paths=(
+                    f"/proposal/acceptance_criteria/{criterion_index}/verification_agent_ids",
+                ),
+                subjects=_planning_subjects(
+                    (ResponseIssueSubjectKind.CRITERION, criterion.id)
+                ),
             )
         for verifier_id in criterion.verification_agent_ids:
             verifier = agents.get(verifier_id)
             if verifier is None:
-                raise PlanningError(
+                message = (
                     f"criterion {criterion.id} references unknown verifier "
                     f"{verifier_id}"
+                )
+                raise _planning_context_invariant(
+                    "planning_criterion_verifier_reference",
+                    message,
+                    paths=(
+                        f"/proposal/acceptance_criteria/{criterion_index}/verification_agent_ids",
+                    ),
+                    subjects=_planning_subjects(
+                        (ResponseIssueSubjectKind.AGENT, verifier_id),
+                        (ResponseIssueSubjectKind.CRITERION, criterion.id),
+                    ),
                 )
             if verifier.capability not in {
                 AgentCapability.TESTING,
                 AgentCapability.REVIEW,
             }:
-                raise PlanningError(
+                message = (
                     f"criterion {criterion.id} verifier {verifier_id} is not "
                     "read-only quality"
                 )
-            if any(not transitively_depends(verifier_id, writer) for writer in writers):
-                raise PlanningError(
+                raise _planning_context_invariant(
+                    "planning_criterion_verifier_capability",
+                    message,
+                    paths=(
+                        f"/proposal/acceptance_criteria/{criterion_index}/verification_agent_ids",
+                    ),
+                    subjects=_planning_subjects(
+                        (ResponseIssueSubjectKind.AGENT, verifier_id),
+                        (ResponseIssueSubjectKind.CRITERION, criterion.id),
+                    ),
+                )
+            missing_writers = tuple(
+                sorted(
+                    writer
+                    for writer in writers
+                    if not transitively_depends(verifier_id, writer)
+                )
+            )
+            if missing_writers:
+                message = (
                     f"criterion {criterion.id} verifier {verifier_id} is not "
-                    "downstream "
-                    "of every responsible writer"
+                    "downstream of every responsible writer"
+                )
+                raise _planning_context_invariant(
+                    "planning_criterion_verifier_dependency",
+                    message,
+                    paths=(
+                        f"/proposal/agents/{agent_indexes[verifier_id]}/dependencies",
+                    ),
+                    subjects=_planning_subjects(
+                        (ResponseIssueSubjectKind.AGENT, verifier_id),
+                        (ResponseIssueSubjectKind.CRITERION, criterion.id),
+                        *(
+                            (ResponseIssueSubjectKind.AGENT, item)
+                            for item in missing_writers
+                        ),
+                    ),
                 )
 
     missing_requirement_coverage = requirement_ids - covered_requirements
     if missing_requirement_coverage:
-        raise PlanningError(
-            "requirements lack observable acceptance coverage: "
-            + ", ".join(sorted(missing_requirement_coverage))
+        message = "requirements lack observable acceptance coverage: " + ", ".join(
+            sorted(missing_requirement_coverage)
+        )
+        raise _planning_context_invariant(
+            "planning_requirement_acceptance_coverage",
+            message,
+            paths=("/proposal/acceptance_criteria",),
+            subjects=_planning_subjects(
+                *(
+                    (ResponseIssueSubjectKind.REQUIREMENT, item)
+                    for item in missing_requirement_coverage
+                )
+            ),
         )
 
     if question_contracts is None:
@@ -1546,7 +1977,31 @@ def validate_planning_clarity(
     if len(linked) != sum(
         decision.question_id is not None for decision in body.decisions
     ):
-        raise PlanningError("a Planning question can resolve only one decision record")
+        duplicate_questions = tuple(
+            sorted(
+                {
+                    decision.question_id
+                    for decision in body.decisions
+                    if decision.question_id is not None
+                    and sum(
+                        item.question_id == decision.question_id
+                        for item in body.decisions
+                    )
+                    > 1
+                }
+            )
+        )
+        raise _planning_context_invariant(
+            "planning_question_decision_unique",
+            "a Planning question can resolve only one decision record",
+            paths=("/proposal/decisions",),
+            subjects=_planning_subjects(
+                *(
+                    (ResponseIssueSubjectKind.QUESTION, item)
+                    for item in duplicate_questions
+                )
+            ),
+        )
     if set(linked) != set(question_contracts):
         missing = set(question_contracts) - set(linked)
         invented = set(linked) - set(question_contracts)
@@ -1555,14 +2010,35 @@ def validate_planning_clarity(
             details.append("missing " + ", ".join(sorted(missing)))
         if invented:
             details.append("unknown " + ", ".join(sorted(invented)))
-        raise PlanningError(
-            "proposal question-decision provenance is incomplete: " + "; ".join(details)
+        message = "proposal question-decision provenance is incomplete: " + "; ".join(
+            details
+        )
+        raise _planning_context_invariant(
+            "planning_question_decision_completeness",
+            message,
+            paths=("/proposal/decisions",),
+            subjects=_planning_subjects(
+                *((ResponseIssueSubjectKind.QUESTION, item) for item in missing),
+                *((ResponseIssueSubjectKind.QUESTION, item) for item in invented),
+            ),
         )
     for question_id, (category, owner) in question_contracts.items():
         decision = linked[question_id]
         if decision.category is not category or decision.authority is not owner:
-            raise PlanningError(
-                f"decision for question {question_id} changed its category or owner"
+            decision_index = tuple(item.id for item in body.decisions).index(
+                decision.id
+            )
+            raise _planning_context_invariant(
+                "planning_question_decision_contract",
+                f"decision for question {question_id} changed its category or owner",
+                paths=(
+                    f"/proposal/decisions/{decision_index}/authority",
+                    f"/proposal/decisions/{decision_index}/category",
+                ),
+                subjects=_planning_subjects(
+                    (ResponseIssueSubjectKind.DECISION, decision.id),
+                    (ResponseIssueSubjectKind.QUESTION, question_id),
+                ),
             )
 
 
@@ -2338,6 +2814,8 @@ def preview_adaptive_proposal(
             body.tasks,
             proposed_criterion_ids | profile_criterion_ids,
         )
+    except _PlanningModelInvariantError as error:
+        raise _PlanningContextInvariantError(error.invariant) from error
     except ValueError as error:
         raise PlanningError(str(error)) from error
     if policy.require_review_agent and not any(
@@ -3550,6 +4028,10 @@ class AdaptivePlanningCoordinator:
                 self.policy,
                 created_at=proposal.created_at,
             )
+        except _PlanningContextInvariantError:
+            raise
+        except _PlanningModelInvariantError as error:
+            raise _PlanningContextInvariantError(error.invariant) from error
         except (ValueError, PlanningError) as error:
             raise PlanningError(f"proposed TeamPlan is invalid: {error}") from error
 
@@ -3834,27 +4316,42 @@ class AdaptivePlanningCoordinator:
                             SemanticCorrectionOutcome.INVALID_SUBMISSION
                         )
                     parsed = None
+                except _PlanningContextInvariantError as error:
+                    validation_error = _safe_validation_detail(error)
+                    if payload is not None:
+                        response_validation = _planning_invariant_diagnostic(
+                            payload,
+                            error.invariant,
+                        )
+                    if correction_plan is not None and not correction_applied:
+                        current_correction_outcome = (
+                            SemanticCorrectionOutcome.INVALID_SUBMISSION
+                        )
+                    parsed = None
+                except _PlanningModelInvariantError as error:
+                    validation_error = _safe_validation_detail(error)
+                    if payload is not None:
+                        response_validation = _planning_invariant_diagnostic(
+                            payload,
+                            error.invariant,
+                        )
+                    if correction_plan is not None and not correction_applied:
+                        current_correction_outcome = (
+                            SemanticCorrectionOutcome.INVALID_SUBMISSION
+                        )
+                    parsed = None
                 except (PlanningError, ValueError) as error:
                     validation_error = _safe_validation_detail(error)
                     if payload is not None:
-                        response_validation = diagnostic_from_message(
+                        response_validation = diagnostic_from_invariant(
                             payload,
                             failure_class=ResponseFailureClass.SEMANTIC_CONTEXT,
-                            authority=ResponseIssueAuthority.MODEL,
-                            code="planning_context",
+                            authority=ResponseIssueAuthority.CONTROLLER,
+                            code="planning_context_unclassified",
+                            invariant_id="planning_context_unclassified",
+                            subjects=(),
                             message=validation_error,
-                            paths=(
-                                _planning_proposal_error_paths(
-                                    validation_error,
-                                    payload,
-                                )
-                                if parsed is not None
-                                and parsed.kind is PlanningResponseKind.PROPOSAL
-                                else _planning_context_paths(
-                                    validation_error,
-                                    parsed,
-                                )
-                            ),
+                            paths=("/",),
                         )
                     if correction_plan is not None and not correction_applied:
                         current_correction_outcome = (

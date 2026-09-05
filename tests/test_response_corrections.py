@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
+import pytest
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from software_agent_team.response_corrections import (
     ResponseFailureClass,
     ResponseIssueAuthority,
+    ResponseIssueSubject,
+    ResponseIssueSubjectKind,
+    ResponseValidationDiagnostic,
     SemanticCorrectionOutcome,
     apply_semantic_correction,
     build_semantic_correction_plan,
     correction_outcome,
     deterministically_remove_forbidden_fields,
+    diagnostic_from_invariant,
     diagnostic_from_message,
     diagnostic_from_validation_error,
     semantic_payload_sha256,
@@ -55,7 +60,6 @@ def test_plan_targets_only_invalid_fields_and_preserves_other_content() -> None:
         },
         plan,
     )
-
     assert corrected == {
         "summary": "valid summary",
         "tasks": ["TASK_ONE"],
@@ -171,6 +175,145 @@ def test_outcome_distinguishes_a_new_container_error_from_the_fixed_child() -> N
         )
         is SemanticCorrectionOutcome.IMPROVED
     )
+
+
+def test_outcome_uses_invariant_and_subject_instead_of_message_or_path() -> None:
+    first_payload: dict[str, object] = {
+        "kind": "proposal",
+        "proposal": {"tasks": [], "acceptance_criteria": ["AC_COUNTS"]},
+    }
+    first = diagnostic_from_invariant(
+        first_payload,
+        failure_class=ResponseFailureClass.SEMANTIC_CONTEXT,
+        authority=ResponseIssueAuthority.MODEL,
+        code="planning_context",
+        invariant_id="planning_writer_criterion_coverage",
+        subjects=(
+            ResponseIssueSubject(
+                kind=ResponseIssueSubjectKind.CRITERION,
+                identifier="AC_COUNTS",
+            ),
+        ),
+        message="writer coverage failed",
+        paths=("/proposal/tasks",),
+    )
+    plan = build_semantic_correction_plan(first_payload, first)
+    assert plan is not None
+    second_payload: dict[str, object] = {
+        "kind": "proposal",
+        "proposal": {
+            "tasks": ["TASK_COUNTS"],
+            "acceptance_criteria": ["AC_SCAN"],
+        },
+    }
+    newly_exposed = diagnostic_from_invariant(
+        second_payload,
+        failure_class=ResponseFailureClass.SEMANTIC_CONTEXT,
+        authority=ResponseIssueAuthority.MODEL,
+        code="planning_context",
+        invariant_id="planning_criterion_verifier_capability",
+        subjects=(
+            ResponseIssueSubject(
+                kind=ResponseIssueSubjectKind.AGENT,
+                identifier="impl",
+            ),
+            ResponseIssueSubject(
+                kind=ResponseIssueSubjectKind.CRITERION,
+                identifier="AC_SCAN",
+            ),
+        ),
+        message="a completely different human-readable message",
+        paths=("/proposal/tasks",),
+    )
+
+    assert first.fingerprint != newly_exposed.fingerprint
+    assert (
+        correction_outcome(
+            plan,
+            newly_exposed,
+            seen_fingerprints=frozenset({first.fingerprint}),
+        )
+        is SemanticCorrectionOutcome.IMPROVED
+    )
+
+    same_invariant_at_a_refined_path = diagnostic_from_invariant(
+        second_payload,
+        failure_class=ResponseFailureClass.SEMANTIC_CONTEXT,
+        authority=ResponseIssueAuthority.MODEL,
+        code="planning_context",
+        invariant_id="planning_writer_criterion_coverage",
+        subjects=(
+            ResponseIssueSubject(
+                kind=ResponseIssueSubjectKind.CRITERION,
+                identifier="AC_COUNTS",
+            ),
+        ),
+        message="rewritten message text",
+        paths=("/proposal/tasks/0/acceptance_criteria",),
+    )
+    assert (
+        correction_outcome(
+            plan,
+            same_invariant_at_a_refined_path,
+            seen_fingerprints=frozenset({first.fingerprint}),
+        )
+        is SemanticCorrectionOutcome.NO_IMPROVEMENT
+    )
+
+
+def test_legacy_diagnostic_remains_readable_with_path_based_identity() -> None:
+    payload = {
+        "schema_version": 1,
+        "failure_class": "semantic_context",
+        "response_sha256": "a" * 64,
+        "issues": [
+            {
+                "path": "/summary",
+                "code": "too_short",
+                "message": "legacy issue",
+                "authority": "model",
+            }
+        ],
+        "correction_paths": ["/summary"],
+    }
+    legacy = ResponseValidationDiagnostic.model_validate(payload)
+
+    assert legacy.issues[0].invariant_id is None
+    assert legacy.issues[0].identity[2] == "/summary"
+    assert legacy.model_dump(mode="json") == payload
+    assert legacy.fingerprint == semantic_payload_sha256(
+        {
+            "failure_class": "semantic_context",
+            "issues": [
+                {
+                    "path": "/summary",
+                    "code": "too_short",
+                    "authority": "model",
+                }
+            ],
+            "correction_paths": ["/summary"],
+        }
+    )
+
+
+def test_current_diagnostic_requires_a_stable_invariant_id() -> None:
+    with pytest.raises(ValidationError, match="stable invariant ID"):
+        ResponseValidationDiagnostic.model_validate(
+            {
+                "schema_version": 2,
+                "failure_class": "semantic_context",
+                "response_sha256": "a" * 64,
+                "issues": [
+                    {
+                        "path": "/summary",
+                        "code": "too_short",
+                        "message": "current issue without an invariant",
+                        "authority": "model",
+                    }
+                ],
+                "correction_paths": ["/summary"],
+            }
+        )
 
 
 def test_unlocated_whole_response_error_cannot_create_a_correction_plan() -> None:

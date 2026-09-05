@@ -257,8 +257,10 @@ it as the final response contract for an Agent that has inspected or changed a
 workspace. SAT therefore validates the returned semantic object in its
 controller.
 
-A targetable model-owned failure becomes a typed, content-free diagnostic with
-exact JSON-pointer paths. The controller retains the invalid semantic object,
+A targetable model-owned failure becomes a versioned, content-free diagnostic
+with a validator-owned invariant ID, structured affected-entity subjects, and
+exact model-owned JSON-pointer paths. Human-readable error text explains the
+failure but never defines its identity. The controller retains the invalid semantic object,
 binds its canonical SHA-256 into a `semantic_correction_v1` envelope, and asks
 the model to return replacements for exactly those paths—never the complete
 object. It applies the replacements to a copy, preserves every unrelated field,
@@ -266,18 +268,23 @@ and revalidates the compiled result. A writer's verified commit and snapshot
 are frozen before correction and must remain unchanged. A missing user-owned
 decision returns through the typed Planning-question path and never enters this
 protocol. Transport failures, unlocated errors, invalid envelopes, repeated
-error fingerprints, and corrections that leave the same typed defect in place
+invariant/subject fingerprints, and corrections that leave the same typed defect in place
 stop rather than consuming a random full-response retry. JSON-pointer ancestry
 alone does not identify the same defect: a newly exposed container relation may
-be a different root cause, and Planning maps known relations such as a missing
-requirement-ID list to the smallest authority field. Ordinary product flow may
+be a different root cause. Planning relational validators emit their stable
+identity and authority field directly rather than recovering either from error
+prose; an unclassified relation fails closed instead of authorizing a broad
+proposal replacement. Ordinary product flow may
 continue after a correction only when the previous typed defects disappeared,
 a distinct targetable defect remains, and the task USD/deadline authority
 permits the next call. Every deterministic normalization is retained even when
 later validation still fails. Controlled evaluations may intentionally freeze a
 zero-or-one correction cap; each permitted invocation receives the frozen
 per-invocation timeout.
-The 64-field protocol ceiling rejects an over-wide diagnostic as one invalid
+Diagnostic schema v2 adds invariant and subject identity while retaining
+readability, canonical serialization, and fingerprint semantics of schema-v1
+evidence. The 64-field
+protocol ceiling rejects an over-wide diagnostic as one invalid
 submission instead of partially patching it; it is a schema-safety bound, not a
 task, Agent, call, token, or cost budget.
 

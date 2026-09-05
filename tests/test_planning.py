@@ -2269,6 +2269,91 @@ def test_product_planning_continues_only_when_targeted_correction_improves(
     )
 
 
+def test_product_planning_distinguishes_new_relational_invariant_and_continues(
+    tmp_path: Path,
+) -> None:
+    valid_payload = proposal_response().model_dump(mode="json")
+    invalid_payload = json.loads(json.dumps(valid_payload))
+    invalid_payload["proposal"]["tasks"][0]["acceptance_criteria"] = ["AC_REPORT"]
+    invalid_payload["proposal"]["acceptance_criteria"][0]["verification_agent_ids"] = [
+        "cli_developer",
+        "acceptance_tester",
+    ]
+
+    first_corrected = json.loads(json.dumps(invalid_payload))
+    first_corrected["proposal"]["tasks"] = valid_payload["proposal"]["tasks"]
+    second_corrected = json.loads(json.dumps(first_corrected))
+    second_corrected["proposal"]["acceptance_criteria"][0]["verification_agent_ids"] = (
+        valid_payload["proposal"]["acceptance_criteria"][0]["verification_agent_ids"]
+    )
+    executor = ScriptedAgentExecutor(
+        [
+            json.dumps(invalid_payload),
+            correction_response(
+                invalid_payload,
+                {"/proposal/tasks": valid_payload["proposal"]["tasks"]},
+            ),
+            correction_response(
+                first_corrected,
+                {
+                    "/proposal/acceptance_criteria/0/verification_agent_ids": (
+                        valid_payload["proposal"]["acceptance_criteria"][0][
+                            "verification_agent_ids"
+                        ]
+                    )
+                },
+            ),
+        ]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(response_repair_limit=None),
+        clock=AdvancingClock(),
+    )
+
+    created = coordinator.start(
+        request(),
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+
+    assert created is not None
+    assert len(executor.requests) == 3
+    first = store.load_turn(request().run_id, 1)
+    assert first.response_validation is not None
+    assert first.response_validation.schema_version == 2
+    assert first.response_validation.correction_paths == ("/proposal/tasks",)
+    assert first.response_validation.issues[0].invariant_id == (
+        "planning_writer_criterion_coverage"
+    )
+    assert [
+        item.model_dump(mode="json")
+        for item in first.response_validation.issues[0].subjects
+    ] == [{"kind": "criterion", "identifier": "AC_SCAN"}]
+
+    second = store.load_turn(request().run_id, 2)
+    assert second.semantic_correction_outcome == "improved"
+    assert second.response_validation is not None
+    assert second.response_validation.correction_paths == (
+        "/proposal/acceptance_criteria/0/verification_agent_ids",
+    )
+    assert second.response_validation.issues[0].invariant_id == (
+        "planning_criterion_verifier_capability"
+    )
+    assert [
+        item.model_dump(mode="json")
+        for item in second.response_validation.issues[0].subjects
+    ] == [
+        {"kind": "agent", "identifier": "cli_developer"},
+        {"kind": "criterion", "identifier": "AC_SCAN"},
+    ]
+    assert "planning_criterion_verifier_capability" in executor.requests[2].prompt
+    assert store.load_turn(request().run_id, 3).semantic_correction_outcome == (
+        "accepted"
+    )
+
+
 def test_product_planning_preserves_normalization_and_targets_new_root_cause(
     tmp_path: Path,
 ) -> None:

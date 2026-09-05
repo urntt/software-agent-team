@@ -218,13 +218,16 @@ Transport failures and unlocated errors stop. A targetable model-owned failure
 produces a content-free diagnostic and a `semantic_correction_v1` envelope bound
 to the retained object's SHA-256. The model supplies values for exactly the
 listed JSON-pointer paths; every other value remains immutable. Product
-Planning continues only after every prior typed issue identity disappears and a
-distinct targetable failure remains within the task budget. A newly exposed
-relational error at a broader container is not treated as the same defect merely
-because its JSON pointer overlaps the corrected child; the controller locates
-the smallest authority field it can justify. A repeated fingerprint or the same
-typed issue stops, while controlled evaluation may intentionally impose a
-zero-or-one correction cap.
+Planning continues only after every prior validator-owned invariant/subject
+identity disappears and a distinct targetable failure remains within the task
+budget. A newly exposed relational error is not treated as the same defect merely
+because its JSON pointer overlaps the corrected field; each Planning relational
+validator supplies a stable invariant ID, structured criterion/task/Agent or
+other entity subjects, and the smallest model-owned authority path it can
+justify. Error prose is display-only. An unclassified relation fails closed
+without guessing a broad replacement. A repeated fingerprint or the same typed
+issue stops, while controlled evaluation may intentionally impose a zero-or-one
+correction cap.
 
 Every workspace scope describes controller authority inside the generated
 repository: `repository` grants whole-project access and `repository/path`

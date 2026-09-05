@@ -19,7 +19,7 @@ from pydantic import (
     model_validator,
 )
 
-CORRECTION_SCHEMA_VERSION = 1
+CORRECTION_SCHEMA_VERSION = 2
 MAX_CORRECTION_FIELDS = 64
 
 
@@ -43,6 +43,37 @@ class ResponseIssueAuthority(StrEnum):
     CONTROLLER = "controller"
 
 
+class ResponseIssueSubjectKind(StrEnum):
+    """Stable entity type affected by one response invariant."""
+
+    AGENT = "agent"
+    CAPABILITY = "capability"
+    CRITERION = "criterion"
+    DECISION = "decision"
+    QUESTION = "question"
+    REQUIREMENT = "requirement"
+    TASK = "task"
+
+
+class ResponseIssueSubject(BaseModel):
+    """Content-free identity of an entity involved in a response defect."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: ResponseIssueSubjectKind
+    identifier: str = Field(min_length=1, max_length=200)
+
+    @field_validator("identifier")
+    @classmethod
+    def require_safe_identifier(cls, value: str) -> str:
+        cleaned = " ".join(value.split())
+        if not cleaned or any(
+            character in cleaned for character in ("\x00", "\r", "\n")
+        ):
+            raise ValueError("response issue subject must be bounded text")
+        return cleaned
+
+
 class SemanticCorrectionOutcome(StrEnum):
     """Controller conclusion after applying one correction submission."""
 
@@ -60,6 +91,15 @@ class ResponseValidationIssue(BaseModel):
 
     path: str = Field(min_length=1, max_length=500)
     code: str = Field(pattern=r"^[a-z][a-z0-9_]{1,99}$")
+    invariant_id: str | None = Field(
+        default=None,
+        pattern=r"^[a-z][a-z0-9_]{1,99}$",
+        exclude_if=lambda value: value is None,
+    )
+    subjects: tuple[ResponseIssueSubject, ...] = Field(
+        default=(),
+        exclude_if=lambda values: not values,
+    )
     message: str = Field(min_length=1, max_length=500)
     authority: ResponseIssueAuthority
 
@@ -83,13 +123,45 @@ class ResponseValidationIssue(BaseModel):
             raise ValueError("response issue message must not be blank")
         return cleaned
 
+    @field_validator("subjects")
+    @classmethod
+    def require_canonical_subjects(
+        cls,
+        values: tuple[ResponseIssueSubject, ...],
+    ) -> tuple[ResponseIssueSubject, ...]:
+        identities = tuple((item.kind.value, item.identifier) for item in values)
+        if len(identities) != len(set(identities)) or identities != tuple(
+            sorted(identities)
+        ):
+            raise ValueError("response issue subjects must be unique and sorted")
+        return values
+
+    @property
+    def identity(
+        self,
+    ) -> tuple[
+        str,
+        tuple[tuple[str, str], ...],
+        str | None,
+        ResponseIssueAuthority,
+    ]:
+        """Return the stable root-cause identity used for convergence."""
+
+        subjects = tuple((item.kind.value, item.identifier) for item in self.subjects)
+        return (
+            self.invariant_id or self.code,
+            subjects,
+            None if subjects else self.path,
+            self.authority,
+        )
+
 
 class ResponseValidationDiagnostic(BaseModel):
     """Stable failure set used to decide whether correction is possible."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[CORRECTION_SCHEMA_VERSION] = CORRECTION_SCHEMA_VERSION
+    schema_version: Literal[1, CORRECTION_SCHEMA_VERSION] = CORRECTION_SCHEMA_VERSION
     failure_class: ResponseFailureClass
     response_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     issues: tuple[ResponseValidationIssue, ...] = Field(
@@ -112,6 +184,7 @@ class ResponseValidationDiagnostic(BaseModel):
             ResponseValidationIssue(
                 path=value,
                 code="repair_path",
+                invariant_id="repair_path",
                 message="validated repair path",
                 authority=ResponseIssueAuthority.MODEL,
             )
@@ -119,6 +192,10 @@ class ResponseValidationDiagnostic(BaseModel):
 
     @model_validator(mode="after")
     def bind_correction_paths_to_model_issues(self) -> Self:
+        if self.schema_version == CORRECTION_SCHEMA_VERSION and any(
+            issue.invariant_id is None for issue in self.issues
+        ):
+            raise ValueError("current response issues require a stable invariant ID")
         model_paths = {
             issue.path
             for issue in self.issues
@@ -145,17 +222,36 @@ class ResponseValidationDiagnostic(BaseModel):
     def fingerprint(self) -> str:
         """Return a content-free identity for non-convergence detection."""
 
+        if self.schema_version == 1:
+            return _json_sha256(
+                {
+                    "failure_class": self.failure_class.value,
+                    "issues": [
+                        {
+                            "path": issue.path,
+                            "code": issue.code,
+                            "authority": issue.authority.value,
+                        }
+                        for issue in self.issues
+                    ],
+                    "correction_paths": list(self.correction_paths),
+                }
+            )
+        identities = sorted(set(issue.identity for issue in self.issues))
         payload = {
             "failure_class": self.failure_class.value,
             "issues": [
                 {
-                    "path": issue.path,
-                    "code": issue.code,
-                    "authority": issue.authority.value,
+                    "invariant_id": invariant_id,
+                    "subjects": [
+                        {"kind": kind, "identifier": identifier}
+                        for kind, identifier in subjects
+                    ],
+                    "path": path,
+                    "authority": authority.value,
                 }
-                for issue in self.issues
+                for invariant_id, subjects, path, authority in identities
             ],
-            "correction_paths": list(self.correction_paths),
         }
         return _json_sha256(payload)
 
@@ -330,6 +426,7 @@ def diagnostic_from_validation_error(
             ResponseValidationIssue(
                 path="/",
                 code="validation_issue_overflow",
+                invariant_id="validation_issue_overflow",
                 message=(
                     "Response has too many independent validation failures for "
                     "safe field-targeted correction"
@@ -347,6 +444,7 @@ def diagnostic_from_validation_error(
         ResponseValidationIssue(
             path=_encode_pointer(tuple(item for item in issue["loc"])),
             code=str(issue["type"]).replace(".", "_")[:100],
+            invariant_id=str(issue["type"]).replace(".", "_")[:100],
             message=str(issue["msg"])[:500],
             authority=(
                 ResponseIssueAuthority.CONTROLLER
@@ -383,6 +481,39 @@ def diagnostic_from_message(
         ResponseValidationIssue(
             path=path,
             code=code,
+            invariant_id=code,
+            message=message[:500],
+            authority=authority,
+        )
+        for path in paths
+    )
+    return ResponseValidationDiagnostic(
+        failure_class=failure_class,
+        response_sha256=semantic_payload_sha256(payload),
+        issues=issues,
+        correction_paths=_minimal_correction_paths(issues),
+    )
+
+
+def diagnostic_from_invariant(
+    payload: dict[str, object],
+    *,
+    failure_class: ResponseFailureClass,
+    authority: ResponseIssueAuthority,
+    code: str,
+    invariant_id: str,
+    subjects: tuple[ResponseIssueSubject, ...],
+    message: str,
+    paths: tuple[str, ...],
+) -> ResponseValidationDiagnostic:
+    """Create a diagnostic from a validator-owned invariant and entities."""
+
+    issues = tuple(
+        ResponseValidationIssue(
+            path=path,
+            code=code,
+            invariant_id=invariant_id,
+            subjects=subjects,
             message=message[:500],
             authority=authority,
         )
@@ -407,6 +538,7 @@ def diagnostic_from_transport(
     issue = ResponseValidationIssue(
         path="/",
         code=code,
+        invariant_id=code,
         message=message[:500],
         authority=ResponseIssueAuthority.TRANSPORT,
     )
@@ -508,6 +640,8 @@ def correction_prompt(plan: SemanticCorrectionPlan) -> str:
         {
             "path": issue.path,
             "code": issue.code,
+            "invariant_id": issue.invariant_id,
+            "subjects": [item.model_dump(mode="json") for item in issue.subjects],
             "message": issue.message,
         }
         for issue in plan.diagnostic.issues
@@ -592,15 +726,13 @@ def correction_outcome(
     if diagnostic.fingerprint in seen_fingerprints:
         return SemanticCorrectionOutcome.NO_IMPROVEMENT
     prior_issues = {
-        (issue.path, issue.code, issue.authority)
+        issue.identity
         for issue in plan.diagnostic.issues
         if any(
             _paths_overlap(issue.path, target) for target in plan.evidence.target_paths
         )
     }
-    current_issues = {
-        (issue.path, issue.code, issue.authority) for issue in diagnostic.issues
-    }
+    current_issues = {issue.identity for issue in diagnostic.issues}
     if prior_issues & current_issues:
         return SemanticCorrectionOutcome.NO_IMPROVEMENT
     return SemanticCorrectionOutcome.IMPROVED
