@@ -64,7 +64,14 @@ def test_success_records_exact_commands_resources_and_terminal_inventory(
     )
 
     assert exit_code == 0
+    assert report["schema_version"] == 2
     assert report["status"] == FullGateStatus.COMPLETED.value
+    assert report["process_attribution"] == {
+        "mode": "subreaper_with_inherited_stage_identity",
+        "status": "available",
+        "reason": None,
+        "restored": True,
+    }
     assert [item["status"] for item in report["stages"]] == [
         StageStatus.COMPLETED.value,
         StageStatus.COMPLETED.value,
@@ -215,7 +222,6 @@ def test_detached_descendant_is_reported_and_exactly_cleaned(tmp_path: Path) -> 
             "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'],",
             "                 start_new_session=True, stdout=subprocess.DEVNULL,",
             "                 stderr=subprocess.DEVNULL)",
-            "time.sleep(0.2)",
         )
     )
 
@@ -224,11 +230,32 @@ def test_detached_descendant_is_reported_and_exactly_cleaned(tmp_path: Path) -> 
     assert exit_code == 1
     stage = report["stages"][0]
     assert stage["status"] == StageStatus.FAILED.value
-    assert any(
-        action.startswith("sigkill_pid:")
-        for action in stage["process"]["cleanup"]["actions"]
-    )
+    actions = stage["process"]["cleanup"]["actions"]
+    assert any(action.startswith("sigterm_pid:") for action in actions)
+    assert any(action.startswith("reaped_pid:") for action in actions)
     assert stage["process"]["residual_after_cleanup"] == []
+    assert stage["process_ownership"]["mechanism"] == "inherited_stage_identity"
+    assert len(stage["process_ownership"]["identity_sha256"]) == 64
+    assert "SAT_FULL_GATE_STAGE_ID" not in json.dumps(report)
+
+
+@pytest.mark.skipif(not Path("/proc").exists(), reason="Linux process evidence")
+def test_stage_identity_does_not_capture_an_unrelated_process(tmp_path: Path) -> None:
+    unrelated = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        start_new_session=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        exit_code, report, _, _ = _run(tmp_path, "pass")
+
+        assert exit_code == 0
+        assert report["status"] == FullGateStatus.COMPLETED.value
+        assert unrelated.poll() is None
+    finally:
+        unrelated.kill()
+        unrelated.wait(timeout=5)
 
 
 def test_canonical_stage_order_uses_shell_free_commands(tmp_path: Path) -> None:

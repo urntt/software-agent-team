@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import hashlib
 import json
 import os
@@ -27,12 +28,15 @@ from software_agent_team.process_lifecycle import (
     read_linux_process_identity,
 )
 
-FULL_GATE_SCHEMA_VERSION = 1
+FULL_GATE_SCHEMA_VERSION = 2
 DEFAULT_STAGE_TIMEOUT_SECONDS = 1_800.0
 DEFAULT_TERMINATION_GRACE_SECONDS = 5.0
 DEFAULT_SAMPLE_INTERVAL_SECONDS = 0.10
 REPORT_FILENAME = "report.json"
 PYTEST_STATE_FILENAME = "pytest-state.json"
+_STAGE_IDENTITY_ENV = "SAT_FULL_GATE_STAGE_ID"
+_PR_SET_CHILD_SUBREAPER = 36
+_PR_GET_CHILD_SUBREAPER = 37
 
 
 class FullGateStatus(StrEnum):
@@ -73,6 +77,7 @@ class ProcessSnapshot:
     pid: int
     parent_pid: int
     process_group_id: int
+    state: str
     start_time_ticks: int
     command_name: str
     rss_bytes: int
@@ -83,6 +88,7 @@ class ProcessSnapshot:
             "pid": self.pid,
             "parent_pid": self.parent_pid,
             "process_group_id": self.process_group_id,
+            "state": self.state,
             "start_time_ticks": self.start_time_ticks,
             "command_name": self.command_name,
             "rss_bytes": self.rss_bytes,
@@ -155,6 +161,7 @@ def _read_proc_snapshot(pid: int) -> ProcessSnapshot | None:
             pid=pid,
             parent_pid=int(fields[1]),
             process_group_id=int(fields[2]),
+            state=fields[0],
             start_time_ticks=int(fields[19]),
             command_name=raw[opening + 1 : closing],
             rss_bytes=int(statm[1]) * os.sysconf("SC_PAGE_SIZE"),
@@ -185,17 +192,111 @@ def _all_processes() -> dict[int, ProcessSnapshot]:
     return observed
 
 
+def _has_stage_identity(pid: int, stage_identity: str) -> bool:
+    """Match one inherited stage marker without exposing process environments."""
+
+    expected = f"{_STAGE_IDENTITY_ENV}={stage_identity}".encode()
+    try:
+        environment = Path(f"/proc/{pid}/environ").read_bytes()
+    except (FileNotFoundError, ProcessLookupError, PermissionError, OSError):
+        return False
+    return expected in environment.split(b"\0")
+
+
+@dataclass(frozen=True)
+class _ChildSubreaperBoundary:
+    """Process-local Linux orphan-adoption boundary for exact stage cleanup."""
+
+    active: bool
+    previously_active: bool | None
+    reason: str | None = None
+
+    def as_json(self) -> dict[str, Any]:
+        return {
+            "mode": (
+                "subreaper_with_inherited_stage_identity"
+                if self.active
+                else "inherited_stage_identity_fallback"
+            ),
+            "status": "available" if self.active else "unavailable",
+            "reason": self.reason,
+        }
+
+
+def _set_child_subreaper() -> _ChildSubreaperBoundary:
+    """Adopt orphaned stage descendants when the Linux kernel supports it."""
+
+    if sys.platform != "linux":
+        return _ChildSubreaperBoundary(
+            active=False,
+            previously_active=None,
+            reason="unsupported_platform",
+        )
+    try:
+        library = ctypes.CDLL(None, use_errno=True)
+        current = ctypes.c_int()
+        if (
+            library.prctl(
+                _PR_GET_CHILD_SUBREAPER,
+                ctypes.byref(current),
+                0,
+                0,
+                0,
+            )
+            != 0
+        ):
+            raise OSError(ctypes.get_errno(), "PR_GET_CHILD_SUBREAPER failed")
+        previous = bool(current.value)
+        if not previous and library.prctl(_PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0:
+            raise OSError(ctypes.get_errno(), "PR_SET_CHILD_SUBREAPER failed")
+    except (AttributeError, OSError) as error:
+        return _ChildSubreaperBoundary(
+            active=False,
+            previously_active=None,
+            reason=type(error).__name__,
+        )
+    return _ChildSubreaperBoundary(
+        active=True,
+        previously_active=previous,
+    )
+
+
+def _restore_child_subreaper(boundary: _ChildSubreaperBoundary) -> str | None:
+    """Restore only the process-local flag changed by this supervisor."""
+
+    if not boundary.active or boundary.previously_active is not False:
+        return None
+    try:
+        library = ctypes.CDLL(None, use_errno=True)
+        if library.prctl(_PR_SET_CHILD_SUBREAPER, 0, 0, 0, 0) != 0:
+            raise OSError(ctypes.get_errno(), "PR_SET_CHILD_SUBREAPER restore failed")
+    except (AttributeError, OSError) as error:
+        return type(error).__name__
+    return None
+
+
 def _owned_processes(
     root_pid: int,
     process_group_id: int,
     *,
     tracked: dict[tuple[int, int], ProcessSnapshot],
+    stage_identity: str | None = None,
+    supervisor_pid: int | None = None,
+    subreaper_active: bool = False,
 ) -> tuple[ProcessSnapshot, ...]:
     processes = _all_processes()
     selected = {
         pid
         for pid, item in processes.items()
         if item.process_group_id == process_group_id
+        or (
+            stage_identity is not None
+            and (
+                not subreaper_active
+                or (supervisor_pid is not None and item.parent_pid == supervisor_pid)
+            )
+            and _has_stage_identity(pid, stage_identity)
+        )
     }
     selected.add(root_pid)
     changed = True
@@ -458,33 +559,108 @@ def _sleep_before_deadline(deadline: float) -> bool:
     return True
 
 
+def _reap_adopted_zombies(
+    processes: tuple[ProcessSnapshot, ...],
+    *,
+    root_pid: int,
+    supervisor_pid: int,
+    actions: list[str],
+) -> bool:
+    """Reap only exact zombie descendants adopted by this subreaper."""
+
+    reaped = False
+    for item in processes:
+        if (
+            item.pid == root_pid
+            or item.parent_pid != supervisor_pid
+            or item.state != "Z"
+        ):
+            continue
+        current = _read_proc_snapshot(item.pid)
+        if current is None or current.start_time_ticks != item.start_time_ticks:
+            continue
+        try:
+            waited_pid, _ = os.waitpid(item.pid, os.WNOHANG)
+        except ChildProcessError:
+            continue
+        if waited_pid == item.pid:
+            actions.append(f"reaped_pid:{item.pid}")
+            reaped = True
+    return reaped
+
+
 def _terminate_owned_processes(
     process: subprocess.Popen[bytes],
     tracked: dict[tuple[int, int], ProcessSnapshot],
     *,
     grace_seconds: float,
+    stage_identity: str,
+    supervisor_pid: int,
+    subreaper_active: bool,
 ) -> dict[str, Any]:
     actions: list[str] = []
-    if process.poll() is None:
+    group_terminated = process.poll() is None
+    if group_terminated:
         try:
             os.killpg(process.pid, signal.SIGTERM)
             actions.append("sigterm_process_group")
         except ProcessLookupError:
             pass
+
+    def observe() -> tuple[ProcessSnapshot, ...]:
+        alive = _owned_processes(
+            process.pid,
+            process.pid,
+            tracked=tracked,
+            stage_identity=stage_identity,
+            supervisor_pid=supervisor_pid,
+            subreaper_active=subreaper_active,
+        )
+        if subreaper_active and _reap_adopted_zombies(
+            alive,
+            root_pid=process.pid,
+            supervisor_pid=supervisor_pid,
+            actions=actions,
+        ):
+            alive = _owned_processes(
+                process.pid,
+                process.pid,
+                tracked=tracked,
+                stage_identity=stage_identity,
+                supervisor_pid=supervisor_pid,
+                subreaper_active=subreaper_active,
+            )
+        return alive
+
+    alive = observe()
+    for item in alive:
+        if item.pid == process.pid or (
+            group_terminated and item.process_group_id == process.pid
+        ):
+            continue
+        current = _read_proc_snapshot(item.pid)
+        if current is None or current.start_time_ticks != item.start_time_ticks:
+            continue
+        try:
+            os.kill(item.pid, signal.SIGTERM)
+            actions.append(f"sigterm_pid:{item.pid}")
+        except ProcessLookupError:
+            pass
     deadline = time.monotonic() + grace_seconds
     while time.monotonic() < deadline:
-        alive = _owned_processes(process.pid, process.pid, tracked=tracked)
+        alive = observe()
         if not alive:
             break
         if not _sleep_before_deadline(deadline):
             break
-    alive = _owned_processes(process.pid, process.pid, tracked=tracked)
+    alive = observe()
     if alive:
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-            actions.append("sigkill_process_group")
-        except ProcessLookupError:
-            pass
+        if process.poll() is None:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+                actions.append("sigkill_process_group")
+            except ProcessLookupError:
+                pass
         for item in alive:
             current = _read_proc_snapshot(item.pid)
             if current is None or current.start_time_ticks != item.start_time_ticks:
@@ -496,7 +672,7 @@ def _terminate_owned_processes(
                 pass
         deadline = time.monotonic() + grace_seconds
         while time.monotonic() < deadline:
-            if not _owned_processes(process.pid, process.pid, tracked=tracked):
+            if not observe():
                 break
             if not _sleep_before_deadline(deadline):
                 break
@@ -545,6 +721,7 @@ class FullGateSupervisor:
         cgroup_before = _read_cgroup_memory()
         kernel_before = _kernel_oom_evidence()
         owner = read_linux_process_identity(os.getpid())
+        subreaper = _set_child_subreaper()
         report: dict[str, Any] = {
             "schema_version": FULL_GATE_SCHEMA_VERSION,
             "report_id": report_directory.name,
@@ -564,6 +741,10 @@ class FullGateSupervisor:
                     "start_time_ticks": owner.start_time_ticks,
                 }
             ),
+            "process_attribution": {
+                **subreaper.as_json(),
+                "restored": None,
+            },
             "stage_timeout_seconds": self.stage_timeout_seconds,
             "termination_grace_seconds": self.termination_grace_seconds,
             "stages": [
@@ -604,6 +785,7 @@ class FullGateSupervisor:
                     report,
                     report_path,
                     report_directory,
+                    subreaper_active=subreaper.active,
                 )
             if self._requested_signal is not None:
                 report["status"] = FullGateStatus.INTERRUPTED.value
@@ -630,6 +812,12 @@ class FullGateSupervisor:
                 kernel_before, kernel_after
             )
             report["post_run_inventory"] = self._post_run_inventory(report["stages"])
+            restoration_error = _restore_child_subreaper(subreaper)
+            report["process_attribution"]["restored"] = restoration_error is None
+            if restoration_error is not None:
+                report["process_attribution"]["restore_error"] = restoration_error
+                report["status"] = FullGateStatus.FAILED.value
+                exit_code = exit_code or 1
             _atomic_write_json(report_path, report)
             _atomic_write_json(
                 self.evidence_root / "latest.json",
@@ -707,6 +895,8 @@ class FullGateSupervisor:
         report: dict[str, Any],
         report_path: Path,
         report_directory: Path,
+        *,
+        subreaper_active: bool,
     ) -> int:
         stage_record["status"] = StageStatus.RUNNING.value
         stage_record["started_at"] = _utc_now()
@@ -716,6 +906,12 @@ class FullGateSupervisor:
         environment = os.environ.copy()
         if stage.environment:
             environment.update(stage.environment)
+        stage_identity = uuid4().hex
+        environment[_STAGE_IDENTITY_ENV] = stage_identity
+        stage_record["process_ownership"] = {
+            "mechanism": "inherited_stage_identity",
+            "identity_sha256": hashlib.sha256(stage_identity.encode()).hexdigest(),
+        }
         if stage.name == "test":
             environment["SAT_FULL_GATE_PYTEST_STATE"] = str(
                 report_directory / PYTEST_STATE_FILENAME
@@ -754,7 +950,14 @@ class FullGateSupervisor:
                         log.flush()
                     else:
                         selector.unregister(key.fileobj)
-                tree = _owned_processes(process.pid, process.pid, tracked=tracked)
+                tree = _owned_processes(
+                    process.pid,
+                    process.pid,
+                    tracked=tracked,
+                    stage_identity=stage_identity,
+                    supervisor_pid=os.getpid(),
+                    subreaper_active=subreaper_active,
+                )
                 self._update_resource_peak(report, tree)
                 if stage.name == "test":
                     report["pytest"] = _pytest_state(
@@ -765,7 +968,12 @@ class FullGateSupervisor:
                         process,
                         tracked,
                         grace_seconds=self.termination_grace_seconds,
+                        stage_identity=stage_identity,
+                        supervisor_pid=os.getpid(),
+                        subreaper_active=subreaper_active,
                     )
+                if process.poll() is not None and not selector.get_map():
+                    break
                 if (
                     time.monotonic() - started >= self.stage_timeout_seconds
                     and termination is None
@@ -775,23 +983,41 @@ class FullGateSupervisor:
                         process,
                         tracked,
                         grace_seconds=self.termination_grace_seconds,
+                        stage_identity=stage_identity,
+                        supervisor_pid=os.getpid(),
+                        subreaper_active=subreaper_active,
                     )
-                if process.poll() is not None and not selector.get_map():
-                    break
                 _atomic_write_json(report_path, report)
             selector.close()
             return_code = process.wait()
             self._active_process = None
-        residual_before = _owned_processes(process.pid, process.pid, tracked=tracked)
+        residual_before = _owned_processes(
+            process.pid,
+            process.pid,
+            tracked=tracked,
+            stage_identity=stage_identity,
+            supervisor_pid=os.getpid(),
+            subreaper_active=subreaper_active,
+        )
         residual_cleanup: dict[str, Any] = termination or {"actions": []}
         if residual_before:
             later_cleanup = _terminate_owned_processes(
                 process,
                 tracked,
                 grace_seconds=self.termination_grace_seconds,
+                stage_identity=stage_identity,
+                supervisor_pid=os.getpid(),
+                subreaper_active=subreaper_active,
             )
             residual_cleanup["actions"].extend(later_cleanup["actions"])
-        residual_after = _owned_processes(process.pid, process.pid, tracked=tracked)
+        residual_after = _owned_processes(
+            process.pid,
+            process.pid,
+            tracked=tracked,
+            stage_identity=stage_identity,
+            supervisor_pid=os.getpid(),
+            subreaper_active=subreaper_active,
+        )
         stage_record["ended_at"] = _utc_now()
         stage_record["exit_code"] = return_code if return_code >= 0 else None
         stage_record["signal"] = -return_code if return_code < 0 else None
