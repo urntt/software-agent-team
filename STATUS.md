@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** Phase 3E implemented; twenty fresh installed adaptive rehearsals include two accepted strict-route Adaptive Planning deliveries and one provider-backed foreground-control rehearsal; the latest managed-lifecycle and saved-profile startup repairs are live-validated
+**Current milestone:** Phase 3E implemented; invocation lifecycle and checkpoint progress are offline-verified; twenty fresh installed adaptive rehearsals include two accepted strict-route Adaptive Planning deliveries and one provider-backed foreground-control rehearsal
 
 **Last updated:** September 5, 2026
 
@@ -20,16 +20,26 @@ first complete supervised gate passed all 997 tests with no residual stage
 process, process lease, sandbox container, or volume; it observed no new cgroup
 or kernel OOM event. The two historical incomplete suites still have an
 evidence-bounded unknown cause rather than a retroactively invented diagnosis.
+The latest clean batch gate at `65518d9` passed all 1,014 tests after a
+deadline-crossing cleanup race was reproduced, fixed, and regression-tested;
+it likewise recorded no new OOM evidence or residual owned resources.
 
 The current development head implements configuration schema v8 model metadata
 with attributable price/context sources, task-scoped route snapshots, one
 explicit per-task USD authorization and optional deadline prompt, and separate
 controlled-evaluation versus ordinary-user resource authority. Product Planning
 and execution no longer use a fixed wall-clock work limit. SAT resolves a
-provider/model-aware renewable inactivity lease, observes private stream and
-attributable tool lifecycle without persisting their content, visibly separates
-suspected stall, grace, recovery, degraded observation, and terminal stall, and
-persists typed content-free evidence for Planning and runtime Agents. One
+finite attributable initialization sequence before a provider/model-aware
+renewable inactivity lease. Planning and runtime Agents now share `launched`,
+`initializing`, `provider_wait`, `tool_active`, `stopping`,
+`collecting_evidence`, and `stopped` phases with distinct stop authorities and
+typed cleanup evidence. SAT observes private stream and attributable tool
+lifecycle without persisting their content, visibly separates suspected stall,
+grace, recovery, degraded observation, and terminal stall, and does not publish
+terminal failure before process reaping and evidence collection. RunEvent v3
+adds a Controller-owned approved-task/checkpoint/Git/gate/Review/cost snapshot
+while preserving canonical v2 reads; Artifact schema v5 carries invocation
+lifecycle evidence and retains v2-v4 reads. One
 controller-priced ledger now covers Planning through terminal execution,
 standard progress exposes spend and remaining authorization, and final reports
 include attributable per-call cost evidence. Terminal JSON, Markdown, and the
@@ -122,7 +132,8 @@ assessments in one pass and records removal of the five unapproved arrays. This
 proves the captured regression path offline, not a corrected provider journey;
 the issue remains open until a fresh run crosses Review without that call.
 
-Doctor, formatter, lint, and the complete **987-test offline suite** pass with
+At that correction milestone, doctor, formatter, lint, and the complete
+**987-test offline suite** passed with
 diagnostic-v2 and slot-bound semantic correction v2, including the exact
 captured two-invariant Planning sequence, a three-call correction regression,
 collision-safe decision-token canonicalization, and multi-field Controller path
