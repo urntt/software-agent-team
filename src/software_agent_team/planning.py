@@ -480,12 +480,115 @@ def _normalize_planning_response_payload(
     if not isinstance(proposal, dict):
         return normalized, tuple(changes)
     acceptance_criteria = proposal.get("acceptance_criteria")
+    tasks = proposal.get("tasks")
+    agents = proposal.get("agents")
     controller_owned_ids = set(profile_criterion_ids)
     if isinstance(acceptance_criteria, list) and controller_owned_ids:
+        task_items = tasks if isinstance(tasks, list) else []
+        agent_items = agents if isinstance(agents, list) else []
+
+        def string_list(value: object) -> tuple[str, ...]:
+            return (
+                tuple(item for item in value if isinstance(item, str))
+                if isinstance(value, list)
+                else ()
+            )
+
+        criterion_ids = [
+            criterion.get("id") if isinstance(criterion, dict) else None
+            for criterion in acceptance_criteria
+        ]
+        criterion_id_counts = {
+            criterion_id: criterion_ids.count(criterion_id)
+            for criterion_id in criterion_ids
+            if isinstance(criterion_id, str)
+        }
+        writer_ids = {
+            agent.get("id")
+            for agent in agent_items
+            if isinstance(agent, dict)
+            and agent.get("capability") in {"implementation", "integration"}
+            and isinstance(agent.get("id"), str)
+        }
+        writer_bound_ids = {
+            criterion_id
+            for task in task_items
+            if isinstance(task, dict) and task.get("owner_agent_id") in writer_ids
+            for criterion_id in string_list(task.get("acceptance_criteria"))
+        }
+        declared_requirement_ids = set(string_list(proposal.get("requirement_ids")))
+        covered_requirement_ids = {
+            requirement_id
+            for criterion in acceptance_criteria
+            if isinstance(criterion, dict)
+            and criterion.get("id") not in controller_owned_ids
+            for requirement_id in string_list(criterion.get("requirement_ids"))
+        }
+        uncovered_requirement_ids = declared_requirement_ids - covered_requirement_ids
+        deconfliction_candidates = [
+            (
+                criterion_index,
+                set(string_list(criterion.get("requirement_ids"))),
+            )
+            for criterion_index, criterion in enumerate(acceptance_criteria)
+            if isinstance(criterion, dict)
+            and isinstance(criterion.get("id"), str)
+            and criterion["id"] in controller_owned_ids
+            and criterion_id_counts[criterion["id"]] == 1
+            and criterion["id"] in writer_bound_ids
+        ]
+        retained_collision_indexes: set[int] = set()
+        while uncovered_requirement_ids:
+            eligible = [
+                (index, requirements)
+                for index, requirements in deconfliction_candidates
+                if index not in retained_collision_indexes
+                and requirements & uncovered_requirement_ids
+            ]
+            if not eligible:
+                break
+            selected_index, selected_requirements = min(
+                eligible,
+                key=lambda item: (
+                    -len(item[1] & uncovered_requirement_ids),
+                    item[0],
+                ),
+            )
+            retained_collision_indexes.add(selected_index)
+            uncovered_requirement_ids -= selected_requirements
+
+        used_criterion_ids = {
+            criterion_id
+            for criterion_id in criterion_ids
+            if isinstance(criterion_id, str)
+        } | controller_owned_ids
+        renamed_criterion_ids: dict[str, str] = {}
         retained_criteria: list[object] = []
         for criterion_index, criterion in enumerate(acceptance_criteria):
             criterion_id = criterion.get("id") if isinstance(criterion, dict) else None
             if isinstance(criterion_id, str) and criterion_id in controller_owned_ids:
+                if criterion_index in retained_collision_indexes:
+                    suffix = (
+                        criterion_id.removeprefix("AC_")
+                        if criterion_id.startswith("AC_")
+                        else criterion_id
+                    )
+                    base_id = f"AC_TASK_{suffix}"
+                    replacement_id = base_id
+                    counter = 2
+                    while replacement_id in used_criterion_ids:
+                        replacement_id = f"{base_id}_{counter}"
+                        counter += 1
+                    assert isinstance(criterion, dict)
+                    criterion["id"] = replacement_id
+                    used_criterion_ids.add(replacement_id)
+                    renamed_criterion_ids[criterion_id] = replacement_id
+                    retained_criteria.append(criterion)
+                    changes.append(
+                        f"deconflicted model criterion {criterion_id} as "
+                        f"{replacement_id} from controller-owned profile ID"
+                    )
+                    continue
                 changes.append(
                     "removed controller-owned profile criterion "
                     f"{criterion_id} from proposal.acceptance_criteria"
@@ -494,7 +597,24 @@ def _normalize_planning_response_payload(
                 continue
             retained_criteria.append(criterion)
         proposal["acceptance_criteria"] = retained_criteria
-    tasks = proposal.get("tasks")
+        if isinstance(tasks, list) and renamed_criterion_ids:
+            for task in tasks:
+                if not isinstance(task, dict):
+                    continue
+                bindings = task.get("acceptance_criteria")
+                if not isinstance(bindings, list):
+                    continue
+                expanded_bindings: list[object] = []
+                for binding in bindings:
+                    replacement = renamed_criterion_ids.get(binding)
+                    if replacement is not None:
+                        expanded_bindings.append(replacement)
+                    expanded_bindings.append(binding)
+                deduplicated_bindings: list[object] = []
+                for binding in expanded_bindings:
+                    if binding not in deduplicated_bindings:
+                        deduplicated_bindings.append(binding)
+                task["acceptance_criteria"] = deduplicated_bindings
     if isinstance(tasks, list):
         for task_index, task in enumerate(tasks):
             if not isinstance(task, dict):
@@ -510,7 +630,6 @@ def _normalize_planning_response_payload(
                         "canonicalized "
                         f"proposal.tasks[{task_index}].expected_paths[{path_index}]"
                     )
-    agents = proposal.get("agents")
     if isinstance(agents, list):
         for agent_index, agent in enumerate(agents):
             if not isinstance(agent, dict) or "workspace_scope" not in agent:

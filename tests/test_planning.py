@@ -2576,6 +2576,79 @@ def test_profile_criterion_echo_does_not_consume_a_model_repair_call(
     )
 
 
+def test_profile_collision_deconflicts_required_relational_binding_without_call(
+    tmp_path: Path,
+) -> None:
+    profile_criterion = AcceptanceCriterion(
+        id="AC_PROFILE",
+        description="The project satisfies the fixed runtime contract.",
+        verification="Run the controller-owned profile gate.",
+    )
+    payload = proposal_response().model_dump(mode="json")
+    payload["proposal"]["requirements"].append("Pass the profile test contract.")
+    payload["proposal"]["requirement_ids"].append("REQ_PROFILE_TEST")
+    payload["proposal"]["acceptance_criteria"].append(
+        {
+            "id": "AC_PROFILE",
+            "description": "The task-specific behavior passes its profile test.",
+            "verification": "Inspect the behavior and execute the profile test.",
+            "requirement_ids": ["REQ_PROFILE_TEST"],
+            "verification_agent_ids": ["quality_reviewer"],
+            "review_boundaries": ["failure_path"],
+        }
+    )
+    payload["proposal"]["tasks"][0]["acceptance_criteria"].append("AC_PROFILE")
+    raw_response = json.dumps(payload)
+    executor = ScriptedAgentExecutor([raw_response])
+    store = PlanningStore(tmp_path / "planning")
+    configured = policy(
+        response_repair_limit=0,
+        profile_acceptance_criteria=(profile_criterion,),
+    )
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=configured,
+        clock=AdvancingClock(),
+    )
+
+    created = coordinator.start(
+        request(),
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+
+    assert created is not None
+    assert len(executor.requests) == 1
+    task_criterion = next(
+        item
+        for item in created.body.acceptance_criteria
+        if item.id == "AC_TASK_PROFILE"
+    )
+    assert task_criterion.requirement_ids == ("REQ_PROFILE_TEST",)
+    assert task_criterion.verification_agent_ids == ("quality_reviewer",)
+    assert task_criterion.review_boundaries == (ReviewBoundaryKind.FAILURE_PATH,)
+    assert created.body.tasks[0].acceptance_criteria[-2:] == (
+        "AC_TASK_PROFILE",
+        "AC_PROFILE",
+    )
+    preview = preview_adaptive_proposal(
+        request(),
+        created,
+        configured,
+        created_at=FIXED_TIME,
+    )
+    criteria_by_id = {item.id: item for item in preview.task_brief.acceptance_criteria}
+    assert criteria_by_id["AC_PROFILE"] == profile_criterion
+    assert criteria_by_id["AC_TASK_PROFILE"].description == (
+        "The task-specific behavior passes its profile test."
+    )
+    turn = store.load_turn(request().run_id, 1)
+    assert turn.response_normalizations == (
+        "deconflicted model criterion AC_PROFILE as AC_TASK_PROFILE from "
+        "controller-owned profile ID",
+    )
+
+
 def test_cancellation_stops_before_a_proposal_or_approval(tmp_path: Path) -> None:
     planning_request = request(source_request=AMBIGUOUS_LINK_REQUEST)
     store = PlanningStore(tmp_path / "planning")

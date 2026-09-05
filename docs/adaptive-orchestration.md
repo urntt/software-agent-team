@@ -238,11 +238,14 @@ and verification contract remain controller-owned; the Planner should not echo
 those definitions, but a task may reference a profile criterion ID supplied in
 the current Planning context when the task materially implements or verifies
 it. If a response nevertheless repeats an exact active profile ID in its
-definition list, the controller removes that non-authoritative definition
-before context-free proposal coverage validation and records the removal. It
-does not import any model-authored text or boundary from the echo. Context-free
-validation then checks ID syntax and complete coverage of the remaining
-Planner-owned criteria. The policy-aware controller preview resolves every
+definition list, the controller never imports that model-authored text as the
+profile definition. A redundant echo is removed and audited. If deleting it
+would lose a requirement-to-acceptance relation that has a responsible writer,
+the controller instead assigns that task-specific criterion a deterministic
+non-reserved ID, preserves its model-owned verifier and Review-boundary fields,
+and expands the ambiguous task reference to both the task-specific and canonical
+profile IDs. Context-free validation then checks ID syntax and complete coverage
+of the resulting Planner-owned criteria. The policy-aware controller resolves every
 task reference against the union of proposal and current profile IDs. It
 rejects any other ID before an overview is shown and preserves valid profile
 bindings when it materializes the TaskBrief and implementation plan. A profile
@@ -746,10 +749,11 @@ ordinary-user interaction test are implemented. Bare `sat` now activates this
 interaction together with Batch 3C, so an approved dynamic plan is the exact
 plan the controller executes. Before strict validation, the Planning boundary
 infers only an unambiguous response kind, canonicalizes only safe relative-path
-presentation, and removes exact active-profile criterion-definition echoes
-without removing their legal task bindings or adopting model-authored profile
-text. The raw response and every normalization remain recorded in the Planning
-turn.
+presentation, removes redundant active-profile definition echoes, and
+deterministically deconflicts an echo whose model-owned relationship is still
+needed. The canonical profile text remains controller-owned, both task bindings
+are retained, and the raw response plus every normalization remain recorded in
+the Planning turn.
 Planning schema v4 adds typed validation diagnostics, deterministic
 normalization, and targeted-correction evidence while retaining read support
 for schema-v2 and schema-v3 evidence. Current live response schemas make the

@@ -58,7 +58,11 @@ The response compiler now distinguishes transport, schema, contextual, and
 evidence-grounding failures; a missing user-owned decision remains on the
 typed Planning-question path instead of entering correction. It deterministically
 removes only schema-forbidden fields that cannot carry controller/evidence
-authority and records each normalization. A remaining targetable model-owned
+authority and records each normalization. Profile-criterion ID collisions now
+remove only redundant echoes; a task-specific relation needed for requirement
+coverage receives a deterministic non-reserved ID while the canonical profile
+binding and all model-owned verification relationships remain intact. A
+remaining targetable model-owned
 failure creates a typed JSON-pointer diagnostic and a SHA-bound
 `semantic_correction_v1` envelope; the controller retains every unrelated
 field, freezes a writer's verified Git result, and records each request and
@@ -68,7 +72,7 @@ its explicit zero-or-one cap. Transport, unlocated, repeated, invalid-envelope,
 and non-improving failures stop without a full-response retry. Fresh
 provider-backed correction evidence remains pending.
 
-Formatter, lint, doctor, and **928 offline tests** pass for this implementation.
+Formatter, lint, doctor, and **929 offline tests** pass for this implementation.
 
 ## Phase 1 Result
 
