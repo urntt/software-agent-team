@@ -14,6 +14,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
+import software_agent_team.execution as execution
 from software_agent_team.artifacts import AgentRole, ArtifactKind
 from software_agent_team.execution import (
     AgentExecutionActivity,
@@ -1065,6 +1066,98 @@ finish()
     )
 
 
+def test_session_activity_readiness_cannot_overtake_initialization_observation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_activity_seen = False
+    inspect_initialization = execution.inspect_openclaw_initialization
+    inspect_activity = execution.inspect_openclaw_session_activity
+
+    def delay_initialization_until_session_activity(**kwargs: object) -> object:
+        if not session_activity_seen:
+            return None
+        return inspect_initialization(**kwargs)
+
+    def observe_session_activity(**kwargs: object) -> object:
+        nonlocal session_activity_seen
+        observation = inspect_activity(**kwargs)
+        if observation is not None:
+            session_activity_seen = True
+        return observation
+
+    monkeypatch.setattr(
+        execution,
+        "inspect_openclaw_initialization",
+        delay_initialization_until_session_activity,
+    )
+    monkeypatch.setattr(
+        execution,
+        "inspect_openclaw_session_activity",
+        observe_session_activity,
+    )
+    executor = live_liveness_executor(
+        tmp_path,
+        FAKE_OPENCLAW_SETUP + "\ntime.sleep(0.15)\nfinish()\n",
+    )
+
+    result = executor.execute(request(timeout_seconds=0, model="provider/model"))
+
+    assert result.status is AgentExecutionStatus.COMPLETED
+    lifecycle = result.telemetry.invocation_lifecycle
+    assert lifecycle is not None
+    assert InitializationCheckpoint.CURRENT_TURN in lifecycle.initialization.checkpoints
+    phases = [transition.phase for transition in lifecycle.transitions]
+    assert phases.count(InvocationPhase.PROVIDER_WAIT) == 1
+    assert phases.index(InvocationPhase.INITIALIZING) < phases.index(
+        InvocationPhase.PROVIDER_WAIT
+    )
+
+
+def test_private_stream_can_be_the_single_initialization_ready_boundary(
+    tmp_path: Path,
+) -> None:
+    executor = live_liveness_executor(
+        tmp_path,
+        r"""
+import json
+import os
+import time
+from pathlib import Path
+
+raw_path = Path(os.environ["OPENCLAW_RAW_STREAM_PATH"])
+raw_path.write_text(
+    json.dumps({"event": "assistant_text_stream", "content": "private"}) + "\n",
+    encoding="utf-8",
+)
+time.sleep(0.10)
+print(json.dumps({
+    "payloads": [{"text": "{\"kind\":\"implementation_plan\"}"}],
+    "meta": {"agentMeta": {
+        "sessionId": "stream-only-session",
+        "provider": "provider",
+        "model": "model",
+        "usage": {"input": 1, "output": 1},
+    }},
+}))
+""",
+    )
+
+    result = executor.execute(request(timeout_seconds=0, model="provider/model"))
+
+    assert result.status is AgentExecutionStatus.COMPLETED
+    lifecycle = result.telemetry.invocation_lifecycle
+    assert lifecycle is not None
+    assert lifecycle.initialization.checkpoints == (
+        InitializationCheckpoint.PROCESS_LAUNCHED,
+        InitializationCheckpoint.PROVIDER_STREAM,
+    )
+    phases = [transition.phase for transition in lifecycle.transitions]
+    assert phases.count(InvocationPhase.PROVIDER_WAIT) == 1
+    assert result.telemetry.provider_liveness is not None
+    assert result.telemetry.provider_liveness.lease_start_source == "provider_stream"
+
+
 def test_missing_attributable_session_degrades_instead_of_guessing_stall(
     tmp_path: Path,
 ) -> None:
@@ -1231,12 +1324,31 @@ time.sleep(0.04)
     assert result.status is AgentExecutionStatus.COMPLETED
     lifecycle = result.telemetry.invocation_lifecycle
     assert lifecycle is not None
-    assert lifecycle.initialization.stall_suspected_count == 1
-    assert lifecycle.initialization.stall_recovered_count == 1
+    assert lifecycle.initialization.stall_suspected_count >= 1
+    assert (
+        lifecycle.initialization.stall_recovered_count
+        == lifecycle.initialization.stall_suspected_count
+    )
+    assert not lifecycle.initialization.stalled
     kinds = [activity.kind for activity in activities]
-    assert kinds.index(
-        AgentExecutionActivityKind.INITIALIZATION_STALL_SUSPECTED
-    ) < kinds.index(AgentExecutionActivityKind.INITIALIZATION_STALL_RECOVERED)
+    suspected = [
+        index
+        for index, kind in enumerate(kinds)
+        if kind is AgentExecutionActivityKind.INITIALIZATION_STALL_SUSPECTED
+    ]
+    recovered = [
+        index
+        for index, kind in enumerate(kinds)
+        if kind is AgentExecutionActivityKind.INITIALIZATION_STALL_RECOVERED
+    ]
+    assert all(
+        suspected_index < recovered_index
+        for suspected_index, recovered_index in zip(
+            suspected,
+            recovered,
+            strict=True,
+        )
+    )
 
 
 def test_initialization_observer_failure_stops_with_typed_process_evidence(

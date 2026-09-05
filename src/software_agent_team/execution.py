@@ -1295,12 +1295,24 @@ class _InitializationLivenessMonitor:
         self.lifecycle.set_initialization_evidence(self.evidence())
         return False
 
-    def provider_stream_ready(self, now: float) -> None:
-        """Accept a private stream as an attributable provider-start boundary."""
+    def mark_ready(
+        self,
+        checkpoint: InitializationCheckpoint,
+        *,
+        now: float,
+    ) -> None:
+        """Own the single transition from initialization to provider readiness."""
 
         if self.ready:
             return
-        self._advance(InitializationCheckpoint.PROVIDER_STREAM, now=now)
+        if checkpoint not in {
+            InitializationCheckpoint.CURRENT_TURN,
+            InitializationCheckpoint.PROVIDER_STREAM,
+        }:
+            raise AgentExecutionError(
+                "provider readiness requires current-turn or stream evidence"
+            )
+        self._advance(checkpoint, now=now)
 
     def finalize(self, now: float) -> InitializationLivenessEvidence:
         if not self.ready and self.degradation_reason is None and not self.stalled:
@@ -1532,9 +1544,7 @@ class _ProviderLivenessMonitor:
             if source == "provider_stream"
             else InitializationCheckpoint.CURRENT_TURN
         )
-        if source == "provider_stream":
-            self.initialization_monitor.provider_stream_ready(now)
-        self.lifecycle.provider_ready(checkpoint, now=now)
+        self.initialization_monitor.mark_ready(checkpoint, now=now)
 
     def _degrade(self, reason: str, now: float) -> None:
         if self.degradation_reason is not None:
