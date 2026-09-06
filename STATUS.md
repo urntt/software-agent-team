@@ -94,7 +94,10 @@ removes only schema-forbidden fields that cannot carry controller/evidence
 authority and records each normalization. Profile-criterion ID collisions now
 remove only redundant echoes; a task-specific relation needed for requirement
 coverage receives a deterministic non-reserved ID while the canonical profile
-binding and all model-owned verification relationships remain intact. An
+binding and all model-owned verification relationships remain intact. This
+deconfliction no longer depends on an already-correct writer-task binding: a
+missing binding remains a separately reported `/proposal/tasks` defect instead
+of authorizing the controller to erase the requirement relation. An
 otherwise well-formed `DECISION_` token and its assumption reference are
 canonicalized to uppercase only when the resulting identity is unique, so a
 presentation-only case mismatch cannot spend another model call while a real

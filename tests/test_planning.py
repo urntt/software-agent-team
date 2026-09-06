@@ -4849,6 +4849,81 @@ def test_profile_collision_deconflicts_required_relational_binding_without_call(
     )
 
 
+def test_profile_collision_preserves_relation_before_writer_binding_correction(
+    tmp_path: Path,
+) -> None:
+    profile_criterion = AcceptanceCriterion(
+        id="AC_DOCUMENTATION",
+        description="The project satisfies the fixed documentation contract.",
+        verification="Run the controller-owned documentation gate.",
+    )
+    payload = proposal_response().model_dump(mode="json")
+    payload["proposal"]["requirements"].append("Document the task-specific usage.")
+    payload["proposal"]["requirement_ids"].append("REQ_README")
+    payload["proposal"]["acceptance_criteria"].append(
+        {
+            "id": "AC_DOCUMENTATION",
+            "description": "The README documents the task-specific usage.",
+            "verification": "Inspect the README against the requested workflow.",
+            "requirement_ids": ["REQ_README"],
+            "verification_agent_ids": ["quality_reviewer"],
+            "review_boundaries": [],
+        }
+    )
+    corrected_tasks = json.loads(json.dumps(payload["proposal"]["tasks"]))
+    corrected_tasks[0]["acceptance_criteria"].append("AC_TASK_DOCUMENTATION")
+    executor = ScriptedAgentExecutor(
+        [
+            json.dumps(payload),
+            correction_response(
+                payload,
+                {"/proposal/tasks": corrected_tasks},
+            ),
+        ]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    configured = policy(
+        response_repair_limit=None,
+        profile_acceptance_criteria=(profile_criterion,),
+    )
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=configured,
+        clock=AdvancingClock(),
+    )
+
+    created = coordinator.start(
+        request(),
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+
+    assert created is not None
+    assert len(executor.requests) == 2
+    first = store.load_turn(request().run_id, 1)
+    assert first.response_normalizations == (
+        "deconflicted model criterion AC_DOCUMENTATION as "
+        "AC_TASK_DOCUMENTATION from controller-owned profile ID",
+    )
+    assert first.response_validation is not None
+    assert first.response_validation.correction_paths == ("/proposal/tasks",)
+    assert first.response_validation.issues[0].invariant_id == (
+        "planning_writer_criterion_coverage"
+    )
+    assert [
+        item.model_dump(mode="json")
+        for item in first.response_validation.issues[0].subjects
+    ] == [{"kind": "criterion", "identifier": "AC_TASK_DOCUMENTATION"}]
+    accepted = store.load_turn(request().run_id, 2)
+    assert accepted.semantic_correction_outcome == "accepted"
+    assert {item.id for item in created.body.acceptance_criteria} == {
+        "AC_SCAN",
+        "AC_REPORT",
+        "AC_TASK_DOCUMENTATION",
+    }
+    assert created.body.tasks[0].acceptance_criteria[-1] == ("AC_TASK_DOCUMENTATION")
+
+
 def test_cancellation_stops_before_a_proposal_or_approval(tmp_path: Path) -> None:
     planning_request = request(source_request=AMBIGUOUS_LINK_REQUEST)
     store = PlanningStore(tmp_path / "planning")

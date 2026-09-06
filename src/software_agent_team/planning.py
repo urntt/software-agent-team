@@ -1200,8 +1200,6 @@ def _normalize_planning_response_payload(
     agents = proposal.get("agents")
     controller_owned_ids = set(profile_criterion_ids)
     if isinstance(acceptance_criteria, list) and controller_owned_ids:
-        task_items = tasks if isinstance(tasks, list) else []
-        agent_items = agents if isinstance(agents, list) else []
 
         def string_list(value: object) -> tuple[str, ...]:
             return (
@@ -1218,19 +1216,6 @@ def _normalize_planning_response_payload(
             criterion_id: criterion_ids.count(criterion_id)
             for criterion_id in criterion_ids
             if isinstance(criterion_id, str)
-        }
-        writer_ids = {
-            agent.get("id")
-            for agent in agent_items
-            if isinstance(agent, dict)
-            and agent.get("capability") in {"implementation", "integration"}
-            and isinstance(agent.get("id"), str)
-        }
-        writer_bound_ids = {
-            criterion_id
-            for task in task_items
-            if isinstance(task, dict) and task.get("owner_agent_id") in writer_ids
-            for criterion_id in string_list(task.get("acceptance_criteria"))
         }
         declared_requirement_ids = set(string_list(proposal.get("requirement_ids")))
         covered_requirement_ids = {
@@ -1251,7 +1236,6 @@ def _normalize_planning_response_payload(
             and isinstance(criterion.get("id"), str)
             and criterion["id"] in controller_owned_ids
             and criterion_id_counts[criterion["id"]] == 1
-            and criterion["id"] in writer_bound_ids
         ]
         retained_collision_indexes: set[int] = set()
         while uncovered_requirement_ids:

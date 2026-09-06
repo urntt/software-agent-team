@@ -249,7 +249,11 @@ may perform only these bounded, semantics-preserving normalizations:
   unambiguous;
 - Remove a criterion definition whose exact ID belongs to the active
   controller-owned execution profile, while retaining any task binding to that
-  known ID and using only the profile's canonical definition;
+  known ID and using only the profile's canonical definition. If the colliding
+  model criterion owns the only relation covering a declared requirement, give
+  that relation a deterministic non-reserved ID even when its writer task has
+  not bound it yet; strict validation then targets the missing task binding
+  instead of discarding the requirement relation;
 - Canonicalize safe relative `expected_paths` values such as `tests/` to
   `tests`;
 - Canonicalize safe `workspace_scope` presentation such as `repository/` to
