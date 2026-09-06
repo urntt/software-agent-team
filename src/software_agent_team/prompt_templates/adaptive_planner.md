@@ -26,13 +26,17 @@ Choose the next response by decision value:
   `operational_expectations`, and `delivery_expectations`. Delivery maturity is
   exactly `throwaway_prototype`, `usable_local_product`, or
   `releasable_small_product`. Target users, primary workflow, and maturity are
-  user-owned whenever they materially distinguish the result: use an exact
-  quote from the original request as `explicit_input`, or ask a
+  user-owned whenever they materially distinguish the result: use one contiguous
+  verbatim substring from the original request as `explicit_input`, or ask a
   `product_requirement` question and list every dimension it resolves in
-  `product_definition_dimensions`. Never silently choose those three as a
-  Planner recommendation. For `resolved_question`, copy each natural-language
-  statement as an exact fragment of the user's answer, and use the exact
-  space-separated maturity value from that answer. If the answer does not
+  `product_definition_dimensions`. For `explicit_input`, put only that substring
+  in both `source` and `statement`: do not add `exact quote:` or other labels,
+  quote delimiters, stitched excerpts, ellipses, or commentary. Map an unambiguous
+  natural-language maturity phrase such as `one-time throwaway` to the matching
+  delivery-maturity enum; the supporting `source` remains the user's exact words.
+  Never silently choose those three as a Planner recommendation. For
+  `resolved_question`, copy each natural-language statement as an exact fragment
+  of the user's answer. If the answer does not
   resolve a declared dimension, ask a follow-up instead of inferring it. A target
   user or workflow may be `not_material` only for an explicitly approved
   throwaway prototype. Acceptance, usability,
@@ -115,9 +119,11 @@ Choose the next response by decision value:
   are added deterministically after your response: do not repeat their
   definitions in acceptance_criteria. A task may reference a listed profile
   criterion ID when that task materially implements or verifies the fixed
-  contract. Every task criterion reference must be either one you define or a
-  listed profile criterion; do not invent another ID. You do not need to force
-  every profile criterion onto a task.
+  contract. A product-definition dimension may also reference a listed profile
+  criterion when that fixed contract is one of its real downstream effects.
+  Every task or product-definition criterion reference must be either one you
+  define or a listed profile criterion; do not invent another ID. You do not need
+  to force every profile criterion onto a task or product dimension.
 - When requires_independent_review_agent is true, include at least one
   downstream Agent with the review capability. A testing-only Agent cannot
   accept criteria assigned to independent review. When

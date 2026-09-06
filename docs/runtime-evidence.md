@@ -310,7 +310,13 @@ semantic object,
 binds its canonical SHA-256 into persisted correction-request evidence, assigns
 the exact paths to ordered Controller-owned slots, and asks the model to submit
 only the corresponding `replacement_values`—never the digest, paths, or the
-complete object. The exact semantic correction schema requires the slot count;
+complete object. Each model-visible slot includes a self-contained projection of
+the target value's exact response schema plus the validator-owned error constraints;
+the schema is guidance, not new path authority. ProductDefinition validation reports
+independent invalid dimensions together, and each complete dimension is the atomic
+repair value so coupled disposition, source, statement, and downstream references
+cannot be repaired as a misleading sequence of isolated scalar edits. The exact
+semantic correction schema requires the slot count;
 dynamic Agents expose it directly, while Adaptive Planning retains it in the
 Controller binding behind the object-only transport schema. In either case the
 model cannot repeat or widen field authority. The model calls the same submission tool once,
@@ -501,7 +507,8 @@ requirement-to-criterion-to-writer-to-downstream-read-only-verifier graph.
 For the current schema it also rejects missing product depth, a Planner-owned
 target user/workflow/maturity, an explicit-input statement that expands beyond
 its quoted source, a question-backed dimension absent from that question's
-declared scope, and any product-definition reference outside the proposal.
+declared scope, and any product-definition reference outside proposal-owned
+requirements and decisions or proposal/profile-owned criteria.
 These structural checks cannot prove that free text was classified wisely;
 provider-backed ambiguous-task and user-comprehension evidence remain separate
 acceptance boundaries.
@@ -511,10 +518,11 @@ to the model. A proposal must cover every Planner-owned criterion it defines.
 An exact active-profile ID echo cannot replace the canonical definition: a
 redundant echo is discarded, while a task-specific relation needed for complete
 coverage is deconflicted under a deterministic `AC_TASK_*` ID and remains
-separate. A task may bind to a profile criterion ID explicitly supplied by the
-current controller policy, while the controller remains the sole source of that
-criterion's description and verification contract. Before persisting a valid
-proposal, the controller rejects task references outside the union of those two
+separate. A task or ProductDefinition dimension may bind to a profile criterion ID
+explicitly supplied by the current controller policy, while the controller remains
+the sole source of that criterion's description and verification contract. Before
+persisting a valid proposal, the controller rejects task and ProductDefinition
+criterion references outside the union of those two
 sets, materializes profile criteria into the confirmed TaskBrief, and preserves
 both sides of an ambiguous collision binding in the adaptive implementation
 plan. Prompt construction rechecks every persisted task reference against the

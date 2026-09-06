@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -165,6 +167,77 @@ def test_correction_prompt_keeps_path_authority_in_the_controller() -> None:
             },
             plan,
         )
+
+
+def test_correction_prompt_projects_each_target_value_schema() -> None:
+    payload: dict[str, object] = {
+        "items": [{"id": "invalid"}],
+        "preserved": "keep",
+    }
+    report = ResponseValidationDiagnostic(
+        failure_class=ResponseFailureClass.SEMANTIC_SCHEMA,
+        response_sha256=semantic_payload_sha256(payload),
+        issues=(
+            ResponseValidationIssue(
+                path="/items/0/id",
+                code="invalid_id",
+                invariant_id="invalid_id",
+                message="ID must use the stable uppercase form",
+                authority=ResponseIssueAuthority.MODEL,
+            ),
+        ),
+        correction_paths=("/items/0/id",),
+    )
+    plan = build_semantic_correction_plan(payload, report)
+    assert plan is not None
+    response_schema = {
+        "type": "object",
+        "properties": {
+            "items": {
+                "type": "array",
+                "items": {
+                    "$ref": "#/$defs/Item",
+                },
+            },
+        },
+        "$defs": {
+            "Item": {
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "pattern": "^[A-Z][A-Z0-9_]+$",
+                    },
+                },
+            },
+        },
+    }
+
+    prompt = correction_prompt(plan, response_schema=response_schema)
+    target_json = prompt.split("TARGET_SLOTS_AND_ERRORS\n", maxsplit=1)[1].split(
+        "\nCORRECTION_SCHEMA_JSON",
+        maxsplit=1,
+    )[0]
+    slots = json.loads(target_json)
+
+    assert slots == [
+        {
+            "slot": 0,
+            "target_path": "/items/0/id",
+            "errors": [
+                {
+                    "code": "invalid_id",
+                    "invariant_id": "invalid_id",
+                    "subjects": [],
+                    "message": "ID must use the stable uppercase form",
+                }
+            ],
+            "value_schema": {
+                "type": "string",
+                "pattern": "^[A-Z][A-Z0-9_]+$",
+            },
+        }
+    ]
 
 
 def test_outcome_requires_targeted_errors_to_disappear_and_rejects_cycles() -> None:

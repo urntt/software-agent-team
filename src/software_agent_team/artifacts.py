@@ -353,7 +353,17 @@ class ProductDefinitionBasis(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     disposition: ProductDefinitionDisposition
-    source: str = Field(min_length=1, max_length=500)
+    source: str = Field(
+        min_length=1,
+        max_length=500,
+        description=(
+            "Provenance selector. For explicit_input, use exactly one contiguous "
+            "verbatim substring from the user's input with no label, quote "
+            "delimiter, stitched excerpt, ellipsis, or commentary. For "
+            "resolved_question, use the stable question ID. For "
+            "planner_recommendation or not_material, use exactly 'planner'."
+        ),
+    )
     rationale: str = Field(min_length=1, max_length=500)
     requirement_ids: tuple[str, ...] = ()
     criterion_ids: tuple[str, ...] = ()

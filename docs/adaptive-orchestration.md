@@ -190,8 +190,12 @@ with six dimensions:
 Each dimension records a statement or maturity level, one of
 `explicit_input`, `resolved_question`, `planner_recommendation`, or
 `not_material`, attributable source and rationale, and stable downstream
-requirement, criterion, and decision references. An explicit-input statement
-preserves the quoted user wording. A question declares the exact dimensions it
+requirement, criterion, and decision references. An explicit-input source and
+statement preserve one contiguous verbatim user-input substring without citation
+labels, quote delimiters, stitched fragments, or commentary. An unambiguous phrase
+such as `one-time throwaway` may map to the matching delivery-maturity enum; the
+source remains the user's words rather than invented Controller vocabulary. A
+question declares the exact dimensions it
 resolves; each resolved statement must be an exact fragment of that answer, and
 the answer must reach one unchanged user-owned product decision. If an answer
 does not cover a declared dimension, Planning must ask again rather than infer it.
@@ -274,8 +278,12 @@ produces a content-free diagnostic and a correction request whose persisted
 evidence is bound to the retained object's SHA-256. The Controller assigns an
 ordered slot to each exact validator-owned JSON-pointer path; the model submits
 only `replacement_values` through the same typed tool under a correction-only
-semantic schema. It cannot repeat, replace, widen, or reorder the response identity or
-path authority. Derived parent
+semantic schema. Every model-visible slot also includes the exact response-schema
+fragment for its replacement value and its validator-owned constraints. Independent
+ProductDefinition dimension defects are collected in one validation pass, and each
+dimension is an atomic replacement boundary because disposition, provenance,
+statement, and downstream references must remain coherent. It cannot repeat,
+replace, widen, or reorder the response identity or path authority. Derived parent
 errors are not copied into a child-field request. Every other value remains
 immutable. Product
 Planning continues only after every prior validator-owned invariant/subject
@@ -300,7 +308,9 @@ implementation task. The execution profile defines fixed criteria whose text
 and verification contract remain controller-owned; the Planner should not echo
 those definitions, but a task may reference a profile criterion ID supplied in
 the current Planning context when the task materially implements or verifies
-it. If a response nevertheless repeats an exact active profile ID in its
+it. A ProductDefinition dimension may reference the same supplied ID when that
+fixed obligation is one of the dimension's real downstream effects. If a
+response nevertheless repeats an exact active profile ID in its
 definition list, the controller never imports that model-authored text as the
 profile definition. A redundant echo is removed and audited. If deleting it
 would lose a requirement-to-acceptance relation that has a responsible writer,

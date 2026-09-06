@@ -142,6 +142,13 @@ schema gate. The model-facing request projection excludes Controller-only run,
 destination, route, authorization, and timestamp metadata, preventing execution-layer
 redaction from breaking exact prompt/session attribution. Dynamic Agent submission
 schemas remain exact.
+Targeted correction now projects the exact target value schema into every ordered
+slot. ProductDefinition validation accepts Controller-supplied profile criterion IDs,
+maps clear natural-language maturity evidence without requiring enum wording in the
+user's sentence, reports independent invalid dimensions together, and makes each
+dimension the atomic correction unit. This prevents a valid proposal relationship
+from being rejected as unknown and prevents fail-fast cross-field validation from
+spending one model call per coupled scalar.
 An actual pinned-OpenClaw loopback invocation loaded the plugin in the read-only
 bootstrap runtime, captured the final tool call, accepted the bound payload, and
 removed its exact sandbox container. A new provider-backed product journey is

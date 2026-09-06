@@ -687,19 +687,30 @@ def build_semantic_correction_request(
 
     contract = request.submission_contract
     if contract is None:
+        response_model = RESPONSE_BODY_MODELS.get(request.expected_kind)
+        response_schema = (
+            None if response_model is None else response_model.model_json_schema()
+        )
         return request.model_copy(
-            update={"prompt": f"{request.prompt}{correction_prompt(plan)}"}
+            update={
+                "prompt": (
+                    f"{request.prompt}"
+                    f"{correction_prompt(plan, response_schema=response_schema)}"
+                )
+            }
         )
     correction_contract = AgentSubmissionContract.from_schema(
         semantic_correction_schema(plan),
         purpose=AgentSubmissionPurpose.SEMANTIC_CORRECTION,
     )
+    correction = correction_prompt(
+        plan,
+        submission_tool=contract.tool_name,
+        response_schema=contract.parameters_schema(),
+    )
     return request.model_copy(
         update={
-            "prompt": (
-                f"{request.prompt}"
-                f"{correction_prompt(plan, submission_tool=contract.tool_name)}"
-            ),
+            "prompt": f"{request.prompt}{correction}",
             "submission_contract": correction_contract,
         }
     )

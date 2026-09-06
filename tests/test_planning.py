@@ -665,6 +665,103 @@ def test_planning_captures_extra_fields_before_deterministic_normalization(
     )
 
 
+def test_planning_repairs_schema_then_all_invalid_product_dimensions_together(
+    tmp_path: Path,
+) -> None:
+    valid_body = proposal_body()
+    valid_definition = valid_body.product_definition
+    assert valid_definition is not None
+    invalid_definition = valid_definition.model_copy(
+        update={
+            "target_users": valid_definition.target_users.model_copy(
+                update={
+                    "source": 'exact quote: "developers"',
+                    "statement": "developers",
+                }
+            ),
+            "primary_workflow": valid_definition.primary_workflow.model_copy(
+                update={
+                    "source": 'exact quote: "checks Markdown links"',
+                    "statement": "checks Markdown links",
+                }
+            ),
+            "delivery_maturity": valid_definition.delivery_maturity.model_copy(
+                update={"source": 'exact quote: "usable local product"'}
+            ),
+            "usability_expectations": (
+                valid_definition.usability_expectations.model_copy(
+                    update={"decision_ids": ("DECISION_MODEL_ROUTE",)}
+                )
+            ),
+            "operational_expectations": (
+                valid_definition.operational_expectations.model_copy(
+                    update={"decision_ids": ("DECISION_SCAN_STRUCTURE",)}
+                )
+            ),
+        }
+    )
+    initial = proposal_response(
+        valid_body.model_copy(update={"product_definition": invalid_definition})
+    ).model_dump(mode="json")
+    maturity = initial["proposal"]["product_definition"]["delivery_maturity"]
+    maturity.pop("level")
+    maturity["statement"] = "schema-forbidden presentation"
+    corrected_dimensions = [
+        valid_definition.delivery_maturity.model_dump(mode="json"),
+        valid_definition.operational_expectations.model_dump(mode="json"),
+        valid_definition.primary_workflow.model_dump(mode="json"),
+        valid_definition.target_users.model_dump(mode="json"),
+        valid_definition.usability_expectations.model_dump(mode="json"),
+    ]
+    executor = ScriptedAgentExecutor(
+        [
+            ScriptedAgentResponse(text="ignored", submission_payload=initial),
+            ScriptedAgentResponse(
+                text="ignored",
+                submission_payload={"replacement_values": ["usable_local_product"]},
+            ),
+            ScriptedAgentResponse(
+                text="ignored",
+                submission_payload={"replacement_values": corrected_dimensions},
+            ),
+        ]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(response_repair_limit=2),
+        clock=AdvancingClock(),
+    )
+
+    created = coordinator.start(
+        request(),
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+
+    assert created is not None
+    assert len(executor.requests) == 3
+    first = store.load_turn(request().run_id, 1)
+    second = store.load_turn(request().run_id, 2)
+    third = store.load_turn(request().run_id, 3)
+    assert first.response_validation is not None
+    assert first.response_validation.correction_paths == (
+        "/proposal/product_definition/delivery_maturity/level",
+    )
+    assert second.response_validation is not None
+    assert second.response_validation.correction_paths == (
+        "/proposal/product_definition/delivery_maturity",
+        "/proposal/product_definition/operational_expectations",
+        "/proposal/product_definition/primary_workflow",
+        "/proposal/product_definition/target_users",
+        "/proposal/product_definition/usability_expectations",
+    )
+    assert third.semantic_correction_outcome is not None
+    assert third.parsed_response == proposal_response()
+    assert '"value_schema"' in executor.requests[1].prompt
+    assert "one contiguous verbatim substring" in executor.requests[2].prompt
+
+
 def test_question_requires_suggestions_and_preserves_custom_answers() -> None:
     question = question_response().question
 
@@ -1027,7 +1124,9 @@ def test_explicit_product_statement_cannot_expand_beyond_user_wording() -> None:
         }
     )
 
-    with pytest.raises(PlanningError, match="preserve the exact user wording"):
+    with pytest.raises(
+        PlanningError, match="statement must preserve that exact wording"
+    ):
         preview_adaptive_proposal(
             request(),
             proposal(body=body.model_copy(update={"product_definition": expanded})),
@@ -1036,7 +1135,7 @@ def test_explicit_product_statement_cannot_expand_beyond_user_wording() -> None:
         )
 
 
-def test_explicit_maturity_requires_the_controller_vocabulary() -> None:
+def test_explicit_maturity_accepts_an_unambiguous_natural_language_source() -> None:
     body = proposal_body()
     definition = body.product_definition
     assert definition is not None
@@ -1048,21 +1147,54 @@ def test_explicit_maturity_requires_the_controller_vocabulary() -> None:
         }
     )
 
-    with pytest.raises(PlanningError, match="exact controller vocabulary"):
-        preview_adaptive_proposal(
-            request(
-                source_request=(
-                    "For developers who will use it repeatedly, build a reusable "
-                    "local tool that checks Markdown links in files and fragments "
-                    "without fetching remote URLs."
-                )
-            ),
-            proposal(
-                body=body.model_copy(update={"product_definition": inferred_maturity})
-            ),
-            policy(),
-            created_at=FIXED_TIME,
-        )
+    preview = preview_adaptive_proposal(
+        request(
+            source_request=(
+                "For developers who will use it repeatedly, build a reusable "
+                "local tool that checks Markdown links in files and fragments "
+                "without fetching remote URLs."
+            )
+        ),
+        proposal(
+            body=body.model_copy(update={"product_definition": inferred_maturity})
+        ),
+        policy(),
+        created_at=FIXED_TIME,
+    )
+
+    assert (
+        preview.task_brief.product_definition.delivery_maturity.level
+        is DeliveryMaturity.USABLE_LOCAL_PRODUCT
+    )
+
+
+def test_product_definition_may_reference_controller_profile_criteria() -> None:
+    body = proposal_body()
+    definition = body.product_definition
+    assert definition is not None
+    profile_criterion = AcceptanceCriterion(
+        id="AC_PROFILE",
+        description="The project satisfies the fixed execution contract.",
+        verification="Run the profile gate.",
+    )
+    traced = definition.model_copy(
+        update={
+            "delivery_expectations": definition.delivery_expectations.model_copy(
+                update={"criterion_ids": ("AC_PROFILE",)}
+            )
+        }
+    )
+
+    preview = preview_adaptive_proposal(
+        request(),
+        proposal(body=body.model_copy(update={"product_definition": traced})),
+        policy(profile_acceptance_criteria=(profile_criterion,)),
+        created_at=FIXED_TIME,
+    )
+
+    assert "AC_PROFILE" in {
+        criterion.id for criterion in preview.task_brief.acceptance_criteria
+    }
 
 
 def test_product_definition_references_must_resolve_to_the_proposal() -> None:

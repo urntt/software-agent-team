@@ -12,14 +12,14 @@ sat_run_openclaw_isolated() {
   shift 3
 
   local -a task_clean_environment=(env)
+  local -a task_openclaw_environment_names=("${!OPENCLAW_@}")
   local task_environment_name
-  while read -r task_environment_name; do
-    case "$task_environment_name" in
-      OPENCLAW_*|PI_CODING_AGENT_DIR)
-        task_clean_environment+=(-u "$task_environment_name")
-        ;;
-    esac
-  done < <(compgen -e)
+  # Enumerate names in this shell. An asynchronous process substitution can
+  # outlive a fast parent exit and leave an unreaped child at the caller boundary.
+  task_openclaw_environment_names+=(PI_CODING_AGENT_DIR)
+  for task_environment_name in "${task_openclaw_environment_names[@]}"; do
+    task_clean_environment+=(-u "$task_environment_name")
+  done
 
   "${task_clean_environment[@]}" \
     HOME="$task_private_home" \

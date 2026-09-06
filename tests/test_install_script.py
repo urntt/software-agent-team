@@ -48,6 +48,15 @@ def prepare_checkout(tmp_path: Path) -> Path:
     return checkout
 
 
+def test_openclaw_environment_enumeration_has_no_async_process_substitution() -> None:
+    helper = (REPOSITORY_ROOT / "scripts/openclaw-environment.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert '"${!OPENCLAW_@}"' in helper
+    assert "< <(" not in helper
+
+
 def fake_environment(
     tmp_path: Path,
     checkout: Path,

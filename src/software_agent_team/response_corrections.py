@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass
 from enum import StrEnum
@@ -615,15 +616,148 @@ def semantic_correction_schema(
     return schema
 
 
+def _local_schema_ref(
+    root: Mapping[str, JsonValue],
+    reference: str,
+) -> Mapping[str, JsonValue] | None:
+    """Resolve one local JSON-Schema reference without external I/O."""
+
+    if not reference.startswith("#/"):
+        return None
+    current: object = root
+    try:
+        parts = _decode_pointer(reference[1:])
+    except ValueError:
+        return None
+    for part in parts:
+        if not isinstance(current, Mapping) or part not in current:
+            return None
+        current = current[part]
+    return current if isinstance(current, Mapping) else None
+
+
+def _schema_container_for_part(
+    schema: Mapping[str, JsonValue],
+    *,
+    part: str,
+    root: Mapping[str, JsonValue],
+) -> Mapping[str, JsonValue] | None:
+    """Select the unique local schema branch that owns one path segment."""
+
+    current = schema
+    visited: set[str] = set()
+    while isinstance(reference := current.get("$ref"), str):
+        if reference in visited:
+            return None
+        visited.add(reference)
+        resolved = _local_schema_ref(root, reference)
+        if resolved is None:
+            return None
+        current = resolved
+    for keyword in ("anyOf", "oneOf", "allOf"):
+        branches = current.get(keyword)
+        if not isinstance(branches, list):
+            continue
+        matching: list[Mapping[str, JsonValue]] = []
+        for branch in branches:
+            if not isinstance(branch, Mapping):
+                continue
+            candidate = _schema_container_for_part(branch, part=part, root=root)
+            if candidate is None:
+                continue
+            properties = candidate.get("properties")
+            if (isinstance(properties, Mapping) and part in properties) or (
+                part.isdecimal() and "items" in candidate
+            ):
+                matching.append(candidate)
+        if len(matching) == 1:
+            return matching[0]
+    return current
+
+
+def _expand_local_schema_refs(
+    value: JsonValue,
+    *,
+    root: Mapping[str, JsonValue],
+    active_refs: frozenset[str] = frozenset(),
+) -> JsonValue:
+    """Make a bounded target schema self-contained for model-visible guidance."""
+
+    if isinstance(value, list):
+        return [
+            _expand_local_schema_refs(item, root=root, active_refs=active_refs)
+            for item in value
+        ]
+    if not isinstance(value, Mapping):
+        return value
+    reference = value.get("$ref")
+    if isinstance(reference, str) and reference not in active_refs:
+        resolved = _local_schema_ref(root, reference)
+        if resolved is not None:
+            expanded = _expand_local_schema_refs(
+                dict(resolved),
+                root=root,
+                active_refs=active_refs | {reference},
+            )
+            siblings = {key: item for key, item in value.items() if key != "$ref"}
+            if not siblings:
+                return expanded
+            return {
+                "allOf": [
+                    expanded,
+                    _expand_local_schema_refs(
+                        siblings,
+                        root=root,
+                        active_refs=active_refs,
+                    ),
+                ]
+            }
+    return {
+        str(key): _expand_local_schema_refs(
+            item,
+            root=root,
+            active_refs=active_refs,
+        )
+        for key, item in value.items()
+    }
+
+
+def correction_value_schema(
+    response_schema: Mapping[str, JsonValue],
+    target_path: str,
+) -> dict[str, JsonValue] | None:
+    """Project the exact response-schema contract for one correction path."""
+
+    current: Mapping[str, JsonValue] = response_schema
+    for part in _decode_pointer(target_path):
+        container = _schema_container_for_part(current, part=part, root=response_schema)
+        if container is None:
+            return None
+        properties = container.get("properties")
+        if isinstance(properties, Mapping) and part in properties:
+            candidate = properties[part]
+        elif part.isdecimal():
+            candidate = container.get("items")
+        else:
+            return None
+        if not isinstance(candidate, Mapping):
+            return None
+        current = candidate
+    expanded = _expand_local_schema_refs(dict(current), root=response_schema)
+    return dict(expanded) if isinstance(expanded, Mapping) else None
+
+
 def correction_prompt(
     plan: SemanticCorrectionPlan,
     *,
     submission_tool: str | None = None,
+    response_schema: Mapping[str, JsonValue] | None = None,
 ) -> str:
     """Render the small correction-value contract without echoing content."""
 
-    target_slots = [
-        {
+    target_slots = []
+    for index, path in enumerate(plan.evidence.target_paths):
+        slot: dict[str, object] = {
             "slot": index,
             "target_path": path,
             "errors": [
@@ -639,8 +773,11 @@ def correction_prompt(
                 if issue.path == path
             ],
         }
-        for index, path in enumerate(plan.evidence.target_paths)
-    ]
+        if response_schema is not None:
+            value_schema = correction_value_schema(response_schema, path)
+            if value_schema is not None:
+                slot["value_schema"] = value_schema
+        target_slots.append(slot)
     schema = semantic_correction_schema(plan)
     transport_instruction = (
         "Return exactly one JSON object and no prose or Markdown fence."
@@ -660,7 +797,9 @@ def correction_prompt(
         "CORRECTION_SCHEMA_JSON. Provide one semantic value for each slot, "
         "in exact slot order. Do not repeat or choose target paths; the controller "
         "owns the response identity and those bindings. All other fields are "
-        "immutable and will be preserved by the controller.\n"
+        "immutable and will be preserved by the controller. When a slot includes "
+        "value_schema, that schema is the exact type and shape contract for its "
+        "replacement value; satisfy its listed error constraints as well.\n"
         "TARGET_SLOTS_AND_ERRORS\n"
         f"{json.dumps(target_slots, ensure_ascii=False, indent=2)}\n"
         "CORRECTION_SCHEMA_JSON\n"
