@@ -115,7 +115,7 @@ from software_agent_team.teams import (
     permission_for_capability,
 )
 
-PLANNING_SCHEMA_VERSION = 7
+PLANNING_SCHEMA_VERSION = 8
 MINIMUM_READABLE_PLANNING_SCHEMA_VERSION = 2
 PLANNING_TEMPLATE = Path(__file__).with_name("prompt_templates") / "adaptive_planner.md"
 MAX_PLANNING_EVIDENCE_CHARACTERS = 1_000_000
@@ -152,8 +152,16 @@ class _PlanningModelInvariantError(ValueError):
 class _PlanningContextInvariantError(PlanningError):
     """Carry a typed post-schema Planning invariant to response compilation."""
 
-    def __init__(self, invariant: _PlanningInvariant) -> None:
+    def __init__(
+        self,
+        invariant: _PlanningInvariant,
+        *,
+        failure_class: ResponseFailureClass = ResponseFailureClass.SEMANTIC_CONTEXT,
+        authority: ResponseIssueAuthority = ResponseIssueAuthority.MODEL,
+    ) -> None:
         self.invariant = invariant
+        self.failure_class = failure_class
+        self.authority = authority
         super().__init__(invariant.message)
 
 
@@ -204,6 +212,8 @@ def _planning_context_invariant(
     *,
     paths: tuple[str, ...],
     subjects: tuple[ResponseIssueSubject, ...] = (),
+    failure_class: ResponseFailureClass = ResponseFailureClass.SEMANTIC_CONTEXT,
+    authority: ResponseIssueAuthority = ResponseIssueAuthority.MODEL,
 ) -> _PlanningContextInvariantError:
     return _PlanningContextInvariantError(
         _PlanningInvariant(
@@ -211,7 +221,9 @@ def _planning_context_invariant(
             message=message,
             paths=tuple(sorted(set(paths))),
             subjects=subjects,
-        )
+        ),
+        failure_class=failure_class,
+        authority=authority,
     )
 
 
@@ -258,6 +270,48 @@ class PlanningDecisionAuthority(StrEnum):
     PLANNER_PROPOSAL = "planner_proposal_user_approval"
     AGENT_AUTONOMY = "agent_or_controller_autonomy"
     CONTROLLER_POLICY = "controller_policy"
+
+
+class PlanningDecisionProvenanceKind(StrEnum):
+    """Auditable source kind for one Planning decision."""
+
+    EXPLICIT_INPUT = "explicit_input"
+    RESOLVED_QUESTION = "resolved_question"
+    PLANNER_RECOMMENDATION = "planner_recommendation"
+    AGENT_AUTONOMY = "agent_autonomy"
+
+
+class PlanningDecisionProvenance(BaseModel):
+    """Typed source that supports one current Planning decision."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: PlanningDecisionProvenanceKind
+    source: str = Field(min_length=1, max_length=2000)
+
+    @field_validator("source")
+    @classmethod
+    def require_clean_source(cls, value: str) -> str:
+        return _clean_text(value, label="Planning decision provenance source")
+
+    @model_validator(mode="after")
+    def require_canonical_controller_source(self) -> Self:
+        expected = {
+            PlanningDecisionProvenanceKind.PLANNER_RECOMMENDATION: "planner",
+            PlanningDecisionProvenanceKind.AGENT_AUTONOMY: "agent",
+        }.get(self.kind)
+        if expected is not None and self.source != expected:
+            raise ValueError(
+                f"{self.kind.value} decision provenance source must be {expected!r}"
+            )
+        if (
+            self.kind is PlanningDecisionProvenanceKind.RESOLVED_QUESTION
+            and re.fullmatch(r"[a-z][a-z0-9_]*", self.source) is None
+        ):
+            raise ValueError(
+                "resolved-question decision provenance requires a stable question ID"
+            )
+        return self
 
 
 _DECISION_AUTHORITY = {
@@ -700,6 +754,7 @@ def _normalize_planning_response_payload(
     payload: dict[str, object],
     *,
     profile_criterion_ids: Collection[str] = (),
+    user_inputs: Collection[str] = (),
 ) -> tuple[dict[str, object], tuple[str, ...]]:
     """Apply bounded semantic-preserving normalization before strict validation."""
 
@@ -714,6 +769,23 @@ def _normalize_planning_response_payload(
         if len(candidates) == 1:
             normalized["kind"] = candidates[0]
             changes.append(f"inferred response kind as {candidates[0]}")
+
+    question = normalized.get("question")
+    if isinstance(question, dict):
+        try:
+            question_category = PlanningDecisionCategory(
+                question.get("decision_category")
+            )
+        except (TypeError, ValueError):
+            question_category = None
+        if question_category is not None:
+            expected_owner = _DECISION_AUTHORITY[question_category]
+            if question.get("decision_owner") != expected_owner.value:
+                question["decision_owner"] = expected_owner.value
+                changes.append(
+                    "compiled question.decision_owner from category "
+                    f"{question_category.value}"
+                )
 
     proposal = normalized.get("proposal")
     if not isinstance(proposal, dict):
@@ -771,6 +843,197 @@ def _normalize_planning_response_payload(
                     f"proposal.assumption_decision_ids[{reference_index}] as "
                     f"{canonical_id}"
                 )
+
+        product_definition = proposal.get("product_definition")
+        product_dimensions = (
+            product_definition if isinstance(product_definition, dict) else {}
+        )
+        explicit_sources_by_decision: dict[str, set[str]] = {}
+        for dimension in ProductDefinitionDimension:
+            item = product_dimensions.get(dimension.value)
+            if not isinstance(item, dict):
+                continue
+            references = item.get("decision_ids")
+            if not isinstance(references, list):
+                continue
+            for reference_index, reference in enumerate(references):
+                if (
+                    not isinstance(reference, str)
+                    or re.fullmatch(r"DECISION_[A-Za-z0-9_]+", reference) is None
+                ):
+                    continue
+                canonical_id = reference.upper()
+                if (
+                    canonical_id != reference
+                    and canonical_id_counts.get(canonical_id) == 1
+                ):
+                    references[reference_index] = canonical_id
+                    changes.append(
+                        "canonicalized proposal.product_definition."
+                        f"{dimension.value}.decision_ids[{reference_index}] as "
+                        f"{canonical_id}"
+                    )
+                if item.get(
+                    "disposition"
+                ) == ProductDefinitionDisposition.EXPLICIT_INPUT.value and isinstance(
+                    item.get("source"), str
+                ):
+                    explicit_sources_by_decision.setdefault(canonical_id, set()).add(
+                        item["source"]
+                    )
+
+        normalized_user_inputs = tuple(
+            _normalized_evidence_text(value)
+            for value in user_inputs
+            if isinstance(value, str) and value.strip()
+        )
+        legacy_explicit_decision_ids: set[str] = set()
+        for decision_index, decision in enumerate(decisions):
+            if not isinstance(decision, dict):
+                continue
+            category_value = decision.get("category")
+            try:
+                category = PlanningDecisionCategory(category_value)
+            except (TypeError, ValueError):
+                continue
+            expected_authority = _DECISION_AUTHORITY[category]
+            if decision.get("authority") != expected_authority.value:
+                decision["authority"] = expected_authority.value
+                changes.append(
+                    "compiled proposal.decisions"
+                    f"[{decision_index}].authority from category {category.value}"
+                )
+
+            provenance = decision.get("provenance")
+            legacy_question_id = decision.get("question_id")
+            if provenance is None:
+                compiled_provenance: dict[str, str] | None = None
+                if isinstance(legacy_question_id, str) and legacy_question_id:
+                    compiled_provenance = {
+                        "kind": PlanningDecisionProvenanceKind.RESOLVED_QUESTION.value,
+                        "source": legacy_question_id,
+                    }
+                elif expected_authority is PlanningDecisionAuthority.PLANNER_PROPOSAL:
+                    compiled_provenance = {
+                        "kind": (
+                            PlanningDecisionProvenanceKind.PLANNER_RECOMMENDATION.value
+                        ),
+                        "source": "planner",
+                    }
+                elif expected_authority is PlanningDecisionAuthority.AGENT_AUTONOMY:
+                    compiled_provenance = {
+                        "kind": PlanningDecisionProvenanceKind.AGENT_AUTONOMY.value,
+                        "source": "agent",
+                    }
+                elif expected_authority is PlanningDecisionAuthority.USER:
+                    decision_id = decision.get("id")
+                    candidates = (
+                        explicit_sources_by_decision.get(decision_id, set())
+                        if isinstance(decision_id, str)
+                        else set()
+                    )
+                    came_from_product_definition = bool(candidates)
+                    summary = decision.get("summary")
+                    if (
+                        not candidates
+                        and isinstance(summary, str)
+                        and any(
+                            _normalized_evidence_text(summary) in value
+                            for value in normalized_user_inputs
+                        )
+                    ):
+                        candidates = {summary}
+                    if len(candidates) == 1:
+                        compiled_provenance = {
+                            "kind": PlanningDecisionProvenanceKind.EXPLICIT_INPUT.value,
+                            "source": next(iter(candidates)),
+                        }
+                        decision_id = decision.get("id")
+                        if came_from_product_definition and isinstance(
+                            decision_id, str
+                        ):
+                            legacy_explicit_decision_ids.add(decision_id)
+                if compiled_provenance is not None:
+                    decision["provenance"] = compiled_provenance
+                    changes.append(
+                        "compiled proposal.decisions"
+                        f"[{decision_index}].provenance from existing decision source"
+                    )
+            effective_provenance = decision.get("provenance")
+            if (
+                isinstance(effective_provenance, dict)
+                and effective_provenance.get("kind")
+                == PlanningDecisionProvenanceKind.EXPLICIT_INPUT.value
+                and isinstance(effective_provenance.get("source"), str)
+                and decision.get("summary") != effective_provenance["source"]
+            ):
+                decision["summary"] = effective_provenance["source"]
+                changes.append(
+                    "compiled proposal.decisions"
+                    f"[{decision_index}].summary from exact direct-input source"
+                )
+            if (
+                isinstance(legacy_question_id, str)
+                and isinstance(decision.get("provenance"), dict)
+                and decision["provenance"].get("kind")
+                == PlanningDecisionProvenanceKind.RESOLVED_QUESTION.value
+                and decision["provenance"].get("source") == legacy_question_id
+            ):
+                del decision["question_id"]
+                changes.append(
+                    f"retired legacy proposal.decisions[{decision_index}].question_id"
+                )
+
+        for dimension in ProductDefinitionDimension:
+            item = product_dimensions.get(dimension.value)
+            if not isinstance(item, dict):
+                continue
+            references = item.get("decision_ids")
+            if (
+                item.get("disposition")
+                in {
+                    ProductDefinitionDisposition.EXPLICIT_INPUT.value,
+                    ProductDefinitionDisposition.NOT_MATERIAL.value,
+                }
+                and isinstance(references, list)
+                and references
+                and (item.get("requirement_ids") or item.get("criterion_ids"))
+            ):
+                item["decision_ids"] = []
+                changes.append(
+                    "removed redundant decision references from "
+                    f"proposal.product_definition.{dimension.value}"
+                )
+
+        remaining_decision_references = {
+            reference
+            for dimension in ProductDefinitionDimension
+            if isinstance((item := product_dimensions.get(dimension.value)), dict)
+            and isinstance(item.get("decision_ids"), list)
+            for reference in item["decision_ids"]
+            if isinstance(reference, str)
+        }
+        if isinstance(assumption_decision_ids, list):
+            remaining_decision_references.update(
+                reference
+                for reference in assumption_decision_ids
+                if isinstance(reference, str)
+            )
+        retained_decisions: list[object] = []
+        for decision_index, decision in enumerate(decisions):
+            decision_id = decision.get("id") if isinstance(decision, dict) else None
+            if (
+                isinstance(decision_id, str)
+                and decision_id in legacy_explicit_decision_ids
+                and decision_id not in remaining_decision_references
+            ):
+                changes.append(
+                    "removed redundant direct-input decision "
+                    f"{decision_id} from proposal.decisions[{decision_index}]"
+                )
+                continue
+            retained_decisions.append(decision)
+        proposal["decisions"] = retained_decisions
     acceptance_criteria = proposal.get("acceptance_criteria")
     tasks = proposal.get("tasks")
     agents = proposal.get("agents")
@@ -959,12 +1222,13 @@ def _planning_invariant_diagnostic(
     invariant: _PlanningInvariant,
     *,
     authority: ResponseIssueAuthority = ResponseIssueAuthority.MODEL,
+    failure_class: ResponseFailureClass = ResponseFailureClass.SEMANTIC_CONTEXT,
 ) -> ResponseValidationDiagnostic:
     """Compile validator-owned identity without parsing human error text."""
 
     return diagnostic_from_invariant(
         payload,
-        failure_class=ResponseFailureClass.SEMANTIC_CONTEXT,
+        failure_class=failure_class,
         authority=authority,
         code="planning_context",
         invariant_id=invariant.invariant_id,
@@ -1057,7 +1321,7 @@ class PlanningRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, 6, PLANNING_SCHEMA_VERSION] = (
+    schema_version: Literal[2, 3, 4, 5, 6, 7, PLANNING_SCHEMA_VERSION] = (
         PLANNING_SCHEMA_VERSION
     )
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -1195,12 +1459,21 @@ class PlanningDecisionRecord(BaseModel):
     id: str = Field(pattern=r"^DECISION_[A-Z0-9_]+$")
     category: PlanningDecisionCategory
     authority: PlanningDecisionAuthority
+    provenance: PlanningDecisionProvenance | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description=(
+            "Current live decisions use an explicit typed source. Absence is kept "
+            "only so schema-v2 through schema-v7 evidence remains readable."
+        ),
+    )
     summary: str = Field(min_length=1, max_length=500)
     rationale: str = Field(min_length=1, max_length=500)
     question_id: str | None = Field(
         default=None,
         pattern=r"^[a-z][a-z0-9_]*$",
         exclude_if=lambda value: value is None,
+        description="Legacy schema-v2 through schema-v7 question provenance.",
     )
 
     @field_validator("summary", "rationale")
@@ -1215,11 +1488,34 @@ class PlanningDecisionRecord(BaseModel):
             raise ValueError(
                 f"decision category {self.category.value} belongs to {expected.value}"
             )
-        if (
-            self.authority is PlanningDecisionAuthority.USER
-            and self.question_id is None
-        ):
-            raise ValueError("user decisions must reference their Planning question")
+        if self.provenance is not None:
+            expected_provenance_authority = {
+                PlanningDecisionProvenanceKind.EXPLICIT_INPUT: (
+                    PlanningDecisionAuthority.USER
+                ),
+                PlanningDecisionProvenanceKind.RESOLVED_QUESTION: (
+                    PlanningDecisionAuthority.USER
+                ),
+                PlanningDecisionProvenanceKind.PLANNER_RECOMMENDATION: (
+                    PlanningDecisionAuthority.PLANNER_PROPOSAL
+                ),
+                PlanningDecisionProvenanceKind.AGENT_AUTONOMY: (
+                    PlanningDecisionAuthority.AGENT_AUTONOMY
+                ),
+            }[self.provenance.kind]
+            if self.authority is not expected_provenance_authority:
+                raise ValueError(
+                    f"{self.provenance.kind.value} provenance belongs to "
+                    f"{expected_provenance_authority.value}"
+                )
+            if self.question_id is not None and (
+                self.provenance.kind
+                is not PlanningDecisionProvenanceKind.RESOLVED_QUESTION
+                or self.provenance.source != self.question_id
+            ):
+                raise ValueError(
+                    "legacy question_id must match resolved-question provenance"
+                )
         if (
             self.authority
             in {
@@ -1232,6 +1528,17 @@ class PlanningDecisionRecord(BaseModel):
                 "autonomous or controller-policy decisions cannot claim a user question"
             )
         return self
+
+    @property
+    def resolved_question_id(self) -> str | None:
+        """Return current or legacy question provenance through one authority."""
+
+        if (
+            self.provenance is not None
+            and self.provenance.kind is PlanningDecisionProvenanceKind.RESOLVED_QUESTION
+        ):
+            return self.provenance.source
+        return self.question_id
 
 
 _ALL_REVIEW_BOUNDARIES = tuple(ReviewBoundaryKind)
@@ -1964,6 +2271,91 @@ def _normalized_evidence_text(value: str) -> str:
     return " ".join(value.casefold().split())
 
 
+def _validate_decision_provenance(
+    body: PlanningProposalBody,
+    *,
+    normalized_inputs: tuple[str, ...],
+    require_current_provenance: bool,
+) -> None:
+    """Validate sources without treating missing user input as model patching."""
+
+    for decision_index, decision in enumerate(body.decisions):
+        provenance = decision.provenance
+        if provenance is None:
+            if not require_current_provenance:
+                if (
+                    decision.authority is PlanningDecisionAuthority.USER
+                    and decision.question_id is None
+                ):
+                    raise _planning_context_invariant(
+                        "planning_legacy_user_decision_source",
+                        (
+                            f"decision {decision.id} has neither direct-input nor "
+                            "question provenance"
+                        ),
+                        paths=(f"/proposal/decisions/{decision_index}",),
+                        subjects=_planning_subjects(
+                            (ResponseIssueSubjectKind.DECISION, decision.id)
+                        ),
+                        failure_class=ResponseFailureClass.MISSING_USER_DECISION,
+                        authority=ResponseIssueAuthority.USER,
+                    )
+                continue
+            authority = (
+                ResponseIssueAuthority.USER
+                if decision.authority is PlanningDecisionAuthority.USER
+                else ResponseIssueAuthority.MODEL
+            )
+            failure_class = (
+                ResponseFailureClass.MISSING_USER_DECISION
+                if authority is ResponseIssueAuthority.USER
+                else ResponseFailureClass.SEMANTIC_CONTEXT
+            )
+            raise _planning_context_invariant(
+                "planning_decision_provenance_required",
+                f"current decision {decision.id} requires typed provenance",
+                paths=(f"/proposal/decisions/{decision_index}/provenance",),
+                subjects=_planning_subjects(
+                    (ResponseIssueSubjectKind.DECISION, decision.id)
+                ),
+                failure_class=failure_class,
+                authority=authority,
+            )
+        if provenance.kind is PlanningDecisionProvenanceKind.EXPLICIT_INPUT and not any(
+            _normalized_evidence_text(provenance.source) in value
+            for value in normalized_inputs
+        ):
+            raise _planning_context_invariant(
+                "planning_decision_explicit_source",
+                (
+                    f"decision {decision.id} claims explicit user input that is "
+                    "not present in the Planning request or a user revision"
+                ),
+                paths=(f"/proposal/decisions/{decision_index}/provenance",),
+                subjects=_planning_subjects(
+                    (ResponseIssueSubjectKind.DECISION, decision.id)
+                ),
+                failure_class=ResponseFailureClass.MISSING_USER_DECISION,
+                authority=ResponseIssueAuthority.USER,
+            )
+        if (
+            provenance.kind is PlanningDecisionProvenanceKind.EXPLICIT_INPUT
+            and _normalized_evidence_text(decision.summary)
+            != _normalized_evidence_text(provenance.source)
+        ):
+            raise _planning_context_invariant(
+                "planning_decision_explicit_summary",
+                (
+                    f"decision {decision.id} must preserve its exact direct-input "
+                    "source as the user-owned summary"
+                ),
+                paths=(f"/proposal/decisions/{decision_index}/summary",),
+                subjects=_planning_subjects(
+                    (ResponseIssueSubjectKind.DECISION, decision.id)
+                ),
+            )
+
+
 def _product_definition_dimension_invariant(
     *,
     dimension: ProductDefinitionDimension,
@@ -1975,6 +2367,7 @@ def _product_definition_dimension_invariant(
     decisions: Mapping[str, PlanningDecisionRecord],
     normalized_inputs: tuple[str, ...],
     question_contracts: Mapping[str, _PlanningQuestionContract] | None,
+    allow_legacy_decision_links: bool,
 ) -> _PlanningInvariant | None:
     """Return one atomic, coherently repairable issue for a product dimension."""
 
@@ -2030,13 +2423,21 @@ def _product_definition_dimension_invariant(
                     "is not explicit, choose the truthful disposition and its source."
                 ),
             )
+        if item.decision_ids and not allow_legacy_decision_links:
+            return issue(
+                "planning_product_explicit_decision_trace",
+                (
+                    f"{dimension.value} explicit_input is already attributable to "
+                    "its exact user source and cannot cite a separate decision record"
+                ),
+            )
         return None
 
     if item.disposition is ProductDefinitionDisposition.RESOLVED_QUESTION:
         linked = tuple(
             decision
             for decision in decisions.values()
-            if decision.question_id == item.source
+            if decision.resolved_question_id == item.source
         )
         if (
             len(linked) != 1
@@ -2047,10 +2448,14 @@ def _product_definition_dimension_invariant(
                 "planning_product_question_source",
                 f"{dimension.value} must reference one user-owned product question",
             )
-        if linked[0].id not in item.decision_ids:
+        if (
+            linked[0].id not in item.decision_ids
+            if allow_legacy_decision_links
+            else set(item.decision_ids) != {linked[0].id}
+        ):
             return issue(
                 "planning_product_question_decision_trace",
-                f"{dimension.value} omits its resolved question decision",
+                (f"{dimension.value} must cite only its resolved question decision"),
             )
         if question_contracts is None:
             return None
@@ -2129,13 +2534,21 @@ def _product_definition_dimension_invariant(
                 PlanningDecisionCategory.DELIVERY
             ),
         }[dimension]
-        if not any(
+        category_matches = tuple(
             decisions[decision_id].category is expected_category
             for decision_id in item.decision_ids
+        )
+        if not (
+            any(category_matches)
+            if allow_legacy_decision_links
+            else all(category_matches)
         ):
             return issue(
                 "planning_product_recommendation_category",
-                f"{dimension.value} lacks its corresponding Planner decision",
+                (
+                    f"{dimension.value} may cite only its corresponding "
+                    "Planner decision category"
+                ),
             )
         return None
 
@@ -2165,6 +2578,14 @@ def _product_definition_dimension_invariant(
                 "attributable to Planning"
             ),
         )
+    if item.decision_ids and not allow_legacy_decision_links:
+        return issue(
+            "planning_product_not_material_decision_trace",
+            (
+                f"{dimension.value} not_material is attributable to the Planner "
+                "disposition itself and cannot cite a separate decision record"
+            ),
+        )
     return None
 
 
@@ -2175,6 +2596,7 @@ def _validate_product_definition(
     user_inputs: Collection[str],
     question_contracts: Mapping[str, _PlanningQuestionContract] | None,
     allowed_criterion_ids: Collection[str] = (),
+    allow_legacy_decision_links: bool = False,
 ) -> None:
     """Require attributable product depth with real downstream plan effects."""
 
@@ -2207,6 +2629,7 @@ def _validate_product_definition(
                 decisions=decisions,
                 normalized_inputs=normalized_inputs,
                 question_contracts=question_contracts,
+                allow_legacy_decision_links=allow_legacy_decision_links,
             )
         )
         is not None
@@ -2256,6 +2679,8 @@ def validate_planning_clarity(
     additional_user_inputs: Collection[str] = (),
     question_contracts: Mapping[str, _PlanningQuestionContract] | None = None,
     allowed_criterion_ids: Collection[str] = (),
+    require_current_decision_provenance: bool = True,
+    allow_legacy_product_decision_links: bool = False,
 ) -> None:
     """Enforce the current decision and requirement-to-evidence contract."""
 
@@ -2311,7 +2736,7 @@ def validate_planning_clarity(
             "planning_controller_authority_claim",
             "Planner output cannot claim controller-policy decision authority",
             paths=tuple(
-                f"/proposal/decisions/{index}/authority"
+                f"/proposal/decisions/{index}/category"
                 for index, _decision in invalid_decisions
             ),
             subjects=_planning_subjects(
@@ -2320,7 +2745,19 @@ def validate_planning_clarity(
                     for _index, decision in invalid_decisions
                 )
             ),
+            authority=ResponseIssueAuthority.CONTROLLER,
         )
+
+    normalized_inputs = tuple(
+        _normalized_evidence_text(value)
+        for value in (source_request, *additional_user_inputs)
+        if value is not None
+    )
+    _validate_decision_provenance(
+        body,
+        normalized_inputs=normalized_inputs,
+        require_current_provenance=require_current_decision_provenance,
+    )
 
     _validate_product_definition(
         body,
@@ -2332,6 +2769,7 @@ def validate_planning_clarity(
         ),
         question_contracts=question_contracts,
         allowed_criterion_ids=allowed_criterion_ids,
+        allow_legacy_decision_links=allow_legacy_product_decision_links,
     )
 
     required_recommendations = {
@@ -2380,13 +2818,10 @@ def validate_planning_clarity(
                 ),
             )
         if decision.authority is not PlanningDecisionAuthority.AGENT_AUTONOMY:
-            decision_index = tuple(item.id for item in body.decisions).index(
-                decision_id
-            )
             raise _planning_context_invariant(
                 "planning_assumption_decision_authority",
                 f"assumption {decision_id} is not an autonomous implementation choice",
-                paths=(f"/proposal/decisions/{decision_index}/authority",),
+                paths=("/proposal/assumption_decision_ids",),
                 subjects=_planning_subjects(
                     (ResponseIssueSubjectKind.DECISION, decision_id)
                 ),
@@ -2562,21 +2997,21 @@ def validate_planning_clarity(
     if question_contracts is None:
         return
     linked = {
-        decision.question_id: decision
+        decision.resolved_question_id: decision
         for decision in body.decisions
-        if decision.question_id is not None
+        if decision.resolved_question_id is not None
     }
     if len(linked) != sum(
-        decision.question_id is not None for decision in body.decisions
+        decision.resolved_question_id is not None for decision in body.decisions
     ):
         duplicate_questions = tuple(
             sorted(
                 {
-                    decision.question_id
+                    decision.resolved_question_id
                     for decision in body.decisions
-                    if decision.question_id is not None
+                    if decision.resolved_question_id is not None
                     and sum(
-                        item.question_id == decision.question_id
+                        item.resolved_question_id == decision.resolved_question_id
                         for item in body.decisions
                     )
                     > 1
@@ -2625,11 +3060,8 @@ def validate_planning_clarity(
             )
             raise _planning_context_invariant(
                 "planning_question_decision_contract",
-                f"decision for question {question_id} changed its category or owner",
-                paths=(
-                    f"/proposal/decisions/{decision_index}/authority",
-                    f"/proposal/decisions/{decision_index}/category",
-                ),
+                f"decision for question {question_id} changed its category",
+                paths=(f"/proposal/decisions/{decision_index}/category",),
                 subjects=_planning_subjects(
                     (ResponseIssueSubjectKind.DECISION, decision.id),
                     (ResponseIssueSubjectKind.QUESTION, question_id),
@@ -2666,7 +3098,6 @@ def _planning_response_schema() -> dict[str, object]:
     required_by_definition = {
         "PlanningQuestion": (
             "decision_category",
-            "decision_owner",
             "missing_evidence",
             "material_consequences",
             "product_definition_dimensions",
@@ -2676,6 +3107,7 @@ def _planning_response_schema() -> dict[str, object]:
             "verification_agent_ids",
             "review_boundaries",
         ),
+        "PlanningDecisionRecord": ("provenance",),
         "PlanningProposalBody": (
             "product_definition",
             "requirement_ids",
@@ -2706,7 +3138,7 @@ def _planning_response_schema() -> dict[str, object]:
             if field_name not in required:
                 required.append(field_name)
     question_properties = definitions["PlanningQuestion"]["properties"]
-    for field_name in ("decision_category", "decision_owner"):
+    for field_name in ("decision_category",):
         field_schema = question_properties[field_name]
         options = field_schema.get("anyOf")
         if not isinstance(options, list):
@@ -2719,6 +3151,29 @@ def _planning_response_schema() -> dict[str, object]:
                 f"Planning response schema has an invalid {field_name} union"
             )
         question_properties[field_name] = non_null[0]
+    question_required = definitions["PlanningQuestion"]["required"]
+    question_properties.pop("decision_owner", None)
+    while "decision_owner" in question_required:
+        question_required.remove("decision_owner")
+    decision_definition = definitions["PlanningDecisionRecord"]
+    decision_properties = decision_definition["properties"]
+    decision_required = decision_definition["required"]
+    provenance_schema = decision_properties["provenance"]
+    provenance_options = provenance_schema.get("anyOf")
+    if not isinstance(provenance_options, list):
+        raise PlanningError(
+            "Planning response schema has no nullable decision provenance union"
+        )
+    provenance_non_null = [
+        option for option in provenance_options if option.get("type") != "null"
+    ]
+    if len(provenance_non_null) != 1:
+        raise PlanningError("Planning response schema has invalid decision provenance")
+    decision_properties["provenance"] = provenance_non_null[0]
+    for controller_field in ("authority", "question_id"):
+        decision_properties.pop(controller_field, None)
+        while controller_field in decision_required:
+            decision_required.remove(controller_field)
     proposal_properties = definitions["PlanningProposalBody"]["properties"]
     product_definition_schema = proposal_properties["product_definition"]
     product_options = product_definition_schema.get("anyOf")
@@ -2759,7 +3214,7 @@ class AdaptiveImplementationPlan(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, 6, PLANNING_SCHEMA_VERSION] = (
+    schema_version: Literal[2, 3, 4, 5, 6, 7, PLANNING_SCHEMA_VERSION] = (
         PLANNING_SCHEMA_VERSION
     )
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -2838,7 +3293,7 @@ class PlanningTurn(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, 6, PLANNING_SCHEMA_VERSION] = (
+    schema_version: Literal[2, 3, 4, 5, 6, 7, PLANNING_SCHEMA_VERSION] = (
         PLANNING_SCHEMA_VERSION
     )
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -2994,7 +3449,7 @@ class PlanningProposal(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, 6, PLANNING_SCHEMA_VERSION] = (
+    schema_version: Literal[2, 3, 4, 5, 6, 7, PLANNING_SCHEMA_VERSION] = (
         PLANNING_SCHEMA_VERSION
     )
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -3054,7 +3509,7 @@ class PlanningSession(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, 6, PLANNING_SCHEMA_VERSION] = (
+    schema_version: Literal[2, 3, 4, 5, 6, 7, PLANNING_SCHEMA_VERSION] = (
         PLANNING_SCHEMA_VERSION
     )
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -3235,7 +3690,7 @@ class PlanningApproval(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, 6, PLANNING_SCHEMA_VERSION] = (
+    schema_version: Literal[2, 3, 4, 5, 6, 7, PLANNING_SCHEMA_VERSION] = (
         PLANNING_SCHEMA_VERSION
     )
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -3475,6 +3930,8 @@ def preview_adaptive_proposal(
             allowed_criterion_ids=(
                 criterion.id for criterion in policy.profile_acceptance_criteria
             ),
+            require_current_decision_provenance=proposal.schema_version >= 8,
+            allow_legacy_product_decision_links=proposal.schema_version < 8,
         )
     if policy.max_agents is not None and len(body.agents) > policy.max_agents:
         raise PlanningError(
@@ -3945,13 +4402,18 @@ def render_planning_overview(
                 else "      - none"
             )
         for decision in records:
-            question = (
+            question_id = decision.resolved_question_id
+            question = "" if question_id is None else f"; question={question_id}"
+            direct_source = (
                 ""
-                if decision.question_id is None
-                else f"; question={decision.question_id}"
+                if decision.provenance is None
+                or decision.provenance.kind
+                is not PlanningDecisionProvenanceKind.EXPLICIT_INPUT
+                else f"; source={decision.provenance.source!r}"
             )
             lines.append(
-                f"      - {decision.id} [{decision.category.value}{question}]: "
+                f"      - {decision.id} "
+                f"[{decision.category.value}{question}{direct_source}]: "
                 f"{decision.summary} (why: {decision.rationale})"
             )
     lines.append("    Assumptions:")
@@ -4844,16 +5306,17 @@ class AdaptivePlanningCoordinator:
                             (dimension, value)
                         )
             for decision in current_proposal.body.decisions:
-                if decision.question_id is None:
+                question_id = decision.resolved_question_id
+                if question_id is None:
                     continue
-                contracts[decision.question_id] = _PlanningQuestionContract(
+                contracts[question_id] = _PlanningQuestionContract(
                     category=decision.category,
                     owner=decision.authority,
                     product_definition_dimensions=tuple(
-                        dimensions_by_question.get(decision.question_id, ())
+                        dimensions_by_question.get(question_id, ())
                     ),
                     approved_dimension_values=tuple(
-                        values_by_question.get(decision.question_id, ())
+                        values_by_question.get(question_id, ())
                     ),
                 )
         for entry in transcript:
@@ -5077,6 +5540,10 @@ class AdaptivePlanningCoordinator:
                                 criterion.id
                                 for criterion in self.policy.profile_acceptance_criteria
                             ),
+                            user_inputs=(
+                                request.source_request,
+                                *(() if change_request is None else (change_request,)),
+                            ),
                         )
                     )
                     normalization_list = list(initial_normalizations)
@@ -5177,6 +5644,8 @@ class AdaptivePlanningCoordinator:
                         response_validation = _planning_invariant_diagnostic(
                             payload,
                             error.invariant,
+                            authority=error.authority,
+                            failure_class=error.failure_class,
                         )
                     if correction_plan is not None and not correction_applied:
                         current_correction_outcome = (

@@ -496,20 +496,25 @@ seconds. Approval revalidates that authority against the TeamPlan at the
 execution boundary.
 The bootstrap Planner cannot create Agents or change lifecycle state.
 
-Planning schema v7 adds invocation-bound typed submission payload and evidence
-to current turns. Schema v6 added response-finalization outcomes to current
+Planning schema v8 adds typed decision provenance, with exact direct-input or
+question sources, while the controller compiles category-owned authority.
+Schema-v2 through schema-v7 decisions remain readable and omit the new field
+when reserialized. Schema v7 added invocation-bound typed submission payload and
+evidence to current turns. Schema v6 added response-finalization outcomes to current
 execution evidence. Schema v5 added an attributable ProductDefinition to
 proposals, adaptive implementation plans, and confirmed TaskBriefs, plus the exact
-product-definition dimensions resolved by each question. Schema v2 through v6
+product-definition dimensions resolved by each question. Schema v2 through v7
 remain readable. Compatibility fields omit themselves when absent so loading
 historical evidence does not change its canonical bytes or digest. Schema v4
 introduced the typed normalization and correction evidence retained by later versions. A
 structured edit of historical evidence preserves its schema identity; a new
 model-authored replacement uses the current schema.
-The live response schema, unlike the backward-readable persistence models,
-requires non-null question category and owner, admission rationale,
+The current validated response, unlike the backward-readable persistence models,
+requires non-null question category and Controller-derived owner, admission rationale,
 ProductDefinition, stable requirement references, non-goals, assumption
-ownership, decision provenance, and criterion verifier references.
+ownership, typed decision provenance, and criterion verifier references. The
+model-facing schema omits question/decision authority and legacy `question_id`;
+they are controller-owned projections of category and provenance.
 
 Before a question reaches the user, the controller checks its declared category
 against the fixed responsibility matrix and rejects autonomous implementation,

@@ -160,10 +160,11 @@ Questions should be selected for decision value. The planner must not turn
 every implementation detail into a user prompt or silently decide a missing
 product requirement on the user's behalf.
 
-Every focused question carries a stable decision category and owner, the
+Every focused question carries a stable decision category, the
 evidence that is missing, the material consequences of choosing differently,
-and two or three alternatives plus a custom-answer path. The controller owns
-the category-to-authority mapping. It rejects questions about reversible local
+and two or three alternatives plus a custom-answer path. The controller derives
+the owner from its category-to-authority mapping rather than accepting a second
+model-authored field. It rejects questions about reversible local
 implementation or scheduling, rejects any attempt to delegate safety or
 evidence-integrity policy, and rejects a category whose declared owner does not
 match the mapping. This is an admission boundary, not a claim that deterministic
@@ -171,7 +172,13 @@ code can infer the semantic value of arbitrary prose; ambiguous real tasks
 remain the usability test for under- and over-questioning.
 
 A current proposal records one stable ID per requirement, explicit non-goals,
-and attributable decision records. Every answered question resolves exactly one
+and attributable decision records. Every current decision has typed provenance:
+an exact direct user-input substring, one resolved question ID, `planner`, or
+`agent`. The model supplies the semantic category and provenance; the controller
+compiles authority from the category instead of asking the model to repeat a
+deterministically known field. For direct input, the controller also projects
+the exact source into the user-owned summary so a Planner paraphrase cannot be
+misattributed to the user. Every answered question resolves exactly one
 decision with the original category and owner. Assumptions may reference only
 local implementation or scheduling decisions inside the approved boundary;
 they cannot substitute for a user authorization or Controller invariant.
@@ -204,6 +211,15 @@ Target users or workflow may be `not_material` only for an explicitly approved
 throwaway prototype. Usability, operations, and delivery may be reasoned
 Planner recommendations that become user-approved with the overview.
 
+The source carried by an `explicit_input` or `not_material` dimension is its
+decision provenance, so those dimensions do not cite a separate decision ID. A
+`resolved_question` dimension cites exactly its matching question decision. A
+`planner_recommendation` dimension cites only the corresponding Planner category
+(`acceptance_scope` for usability/operations and `delivery` for delivery). This
+prevents an unrelated but existing decision ID from satisfying the product-depth
+trace. Direct product facts already represented this way are not duplicated in
+the additional decision ledger.
+
 This is a dependency contract, not a questionnaire count. An explicit
 throwaway prototype can proceed directly with a lean proposal. An
 under-specified reusable product must clarify material user-owned depth first.
@@ -229,6 +245,13 @@ may perform only these bounded, semantics-preserving normalizations:
   `repository`;
 - Canonicalize the letter case of an otherwise well-formed `DECISION_` token
   and its exact assumption reference when that canonical identity is unique;
+- Compile decision authority from its category, compile legacy question,
+  Planner, and Agent source fields into typed provenance, and remove redundant
+  legacy direct-product decision records only when the ProductDefinition retains
+  its exact source and downstream requirement or criterion traces;
+- Remove decision references from `explicit_input` and `not_material`
+  ProductDefinition dimensions when a requirement or criterion trace remains,
+  because their own typed source is authoritative;
 - Remove a schema-forbidden field only when removing it cannot grant or hide
   controller/evidence authority.
 
@@ -858,7 +881,14 @@ deterministically deconflicts an echo whose model-owned relationship is still
 needed. The canonical profile text remains controller-owned, both task bindings
 are retained, and the raw response plus every normalization remain recorded in
 the Planning turn.
-Planning schema v7 adds the exact typed semantic payload and content-free
+Planning schema v8 adds typed decision provenance and moves redundant question
+and decision category-to-authority fields out of the model-facing response
+contract. It keeps
+schema-v2 through schema-v7 records readable without adding fields or changing
+their canonical serialization. Current turns retain the exact submission,
+record every deterministic compilation, and separately persist the validated
+provenance-bearing form.
+Planning schema v7 added the exact typed semantic payload and content-free
 submission binding to each current turn while preserving assistant text as
 non-authoritative evidence. Schema v6 added terminal-response/finalization
 execution outcomes to Planning evidence. Schema v5 added the attributable

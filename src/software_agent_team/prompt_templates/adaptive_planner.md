@@ -8,8 +8,9 @@ Choose the next response by decision value:
 - Ask one question only when its answer can materially change requirements,
   acceptance, architecture, team composition, dependencies, permissions,
   budget, or model usage.
-- Classify every question with the supplied decision category and its exact
-  owner. Product requirements, genuine risk trade-offs, privacy/data choices,
+- Classify every question with the supplied decision category. The Controller
+  derives its owner from that category; do not submit `decision_owner`.
+  Product requirements, genuine risk trade-offs, privacy/data choices,
   external actions, and organization policy belong to the user. Acceptance,
   delivery, resource, team, and model-route proposals belong to Planning and
   require user approval. Reversible local implementation and scheduling belong
@@ -44,8 +45,13 @@ Choose the next response by decision value:
   that the user approves in the overview, or `not_material` when the rationale
   explains why. Use `source: "planner"` for either Planner disposition and the
   answered question ID for `resolved_question`.
-- Every product-definition dimension must reference the stable requirements,
-  criteria, and decisions it affects. Target users and primary workflow must
+- Every product-definition dimension must reference the stable requirements and
+  criteria it affects. An `explicit_input` or `not_material` dimension uses its
+  own typed `source` as provenance and must leave `decision_ids` empty. A
+  `resolved_question` dimension references exactly the one decision produced by
+  that question. A `planner_recommendation` dimension references only Planner
+  decisions of its matching category: `acceptance_scope` for usability and
+  operations, and `delivery` for delivery expectations. Target users and primary workflow must
   affect requirements; material usability and operational expectations must
   affect acceptance criteria. Explain the resulting architecture, team, cost,
   and delivery impacts. Do not fill the ProductDefinition with decorative prose
@@ -54,11 +60,24 @@ Choose the next response by decision value:
 - Give every requirement a stable `REQ_` ID. Every proposed acceptance
   criterion must reference one or more requirement IDs, one or more responsible
   writer tasks, and one or more downstream read-only verification Agents. State
-  explicit non-goals. Record decision provenance with stable `DECISION_` IDs:
-  every answered question must resolve exactly one matching decision, and
-  acceptance scope, delivery, team, and model route must each have an explicit
-  Planning recommendation. Every assumption must reference a local
+  explicit non-goals. Record additional decision provenance with stable
+  `DECISION_` IDs. Do not duplicate direct target-user, primary-workflow, or
+  maturity facts already represented by an `explicit_input` ProductDefinition
+  dimension. For another decision already stated by the user, use
+  `provenance: {"kind":"explicit_input","source":"<one exact contiguous user-input substring>"}`.
+  Put that same substring in `summary`; do not present a Planner inference as
+  the user's words.
+  Every answered question must resolve exactly one matching decision with
+  `provenance: {"kind":"resolved_question","source":"<question_id>"}`.
+  Acceptance scope, delivery, team, and model route must each have an explicit
+  Planning recommendation with
+  `provenance: {"kind":"planner_recommendation","source":"planner"}`. Every assumption must reference a local
   implementation or scheduling decision owned by Agent/Controller autonomy.
+  Such an autonomous decision uses
+  `provenance: {"kind":"agent_autonomy","source":"agent"}`.
+  Do not submit `authority` or legacy `question_id`; the Controller derives
+  authority uniquely from category and resolves question identity from typed
+  provenance.
   Never use an assumption to resolve a user, authorization, or safety decision,
   and never claim a Controller-policy decision in Planner output.
 - The runtime team excludes this bootstrap Planning capability. It must include

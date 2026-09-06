@@ -52,6 +52,8 @@ from software_agent_team.planning import (
     PlanningActivityKind,
     PlanningDecisionAuthority,
     PlanningDecisionCategory,
+    PlanningDecisionProvenance,
+    PlanningDecisionProvenanceKind,
     PlanningDecisionRecord,
     PlanningError,
     PlanningIntegrityError,
@@ -77,6 +79,10 @@ from software_agent_team.planning import (
     preview_adaptive_proposal,
     render_planning_overview,
     run_interactive_planning,
+)
+from software_agent_team.response_corrections import (
+    ResponseFailureClass,
+    ResponseIssueAuthority,
 )
 from software_agent_team.submissions import AgentSubmissionPurpose
 from software_agent_team.teams import (
@@ -179,6 +185,10 @@ def proposal_body(
             id="DECISION_ACCEPTANCE",
             category=PlanningDecisionCategory.ACCEPTANCE_SCOPE,
             authority=PlanningDecisionAuthority.PLANNER_PROPOSAL,
+            provenance=PlanningDecisionProvenance(
+                kind=PlanningDecisionProvenanceKind.PLANNER_RECOMMENDATION,
+                source="planner",
+            ),
             summary="Verify observable scan failures and diagnostic locations.",
             rationale="These behaviors make the requested CLI testable.",
         ),
@@ -186,6 +196,10 @@ def proposal_body(
             id="DECISION_DELIVERY",
             category=PlanningDecisionCategory.DELIVERY,
             authority=PlanningDecisionAuthority.PLANNER_PROPOSAL,
+            provenance=PlanningDecisionProvenance(
+                kind=PlanningDecisionProvenanceKind.PLANNER_RECOMMENDATION,
+                source="planner",
+            ),
             summary="Deliver one runnable local CLI project.",
             rationale="The request is for a local command-line tool.",
         ),
@@ -193,6 +207,10 @@ def proposal_body(
             id="DECISION_TEAM",
             category=PlanningDecisionCategory.TEAM,
             authority=PlanningDecisionAuthority.PLANNER_PROPOSAL,
+            provenance=PlanningDecisionProvenance(
+                kind=PlanningDecisionProvenanceKind.PLANNER_RECOMMENDATION,
+                source="planner",
+            ),
             summary="Use one writer and two downstream quality Agents.",
             rationale="The cohesive implementation still needs independent checks.",
         ),
@@ -200,6 +218,10 @@ def proposal_body(
             id="DECISION_MODEL_ROUTE",
             category=PlanningDecisionCategory.MODEL_ROUTE,
             authority=PlanningDecisionAuthority.PLANNER_PROPOSAL,
+            provenance=PlanningDecisionProvenance(
+                kind=PlanningDecisionProvenanceKind.PLANNER_RECOMMENDATION,
+                source="planner",
+            ),
             summary="Use capability-compatible configured model routes.",
             rationale="No task evidence justifies a route override.",
         ),
@@ -207,6 +229,10 @@ def proposal_body(
             id="DECISION_SCAN_STRUCTURE",
             category=PlanningDecisionCategory.LOCAL_IMPLEMENTATION,
             authority=PlanningDecisionAuthority.AGENT_AUTONOMY,
+            provenance=PlanningDecisionProvenance(
+                kind=PlanningDecisionProvenanceKind.AGENT_AUTONOMY,
+                source="agent",
+            ),
             summary="Use one single-process scan before considering parallelism.",
             rationale="The small initial workload does not justify added coordination.",
         ),
@@ -218,9 +244,12 @@ def proposal_body(
                 id="DECISION_LINK_SCOPE_ANSWER",
                 category=PlanningDecisionCategory.PRODUCT_REQUIREMENT,
                 authority=PlanningDecisionAuthority.USER,
+                provenance=PlanningDecisionProvenance(
+                    kind=PlanningDecisionProvenanceKind.RESOLVED_QUESTION,
+                    source=question_id,
+                ),
                 summary="Keep the first release limited to local links.",
                 rationale="The user selected the deterministic local-only option.",
-                question_id=question_id,
             ),
         )
     return PlanningProposalBody(
@@ -246,7 +275,6 @@ def proposal_body(
                 source="usable local product",
                 rationale="The request explicitly asks for a reusable local tool.",
                 requirement_ids=("REQ_SCAN",),
-                decision_ids=("DECISION_DELIVERY",),
             ),
             usability_expectations=ProductDefinitionStatement(
                 statement="Failures are actionable from ordinary terminal output.",
@@ -373,6 +401,21 @@ def proposal(
         source_turn_sequence=revision,
         body=body or proposal_body(),
     )
+
+
+def strip_v8_decision_fields(body_payload: dict[str, object]) -> None:
+    """Turn one current proposal-body payload into its schema-v7 decision shape."""
+
+    decisions = body_payload["decisions"]
+    assert isinstance(decisions, list)
+    for decision in decisions:
+        assert isinstance(decision, dict)
+        provenance = decision.pop("provenance", None)
+        if (
+            isinstance(provenance, dict)
+            and provenance.get("kind") == "resolved_question"
+        ):
+            decision["question_id"] = provenance["source"]
 
 
 def test_planning_overview_separates_constraint_authority_without_losing_data() -> None:
@@ -773,6 +816,99 @@ def test_planning_repairs_schema_then_all_invalid_product_dimensions_together(
     assert "one contiguous verbatim substring" in executor.requests[2].prompt
 
 
+def test_planning_replays_legacy_direct_decisions_through_reachable_slots(
+    tmp_path: Path,
+) -> None:
+    valid_body = proposal_body()
+    valid_definition = valid_body.product_definition
+    assert valid_definition is not None
+    initial = proposal_response().model_dump(mode="json")
+    proposal_payload = initial["proposal"]
+    for decision in proposal_payload["decisions"]:
+        decision.pop("provenance")
+    proposal_payload["decisions"][1]["authority"] = "user"
+    proposal_payload["decisions"][:0] = [
+        {
+            "id": "DECISION_TARGET_USERS",
+            "category": "product_requirement",
+            "authority": "user",
+            "summary": "Developers are the intended users.",
+            "rationale": "The request mentions developers.",
+        },
+        {
+            "id": "DECISION_WORKFLOW",
+            "category": "product_requirement",
+            "authority": "user",
+            "summary": "The primary workflow checks Markdown links.",
+            "rationale": "The request names that workflow.",
+        },
+    ]
+    definition = proposal_payload["product_definition"]
+    definition["target_users"].update(
+        {
+            "statement": "Developers who repeatedly run the tool.",
+            "decision_ids": ["DECISION_TARGET_USERS"],
+        }
+    )
+    definition["primary_workflow"].update(
+        {
+            "statement": "Run a complete Markdown link-checking workflow.",
+            "decision_ids": ["DECISION_WORKFLOW"],
+        }
+    )
+    definition["delivery_maturity"]["decision_ids"] = ["DECISION_DELIVERY"]
+    executor = ScriptedAgentExecutor(
+        [
+            ScriptedAgentResponse(text="ignored", submission_payload=initial),
+            ScriptedAgentResponse(
+                text="ignored",
+                submission_payload={
+                    "replacement_values": [
+                        valid_definition.primary_workflow.model_dump(mode="json"),
+                        valid_definition.target_users.model_dump(mode="json"),
+                    ]
+                },
+            ),
+        ]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(response_repair_limit=1),
+        clock=AdvancingClock(),
+    )
+
+    created = coordinator.start(
+        request(),
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+
+    assert created is not None
+    assert len(executor.requests) == 2
+    first = store.load_turn(request().run_id, 1)
+    second = store.load_turn(request().run_id, 2)
+    assert first.response_validation is not None
+    assert first.response_validation.correction_paths == (
+        "/proposal/product_definition/primary_workflow",
+        "/proposal/product_definition/target_users",
+    )
+    assert all(
+        "/proposal/decisions/" not in path
+        for path in first.response_validation.correction_paths
+    )
+    assert any(
+        "removed redundant direct-input decision DECISION_TARGET_USERS" in item
+        for item in first.response_normalizations
+    )
+    assert second.parsed_response is not None
+    assert second.semantic_correction_outcome is not None
+    assert second.parsed_response.proposal is not None
+    assert {item.id for item in second.parsed_response.proposal.decisions}.isdisjoint(
+        {"DECISION_TARGET_USERS", "DECISION_WORKFLOW"}
+    )
+
+
 def test_question_requires_suggestions_and_preserves_custom_answers() -> None:
     question = question_response().question
 
@@ -993,33 +1129,15 @@ def test_resolved_dimension_must_be_declared_by_its_question(tmp_path: Path) -> 
         )
 
 
-@pytest.mark.parametrize(
-    ("category", "owner", "message"),
-    (
-        (
-            PlanningDecisionCategory.LOCAL_IMPLEMENTATION,
-            PlanningDecisionAuthority.AGENT_AUTONOMY,
-            "cannot ask the user to decide",
-        ),
-        (
-            PlanningDecisionCategory.PRODUCT_REQUIREMENT,
-            PlanningDecisionAuthority.PLANNER_PROPOSAL,
-            "belongs to user",
-        ),
-    ),
-)
-def test_controller_rejects_questions_outside_the_responsibility_matrix(
+def test_controller_rejects_questions_for_autonomous_decisions(
     tmp_path: Path,
-    category: PlanningDecisionCategory,
-    owner: PlanningDecisionAuthority,
-    message: str,
 ) -> None:
     question = question_response().question
     assert question is not None
     invalid = question.model_copy(
         update={
-            "decision_category": category,
-            "decision_owner": owner,
+            "decision_category": PlanningDecisionCategory.LOCAL_IMPLEMENTATION,
+            "decision_owner": PlanningDecisionAuthority.USER,
         }
     )
     coordinator = AdaptivePlanningCoordinator(
@@ -1038,7 +1156,7 @@ def test_controller_rejects_questions_outside_the_responsibility_matrix(
         clock=AdvancingClock(),
     )
 
-    with pytest.raises(PlanningError, match=message):
+    with pytest.raises(PlanningError, match="cannot ask the user to decide"):
         coordinator.start(
             request(source_request=AMBIGUOUS_LINK_REQUEST),
             answer_question=lambda _question: pytest.fail(
@@ -1229,6 +1347,172 @@ def test_product_definition_references_must_resolve_to_the_proposal() -> None:
         )
 
 
+def test_direct_user_decision_requires_attributable_input_without_model_retry(
+    tmp_path: Path,
+) -> None:
+    body = proposal_body()
+    direct = PlanningDecisionRecord(
+        id="DECISION_NO_NETWORK",
+        category=PlanningDecisionCategory.PRIVACY_OR_DATA,
+        authority=PlanningDecisionAuthority.USER,
+        provenance=PlanningDecisionProvenance(
+            kind=PlanningDecisionProvenanceKind.EXPLICIT_INPUT,
+            source="without fetching remote URLs",
+        ),
+        summary="without fetching remote URLs",
+        rationale="The request explicitly excludes remote fetches.",
+    )
+    accepted = body.model_copy(update={"decisions": (*body.decisions, direct)})
+
+    preview_adaptive_proposal(
+        request(),
+        proposal(body=accepted),
+        policy(),
+        created_at=FIXED_TIME,
+    )
+
+    invented = direct.model_copy(
+        update={
+            "provenance": direct.provenance.model_copy(
+                update={"source": "the user approved uploading every file"}
+            )
+        }
+    )
+    invalid = proposal_response(
+        body.model_copy(update={"decisions": (*body.decisions, invented)})
+    ).model_dump(mode="json")
+    executor = ScriptedAgentExecutor(
+        [ScriptedAgentResponse(text="ignored", submission_payload=invalid)]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(response_repair_limit=2),
+        clock=AdvancingClock(),
+    )
+
+    with pytest.raises(PlanningError, match="not present in the Planning request"):
+        coordinator.start(
+            request(),
+            answer_question=lambda _question: pytest.fail("unexpected question"),
+        )
+
+    assert len(executor.requests) == 1
+    turn = store.load_turn(request().run_id, 1)
+    assert turn.response_validation is not None
+    assert turn.response_validation.failure_class is (
+        ResponseFailureClass.MISSING_USER_DECISION
+    )
+    assert turn.response_validation.correction_paths == ()
+    assert {item.authority for item in turn.response_validation.issues} == {
+        ResponseIssueAuthority.USER
+    }
+
+
+def test_product_definition_decision_links_are_disposition_specific() -> None:
+    body = proposal_body()
+    definition = body.product_definition
+    assert definition is not None
+
+    unrelated_explicit = definition.model_copy(
+        update={
+            "target_users": definition.target_users.model_copy(
+                update={"decision_ids": ("DECISION_MODEL_ROUTE",)}
+            )
+        }
+    )
+    with pytest.raises(PlanningError, match="cannot cite a separate decision"):
+        preview_adaptive_proposal(
+            request(),
+            proposal(
+                body=body.model_copy(update={"product_definition": unrelated_explicit})
+            ),
+            policy(),
+            created_at=FIXED_TIME,
+        )
+
+    mixed_recommendation = definition.model_copy(
+        update={
+            "usability_expectations": definition.usability_expectations.model_copy(
+                update={
+                    "decision_ids": (
+                        "DECISION_ACCEPTANCE",
+                        "DECISION_MODEL_ROUTE",
+                    )
+                }
+            )
+        }
+    )
+    with pytest.raises(PlanningError, match="only its corresponding Planner"):
+        preview_adaptive_proposal(
+            request(),
+            proposal(
+                body=body.model_copy(
+                    update={"product_definition": mixed_recommendation}
+                )
+            ),
+            policy(),
+            created_at=FIXED_TIME,
+        )
+
+    resolved = resolved_product_body()
+    resolved_definition = resolved.product_definition
+    assert resolved_definition is not None
+    extra_question_link = resolved_definition.model_copy(
+        update={
+            "primary_workflow": resolved_definition.primary_workflow.model_copy(
+                update={
+                    "decision_ids": (
+                        "DECISION_LINK_SCOPE_ANSWER",
+                        "DECISION_MODEL_ROUTE",
+                    )
+                }
+            )
+        }
+    )
+    with pytest.raises(PlanningError, match="only its resolved question decision"):
+        preview_adaptive_proposal(
+            request(source_request=AMBIGUOUS_LINK_REQUEST),
+            proposal(
+                body=resolved.model_copy(
+                    update={"product_definition": extra_question_link}
+                )
+            ),
+            policy(),
+            created_at=FIXED_TIME,
+        )
+
+
+def test_schema_v7_decisions_remain_readable_without_canonical_rewrite() -> None:
+    payload = proposal().model_dump(mode="json")
+    payload["schema_version"] = 7
+    body = payload["body"]
+    assert isinstance(body, dict)
+    strip_v8_decision_fields(body)
+    body["product_definition"]["delivery_maturity"]["decision_ids"] = [
+        "DECISION_DELIVERY"
+    ]
+    legacy = PlanningProposal.model_validate(payload)
+
+    preview = preview_adaptive_proposal(
+        request(),
+        legacy,
+        policy(),
+        created_at=FIXED_TIME,
+    )
+
+    assert preview.task_brief.product_definition is not None
+    serialized = legacy.model_dump(mode="json")
+    assert serialized["schema_version"] == 7
+    assert all(
+        "provenance" not in decision for decision in serialized["body"]["decisions"]
+    )
+    assert serialized["body"]["product_definition"]["delivery_maturity"][
+        "decision_ids"
+    ] == ["DECISION_DELIVERY"]
+
+
 def test_explicit_throwaway_prototype_can_form_a_lean_plan_without_questions(
     tmp_path: Path,
 ) -> None:
@@ -1401,9 +1685,12 @@ def test_clarity_gate_rejects_an_authorized_choice_hidden_as_an_assumption() -> 
             id="DECISION_SCAN_STRUCTURE",
             category=PlanningDecisionCategory.RISK_TRADEOFF,
             authority=PlanningDecisionAuthority.USER,
+            provenance=PlanningDecisionProvenance(
+                kind=PlanningDecisionProvenanceKind.RESOLVED_QUESTION,
+                source="network_risk",
+            ),
             summary="Assume the user accepts network reliability risk.",
             rationale="This deliberately hides an unresolved risk decision.",
-            question_id="network_risk",
         ),
     )
 
@@ -1576,6 +1863,110 @@ def test_response_normalizer_canonicalizes_unambiguous_decision_tokens() -> None
     )
     assert changes[-1] == (
         "canonicalized proposal.assumption_decision_ids[0] as DECISION_SCAN_STRUCTURE"
+    )
+
+
+def test_response_normalizer_compiles_decision_authority_and_legacy_sources() -> None:
+    payload = proposal_response().model_dump(mode="json")
+    proposal_payload = payload["proposal"]
+    for decision in proposal_payload["decisions"]:
+        decision.pop("provenance")
+        decision.pop("authority")
+    proposal_payload["decisions"][1]["authority"] = "user"
+    proposal_payload["decisions"][:0] = [
+        {
+            "id": "DECISION_TARGET_USERS",
+            "category": "product_requirement",
+            "authority": "user",
+            "summary": "A developer is the intended user.",
+            "rationale": "This interpretation came from the product definition.",
+        },
+        {
+            "id": "DECISION_WORKFLOW",
+            "category": "product_requirement",
+            "authority": "user",
+            "summary": "The user checks Markdown links.",
+            "rationale": "This interpretation came from the product definition.",
+        },
+    ]
+    proposal_payload["decisions"].append(
+        {
+            "id": "DECISION_NO_REMOTE_FETCH",
+            "category": "privacy_or_data",
+            "summary": "without fetching remote URLs",
+            "rationale": "The request states this boundary directly.",
+        }
+    )
+    definition = proposal_payload["product_definition"]
+    definition["target_users"]["decision_ids"] = ["DECISION_TARGET_USERS"]
+    definition["primary_workflow"]["decision_ids"] = ["DECISION_WORKFLOW"]
+    definition["delivery_maturity"]["decision_ids"] = ["DECISION_DELIVERY"]
+    original = json.loads(json.dumps(payload))
+
+    normalized, changes = planning._normalize_planning_response_payload(
+        payload,
+        user_inputs=(request().source_request,),
+    )
+    parsed = PlanningModelResponse.model_validate(normalized)
+
+    assert payload == original
+    assert parsed.proposal is not None
+    assert [item.id for item in parsed.proposal.decisions] == [
+        "DECISION_ACCEPTANCE",
+        "DECISION_DELIVERY",
+        "DECISION_TEAM",
+        "DECISION_MODEL_ROUTE",
+        "DECISION_SCAN_STRUCTURE",
+        "DECISION_NO_REMOTE_FETCH",
+    ]
+    assert all(item.provenance is not None for item in parsed.proposal.decisions)
+    assert parsed.proposal.decisions[1].authority is (
+        PlanningDecisionAuthority.PLANNER_PROPOSAL
+    )
+    assert (
+        parsed.proposal.decisions[1].provenance.kind
+        is PlanningDecisionProvenanceKind.PLANNER_RECOMMENDATION
+    )
+    assert not parsed.proposal.product_definition.target_users.decision_ids
+    assert not parsed.proposal.product_definition.primary_workflow.decision_ids
+    assert not parsed.proposal.product_definition.delivery_maturity.decision_ids
+    assert parsed.proposal.decisions[-1].provenance == PlanningDecisionProvenance(
+        kind=PlanningDecisionProvenanceKind.EXPLICIT_INPUT,
+        source="without fetching remote URLs",
+    )
+    assert any("compiled proposal.decisions[3].authority" in item for item in changes)
+    assert any(
+        "removed redundant direct-input decision DECISION_TARGET_USERS" in item
+        for item in changes
+    )
+
+
+def test_current_decision_schema_exposes_source_but_not_derived_authority() -> None:
+    schema = planning._planning_response_schema()
+    decision_schema = schema["$defs"]["PlanningDecisionRecord"]
+
+    assert "provenance" in decision_schema["required"]
+    assert decision_schema["properties"]["provenance"] == {
+        "$ref": "#/$defs/PlanningDecisionProvenance"
+    }
+    assert "authority" not in decision_schema["properties"]
+    assert "question_id" not in decision_schema["properties"]
+    assert "authority" not in decision_schema["required"]
+
+
+def test_response_normalizer_compiles_question_owner_from_category() -> None:
+    payload = product_intent_question_response().model_dump(mode="json")
+    payload["question"].pop("decision_owner")
+    original = json.loads(json.dumps(payload))
+
+    normalized, changes = planning._normalize_planning_response_payload(payload)
+    parsed = PlanningModelResponse.model_validate(normalized)
+
+    assert payload == original
+    assert parsed.question is not None
+    assert parsed.question.decision_owner is PlanningDecisionAuthority.USER
+    assert changes == (
+        "compiled question.decision_owner from category product_requirement",
     )
 
 
@@ -2606,6 +2997,7 @@ def test_schema_four_proposal_keeps_canonical_bytes_without_product_definition()
     payload["schema_version"] = 4
     body = payload["body"]
     assert isinstance(body, dict)
+    strip_v8_decision_fields(body)
     body.pop("product_definition")
     expected = hashlib.sha256(
         json.dumps(
@@ -2639,6 +3031,12 @@ def test_schema_four_proposal_keeps_canonical_bytes_without_product_definition()
 def test_schema_five_product_definition_proposal_remains_canonical() -> None:
     payload = proposal().model_dump(mode="json")
     payload["schema_version"] = 5
+    body = payload["body"]
+    assert isinstance(body, dict)
+    strip_v8_decision_fields(body)
+    body["product_definition"]["delivery_maturity"]["decision_ids"] = [
+        "DECISION_DELIVERY"
+    ]
 
     loaded = PlanningProposal.model_validate(payload)
     preview = preview_adaptive_proposal(
@@ -2670,6 +3068,9 @@ def test_schema_three_turn_remains_readable_without_correction_evidence(
     )
     payload = store.load_turn(request().run_id, 1).model_dump(mode="json")
     payload["schema_version"] = 3
+    parsed_body = payload["parsed_response"]["proposal"]
+    assert isinstance(parsed_body, dict)
+    strip_v8_decision_fields(parsed_body)
     payload.pop("response_validation", None)
     payload.pop("semantic_correction_request", None)
     payload.pop("semantic_correction_outcome", None)
@@ -2711,6 +3112,9 @@ def test_schema_six_turn_remains_canonical_without_typed_submission(
     )
     payload = store.load_turn(request().run_id, 1).model_dump(mode="json")
     payload["schema_version"] = 6
+    parsed_body = payload["parsed_response"]["proposal"]
+    assert isinstance(parsed_body, dict)
+    strip_v8_decision_fields(parsed_body)
     payload.pop("submission_payload")
     payload.pop("submission_evidence")
     expected = hashlib.sha256(
@@ -2727,6 +3131,54 @@ def test_schema_six_turn_remains_canonical_without_typed_submission(
     assert loaded.schema_version == 6
     assert loaded.submission_payload is None
     assert loaded.submission_evidence is None
+    assert loaded.model_dump(mode="json") == payload
+    assert canonical_model_sha256(loaded) == expected
+
+
+def test_schema_seven_turn_remains_canonical_without_decision_provenance(
+    tmp_path: Path,
+) -> None:
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=ScriptedAgentExecutor(
+            [
+                ScriptedAgentResponse(
+                    text="ignored",
+                    submission_payload=proposal_response().model_dump(mode="json"),
+                )
+            ]
+        ),
+        store=store,
+        policy=policy(),
+        clock=AdvancingClock(),
+    )
+    coordinator.start(
+        request(),
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+    payload = store.load_turn(request().run_id, 1).model_dump(mode="json")
+    payload["schema_version"] = 7
+    submission_body = payload["submission_payload"]["proposal"]
+    parsed_body = payload["parsed_response"]["proposal"]
+    assert isinstance(submission_body, dict)
+    assert isinstance(parsed_body, dict)
+    strip_v8_decision_fields(submission_body)
+    strip_v8_decision_fields(parsed_body)
+    payload["submission_evidence"]["semantic_payload_sha256"] = (
+        planning.canonical_json_sha256(payload["submission_payload"])
+    )
+    expected = hashlib.sha256(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+
+    loaded = PlanningTurn.model_validate(payload)
+
+    assert loaded.schema_version == 7
     assert loaded.model_dump(mode="json") == payload
     assert canonical_model_sha256(loaded) == expected
 
@@ -3049,7 +3501,6 @@ def test_dialogue_revision_structured_edit_and_approval_are_recoverable(
     proposal_schema = response_schema["$defs"]["PlanningProposalBody"]
     assert {
         "decision_category",
-        "decision_owner",
         "missing_evidence",
         "material_consequences",
         "product_definition_dimensions",
@@ -3057,9 +3508,8 @@ def test_dialogue_revision_structured_edit_and_approval_are_recoverable(
     assert question_schema["properties"]["decision_category"] == {
         "$ref": "#/$defs/PlanningDecisionCategory"
     }
-    assert question_schema["properties"]["decision_owner"] == {
-        "$ref": "#/$defs/PlanningDecisionAuthority"
-    }
+    assert "decision_owner" not in question_schema["properties"]
+    assert "decision_owner" not in question_schema["required"]
     assert {"requirement_ids", "verification_agent_ids"}.issubset(
         criterion_schema["required"]
     )
