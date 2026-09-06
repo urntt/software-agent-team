@@ -31,6 +31,10 @@ from software_agent_team.sandbox_lifecycle import (
     SandboxResourceObservation,
     inspect_sat_sandbox_resources,
 )
+from software_agent_team.state_layout import (
+    PRODUCT_STATE_CATEGORIES,
+    state_category_paths,
+)
 
 MINIMUM_FREE_BYTES = 1_073_741_824
 PROJECT_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
@@ -176,16 +180,7 @@ class ProductStatePaths:
 
     @classmethod
     def below(cls, root: Path) -> ProductStatePaths:
-        return cls(
-            root=root,
-            runs=root / "runs",
-            workspaces=root / "workspaces",
-            sources=root / "sources",
-            planning=root / "planning",
-            self_checks=root / "self-checks",
-            process_leases=root / "process-leases",
-            openclaw=root / "openclaw",
-        )
+        return cls(root=root, **state_category_paths(root))
 
 
 def ensure_product_state(paths: ProductStatePaths) -> None:
@@ -216,15 +211,8 @@ def ensure_product_state(paths: ProductStatePaths) -> None:
         marker.chmod(0o600)
 
     paths.root.chmod(0o700)
-    for path in (
-        paths.runs,
-        paths.workspaces,
-        paths.sources,
-        paths.planning,
-        paths.self_checks,
-        paths.process_leases,
-        paths.openclaw,
-    ):
+    for category in PRODUCT_STATE_CATEGORIES:
+        path = getattr(paths, category.attribute)
         path.mkdir(exist_ok=True, mode=0o700)
         if path.is_symlink() or not path.is_dir():
             raise ProductFlowError(f"SAT state path must be a real directory: {path}")

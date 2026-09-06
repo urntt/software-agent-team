@@ -520,11 +520,13 @@ including retained versions and each version's private OpenClaw binary. A
 source checkout is preserved after its checkout-local environment and private
 runtime are removed. Before changing files, a managed uninstall binds the
 active release marker, lifecycle-root marker, installation record, logical
-application link, and recorded launchers; it also refuses an active run or a
-concurrent install/update. By default it preserves:
+application link, and recorded launchers; every installation mode refuses an
+active run, active or orphaned provider process, and a concurrent managed
+install/update. By default it preserves:
 
 - SAT configuration;
-- Planning evidence, generated runs, workspaces, and trusted sources;
+- Planning and self-check evidence, generated runs, workspaces, and trusted
+  sources;
 - SAT's isolated OpenClaw provider configuration, credentials, and sessions;
 - Every OpenClaw installation and profile outside SAT;
 - uv and its managed Python installation;
@@ -538,9 +540,9 @@ sat-uninstall --export-to "$HOME/sat-backup" --yes
 
 The new absolute destination must not already exist and must be outside the
 application, managed lifecycle root, and SAT state. The export can contain
-`configuration/config.json`, `data/planning/`, `data/runs/`,
-`data/workspaces/`, `data/sources/`, and `EXPORT.txt`. Provider credentials
-remain excluded.
+`configuration/config.json`, `data/planning/`, `data/self-checks/`,
+`data/runs/`, `data/workspaces/`, `data/sources/`, and `EXPORT.txt`. Provider
+credentials and ephemeral process leases remain excluded.
 
 Deletion requires explicit purge flags and may follow the same export:
 
@@ -579,6 +581,17 @@ records agree on the exact active identity and owned paths; it refuses missing,
 symbolic, invalid, or mismatched metadata. It also refuses symbolic
 configuration or state targets and a missing or mismatched state-ownership
 marker before export or purge.
+
+One code-owned state-category manifest defines every SAT state directory and
+whether it belongs to generated data, isolated provider state, or ephemeral
+lifecycle state. Product state creation, export, purge, and completeness tests
+all consume that manifest. The uninstaller performs a read-only validation of
+the complete manifest and process/run liveness before compatibility repair or
+deletion. `--purge-data` therefore includes self-check evidence, while inactive
+process leases are never exported and are removed with the application. When
+data and provider state are both purged, the ownership marker and empty state
+root are removed too. An unknown future category fails closed instead of being
+silently preserved under a successful full-purge message.
 
 Releases that predate user-owned sandbox mountpoint preparation can leave one
 empty root-owned `.openclaw/sandbox-skills/skills` tree inside an otherwise

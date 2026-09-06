@@ -674,6 +674,16 @@ matches and whose controller identity no longer exists. It holds a Linux pidfd
 across process-group signalling and retains the record until the exact
 SAT-owned sandbox session has also been handled.
 
+The state directory list is not independently hard-coded by installation
+scripts. A typed lifecycle manifest classifies `runs`, `workspaces`, `sources`,
+`planning`, and `self-checks` as exportable generated data; `openclaw` as
+non-exportable provider state; and `process-leases` as non-exportable ephemeral
+state. `ProductStatePaths`, state creation, uninstall preflight, export, and
+purge consume that same list, with a completeness test binding every dataclass
+field to one category. Uninstall refuses active runs, active or orphaned
+provider processes, symbolic or foreign category roots, and unknown categories
+before it changes configuration or state.
+
 Every new completed, failed, or user-cancelled `FinalReport` embeds the same
 typed `SoftwareVersionReport` captured at task admission (or immediately before
 an explicit evaluation run). This binds the controlling release, full source

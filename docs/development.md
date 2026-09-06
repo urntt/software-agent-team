@@ -392,13 +392,16 @@ src/software_agent_team/
   scheduling.py                Approved DAG and shared-workspace scheduling
   schema_compatibility.py      Persisted-schema registry and candidate protocol
   self_check.py                Task-readiness schema, dependency graph, and store
+  state_layout.py              Authoritative state-category lifecycle manifest
   teams.py                     TeamPlan contracts and fixed-fixture compilation
+  uninstall_state.py           Transactional state export and purge boundary
   user_configuration.py        User-local secret-free live-run defaults
   versioning.py                Release, source, and managed-install identity
   releases.py                  Stable Release manifest and resolver
   release_tools.py             Change-impact and release-candidate gates
   managed_install.py           Staged activation and task/update lifecycle leases
   updates.py                   Update and channel-change planning
+  workspace_mounts.py          User-owned sandbox mountpoint preparation and repair
   workflow.py                  Fixed-fixture compatibility orchestration
 scripts/
   bootstrap.sh                 Remote managed-install entry point

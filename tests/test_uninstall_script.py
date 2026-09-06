@@ -84,6 +84,12 @@ def prepare_installation(
         "planning evidence\n",
         encoding="utf-8",
     )
+    (state / "self-checks/example").mkdir(parents=True)
+    (state / "self-checks/example/0001.json").write_text(
+        "self-check evidence\n",
+        encoding="utf-8",
+    )
+    (state / "process-leases").mkdir()
     (state / "openclaw/credentials").mkdir(parents=True)
     (state / "openclaw/credentials/provider.json").write_text(
         "private SAT credential state\n",
@@ -260,7 +266,8 @@ def test_uninstaller_preserves_configuration_and_generated_data_by_default(
     assert (checkout / "scripts/uninstall.sh").is_file()
     assert "preserved SAT configuration" in completed.stdout
     assert (
-        "preserved runs, workspaces, sources, and Planning evidence" in completed.stdout
+        "preserved runs, workspaces, sources, Planning, and self-check evidence"
+        in completed.stdout
     )
     assert "development checkout preserved" in completed.stdout
 
@@ -295,12 +302,16 @@ def test_uninstaller_exports_before_explicit_purge(tmp_path: Path) -> None:
     assert (export / "data/workspaces/example/result.py").is_file()
     assert (export / "data/sources/example/README.md").is_file()
     assert (export / "data/planning/example/session.json").is_file()
+    assert (export / "data/self-checks/example/0001.json").is_file()
+    assert not (export / "data/process-leases").exists()
     manifest = (export / "EXPORT.txt").read_text(encoding="utf-8")
     assert "configuration=yes" in manifest
     assert "runs=yes" in manifest
     assert "workspaces=yes" in manifest
     assert "sources=yes" in manifest
     assert "planning=yes" in manifest
+    assert "self_checks=yes" in manifest
+    assert "process_leases=excluded" in manifest
     assert "provider_credentials=excluded" in manifest
     assert "exported preserved state" in completed.stdout
 
@@ -336,9 +347,10 @@ def test_uninstaller_validates_every_purge_target_before_deleting(
     )
 
     assert completed.returncode == 1
-    assert "symbolic-link SAT state directories" in completed.stderr
+    assert "SAT workspaces state must be a real directory" in completed.stderr
     assert configuration.is_file()
     assert (state / "runs/example/final-report.md").is_file()
+    assert (state / "self-checks/example/0001.json").is_file()
     assert (checkout / ".venv").is_dir()
     assert (install_bin / "sat").is_symlink()
 
@@ -376,10 +388,34 @@ exec "${SAT_TEST_REAL_PYTHON:?}" "$@"
     assert "nothing was deleted" in completed.stderr
     assert configuration.is_file()
     assert (state / "runs/example/final-report.md").is_file()
+    assert (state / "self-checks/example/0001.json").is_file()
     assert (state / "workspaces/example/result.py").is_file()
     assert (state / "openclaw/credentials/provider.json").is_file()
     assert (checkout / ".venv").is_dir()
     assert (install_bin / "sat").is_symlink()
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="uninstaller supports Linux/WSL")
+def test_uninstaller_full_purge_removes_the_complete_owned_state_root(
+    tmp_path: Path,
+) -> None:
+    checkout, install_bin, configuration, environment = prepare_installation(tmp_path)
+    state = Path(environment["SAT_STATE_ROOT"])
+
+    completed = run_uninstaller(
+        checkout,
+        environment,
+        "--purge-config",
+        "--purge-data",
+        "--purge-provider-state",
+        "--yes",
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert not configuration.exists()
+    assert not state.exists()
+    assert not (install_bin / "sat").exists()
+    assert "self-check evidence" in completed.stdout
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="uninstaller supports Linux/WSL")
@@ -417,7 +453,7 @@ def test_uninstaller_refuses_to_purge_an_unowned_state_root(tmp_path: Path) -> N
     )
 
     assert completed.returncode == 1
-    assert "missing its ownership marker" in completed.stderr
+    assert "state ownership marker is unavailable" in completed.stderr
     assert configuration.is_file()
     assert (state / "runs/example/final-report.md").is_file()
     assert (checkout / ".venv").is_dir()

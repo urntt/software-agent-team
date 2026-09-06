@@ -15,12 +15,7 @@ task_xdg_config_root="${XDG_CONFIG_HOME:-$HOME/.config}"
 task_config_path="${SAT_CONFIG_PATH:-$task_xdg_config_root/software-agent-team/config.json}"
 task_xdg_state_root="${XDG_STATE_HOME:-$HOME/.local/state}"
 task_state_root="${SAT_STATE_ROOT:-$task_xdg_state_root/software-agent-team}"
-task_runs_root="$task_state_root/runs"
 task_workspaces_root="$task_state_root/workspaces"
-task_sources_root="$task_state_root/sources"
-task_planning_root="$task_state_root/planning"
-task_provider_state_root="$task_state_root/openclaw"
-task_state_marker="$task_state_root/.sat-state-v1"
 task_runtime_root="$task_root/.sat"
 task_openclaw_runtime="$task_runtime_root/openclaw"
 task_openclaw_runtime_marker="$task_openclaw_runtime/.sat-owned-runtime"
@@ -61,8 +56,8 @@ Options:
                     PATH must be an absolute path that does not already exist.
   --keep-config     Preserve saved SAT configuration (default).
   --purge-config    Delete saved SAT configuration after an optional export.
-  --keep-data       Preserve runs, workspaces, sources, and Planning evidence
-                    (default).
+  --keep-data       Preserve runs, workspaces, sources, Planning, and self-check
+                    evidence (default).
   --purge-data      Delete generated data after an optional export.
   --keep-provider-state
                     Preserve SAT's isolated OpenClaw credentials and sessions
@@ -241,41 +236,6 @@ acquire_managed_lifecycle_lock() {
     fail "another managed install or update is active"
 }
 
-refuse_active_managed_runs() {
-  local task_python="$task_root/.venv/bin/python"
-  if ! "$task_python" - "$task_runs_root" <<'PY'
-import json
-import os
-import stat
-import sys
-from pathlib import Path
-
-runs = Path(sys.argv[1])
-if not os.path.lexists(runs):
-    raise SystemExit(0)
-mode = os.lstat(runs).st_mode
-if not stat.S_ISDIR(mode):
-    raise SystemExit("run state root is not a real directory")
-active: list[str] = []
-for path in sorted(runs.glob("*/run.json")):
-    entry_mode = os.lstat(path).st_mode
-    if not stat.S_ISREG(entry_mode):
-        raise SystemExit(f"run state is not a regular file: {path}")
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        phase = payload["phase"]
-    except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError) as error:
-        raise SystemExit(f"run state cannot be verified: {path}: {error}")
-    if phase not in {"completed", "failed"}:
-        active.append(path.parent.name)
-if active:
-    raise SystemExit("active SAT run blocks uninstall: " + ", ".join(active))
-PY
-  then
-    fail "managed run state prevents uninstall"
-  fi
-}
-
 while (($#)); do
   case "$1" in
     --export-to)
@@ -364,7 +324,6 @@ if [[ -e "$task_managed_marker" || -L "$task_managed_marker" ]]; then
 fi
 if [[ "$task_managed_install" == "2" ]]; then
   acquire_managed_lifecycle_lock
-  refuse_active_managed_runs
   [[ "$task_managed_root" != "/" && "$task_managed_root" != "$HOME" && \
     "$task_managed_root" != "$(dirname "$HOME")" ]] || \
     fail "refusing to remove an unsafe managed application root"
@@ -381,24 +340,6 @@ ask_yes_no() {
       *) echo "Please answer y or n." ;;
     esac
   done
-}
-
-validate_state_ownership() {
-  if [[ ! -e "$task_state_root" && ! -L "$task_state_root" ]]; then
-    return
-  fi
-  [[ -d "$task_state_root" && ! -L "$task_state_root" ]] || \
-    fail "SAT state root must be a real directory"
-  [[ -f "$task_state_marker" && ! -L "$task_state_marker" ]] || \
-    fail "SAT state root is missing its ownership marker"
-  local task_resolved_state
-  task_resolved_state="$(cd "$task_state_root" && pwd -P)"
-  [[ "$(sed -n '1p' "$task_state_marker")" == \
-    "software-agent-team-state-v1" ]] || \
-    fail "SAT state ownership marker is invalid"
-  [[ "$(sed -n '2p' "$task_state_marker")" == \
-    "root=$task_resolved_state" ]] || \
-    fail "SAT state ownership marker belongs to a different path"
 }
 
 validate_runtime_ownership() {
@@ -437,7 +378,7 @@ if [[ "$task_assume_yes" == "0" ]]; then
     task_config_policy="purge"
   fi
   if [[ "$task_data_policy_explicit" == "0" ]] && \
-    ask_yes_no "Delete runs, workspaces, sources, and Planning evidence after export?"; then
+    ask_yes_no "Delete runs, workspaces, sources, Planning, and self-check evidence after export?"; then
     task_data_policy="purge"
   fi
   if [[ "$task_provider_policy_explicit" == "0" ]] && \
@@ -482,75 +423,31 @@ validate_export_destination() {
   fi
 }
 
-export_user_state() {
-  validate_export_destination
-  mkdir -m 700 -- "$task_export_to"
-  local task_config_exported="no"
-  local task_runs_exported="no"
-  local task_workspaces_exported="no"
-  local task_sources_exported="no"
-  local task_planning_exported="no"
-  if [[ -f "$task_config_path" ]]; then
-    mkdir -m 700 -- "$task_export_to/configuration"
-    cp -p -- "$task_config_path" "$task_export_to/configuration/config.json"
-    task_config_exported="yes"
-  fi
-  if [[ -d "$task_runs_root" ]]; then
-    mkdir -m 700 -- "$task_export_to/data"
-    cp -a -- "$task_runs_root" "$task_export_to/data/runs"
-    task_runs_exported="yes"
-  fi
-  if [[ -d "$task_workspaces_root" ]]; then
-    mkdir -p -m 700 -- "$task_export_to/data"
-    cp -a -- "$task_workspaces_root" "$task_export_to/data/workspaces"
-    task_workspaces_exported="yes"
-  fi
-  if [[ -d "$task_sources_root" ]]; then
-    mkdir -p -m 700 -- "$task_export_to/data"
-    cp -a -- "$task_sources_root" "$task_export_to/data/sources"
-    task_sources_exported="yes"
-  fi
-  if [[ -d "$task_planning_root" ]]; then
-    mkdir -p -m 700 -- "$task_export_to/data"
-    cp -a -- "$task_planning_root" "$task_export_to/data/planning"
-    task_planning_exported="yes"
-  fi
-  {
-    echo "Software Agent Team uninstall export"
-    echo "created_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    echo "configuration=$task_config_exported"
-    echo "runs=$task_runs_exported"
-    echo "workspaces=$task_workspaces_exported"
-    echo "sources=$task_sources_exported"
-    echo "planning=$task_planning_exported"
-    echo "provider_credentials=excluded"
-    echo "custom_run_roots=excluded"
-  } > "$task_export_to/EXPORT.txt"
-  chmod 600 "$task_export_to/EXPORT.txt"
-  echo "uninstall: exported preserved state to $task_export_to"
-}
-
 [[ ! -L "$task_root/.venv" ]] || \
   fail "refusing to remove a symbolic-link project environment"
-if [[ -n "$task_export_to" || "$task_config_policy" == "purge" ]]; then
-  [[ ! -L "$task_config_path" ]] || \
-    fail "refusing to export or delete a symbolic-link configuration"
-fi
-if [[ -n "$task_export_to" || "$task_data_policy" == "purge" || \
-  "$task_provider_policy" == "purge" ]]; then
-  validate_state_ownership
-  [[ ! -L "$task_state_root" && ! -L "$task_runs_root" && \
-    ! -L "$task_workspaces_root" && ! -L "$task_sources_root" && \
-    ! -L "$task_planning_root" && \
-    ! -L "$task_provider_state_root" ]] || \
-    fail "refusing to export or delete symbolic-link SAT state directories"
-fi
 validate_runtime_ownership
 
+task_python="$task_root/.venv/bin/python"
+[[ -x "$task_python" ]] || \
+  fail "SAT's Python runtime is unavailable for state lifecycle preflight"
+if [[ -n "$task_export_to" ]]; then
+  validate_export_destination
+fi
+task_state_arguments=(
+  --state-root "$task_state_root"
+  --config-path "$task_config_path"
+  --config-policy "$task_config_policy"
+  --data-policy "$task_data_policy"
+  --provider-policy "$task_provider_policy"
+)
+if [[ -n "$task_export_to" ]]; then
+  task_state_arguments+=(--export-to "$task_export_to")
+fi
+"$task_python" -m software_agent_team.uninstall_state preflight \
+  "${task_state_arguments[@]}" || \
+  fail "state lifecycle preflight failed; nothing was deleted"
+
 repair_legacy_workspace_mountpoints() {
-  local task_python="$task_root/.venv/bin/python"
-  [[ -x "$task_python" ]] || \
-    fail "SAT's Python runtime is unavailable for workspace ownership preflight"
   [[ -f "$task_product_policy" && ! -L "$task_product_policy" ]] || \
     fail "SAT's sandbox policy is unavailable for workspace ownership preflight"
   "$task_python" -m software_agent_team.workspace_mounts \
@@ -567,31 +464,9 @@ if [[ -n "$task_export_to" || "$task_data_policy" == "purge" ]]; then
   repair_legacy_workspace_mountpoints
 fi
 
-if [[ -n "$task_export_to" ]]; then
-  export_user_state
-fi
-
-if [[ "$task_config_policy" == "purge" ]]; then
-  rm -f -- "$task_config_path"
-  echo "uninstall: deleted SAT configuration $task_config_path"
-else
-  echo "uninstall: preserved SAT configuration $task_config_path"
-fi
-
-if [[ "$task_data_policy" == "purge" ]]; then
-  rm -rf -- "$task_runs_root" "$task_workspaces_root" "$task_sources_root" \
-    "$task_planning_root"
-  echo "uninstall: deleted runs, workspaces, sources, and Planning evidence"
-else
-  echo "uninstall: preserved runs, workspaces, sources, and Planning evidence"
-fi
-
-if [[ "$task_provider_policy" == "purge" ]]; then
-  rm -rf -- "$task_provider_state_root"
-  echo "uninstall: deleted SAT's isolated OpenClaw provider state"
-else
-  echo "uninstall: preserved SAT's isolated OpenClaw provider state"
-fi
+"$task_python" -m software_agent_team.uninstall_state apply \
+  "${task_state_arguments[@]}" || \
+  fail "state lifecycle update did not complete"
 
 remove_owned_link() {
   local task_link="$1"
