@@ -22,6 +22,7 @@ from software_agent_team.response_corrections import (
     SemanticCorrectionOutcome,
     SemanticCorrectionRequestEvidence,
 )
+from software_agent_team.submissions import ARTIFACT_SUBMISSION_PROTOCOL
 
 
 @dataclass(frozen=True)
@@ -132,7 +133,13 @@ def persist_agent_invocation(
             else "semantic_body_v1"
         ),
         response_transport=(
-            "typed_submission_v1" if request.submission_contract is not None else None
+            (
+                "typed_submission_v2"
+                if request.submission_contract.protocol == ARTIFACT_SUBMISSION_PROTOCOL
+                else "typed_submission_v1"
+            )
+            if request.submission_contract is not None
+            else None
         ),
         controller_supplied_fields=controller_supplied_fields,
         ignored_controller_fields=ignored_controller_fields,

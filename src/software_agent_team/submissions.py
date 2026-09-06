@@ -21,7 +21,9 @@ from pydantic import (
 
 ARTIFACT_SUBMISSION_PLUGIN_ID = "sat-artifact-submission"
 ARTIFACT_SUBMISSION_TOOL = "sat_submit_artifact"
-ARTIFACT_SUBMISSION_PROTOCOL = "sat_artifact_submission_v1"
+ARTIFACT_SUBMISSION_PROTOCOL_V1 = "sat_artifact_submission_v1"
+ARTIFACT_SUBMISSION_PROTOCOL = "sat_artifact_submission_v2"
+ARTIFACT_SUBMISSION_ARGUMENT = "artifact"
 MAX_SUBMISSION_SCHEMA_BYTES = 512 * 1024
 MAX_SUBMISSION_FILE_BYTES = 2 * 1024 * 1024
 
@@ -164,20 +166,36 @@ class AgentSubmissionContract(BaseModel):
         assert isinstance(value, dict)
         return value
 
-    def transport_schema(self) -> dict[str, JsonValue]:
-        """Return the schema exposed to the tool transport for this invocation."""
+    def transport_payload_schema(self) -> dict[str, JsonValue]:
+        """Return the semantic payload shape accepted at the transport boundary."""
 
         encoded = self.transport_schema_json or self.parameters_schema_json
         value = json.loads(encoded)
         assert isinstance(value, dict)
         return value
 
+    def transport_schema(self) -> dict[str, JsonValue]:
+        """Return the one-envelope schema exposed to the OpenClaw tool transport."""
+
+        payload_schema = self.transport_payload_schema()
+        definitions = payload_schema.pop("$defs", None)
+        schema: dict[str, JsonValue] = {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                ARTIFACT_SUBMISSION_ARGUMENT: payload_schema,
+            },
+            "required": [ARTIFACT_SUBMISSION_ARGUMENT],
+        }
+        if definitions is not None:
+            schema["$defs"] = definitions
+        return schema
+
     @property
     def transport_schema_sha256(self) -> str:
         """Return the integrity digest for the tool transport schema file."""
 
-        encoded = self.transport_schema_json or self.parameters_schema_json
-        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+        return canonical_json_sha256(self.transport_schema())
 
 
 class AgentSubmissionEvidence(BaseModel):
@@ -185,14 +203,30 @@ class AgentSubmissionEvidence(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    protocol: Literal[ARTIFACT_SUBMISSION_PROTOCOL] = ARTIFACT_SUBMISSION_PROTOCOL
+    protocol: Literal[
+        ARTIFACT_SUBMISSION_PROTOCOL_V1,
+        ARTIFACT_SUBMISSION_PROTOCOL,
+    ] = ARTIFACT_SUBMISSION_PROTOCOL_V1
     purpose: AgentSubmissionPurpose
     status: AgentSubmissionStatus
     tool_name: Literal[ARTIFACT_SUBMISSION_TOOL] = ARTIFACT_SUBMISSION_TOOL
     schema_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     binding_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     tool_call_id: str | None = Field(default=None, pattern=r"^tool-[0-9]{3}$")
-    payload_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    payload_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+        description=(
+            "Canonical tool-arguments digest; v1 arguments were the semantic "
+            "object directly, while v2 arguments contain the artifact envelope."
+        ),
+    )
+    semantic_payload_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+        description="Canonical v2 semantic object digest inside artifact.",
+        exclude_if=lambda value: value is None,
+    )
     diagnostic_code: str | None = Field(
         default=None,
         pattern=r"^[a-z][a-z0-9_]{0,99}$",
@@ -209,6 +243,20 @@ class AgentSubmissionEvidence(BaseModel):
                 )
             if self.diagnostic_code is not None or self.diagnostic_detail is not None:
                 raise ValueError("accepted submission cannot contain a diagnostic")
+            if (
+                self.protocol == ARTIFACT_SUBMISSION_PROTOCOL
+                and self.semantic_payload_sha256 is None
+            ):
+                raise ValueError(
+                    "v2 accepted submission requires a semantic payload digest"
+                )
+            if (
+                self.protocol == ARTIFACT_SUBMISSION_PROTOCOL_V1
+                and self.semantic_payload_sha256 is not None
+            ):
+                raise ValueError(
+                    "v1 submission cannot contain a semantic payload digest"
+                )
         elif self.diagnostic_code is None or self.diagnostic_detail is None:
             raise ValueError("rejected submission requires a typed diagnostic")
         return self
@@ -226,7 +274,10 @@ class AgentSemanticSubmission(BaseModel):
     def validate_payload_binding(self) -> Self:
         if self.evidence.status is not AgentSubmissionStatus.ACCEPTED:
             raise ValueError("semantic payload requires accepted submission evidence")
-        if canonical_json_sha256(self.payload) != self.evidence.payload_sha256:
+        expected_sha256 = (
+            self.evidence.semantic_payload_sha256 or self.evidence.payload_sha256
+        )
+        if canonical_json_sha256(self.payload) != expected_sha256:
             raise ValueError("semantic payload differs from submission evidence")
         return self
 
@@ -344,6 +395,7 @@ def rejected_submission_evidence(
     if status is AgentSubmissionStatus.ACCEPTED:
         raise ValueError("rejected submission helper cannot accept a payload")
     return AgentSubmissionEvidence(
+        protocol=contract.protocol,
         purpose=contract.purpose,
         status=status,
         schema_sha256=contract.schema_sha256,
@@ -501,6 +553,9 @@ def validate_submission_capture(
         )
         return None, evidence
     payload_sha256 = canonical_json_sha256(payload)
+    transport_arguments_sha256 = canonical_json_sha256(
+        {ARTIFACT_SUBMISSION_ARGUMENT: payload}
+    )
     expected_external_sha256 = hashlib.sha256(
         str(envelope.get("tool_call_id", "")).encode("utf-8")
     ).hexdigest()
@@ -509,7 +564,7 @@ def validate_submission_capture(
         and envelope.get("binding_sha256") == binding_sha256
         and envelope.get("schema_sha256") == contract.schema_sha256
         and expected_external_sha256 == call.external_call_sha256
-        and payload_sha256 == call.arguments_sha256
+        and transport_arguments_sha256 == call.arguments_sha256
     )
     if not authorized:
         evidence = rejected_submission_evidence(
@@ -522,16 +577,18 @@ def validate_submission_capture(
                 "does not match controller evidence"
             ),
             tool_call_id=call.id,
-            payload_sha256=payload_sha256,
+            payload_sha256=transport_arguments_sha256,
         )
         return None, evidence
 
     evidence = AgentSubmissionEvidence(
+        protocol=contract.protocol,
         purpose=contract.purpose,
         status=AgentSubmissionStatus.ACCEPTED,
         schema_sha256=contract.schema_sha256,
         binding_sha256=binding_sha256,
         tool_call_id=call.id,
-        payload_sha256=payload_sha256,
+        payload_sha256=transport_arguments_sha256,
+        semantic_payload_sha256=payload_sha256,
     )
     return AgentSemanticSubmission(payload=payload, evidence=evidence), evidence

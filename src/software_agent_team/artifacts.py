@@ -29,6 +29,8 @@ from software_agent_team.response_corrections import (
     SemanticCorrectionRequestEvidence,
 )
 from software_agent_team.submissions import (
+    ARTIFACT_SUBMISSION_PROTOCOL,
+    ARTIFACT_SUBMISSION_PROTOCOL_V1,
     AgentSubmissionEvidence,
     AgentSubmissionStatus,
 )
@@ -837,7 +839,13 @@ class AgentExecutionRecord(BaseModel):
         ]
         | None
     ) = None
-    response_transport: Literal["typed_submission_v1"] | None = Field(
+    response_transport: (
+        Literal[
+            "typed_submission_v1",
+            "typed_submission_v2",
+        ]
+        | None
+    ) = Field(
         default=None,
         exclude_if=lambda value: value is None,
     )
@@ -970,15 +978,15 @@ class AgentExecutionRecord(BaseModel):
             or self.response_transport is not None
         ):
             raise ValueError("response binding fields require a response contract")
-        if (
-            self.submission_evidence is not None
-            and self.response_transport != "typed_submission_v1"
-        ):
+        if self.submission_evidence is not None and self.response_transport not in {
+            "typed_submission_v1",
+            "typed_submission_v2",
+        }:
             raise ValueError(
                 "submission evidence requires the typed submission transport"
             )
         if (
-            self.response_transport == "typed_submission_v1"
+            self.response_transport in {"typed_submission_v1", "typed_submission_v2"}
             and self.execution_status is AgentExecutionStatus.COMPLETED
             and self.submission_evidence is None
         ):
@@ -989,6 +997,16 @@ class AgentExecutionRecord(BaseModel):
             self.submission_evidence is not None
             and self.submission_evidence.status is AgentSubmissionStatus.ACCEPTED
         ):
+            expected_transport = (
+                "typed_submission_v2"
+                if self.submission_evidence.protocol == ARTIFACT_SUBMISSION_PROTOCOL
+                else "typed_submission_v1"
+            )
+            if self.submission_evidence.protocol not in {
+                ARTIFACT_SUBMISSION_PROTOCOL_V1,
+                ARTIFACT_SUBMISSION_PROTOCOL,
+            }:
+                raise ValueError("submission evidence uses an unknown protocol")
             matching_submission_calls = tuple(
                 call
                 for call in self.tool_calls
@@ -996,7 +1014,8 @@ class AgentExecutionRecord(BaseModel):
                 and call.tool_name == self.submission_evidence.tool_name
             )
             if (
-                self.tool_evidence_status is not AgentToolEvidenceStatus.CAPTURED
+                self.response_transport != expected_transport
+                or self.tool_evidence_status is not AgentToolEvidenceStatus.CAPTURED
                 or len(matching_submission_calls) != 1
                 or self.tool_calls[-1] is not matching_submission_calls[0]
                 or matching_submission_calls[0].outcome

@@ -129,8 +129,10 @@ RESPONSE_SCHEMA_JSON
 ${response_schema_json}
 
 FINAL_RESPONSE_CONTRACT
-Call `${submission_tool}` exactly once with the semantic fields in the response
-schema as its arguments. The controller supplies `${expected_kind}`, Agent and
+Call `${submission_tool}` exactly once with one top-level `artifact` argument
+whose value contains the semantic fields in the response schema. The tool
+arguments are exactly `{"artifact": <response object>}`; do not add another
+envelope. The controller supplies `${expected_kind}`, Agent and
 run identity, iteration, timestamps, commit, and review scope. The submission
 tool writes only to a controller-owned invocation file; it does not modify the
 read-only project snapshot or expand Review authority. Its success ends this

@@ -128,9 +128,11 @@ Choose the next response by decision value:
   downstream Agent with the review capability. A testing-only Agent cannot
   accept criteria assigned to independent review. When
   maximum_review_agents is not null, do not exceed it.
-- Call `$submission_tool` exactly once with an object matching
-  RESPONSE_SCHEMA_JSON. Do not serialize that object in assistant text. The
-  successful submission ends this invocation.
+- Call `$submission_tool` exactly once with one top-level `artifact` argument
+  whose value is the object matching RESPONSE_SCHEMA_JSON. The tool arguments
+  are exactly `{"artifact": <response object>}`; do not add another envelope.
+  Do not serialize that object in assistant text. The successful submission
+  ends this invocation.
 
 PLANNING_CONTEXT_JSON
 $planning_context_json

@@ -134,14 +134,19 @@ Controller-owned. Adaptive Planning now uses invocation-bound typed submission
 for initial questions/proposals and for correction values. Planning schema v7
 persists the submitted semantic payload and content-free binding separately
 from non-authoritative assistant text while retaining canonical v2-v6 reads.
-Planning separates its permissive object-only tool transport schema from the
-exact semantic-schema digest retained by the Controller. Consequently, every
-syntactically structured Planning payload reaches strict semantic validation and
-deterministic normalization instead of being discarded by a redundant pre-Controller
-schema gate. The model-facing request projection excludes Controller-only run,
+The submission tool now exposes one explicit outer `artifact` argument and the
+plugin unwraps it exactly once before semantic validation. Protocol-v2 evidence binds
+the outer tool-arguments digest separately from the inner semantic-object digest, so
+direct objects, double envelopes, and argument/file mismatches fail closed while
+historical v1 evidence remains readable. Planning places its permissive object-only
+capture schema inside that argument and separately retains the exact semantic-schema
+digest. Consequently, every syntactically structured Planning payload reaches strict
+semantic validation and deterministic normalization instead of being discarded by a
+redundant pre-Controller schema gate or mistaken for a semantic `artifact` field. The
+model-facing request projection excludes Controller-only run,
 destination, route, authorization, and timestamp metadata, preventing execution-layer
 redaction from breaking exact prompt/session attribution. Dynamic Agent submission
-schemas remain exact.
+schemas remain exact inside the same explicit envelope.
 Targeted correction now projects the exact target value schema into every ordered
 slot. ProductDefinition validation accepts Controller-supplied profile criterion IDs,
 maps clear natural-language maturity evidence without requiring enum wording in the

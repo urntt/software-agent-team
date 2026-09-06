@@ -783,9 +783,12 @@ def correction_prompt(
         "Return exactly one JSON object and no prose or Markdown fence."
         if submission_tool is None
         else (
-            f"Call `{submission_tool}` exactly once with the correction values as "
-            "its arguments. Do not serialize the values in assistant text. The "
-            "successful submission ends this invocation."
+            f"Call `{submission_tool}` exactly once with one top-level `artifact` "
+            "argument whose value is the object matching CORRECTION_SCHEMA_JSON. "
+            "The tool arguments are exactly "
+            '`{"artifact": <correction object>}`; do not add another envelope. '
+            "Do not serialize the values in assistant text. The successful "
+            "submission ends this invocation."
         )
     )
     return (

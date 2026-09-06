@@ -530,7 +530,7 @@ class AdaptiveExecutor:
             id=f"tool-{len(review_calls) + 1:03d}",
             tool_name=contract.tool_name,
             external_call_sha256=hashlib.sha256(external_id.encode()).hexdigest(),
-            arguments_sha256=canonical_json_sha256(submission_payload),
+            arguments_sha256=canonical_json_sha256({"artifact": submission_payload}),
             outcome="succeeded",
             is_error=False,
             output_sha256=hashlib.sha256(output).hexdigest(),
@@ -542,12 +542,14 @@ class AdaptiveExecutor:
             f"{request.session_key}\x00{contract.schema_sha256}".encode()
         ).hexdigest()
         submission_evidence = AgentSubmissionEvidence(
+            protocol=contract.protocol,
             purpose=contract.purpose,
             status=AgentSubmissionStatus.ACCEPTED,
             schema_sha256=contract.schema_sha256,
             binding_sha256=binding_sha256,
             tool_call_id=submission_call.id,
-            payload_sha256=canonical_json_sha256(submission_payload),
+            payload_sha256=canonical_json_sha256({"artifact": submission_payload}),
+            semantic_payload_sha256=canonical_json_sha256(submission_payload),
         )
         self._emit_stop(request, activity_handler, InvocationStopReason.COMPLETED)
         return AgentExecutionResult(

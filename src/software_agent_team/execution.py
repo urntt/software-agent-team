@@ -56,11 +56,13 @@ from software_agent_team.process_lifecycle import (
     ProcessLeaseStore,
 )
 from software_agent_team.submissions import (
+    ARTIFACT_SUBMISSION_ARGUMENT,
     AgentSemanticSubmission,
     AgentSubmissionContract,
     AgentSubmissionEvidence,
     AgentSubmissionStatus,
     SubmissionFileCapture,
+    canonical_json_bytes,
     canonical_json_sha256,
     capture_submission_file,
     rejected_submission_evidence,
@@ -1984,10 +1986,9 @@ class OpenClawSubprocessExecutor:
             if request.submission_contract is not None:
                 submission_schema_path = temporary_path / "submission-schema.json"
                 submission_schema_path.write_text(
-                    (
-                        request.submission_contract.transport_schema_json
-                        or request.submission_contract.parameters_schema_json
-                    ),
+                    canonical_json_bytes(
+                        request.submission_contract.transport_schema()
+                    ).decode("utf-8"),
                     encoding="utf-8",
                 )
                 submission_schema_path.chmod(0o600)
@@ -3407,7 +3408,9 @@ class ScriptedAgentExecutor:
                 external_call_sha256=hashlib.sha256(
                     external_id.encode("utf-8")
                 ).hexdigest(),
-                arguments_sha256=canonical_json_sha256(submission_payload),
+                arguments_sha256=canonical_json_sha256(
+                    {ARTIFACT_SUBMISSION_ARGUMENT: submission_payload}
+                ),
                 outcome=AgentToolCallOutcome.SUCCEEDED,
                 is_error=False,
                 output_sha256=hashlib.sha256(output).hexdigest(),
@@ -3422,12 +3425,16 @@ class ScriptedAgentExecutor:
                 ).encode()
             ).hexdigest()
             submission_evidence = AgentSubmissionEvidence(
+                protocol=request.submission_contract.protocol,
                 purpose=request.submission_contract.purpose,
                 status=AgentSubmissionStatus.ACCEPTED,
                 schema_sha256=request.submission_contract.schema_sha256,
                 binding_sha256=binding_sha256,
                 tool_call_id=submission_call.id,
-                payload_sha256=canonical_json_sha256(submission_payload),
+                payload_sha256=canonical_json_sha256(
+                    {ARTIFACT_SUBMISSION_ARGUMENT: submission_payload}
+                ),
+                semantic_payload_sha256=canonical_json_sha256(submission_payload),
             )
             semantic_submission = AgentSemanticSubmission(
                 payload=submission_payload,

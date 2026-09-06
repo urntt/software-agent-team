@@ -21,8 +21,10 @@ RESPONSE_SCHEMA_JSON
 ${response_schema_json}
 
 FINAL_RESPONSE_CONTRACT
-Call `${submission_tool}` exactly once with only semantic findings and summary
-as its arguments. The controller supplies `${expected_kind}`, Agent and run
+Call `${submission_tool}` exactly once with one top-level `artifact` argument
+whose value contains only semantic findings and summary. The tool arguments are
+exactly `{"artifact": <response object>}`; do not add another envelope. The
+controller supplies `${expected_kind}`, Agent and run
 identity, iteration, timestamps, commit, commands, statuses, criteria, and
 blockers. The submission tool writes only to a controller-owned invocation file
 and its success ends this invocation. Do not serialize the artifact in assistant

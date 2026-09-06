@@ -309,10 +309,13 @@ Confirm all of the following before marking Phase 1 accepted:
   boundary checks. Historical `semantic_body_v2` and `semantic_body_v3` records
   retain their prior tool-only and deterministic-command grounding contracts.
   Adaptive Planning turns and dynamic execution records bind their accepted
-  semantic payload digest to the final successful `sat_submit_artifact` tool
-  evidence. Dynamic records separately identify `typed_submission_v1` as their
-  response transport. Assistant presentation text is not Planning or dynamic
-  artifact transport.
+  semantic payload to the final successful `sat_submit_artifact` tool evidence.
+  Current v2 submissions separately bind the canonical
+  `{"artifact": <semantic object>}` tool-arguments digest and the inner semantic
+  digest; a direct object or double envelope fails closed. Dynamic records identify
+  `typed_submission_v2` as their response transport, while historical v1 records
+  remain readable. Assistant presentation text is not Planning or dynamic artifact
+  transport.
   The record lists the controller-supplied persisted fields, records any
   redundant model-returned controller fields that were ignored, and records
   the resolved stage and remaining attempt timeouts. Missing or incorrect

@@ -740,7 +740,9 @@ class DynamicExecutor:
                 id=f"tool-{len(review_calls) + 1:03d}",
                 tool_name=contract.tool_name,
                 external_call_sha256=hashlib.sha256(external_id.encode()).hexdigest(),
-                arguments_sha256=canonical_json_sha256(submission_payload),
+                arguments_sha256=canonical_json_sha256(
+                    {"artifact": submission_payload}
+                ),
                 outcome="succeeded",
                 is_error=False,
                 output_sha256=hashlib.sha256(output).hexdigest(),
@@ -749,12 +751,14 @@ class DynamicExecutor:
             )
             tool_calls = (*review_calls, submission_call)
             submission_evidence = AgentSubmissionEvidence(
+                protocol=contract.protocol,
                 purpose=contract.purpose,
                 status=AgentSubmissionStatus.ACCEPTED,
                 schema_sha256=contract.schema_sha256,
                 binding_sha256=binding_sha256,
                 tool_call_id=submission_call.id,
-                payload_sha256=canonical_json_sha256(submission_payload),
+                payload_sha256=canonical_json_sha256({"artifact": submission_payload}),
+                semantic_payload_sha256=canonical_json_sha256(submission_payload),
             )
             semantic_submission = AgentSemanticSubmission(
                 payload=submission_payload,
@@ -1185,7 +1189,7 @@ def test_dynamic_reviewer_repairs_a_zero_call_fabricated_tool_citation(
     assert isinstance(reviewer_records[0], AgentExecutionRecord)
     assert reviewer_records[0].tool_evidence_status is AgentToolEvidenceStatus.CAPTURED
     assert reviewer_records[0].response_contract == "semantic_body_v4"
-    assert reviewer_records[0].response_transport == "typed_submission_v1"
+    assert reviewer_records[0].response_transport == "typed_submission_v2"
     assert [call.tool_name for call in reviewer_records[0].tool_calls] == [
         "sat_submit_artifact"
     ]

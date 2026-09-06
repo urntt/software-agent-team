@@ -2924,7 +2924,10 @@ class PlanningTurn(BaseModel):
             if (
                 self.submission_evidence is None
                 or self.submission_evidence.status is not AgentSubmissionStatus.ACCEPTED
-                or self.submission_evidence.payload_sha256
+                or (
+                    self.submission_evidence.semantic_payload_sha256
+                    or self.submission_evidence.payload_sha256
+                )
                 != canonical_json_sha256(self.submission_payload)
             ):
                 raise ValueError(

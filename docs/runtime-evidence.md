@@ -204,11 +204,13 @@ current semantic bodies remain `semantic_body_v1`. `semantic_body_v2` and
 `semantic_body_v3` remain valid historical evidence for the attempt-qualified
 tool-only and deterministic-command grounding contracts, respectively.
 `response_contract` continues to identify this semantic schema independently
-of transport. Dynamic execution records additionally name
-`typed_submission_v1` as `response_transport` and retain a content-free
-submission status, invocation/schema binding digests, normalized tool-call ID,
-and payload digest. An accepted submission must bind the final successful
-captured `sat_submit_artifact` call and its canonical arguments digest.
+of transport. Current dynamic execution records name `typed_submission_v2` as
+`response_transport` and retain a content-free submission status,
+invocation/schema binding digests, normalized tool-call ID, canonical outer
+tool-arguments digest, and distinct inner semantic-object digest. Historical
+`typed_submission_v1` records remain readable; in v1 the semantic object was
+also the direct tool arguments. An accepted submission must bind the final
+successful captured `sat_submit_artifact` call and both v2 digests.
 Existing schema-v2 Review artifacts that predate attempt qualification or
 command references serialize without invented fields, preserving their
 canonical content and digests. Newly grounded references record actual
@@ -228,20 +230,24 @@ Adaptive Planning and dynamic execution Agents deliver semantic values through
 an invocation-bound `sat_submit_artifact` tool, not through assistant-message
 framing. Before each call, the controller freezes the exact semantic response JSON
 Schema, creates a fresh invocation binding, and starts the isolated OpenClaw process
-with only owner-private paths and digests. Dynamic Agents expose that exact schema at
-the tool boundary. Adaptive Planning exposes an object-only transport schema while
-retaining the exact Planning semantic-schema digest in the private binding. This
+with only owner-private paths and digests. The tool exposes one exact outer argument,
+`artifact`, whose value is the semantic object. Dynamic Agents expose their exact
+semantic schema inside that argument. Adaptive Planning exposes an object-only inner
+transport schema while retaining the exact Planning semantic-schema digest in the
+private binding. This
 separation ensures that valid JSON arguments reach Controller validation even when a
 proposal contains a harmless extra field or a targetable semantic defect; OpenClaw
 cannot discard the only payload before SAT records normalization or correction
 evidence. The SAT-owned OpenClaw plugin verifies the transport-schema file under a
-separate integrity digest. A
-successful call exclusively writes one private envelope and terminates the
+separate integrity digest, rejects any shape other than one object-valued `artifact`
+argument, and unwraps exactly once. A successful call exclusively writes one private
+envelope containing the inner semantic object and terminates the
 Agent turn. After the process exits, the controller requires exactly one
 successful final submission-tool call in the attributable session transcript
 and cross-checks its provider call identity and canonical arguments digest
-against the private envelope, invocation binding, schema digest, and payload
-digest. A missing, duplicate, failed, non-final, malformed, unsafe, or
+against the private envelope, invocation binding, semantic-schema digest, outer
+arguments digest, and inner semantic-object digest. A missing, duplicate, failed,
+non-final, malformed, unsafe, direct-object, double-envelope, or
 unattributable submission fails closed. The plugin neither writes the project
 workspace nor changes the Agent's permission profile.
 
@@ -317,9 +323,10 @@ independent invalid dimensions together, and each complete dimension is the atom
 repair value so coupled disposition, source, statement, and downstream references
 cannot be repaired as a misleading sequence of isolated scalar edits. The exact
 semantic correction schema requires the slot count;
-dynamic Agents expose it directly, while Adaptive Planning retains it in the
-Controller binding behind the object-only transport schema. In either case the
-model cannot repeat or widen field authority. The model calls the same submission tool once,
+dynamic Agents expose it directly inside the canonical `artifact` argument, while
+Adaptive Planning retains it in the Controller binding behind the object-only inner
+transport schema. In either case the model cannot repeat or widen field authority.
+The model calls the same submission tool once,
 and assistant prose is again non-authoritative. The
 Controller applies each value to its pre-authorized path on a copy, preserves
 every unrelated field, and revalidates the compiled result. A writer's verified commit and snapshot

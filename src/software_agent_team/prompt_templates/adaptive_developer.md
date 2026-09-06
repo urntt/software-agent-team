@@ -61,8 +61,10 @@ RESPONSE_SCHEMA_JSON
 ${response_schema_json}
 
 FINAL_RESPONSE_CONTRACT
-Call `${submission_tool}` exactly once with the semantic fields in the response
-schema as its arguments. `completed_tasks` must contain the exact assigned
+Call `${submission_tool}` exactly once with one top-level `artifact` argument
+whose value contains the semantic fields in the response schema. The tool
+arguments are exactly `{"artifact": <response object>}`; do not add another
+envelope. `completed_tasks` must contain the exact assigned
 TASK_ IDs completed in the commit. The controller supplies `${expected_kind}`,
 Agent and run identity, iteration, timestamps, and Git facts. The submission
 tool writes only to a controller-owned invocation file and does not grant more

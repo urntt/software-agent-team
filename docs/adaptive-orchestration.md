@@ -246,15 +246,21 @@ by validation; the model never regenerates the complete retained object or
 selects the fields it may replace.
 
 Adaptive Planning and dynamic execution Agents call the invocation-bound
-`sat_submit_artifact` tool exactly once with their semantic response. SAT gives
-dynamic Agents the exact AgentSpec-derived JSON Schema. Planning uses a separate
-object-only transport schema so every syntactically structured proposal or correction
-reaches the Controller's exact semantic validator; the private envelope still binds
-the exact Planning semantic-schema digest. This allows deterministic forbidden-field
+`sat_submit_artifact` tool exactly once through the canonical
+`{"artifact": <semantic object>}` transport envelope. The envelope is tool
+transport, not part of the semantic response. The plugin accepts exactly that one
+object-valued argument and writes only its inner object to the private submission
+file. SAT gives dynamic Agents the exact AgentSpec-derived semantic JSON Schema
+inside the envelope. Planning instead uses a permissive object-only inner transport
+schema so every syntactically structured proposal or correction reaches the
+Controller's exact semantic validator; the private envelope still binds the exact
+Planning semantic-schema digest. This allows deterministic forbidden-field
 normalization and targeted semantic correction to operate after transport without
 trusting invalid content. SAT gives every invocation a fresh controller binding, then
-requires the private envelope to match the final
-successful attributable tool call. Visible
+requires the private envelope to match the final successful attributable tool call.
+The v2 evidence binds the canonical outer tool-arguments digest separately from the
+inner semantic-object digest. A direct object, a second `artifact` envelope, or any
+other transport shape cannot satisfy both bindings. Visible
 assistant payloads remain raw telemetry but are not parsed as Planning or
 dynamic semantics, so prose, truncation, or ancillary diagnostics cannot
 compete with the submitted object. Missing, duplicate, non-final, malformed,
@@ -270,9 +276,9 @@ prevents execution-layer secret redaction of authorization-shaped metadata from
 changing the persisted prompt and invalidating exact session attribution.
 
 The pinned OpenClaw Agent CLI does not expose a response-schema parameter for a
-tool-using turn. SAT supplies the appropriate transport schema through its isolated
-submission plugin, binds the exact semantic schema separately, and compiles submitted
-values at the controller boundary.
+tool-using turn. SAT supplies the explicit one-argument transport schema through its
+isolated submission plugin, binds the exact semantic schema separately, and compiles
+submitted values at the controller boundary.
 Transport failures and unlocated errors stop. A targetable model-owned failure
 produces a content-free diagnostic and a correction request whose persisted
 evidence is bound to the retained object's SHA-256. The Controller assigns an

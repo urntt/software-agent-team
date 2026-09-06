@@ -4,7 +4,8 @@ import path from "node:path";
 
 const PLUGIN_ID = "sat-artifact-submission";
 const TOOL_NAME = "sat_submit_artifact";
-const PROTOCOL = "sat_artifact_submission_v1";
+const PROTOCOL = "sat_artifact_submission_v2";
+const ARTIFACT_ARGUMENT = "artifact";
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 const MAX_SCHEMA_BYTES = 512 * 1024;
 
@@ -104,13 +105,31 @@ export default {
       name: TOOL_NAME,
       label: "Submit SAT artifact",
       description:
-        "Submit the final semantic artifact exactly once. This ends the current Agent invocation.",
+        "Submit the final semantic artifact exactly once. Pass it as the single artifact argument; do not add another envelope. This ends the current Agent invocation.",
       parameters: contract.parameters,
       async execute(toolCallId, params) {
         if (!contract.available) {
           throw new Error("SAT artifact submission is not bound to an invocation");
         }
-        writeExclusiveSubmission(contract, toolCallId, params);
+        if (
+          !params ||
+          typeof params !== "object" ||
+          Array.isArray(params) ||
+          Object.keys(params).length !== 1 ||
+          !Object.hasOwn(params, ARTIFACT_ARGUMENT) ||
+          !params[ARTIFACT_ARGUMENT] ||
+          typeof params[ARTIFACT_ARGUMENT] !== "object" ||
+          Array.isArray(params[ARTIFACT_ARGUMENT])
+        ) {
+          throw new Error(
+            "SAT artifact submission requires exactly one object-valued artifact argument",
+          );
+        }
+        writeExclusiveSubmission(
+          contract,
+          toolCallId,
+          params[ARTIFACT_ARGUMENT],
+        );
         return {
           content: [
             {

@@ -617,9 +617,20 @@ def test_planning_uses_typed_submission_instead_of_assistant_text(
     contract = executor.requests[0].submission_contract
     assert contract is not None
     assert contract.purpose is AgentSubmissionPurpose.PLANNING_RESPONSE
-    assert contract.transport_schema() == {
+    assert contract.transport_payload_schema() == {
         "type": "object",
         "additionalProperties": True,
+    }
+    assert contract.transport_schema() == {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "artifact": {
+                "type": "object",
+                "additionalProperties": True,
+            }
+        },
+        "required": ["artifact"],
     }
     turn = store.load_turn(request().run_id, 1)
     assert turn.response_text == "This presentation is deliberately not JSON."

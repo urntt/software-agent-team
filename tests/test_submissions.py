@@ -11,6 +11,8 @@ from pydantic import ValidationError
 
 from software_agent_team.artifacts import AgentToolCallEvidence
 from software_agent_team.submissions import (
+    ARTIFACT_SUBMISSION_ARGUMENT,
+    ARTIFACT_SUBMISSION_PROTOCOL,
     AgentSubmissionContract,
     AgentSubmissionPurpose,
     AgentSubmissionStatus,
@@ -55,7 +57,7 @@ def tool_call(
         id=normalized_id,
         tool_name=tool_name,
         external_call_sha256=hashlib.sha256(external_id.encode()).hexdigest(),
-        arguments_sha256=canonical_json_sha256(payload),
+        arguments_sha256=canonical_json_sha256({ARTIFACT_SUBMISSION_ARGUMENT: payload}),
         outcome=outcome,
         is_error=is_error,
         output_sha256=hashlib.sha256(output).hexdigest(),
@@ -74,7 +76,7 @@ def capture(
     """Return the private-file envelope written by the plugin."""
 
     envelope = {
-        "protocol": "sat_artifact_submission_v1",
+        "protocol": ARTIFACT_SUBMISSION_PROTOCOL,
         "binding_sha256": binding,
         "schema_sha256": schema_sha256 or contract().schema_sha256,
         "tool_call_id": external_id,
@@ -111,8 +113,41 @@ def test_submission_contract_separates_transport_from_semantic_schema() -> None:
 
     assert value.parameters_schema() == SCHEMA
     assert value.schema_sha256 == canonical_json_sha256(SCHEMA)
-    assert value.transport_schema() == transport_schema
-    assert value.transport_schema_sha256 == canonical_json_sha256(transport_schema)
+    assert value.transport_payload_schema() == transport_schema
+    expected_tool_schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {"artifact": transport_schema},
+        "required": ["artifact"],
+    }
+    assert value.transport_schema() == expected_tool_schema
+    assert value.transport_schema_sha256 == canonical_json_sha256(expected_tool_schema)
+
+
+def test_submission_transport_envelope_lifts_semantic_definitions() -> None:
+    semantic_schema = {
+        "$defs": {
+            "Summary": {
+                "type": "object",
+                "properties": {"text": {"type": "string"}},
+                "required": ["text"],
+            }
+        },
+        "type": "object",
+        "properties": {"summary": {"$ref": "#/$defs/Summary"}},
+        "required": ["summary"],
+    }
+
+    value = AgentSubmissionContract.from_schema(
+        semantic_schema,
+        purpose=AgentSubmissionPurpose.ARTIFACT,
+    )
+
+    tool_schema = value.transport_schema()
+    assert tool_schema["$defs"] == semantic_schema["$defs"]
+    artifact_schema = tool_schema["properties"]["artifact"]
+    assert "$defs" not in artifact_schema
+    assert artifact_schema["properties"]["summary"] == {"$ref": "#/$defs/Summary"}
 
 
 def test_submission_capture_accepts_one_final_bound_call() -> None:
@@ -130,7 +165,36 @@ def test_submission_capture_accepts_one_final_bound_call() -> None:
     assert submission.payload == payload
     assert evidence.status is AgentSubmissionStatus.ACCEPTED
     assert evidence.tool_call_id == "tool-001"
-    assert evidence.payload_sha256 == canonical_json_sha256(payload)
+    assert evidence.payload_sha256 == canonical_json_sha256({"artifact": payload})
+    assert evidence.semantic_payload_sha256 == canonical_json_sha256(payload)
+
+
+def test_submission_capture_rejects_unbound_direct_or_double_envelope_arguments() -> (
+    None
+):
+    payload = {"summary": "complete"}
+    direct_call = tool_call(payload).model_copy(
+        update={"arguments_sha256": canonical_json_sha256(payload)}
+    )
+    double_call = tool_call(payload).model_copy(
+        update={
+            "arguments_sha256": canonical_json_sha256(
+                {"artifact": {"artifact": payload}}
+            )
+        }
+    )
+
+    for call in (direct_call, double_call):
+        submission, evidence = validate_submission_capture(
+            contract(),
+            binding_sha256=BINDING,
+            capture=capture(payload),
+            tool_calls=(call,),
+            tool_evidence_error=None,
+        )
+        assert submission is None
+        assert evidence.status is AgentSubmissionStatus.UNAUTHORIZED
+        assert evidence.diagnostic_code == "submission_binding_mismatch"
 
 
 @pytest.mark.parametrize(

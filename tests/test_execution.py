@@ -43,6 +43,7 @@ from software_agent_team.invocation_lifecycle import (
 )
 from software_agent_team.process_lifecycle import ProcessLeaseStore
 from software_agent_team.submissions import (
+    ARTIFACT_SUBMISSION_PROTOCOL,
     AgentSubmissionContract,
     AgentSubmissionPurpose,
     AgentSubmissionStatus,
@@ -431,19 +432,27 @@ def test_openclaw_adapter_uses_bound_submission_not_visible_text(
         prompt_path = Path(command[command.index("--message-file") + 1])
         prompt = prompt_path.read_text(encoding="utf-8")
         schema_path = Path(environment["SAT_ARTIFACT_SUBMISSION_SCHEMA_PATH"])
-        assert json.loads(schema_path.read_text(encoding="utf-8")) == transport_schema
+        expected_tool_schema = {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {"artifact": transport_schema},
+            "required": ["artifact"],
+        }
+        assert json.loads(schema_path.read_text(encoding="utf-8")) == (
+            expected_tool_schema
+        )
         assert environment["SAT_ARTIFACT_SUBMISSION_SCHEMA_SHA256"] == (
             canonical_json_sha256(semantic_schema)
         )
         assert environment["SAT_ARTIFACT_SUBMISSION_PARAMETERS_SHA256"] == (
-            canonical_json_sha256(transport_schema)
+            canonical_json_sha256(expected_tool_schema)
         )
         external_id = "provider-call-1"
         output_path = Path(environment["SAT_ARTIFACT_SUBMISSION_OUTPUT_PATH"])
         output_path.write_text(
             json.dumps(
                 {
-                    "protocol": "sat_artifact_submission_v1",
+                    "protocol": ARTIFACT_SUBMISSION_PROTOCOL,
                     "binding_sha256": environment[
                         "SAT_ARTIFACT_SUBMISSION_BINDING_SHA256"
                     ],
@@ -471,7 +480,7 @@ def test_openclaw_adapter_uses_bound_submission_not_visible_text(
                             "type": "toolCall",
                             "id": external_id,
                             "name": "sat_submit_artifact",
-                            "arguments": semantic_payload,
+                            "arguments": {"artifact": semantic_payload},
                         }
                     ],
                 },
