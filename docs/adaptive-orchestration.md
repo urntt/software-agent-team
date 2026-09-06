@@ -360,8 +360,12 @@ inner semantic-object digest. A direct object, a second `artifact` envelope, or 
 other transport shape cannot satisfy both bindings. Visible
 assistant payloads remain raw telemetry but are not parsed as Planning or
 dynamic semantics, so prose, truncation, or ancillary diagnostics cannot
-compete with the submitted object. Missing, duplicate, non-final, malformed,
-failed, or unattributable submissions fail closed. Only the legacy fixed-role
+compete with the submitted object. A schema- or tool-rejected attempt has no
+semantic authority and may precede exactly one final successful bound submission;
+its failed tool evidence remains attributable. More than one successful
+submission is duplicate and ambiguous, and any tool action after a successful
+submission makes it non-final. Missing, duplicate-success, non-final, malformed,
+all-failed, or unattributable submission sequences fail closed. Only the legacy fixed-role
 compatibility path retains the bounded single-object text parser; on that path,
 payload count is not mistaken for semantic object count and two real object
 candidates remain ambiguous.

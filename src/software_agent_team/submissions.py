@@ -452,35 +452,42 @@ def validate_submission_capture(
             ),
         )
         return None, evidence
-    if len(matching) != 1:
+
+    successful_matching = tuple(
+        call
+        for call in matching
+        if getattr(call.outcome, "value", call.outcome) == "succeeded"
+        and not call.is_error
+    )
+    if len(successful_matching) > 1:
         evidence = rejected_submission_evidence(
             contract,
             binding_sha256=binding_sha256,
             status=AgentSubmissionStatus.DUPLICATE,
             code="duplicate_submission_calls",
-            detail="the Agent called the submission tool more than once",
+            detail="the Agent completed more than one successful submission",
+        )
+        return None, evidence
+    if not successful_matching:
+        call = matching[-1]
+        evidence = rejected_submission_evidence(
+            contract,
+            binding_sha256=binding_sha256,
+            status=AgentSubmissionStatus.INVALID,
+            code="submission_tool_failed",
+            detail="the required submission tool never completed successfully",
+            tool_call_id=call.id,
         )
         return None, evidence
 
-    call = matching[0]
-    if tool_calls[-1] is not call:
+    call = successful_matching[0]
+    if tool_calls[-1].id != call.id:
         evidence = rejected_submission_evidence(
             contract,
             binding_sha256=binding_sha256,
             status=AgentSubmissionStatus.UNAUTHORIZED,
             code="submission_not_final",
             detail="the semantic submission was not the final tool call",
-            tool_call_id=call.id,
-        )
-        return None, evidence
-    outcome = getattr(call.outcome, "value", call.outcome)
-    if outcome != "succeeded" or call.is_error:
-        evidence = rejected_submission_evidence(
-            contract,
-            binding_sha256=binding_sha256,
-            status=AgentSubmissionStatus.INVALID,
-            code="submission_tool_failed",
-            detail="the required submission tool call did not succeed",
             tool_call_id=call.id,
         )
         return None, evidence

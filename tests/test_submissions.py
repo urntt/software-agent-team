@@ -169,6 +169,62 @@ def test_submission_capture_accepts_one_final_bound_call() -> None:
     assert evidence.semantic_payload_sha256 == canonical_json_sha256(payload)
 
 
+def test_submission_capture_accepts_one_final_success_after_schema_rejection() -> None:
+    """A failed transport attempt has no semantic authority or file binding."""
+
+    invalid_payload = {"summary": 42}
+    payload = {"summary": "complete"}
+    failed = tool_call(
+        invalid_payload,
+        external_id="provider-call-1",
+        outcome="failed",
+        is_error=True,
+    )
+    succeeded = tool_call(
+        payload,
+        normalized_id="tool-002",
+        external_id="provider-call-2",
+    )
+
+    submission, evidence = validate_submission_capture(
+        contract(),
+        binding_sha256=BINDING,
+        capture=capture(payload, external_id="provider-call-2"),
+        tool_calls=(failed, succeeded),
+        tool_evidence_error=None,
+    )
+
+    assert submission is not None
+    assert submission.payload == payload
+    assert evidence.status is AgentSubmissionStatus.ACCEPTED
+    assert evidence.tool_call_id == "tool-002"
+
+
+def test_submission_capture_rejects_success_followed_by_failed_retry() -> None:
+    """A successful semantic submission must remain the terminal tool action."""
+
+    payload = {"summary": "complete"}
+    later_failure = tool_call(
+        {"summary": 42},
+        normalized_id="tool-002",
+        external_id="provider-call-2",
+        outcome="failed",
+        is_error=True,
+    )
+
+    submission, evidence = validate_submission_capture(
+        contract(),
+        binding_sha256=BINDING,
+        capture=capture(payload),
+        tool_calls=(tool_call(payload), later_failure),
+        tool_evidence_error=None,
+    )
+
+    assert submission is None
+    assert evidence.status is AgentSubmissionStatus.UNAUTHORIZED
+    assert evidence.diagnostic_code == "submission_not_final"
+
+
 def test_submission_capture_rejects_unbound_direct_or_double_envelope_arguments() -> (
     None
 ):

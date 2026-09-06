@@ -287,6 +287,14 @@ offer either array alone as a relational correction target. A live-contract
 change updates its submission schema hash; bump the persisted Planning schema
 only when stored canonical structure changes.
 
+Typed-submission tests must distinguish transport attempts from successful
+semantic submissions. OpenClaw may return a schema error to the model and let it
+retry within the same invocation. Any number of attributable failed attempts may
+precede exactly one final successful call, because none wrote or authorized a
+semantic payload. Continue to reject two successful calls, a successful call
+followed by any other tool action, an all-failed sequence, or a private file that
+does not bind the sole final success.
+
 Apply the same atomicity rule to decision authority. The model-facing decision
 schema must enumerate only legal category/provenance combinations; it must not
 expose independently selectable values that the persisted model rejects after

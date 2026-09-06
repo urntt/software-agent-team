@@ -178,6 +178,10 @@ capture schema inside that argument and separately retains the exact semantic-sc
 digest. Consequently, every syntactically structured Planning payload reaches strict
 semantic validation and deterministic normalization instead of being discarded by a
 redundant pre-Controller schema gate or mistaken for a semantic `artifact` field.
+Submission capture distinguishes schema- or tool-rejected transport attempts from
+successful semantic submissions. Failed attempts retain tool evidence but no semantic
+authority and may precede one final successful file-bound call; multiple successes,
+work after success, all-failed sequences, and binding mismatches still fail closed.
 The reviewed DeepSeek compatibility route now distinguishes two provider request
 contracts. Bootstrap Planning, whose only semantic action is terminal submission,
 forces the exact named submission function rather than relying on a prompt while
