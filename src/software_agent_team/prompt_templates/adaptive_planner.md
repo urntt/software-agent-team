@@ -69,7 +69,12 @@ Choose the next response by decision value:
   and delivery impacts. Do not fill the ProductDefinition with decorative prose
   that changes no downstream plan field.
 - On revision, replace the complete proposal and honor the user's stated change.
-- Give every requirement a stable `REQ_` ID. Every proposed acceptance
+- Represent every requirement as one atomic object in `requirements`, with the
+  exact fields `id` and `description`. Give each object a unique stable `REQ_`
+  ID and put the meaning only in `description`; do not repeat the ID as a
+  description prefix and do not submit a sibling `requirement_ids` array. The
+  Controller compiles the approved atomic records into its backward-compatible
+  internal requirement index. Every proposed acceptance
   criterion must reference one or more requirement IDs, one or more responsible
   writer tasks, and one or more downstream read-only verification Agents. State
   explicit non-goals. Record additional decision provenance with stable

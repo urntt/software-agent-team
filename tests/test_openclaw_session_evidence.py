@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
 import pytest
 
+import software_agent_team.openclaw_session_evidence as session_evidence
 from software_agent_team.artifacts import (
     AgentToolCallOutcome,
     AgentToolEvidenceStatus,
@@ -406,6 +408,101 @@ def test_initialization_inspection_reports_only_finite_attributable_checkpoints(
     assert current is not None
     assert current.checkpoint is InitializationCheckpoint.CURRENT_TURN
     assert "INITIALIZATION_SECRET" not in repr(current)
+
+
+def test_initialization_index_publish_between_open_and_observation_is_missing_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    invocation = request()
+    sessions = tmp_path / "agents" / invocation.agent_id / "sessions"
+    sessions.mkdir(parents=True)
+    index_path = sessions / "sessions.json"
+    real_open = os.open
+    raced = False
+
+    def open_during_publish(path: Path, flags: int) -> int:
+        nonlocal raced
+        if Path(path) == index_path and not raced:
+            raced = True
+            index_path.write_text("{}", encoding="utf-8")
+            raise FileNotFoundError(2, "not published at open time", str(path))
+        return real_open(path, flags)
+
+    monkeypatch.setattr(session_evidence.os, "open", open_during_publish)
+
+    first = inspect_openclaw_initialization(
+        state_dir=tmp_path,
+        agent_id=invocation.agent_id,
+        session_key=invocation.session_key,
+        prompt=invocation.prompt,
+    )
+    second = inspect_openclaw_initialization(
+        state_dir=tmp_path,
+        agent_id=invocation.agent_id,
+        session_key=invocation.session_key,
+        prompt=invocation.prompt,
+    )
+
+    assert raced
+    assert first is not None
+    assert first.checkpoint is InitializationCheckpoint.SESSION_DIRECTORY
+    assert second is not None
+    assert second.checkpoint is InitializationCheckpoint.SESSION_INDEX
+
+
+def test_initialization_transcript_publish_between_checkpoints_is_missing_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    invocation = request()
+    sessions = tmp_path / "agents" / invocation.agent_id / "sessions"
+    sessions.mkdir(parents=True)
+    (sessions / "sessions.json").write_text(
+        json.dumps({invocation.session_key: {"sessionId": SESSION_ID}}),
+        encoding="utf-8",
+    )
+    transcript_path = sessions / f"{SESSION_ID}.jsonl"
+    real_open = os.open
+    raced = False
+
+    def open_during_publish(path: Path, flags: int) -> int:
+        nonlocal raced
+        if Path(path) == transcript_path and not raced:
+            raced = True
+            transcript_path.write_text(
+                "\n".join(
+                    (
+                        json.dumps(session_record()),
+                        json.dumps(user_record(invocation.prompt)),
+                    )
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            raise FileNotFoundError(2, "not published at open time", str(path))
+        return real_open(path, flags)
+
+    monkeypatch.setattr(session_evidence.os, "open", open_during_publish)
+
+    first = inspect_openclaw_initialization(
+        state_dir=tmp_path,
+        agent_id=invocation.agent_id,
+        session_key=invocation.session_key,
+        prompt=invocation.prompt,
+    )
+    second = inspect_openclaw_initialization(
+        state_dir=tmp_path,
+        agent_id=invocation.agent_id,
+        session_key=invocation.session_key,
+        prompt=invocation.prompt,
+    )
+
+    assert raced
+    assert first is not None
+    assert first.checkpoint is InitializationCheckpoint.SESSION_BOUND
+    assert second is not None
+    assert second.checkpoint is InitializationCheckpoint.CURRENT_TURN
 
 
 def test_capture_keeps_only_the_executable_not_sensitive_exec_arguments(

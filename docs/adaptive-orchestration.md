@@ -260,9 +260,10 @@ may perform only these bounded, semantics-preserving normalizations:
   is authoritative;
 - Remove every downstream reference from a `not_material` ProductDefinition
   dimension, because retaining one would contradict the approved disposition;
-- Remove one or more repeated copies of a requirement's exact parallel `REQ_`
-  ID prefix from its description, because the ID array is the sole identity
-  authority and the submitted value remains in raw turn evidence;
+- Compile each current model-facing atomic requirement `{id, description}` into
+  the canonical backward-readable description and stable-ID index, and remove
+  one or more repeated copies of that exact ID from its description because the
+  atomic record already binds identity to meaning;
 - Remove a schema-forbidden field only when removing it cannot grant or hide
   controller/evidence authority.
 
@@ -278,6 +279,15 @@ fields are rejected rather than normalized away. Other model-owned defects are
 eligible only for digest-bound correction of the exact typed fields identified
 by validation; the model never regenerates the complete retained object or
 selects the fields it may replace.
+
+The current response schema exposes only one `requirements` array of atomic
+`{id, description}` objects. It does not expose a sibling `requirement_ids`
+array. This makes requirement cardinality valid by construction at the model
+boundary. The Controller compiles the atoms into the existing persisted
+description/ID representation so schema-v2 through schema-v8 records retain
+their canonical serialization. If a legacy parallel-shaped live response has
+unequal cardinality, the only correction target is the complete atomic
+requirements relation; an isolated ID-array replacement is never offered.
 
 The terminal overview treats every user- or model-authored string as untrusted
 display text. Each newline is rendered as an indented continuation of its own
@@ -904,7 +914,9 @@ contract. It keeps
 schema-v2 through schema-v7 records readable without adding fields or changing
 their canonical serialization. Current turns retain the exact submission,
 record every deterministic compilation, and separately persist the validated
-provenance-bearing form.
+provenance-bearing form. The current live response contract additionally binds
+each requirement ID and description in one atomic record; this changes the
+submission schema hash, not the persisted Planning schema version.
 Planning schema v7 added the exact typed semantic payload and content-free
 submission binding to each current turn while preserving assistant text as
 non-authoritative evidence. Schema v6 added terminal-response/finalization

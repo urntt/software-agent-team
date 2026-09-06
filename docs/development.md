@@ -241,8 +241,20 @@ deadline, controlled-evaluation timeout, TERM exit, KILL escalation, evidence
 collection, and absence of stale working heartbeats. `RunEvent` schema v4 must
 remain canonically readable from v2 through v3, Artifact schema v6 from v2
 through v5, and Planning schema v8 from v2 through v7.
+Initialization file-race tests must distinguish an exact open-time missing file
+from malformed or unsafe evidence and must cover atomic publication between
+observations. Do not infer an earlier `open` result from a later `exists` check.
 Any added phase, stop reason, or infrastructure threshold belongs in the one
 shared lifecycle or decision-limit registry rather than a parallel adapter.
+
+The live Planning response schema and the persisted Planning schema have
+different ownership. Current model output binds every requirement as one atomic
+`{id, description}` record. The Planning boundary compiles that relation into
+the existing backward-readable description and stable-ID fields before semantic
+validation. Do not reintroduce independently generated requirement arrays or
+offer either array alone as a relational correction target. A live-contract
+change updates its submission schema hash; bump the persisted Planning schema
+only when stored canonical structure changes.
 
 The product profile and evaluation fixture share this dependency image, not a
 TaskBrief, seed, acceptance suite, environment contract, or delivery command.

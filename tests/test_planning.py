@@ -519,7 +519,11 @@ def test_planning_overview_contains_multiline_text_inside_its_own_entry() -> Non
 
 
 def response(value: PlanningModelResponse) -> str:
-    return value.model_dump_json()
+    payload = value.model_dump(mode="json")
+    if value.kind is PlanningResponseKind.PROPOSAL:
+        assert value.proposal is not None
+        payload["proposal"] = planning._planning_proposal_body_for_model(value.proposal)
+    return json.dumps(payload)
 
 
 def test_planner_contract_does_not_treat_provenance_as_semantic_relevance() -> None:
@@ -1257,7 +1261,7 @@ def test_answered_question_must_have_exact_decision_provenance(tmp_path: Path) -
         ),
         (
             proposal_body().model_copy(update={"requirement_ids": ("REQ_SCAN",)}),
-            "one stable ID for every requirement",
+            "one stable ID for every description",
         ),
         (
             proposal_body().model_copy(
@@ -2121,6 +2125,75 @@ def test_response_normalizer_uses_parallel_requirement_ids_and_disposition() -> 
             "proposal.product_definition.target_users"
         ),
     )
+
+
+def test_response_normalizer_compiles_atomic_requirements_without_mutating_raw() -> (
+    None
+):
+    payload = proposal_response().model_dump(mode="json")
+    proposal_payload = payload["proposal"]
+    descriptions = proposal_payload["requirements"]
+    requirement_ids = proposal_payload["requirement_ids"]
+    proposal_payload["requirements"] = [
+        {
+            "id": requirement_id,
+            "description": f"{requirement_id}: {description}",
+        }
+        for requirement_id, description in zip(
+            requirement_ids,
+            descriptions,
+            strict=True,
+        )
+    ]
+    proposal_payload["requirement_ids"] = ["REQ_CONFLICTING_REDUNDANT_FIELD"]
+    original = json.loads(json.dumps(payload))
+
+    normalized, changes = planning._normalize_planning_response_payload(payload)
+    parsed = PlanningModelResponse.model_validate(normalized)
+
+    assert payload == original
+    assert parsed.proposal is not None
+    assert parsed.proposal.requirement_ids == tuple(requirement_ids)
+    assert parsed.proposal.requirements == tuple(descriptions)
+    assert changes == (
+        (
+            "compiled atomic proposal.requirements into canonical descriptions "
+            "and stable IDs"
+        ),
+        "removed redundant stable ID prefix from proposal.requirements[0]",
+        "removed redundant stable ID prefix from proposal.requirements[1]",
+    )
+
+
+def test_response_normalizer_rejects_mixed_requirement_shapes() -> None:
+    payload = proposal_response().model_dump(mode="json")
+    payload["proposal"]["requirements"] = [
+        {"id": "REQ_SCAN", "description": "Scan Markdown files."},
+        "Report broken links.",
+    ]
+
+    with pytest.raises(PlanningError, match="cannot be mixed"):
+        planning._normalize_planning_response_payload(payload)
+
+
+def test_current_proposal_context_uses_atomic_requirements_without_rewriting_body() -> (
+    None
+):
+    body = proposal_body()
+    canonical = body.model_dump(mode="json")
+
+    projected = planning._planning_proposal_body_for_model(body)
+
+    assert body.model_dump(mode="json") == canonical
+    assert "requirement_ids" not in projected
+    assert projected["requirements"] == [
+        {"id": requirement_id, "description": description}
+        for requirement_id, description in zip(
+            body.requirement_ids,
+            body.requirements,
+            strict=True,
+        )
+    ]
 
 
 def test_response_normalizer_canonicalizes_unambiguous_decision_tokens() -> None:
@@ -3220,7 +3293,12 @@ def test_store_detects_changed_append_only_turn_evidence(tmp_path: Path) -> None
     assert created is not None
     turn_path = tmp_path / "planning" / request().run_id / "turns" / "001.json"
     payload = json.loads(turn_path.read_text(encoding="utf-8"))
-    assert "response_normalizations" not in payload
+    assert payload["response_normalizations"] == [
+        (
+            "compiled atomic proposal.requirements into canonical descriptions "
+            "and stable IDs"
+        )
+    ]
     payload["user_message"] = "changed after persistence"
     turn_path.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(PlanningIntegrityError, match="head digest changed"):
@@ -3803,11 +3881,18 @@ def test_dialogue_revision_structured_edit_and_approval_are_recoverable(
     assert "default" not in criterion_schema["properties"]["review_boundaries"]
     assert {
         "product_definition",
-        "requirement_ids",
         "non_goals",
         "assumption_decision_ids",
         "decisions",
     }.issubset(proposal_schema["required"])
+    assert "requirement_ids" not in proposal_schema["properties"]
+    assert "requirement_ids" not in proposal_schema["required"]
+    requirement_schema = response_schema["$defs"]["ProposedRequirement"]
+    assert proposal_schema["properties"]["requirements"]["items"] == {
+        "$ref": "#/$defs/ProposedRequirement"
+    }
+    assert requirement_schema["additionalProperties"] is False
+    assert set(requirement_schema["required"]) == {"id", "description"}
     assert proposal_schema["properties"]["product_definition"] == {
         "$ref": "#/$defs/ProductDefinition"
     }
@@ -4201,7 +4286,16 @@ def test_product_planning_preserves_normalization_and_targets_new_root_cause(
             ),
             correction_response(
                 second_base,
-                {"/proposal/requirement_ids": requirement_ids},
+                {
+                    "/proposal/requirements": [
+                        {"id": requirement_id, "description": description}
+                        for requirement_id, description in zip(
+                            requirement_ids,
+                            valid_payload["proposal"]["requirements"],
+                            strict=True,
+                        )
+                    ]
+                },
             ),
         ]
     )
@@ -4227,8 +4321,74 @@ def test_product_planning_preserves_normalization_and_targets_new_root_cause(
     second = store.load_turn(request().run_id, 2)
     assert second.semantic_correction_outcome == "improved"
     assert second.response_validation is not None
-    assert second.response_validation.correction_paths == ("/proposal/requirement_ids",)
+    assert second.response_validation.correction_paths == ("/proposal/requirements",)
+    correction = executor.requests[2].prompt.rsplit(
+        "TARGETED_SEMANTIC_CORRECTION_VALUES_V1", 1
+    )[1]
+    assert '"$ref": "#/$defs/ProposedRequirement"' not in correction
+    assert '"Stable requirement identity' in correction
     assert store.load_turn(request().run_id, 3).semantic_correction_outcome == (
+        "accepted"
+    )
+
+
+def test_product_planning_repairs_one_requirement_relation_not_an_id_array(
+    tmp_path: Path,
+) -> None:
+    payload = proposal_response().model_dump(mode="json")
+    proposal_payload = payload["proposal"]
+    extra_ids = tuple(f"REQ_EXTRA_{index}" for index in range(1, 9))
+    proposal_payload["requirement_ids"].extend(extra_ids)
+    proposal_payload["acceptance_criteria"][0]["requirement_ids"].extend(extra_ids)
+    atomic_requirements = [
+        {"id": requirement_id, "description": description}
+        for requirement_id, description in zip(
+            proposal_body().requirement_ids,
+            proposal_body().requirements,
+            strict=True,
+        )
+    ] + [
+        {
+            "id": requirement_id,
+            "description": f"Exercise independent requirement {index}.",
+        }
+        for index, requirement_id in enumerate(extra_ids, start=1)
+    ]
+    executor = ScriptedAgentExecutor(
+        [
+            json.dumps(payload),
+            correction_response(
+                payload,
+                {"/proposal/requirements": atomic_requirements},
+            ),
+        ]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(response_repair_limit=None),
+        clock=AdvancingClock(),
+    )
+
+    created = coordinator.start(
+        request(),
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+
+    assert created is not None
+    assert len(created.body.requirements) == 10
+    assert created.body.requirement_ids == (
+        *proposal_body().requirement_ids,
+        *extra_ids,
+    )
+    first = store.load_turn(request().run_id, 1)
+    assert first.response_validation is not None
+    assert first.response_validation.issues[0].invariant_id == (
+        "planning_requirement_id_cardinality"
+    )
+    assert first.response_validation.correction_paths == ("/proposal/requirements",)
+    assert store.load_turn(request().run_id, 2).semantic_correction_outcome == (
         "accepted"
     )
 

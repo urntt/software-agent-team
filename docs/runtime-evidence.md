@@ -514,7 +514,12 @@ requires non-null question category and Controller-derived owner, admission rati
 ProductDefinition, stable requirement references, non-goals, assumption
 ownership, typed decision provenance, and criterion verifier references. The
 model-facing schema omits question/decision authority and legacy `question_id`;
-they are controller-owned projections of category and provenance.
+they are controller-owned projections of category and provenance. It also
+represents requirements only as atomic `{id, description}` records and omits a
+sibling `requirement_ids` array. The Controller records the exact submitted
+atoms, then compiles them into the backward-readable internal description/ID
+index. This prevents independently generated arrays from creating an
+unrepairable cardinality relation without changing historical canonical bytes.
 
 Before a question reaches the user, the controller checks its declared category
 against the fixed responsibility matrix and rejects autonomous implementation,
@@ -957,7 +962,12 @@ when investigating it rather than editing artifacts in place.
   checkpoint enters a visible final 15-second grace, after which the exact
   process is stopped as `initialization_stall`. Observer absence or malformed
   attribution fails closed as `process_failure`; neither outcome is rewritten as
-  provider silence.
+  provider silence. Exact index or transcript absence reported by the guarded
+  open means that checkpoint has not been published yet and leaves the prior
+  checkpoint active. The reader never follows that open with an independent
+  existence check: OpenClaw may atomically publish the file between those calls,
+  making such a combined conclusion false. Symlink, non-regular, oversized,
+  malformed, or identity-invalid state remains a hard attribution failure.
 - SAT resolves a provider/model-aware inactivity lease from the pinned runtime's
   cloud or local stream boundary. An explicit provider request timeout replaces
   that implicit boundary, including when it deliberately gives a slow model more

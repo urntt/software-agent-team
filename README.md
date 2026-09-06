@@ -175,7 +175,10 @@ in its private state. Ninety seconds without checkpoint progress opens a visible
 final 15-second diagnostic window; continued inactivity stops only that
 invocation, while a late checkpoint recovers the same invocation. An unavailable
 or malformed initialization observer fails closed instead of leaving an
-unobservable process running.
+unobservable process running. A session index or transcript that is exactly
+missing at open time is instead treated as “not published yet” and remains at
+the preceding checkpoint; SAT does not combine that result with a later path
+lookup that can race an atomic OpenClaw publish.
 
 Once the current turn or its private provider stream is attributable, OpenClaw
 retains its provider transport boundary and SAT watches content-free stream and

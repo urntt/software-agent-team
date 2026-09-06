@@ -33,6 +33,10 @@ class OpenClawSessionEvidenceError(ValueError):
     """Raised when session provenance or tool-call pairing is not trustworthy."""
 
 
+class _OpenClawSessionFileMissing(OpenClawSessionEvidenceError):
+    """Preserve an exact open-time missing result during initialization."""
+
+
 @dataclass(frozen=True)
 class CapturedOpenClawToolEvidence:
     """Sanitized current-invocation evidence ready for telemetry persistence."""
@@ -74,6 +78,8 @@ def _read_regular_file(path: Path, *, limit: int, label: str) -> bytes:
     flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     try:
         descriptor = os.open(path, flags)
+    except FileNotFoundError as error:
+        raise _OpenClawSessionFileMissing(f"{label} is not published yet") from error
     except OSError as error:
         raise OpenClawSessionEvidenceError(f"cannot open {label} safely") from error
     try:
@@ -247,10 +253,8 @@ def _inspect_openclaw_session_snapshot(
             limit=_MAX_INDEX_BYTES,
             label="OpenClaw session index",
         )
-    except OpenClawSessionEvidenceError as error:
-        if not (sessions / "sessions.json").exists():
-            return snapshot
-        raise error
+    except _OpenClawSessionFileMissing:
+        return snapshot
     index = _load_json_object(index_payload, label="OpenClaw session index")
     snapshot = _OpenClawSessionSnapshot(
         observation=OpenClawInitializationObservation(
@@ -287,13 +291,14 @@ def _inspect_openclaw_session_snapshot(
             checkpoint=InitializationCheckpoint.SESSION_BOUND
         )
     )
-    if not expected_path.exists():
+    try:
+        transcript = _read_regular_file(
+            expected_path,
+            limit=_MAX_SESSION_BYTES,
+            label="OpenClaw session transcript",
+        )
+    except _OpenClawSessionFileMissing:
         return snapshot
-    transcript = _read_regular_file(
-        expected_path,
-        limit=_MAX_SESSION_BYTES,
-        label="OpenClaw session transcript",
-    )
     if not transcript:
         return snapshot
     complete_lines = transcript.splitlines()

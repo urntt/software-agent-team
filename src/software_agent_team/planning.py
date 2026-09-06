@@ -719,7 +719,7 @@ def _clean_unique(values: tuple[str, ...], *, label: str) -> tuple[str, ...]:
 
 
 def _strip_redundant_stable_id_prefix(value: str, stable_id: str) -> str:
-    """Remove only repeated copies of the parallel stable-ID presentation."""
+    """Remove only repeated copies of the requirement's stable-ID presentation."""
 
     return re.sub(rf"^(?:{re.escape(stable_id)}\s*:\s*)+", "", value)
 
@@ -817,6 +817,55 @@ def _normalize_planning_response_payload(
     if not isinstance(proposal, dict):
         return normalized, tuple(changes)
     requirements = proposal.get("requirements")
+    if isinstance(requirements, list) and any(
+        isinstance(item, dict) for item in requirements
+    ):
+        if not all(isinstance(item, dict) for item in requirements):
+            raise _planning_context_invariant(
+                "planning_requirement_atom_shape",
+                (
+                    "proposal requirements must be one array of atomic objects; "
+                    "string and object entries cannot be mixed"
+                ),
+                paths=("/proposal/requirements",),
+            )
+        compiled_requirements: list[ProposedRequirement] = []
+        for requirement_index, item in enumerate(requirements):
+            try:
+                compiled_requirements.append(ProposedRequirement.model_validate(item))
+            except ValidationError as error:
+                raise _planning_context_invariant(
+                    "planning_requirement_atom_schema",
+                    (
+                        f"proposal requirement {requirement_index} must contain "
+                        "exactly one stable REQ_ id and one non-empty description: "
+                        f"{_safe_validation_detail(error)}"
+                    ),
+                    paths=(f"/proposal/requirements/{requirement_index}",),
+                ) from error
+        compiled_ids = tuple(item.id for item in compiled_requirements)
+        compiled_descriptions = tuple(
+            item.description for item in compiled_requirements
+        )
+        if len(compiled_ids) != len(set(compiled_ids)):
+            raise _planning_context_invariant(
+                "planning_requirement_atom_id_unique",
+                "proposal requirement objects must use unique stable REQ_ IDs",
+                paths=("/proposal/requirements",),
+            )
+        if len(compiled_descriptions) != len(set(compiled_descriptions)):
+            raise _planning_context_invariant(
+                "planning_requirement_atom_description_unique",
+                "proposal requirement objects must use unique descriptions",
+                paths=("/proposal/requirements",),
+            )
+        proposal["requirements"] = list(compiled_descriptions)
+        proposal["requirement_ids"] = list(compiled_ids)
+        requirements = proposal["requirements"]
+        changes.append(
+            "compiled atomic proposal.requirements into canonical descriptions "
+            "and stable IDs"
+        )
     requirement_ids = proposal.get("requirement_ids")
     if (
         isinstance(requirements, list)
@@ -1619,6 +1668,31 @@ _ABSOLUTE_GUARANTEE_PATTERN = re.compile(
     r"不得|禁止|永不|绝不|任何(?:层级|深度|情况下)?.{0,8}(?:不|无))",
     flags=re.IGNORECASE,
 )
+
+
+class ProposedRequirement(BaseModel):
+    """One model-owned requirement whose identity cannot drift from its meaning."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: str = Field(
+        pattern=r"^REQ_[A-Z0-9_]+$",
+        description=(
+            "Stable requirement identity. Use one unique uppercase REQ_ identifier."
+        ),
+    )
+    description: str = Field(
+        min_length=1,
+        max_length=500,
+        description=(
+            "Requirement meaning only. Do not repeat the stable ID as a prefix."
+        ),
+    )
+
+    @field_validator("description")
+    @classmethod
+    def require_clean_description(cls, value: str) -> str:
+        return _clean_text(value, label="requirement description")
 
 
 class ProposedCriterion(BaseModel):
@@ -2770,8 +2844,12 @@ def validate_planning_clarity(
     if len(body.requirement_ids) != len(body.requirements):
         raise _planning_context_invariant(
             "planning_requirement_id_cardinality",
-            "current proposals require one stable ID for every requirement",
-            paths=("/proposal/requirement_ids",),
+            (
+                "legacy proposal requirement fields do not contain one stable ID "
+                "for every description; replace the complete requirements relation "
+                "with atomic id/description objects"
+            ),
+            paths=("/proposal/requirements",),
         )
     if not body.non_goals:
         raise _planning_context_invariant(
@@ -3193,7 +3271,6 @@ def _planning_response_schema() -> dict[str, object]:
         "PlanningDecisionRecord": ("provenance",),
         "PlanningProposalBody": (
             "product_definition",
-            "requirement_ids",
             "non_goals",
             "assumption_decision_ids",
             "decisions",
@@ -3258,6 +3335,25 @@ def _planning_response_schema() -> dict[str, object]:
         while controller_field in decision_required:
             decision_required.remove(controller_field)
     proposal_properties = definitions["PlanningProposalBody"]["properties"]
+    requirement_definition = ProposedRequirement.model_json_schema()
+    nested_definitions = requirement_definition.pop("$defs", None)
+    if nested_definitions:
+        raise PlanningError("requirement response schema unexpectedly has definitions")
+    definitions["ProposedRequirement"] = requirement_definition
+    proposal_properties["requirements"] = {
+        "description": (
+            "Atomic requirement records. The controller compiles their IDs and "
+            "descriptions into the backward-compatible internal representation."
+        ),
+        "items": {"$ref": "#/$defs/ProposedRequirement"},
+        "minItems": 1,
+        "title": "Requirements",
+        "type": "array",
+    }
+    proposal_properties.pop("requirement_ids", None)
+    proposal_required = definitions["PlanningProposalBody"]["required"]
+    while "requirement_ids" in proposal_required:
+        proposal_required.remove("requirement_ids")
     product_definition_schema = proposal_properties["product_definition"]
     product_options = product_definition_schema.get("anyOf")
     if not isinstance(product_options, list):
@@ -3273,6 +3369,25 @@ def _planning_response_schema() -> dict[str, object]:
         )
     proposal_properties["product_definition"] = product_non_null[0]
     return schema
+
+
+def _planning_proposal_body_for_model(
+    body: PlanningProposalBody,
+) -> dict[str, object]:
+    """Project canonical persisted fields into the current model-facing contract."""
+
+    payload = body.model_dump(mode="json")
+    if len(body.requirements) == len(body.requirement_ids):
+        payload["requirements"] = [
+            {"id": requirement_id, "description": description}
+            for requirement_id, description in zip(
+                body.requirement_ids,
+                body.requirements,
+                strict=True,
+            )
+        ]
+        payload.pop("requirement_ids", None)
+    return payload
 
 
 def _planning_submission_transport_schema() -> dict[str, object]:
@@ -6013,7 +6128,7 @@ class AdaptivePlanningCoordinator:
             "current_proposal": (
                 None
                 if current_proposal is None
-                else current_proposal.body.model_dump(mode="json")
+                else _planning_proposal_body_for_model(current_proposal.body)
             ),
             "change_request": change_request,
             "controller_policy": {
