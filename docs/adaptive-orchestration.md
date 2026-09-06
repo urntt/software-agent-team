@@ -287,6 +287,15 @@ eligible only for digest-bound correction of the exact typed fields identified
 by validation; the model never regenerates the complete retained object or
 selects the fields it may replace.
 
+Reviewer evidence selection is corrected at the same minimum-authority
+boundary. Evidence validation collects all independently invalid selectors in
+one pass and assigns each a stable grounding invariant, its criterion subject,
+and the exact `observable` leaf. A bounded correction may replace those leaf
+strings together while every other assessment field and the containing array
+remain frozen. The Controller cannot guess a replacement from the Reviewer's
+summary or source assertions; it only binds a fragment after the submitted
+selector matches protocol-eligible evidence.
+
 The current response schema exposes only one `requirements` array of atomic
 `{id, description}` objects. It does not expose a sibling `requirement_ids`
 array. This makes requirement cardinality valid by construction at the model

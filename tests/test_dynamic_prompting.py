@@ -613,7 +613,10 @@ def test_dynamic_review_response_rejects_an_unmatched_tool_claim() -> None:
         )
     )
 
-    with pytest.raises(AgentArtifactResponseError, match="does not match any"):
+    with pytest.raises(
+        AgentArtifactResponseError,
+        match="does not match any",
+    ) as captured:
         parse_dynamic_agent_response(
             result,
             request,
@@ -621,6 +624,17 @@ def test_dynamic_review_response_rejects_an_unmatched_tool_claim() -> None:
             team_plan=team_plan(),
             reviewed_criterion_ids=("AC_LINKS",),
         )
+
+    diagnostic = captured.value.diagnostic
+    assert diagnostic is not None
+    assert diagnostic.failure_class == "evidence_grounding"
+    assert diagnostic.correction_paths == (
+        "/criterion_assessments/0/tool_evidence/0/observable",
+    )
+    assert diagnostic.issues[0].invariant_id == ("review_evidence_fragment_unmatched")
+    assert [
+        subject.model_dump(mode="json") for subject in diagnostic.issues[0].subjects
+    ] == [{"kind": "criterion", "identifier": "AC_LINKS"}]
 
 
 def test_controller_matches_only_json_outside_string_whitespace_variants() -> None:
@@ -1288,6 +1302,60 @@ def boundary_checks(
         )
         for index, boundary in enumerate(boundaries, start=1)
     )
+
+
+def test_review_reports_every_invalid_evidence_selector_as_an_exact_leaf() -> None:
+    brief = boundary_task_brief()
+    plan = team_plan(brief)
+    assessment = ReviewCriterionAssessmentResponse(
+        criterion_id="AC_LINKS",
+        status="satisfied",
+        adversarial_check="Claimed source assertions instead of emitted results.",
+        evidence="Every selector is intentionally absent from captured output.",
+        tool_evidence=(review_tool_claim("assert general_condition"),),
+        boundary_checks=tuple(
+            check.model_copy(
+                update={
+                    "tool_evidence": (
+                        review_tool_claim(f"assert boundary_condition_{index}"),
+                    )
+                }
+            )
+            for index, check in enumerate(boundary_checks())
+        ),
+    )
+    request, result = _review_result(
+        ReviewReportResponse(
+            verdict="accept",
+            criterion_assessments=(assessment,),
+            summary="Claimed five selectors that were never emitted.",
+        )
+    )
+
+    with pytest.raises(AgentArtifactResponseError) as captured:
+        parse_dynamic_agent_response(
+            result,
+            request,
+            task_brief=brief,
+            team_plan=plan,
+            reviewed_criterion_ids=("AC_LINKS",),
+        )
+
+    diagnostic = captured.value.diagnostic
+    assert diagnostic is not None
+    assert diagnostic.correction_paths == (
+        "/criterion_assessments/0/boundary_checks/0/tool_evidence/0/observable",
+        "/criterion_assessments/0/boundary_checks/1/tool_evidence/0/observable",
+        "/criterion_assessments/0/boundary_checks/2/tool_evidence/0/observable",
+        "/criterion_assessments/0/boundary_checks/3/tool_evidence/0/observable",
+        "/criterion_assessments/0/tool_evidence/0/observable",
+    )
+    assert {issue.invariant_id for issue in diagnostic.issues} == {
+        "review_evidence_fragment_unmatched"
+    }
+    assert {
+        subject.identifier for issue in diagnostic.issues for subject in issue.subjects
+    } == {"AC_LINKS"}
 
 
 def test_review_boundary_checks_allow_controller_command_only_grounding() -> None:

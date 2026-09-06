@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** Phase 3E implemented; invocation lifecycle, checkpoint progress, ProductDefinition, and typed Adaptive Planning submission are offline-verified; final fresh-run and release validation remain in progress
+**Current milestone:** Phase 3E implemented; invocation lifecycle, checkpoint progress, ProductDefinition, typed submission, and leaf-scoped Review evidence correction are offline-verified; final fresh-run and release validation remain in progress
 
 **Last updated:** September 6, 2026
 
@@ -103,8 +103,14 @@ Reviewer response is also compiled against the exact TaskBrief-owned boundary
 scope before nested boundary content is validated. Extra checks outside that
 scope are removed with an explicit normalization instead of creating new
 acceptance obligations or model correction calls; checks inside the approved
-scope retain strict completeness, uniqueness, and evidence-grounding rules. A
-remaining targetable model-owned failure creates a diagnostic-v2 invariant ID,
+scope retain strict completeness, uniqueness, and evidence-grounding rules.
+Review grounding failures now identify every independently invalid selector in
+one pass with a stable invariant, criterion subject, and exact `observable`
+leaf. Targeted correction can therefore replace those selector strings together
+while preserving every assessment, finding, verdict, and summary field that
+already passed validation; it never asks the model to regenerate the whole
+assessment array. A remaining targetable model-owned failure creates a
+diagnostic-v2 invariant ID,
 structured affected-entity subjects, precise model-owned JSON-pointer authority,
 and SHA-bound correction-request evidence. The Controller binds those paths to
 ordered slots and the model submits only corresponding `replacement_values`, so

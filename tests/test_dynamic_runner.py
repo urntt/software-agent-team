@@ -654,9 +654,21 @@ class DynamicExecutor:
                     )
                     submission_payload = json.loads(response_text)
             elif self.zero_review_tool_calls_once and count == 2:
+                assessments = valid_payload["criterion_assessments"]
+                assert isinstance(assessments, list)
+                assessment = assessments[0]
+                assert isinstance(assessment, dict)
+                claims = assessment["tool_evidence"]
+                assert isinstance(claims, list)
+                claim = claims[0]
+                assert isinstance(claim, dict)
                 response_text = semantic_correction_response(
                     valid_payload,
-                    {"/criterion_assessments": valid_payload["criterion_assessments"]},
+                    {
+                        "/criterion_assessments/0/tool_evidence/0/observable": (
+                            claim["observable"]
+                        )
+                    },
                 )
                 submission_payload = json.loads(response_text)
         else:  # pragma: no cover - the fixture owns the complete team
@@ -1244,6 +1256,10 @@ def test_dynamic_reviewer_repairs_a_zero_call_fabricated_tool_citation(
     assert [request.timeout_seconds for request in reviewer_requests] == [47, 47]
     assert "TARGETED_SEMANTIC_CORRECTION_VALUES_V1" in reviewer_requests[1].prompt
     normalized_prompt = " ".join(reviewer_requests[1].prompt.split())
+    assert "/criterion_assessments/0/tool_evidence/0/observable" in (
+        reviewer_requests[1].prompt
+    )
+    assert '"type": "string"' in reviewer_requests[1].prompt
     assert "provide only a bounded result fragment" in normalized_prompt
     assert "deterministic command stdout/stderr from this immutable" in (
         normalized_prompt
@@ -1265,6 +1281,15 @@ def test_dynamic_reviewer_repairs_a_zero_call_fabricated_tool_citation(
     assert "does not match any eligible review-chain tool result" in (
         reviewer_records[0].error or ""
     )
+    assert reviewer_records[0].response_validation is not None
+    assert reviewer_records[0].response_validation.correction_paths == (
+        "/criterion_assessments/0/tool_evidence/0/observable",
+    )
+    issue = reviewer_records[0].response_validation.issues[0]
+    assert issue.invariant_id == "review_evidence_fragment_unmatched"
+    assert [(subject.kind.value, subject.identifier) for subject in issue.subjects] == [
+        ("criterion", "AC_REVIEW")
+    ]
     assert isinstance(reviewer_records[1], AgentExecutionRecord)
     assert reviewer_records[1].semantic_correction_request is not None
     assert reviewer_records[1].semantic_correction_outcome == "accepted"

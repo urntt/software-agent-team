@@ -359,6 +359,17 @@ protocol ceiling rejects an over-wide diagnostic as one invalid
 submission instead of partially patching it; it is a schema-safety bound, not a
 task, Agent, call, token, or cost budget.
 
+Review evidence grounding follows the same rule at selector granularity. The
+validator evaluates every independently locatable claim in the submitted report
+before authorizing correction. An unmatched, failed-result, or ineligible
+positive selector records its criterion as the stable subject and its exact
+`criterion_assessments/.../tool_evidence/.../observable` leaf as model authority.
+All such leaves within the protocol ceiling are offered together in one bounded
+correction; unaffected assessments, boundary descriptions, findings, verdict,
+and summary remain immutable. SAT does not ask the model to regenerate the
+assessment array and does not infer a replacement fragment from explanatory
+prose.
+
 If a model returns controller-owned fields, they are ignored and recorded in
 the execution record. Missing or incorrect echoes such as `kind`, commit
 hashes, test status, command lists, criterion identifiers, or review scope do

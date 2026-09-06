@@ -38,13 +38,19 @@ from software_agent_team.execution import (
 )
 from software_agent_team.integrity import canonical_model_sha256
 from software_agent_team.response_corrections import (
+    MAX_CORRECTION_FIELDS,
     ResponseFailureClass,
     ResponseIssueAuthority,
+    ResponseIssueSubject,
+    ResponseIssueSubjectKind,
     ResponseValidationDiagnostic,
+    ResponseValidationIssue,
     deterministically_remove_forbidden_fields,
+    diagnostic_from_invariant,
     diagnostic_from_message,
     diagnostic_from_transport,
     diagnostic_from_validation_error,
+    semantic_payload_sha256,
 )
 from software_agent_team.submissions import AgentSubmissionPurpose
 from software_agent_team.teams import TeamPlan, capability_for_legacy_role
@@ -67,8 +73,38 @@ class AgentArtifactResponseError(ValueError):
         self.response_normalizations = response_normalizations
 
 
-class _UnsafeSatisfiedEvidenceError(ValueError):
+class _ReviewEvidenceGroundingError(ValueError):
+    """Locate one model-owned Review selector rejected by evidence binding."""
+
+    def __init__(
+        self,
+        detail: str,
+        *,
+        path: str,
+        invariant_id: str,
+        criterion_id: str,
+    ) -> None:
+        super().__init__(detail)
+        self.path = path
+        self.invariant_id = invariant_id
+        self.criterion_id = criterion_id
+
+
+class _UnsafeSatisfiedEvidenceError(_ReviewEvidenceGroundingError):
     """Identify a positive Review claim that matched only unsafe evidence."""
+
+
+class _ReviewEvidenceGroundingErrors(ValueError):
+    """Preserve every independently invalid Review evidence selector."""
+
+    def __init__(self, errors: tuple[_ReviewEvidenceGroundingError, ...]) -> None:
+        if not errors:
+            raise ValueError("Review evidence error collection must not be empty")
+        detail = str(errors[0])
+        if len(errors) > 1:
+            detail += f"; {len(errors) - 1} additional evidence selector(s) failed"
+        super().__init__(detail)
+        self.errors = errors
 
 
 @dataclass(frozen=True)
@@ -330,94 +366,130 @@ def _ground_review_tool_evidence(
     if attempts[-1].tool_calls != telemetry.tool_calls:
         raise ValueError("review evidence chain does not end at the current attempt")
 
+    def evaluate_claim(
+        claim: ReviewToolEvidenceClaim,
+        *,
+        label: str,
+        status: ReviewCriterionStatus,
+        claim_path: str,
+        criterion_id: str,
+    ) -> tuple[
+        tuple[tuple[int, AgentToolCallEvidence], ...],
+        tuple[CommandEvidence, ...],
+    ]:
+        """Resolve one selector or raise its exact typed grounding failure."""
+
+        tool_matches = tuple(
+            (attempt.execution_attempt, call)
+            for attempt in attempts
+            for call in attempt.tool_calls
+            if _observable_matches_output(
+                claim.observable,
+                (
+                    _positive_probe_match_surface(call)
+                    if status is ReviewCriterionStatus.SATISFIED
+                    else call.output_excerpt
+                ),
+            )
+        )
+        ineligible_probe_matches = tuple(
+            (attempt.execution_attempt, call)
+            for attempt in attempts
+            for call in attempt.tool_calls
+            if status is ReviewCriterionStatus.SATISFIED
+            and _is_direct_probe(call)
+            and _observable_matches_output(
+                claim.observable,
+                call.output_excerpt,
+            )
+            and not _observable_matches_output(
+                claim.observable,
+                _positive_probe_match_surface(call),
+            )
+        )
+        command_matches = tuple(
+            command
+            for command in command_evidence
+            if _observable_matches_output(claim.observable, command.stdout_tail)
+            or _observable_matches_output(claim.observable, command.stderr_tail)
+        )
+        if not tool_matches and not command_matches:
+            if ineligible_probe_matches:
+                raise _UnsafeSatisfiedEvidenceError(
+                    f"{label} satisfied evidence fragment is absent from "
+                    "protocol-eligible child stdout in a complete direct probe; "
+                    "rerun it and emit the fragment after the relevant assertion "
+                    "passes",
+                    path=claim_path,
+                    invariant_id="review_evidence_positive_surface_unavailable",
+                    criterion_id=criterion_id,
+                )
+            raise _ReviewEvidenceGroundingError(
+                f"{label} evidence fragment does not match any eligible "
+                "review-chain tool result or deterministic command output",
+                path=claim_path,
+                invariant_id="review_evidence_fragment_unmatched",
+                criterion_id=criterion_id,
+            )
+        if status is ReviewCriterionStatus.SATISFIED:
+            successful_probe_matches = tuple(
+                match
+                for match in tool_matches
+                if _is_direct_probe(match[1])
+                and not _matched_tool_result_failed(match[1])
+            )
+            if successful_probe_matches:
+                tool_matches = tuple(
+                    match
+                    for match in tool_matches
+                    if not (
+                        _is_direct_probe(match[1])
+                        and _matched_tool_result_failed(match[1])
+                    )
+                )
+            if any(_matched_tool_result_failed(call) for _, call in tool_matches):
+                raise _UnsafeSatisfiedEvidenceError(
+                    f"{label} satisfied evidence selects an overall failed "
+                    "tool result; rerun the direct probe successfully and cite "
+                    "a fragment emitted by child stdout",
+                    path=claim_path,
+                    invariant_id="review_evidence_failed_tool",
+                    criterion_id=criterion_id,
+                )
+            if failed_commands := tuple(
+                command.id
+                for command in command_matches
+                if _matched_command_failed(command)
+            ):
+                raise _UnsafeSatisfiedEvidenceError(
+                    f"{label} satisfied evidence selects a failed or timed-out "
+                    "deterministic command: " + ", ".join(failed_commands),
+                    path=claim_path,
+                    invariant_id="review_evidence_failed_command",
+                    criterion_id=criterion_id,
+                )
+        return tool_matches, command_matches
+
     def resolve_claims(
         claims: tuple[ReviewToolEvidenceClaim, ...],
         *,
         label: str,
         status: ReviewCriterionStatus,
+        path_prefix: str,
+        criterion_id: str,
     ) -> tuple[tuple[ReviewToolEvidenceReference, ...], tuple[str, ...]]:
         """Bind one semantic claim collection to protocol-eligible evidence."""
 
         observable_by_tool_call: dict[tuple[int, str], str] = {}
         matching_command_ids: set[str] = set()
-        for claim in claims:
-            tool_matches = tuple(
-                (attempt.execution_attempt, call)
-                for attempt in attempts
-                for call in attempt.tool_calls
-                if _observable_matches_output(
-                    claim.observable,
-                    (
-                        _positive_probe_match_surface(call)
-                        if status is ReviewCriterionStatus.SATISFIED
-                        else call.output_excerpt
-                    ),
-                )
+        for claim_index, claim in enumerate(claims):
+            tool_matches, command_matches = evaluate_claim(
+                claim,
+                label=label,
+                status=status,
+                claim_path=f"{path_prefix}/{claim_index}/observable",
+                criterion_id=criterion_id,
             )
-            ineligible_probe_matches = tuple(
-                (attempt.execution_attempt, call)
-                for attempt in attempts
-                for call in attempt.tool_calls
-                if status is ReviewCriterionStatus.SATISFIED
-                and _is_direct_probe(call)
-                and _observable_matches_output(
-                    claim.observable,
-                    call.output_excerpt,
-                )
-                and not _observable_matches_output(
-                    claim.observable,
-                    _positive_probe_match_surface(call),
-                )
-            )
-            command_matches = tuple(
-                command
-                for command in command_evidence
-                if _observable_matches_output(claim.observable, command.stdout_tail)
-                or _observable_matches_output(claim.observable, command.stderr_tail)
-            )
-            if not tool_matches and not command_matches:
-                if ineligible_probe_matches:
-                    raise _UnsafeSatisfiedEvidenceError(
-                        f"{label} satisfied evidence fragment is absent from "
-                        "protocol-eligible child stdout in a complete direct probe; "
-                        "rerun it and emit the fragment after the relevant assertion "
-                        "passes"
-                    )
-                raise ValueError(
-                    f"{label} evidence fragment does not match any eligible "
-                    "review-chain tool result or deterministic command output"
-                )
-            if status is ReviewCriterionStatus.SATISFIED:
-                successful_probe_matches = tuple(
-                    match
-                    for match in tool_matches
-                    if _is_direct_probe(match[1])
-                    and not _matched_tool_result_failed(match[1])
-                )
-                if successful_probe_matches:
-                    tool_matches = tuple(
-                        match
-                        for match in tool_matches
-                        if not (
-                            _is_direct_probe(match[1])
-                            and _matched_tool_result_failed(match[1])
-                        )
-                    )
-                if any(_matched_tool_result_failed(call) for _, call in tool_matches):
-                    raise _UnsafeSatisfiedEvidenceError(
-                        f"{label} satisfied evidence selects an overall failed "
-                        "tool result; rerun the direct probe successfully and cite "
-                        "a fragment emitted by child stdout"
-                    )
-                if failed_commands := tuple(
-                    command.id
-                    for command in command_matches
-                    if _matched_command_failed(command)
-                ):
-                    raise _UnsafeSatisfiedEvidenceError(
-                        f"{label} satisfied evidence selects a failed or timed-out "
-                        "deterministic command: " + ", ".join(failed_commands)
-                    )
             for execution_attempt, match in tool_matches:
                 observable_by_tool_call.setdefault(
                     (execution_attempt, match.id),
@@ -446,6 +518,7 @@ def _ground_review_tool_evidence(
     def ground_assessment(
         assessment: ReviewCriterionAssessmentResponse,
         *,
+        assessment_index: int,
         status: ReviewCriterionStatus,
         evidence: str | None = None,
     ) -> ReviewCriterionAssessment:
@@ -455,6 +528,8 @@ def _ground_review_tool_evidence(
             assessment.tool_evidence,
             label=f"criterion {assessment.criterion_id}",
             status=status,
+            path_prefix=(f"/criterion_assessments/{assessment_index}/tool_evidence"),
+            criterion_id=assessment.criterion_id,
         )
         boundary_checks = tuple(
             ReviewBoundaryCheck(
@@ -463,7 +538,7 @@ def _ground_review_tool_evidence(
                 command_evidence_ids=boundary_command_ids,
                 tool_evidence=boundary_references,
             )
-            for boundary in assessment.boundary_checks
+            for boundary_index, boundary in enumerate(assessment.boundary_checks)
             for boundary_references, boundary_command_ids in (
                 resolve_claims(
                     boundary.tool_evidence,
@@ -472,6 +547,11 @@ def _ground_review_tool_evidence(
                         f"{boundary.boundary.value}"
                     ),
                     status=status,
+                    path_prefix=(
+                        f"/criterion_assessments/{assessment_index}/"
+                        f"boundary_checks/{boundary_index}/tool_evidence"
+                    ),
+                    criterion_id=assessment.criterion_id,
                 ),
             )
         )
@@ -493,12 +573,57 @@ def _ground_review_tool_evidence(
         )
         and any(finding.blocking for finding in body.findings)
     )
+    grounding_errors: list[_ReviewEvidenceGroundingError] = []
+    for assessment_index, assessment in enumerate(body.criterion_assessments):
+        claim_groups = [
+            (
+                assessment.tool_evidence,
+                f"criterion {assessment.criterion_id}",
+                f"/criterion_assessments/{assessment_index}/tool_evidence",
+            )
+        ]
+        claim_groups.extend(
+            (
+                boundary.tool_evidence,
+                (
+                    f"criterion {assessment.criterion_id} boundary "
+                    f"{boundary.boundary.value}"
+                ),
+                (
+                    f"/criterion_assessments/{assessment_index}/"
+                    f"boundary_checks/{boundary_index}/tool_evidence"
+                ),
+            )
+            for boundary_index, boundary in enumerate(assessment.boundary_checks)
+        )
+        for claims, label, path_prefix in claim_groups:
+            for claim_index, claim in enumerate(claims):
+                try:
+                    evaluate_claim(
+                        claim,
+                        label=label,
+                        status=assessment.status,
+                        claim_path=f"{path_prefix}/{claim_index}/observable",
+                        criterion_id=assessment.criterion_id,
+                    )
+                except _UnsafeSatisfiedEvidenceError as error:
+                    if not recoverable_revision:
+                        grounding_errors.append(error)
+                except _ReviewEvidenceGroundingError as error:
+                    grounding_errors.append(error)
+    if grounding_errors:
+        raise _ReviewEvidenceGroundingErrors(tuple(grounding_errors))
+
     grounded_assessments: list[ReviewCriterionAssessment] = []
     downgraded: dict[str, str] = {}
-    for assessment in body.criterion_assessments:
+    for assessment_index, assessment in enumerate(body.criterion_assessments):
         try:
             grounded_assessments.append(
-                ground_assessment(assessment, status=assessment.status)
+                ground_assessment(
+                    assessment,
+                    assessment_index=assessment_index,
+                    status=assessment.status,
+                )
             )
         except _UnsafeSatisfiedEvidenceError as error:
             if (
@@ -511,6 +636,7 @@ def _ground_review_tool_evidence(
             grounded_assessments.append(
                 ground_assessment(
                     assessment,
+                    assessment_index=assessment_index,
                     status=ReviewCriterionStatus.BLOCKED,
                     evidence=(
                         "The controller downgraded this positive assessment because "
@@ -1231,6 +1357,48 @@ def _context_failure_diagnostic(
     """Locate post-schema semantic failures without authorizing whole replacement."""
 
     detail = _safe_validation_detail(error)
+    grounding_errors: tuple[_ReviewEvidenceGroundingError, ...] = ()
+    if isinstance(error, _ReviewEvidenceGroundingErrors):
+        grounding_errors = error.errors
+    elif isinstance(error, _ReviewEvidenceGroundingError):
+        grounding_errors = (error,)
+    if len(grounding_errors) > MAX_CORRECTION_FIELDS:
+        return diagnostic_from_invariant(
+            parsed.semantic_payload,
+            failure_class=ResponseFailureClass.EVIDENCE_GROUNDING,
+            authority=ResponseIssueAuthority.CONTROLLER,
+            code="review_evidence_issue_overflow",
+            invariant_id="review_evidence_issue_overflow",
+            subjects=(),
+            message=(
+                "Review response has too many independent evidence selectors for "
+                "one safe targeted correction"
+            ),
+            paths=("/",),
+        )
+    if grounding_errors:
+        issues = tuple(
+            ResponseValidationIssue(
+                path=item.path,
+                code="review_evidence_grounding",
+                invariant_id=item.invariant_id,
+                subjects=(
+                    ResponseIssueSubject(
+                        kind=ResponseIssueSubjectKind.CRITERION,
+                        identifier=item.criterion_id,
+                    ),
+                ),
+                message=str(item),
+                authority=ResponseIssueAuthority.MODEL,
+            )
+            for item in grounding_errors
+        )
+        return ResponseValidationDiagnostic(
+            failure_class=ResponseFailureClass.EVIDENCE_GROUNDING,
+            response_sha256=semantic_payload_sha256(parsed.semantic_payload),
+            issues=issues,
+            correction_paths=tuple(sorted({item.path for item in grounding_errors})),
+        )
     body = parsed.body
     failure_class = ResponseFailureClass.SEMANTIC_CONTEXT
     if isinstance(body, ImplementationPlanResponse):
