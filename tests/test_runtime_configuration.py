@@ -460,6 +460,48 @@ def test_legacy_text_runtime_does_not_force_the_typed_submission_tool(
     assert "plugins" not in payload
 
 
+def test_dynamic_deepseek_runtime_requires_a_tool_without_forcing_submission(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    destination = tmp_path / "run" / "openclaw.runtime.json"
+    original = adaptive_team_plan()
+    plan = TeamPlan.model_validate(
+        {
+            **original.model_dump(mode="json"),
+            "model_routes": {
+                **original.model_routes.model_dump(mode="json"),
+                "routes": [
+                    {"id": "default", "model": DEEPSEEK_VISION_MODEL},
+                ],
+            },
+        }
+    )
+
+    materialize_run_configuration(
+        OPENCLAW_TEMPLATE,
+        destination,
+        manifest=load_team_manifest(TEAM_CONFIG),
+        team_plan=plan,
+        workspace=workspace,
+        sandbox_image="sat-agent:phase1",
+        sandbox_user="1000:1000",
+    )
+
+    payload = json.loads(destination.read_text(encoding="utf-8"))
+    settings = payload["agents"]["defaults"]["models"][DEEPSEEK_VISION_MODEL]
+    assert settings["params"]["extra_body"] == {
+        "thinking": {"type": "disabled"},
+        "tool_choice": "required",
+    }
+    agents = {item["id"]: item for item in payload["agents"]["list"]}
+    assert "exec" not in agents["cli_developer"]["tools"]["deny"]
+    assert payload["tools"]["sandbox"]["tools"]["alsoAllow"] == ["sat_submit_artifact"]
+
+
 def test_dynamic_config_registers_compatibility_for_an_authorized_fallback(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -508,12 +550,12 @@ def test_dynamic_config_registers_compatibility_for_an_authorized_fallback(
     payload = json.loads(destination.read_text(encoding="utf-8"))
     registered = payload["models"]["providers"]["deepseek"]["models"]
     assert [model["id"] for model in registered] == ["deepseek-v4-flash-vision-exp"]
-    assert payload["agents"]["defaults"]["models"][DEEPSEEK_VISION_MODEL]["params"][
-        "extra_body"
-    ]["tool_choice"] == {
-        "type": "function",
-        "function": {"name": "sat_submit_artifact"},
-    }
+    assert (
+        payload["agents"]["defaults"]["models"][DEEPSEEK_VISION_MODEL]["params"][
+            "extra_body"
+        ]["tool_choice"]
+        == "required"
+    )
     assert all(
         agent["model"] == {"primary": "provider/model", "fallbacks": []}
         for agent in payload["agents"]["list"]

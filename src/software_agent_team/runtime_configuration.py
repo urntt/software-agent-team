@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from contextlib import suppress
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -44,6 +44,7 @@ _DEEPSEEK_ARTIFACT_TOOL_CHOICE = {
     "type": "function",
     "function": {"name": ARTIFACT_SUBMISSION_TOOL},
 }
+_ArtifactSubmissionMode = Literal["single_tool", "tool_loop"]
 _MODEL_COMPATIBILITY: dict[str, dict[str, Any]] = {
     _DEEPSEEK_VISION_MODEL: {
         "agent": {
@@ -53,9 +54,8 @@ _MODEL_COMPATIBILITY: dict[str, dict[str, Any]] = {
             }
         },
         "artifact_submission": {
-            "extra_body": {
-                "tool_choice": _DEEPSEEK_ARTIFACT_TOOL_CHOICE,
-            }
+            "single_tool_choice": _DEEPSEEK_ARTIFACT_TOOL_CHOICE,
+            "tool_loop_choice": "required",
         },
         "provider_id": "deepseek",
         "credential_env": "DEEPSEEK_API_KEY",
@@ -281,7 +281,7 @@ def _apply_model_compatibility(
     payload: dict[str, Any],
     model: str,
     *,
-    require_artifact_submission: bool = False,
+    artifact_submission_mode: _ArtifactSubmissionMode | None = None,
 ) -> None:
     compatibility = _MODEL_COMPATIBILITY.get(model)
     if compatibility is None:
@@ -298,32 +298,33 @@ def _apply_model_compatibility(
     )
     if not isinstance(model_settings, dict):
         raise RuntimeConfigurationError("OpenClaw Agent model settings are invalid")
-    if require_artifact_submission:
+    if artifact_submission_mode is not None:
         submission_settings = compatibility.get("artifact_submission")
-        if isinstance(submission_settings, dict):
-            params = model_settings.setdefault("params", {})
-            if not isinstance(params, dict):
-                raise RuntimeConfigurationError(
-                    "OpenClaw Agent model params are invalid"
-                )
-            configured_extra_body = params.setdefault("extra_body", {})
-            if not isinstance(configured_extra_body, dict):
-                raise RuntimeConfigurationError(
-                    "OpenClaw Agent model extra_body is invalid"
-                )
-            required_extra_body = submission_settings.get("extra_body")
-            if not isinstance(required_extra_body, dict):
-                raise RuntimeConfigurationError(
-                    "artifact-submission model compatibility is invalid"
-                )
-            for key, value in required_extra_body.items():
-                existing = configured_extra_body.get(key)
-                if existing is not None and existing != value:
-                    raise RuntimeConfigurationError(
-                        "OpenClaw Agent model params conflict with mandatory "
-                        f"artifact submission: {model} {key}"
-                    )
-                configured_extra_body[key] = json.loads(json.dumps(value))
+        choice_key = f"{artifact_submission_mode}_choice"
+        if not isinstance(submission_settings, dict) or choice_key not in (
+            submission_settings
+        ):
+            raise RuntimeConfigurationError(
+                "artifact-submission model compatibility is invalid"
+            )
+        params = model_settings.setdefault("params", {})
+        if not isinstance(params, dict):
+            raise RuntimeConfigurationError("OpenClaw Agent model params are invalid")
+        configured_extra_body = params.setdefault("extra_body", {})
+        if not isinstance(configured_extra_body, dict):
+            raise RuntimeConfigurationError(
+                "OpenClaw Agent model extra_body is invalid"
+            )
+        required_choice = submission_settings[choice_key]
+        if (
+            "tool_choice" in configured_extra_body
+            and configured_extra_body["tool_choice"] != required_choice
+        ):
+            raise RuntimeConfigurationError(
+                "OpenClaw Agent model params conflict with mandatory "
+                f"artifact submission: {model} tool_choice"
+            )
+        configured_extra_body["tool_choice"] = json.loads(json.dumps(required_choice))
 
     models = payload.setdefault("models", {})
     if not isinstance(models, dict):
@@ -1013,20 +1014,24 @@ def materialize_run_configuration(
     defaults = agents["defaults"]
     defaults["repoRoot"] = str(resolved_workspace)
     defaults["skipBootstrap"] = True
-    uses_typed_submission = bootstrap_capability is not None or team_plan is not None
+    artifact_submission_mode: _ArtifactSubmissionMode | None = None
+    if bootstrap_capability is not None:
+        artifact_submission_mode = "single_tool"
+    elif team_plan is not None:
+        artifact_submission_mode = "tool_loop"
     if model is not None:
         defaults["model"] = {"primary": model, "fallbacks": []}
         _apply_model_compatibility(
             payload,
             model,
-            require_artifact_submission=uses_typed_submission,
+            artifact_submission_mode=artifact_submission_mode,
         )
     if team_plan is not None:
         for route in team_plan.model_routes.routes:
             _apply_model_compatibility(
                 payload,
                 route.model,
-                require_artifact_submission=True,
+                artifact_submission_mode="tool_loop",
             )
     sandbox = defaults["sandbox"]
     sandbox["scope"] = "session"

@@ -251,11 +251,13 @@ Adaptive Planning and dynamic execution Agents call the invocation-bound
 transport, not part of the semantic response. The plugin accepts exactly that one
 object-valued argument and writes only its inner object to the private submission
 file. A prompt instruction alone does not make that call mandatory. For a reviewed
-model compatibility route that supports named function selection, SAT adds the exact
-`sat_submit_artifact` choice only to submission-bound runtime requests. It leaves
-model inspection, provider smoke, and legacy text-compatibility requests unchanged,
-because those requests do not expose an invocation binding. SAT gives dynamic Agents
-the exact AgentSpec-derived semantic JSON Schema
+model compatibility route, bootstrap Planning forces the exact
+`sat_submit_artifact` choice because terminal submission is its only semantic action.
+A dynamic Agent instead receives `tool_choice=required`: each model step must call an
+authorized tool, but the Agent remains free to use work or evidence tools before its
+terminal submission. It leaves model inspection, provider smoke, and legacy
+text-compatibility requests unchanged, because those requests do not expose an
+invocation binding. SAT gives dynamic Agents the exact AgentSpec-derived semantic JSON Schema
 inside the envelope. Planning instead uses a permissive object-only inner transport
 schema so every syntactically structured proposal or correction reaches the
 Controller's exact semantic validator; the private envelope still binds the exact

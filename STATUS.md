@@ -143,13 +143,17 @@ capture schema inside that argument and separately retains the exact semantic-sc
 digest. Consequently, every syntactically structured Planning payload reaches strict
 semantic validation and deterministic normalization instead of being discarded by a
 redundant pre-Controller schema gate or mistaken for a semantic `artifact` field.
-The reviewed DeepSeek compatibility route now forces the exact named submission
-function for bootstrap Planning and dynamic-team runtime requests, rather than
-relying on a prompt while the provider retains its default `auto` choice. Model
-inspection, provider smoke, and legacy text-compatibility configurations retain
-their original request behavior. A pinned-OpenClaw loopback observes the exact
-outbound choice, one accepted v2 envelope, one provider request, terminal plugin
-behavior, and exact sandbox cleanup. The model-facing request projection excludes
+The reviewed DeepSeek compatibility route now distinguishes two provider request
+contracts. Bootstrap Planning, whose only semantic action is terminal submission,
+forces the exact named submission function rather than relying on a prompt while
+the provider retains its default `auto` choice. Dynamic-team runtimes use
+`tool_choice=required`: every model step must select an authorized tool, while a
+writer or quality Agent can still use its capability tools before the terminal
+submission. Model inspection, provider smoke, and legacy text-compatibility
+configurations retain their original request behavior. Pinned-OpenClaw loopbacks
+observe both outbound choices, the work-tool-to-submission order, accepted v2
+envelopes, terminal one-request behavior, and exact sandbox cleanup. The
+model-facing request projection excludes
 Controller-only run,
 destination, route, authorization, and timestamp metadata, preventing execution-layer
 redaction from breaking exact prompt/session attribution. Dynamic Agent submission

@@ -235,10 +235,12 @@ with only owner-private paths and digests. The tool exposes one exact outer argu
 semantic schema inside that argument. Adaptive Planning exposes an object-only inner
 transport schema while retaining the exact Planning semantic-schema digest in the
 private binding. On reviewed compatibility routes whose API otherwise permits a
-plain assistant response, submission-bound runtime configuration selects this exact
-named function at the provider boundary. The override is absent from non-generation
-model inspection, provider smoke, and legacy text-compatibility configurations, where
-no invocation-bound submission tool exists. This
+plain assistant response, bootstrap Planning selects this exact named function at
+the provider boundary. Dynamic Agents instead use a required-any-authorized-tool
+choice, preserving their work/evidence tool loop before the terminal submission.
+The override is absent from non-generation model inspection, provider smoke, and
+legacy text-compatibility configurations, where no invocation-bound submission tool
+exists. This
 separation ensures that valid JSON arguments reach Controller validation even when a
 proposal contains a harmless extra field or a targetable semantic defect; OpenClaw
 cannot discard the only payload before SAT records normalization or correction
@@ -906,8 +908,9 @@ when investigating it rather than editing artifacts in place.
   select a fallback. When a trusted caller credential variable is available,
   the generated config contains only its variable reference; SAT's isolated
   auth profiles remain the other credential source. A reviewed named-function
-  override may be activated only for a runtime that exposes the bound artifact
-  tool; it must not leak into model checks, provider smoke, or legacy text calls.
+  override may be activated only when bound artifact submission is the invocation's
+  sole semantic action. Dynamic multi-tool runtimes use required-any-tool semantics;
+  neither override may leak into model checks, provider smoke, or legacy text calls.
 - Agent containers receive an explicit non-secret environment instead of the
   host process environment or provider credentials.
 - SAT's isolated OpenClaw host process owns model-provider access. Credentials

@@ -190,11 +190,14 @@ materialization plus exact-availability tests. Record only verified routing,
 modality, context, output, and compatibility metadata; do not add a credential,
 mutable fallback, or guessed price.
 
-A compatibility entry may also carry a provider-native named-function choice for
-the invocation-bound artifact tool. Apply it only when the materialized runtime
-actually exposes the typed-submission plugin: bootstrap Planning and approved
-dynamic teams qualify; model inspection, provider smoke, and legacy text response
-paths do not. Test the outbound request through the pinned OpenClaw, the canonical
+A compatibility entry may also carry provider-native choices for the
+invocation-bound artifact protocol. Apply a named terminal-function choice only
+when submission is the invocation's sole semantic action. A dynamic team with work
+or evidence tools must use a compatible required-any-tool choice instead, so the
+provider cannot return plain text but also cannot force the terminal tool before
+work. Model inspection, provider smoke, and legacy text response paths receive no
+choice override. Test both outbound requests through the pinned OpenClaw: the
+bootstrap named choice, the dynamic work-tool-to-submission sequence, canonical
 single `artifact` envelope, terminal one-request behavior, and exact sandbox cleanup.
 Do not treat a prompt instruction as evidence that the provider must call a tool.
 
