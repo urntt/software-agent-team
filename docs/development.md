@@ -123,6 +123,12 @@ artifact store also verifies run, team, iteration, role, stage, commit,
 acceptance-criterion, canonical-path, referenced-content, and digest context.
 See [`runtime-evidence.md`](runtime-evidence.md) for the full evidence model.
 
+Planning-schema regressions must test relation-bearing model fields as atomic
+records. In particular, requirements use `{id, description}` and assumptions
+use `{statement, decision_id}` at the model boundary; tests must not recreate
+parallel model-owned arrays whose cardinality can diverge. Persisted historical
+schemas may retain their compiled indexes for backward readability.
+
 Validate the product profile separately from the default evaluation fixture:
 
 ```bash

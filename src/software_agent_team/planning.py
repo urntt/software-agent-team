@@ -940,6 +940,49 @@ def _normalize_planning_response_payload(
                     f"proposal.requirements[{requirement_index}]"
                 )
 
+    assumptions = proposal.get("assumptions")
+    if isinstance(assumptions, list) and any(
+        isinstance(item, dict) for item in assumptions
+    ):
+        if not all(isinstance(item, dict) for item in assumptions):
+            raise _planning_context_invariant(
+                "planning_assumption_atom_shape",
+                (
+                    "proposal assumptions must be one array of atomic objects; "
+                    "string and object entries cannot be mixed"
+                ),
+                paths=("/proposal/assumptions",),
+            )
+        compiled_assumptions: list[ProposedAssumption] = []
+        for assumption_index, item in enumerate(assumptions):
+            try:
+                compiled_assumptions.append(ProposedAssumption.model_validate(item))
+            except ValidationError as error:
+                raise _planning_context_invariant(
+                    "planning_assumption_atom_schema",
+                    (
+                        f"proposal assumption {assumption_index} must contain "
+                        "exactly one statement and one stable autonomous decision "
+                        f"reference: {_safe_validation_detail(error)}"
+                    ),
+                    paths=(f"/proposal/assumptions/{assumption_index}",),
+                ) from error
+        compiled_statements = tuple(item.statement for item in compiled_assumptions)
+        if len(compiled_statements) != len(set(compiled_statements)):
+            raise _planning_context_invariant(
+                "planning_assumption_atom_statement_unique",
+                "proposal assumption objects must use unique statements",
+                paths=("/proposal/assumptions",),
+            )
+        proposal["assumptions"] = list(compiled_statements)
+        proposal["assumption_decision_ids"] = [
+            item.decision_id for item in compiled_assumptions
+        ]
+        changes.append(
+            "compiled atomic proposal.assumptions into canonical statements "
+            "and autonomous decision references"
+        )
+
     product_definition = proposal.get("product_definition")
     product_dimensions = (
         product_definition if isinstance(product_definition, dict) else {}
@@ -1750,6 +1793,30 @@ class ProposedRequirement(BaseModel):
     @classmethod
     def require_clean_description(cls, value: str) -> str:
         return _clean_text(value, label="requirement description")
+
+
+class ProposedAssumption(BaseModel):
+    """One model-owned assumption bound atomically to its autonomy decision."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    statement: str = Field(
+        min_length=1,
+        max_length=500,
+        description="The implementation or scheduling assumption being made.",
+    )
+    decision_id: str = Field(
+        pattern=r"^DECISION_[A-Z0-9_]+$",
+        description=(
+            "Stable identity of the Agent-autonomy decision that authorizes this "
+            "assumption."
+        ),
+    )
+
+    @field_validator("statement")
+    @classmethod
+    def require_clean_statement(cls, value: str) -> str:
+        return _clean_text(value, label="assumption statement")
 
 
 class ProposedCriterion(BaseModel):
@@ -3022,7 +3089,7 @@ def validate_planning_clarity(
         raise _planning_context_invariant(
             "planning_assumption_decision_cardinality",
             "every assumption must identify its autonomous decision record",
-            paths=("/proposal/assumption_decision_ids",),
+            paths=("/proposal/assumptions",),
         )
     for decision_id in body.assumption_decision_ids:
         decision = decisions.get(decision_id)
@@ -3030,7 +3097,7 @@ def validate_planning_clarity(
             raise _planning_context_invariant(
                 "planning_assumption_decision_reference",
                 f"assumption references an unknown decision: {decision_id}",
-                paths=("/proposal/assumption_decision_ids",),
+                paths=("/proposal/assumptions",),
                 subjects=_planning_subjects(
                     (ResponseIssueSubjectKind.DECISION, decision_id)
                 ),
@@ -3039,7 +3106,7 @@ def validate_planning_clarity(
             raise _planning_context_invariant(
                 "planning_assumption_decision_authority",
                 f"assumption {decision_id} is not an autonomous implementation choice",
-                paths=("/proposal/assumption_decision_ids",),
+                paths=("/proposal/assumptions",),
                 subjects=_planning_subjects(
                     (ResponseIssueSubjectKind.DECISION, decision_id)
                 ),
@@ -3329,7 +3396,6 @@ def _planning_response_schema() -> dict[str, object]:
         "PlanningProposalBody": (
             "product_definition",
             "non_goals",
-            "assumption_decision_ids",
             "decisions",
         ),
     }
@@ -3490,6 +3556,24 @@ def _planning_response_schema() -> dict[str, object]:
     proposal_required = definitions["PlanningProposalBody"]["required"]
     while "requirement_ids" in proposal_required:
         proposal_required.remove("requirement_ids")
+    assumption_definition = ProposedAssumption.model_json_schema()
+    nested_definitions = assumption_definition.pop("$defs", None)
+    if nested_definitions:
+        raise PlanningError("assumption response schema unexpectedly has definitions")
+    definitions["ProposedAssumption"] = assumption_definition
+    proposal_properties["assumptions"] = {
+        "description": (
+            "Atomic assumption records. The controller compiles each statement "
+            "and its autonomy decision reference into the backward-compatible "
+            "internal representation."
+        ),
+        "items": {"$ref": "#/$defs/ProposedAssumption"},
+        "title": "Assumptions",
+        "type": "array",
+    }
+    proposal_properties.pop("assumption_decision_ids", None)
+    while "assumption_decision_ids" in proposal_required:
+        proposal_required.remove("assumption_decision_ids")
     product_definition_schema = proposal_properties["product_definition"]
     product_options = product_definition_schema.get("anyOf")
     if not isinstance(product_options, list):
@@ -3523,7 +3607,44 @@ def _planning_proposal_body_for_model(
             )
         ]
         payload.pop("requirement_ids", None)
+    if len(body.assumptions) == len(body.assumption_decision_ids):
+        payload["assumptions"] = [
+            {"statement": statement, "decision_id": decision_id}
+            for statement, decision_id in zip(
+                body.assumptions,
+                body.assumption_decision_ids,
+                strict=True,
+            )
+        ]
+        payload.pop("assumption_decision_ids", None)
     return payload
+
+
+def _planning_response_schema_for_correction(
+    plan: SemanticCorrectionPlan,
+) -> dict[str, object]:
+    """Bind correction-only assumption references to existing autonomy IDs."""
+
+    schema = _planning_response_schema()
+    proposal = plan.base_payload.get("proposal")
+    decisions = proposal.get("decisions") if isinstance(proposal, dict) else None
+    autonomous_ids: list[str] = []
+    if isinstance(decisions, list):
+        for decision in decisions:
+            if not isinstance(decision, dict):
+                continue
+            decision_id = decision.get("id")
+            authority = decision.get("authority")
+            if (
+                isinstance(decision_id, str)
+                and authority == PlanningDecisionAuthority.AGENT_AUTONOMY.value
+            ):
+                autonomous_ids.append(decision_id)
+    definitions = schema["$defs"]
+    assumption = definitions["ProposedAssumption"]
+    decision_id_schema = assumption["properties"]["decision_id"]
+    decision_id_schema["enum"] = list(dict.fromkeys(autonomous_ids))
+    return schema
 
 
 def _planning_submission_transport_schema() -> dict[str, object]:
@@ -5722,20 +5843,26 @@ class AdaptivePlanningCoordinator:
         )
         attempt = 1
         while True:
+            response_schema = (
+                _planning_response_schema()
+                if correction_plan is None
+                else _planning_response_schema_for_correction(correction_plan)
+            )
             prompt = self._prompt(
                 request,
                 transcript=transcript,
                 current_proposal=current_proposal,
                 change_request=change_request,
                 correction_plan=correction_plan,
+                response_schema=response_schema,
             )
             submission_contract = AgentSubmissionContract.from_schema(
                 (
-                    _planning_response_schema()
+                    response_schema
                     if correction_plan is None
                     else semantic_correction_schema(
                         correction_plan,
-                        response_schema=_planning_response_schema(),
+                        response_schema=response_schema,
                     )
                 ),
                 purpose=(
@@ -6275,6 +6402,7 @@ class AdaptivePlanningCoordinator:
         current_proposal: PlanningProposal | None,
         change_request: str | None,
         correction_plan: SemanticCorrectionPlan | None,
+        response_schema: dict[str, object],
     ) -> str:
         template = Template(PLANNING_TEMPLATE.read_text(encoding="utf-8"))
         context = {
@@ -6369,7 +6497,7 @@ class AdaptivePlanningCoordinator:
         rendered = template.substitute(
             planning_context_json=json.dumps(context, ensure_ascii=False, indent=2),
             response_schema_json=json.dumps(
-                _planning_response_schema(),
+                response_schema,
                 ensure_ascii=False,
                 indent=2,
             ),
@@ -6380,7 +6508,7 @@ class AdaptivePlanningCoordinator:
             rendered += correction_prompt(
                 correction_plan,
                 submission_tool=ARTIFACT_SUBMISSION_TOOL,
-                response_schema=_planning_response_schema(),
+                response_schema=response_schema,
             )
         return rendered
 

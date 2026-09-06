@@ -1458,6 +1458,9 @@ The acceptance contract is
 - Versioned, explicitly authorized Adaptive Planning requests; strict
   question-or-proposal responses; high-value focused questions with suggested
   and custom answers; controller validation and targeted semantic correction;
+- Model-facing atomic requirement and assumption relations, with
+  Controller-compiled backward-compatible persistence and correction-time
+  assumption references restricted to retained Agent-autonomy decisions;
 - Task-defined proposal compilation into confirmed requirements, adaptive
   implementation intent, least-privilege AgentSpecs, exact primary and
   fallback model assignments, dependency waves, qualitative per-Agent workload

@@ -2178,7 +2178,54 @@ def test_response_normalizer_rejects_mixed_requirement_shapes() -> None:
         planning._normalize_planning_response_payload(payload)
 
 
-def test_current_proposal_context_uses_atomic_requirements_without_rewriting_body() -> (
+def test_response_normalizer_compiles_atomic_assumptions_without_mutating_raw() -> None:
+    payload = proposal_response().model_dump(mode="json")
+    proposal_payload = payload["proposal"]
+    statements = [
+        "Use one single-process scan.",
+        "Keep the first implementation local and synchronous.",
+    ]
+    proposal_payload["assumptions"] = [
+        {
+            "statement": statement,
+            "decision_id": "DECISION_SCAN_STRUCTURE",
+        }
+        for statement in statements
+    ]
+    proposal_payload["assumption_decision_ids"] = ["DECISION_CONFLICTING"]
+    original = json.loads(json.dumps(payload))
+
+    normalized, changes = planning._normalize_planning_response_payload(payload)
+    parsed = PlanningModelResponse.model_validate(normalized)
+
+    assert payload == original
+    assert parsed.proposal is not None
+    assert parsed.proposal.assumptions == tuple(statements)
+    assert parsed.proposal.assumption_decision_ids == (
+        "DECISION_SCAN_STRUCTURE",
+        "DECISION_SCAN_STRUCTURE",
+    )
+    assert changes == (
+        "compiled atomic proposal.assumptions into canonical statements "
+        "and autonomous decision references",
+    )
+
+
+def test_response_normalizer_rejects_mixed_assumption_shapes() -> None:
+    payload = proposal_response().model_dump(mode="json")
+    payload["proposal"]["assumptions"] = [
+        {
+            "statement": "Use one single-process scan.",
+            "decision_id": "DECISION_SCAN_STRUCTURE",
+        },
+        "Keep the first implementation local.",
+    ]
+
+    with pytest.raises(PlanningError, match="cannot be mixed"):
+        planning._normalize_planning_response_payload(payload)
+
+
+def test_current_proposal_context_uses_atomic_relations_without_rewriting_body() -> (
     None
 ):
     body = proposal_body()
@@ -2193,6 +2240,15 @@ def test_current_proposal_context_uses_atomic_requirements_without_rewriting_bod
         for requirement_id, description in zip(
             body.requirement_ids,
             body.requirements,
+            strict=True,
+        )
+    ]
+    assert "assumption_decision_ids" not in projected
+    assert projected["assumptions"] == [
+        {"statement": statement, "decision_id": decision_id}
+        for statement, decision_id in zip(
+            body.assumptions,
+            body.assumption_decision_ids,
             strict=True,
         )
     ]
@@ -3429,7 +3485,11 @@ def test_store_detects_changed_append_only_turn_evidence(tmp_path: Path) -> None
         (
             "compiled atomic proposal.requirements into canonical descriptions "
             "and stable IDs"
-        )
+        ),
+        (
+            "compiled atomic proposal.assumptions into canonical statements "
+            "and autonomous decision references"
+        ),
     ]
     payload["user_message"] = "changed after persistence"
     turn_path.write_text(json.dumps(payload), encoding="utf-8")
@@ -4014,17 +4074,24 @@ def test_dialogue_revision_structured_edit_and_approval_are_recoverable(
     assert {
         "product_definition",
         "non_goals",
-        "assumption_decision_ids",
         "decisions",
     }.issubset(proposal_schema["required"])
     assert "requirement_ids" not in proposal_schema["properties"]
     assert "requirement_ids" not in proposal_schema["required"]
+    assert "assumption_decision_ids" not in proposal_schema["properties"]
+    assert "assumption_decision_ids" not in proposal_schema["required"]
     requirement_schema = response_schema["$defs"]["ProposedRequirement"]
     assert proposal_schema["properties"]["requirements"]["items"] == {
         "$ref": "#/$defs/ProposedRequirement"
     }
     assert requirement_schema["additionalProperties"] is False
     assert set(requirement_schema["required"]) == {"id", "description"}
+    assumption_schema = response_schema["$defs"]["ProposedAssumption"]
+    assert proposal_schema["properties"]["assumptions"]["items"] == {
+        "$ref": "#/$defs/ProposedAssumption"
+    }
+    assert assumption_schema["additionalProperties"] is False
+    assert set(assumption_schema["required"]) == {"statement", "decision_id"}
     assert proposal_schema["properties"]["product_definition"] == {
         "$ref": "#/$defs/ProductDefinition"
     }
@@ -4529,6 +4596,81 @@ def test_product_planning_repairs_one_requirement_relation_not_an_id_array(
     assert first.response_validation.correction_paths == ("/proposal/requirements",)
     assert store.load_turn(request().run_id, 2).semantic_correction_outcome == (
         "accepted"
+    )
+
+
+def test_product_planning_repairs_assumption_relation_as_atomic_records(
+    tmp_path: Path,
+) -> None:
+    invalid_payload = proposal_response().model_dump(mode="json")
+    statements = [
+        "The project uses a src layout.",
+        "The CLI uses the current directory by default.",
+    ]
+    invalid_payload["proposal"]["assumptions"] = statements
+    invalid_payload["proposal"]["assumption_decision_ids"] = ["DECISION_SCAN_STRUCTURE"]
+    atomic_assumptions = [
+        {
+            "statement": statement,
+            "decision_id": "DECISION_SCAN_STRUCTURE",
+        }
+        for statement in statements
+    ]
+    executor = ScriptedAgentExecutor(
+        [
+            json.dumps(invalid_payload),
+            correction_response(
+                invalid_payload,
+                {"/proposal/assumptions": atomic_assumptions},
+            ),
+        ]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(response_repair_limit=None),
+        clock=AdvancingClock(),
+    )
+
+    created = coordinator.start(
+        request(),
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+
+    assert created is not None
+    assert created.body.assumptions == tuple(statements)
+    assert created.body.assumption_decision_ids == (
+        "DECISION_SCAN_STRUCTURE",
+        "DECISION_SCAN_STRUCTURE",
+    )
+    first = store.load_turn(request().run_id, 1)
+    assert first.response_validation is not None
+    assert first.response_validation.issues[0].invariant_id == (
+        "planning_assumption_decision_cardinality"
+    )
+    assert first.response_validation.correction_paths == ("/proposal/assumptions",)
+    correction = executor.requests[1].prompt.rsplit(
+        "TARGETED_SEMANTIC_CORRECTION_VALUES_V1", 1
+    )[1]
+    assert '"target_path": "/proposal/assumptions"' in correction
+    assert '"$ref": "#/$defs/ProposedAssumption"' not in correction
+    assert "autonomy decision that authorizes this assumption" in correction
+    correction_schema_text = correction.split("CORRECTION_SCHEMA_JSON\n", 1)[1].split(
+        "\nCall `sat_submit_artifact`", 1
+    )[0]
+    correction_schema = json.loads(correction_schema_text)
+    assumption_array_schema = correction_schema["properties"]["replacement_values"][
+        "prefixItems"
+    ][0]
+    assert assumption_array_schema["items"]["properties"]["decision_id"]["enum"] == [
+        "DECISION_SCAN_STRUCTURE"
+    ]
+    accepted = store.load_turn(request().run_id, 2)
+    assert accepted.semantic_correction_outcome == "accepted"
+    assert accepted.response_normalizations == (
+        "compiled atomic proposal.assumptions into canonical statements "
+        "and autonomous decision references",
     )
 
 

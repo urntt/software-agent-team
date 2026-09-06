@@ -275,6 +275,11 @@ may perform only these bounded, semantics-preserving normalizations:
   the canonical backward-readable description and stable-ID index, and remove
   one or more repeated copies of that exact ID from its description because the
   atomic record already binds identity to meaning;
+- Compile each current model-facing atomic assumption `{statement,
+  decision_id}` into the canonical backward-readable statement and decision-ID
+  indexes. During targeted correction, the `decision_id` schema permits only
+  the existing Agent-autonomy decisions retained in the immutable base
+  proposal;
 - Remove a schema-forbidden field only when removing it cannot grant or hide
   controller/evidence authority.
 
@@ -313,6 +318,14 @@ description/ID representation so schema-v2 through schema-v8 records retain
 their canonical serialization. If a legacy parallel-shaped live response has
 unequal cardinality, the only correction target is the complete atomic
 requirements relation; an isolated ID-array replacement is never offered.
+
+The same boundary exposes one `assumptions` array of atomic `{statement,
+decision_id}` objects and no sibling `assumption_decision_ids` array. An
+assumption therefore cannot be generated without exactly one authorizing
+Agent-autonomy decision reference, and correction replaces the complete
+relation rather than trying to repair two independently generated arrays. The
+Controller compiles the atoms into the persisted parallel representation so
+older evidence remains readable.
 
 The terminal overview treats every user- or model-authored string as untrusted
 display text. Each newline is rendered as an indented continuation of its own

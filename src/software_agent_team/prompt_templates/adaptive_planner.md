@@ -90,9 +90,11 @@ Choose the next response by decision value:
   `provenance: {"kind":"resolved_question","source":"<question_id>"}`.
   Acceptance scope, delivery, team, and model route must each have an explicit
   Planning recommendation with
-  `provenance: {"kind":"planner_recommendation","source":"planner"}`. Every assumption must reference a local
-  implementation or scheduling decision owned by Agent/Controller autonomy.
-  Such an autonomous decision uses
+  `provenance: {"kind":"planner_recommendation","source":"planner"}`. Represent
+  every assumption as one atomic object with exactly `statement` and
+  `decision_id`; do not submit a sibling `assumption_decision_ids` array. The
+  `decision_id` must reference a local implementation or scheduling decision
+  owned by Agent/Controller autonomy. Such an autonomous decision uses
   `provenance: {"kind":"agent_autonomy","source":"agent"}`.
   Do not submit `authority` or legacy `question_id`; the Controller derives
   authority uniquely from category and resolves question identity from typed
