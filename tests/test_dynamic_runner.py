@@ -1501,6 +1501,47 @@ def test_dynamic_runner_projects_response_finalization_without_provider_claims(
     assert "test response-finalization contract" in events[1].message
 
 
+def test_dynamic_runner_projects_tool_history_from_current_snapshot(
+    tmp_path: Path,
+) -> None:
+    runner, team_plan, _, _, _ = runtime(tmp_path)
+    events: list[ProgressEvent] = []
+    runner.activity_handler = events.append
+    agent = next(item for item in team_plan.agents if item.id == "builder")
+
+    for kind in (
+        AgentExecutionActivityKind.TOOL_STARTED,
+        AgentExecutionActivityKind.TOOL_COMPLETED,
+    ):
+        runner._observe_execution_activity(
+            agent,
+            attempt=1,
+            activity=AgentExecutionActivity(
+                kind=kind,
+                agent_id=agent.id,
+                session_key="agent:builder:coalesced-tool-history",
+                model=MODEL,
+                elapsed_ms=100,
+                active_tool_count=0,
+                completed_tool_count=1,
+                silence_seconds=120,
+                stall_grace_seconds=30,
+                policy_source="test provider contract",
+            ),
+        )
+
+    assert [event.kind for event in events] == [
+        ProgressEventKind.AGENT_TOOL_STARTED,
+        ProgressEventKind.AGENT_TOOL_COMPLETED,
+    ]
+    assert all(
+        event.checkpoint is not None
+        and event.checkpoint.invocation_phase is InvocationPhase.PROVIDER_WAIT
+        and event.checkpoint.completed_tool_operations == 1
+        for event in events
+    )
+
+
 def test_dynamic_runner_refuses_unapproved_provider_fallback(
     tmp_path: Path,
 ) -> None:

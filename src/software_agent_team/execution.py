@@ -1577,19 +1577,23 @@ class _ProviderLivenessMonitor:
             completed_delta = (
                 session.tool_completed_count - self.previous_tool_completed
             )
-            if started_delta < 0 or completed_delta < 0:
-                self._degrade("OpenClaw session activity moved backwards", now)
-            else:
-                for _ in range(started_delta):
-                    self._emit(AgentExecutionActivityKind.TOOL_STARTED, now)
-                for _ in range(completed_delta):
-                    self._emit(AgentExecutionActivityKind.TOOL_COMPLETED, now)
             self.previous_trusted_records = session.trusted_record_count
             self.previous_tool_started = session.tool_started_count
             self.previous_tool_completed = session.tool_completed_count
             self.active_tool_count = session.active_tool_count
-            if started_delta > 0 or completed_delta > 0:
-                self.lifecycle.tool_state(self.active_tool_count, now=now)
+            if started_delta < 0 or completed_delta < 0:
+                self._degrade("OpenClaw session activity moved backwards", now)
+            else:
+                # Publish every history delta against the same current session
+                # snapshot. A poll can observe a tool start and completion at
+                # once, so the event kind alone is not the current lifecycle
+                # state.
+                if started_delta > 0 or completed_delta > 0:
+                    self.lifecycle.tool_state(self.active_tool_count, now=now)
+                for _ in range(started_delta):
+                    self._emit(AgentExecutionActivityKind.TOOL_STARTED, now)
+                for _ in range(completed_delta):
+                    self._emit(AgentExecutionActivityKind.TOOL_COMPLETED, now)
             if (
                 session.terminal_response_observed
                 and not self.terminal_response_observed

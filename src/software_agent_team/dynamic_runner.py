@@ -1118,9 +1118,15 @@ class DynamicAgentRunner:
                     InvocationPhase.INITIALIZING
                 ),
                 AgentExecutionActivityKind.PROVIDER_STREAM: (
-                    InvocationPhase.PROVIDER_WAIT
+                    InvocationPhase.TOOL_ACTIVE
+                    if activity.active_tool_count
+                    else InvocationPhase.PROVIDER_WAIT
                 ),
-                AgentExecutionActivityKind.TOOL_STARTED: InvocationPhase.TOOL_ACTIVE,
+                AgentExecutionActivityKind.TOOL_STARTED: (
+                    InvocationPhase.TOOL_ACTIVE
+                    if activity.active_tool_count
+                    else InvocationPhase.PROVIDER_WAIT
+                ),
                 AgentExecutionActivityKind.TOOL_COMPLETED: (
                     InvocationPhase.TOOL_ACTIVE
                     if activity.active_tool_count

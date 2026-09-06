@@ -1090,6 +1090,20 @@ finish()
     assert result.telemetry.provider_liveness.tool_started_count == 1
     assert result.telemetry.provider_liveness.tool_completed_count == 1
     assert result.telemetry.provider_liveness.stall_suspected_count == 0
+    started = next(
+        activity
+        for activity in activities
+        if activity.kind is AgentExecutionActivityKind.TOOL_STARTED
+    )
+    completed = next(
+        activity
+        for activity in activities
+        if activity.kind is AgentExecutionActivityKind.TOOL_COMPLETED
+    )
+    assert started.active_tool_count == 1
+    assert started.completed_tool_count == 0
+    assert completed.active_tool_count == 0
+    assert completed.completed_tool_count == 1
     assert (
         "private tool output"
         not in result.telemetry.provider_liveness.model_dump_json()
@@ -1147,6 +1161,17 @@ finish()
     kinds = [activity.kind for activity in activities]
     assert AgentExecutionActivityKind.TOOL_STARTED in kinds
     assert AgentExecutionActivityKind.TOOL_COMPLETED in kinds
+    coalesced = [
+        activity
+        for activity in activities
+        if activity.kind
+        in {
+            AgentExecutionActivityKind.TOOL_STARTED,
+            AgentExecutionActivityKind.TOOL_COMPLETED,
+        }
+    ]
+    assert all(activity.active_tool_count == 0 for activity in coalesced)
+    assert all(activity.completed_tool_count == 1 for activity in coalesced)
 
 
 def test_repeated_active_tool_snapshots_do_not_repeat_tool_active_phase(

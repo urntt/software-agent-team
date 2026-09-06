@@ -716,6 +716,13 @@ and remaining amount. A checkpoint is an observed state transition or an
 approved future boundary; it is never partial model text, hidden reasoning, a
 tool argument, or an Agent-authored progress claim.
 
+Tool start/completion events preserve attributed history, while the phase and
+counters in every event describe the current Controller snapshot. The adapter
+applies that snapshot before publishing its deltas. If one observation contains
+both a start and its completion, the UI may show both historical events, but it
+must show zero active tools, the updated completion count, and no synthetic
+return to `tool_active`.
+
 ### Visibility Levels
 
 The user may change visibility during a run without changing execution:

@@ -241,7 +241,11 @@ deadline, controlled-evaluation timeout, TERM exit, KILL escalation, evidence
 collection, coalesced tool start/completion snapshots, repeated active-tool
 snapshots, and absence of stale working heartbeats. Historical tool counters
 must still produce activity evidence, but only a change in the observed active
-tool state may produce a lifecycle phase transition. `RunEvent` schema v4 must
+tool state may produce a lifecycle phase transition. Apply an attributed session
+snapshot before publishing any tool-history delta from that observation. When a
+single poll coalesces a start and completion, both history events therefore carry
+the current inactive state and the current completed count; neither event may
+reconstruct a stale `tool_active` phase from its kind. `RunEvent` schema v4 must
 remain canonically readable from v2 through v3, Artifact schema v6 from v2
 through v5, and Planning schema v8 from v2 through v7.
 Initialization file-race tests must distinguish an exact open-time missing file
