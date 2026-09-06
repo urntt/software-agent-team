@@ -59,6 +59,13 @@ signal is forwarded to the exact stage process group, followed by a bounded
 cleanup and residual inventory. To diagnose the supervisor itself or place
 evidence elsewhere, run its explicit contributor entry point:
 
+Process-lifecycle regressions must synchronize on an explicit readiness frame
+or an atomically published durable record. File existence, a cumulative sleep,
+or an intermediate `running` label cannot prove that a child installed its
+signal handler or that a terminal report and inventory are durable. Diagnostic
+ceilings belong to the specific handshake or terminal checkpoint, and timeout
+failures must report which checkpoint was not reached.
+
 ```bash
 uv run --frozen python -m software_agent_team.full_gate \
   --evidence-root /absolute/private/evidence/root \

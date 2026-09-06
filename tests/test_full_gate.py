@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -384,15 +385,32 @@ def test_supervisor_interrupt_is_forwarded_and_durably_terminal(
     tmp_path: Path,
 ) -> None:
     evidence = tmp_path / "evidence"
+    ready_socket_path = tmp_path / "stage-ready.sock"
+    ready_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    ready_socket.bind(str(ready_socket_path))
+    ready_socket.listen(1)
+    ready_socket.settimeout(15)
+    stage_program = "; ".join(
+        (
+            "import socket, time",
+            "ready = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)",
+            f"ready.connect({str(ready_socket_path)!r})",
+            "ready.sendall(b'stage-ready\\n')",
+            "ready.close()",
+            "time.sleep(30)",
+        )
+    )
     program = "\n".join(
         (
             "from pathlib import Path",
             "import sys",
+            "import software_agent_team.full_gate as full_gate",
             "from software_agent_team.full_gate import FullGateSupervisor, GateStage",
+            "full_gate.shutil.which = lambda _: None",
             "root, evidence = Path(sys.argv[1]), Path(sys.argv[2])",
             "runner = FullGateSupervisor(repository_root=root, evidence_root=evidence,",
             "    stages=(GateStage('slow', (sys.executable, '-c',",
-            "        'import time; time.sleep(30)')),), sample_interval_seconds=0.01,",
+            f"        {stage_program!r})),), sample_interval_seconds=0.01,",
             "    termination_grace_seconds=0.2)",
             "raise SystemExit(runner.run()[0])",
         )
@@ -404,21 +422,35 @@ def test_supervisor_interrupt_is_forwarded_and_durably_terminal(
         text=True,
     )
     try:
-        report_path = None
-        for _ in range(500):
-            reports = tuple(evidence.glob("*/report.json"))
-            if reports:
-                report_path = reports[0]
-                payload = json.loads(report_path.read_text(encoding="utf-8"))
-                if payload["stages"][0]["status"] == StageStatus.RUNNING.value:
-                    break
-            if process.poll() is not None:
-                raise AssertionError(process.stderr.read())
-            time.sleep(0.01)
-        assert report_path is not None
+        with ready_socket:
+            try:
+                connection, _ = ready_socket.accept()
+            except TimeoutError:
+                pytest.fail(
+                    "full-gate stage did not reach its explicit child-ready "
+                    f"checkpoint (supervisor_status={process.poll()}, "
+                    f"reports={len(tuple(evidence.glob('*/report.json')))})"
+                )
+            with connection, connection.makefile("rb") as stream:
+                assert stream.readline() == b"stage-ready\n"
+
+        reports = tuple(evidence.glob("*/report.json"))
+        assert len(reports) == 1
+        report_path = reports[0]
+        running = json.loads(report_path.read_text(encoding="utf-8"))
+        assert running["stages"][0]["status"] == StageStatus.RUNNING.value
 
         process.send_signal(signal.SIGTERM)
-        assert process.wait(timeout=5) == 128 + signal.SIGTERM
+        try:
+            exit_code = process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            terminal = json.loads(report_path.read_text(encoding="utf-8"))
+            pytest.fail(
+                "full-gate supervisor did not exit after its signal-ready stage "
+                f"(report_status={terminal['status']}, "
+                f"stage_status={terminal['stages'][0]['status']})"
+            )
+        assert exit_code == 128 + signal.SIGTERM
         report = json.loads(report_path.read_text(encoding="utf-8"))
 
         assert report["status"] == FullGateStatus.INTERRUPTED.value

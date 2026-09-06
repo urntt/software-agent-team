@@ -1955,10 +1955,20 @@ def test_interrupt_escalates_when_the_process_ignores_termination(
         try:
             connection, _ = ready_socket.accept()
         except TimeoutError:
+            result = observed.get("result")
+            result_diagnostic = (
+                "not_available"
+                if result is None
+                else (
+                    f"status={result.status.value}, error={result.error!r}, "
+                    f"exit_code={result.telemetry.exit_code}, "
+                    f"stderr_tail={result.telemetry.stderr[-1000:]!r}"
+                )
+            )
             diagnostic = (
                 "fake OpenClaw did not reach its explicit signal-ready checkpoint "
                 f"(worker_alive={worker.is_alive()}, "
-                f"result_available={'result' in observed})"
+                f"result={result_diagnostic})"
             )
             for _ in range(100):
                 if executor.interrupt("planner") or not worker.is_alive():

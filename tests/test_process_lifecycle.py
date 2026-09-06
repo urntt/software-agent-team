@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import os
 import signal
+import socket
 import subprocess
 import sys
-import time
 from contextlib import suppress
 from pathlib import Path
 
@@ -195,36 +195,46 @@ def test_new_process_recovers_lease_after_controller_is_killed(
     tmp_path: Path,
 ) -> None:
     root = tmp_path / "leases"
-    ready = tmp_path / "ready"
+    ready_socket_path = tmp_path / "ready.sock"
+    ready_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    ready_socket.bind(str(ready_socket_path))
+    ready_socket.listen(1)
+    ready_socket.settimeout(15)
     controller_code = "\n".join(
         (
-            "import subprocess, sys, time",
+            "import socket, subprocess, sys, time",
             "from pathlib import Path",
             "from software_agent_team.process_lifecycle import ProcessLeaseStore",
-            "root, ready = Path(sys.argv[1]), Path(sys.argv[2])",
+            "root, ready_path = Path(sys.argv[1]), sys.argv[2]",
             "child = subprocess.Popen(['sleep', '30'], start_new_session=True)",
             "store = ProcessLeaseStore(root)",
             "store.acquire(run_id='sat-crash', agent_id='builder', "
             "session_key='agent:builder:sat-crash-i1-work-result', "
             "child_pid=child.pid, command=('sleep', '30'))",
-            "ready.write_text(str(child.pid), encoding='utf-8')",
+            "ready = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)",
+            "ready.connect(ready_path)",
+            "ready.sendall((str(child.pid) + '\\n').encode('ascii'))",
+            "ready.close()",
             "time.sleep(30)",
         )
     )
     controller = subprocess.Popen(
-        [sys.executable, "-c", controller_code, str(root), str(ready)],
+        [sys.executable, "-c", controller_code, str(root), str(ready_socket_path)],
         text=True,
     )
     child_pid: int | None = None
     try:
-        for _ in range(500):
-            if ready.exists():
-                child_pid = int(ready.read_text(encoding="utf-8"))
-                break
-            if controller.poll() is not None:
-                raise AssertionError("controller exited before acquiring its lease")
-            time.sleep(0.01)
-        assert child_pid is not None
+        with ready_socket:
+            try:
+                connection, _ = ready_socket.accept()
+            except TimeoutError:
+                pytest.fail(
+                    "controller did not publish its post-acquire ready frame "
+                    f"(controller_status={controller.poll()}, "
+                    f"lease_files={len(tuple(root.glob('*.json')))})"
+                )
+            with connection, connection.makefile("rb") as stream:
+                child_pid = int(stream.readline().decode("ascii"))
 
         controller.kill()
         controller.wait(timeout=5)
