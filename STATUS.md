@@ -142,11 +142,24 @@ historical v1 evidence remains readable. Planning places its permissive object-o
 capture schema inside that argument and separately retains the exact semantic-schema
 digest. Consequently, every syntactically structured Planning payload reaches strict
 semantic validation and deterministic normalization instead of being discarded by a
-redundant pre-Controller schema gate or mistaken for a semantic `artifact` field. The
-model-facing request projection excludes Controller-only run,
+redundant pre-Controller schema gate or mistaken for a semantic `artifact` field.
+The reviewed DeepSeek compatibility route now forces the exact named submission
+function for bootstrap Planning and dynamic-team runtime requests, rather than
+relying on a prompt while the provider retains its default `auto` choice. Model
+inspection, provider smoke, and legacy text-compatibility configurations retain
+their original request behavior. A pinned-OpenClaw loopback observes the exact
+outbound choice, one accepted v2 envelope, one provider request, terminal plugin
+behavior, and exact sandbox cleanup. The model-facing request projection excludes
+Controller-only run,
 destination, route, authorization, and timestamp metadata, preventing execution-layer
 redaction from breaking exact prompt/session attribution. Dynamic Agent submission
 schemas remain exact inside the same explicit envelope.
+The fixed compatibility workflow now converts an unexpected executor exception into
+an attributable failed execution before settling its call reservation. Missing token
+telemetry and cost remain unknown, the original exception survives in the terminal
+report, and parallel siblings finish before the ledger is frozen. The corresponding
+throwing-executor regression, atomic initialization fixture, and complete 1054-test
+diagnostic gate pass without new OOM events or stage residuals.
 Targeted correction now projects the exact target value schema into every ordered
 slot. ProductDefinition validation accepts Controller-supplied profile criterion IDs,
 maps clear natural-language maturity evidence without requiring enum wording in the

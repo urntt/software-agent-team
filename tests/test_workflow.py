@@ -171,6 +171,7 @@ class DynamicWorkflowExecutor:
         reported_model: str | None = "offline/test-model",
         report_usage: bool = True,
         developer_stderr: str = "",
+        raise_for_role: AgentRole | None = None,
     ) -> None:
         self.workspace = workspace
         self.review_verdicts = review_verdicts or {}
@@ -184,6 +185,7 @@ class DynamicWorkflowExecutor:
         self.reported_model = reported_model
         self.report_usage = report_usage
         self.developer_stderr = developer_stderr
+        self.raise_for_role = raise_for_role
         self.allow_single_verifier = allow_single_verifier
         self.requests: list[AgentExecutionRequest] = []
         self._counts: dict[AgentRole, int] = {}
@@ -201,6 +203,8 @@ class DynamicWorkflowExecutor:
             self.requests.append(request)
             count = self._counts.get(request.role, 0) + 1
             self._counts[request.role] = count
+        if request.role is self.raise_for_role:
+            raise RuntimeError("simulated executor boundary failure")
         if request.role is AgentRole.PLANNER:
             artifact = self._plan(request)
             if self.invalid_plan_once:
@@ -302,7 +306,7 @@ class DynamicWorkflowExecutor:
         if self._barrier is None:  # pragma: no cover - guarded by the caller
             return
         try:
-            self._barrier.wait(timeout=0.5)
+            self._barrier.wait(timeout=15)
         except threading.BrokenBarrierError:
             if not self.allow_single_verifier:
                 raise
@@ -608,6 +612,59 @@ def test_offline_workflow_completes_with_parallel_independent_verification(
     transitions = state["transitions"]
     assert isinstance(transitions, list)
     assert transitions[-1]["artifacts"][0]["path"] == "final-report.json"
+
+
+def test_executor_exception_settles_parallel_call_and_preserves_root_error(
+    tmp_path: Path,
+) -> None:
+    source = initialize_source(tmp_path)
+    workspace = tmp_path / "workspaces" / task_brief().run_id
+    executor = DynamicWorkflowExecutor(
+        workspace,
+        raise_for_role=AgentRole.REVIEWER,
+    )
+
+    outcome = coordinator(tmp_path, executor).execute(
+        task_brief(),
+        source_repository=source,
+    )
+
+    assert outcome.record.phase is RunPhase.FAILED
+    assert outcome.record.termination_reason is TerminationReason.DEPENDENCY_UNAVAILABLE
+    assert "simulated executor boundary failure" in (
+        outcome.record.termination_detail or ""
+    )
+    run_directory = tmp_path / "runs" / task_brief().run_id
+    ledger = json.loads(
+        (run_directory / "budget-ledger.json").read_text(encoding="utf-8")
+    )
+    assert ledger["usage"]["calls_started"] == 4
+    assert ledger["usage"]["calls_completed"] == 4
+    assert ledger["usage"]["active_calls"] == 0
+    reviewer_call = next(
+        call for call in ledger["calls"] if call["agent_id"] == "reviewer"
+    )
+    assert reviewer_call["input_tokens"] is None
+    assert reviewer_call["output_tokens"] is None
+    assert reviewer_call["cost_source"] == "unknown"
+    executions = [
+        json.loads((run_directory / reference.path).read_text(encoding="utf-8"))
+        for reference in outcome.execution_records
+    ]
+    reviewer_execution = next(
+        item for item in executions if item["agent_id"] == "reviewer"
+    )
+    assert reviewer_execution["execution_status"] == "launch_failed"
+    assert reviewer_execution["error"] == (
+        "Agent executor raised RuntimeError: simulated executor boundary failure"
+    )
+    final_report = json.loads(
+        (run_directory / "final-report.json").read_text(encoding="utf-8")
+    )
+    assert any(
+        "simulated executor boundary failure" in finding
+        for finding in final_report["unresolved_findings"]
+    )
 
 
 def test_workflow_emits_only_controller_backed_progress_events(tmp_path: Path) -> None:

@@ -60,6 +60,7 @@ from software_agent_team.execution import (
     AgentExecutionRequest,
     AgentExecutionResult,
     AgentExecutionStatus,
+    AgentExecutionTelemetry,
     AgentExecutor,
 )
 from software_agent_team.git_workspace import (
@@ -965,7 +966,7 @@ class WorkflowCoordinator:
                     attempt=attempt,
                 ),
             )
-            result = self.executor.execute(request)
+            result = self._execute_agent(request)
             response: PhaseArtifact | None = None
             response_reference: ArtifactReference | None = None
             record_error: str | None = None
@@ -1162,6 +1163,36 @@ class WorkflowCoordinator:
                 ),
             )
         raise AssertionError("unreachable Agent repair state")
+
+    def _execute_agent(
+        self,
+        request: AgentExecutionRequest,
+    ) -> AgentExecutionResult:
+        """Convert an executor exception into terminal attributable call evidence."""
+
+        started_at = _utc(self.clock)
+        try:
+            return self.executor.execute(request)
+        except Exception as error:
+            finished_at = _utc(self.clock)
+            duration_ms = max(
+                0,
+                round((finished_at - started_at).total_seconds() * 1000),
+            )
+            detail = self._error_detail(error)
+            return AgentExecutionResult(
+                status=AgentExecutionStatus.LAUNCH_FAILED,
+                error=f"Agent executor raised {type(error).__name__}: {detail}",
+                telemetry=AgentExecutionTelemetry(
+                    role=request.role,
+                    session_key=request.session_key,
+                    command=("agent-executor",),
+                    started_at=started_at,
+                    finished_at=finished_at,
+                    duration_ms=duration_ms,
+                    exit_code=None,
+                ),
+            )
 
     def _record_execution(
         self,

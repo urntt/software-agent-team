@@ -190,6 +190,14 @@ materialization plus exact-availability tests. Record only verified routing,
 modality, context, output, and compatibility metadata; do not add a credential,
 mutable fallback, or guessed price.
 
+A compatibility entry may also carry a provider-native named-function choice for
+the invocation-bound artifact tool. Apply it only when the materialized runtime
+actually exposes the typed-submission plugin: bootstrap Planning and approved
+dynamic teams qualify; model inspection, provider smoke, and legacy text response
+paths do not. Test the outbound request through the pinned OpenClaw, the canonical
+single `artifact` envelope, terminal one-request behavior, and exact sandbox cleanup.
+Do not treat a prompt instruction as evidence that the provider must call a tool.
+
 Startup and run preflight inspect OpenClaw's configured model view without a
 provider filter so the check stays on configured local catalog/auth evidence
 and does not invoke provider discovery or content generation. A real provider

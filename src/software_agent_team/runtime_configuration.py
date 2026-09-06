@@ -40,12 +40,21 @@ MODEL_INSPECTION_TIMEOUT_SECONDS = 90
 
 
 _DEEPSEEK_VISION_MODEL = "deepseek/deepseek-v4-flash-vision-exp"
+_DEEPSEEK_ARTIFACT_TOOL_CHOICE = {
+    "type": "function",
+    "function": {"name": ARTIFACT_SUBMISSION_TOOL},
+}
 _MODEL_COMPATIBILITY: dict[str, dict[str, Any]] = {
     _DEEPSEEK_VISION_MODEL: {
         "agent": {
             "params": {
                 "maxTokens": 16_384,
                 "extra_body": {"thinking": {"type": "disabled"}},
+            }
+        },
+        "artifact_submission": {
+            "extra_body": {
+                "tool_choice": _DEEPSEEK_ARTIFACT_TOOL_CHOICE,
             }
         },
         "provider_id": "deepseek",
@@ -268,7 +277,12 @@ def has_model_compatibility(model: str) -> bool:
     return model.strip() in _MODEL_COMPATIBILITY
 
 
-def _apply_model_compatibility(payload: dict[str, Any], model: str) -> None:
+def _apply_model_compatibility(
+    payload: dict[str, Any],
+    model: str,
+    *,
+    require_artifact_submission: bool = False,
+) -> None:
     compatibility = _MODEL_COMPATIBILITY.get(model)
     if compatibility is None:
         return
@@ -278,10 +292,38 @@ def _apply_model_compatibility(payload: dict[str, Any], model: str) -> None:
     agent_models = defaults.setdefault("models", {})
     if not isinstance(agent_models, dict):
         raise RuntimeConfigurationError("OpenClaw Agent model settings are invalid")
-    agent_models.setdefault(
+    model_settings = agent_models.setdefault(
         model,
         json.loads(json.dumps(compatibility["agent"])),
     )
+    if not isinstance(model_settings, dict):
+        raise RuntimeConfigurationError("OpenClaw Agent model settings are invalid")
+    if require_artifact_submission:
+        submission_settings = compatibility.get("artifact_submission")
+        if isinstance(submission_settings, dict):
+            params = model_settings.setdefault("params", {})
+            if not isinstance(params, dict):
+                raise RuntimeConfigurationError(
+                    "OpenClaw Agent model params are invalid"
+                )
+            configured_extra_body = params.setdefault("extra_body", {})
+            if not isinstance(configured_extra_body, dict):
+                raise RuntimeConfigurationError(
+                    "OpenClaw Agent model extra_body is invalid"
+                )
+            required_extra_body = submission_settings.get("extra_body")
+            if not isinstance(required_extra_body, dict):
+                raise RuntimeConfigurationError(
+                    "artifact-submission model compatibility is invalid"
+                )
+            for key, value in required_extra_body.items():
+                existing = configured_extra_body.get(key)
+                if existing is not None and existing != value:
+                    raise RuntimeConfigurationError(
+                        "OpenClaw Agent model params conflict with mandatory "
+                        f"artifact submission: {model} {key}"
+                    )
+                configured_extra_body[key] = json.loads(json.dumps(value))
 
     models = payload.setdefault("models", {})
     if not isinstance(models, dict):
@@ -971,12 +1013,21 @@ def materialize_run_configuration(
     defaults = agents["defaults"]
     defaults["repoRoot"] = str(resolved_workspace)
     defaults["skipBootstrap"] = True
+    uses_typed_submission = bootstrap_capability is not None or team_plan is not None
     if model is not None:
         defaults["model"] = {"primary": model, "fallbacks": []}
-        _apply_model_compatibility(payload, model)
+        _apply_model_compatibility(
+            payload,
+            model,
+            require_artifact_submission=uses_typed_submission,
+        )
     if team_plan is not None:
         for route in team_plan.model_routes.routes:
-            _apply_model_compatibility(payload, route.model)
+            _apply_model_compatibility(
+                payload,
+                route.model,
+                require_artifact_submission=True,
+            )
     sandbox = defaults["sandbox"]
     sandbox["scope"] = "session"
     docker = sandbox.setdefault("docker", {})

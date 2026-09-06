@@ -199,10 +199,13 @@ def finish():
     }))
 
 write_records()
-(sessions / "sessions.json").write_text(
+session_index = sessions / "sessions.json"
+session_index_temporary = sessions / ".sessions.json.tmp"
+session_index_temporary.write_text(
     json.dumps({session_key: {"sessionId": session_id}}),
     encoding="utf-8",
 )
+os.replace(session_index_temporary, session_index)
 """
 
 
@@ -1523,7 +1526,9 @@ agent_id = sys.argv[sys.argv.index("--agent") + 1]
 sessions = Path(os.environ["OPENCLAW_STATE_DIR"]) / "agents" / agent_id / "sessions"
 sessions.mkdir(parents=True, exist_ok=True)
 time.sleep(0.20)
-(sessions / "sessions.json").write_text("{}", encoding="utf-8")
+initial_index = sessions / ".sessions.initial.json.tmp"
+initial_index.write_text("{}", encoding="utf-8")
+os.replace(initial_index, sessions / "sessions.json")
 time.sleep(0.04)
 """
     executor = live_liveness_executor(

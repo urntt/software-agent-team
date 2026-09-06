@@ -404,6 +404,7 @@ def test_materialized_config_registers_the_pinned_deepseek_vision_model(
         sandbox_image="sat-agent:phase1",
         sandbox_user="1000:1000",
         model=DEEPSEEK_VISION_MODEL,
+        bootstrap_capability=AgentCapability.CLARIFICATION,
     )
 
     payload = json.loads(destination.read_text(encoding="utf-8"))
@@ -421,7 +422,42 @@ def test_materialized_config_registers_the_pinned_deepseek_vision_model(
         ]
         == 16_384
     )
+    assert payload["agents"]["defaults"]["models"][DEEPSEEK_VISION_MODEL]["params"][
+        "extra_body"
+    ] == {
+        "thinking": {"type": "disabled"},
+        "tool_choice": {
+            "type": "function",
+            "function": {"name": "sat_submit_artifact"},
+        },
+    }
     assert "apiKey" not in destination.read_text(encoding="utf-8")
+
+
+def test_legacy_text_runtime_does_not_force_the_typed_submission_tool(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    destination = tmp_path / "run" / "openclaw.runtime.json"
+
+    materialize_run_configuration(
+        OPENCLAW_TEMPLATE,
+        destination,
+        manifest=load_team_manifest(TEAM_CONFIG),
+        workspace=workspace,
+        sandbox_image="sat-agent:phase1",
+        sandbox_user="1000:1000",
+        model=DEEPSEEK_VISION_MODEL,
+    )
+
+    payload = json.loads(destination.read_text(encoding="utf-8"))
+    assert payload["agents"]["defaults"]["models"][DEEPSEEK_VISION_MODEL]["params"][
+        "extra_body"
+    ] == {"thinking": {"type": "disabled"}}
+    assert "plugins" not in payload
 
 
 def test_dynamic_config_registers_compatibility_for_an_authorized_fallback(
@@ -472,6 +508,12 @@ def test_dynamic_config_registers_compatibility_for_an_authorized_fallback(
     payload = json.loads(destination.read_text(encoding="utf-8"))
     registered = payload["models"]["providers"]["deepseek"]["models"]
     assert [model["id"] for model in registered] == ["deepseek-v4-flash-vision-exp"]
+    assert payload["agents"]["defaults"]["models"][DEEPSEEK_VISION_MODEL]["params"][
+        "extra_body"
+    ]["tool_choice"] == {
+        "type": "function",
+        "function": {"name": "sat_submit_artifact"},
+    }
     assert all(
         agent["model"] == {"primary": "provider/model", "fallbacks": []}
         for agent in payload["agents"]["list"]
@@ -496,6 +538,9 @@ def test_model_check_configuration_is_private_secret_free_and_write_once(
     assert payload["models"]["providers"]["deepseek"]["models"][0]["id"] == (
         "deepseek-v4-flash-vision-exp"
     )
+    assert payload["agents"]["defaults"]["models"][DEEPSEEK_VISION_MODEL]["params"][
+        "extra_body"
+    ] == {"thinking": {"type": "disabled"}}
     assert "apiKey" not in destination.read_text(encoding="utf-8")
     assert destination.stat().st_mode & 0o777 == 0o600
     with pytest.raises(RuntimeConfigurationError, match="already exists"):

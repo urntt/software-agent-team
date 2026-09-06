@@ -234,7 +234,11 @@ with only owner-private paths and digests. The tool exposes one exact outer argu
 `artifact`, whose value is the semantic object. Dynamic Agents expose their exact
 semantic schema inside that argument. Adaptive Planning exposes an object-only inner
 transport schema while retaining the exact Planning semantic-schema digest in the
-private binding. This
+private binding. On reviewed compatibility routes whose API otherwise permits a
+plain assistant response, submission-bound runtime configuration selects this exact
+named function at the provider boundary. The override is absent from non-generation
+model inspection, provider smoke, and legacy text-compatibility configurations, where
+no invocation-bound submission tool exists. This
 separation ensures that valid JSON arguments reach Controller validation even when a
 proposal contains a harmless extra field or a targetable semantic defect; OpenClaw
 cannot discard the only payload before SAT records normalization or correction
@@ -901,7 +905,9 @@ when investigating it rather than editing artifacts in place.
   from the pinned OpenClaw release. It cannot contain a credential or silently
   select a fallback. When a trusted caller credential variable is available,
   the generated config contains only its variable reference; SAT's isolated
-  auth profiles remain the other credential source.
+  auth profiles remain the other credential source. A reviewed named-function
+  override may be activated only for a runtime that exposes the bound artifact
+  tool; it must not leak into model checks, provider smoke, or legacy text calls.
 - Agent containers receive an explicit non-secret environment instead of the
   host process environment or provider credentials.
 - SAT's isolated OpenClaw host process owns model-provider access. Credentials
@@ -1004,6 +1010,11 @@ when investigating it rather than editing artifacts in place.
   launch. For ordinary tasks, that reservation requires the run, phase, Agent,
   attempt, route, model, paired price, price source, and authorization snapshot;
   the ledger itself calculates cost from those frozen terms and provider usage.
+  If a replaceable executor raises instead of returning terminal telemetry, the
+  controller records an attributable failed execution and settles the reservation
+  with unknown token and cost usage. It never drops the call, invents zero usage,
+  or lets an active reservation replace the original failure during terminal-report
+  assembly.
   Controlled evaluations additionally reserve their fixed call count. Completed
   telemetry is retained before any post-call evaluation threshold or task-cost
   rejection; missing token telemetry and unavailable pricing are counted
