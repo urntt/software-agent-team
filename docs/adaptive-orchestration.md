@@ -224,7 +224,12 @@ decision provenance, so those dimensions do not cite a separate decision ID. A
 (`acceptance_scope` for usability/operations and `delivery` for delivery). This
 prevents an unrelated but existing decision ID from satisfying the product-depth
 trace. Direct product facts already represented this way are not duplicated in
-the additional decision ledger.
+the additional decision ledger. The model-facing decision schema exposes only
+four legal atomic combinations: user-owned categories with direct-input or
+resolved-question provenance, Planner-owned categories with Planner provenance,
+and Agent-owned categories with Agent provenance. It does not offer a Cartesian
+product of categories and provenance kinds that the controller would later have
+to reject.
 
 This is a dependency contract, not a questionnaire count. An explicit
 throwaway prototype can proceed directly with a lean proposal. An
@@ -252,9 +257,11 @@ may perform only these bounded, semantics-preserving normalizations:
 - Canonicalize the letter case of an otherwise well-formed `DECISION_` token
   and its exact assumption reference when that canonical identity is unique;
 - Compile decision authority from its category, compile legacy question,
-  Planner, and Agent source fields into typed provenance, and remove redundant
-  legacy direct-product decision records only when the ProductDefinition retains
-  its exact source and downstream requirement or criterion traces;
+  Planner, and Agent source fields into typed provenance, and remove a redundant
+  current or legacy direct-product decision only when the ProductDefinition
+  retains the exact source under the matching semantic category and no other
+  retained relation references that decision. A same-source privacy or risk
+  decision remains independent from an operational or delivery product fact;
 - Remove decision references from `explicit_input` ProductDefinition dimensions
   when a requirement or criterion trace remains, because their own typed source
   is authoritative;

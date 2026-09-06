@@ -342,6 +342,23 @@ _DECISION_AUTHORITY = {
     ),
 }
 
+_PRODUCT_DIMENSION_DECISION_CATEGORY = {
+    ProductDefinitionDimension.TARGET_USERS: (
+        PlanningDecisionCategory.PRODUCT_REQUIREMENT
+    ),
+    ProductDefinitionDimension.PRIMARY_WORKFLOW: (
+        PlanningDecisionCategory.PRODUCT_REQUIREMENT
+    ),
+    ProductDefinitionDimension.DELIVERY_MATURITY: PlanningDecisionCategory.DELIVERY,
+    ProductDefinitionDimension.USABILITY_EXPECTATIONS: (
+        PlanningDecisionCategory.ACCEPTANCE_SCOPE
+    ),
+    ProductDefinitionDimension.OPERATIONAL_EXPECTATIONS: (
+        PlanningDecisionCategory.ACCEPTANCE_SCOPE
+    ),
+    ProductDefinitionDimension.DELIVERY_EXPECTATIONS: PlanningDecisionCategory.DELIVERY,
+}
+
 
 class PlanningProposalSource(StrEnum):
     """Attributable origin of one immutable proposal revision."""
@@ -1004,12 +1021,24 @@ def _normalize_planning_response_payload(
                         item["source"]
                     )
 
+        explicit_product_sources = {
+            (
+                _PRODUCT_DIMENSION_DECISION_CATEGORY[dimension],
+                _normalized_evidence_text(item["source"]),
+            )
+            for dimension in ProductDefinitionDimension
+            if isinstance((item := product_dimensions.get(dimension.value)), dict)
+            and item.get("disposition")
+            == ProductDefinitionDisposition.EXPLICIT_INPUT.value
+            and isinstance(item.get("source"), str)
+            and item["source"].strip()
+        }
         normalized_user_inputs = tuple(
             _normalized_evidence_text(value)
             for value in user_inputs
             if isinstance(value, str) and value.strip()
         )
-        legacy_explicit_decision_ids: set[str] = set()
+        redundant_direct_product_decision_ids: set[str] = set()
         for decision_index, decision in enumerate(decisions):
             if not isinstance(decision, dict):
                 continue
@@ -1074,7 +1103,7 @@ def _normalize_planning_response_payload(
                         if came_from_product_definition and isinstance(
                             decision_id, str
                         ):
-                            legacy_explicit_decision_ids.add(decision_id)
+                            redundant_direct_product_decision_ids.add(decision_id)
                 if compiled_provenance is not None:
                     decision["provenance"] = compiled_provenance
                     changes.append(
@@ -1094,6 +1123,19 @@ def _normalize_planning_response_payload(
                     "compiled proposal.decisions"
                     f"[{decision_index}].summary from exact direct-input source"
                 )
+            if (
+                isinstance(decision.get("id"), str)
+                and isinstance(effective_provenance, dict)
+                and effective_provenance.get("kind")
+                == PlanningDecisionProvenanceKind.EXPLICIT_INPUT.value
+                and isinstance(effective_provenance.get("source"), str)
+                and (
+                    category,
+                    _normalized_evidence_text(effective_provenance["source"]),
+                )
+                in explicit_product_sources
+            ):
+                redundant_direct_product_decision_ids.add(decision["id"])
             if (
                 isinstance(legacy_question_id, str)
                 and isinstance(decision.get("provenance"), dict)
@@ -1143,7 +1185,7 @@ def _normalize_planning_response_payload(
             decision_id = decision.get("id") if isinstance(decision, dict) else None
             if (
                 isinstance(decision_id, str)
-                and decision_id in legacy_explicit_decision_ids
+                and decision_id in redundant_direct_product_decision_ids
                 and decision_id not in remaining_decision_references
             ):
                 changes.append(
@@ -3317,23 +3359,102 @@ def _planning_response_schema() -> dict[str, object]:
         question_required.remove("decision_owner")
     decision_definition = definitions["PlanningDecisionRecord"]
     decision_properties = decision_definition["properties"]
-    decision_required = decision_definition["required"]
     provenance_schema = decision_properties["provenance"]
     provenance_options = provenance_schema.get("anyOf")
     if not isinstance(provenance_options, list):
         raise PlanningError(
             "Planning response schema has no nullable decision provenance union"
         )
-    provenance_non_null = [
-        option for option in provenance_options if option.get("type") != "null"
-    ]
-    if len(provenance_non_null) != 1:
+    if (
+        len([option for option in provenance_options if option.get("type") != "null"])
+        != 1
+    ):
         raise PlanningError("Planning response schema has invalid decision provenance")
-    decision_properties["provenance"] = provenance_non_null[0]
-    for controller_field in ("authority", "question_id"):
-        decision_properties.pop(controller_field, None)
-        while controller_field in decision_required:
-            decision_required.remove(controller_field)
+    common_properties = {
+        field: json.loads(json.dumps(decision_properties[field]))
+        for field in ("id", "summary", "rationale")
+    }
+
+    def decision_branch(
+        *,
+        categories: tuple[PlanningDecisionCategory, ...],
+        provenance_kind: PlanningDecisionProvenanceKind,
+        source_schema: dict[str, object],
+    ) -> dict[str, object]:
+        return {
+            "additionalProperties": False,
+            "properties": {
+                **json.loads(json.dumps(common_properties)),
+                "category": {
+                    "enum": [item.value for item in categories],
+                    "type": "string",
+                },
+                "provenance": {
+                    "additionalProperties": False,
+                    "properties": {
+                        "kind": {
+                            "const": provenance_kind.value,
+                            "type": "string",
+                        },
+                        "source": source_schema,
+                    },
+                    "required": ["kind", "source"],
+                    "type": "object",
+                },
+            },
+            "required": ["id", "category", "provenance", "summary", "rationale"],
+            "type": "object",
+        }
+
+    user_categories = tuple(
+        category
+        for category, authority in _DECISION_AUTHORITY.items()
+        if authority is PlanningDecisionAuthority.USER
+    )
+    planner_categories = tuple(
+        category
+        for category, authority in _DECISION_AUTHORITY.items()
+        if authority is PlanningDecisionAuthority.PLANNER_PROPOSAL
+    )
+    agent_categories = tuple(
+        category
+        for category, authority in _DECISION_AUTHORITY.items()
+        if authority is PlanningDecisionAuthority.AGENT_AUTONOMY
+    )
+    definitions["PlanningDecisionRecord"] = {
+        "description": (
+            "One decision whose category and typed provenance form an authorized "
+            "atomic combination."
+        ),
+        "oneOf": [
+            decision_branch(
+                categories=user_categories,
+                provenance_kind=PlanningDecisionProvenanceKind.EXPLICIT_INPUT,
+                source_schema={"minLength": 1, "maxLength": 2000, "type": "string"},
+            ),
+            decision_branch(
+                categories=user_categories,
+                provenance_kind=PlanningDecisionProvenanceKind.RESOLVED_QUESTION,
+                source_schema={
+                    "maxLength": 2000,
+                    "minLength": 1,
+                    "pattern": "^[a-z][a-z0-9_]*$",
+                    "type": "string",
+                },
+            ),
+            decision_branch(
+                categories=planner_categories,
+                provenance_kind=PlanningDecisionProvenanceKind.PLANNER_RECOMMENDATION,
+                source_schema={"const": "planner", "type": "string"},
+            ),
+            decision_branch(
+                categories=agent_categories,
+                provenance_kind=PlanningDecisionProvenanceKind.AGENT_AUTONOMY,
+                source_schema={"const": "agent", "type": "string"},
+            ),
+        ],
+        "title": "PlanningDecisionRecord",
+    }
     proposal_properties = definitions["PlanningProposalBody"]["properties"]
     requirement_definition = ProposedRequirement.model_json_schema()
     nested_definitions = requirement_definition.pop("$defs", None)

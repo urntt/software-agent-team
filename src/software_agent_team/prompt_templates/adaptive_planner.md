@@ -78,9 +78,11 @@ Choose the next response by decision value:
   criterion must reference one or more requirement IDs, one or more responsible
   writer tasks, and one or more downstream read-only verification Agents. State
   explicit non-goals. Record additional decision provenance with stable
-  `DECISION_` IDs. Do not duplicate direct target-user, primary-workflow, or
-  maturity facts already represented by an `explicit_input` ProductDefinition
-  dimension. For another decision already stated by the user, use
+  `DECISION_` IDs. Do not duplicate any direct product fact already represented
+  by an `explicit_input` ProductDefinition dimension. For another decision
+  already stated by the user, choose only a user-owned category
+  (`product_requirement`, `risk_tradeoff`, `privacy_or_data`,
+  `external_action`, or `organization_policy`) and use
   `provenance: {"kind":"explicit_input","source":"<one exact contiguous user-input substring>"}`.
   Put that same substring in `summary`; do not present a Planner inference as
   the user's words.

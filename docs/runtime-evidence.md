@@ -515,6 +515,14 @@ ProductDefinition, stable requirement references, non-goals, assumption
 ownership, typed decision provenance, and criterion verifier references. The
 model-facing schema omits question/decision authority and legacy `question_id`;
 they are controller-owned projections of category and provenance. It also
+represents decisions as a union of legal category/provenance pairs rather than
+independently selectable fields. Direct-input and resolved-question provenance
+is available only for user-owned categories, Planner provenance only for
+Planner-owned categories, and Agent provenance only for Agent-owned categories.
+The controller may remove a duplicate direct-product decision only when an
+explicit ProductDefinition dimension carries the exact same source under the
+matching semantic category and no retained relation cites the decision; an
+independent same-source privacy or risk decision is preserved. The schema also
 represents requirements only as atomic `{id, description}` records and omits a
 sibling `requirement_ids` array. The Controller records the exact submitted
 atoms, then compiles them into the backward-readable internal description/ID

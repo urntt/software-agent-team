@@ -256,6 +256,15 @@ offer either array alone as a relational correction target. A live-contract
 change updates its submission schema hash; bump the persisted Planning schema
 only when stored canonical structure changes.
 
+Apply the same atomicity rule to decision authority. The model-facing decision
+schema must enumerate only legal category/provenance combinations; it must not
+expose independently selectable values that the persisted model rejects after
+submission. Test every new normalization with both the exact malformed shape it
+accepts and a nearest valid counterexample it must preserve. In particular,
+direct-product deduplication requires an exact ProductDefinition source, the
+matching semantic category, and no retained reference to the candidate decision;
+same-source privacy or risk decisions are not product-definition duplicates.
+
 The product profile and evaluation fixture share this dependency image, not a
 TaskBrief, seed, acceptance suite, environment contract, or delivery command.
 The benchmark contract remains frozen for comparable trials. The confirmed

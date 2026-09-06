@@ -2300,17 +2300,147 @@ def test_response_normalizer_compiles_decision_authority_and_legacy_sources() ->
     )
 
 
+def test_response_normalizer_removes_current_direct_product_duplicate() -> None:
+    payload = proposal_response().model_dump(mode="json")
+    proposal_payload = payload["proposal"]
+    maturity = proposal_payload["product_definition"]["delivery_maturity"]
+    assert maturity["disposition"] == "explicit_input"
+    assert maturity["decision_ids"] == []
+    proposal_payload["decisions"].insert(
+        0,
+        {
+            "id": "DECISION_DUPLICATE_MATURITY",
+            "category": "delivery",
+            "authority": "user",
+            "provenance": {
+                "kind": "explicit_input",
+                "source": maturity["source"],
+            },
+            "summary": "Paraphrased delivery maturity.",
+            "rationale": "The product definition already carries this fact.",
+        },
+    )
+    original = json.loads(json.dumps(payload))
+
+    normalized, changes = planning._normalize_planning_response_payload(payload)
+    parsed = PlanningModelResponse.model_validate(normalized)
+
+    assert payload == original
+    assert parsed.proposal is not None
+    assert "DECISION_DUPLICATE_MATURITY" not in {
+        item.id for item in parsed.proposal.decisions
+    }
+    assert changes == (
+        "compiled proposal.decisions[0].authority from category delivery",
+        "compiled proposal.decisions[0].summary from exact direct-input source",
+        "removed redundant direct-input decision DECISION_DUPLICATE_MATURITY "
+        "from proposal.decisions[0]",
+    )
+
+
+def test_response_normalizer_preserves_same_source_independent_user_decision() -> None:
+    payload = proposal_response().model_dump(mode="json")
+    proposal_payload = payload["proposal"]
+    operations = proposal_payload["product_definition"]["operational_expectations"]
+    operations.update(
+        {
+            "statement": "Do not fetch remote URLs.",
+            "disposition": "explicit_input",
+            "source": "without fetching remote URLs",
+            "rationale": "The user supplied this operational boundary.",
+            "criterion_ids": ["AC_SCAN"],
+            "decision_ids": [],
+        }
+    )
+    proposal_payload["decisions"].append(
+        {
+            "id": "DECISION_PRIVACY_BOUNDARY",
+            "category": "privacy_or_data",
+            "provenance": {
+                "kind": "explicit_input",
+                "source": "without fetching remote URLs",
+            },
+            "summary": "without fetching remote URLs",
+            "rationale": "The same words also establish a data-access boundary.",
+        }
+    )
+    original = json.loads(json.dumps(payload))
+
+    normalized, changes = planning._normalize_planning_response_payload(
+        payload,
+        user_inputs=(request().source_request,),
+    )
+    parsed = PlanningModelResponse.model_validate(normalized)
+
+    assert payload == original
+    assert parsed.proposal is not None
+    privacy_decision = next(
+        item
+        for item in parsed.proposal.decisions
+        if item.id == "DECISION_PRIVACY_BOUNDARY"
+    )
+    assert privacy_decision.authority is PlanningDecisionAuthority.USER
+    assert privacy_decision.provenance == PlanningDecisionProvenance(
+        kind=PlanningDecisionProvenanceKind.EXPLICIT_INPUT,
+        source="without fetching remote URLs",
+    )
+    assert not any(
+        "removed redundant direct-input decision DECISION_PRIVACY_BOUNDARY" in item
+        for item in changes
+    )
+
+
 def test_current_decision_schema_exposes_source_but_not_derived_authority() -> None:
     schema = planning._planning_response_schema()
     decision_schema = schema["$defs"]["PlanningDecisionRecord"]
 
-    assert "provenance" in decision_schema["required"]
-    assert decision_schema["properties"]["provenance"] == {
-        "$ref": "#/$defs/PlanningDecisionProvenance"
+    branches = decision_schema["oneOf"]
+    assert len(branches) == 4
+    actual = {
+        (
+            tuple(branch["properties"]["category"]["enum"]),
+            branch["properties"]["provenance"]["properties"]["kind"]["const"],
+            branch["properties"]["provenance"]["properties"]["source"].get("const"),
+        )
+        for branch in branches
     }
-    assert "authority" not in decision_schema["properties"]
-    assert "question_id" not in decision_schema["properties"]
-    assert "authority" not in decision_schema["required"]
+    user_categories = (
+        "product_requirement",
+        "risk_tradeoff",
+        "privacy_or_data",
+        "external_action",
+        "organization_policy",
+    )
+    assert actual == {
+        (user_categories, "explicit_input", None),
+        (user_categories, "resolved_question", None),
+        (
+            (
+                "acceptance_scope",
+                "delivery",
+                "resource_budget",
+                "team",
+                "model_route",
+            ),
+            "planner_recommendation",
+            "planner",
+        ),
+        (("local_implementation", "scheduling"), "agent_autonomy", "agent"),
+    }
+    for branch in branches:
+        assert branch["required"] == [
+            "id",
+            "category",
+            "provenance",
+            "summary",
+            "rationale",
+        ]
+        assert "authority" not in branch["properties"]
+        assert "question_id" not in branch["properties"]
+        source_schema = branch["properties"]["provenance"]["properties"]["source"]
+        if "const" not in source_schema:
+            assert source_schema["minLength"] == 1
+            assert source_schema["maxLength"] == 2000
 
 
 def test_response_normalizer_compiles_question_owner_from_category() -> None:
