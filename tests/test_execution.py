@@ -118,6 +118,7 @@ def live_liveness_executor(
     program: str,
     *,
     initialization_policy: InitializationLivenessPolicy | None = None,
+    process_lease_store: ProcessLeaseStore | None = None,
     process_grace_seconds: float = 1,
     run_deadline_at: datetime | None = None,
     response_finalization_policy: ResponseFinalizationPolicy | None = None,
@@ -145,6 +146,7 @@ def live_liveness_executor(
         liveness_policies={policy.model: policy},
         initialization_policy=initialization_policy,
         response_finalization_policy=response_finalization_policy,
+        process_lease_store=process_lease_store,
     )
 
 
@@ -580,13 +582,6 @@ def test_openclaw_adapter_rejects_missing_required_submission() -> None:
 def test_live_openclaw_process_acquires_and_releases_durable_ownership(
     tmp_path: Path,
 ) -> None:
-    binary = tmp_path / "fake-openclaw"
-    binary.write_text(
-        f"#!{sys.executable}\nimport json\nprint({openclaw_result()!r})\n",
-        encoding="utf-8",
-    )
-    binary.chmod(0o700)
-
     class TrackingStore(ProcessLeaseStore):
         acquired = 0
         released = 0
@@ -601,14 +596,21 @@ def test_live_openclaw_process_acquires_and_releases_durable_ownership(
             self.released += 1
 
     store = TrackingStore(tmp_path / "process-leases")
-    executor = OpenClawSubprocessExecutor(
-        openclaw_binary=binary,
+    executor = live_liveness_executor(
+        tmp_path,
+        FAKE_OPENCLAW_SETUP + "\nfinish()\n",
         process_lease_store=store,
     )
 
-    result = executor.execute(request())
+    result = executor.execute(request(timeout_seconds=0, model="provider/model"))
 
     assert result.status is AgentExecutionStatus.COMPLETED
+    lifecycle = result.telemetry.invocation_lifecycle
+    assert lifecycle is not None
+    assert lifecycle.initialization.mode == "enforced"
+    assert InitializationCheckpoint.CURRENT_TURN in (
+        lifecycle.initialization.checkpoints
+    )
     assert store.acquired == 1
     assert store.released == 1
     assert store.inspect().processes == ()
@@ -1626,7 +1628,10 @@ time.sleep(30)
 def test_missing_state_directory_fails_closed_and_reaps_process(tmp_path: Path) -> None:
     binary = tmp_path / "unobservable-openclaw"
     binary.write_text(
-        f"#!{sys.executable}\nimport time\ntime.sleep(30)\n",
+        f"#!{sys.executable}\n"
+        "import time\n"
+        f"print({openclaw_result()!r}, flush=True)\n"
+        "time.sleep(30)\n",
         encoding="utf-8",
     )
     binary.chmod(0o700)
