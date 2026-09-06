@@ -885,6 +885,11 @@ when investigating it rather than editing artifacts in place.
   filesystems, and receive only the assigned workspace and frozen inputs.
 - Live runs require an unprivileged invoking account. Writable Agent
   containers use that account's numeric UID/GID; root identities are rejected.
+- Before OpenClaw creates a writable sandbox, SAT creates and validates its
+  exact nested skill bind target under the invoking user's authority. Every
+  path component must be a real, user-owned, writable directory. This prevents
+  Docker from creating a root-owned directory inside the already bind-mounted
+  workspace and keeps the complete run state removable by the same user.
 - Controlled Agents receive no ambient OpenClaw skills. Their explicit prompt,
   tool policy, and run-scoped repository are the complete execution boundary.
 - Clarification, Planning, Testing, and Review capabilities use read-only

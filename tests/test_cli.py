@@ -1,6 +1,7 @@
 """Tests for the unified foundation CLI."""
 
 import json
+import os
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -1493,6 +1494,10 @@ def test_dynamic_runtime_preflight_checks_every_approved_model_route(
         run_directory,
     )
 
+    skill_mountpoint = workspace / ".openclaw/sandbox-skills/skills"
+    assert skill_mountpoint.is_dir()
+    assert not skill_mountpoint.is_symlink()
+    assert skill_mountpoint.stat().st_uid == os.geteuid()
     assert inspected == ["provider/quality"]
     evidence = json.loads(
         (run_directory / "runtime-preflight.json").read_text(encoding="utf-8")

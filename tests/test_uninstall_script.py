@@ -5,6 +5,7 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -44,9 +45,17 @@ def prepare_installation(
     script.parent.mkdir(parents=True)
     shutil.copy2(REPOSITORY_ROOT / "scripts/uninstall.sh", script)
 
+    policy = checkout / "configs/product-policy.json"
+    policy.parent.mkdir(parents=True)
+    shutil.copy2(REPOSITORY_ROOT / "configs/product-policy.json", policy)
+
     sat_target = checkout / ".venv/bin/sat"
     sat_target.parent.mkdir(parents=True)
     write_executable(sat_target, "#!/usr/bin/env bash\nexit 0\n")
+    write_executable(
+        checkout / ".venv/bin/python",
+        f'#!/usr/bin/env bash\nexec {shlex.quote(sys.executable)} "$@"\n',
+    )
     private_openclaw = checkout / ".sat/openclaw"
     (private_openclaw / "bin").mkdir(parents=True)
     write_executable(
@@ -122,6 +131,12 @@ esac
         "SAT_BIN_DIR": str(install_bin),
         "SAT_CONFIG_PATH": str(configuration),
         "SAT_STATE_ROOT": str(state),
+        "PYTHONPATH": os.pathsep.join(
+            filter(
+                None,
+                (str(REPOSITORY_ROOT / "src"), os.environ.get("PYTHONPATH")),
+            )
+        ),
     }
     return checkout, install_bin, configuration, environment
 
@@ -154,8 +169,6 @@ def prepare_managed_v2_installation(
         f"software-agent-team-openclaw-runtime-v1\nroot={private_openclaw}\n",
         encoding="utf-8",
     )
-    python = release / ".venv/bin/python"
-    python.symlink_to(sys.executable)
     marker = ManagedApplicationMarker(
         application_link=str(application),
         channel=ManagedChannel.DEV,
@@ -326,6 +339,45 @@ def test_uninstaller_validates_every_purge_target_before_deleting(
     assert "symbolic-link SAT state directories" in completed.stderr
     assert configuration.is_file()
     assert (state / "runs/example/final-report.md").is_file()
+    assert (checkout / ".venv").is_dir()
+    assert (install_bin / "sat").is_symlink()
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="uninstaller supports Linux/WSL")
+def test_uninstaller_repairs_workspace_ownership_before_any_selected_deletion(
+    tmp_path: Path,
+) -> None:
+    checkout, install_bin, configuration, environment = prepare_installation(tmp_path)
+    state = Path(environment["SAT_STATE_ROOT"])
+    python = checkout / ".venv/bin/python"
+    write_executable(
+        python,
+        """#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == "-m" && "${2:-}" == "software_agent_team.workspace_mounts" ]]; then
+  echo "simulated constrained repair failure" >&2
+  exit 42
+fi
+exec "${SAT_TEST_REAL_PYTHON:?}" "$@"
+""",
+    )
+    environment["SAT_TEST_REAL_PYTHON"] = sys.executable
+
+    completed = run_uninstaller(
+        checkout,
+        environment,
+        "--purge-config",
+        "--purge-data",
+        "--purge-provider-state",
+        "--yes",
+    )
+
+    assert completed.returncode == 1
+    assert "nothing was deleted" in completed.stderr
+    assert configuration.is_file()
+    assert (state / "runs/example/final-report.md").is_file()
+    assert (state / "workspaces/example/result.py").is_file()
+    assert (state / "openclaw/credentials/provider.json").is_file()
     assert (checkout / ".venv").is_dir()
     assert (install_bin / "sat").is_symlink()
 

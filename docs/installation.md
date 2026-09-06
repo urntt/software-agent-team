@@ -580,6 +580,18 @@ symbolic, invalid, or mismatched metadata. It also refuses symbolic
 configuration or state targets and a missing or mismatched state-ownership
 marker before export or purge.
 
+Releases that predate user-owned sandbox mountpoint preparation can leave one
+empty root-owned `.openclaw/sandbox-skills/skills` tree inside an otherwise
+user-owned SAT workspace. Before exporting data or deleting any selected
+state, the current uninstaller scans only SAT's validated workspace root. When
+it finds that exact empty historical shape, it uses the already-installed,
+no-network sandbox image to remove only those directories through a
+capability-minimized bind mount. It never invokes `sudo`, follows a symbolic
+link, recursively repairs arbitrary content, pulls an image, or inspects any
+OpenClaw state outside SAT. An unavailable image, unexpected content, or failed
+repair stops the uninstall before configuration or data is deleted, so the
+same command can be retried after remediation.
+
 Preservation is the default because removing a CLI must not silently destroy a
 generated project or its audit evidence. Inspect a completed export before
 selecting any purge option.

@@ -24,6 +24,8 @@ task_state_marker="$task_state_root/.sat-state-v1"
 task_runtime_root="$task_root/.sat"
 task_openclaw_runtime="$task_runtime_root/openclaw"
 task_openclaw_runtime_marker="$task_openclaw_runtime/.sat-owned-runtime"
+task_product_policy="$task_root/configs/product-policy.json"
+task_sandbox_binary="${SAT_SANDBOX_BINARY:-docker}"
 task_managed_marker="$task_root/.sat-managed-install"
 task_managed_install=0
 task_managed_root=""
@@ -544,6 +546,26 @@ if [[ -n "$task_export_to" || "$task_data_policy" == "purge" || \
     fail "refusing to export or delete symbolic-link SAT state directories"
 fi
 validate_runtime_ownership
+
+repair_legacy_workspace_mountpoints() {
+  local task_python="$task_root/.venv/bin/python"
+  [[ -x "$task_python" ]] || \
+    fail "SAT's Python runtime is unavailable for workspace ownership preflight"
+  [[ -f "$task_product_policy" && ! -L "$task_product_policy" ]] || \
+    fail "SAT's sandbox policy is unavailable for workspace ownership preflight"
+  "$task_python" -m software_agent_team.workspace_mounts \
+    --workspaces-root "$task_workspaces_root" \
+    --policy "$task_product_policy" \
+    --sandbox-binary "$task_sandbox_binary" || \
+    fail "legacy sandbox workspace ownership could not be repaired safely; nothing was deleted"
+}
+
+# Older OpenClaw versions could leave an empty nested bind target owned by root.
+# Repair that exact historical shape before export or any selected deletion, so
+# a failed compatibility preflight cannot partially purge configuration or data.
+if [[ -n "$task_export_to" || "$task_data_policy" == "purge" ]]; then
+  repair_legacy_workspace_mountpoints
+fi
 
 if [[ -n "$task_export_to" ]]; then
   export_user_state

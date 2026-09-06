@@ -167,6 +167,7 @@ from software_agent_team.versioning import (
     render_version_report,
 )
 from software_agent_team.workflow import WorkflowCoordinator, WorkflowOutcome
+from software_agent_team.workspace_mounts import prepare_sandbox_skill_mountpoint
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_TEAM_CONFIG = PROJECT_ROOT / "configs/teams.json"
@@ -1585,6 +1586,7 @@ def _prepare_runtime_boundary(
     def runtime_setup(workspace: GitWorkspace, run_directory: Path) -> None:
         workspace_path = workspace.workspace_path
         limits = configuration.policy.limits
+        prepare_sandbox_skill_mountpoint(Path(workspace_path))
         materialize_run_configuration(
             options.openclaw,
             runtime_path,
