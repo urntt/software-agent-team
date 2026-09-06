@@ -34,8 +34,15 @@ writing a terminal outcome, the next invocation marks that started report
 `incomplete_observed_on_recovery`; it does not infer a cause from a later
 successful run.
 
-Diagnostic report schema v2 gives every stage a private, non-credential
-ownership identity inherited by its subprocesses. Linux process inventory uses
+Diagnostic report schema v3 distinguishes an attributable process-resource
+sample from a process that exits before `/proc` can be observed. It samples
+immediately after launch and reports typed `unavailable` plus `null` peaks when
+no attributable sample exists; it never represents a missing observation as
+numeric zero. Identity observations and nonzero RSS samples are counted
+separately, so a terminal zombie identity cannot masquerade as a resource
+sample. Each stage also records its own observation status and counts.
+Schema v2 introduced the private, non-credential ownership identity inherited
+by each stage's subprocesses. Linux process inventory uses
 that identity together with a process-local child-subreaper boundary, process
 groups, live ancestry, and PID/start-time identities. A child that creates a
 new session is adopted by the supervisor when its parent exits, matched against

@@ -28,7 +28,7 @@ from software_agent_team.process_lifecycle import (
     read_linux_process_identity,
 )
 
-FULL_GATE_SCHEMA_VERSION = 2
+FULL_GATE_SCHEMA_VERSION = 3
 DEFAULT_STAGE_TIMEOUT_SECONDS = 1_800.0
 DEFAULT_TERMINATION_GRACE_SECONDS = 5.0
 DEFAULT_SAMPLE_INTERVAL_SECONDS = 0.10
@@ -757,15 +757,29 @@ class FullGateSupervisor:
                     "exit_code": None,
                     "signal": None,
                     "log_path": f"{stage.name}.log",
+                    "resource_observation": {
+                        "status": "not_started",
+                        "sample_attempts": 0,
+                        "identity_samples": 0,
+                        "resource_samples": 0,
+                        "reason": None,
+                    },
                 }
                 for stage in self.stages
             ],
             "pytest": _pytest_state(report_directory / PYTEST_STATE_FILENAME),
             "resources": {
-                "aggregate_peak_rss_bytes": 0,
-                "peak_process_count": 0,
-                "peak_thread_count": 0,
-                "peak_process_tree": [],
+                "resource_observation": {
+                    "status": "pending",
+                    "sample_attempts": 0,
+                    "identity_samples": 0,
+                    "resource_samples": 0,
+                    "reason": None,
+                },
+                "aggregate_peak_rss_bytes": None,
+                "peak_process_count": None,
+                "peak_thread_count": None,
+                "peak_process_tree": None,
                 "cgroup_before": cgroup_before,
                 "kernel_oom_before": kernel_before,
             },
@@ -810,6 +824,9 @@ class FullGateSupervisor:
             report["resources"]["kernel_oom_after"] = kernel_after
             report["resources"]["kernel_oom_delta"] = _kernel_oom_delta(
                 kernel_before, kernel_after
+            )
+            self._finalize_process_observation(
+                report["resources"]["resource_observation"]
             )
             report["post_run_inventory"] = self._post_run_inventory(report["stages"])
             restoration_error = _restore_child_subreaper(subreaper)
@@ -940,6 +957,16 @@ class FullGateSupervisor:
             selector.register(process.stdout, selectors.EVENT_READ)
             started = time.monotonic()
             termination: dict[str, Any] | None = None
+            stage_record["resource_observation"]["status"] = "pending"
+            tree = _owned_processes(
+                process.pid,
+                process.pid,
+                tracked=tracked,
+                stage_identity=stage_identity,
+                supervisor_pid=os.getpid(),
+                subreaper_active=subreaper_active,
+            )
+            self._record_resource_observation(report, stage_record, tree)
             while True:
                 for key, _ in selector.select(self.sample_interval_seconds):
                     chunk = os.read(key.fileobj.fileno(), 65_536)
@@ -958,7 +985,7 @@ class FullGateSupervisor:
                     supervisor_pid=os.getpid(),
                     subreaper_active=subreaper_active,
                 )
-                self._update_resource_peak(report, tree)
+                self._record_resource_observation(report, stage_record, tree)
                 if stage.name == "test":
                     report["pytest"] = _pytest_state(
                         report_directory / PYTEST_STATE_FILENAME
@@ -1028,6 +1055,7 @@ class FullGateSupervisor:
             "cleanup": residual_cleanup,
             "residual_after_cleanup": [item.as_json() for item in residual_after],
         }
+        self._finalize_process_observation(stage_record["resource_observation"])
         if self._requested_signal is not None:
             stage_record["status"] = StageStatus.INTERRUPTED.value
         elif stage_record["status"] == StageStatus.TIMED_OUT.value:
@@ -1046,21 +1074,59 @@ class FullGateSupervisor:
         return return_code if return_code > 0 else 1
 
     @staticmethod
+    def _finalize_process_observation(observation: dict[str, Any]) -> None:
+        if observation["resource_samples"]:
+            observation["status"] = "available"
+            observation["reason"] = None
+        else:
+            observation["status"] = "unavailable"
+            observation["reason"] = (
+                "only_terminal_zero_rss_process_observed"
+                if observation["identity_samples"]
+                else "process_exited_before_attributable_sample"
+            )
+
+    @classmethod
+    def _record_resource_observation(
+        cls,
+        report: dict[str, Any],
+        stage_record: dict[str, Any],
+        tree: tuple[ProcessSnapshot, ...],
+    ) -> None:
+        for observation in (
+            report["resources"]["resource_observation"],
+            stage_record["resource_observation"],
+        ):
+            observation["sample_attempts"] += 1
+            if tree:
+                observation["identity_samples"] += 1
+            if any(item.rss_bytes > 0 for item in tree):
+                observation["resource_samples"] += 1
+                observation["status"] = "available"
+                observation["reason"] = None
+        if any(item.rss_bytes > 0 for item in tree):
+            cls._update_resource_peak(report, tree)
+
+    @staticmethod
     def _update_resource_peak(
         report: dict[str, Any], tree: tuple[ProcessSnapshot, ...]
     ) -> None:
         resources = report["resources"]
         rss = sum(item.rss_bytes for item in tree)
         threads = sum(item.thread_count for item in tree)
-        if rss > resources["aggregate_peak_rss_bytes"]:
+        if (
+            resources["aggregate_peak_rss_bytes"] is None
+            or rss > resources["aggregate_peak_rss_bytes"]
+        ):
             resources["aggregate_peak_rss_bytes"] = rss
             resources["peak_process_tree"] = [item.as_json() for item in tree]
-        elif tree and not resources["peak_process_tree"]:
-            resources["peak_process_tree"] = [item.as_json() for item in tree]
         resources["peak_process_count"] = max(
-            resources["peak_process_count"], len(tree)
+            resources["peak_process_count"] or 0, len(tree)
         )
-        resources["peak_thread_count"] = max(resources["peak_thread_count"], threads)
+        resources["peak_thread_count"] = max(
+            resources["peak_thread_count"] or 0,
+            threads,
+        )
 
     def _post_run_inventory(self, stages: list[dict[str, Any]]) -> dict[str, Any]:
         own_threads = []

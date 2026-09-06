@@ -7,6 +7,7 @@ import json
 import signal
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -57,14 +58,45 @@ def _run(
 def test_success_records_exact_commands_resources_and_terminal_inventory(
     tmp_path: Path,
 ) -> None:
+    release = tmp_path / "release-stage"
+    observer_error: list[str] = []
+
+    def release_after_attributable_sample() -> None:
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            reports = tuple((tmp_path / "evidence").glob("*/report.json"))
+            if reports:
+                try:
+                    pending = json.loads(reports[0].read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    pass
+                else:
+                    observation = pending["stages"][0]["resource_observation"]
+                    if observation["resource_samples"]:
+                        release.touch()
+                        return
+            time.sleep(0.005)
+        observer_error.append("stage sample did not become attributable")
+        release.touch()
+
+    observer = threading.Thread(target=release_after_attributable_sample)
+    observer.start()
+    first_script = (
+        "import pathlib, time; print('first output', flush=True); "
+        f"release = pathlib.Path({str(release)!r}); "
+        "\nwhile not release.exists(): time.sleep(0.005)"
+    )
     exit_code, report, output, report_path = _run(
         tmp_path,
-        "import time; print('first output', flush=True); time.sleep(0.05)",
-        "import time; print('second output', flush=True); time.sleep(0.05)",
+        first_script,
+        "print('second output', flush=True)",
     )
+    observer.join(timeout=1)
 
     assert exit_code == 0
-    assert report["schema_version"] == 2
+    assert observer_error == []
+    assert not observer.is_alive()
+    assert report["schema_version"] == 3
     assert report["status"] == FullGateStatus.COMPLETED.value
     assert report["process_attribution"] == {
         "mode": "subreaper_with_inherited_stage_identity",
@@ -79,12 +111,14 @@ def test_success_records_exact_commands_resources_and_terminal_inventory(
     assert report["stages"][0]["argv"] == [
         sys.executable,
         "-c",
-        "import time; print('first output', flush=True); time.sleep(0.05)",
+        first_script,
     ]
     assert report["cwd"] == str(tmp_path)
     assert report["started_at"] and report["ended_at"]
+    assert report["resources"]["resource_observation"]["status"] == "available"
     assert report["resources"]["aggregate_peak_rss_bytes"] > 0
     assert report["resources"]["peak_process_count"] >= 1
+    assert report["stages"][0]["resource_observation"]["status"] == "available"
     assert report["post_run_inventory"]["process_leases"]["status"] in {
         "available",
         "unavailable",
@@ -92,6 +126,52 @@ def test_success_records_exact_commands_resources_and_terminal_inventory(
     assert b"first output\n" in output
     assert b"second output\n" in output
     assert (report_path.parent / "stage-1.log").read_bytes() == b"first output\n"
+
+
+def test_unobserved_short_stage_is_typed_unavailable_instead_of_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(full_gate, "_owned_processes", lambda *args, **kwargs: ())
+
+    exit_code, report, _, _ = _run(tmp_path, "pass")
+
+    assert exit_code == 0
+    resources = report["resources"]
+    observation = resources["resource_observation"]
+    assert observation["status"] == "unavailable"
+    assert observation["sample_attempts"] >= 1
+    assert observation["identity_samples"] == 0
+    assert observation["resource_samples"] == 0
+    assert observation["reason"] == "process_exited_before_attributable_sample"
+    assert resources["aggregate_peak_rss_bytes"] is None
+    assert resources["peak_process_count"] is None
+    assert resources["peak_thread_count"] is None
+    assert resources["peak_process_tree"] is None
+    assert report["stages"][0]["resource_observation"]["status"] == "unavailable"
+
+
+@pytest.mark.parametrize("attempt", range(5))
+def test_real_short_stage_never_represents_missing_observation_as_zero(
+    tmp_path: Path, attempt: int
+) -> None:
+    repository = tmp_path / f"attempt-{attempt}"
+    repository.mkdir()
+
+    exit_code, report, _, _ = _run(repository, "pass")
+
+    assert exit_code == 0
+    resources = report["resources"]
+    if resources["resource_observation"]["status"] == "available":
+        assert resources["aggregate_peak_rss_bytes"] > 0
+        assert resources["peak_process_count"] >= 1
+        assert resources["peak_thread_count"] >= 1
+        assert resources["peak_process_tree"]
+    else:
+        assert resources["resource_observation"]["status"] == "unavailable"
+        assert resources["aggregate_peak_rss_bytes"] is None
+        assert resources["peak_process_count"] is None
+        assert resources["peak_thread_count"] is None
+        assert resources["peak_process_tree"] is None
 
 
 def test_nonzero_stage_keeps_real_exit_and_marks_later_stages_skipped(
