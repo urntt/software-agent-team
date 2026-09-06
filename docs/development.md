@@ -238,7 +238,10 @@ lifecycle for Planning and runtime Agents. Tests must separately cover slow
 checkpoint progress, permanent startup hang, recovery inside the visible grace,
 missing or malformed state observation, exact user interrupt/cancel, user
 deadline, controlled-evaluation timeout, TERM exit, KILL escalation, evidence
-collection, and absence of stale working heartbeats. `RunEvent` schema v4 must
+collection, coalesced tool start/completion snapshots, repeated active-tool
+snapshots, and absence of stale working heartbeats. Historical tool counters
+must still produce activity evidence, but only a change in the observed active
+tool state may produce a lifecycle phase transition. `RunEvent` schema v4 must
 remain canonically readable from v2 through v3, Artifact schema v6 from v2
 through v5, and Planning schema v8 from v2 through v7.
 Initialization file-race tests must distinguish an exact open-time missing file

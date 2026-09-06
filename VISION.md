@@ -190,7 +190,10 @@ when code, usability evidence, or controlled experiments justify a replacement.
   provider inactivity begins only after the exact current turn or private stream
   is attributable. Both observations enter provider wait through that single
   initialization readiness authority, so observer order cannot move a lifecycle
-  backwards. A final assistant record ends provider-generation authority and
+  backwards. Historical tool-event counters and the current active-tool state
+  remain separate: counters preserve observed activity, while lifecycle phases
+  change only when the currently observed state changes. A final assistant
+  record ends provider-generation authority and
   starts a distinct renewable result-finalization guard; runtime serialization
   and teardown therefore cannot consume the provider-silence lease. These
   guards never become a productive-work deadline.

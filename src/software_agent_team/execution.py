@@ -1086,23 +1086,36 @@ class _InvocationLifecycleRecorder:
         )
 
     def tool_state(self, active_tool_count: int, *, now: float) -> None:
+        desired_phase = (
+            InvocationPhase.TOOL_ACTIVE
+            if active_tool_count > 0
+            else InvocationPhase.PROVIDER_WAIT
+        )
         with self._lock:
-            if self.phase in {
-                InvocationPhase.STOPPING,
-                InvocationPhase.COLLECTING_EVIDENCE,
-                InvocationPhase.STOPPED,
-                InvocationPhase.FINALIZING_RESPONSE,
-            }:
+            if (
+                self.phase
+                in {
+                    InvocationPhase.STOPPING,
+                    InvocationPhase.COLLECTING_EVIDENCE,
+                    InvocationPhase.STOPPED,
+                    InvocationPhase.FINALIZING_RESPONSE,
+                }
+                or self.phase is desired_phase
+            ):
+                # Session counters describe historical tool events, while the
+                # active count is only the state observed at this snapshot. A
+                # start and completion may therefore be coalesced into one
+                # poll. Keep the events, but do not invent a repeated phase.
                 return
-        if active_tool_count > 0:
+        if desired_phase is InvocationPhase.TOOL_ACTIVE:
             self.transition(
-                InvocationPhase.TOOL_ACTIVE,
+                desired_phase,
                 now=now,
                 action=f"{active_tool_count} attributable tool operation(s) active",
             )
         else:
             self.transition(
-                InvocationPhase.PROVIDER_WAIT,
+                desired_phase,
                 now=now,
                 action="Attributable tools completed; waiting for provider activity",
             )

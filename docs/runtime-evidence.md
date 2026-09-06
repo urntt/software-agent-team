@@ -965,7 +965,12 @@ when investigating it rather than editing artifacts in place.
   activity observer and private-stream observer submit their trusted checkpoint
   through it before provider wait can begin. A faster observer therefore cannot
   publish provider wait and leave a slower observer to move the lifecycle back
-  to initialization.
+  to initialization. Session tool counters are historical activity evidence;
+  `active_tool_count` is the current-state projection for that exact snapshot.
+  If one observation coalesces a tool start and completion, SAT emits both
+  activity counters but does not invent an unobserved `tool_active` interval or
+  repeat `provider_wait`. Repeated active snapshots likewise retain one
+  `tool_active` phase until the observed state actually changes.
   Prompt content is neither retained nor emitted. Ninety seconds without a new
   checkpoint enters a visible final 15-second grace, after which the exact
   process is stopped as `initialization_stall`. Observer absence or malformed

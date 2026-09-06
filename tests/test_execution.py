@@ -1096,6 +1096,113 @@ finish()
     )
 
 
+def test_coalesced_tool_history_does_not_repeat_provider_wait_phase(
+    tmp_path: Path,
+) -> None:
+    executor = live_liveness_executor(
+        tmp_path,
+        FAKE_OPENCLAW_SETUP
+        + r"""
+records.extend([
+    {
+        "type": "message",
+        "message": {"role": "assistant", "content": [{
+            "type": "toolCall", "id": "tool-1", "name": "exec",
+            "arguments": {"command": "test"}
+        }]},
+    },
+    {
+        "type": "message",
+        "message": {
+            "role": "toolResult", "toolCallId": "tool-1", "toolName": "exec",
+            "isError": False, "content": [{"type": "text", "text": "done"}],
+            "details": {"status": "completed", "exitCode": 0},
+        },
+    },
+])
+write_records()
+finish()
+""",
+    )
+    # Ensure the first session snapshot coalesces the historical start and
+    # completion instead of observing an active interval between them.
+    executor.liveness_poll_seconds = 0.20
+    activities = []
+
+    result = executor.execute(
+        request(timeout_seconds=0, model="provider/model"),
+        activity_handler=activities.append,
+    )
+
+    assert result.status is AgentExecutionStatus.COMPLETED
+    liveness = result.telemetry.provider_liveness
+    assert liveness is not None
+    assert liveness.tool_started_count == 1
+    assert liveness.tool_completed_count == 1
+    lifecycle = result.telemetry.invocation_lifecycle
+    assert lifecycle is not None
+    phases = [transition.phase for transition in lifecycle.transitions]
+    assert phases.count(InvocationPhase.PROVIDER_WAIT) == 1
+    assert InvocationPhase.TOOL_ACTIVE not in phases
+    kinds = [activity.kind for activity in activities]
+    assert AgentExecutionActivityKind.TOOL_STARTED in kinds
+    assert AgentExecutionActivityKind.TOOL_COMPLETED in kinds
+
+
+def test_repeated_active_tool_snapshots_do_not_repeat_tool_active_phase(
+    tmp_path: Path,
+) -> None:
+    executor = live_liveness_executor(
+        tmp_path,
+        FAKE_OPENCLAW_SETUP
+        + r"""
+records.append({
+    "type": "message",
+    "message": {"role": "assistant", "content": [{
+        "type": "toolCall", "id": "tool-1", "name": "exec",
+        "arguments": {"command": "one"}
+    }]},
+})
+write_records()
+time.sleep(0.08)
+records.append({
+    "type": "message",
+    "message": {"role": "assistant", "content": [{
+        "type": "toolCall", "id": "tool-2", "name": "exec",
+        "arguments": {"command": "two"}
+    }]},
+})
+write_records()
+time.sleep(0.08)
+for tool_id in ("tool-1", "tool-2"):
+    records.append({
+        "type": "message",
+        "message": {
+            "role": "toolResult", "toolCallId": tool_id, "toolName": "exec",
+            "isError": False, "content": [{"type": "text", "text": "done"}],
+            "details": {"status": "completed", "exitCode": 0},
+        },
+    })
+write_records()
+time.sleep(0.08)
+finish()
+""",
+    )
+
+    result = executor.execute(request(timeout_seconds=0, model="provider/model"))
+
+    assert result.status is AgentExecutionStatus.COMPLETED
+    liveness = result.telemetry.provider_liveness
+    assert liveness is not None
+    assert liveness.tool_started_count == 2
+    assert liveness.tool_completed_count == 2
+    lifecycle = result.telemetry.invocation_lifecycle
+    assert lifecycle is not None
+    phases = [transition.phase for transition in lifecycle.transitions]
+    assert phases.count(InvocationPhase.TOOL_ACTIVE) == 1
+    assert phases.count(InvocationPhase.PROVIDER_WAIT) == 2
+
+
 def test_session_activity_readiness_cannot_overtake_initialization_observation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
