@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import ctypes
 import os
 import signal
 import socket
 import subprocess
 import sys
-from contextlib import suppress
+from collections.abc import Iterator
+from contextlib import contextmanager, suppress
 from pathlib import Path
 
 import pytest
@@ -19,6 +21,26 @@ from software_agent_team.process_lifecycle import (
     ProcessLifecycleError,
     read_linux_process_identity,
 )
+
+_PR_SET_CHILD_SUBREAPER = 36
+_PR_GET_CHILD_SUBREAPER = 37
+
+
+@contextmanager
+def local_child_subreaper() -> Iterator[None]:
+    """Make this fixture the exact reap owner for its simulated orphan."""
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    previous = ctypes.c_int()
+    if libc.prctl(_PR_GET_CHILD_SUBREAPER, ctypes.byref(previous), 0, 0, 0) != 0:
+        raise OSError(ctypes.get_errno(), "cannot read child-subreaper state")
+    if libc.prctl(_PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0:
+        raise OSError(ctypes.get_errno(), "cannot set child-subreaper state")
+    try:
+        yield
+    finally:
+        if libc.prctl(_PR_SET_CHILD_SUBREAPER, previous.value, 0, 0, 0) != 0:
+            raise OSError(ctypes.get_errno(), "cannot restore child-subreaper state")
 
 
 def start_child() -> subprocess.Popen[str]:
@@ -191,6 +213,7 @@ def test_orphan_recovery_fails_closed_without_pidfd(
     stop_child(process)
 
 
+@pytest.mark.skipif(not Path("/proc").exists(), reason="Linux process evidence")
 def test_new_process_recovers_lease_after_controller_is_killed(
     tmp_path: Path,
 ) -> None:
@@ -218,38 +241,47 @@ def test_new_process_recovers_lease_after_controller_is_killed(
             "time.sleep(30)",
         )
     )
-    controller = subprocess.Popen(
-        [sys.executable, "-c", controller_code, str(root), str(ready_socket_path)],
-        text=True,
-    )
-    child_pid: int | None = None
-    try:
-        with ready_socket:
-            try:
-                connection, _ = ready_socket.accept()
-            except TimeoutError:
-                pytest.fail(
-                    "controller did not publish its post-acquire ready frame "
-                    f"(controller_status={controller.poll()}, "
-                    f"lease_files={len(tuple(root.glob('*.json')))})"
-                )
-            with connection, connection.makefile("rb") as stream:
-                child_pid = int(stream.readline().decode("ascii"))
+    with local_child_subreaper():
+        controller = subprocess.Popen(
+            [sys.executable, "-c", controller_code, str(root), str(ready_socket_path)],
+            text=True,
+        )
+        child_pid: int | None = None
+        try:
+            with ready_socket:
+                try:
+                    connection, _ = ready_socket.accept()
+                except TimeoutError:
+                    pytest.fail(
+                        "controller did not publish its post-acquire ready frame "
+                        f"(controller_status={controller.poll()}, "
+                        f"lease_files={len(tuple(root.glob('*.json')))})"
+                    )
+                with connection, connection.makefile("rb") as stream:
+                    child_pid = int(stream.readline().decode("ascii"))
 
-        controller.kill()
-        controller.wait(timeout=5)
-        restarted = ProcessLeaseStore(root)
-        observation = restarted.inspect()
-
-        assert len(observation.orphaned) == 1
-        assert observation.orphaned[0].lease.child.pid == child_pid
-        recovery = restarted.reclaim_orphans(grace_seconds=2)
-        assert len(recovery.reclaimed) == 1
-        assert restarted.inspect().processes == ()
-    finally:
-        if controller.poll() is None:
             controller.kill()
             controller.wait(timeout=5)
-        if child_pid is not None and read_linux_process_identity(child_pid) is not None:
-            with suppress(ProcessLookupError):
-                os.killpg(child_pid, signal.SIGKILL)
+            restarted = ProcessLeaseStore(root)
+            observation = restarted.inspect()
+
+            assert len(observation.orphaned) == 1
+            assert observation.orphaned[0].lease.child.pid == child_pid
+            recovery = restarted.reclaim_orphans(grace_seconds=2)
+            assert len(recovery.reclaimed) == 1
+            waited_pid, _ = os.waitpid(child_pid, 0)
+            assert waited_pid == child_pid
+            assert read_linux_process_identity(child_pid) is None
+            assert restarted.inspect().processes == ()
+        finally:
+            if controller.poll() is None:
+                controller.kill()
+                controller.wait(timeout=5)
+            if (
+                child_pid is not None
+                and read_linux_process_identity(child_pid) is not None
+            ):
+                with suppress(ProcessLookupError):
+                    os.killpg(child_pid, signal.SIGKILL)
+                with suppress(ChildProcessError):
+                    os.waitpid(child_pid, 0)
