@@ -256,13 +256,11 @@ class ResponseValidationDiagnostic(BaseModel):
         return _json_sha256(payload)
 
 
-class SemanticCorrectionEnvelope(BaseModel):
-    """The only model submission accepted during targeted correction."""
+class SemanticCorrectionSubmission(BaseModel):
+    """The only model-owned values accepted during targeted correction."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    kind: Literal["semantic_correction_v2"] = "semantic_correction_v2"
-    base_response_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     replacement_values: tuple[JsonValue, ...] = Field(
         min_length=1,
         max_length=MAX_CORRECTION_FIELDS,
@@ -610,7 +608,7 @@ def semantic_correction_schema(
 ) -> dict[str, JsonValue]:
     """Return the exact bounded schema for one controller-authorized correction."""
 
-    schema = SemanticCorrectionEnvelope.model_json_schema()
+    schema = SemanticCorrectionSubmission.model_json_schema()
     value_schema = schema["properties"]["replacement_values"]
     value_schema["minItems"] = len(plan.evidence.target_paths)
     value_schema["maxItems"] = len(plan.evidence.target_paths)
@@ -622,7 +620,7 @@ def correction_prompt(
     *,
     submission_tool: str | None = None,
 ) -> str:
-    """Render the small correction envelope contract without echoing content."""
+    """Render the small correction-value contract without echoing content."""
 
     target_slots = [
         {
@@ -648,22 +646,21 @@ def correction_prompt(
         "Return exactly one JSON object and no prose or Markdown fence."
         if submission_tool is None
         else (
-            f"Call `{submission_tool}` exactly once with the correction envelope as "
-            "its arguments. Do not serialize the envelope in assistant text. The "
+            f"Call `{submission_tool}` exactly once with the correction values as "
+            "its arguments. Do not serialize the values in assistant text. The "
             "successful submission ends this invocation."
         )
     )
     return (
-        "\n\nTARGETED_SEMANTIC_CORRECTION_V2\n"
+        "\n\nTARGETED_SEMANTIC_CORRECTION_VALUES_V1\n"
         "This correction contract supersedes the earlier FINAL_RESPONSE_CONTRACT "
         "for this invocation. "
         "The prior semantic JSON object was parsed and retained by the controller. "
-        "Do not regenerate or repeat that object. Return only a correction envelope "
-        "matching CORRECTION_SCHEMA_JSON. Provide one semantic value for each slot, "
+        "Do not regenerate or repeat that object. Submit only an object matching "
+        "CORRECTION_SCHEMA_JSON. Provide one semantic value for each slot, "
         "in exact slot order. Do not repeat or choose target paths; the controller "
-        "owns those bindings. All other fields are immutable and will be preserved "
-        "by the controller.\n"
-        f"BASE_RESPONSE_SHA256\n{plan.evidence.base_response_sha256}\n"
+        "owns the response identity and those bindings. All other fields are "
+        "immutable and will be preserved by the controller.\n"
         "TARGET_SLOTS_AND_ERRORS\n"
         f"{json.dumps(target_slots, ensure_ascii=False, indent=2)}\n"
         "CORRECTION_SCHEMA_JSON\n"
@@ -673,25 +670,23 @@ def correction_prompt(
 
 
 def apply_semantic_correction(
-    envelope_payload: dict[str, object],
+    submission_payload: dict[str, object],
     plan: SemanticCorrectionPlan,
 ) -> dict[str, object]:
     """Apply exactly the authorized replacements to a copied base payload."""
 
-    envelope = SemanticCorrectionEnvelope.model_validate(envelope_payload)
-    if envelope.base_response_sha256 != plan.evidence.base_response_sha256:
-        raise ValueError("semantic correction base digest does not match")
+    submission = SemanticCorrectionSubmission.model_validate(submission_payload)
     expected_count = len(plan.evidence.target_paths)
-    if len(envelope.replacement_values) != expected_count:
+    if len(submission.replacement_values) != expected_count:
         raise ValueError(
             "semantic correction value count differs: "
-            f"expected {expected_count}, received {len(envelope.replacement_values)}"
+            f"expected {expected_count}, received {len(submission.replacement_values)}"
         )
 
     corrected: object = deepcopy(plan.base_payload)
     for path, replacement_value in zip(
         plan.evidence.target_paths,
-        envelope.replacement_values,
+        submission.replacement_values,
         strict=True,
     ):
         parts = _decode_pointer(path)

@@ -343,7 +343,11 @@ def test_bootstrap_runtime_contains_only_the_selected_read_only_capability(
         "fallbacks": [],
     }
     assert "generalist_developer" not in json.dumps(agents)
-    assert "plugins" not in payload
+    assert payload["plugins"]["allow"] == ["sat-artifact-submission"]
+    assert payload["plugins"]["entries"] == {
+        "sat-artifact-submission": {"enabled": True}
+    }
+    assert payload["tools"]["sandbox"]["tools"]["alsoAllow"] == ["sat_submit_artifact"]
 
 
 def test_bootstrap_runtime_cannot_mix_with_an_approved_team(tmp_path: Path) -> None:

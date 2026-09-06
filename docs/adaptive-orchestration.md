@@ -228,9 +228,10 @@ may perform only these bounded, semantics-preserving normalizations:
 - Remove a schema-forbidden field only when removing it cannot grant or hide
   controller/evidence authority.
 
-The immutable turn retains the exact raw response and records every normalized
-field or removed profile-owned definition separately, including normalizations
-completed before a later validation failure. The active policy is the
+The immutable turn retains the exact typed submission, its binding evidence,
+and any assistant presentation text separately. It records every normalized
+field or removed profile-owned definition, including normalizations completed
+before a later validation failure. The active policy is the
 only source of IDs eligible for criterion-ownership normalization; the
 controller does not compare or adopt the model-authored description,
 verification text, or Review boundaries. Absolute paths, backslashes, parent
@@ -240,15 +241,16 @@ eligible only for digest-bound correction of the exact typed fields identified
 by validation; the model never regenerates the complete retained object or
 selects the fields it may replace.
 
-Dynamic execution Agents call the invocation-bound `sat_submit_artifact` tool
-exactly once with their semantic response. SAT gives the plugin the exact
-AgentSpec-derived JSON Schema and a fresh controller binding, then requires the
-private envelope to match the final successful attributable tool call. Visible
-assistant payloads remain raw telemetry but are not parsed as the dynamic
-artifact, so prose, truncation, or ancillary diagnostics cannot compete with
-the submitted object. Missing, duplicate, non-final, malformed, failed, or
-unattributable submissions fail closed. Bootstrap Planning and fixed-role
-compatibility calls retain the bounded single-object text parser; on that path,
+Adaptive Planning and dynamic execution Agents call the invocation-bound
+`sat_submit_artifact` tool exactly once with their semantic response. SAT gives
+the plugin the exact Planning- or AgentSpec-derived JSON Schema and a fresh
+controller binding, then requires the private envelope to match the final
+successful attributable tool call. Visible
+assistant payloads remain raw telemetry but are not parsed as Planning or
+dynamic semantics, so prose, truncation, or ancillary diagnostics cannot
+compete with the submitted object. Missing, duplicate, non-final, malformed,
+failed, or unattributable submissions fail closed. Only the legacy fixed-role
+compatibility path retains the bounded single-object text parser; on that path,
 payload count is not mistaken for semantic object count and two real object
 candidates remain ambiguous.
 
@@ -256,11 +258,12 @@ The pinned OpenClaw Agent CLI does not expose a response-schema parameter for a
 tool-using turn. SAT supplies that schema through its isolated submission plugin
 and then compiles the submitted values at the controller boundary.
 Transport failures and unlocated errors stop. A targetable model-owned failure
-produces a content-free diagnostic and a `semantic_correction_v2` request bound
-to the retained object's SHA-256. The Controller assigns an ordered slot to
-each exact validator-owned JSON-pointer path; the model returns only one value
-per slot through the same typed tool under a correction-only schema and cannot
-widen or reorder path authority. Derived parent
+produces a content-free diagnostic and a correction request whose persisted
+evidence is bound to the retained object's SHA-256. The Controller assigns an
+ordered slot to each exact validator-owned JSON-pointer path; the model submits
+only `replacement_values` through the same typed tool under a correction-only
+schema. It cannot repeat, replace, widen, or reorder the response identity or
+path authority. Derived parent
 errors are not copied into a child-field request. Every other value remains
 immutable. Product
 Planning continues only after every prior validator-owned invariant/subject
@@ -820,11 +823,14 @@ deterministically deconflicts an echo whose model-owned relationship is still
 needed. The canonical profile text remains controller-owned, both task bindings
 are retained, and the raw response plus every normalization remain recorded in
 the Planning turn.
-Planning schema v6 adds terminal-response/finalization execution outcomes to
-Planning evidence. Schema v5 added the attributable ProductDefinition and
-question-to-dimension contract. It retains read support and canonical
-serialization for schema-v2 through schema-v5 evidence. Schema v4 introduced typed validation
-diagnostics, deterministic normalization, and targeted-correction evidence.
+Planning schema v7 adds the exact typed semantic payload and content-free
+submission binding to each current turn while preserving assistant text as
+non-authoritative evidence. Schema v6 added terminal-response/finalization
+execution outcomes to Planning evidence. Schema v5 added the attributable
+ProductDefinition and question-to-dimension contract. It retains read support
+and canonical serialization for schema-v2 through schema-v6 evidence. Schema
+v4 introduced typed validation diagnostics, deterministic normalization, and
+targeted-correction evidence.
 Current live response schemas make ProductDefinition, responsibility, and
 clarity fields mandatory and non-null. Structured edits of historical evidence
 preserve its schema identity rather than relabeling it as current.

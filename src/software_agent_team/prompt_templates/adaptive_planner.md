@@ -122,8 +122,9 @@ Choose the next response by decision value:
   downstream Agent with the review capability. A testing-only Agent cannot
   accept criteria assigned to independent review. When
   maximum_review_agents is not null, do not exceed it.
-- Return exactly one JSON object matching RESPONSE_SCHEMA_JSON. Do not add a
-  markdown fence or explanatory prose.
+- Call `$submission_tool` exactly once with an object matching
+  RESPONSE_SCHEMA_JSON. Do not serialize that object in assistant text. The
+  successful submission ends this invocation.
 
 PLANNING_CONTEXT_JSON
 $planning_context_json

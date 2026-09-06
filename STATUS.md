@@ -1,8 +1,8 @@
 # Project Status
 
-**Current milestone:** Phase 3E implemented; invocation lifecycle and checkpoint progress are offline-verified; twenty fresh installed adaptive rehearsals include two accepted strict-route Adaptive Planning deliveries and one provider-backed foreground-control rehearsal
+**Current milestone:** Phase 3E implemented; invocation lifecycle, checkpoint progress, ProductDefinition, and typed Adaptive Planning submission are offline-verified; final fresh-run and release validation remain in progress
 
-**Last updated:** September 5, 2026
+**Last updated:** September 6, 2026
 
 This document records what the repository implements now, what evidence
 supports that claim, and what remains unavailable. It does not redefine the
@@ -29,6 +29,11 @@ process-local Linux subreaper attribution, successful boundary restoration,
 zero residual stage processes or SAT resources, and no new cgroup or kernel OOM
 event. That run was intentionally a dirty-tree implementation gate; final
 closure still requires repeated clean gates on one frozen revision.
+The subsequent typed-Planning candidate passed all 1,044 tests through the same
+supervisor. Its dirty-tree diagnostic report recorded a 224,661,504-byte
+aggregate peak RSS, no new cgroup or kernel OOM event, and zero residual stage
+processes, process leases, sandbox containers, or volumes. Repeated clean gates
+on the eventual frozen revision remain required.
 
 The current development head implements configuration schema v8 model metadata
 with attributable price/context sources, task-scoped route snapshots, one
@@ -42,10 +47,10 @@ renewable inactivity lease. Planning and runtime Agents now share `launched`,
 typed cleanup evidence. SAT observes private stream and attributable tool
 lifecycle without persisting their content, visibly separates suspected stall,
 grace, recovery, degraded observation, and terminal stall, and does not publish
-terminal failure before process reaping and evidence collection. RunEvent v3
+terminal failure before process reaping and evidence collection. RunEvent v4
 adds a Controller-owned approved-task/checkpoint/Git/gate/Review/cost snapshot
-while preserving canonical v2 reads; Artifact schema v5 carries invocation
-lifecycle evidence and retains v2-v4 reads. One
+while preserving canonical v2-v3 reads; Artifact schema v6 carries invocation
+lifecycle and response-finalization evidence and retains v2-v5 reads. One
 controller-priced ledger now covers Planning through terminal execution,
 standard progress exposes spend and remaining authorization, and final reports
 include attributable per-call cost evidence. Terminal JSON, Markdown, and the
@@ -101,16 +106,17 @@ acceptance obligations or model correction calls; checks inside the approved
 scope retain strict completeness, uniqueness, and evidence-grounding rules. A
 remaining targetable model-owned failure creates a diagnostic-v2 invariant ID,
 structured affected-entity subjects, precise model-owned JSON-pointer authority,
-and a SHA-bound
-`semantic_correction_v2` request. The Controller binds those paths to ordered
-slots and the model returns only corresponding semantic values, so it cannot
-select a parent container or otherwise widen correction authority. The
+and SHA-bound correction-request evidence. The Controller binds those paths to
+ordered slots and the model submits only corresponding `replacement_values`, so
+it cannot repeat the response digest, select a parent container, or otherwise
+widen correction authority. The
 controller retains every unrelated field, freezes a writer's verified Git
-result, and records each request and outcome. Planning relational validation no longer infers identity or correction
-scope from human error prose; unclassified relations fail closed. Product
+result, and records each request and outcome. Planning relational validation no
+longer infers identity or correction scope from human error prose; unclassified
+relations fail closed. Product
 Planning and dynamic execution continue only after measurable
 improvement within the task budget, while the fixed evaluation surface retains
-its explicit zero-or-one cap. Transport, unlocated, repeated, invalid-envelope,
+its explicit zero-or-one cap. Transport, unlocated, repeated, invalid-submission,
 and non-improving failures stop without a full-response retry. Fresh
 provider-backed Planning correction evidence now exists. Exact offline replay of
 the latest distinct writer-coverage then verifier-authority failure now yields
@@ -124,8 +130,14 @@ fields, but the correction response replaced the parent `decisions` container
 and was safely rejected as unauthorized. The current compiler instead resolves
 that collision-free token presentation deterministically; genuine multi-field
 correction accepts only an exact-length value vector whose paths remain
-Controller-owned. This root-cause repair is offline-verified but still requires
-a new provider-backed journey before the issue can close.
+Controller-owned. Adaptive Planning now uses invocation-bound typed submission
+for initial questions/proposals and for correction values. Planning schema v7
+persists the submitted semantic payload and content-free binding separately
+from non-authoritative assistant text while retaining canonical v2-v6 reads.
+An actual pinned-OpenClaw loopback invocation loaded the plugin in the read-only
+bootstrap runtime, captured the final tool call, accepted the bound payload, and
+removed its exact sandbox container. A new provider-backed product journey is
+still required before the correction issues can close.
 
 A fresh installed run at `54b0275` reached approved Planning, a clean writer
 commit, and five passing deterministic gates. Its Reviewer returned ten

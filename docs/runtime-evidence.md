@@ -134,8 +134,9 @@ Planning dialogue, proposal compilation, and approval evidence.
 bodies and the explicit mapping of controller-owned fields for each artifact
 kind. These are different boundaries, not duplicate persisted schemas.
 `src/software_agent_team/response_corrections.py` owns typed validation
-diagnostics, deterministic extra-field removal, and the digest-bound targeted
-correction envelope. It does not own artifact meaning or runtime authority.
+diagnostics, deterministic extra-field removal, the Controller-bound correction
+slot plan, and the value-only correction submission. It does not own artifact
+meaning or runtime authority.
 `src/software_agent_team/assembly.py` is the shared binding layer that combines
 those semantic bodies with controller-owned Git, command, identity, commit,
 and review-scope facts for both fixed and task-defined teams.
@@ -223,11 +224,12 @@ ineligible evidence remain typed model-owned failures.
 
 ## Semantic Response Boundary
 
-Dynamic execution Agents deliver semantic values through an invocation-bound
-`sat_submit_artifact` tool, not through assistant-message framing. Before each
-call, the controller freezes the exact response JSON Schema, writes it to an
-owner-private temporary directory, creates a fresh invocation binding, and
-starts the isolated OpenClaw process with only those paths and digests. The
+Adaptive Planning and dynamic execution Agents deliver semantic values through
+an invocation-bound `sat_submit_artifact` tool, not through assistant-message
+framing. Before each call, the controller freezes the exact response JSON
+Schema, writes it to an owner-private temporary directory, creates a fresh
+invocation binding, and starts the isolated OpenClaw process with only those
+paths and digests. The
 SAT-owned OpenClaw plugin registers the tool with that exact schema. A
 successful call exclusively writes one private envelope and terminates the
 Agent turn. After the process exits, the controller requires exactly one
@@ -239,15 +241,15 @@ unattributable submission fails closed. The plugin neither writes the project
 workspace nor changes the Agent's permission profile.
 
 Visible assistant text is retained as raw execution evidence but has no
-semantic authority for a typed runtime call. It may be empty, explanatory,
-truncated, or malformed without replacing the tool arguments. The controller
+semantic authority for a typed Planning or runtime call. It may be empty,
+explanatory, truncated, or malformed without replacing the tool arguments. The controller
 still validates those submitted arguments against the semantic Pydantic model,
 controller-owned identity, approved tasks and criteria, Git state, and evidence
 rules before assembling an artifact. Thus typed transport removes presentation
 framing as a source of semantic failure without weakening content validation.
 
-Bootstrap Planning and the fixed-role compatibility path still use a
-deterministic text transport. On that compatibility boundary, the controller
+Only the legacy fixed-role compatibility path still uses a deterministic text
+transport. On that compatibility boundary, the controller
 accepts one unambiguous semantic JSON object in any of these forms:
 
 - Raw JSON;
@@ -292,18 +294,19 @@ with a validator-owned invariant ID, structured affected-entity subjects, and
 exact model-owned JSON-pointer paths. Human-readable error text explains the
 failure but never defines its identity. The controller retains the invalid
 semantic object,
-binds its canonical SHA-256 into a `semantic_correction_v2` request, assigns the
-exact paths to ordered Controller-owned slots, and asks the model to return only
-the corresponding semantic values—never paths or the complete object. For a
-dynamic Agent, the controller replaces the tool parameters with the exact
-correction-envelope schema for that invocation; the schema requires the exact
-slot count, so the model cannot widen field authority. The model calls the same
-submission tool once, and assistant prose is again non-authoritative. The
+binds its canonical SHA-256 into persisted correction-request evidence, assigns
+the exact paths to ordered Controller-owned slots, and asks the model to submit
+only the corresponding `replacement_values`—never the digest, paths, or the
+complete object. For Adaptive Planning or a dynamic Agent, the controller
+replaces the tool parameters with the exact value-only correction schema for
+that invocation; the schema requires the exact slot count, so the model cannot
+repeat or widen field authority. The model calls the same submission tool once,
+and assistant prose is again non-authoritative. The
 Controller applies each value to its pre-authorized path on a copy, preserves
 every unrelated field, and revalidates the compiled result. A writer's verified commit and snapshot
 are frozen before correction and must remain unchanged. A missing user-owned
 decision returns through the typed Planning-question path and never enters this
-protocol. Transport failures, unlocated errors, invalid envelopes, repeated
+protocol. Transport failures, unlocated errors, invalid submissions, repeated
 invariant/subject fingerprints, and corrections that leave the same typed defect in place
 stop rather than consuming a random full-response retry. JSON-pointer ancestry
 alone does not identify the same defect: a newly exposed container relation may
@@ -432,10 +435,11 @@ load, the store checks producer identity, stage membership, capability, and
 handoff endpoints against the approved `TeamPlan`.
 
 The bare `sat` launcher uses the Adaptive Planning store before creating a run.
-Its request proves explicit model-work authorization. Every
-model invocation, including a rejected semantic response, becomes a write-once
-turn containing prompt and response digests plus bounded provider evidence.
-The turn preserves the exact raw response. When the controller infers an
+Its request proves explicit model-work authorization. Every model invocation,
+including a rejected semantic response, becomes a write-once turn containing
+the prompt digest, exact typed submission and content-free binding evidence,
+any non-authoritative assistant response and its digest, plus bounded provider
+evidence. When the controller infers an
 unambiguous missing question/proposal discriminator, resolves an exact active
 profile criterion ID collision, or canonicalizes a safe relative Planning path
 presentation, it stores the validated normalized body and an explicit
@@ -460,10 +464,11 @@ seconds. Approval revalidates that authority against the TeamPlan at the
 execution boundary.
 The bootstrap Planner cannot create Agents or change lifecycle state.
 
-Planning schema v6 adds response-finalization outcomes to current execution
-evidence. Schema v5 added an attributable ProductDefinition to proposals,
-adaptive implementation plans, and confirmed TaskBriefs, plus the exact
-product-definition dimensions resolved by each question. Schema v2 through v5
+Planning schema v7 adds invocation-bound typed submission payload and evidence
+to current turns. Schema v6 added response-finalization outcomes to current
+execution evidence. Schema v5 added an attributable ProductDefinition to
+proposals, adaptive implementation plans, and confirmed TaskBriefs, plus the exact
+product-definition dimensions resolved by each question. Schema v2 through v6
 remain readable. Compatibility fields omit themselves when absent so loading
 historical evidence does not change its canonical bytes or digest. Schema v4
 introduced the typed normalization and correction evidence retained by later versions. A

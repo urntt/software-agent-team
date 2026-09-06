@@ -23,6 +23,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    JsonValue,
     ValidationError,
     field_validator,
     model_validator,
@@ -85,11 +86,20 @@ from software_agent_team.response_corrections import (
     correction_prompt,
     deterministically_remove_forbidden_fields,
     diagnostic_from_invariant,
+    diagnostic_from_transport,
     diagnostic_from_validation_error,
+    semantic_correction_schema,
 )
 from software_agent_team.responses import (
     AgentArtifactResponseError,
-    parse_json_object_response,
+)
+from software_agent_team.submissions import (
+    ARTIFACT_SUBMISSION_TOOL,
+    AgentSubmissionContract,
+    AgentSubmissionEvidence,
+    AgentSubmissionPurpose,
+    AgentSubmissionStatus,
+    canonical_json_sha256,
 )
 from software_agent_team.teams import (
     AgentCapability,
@@ -104,7 +114,7 @@ from software_agent_team.teams import (
     permission_for_capability,
 )
 
-PLANNING_SCHEMA_VERSION = 6
+PLANNING_SCHEMA_VERSION = 7
 MINIMUM_READABLE_PLANNING_SCHEMA_VERSION = 2
 PLANNING_TEMPLATE = Path(__file__).with_name("prompt_templates") / "adaptive_planner.md"
 MAX_PLANNING_EVIDENCE_CHARACTERS = 1_000_000
@@ -1009,7 +1019,7 @@ class PlanningRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, PLANNING_SCHEMA_VERSION] = (
+    schema_version: Literal[2, 3, 4, 5, 6, PLANNING_SCHEMA_VERSION] = (
         PLANNING_SCHEMA_VERSION
     )
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -2669,7 +2679,7 @@ class AdaptiveImplementationPlan(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, PLANNING_SCHEMA_VERSION] = (
+    schema_version: Literal[2, 3, 4, 5, 6, PLANNING_SCHEMA_VERSION] = (
         PLANNING_SCHEMA_VERSION
     )
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -2748,7 +2758,7 @@ class PlanningTurn(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, PLANNING_SCHEMA_VERSION] = (
+    schema_version: Literal[2, 3, 4, 5, 6, PLANNING_SCHEMA_VERSION] = (
         PLANNING_SCHEMA_VERSION
     )
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -2762,6 +2772,14 @@ class PlanningTurn(BaseModel):
         max_length=MAX_PLANNING_EVIDENCE_CHARACTERS,
     )
     response_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    submission_payload: dict[str, JsonValue] | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    submission_evidence: AgentSubmissionEvidence | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     parsed_response: PlanningModelResponse | None = None
     response_normalizations: tuple[str, ...] = Field(
         default=(),
@@ -2793,6 +2811,12 @@ class PlanningTurn(BaseModel):
 
     @model_validator(mode="after")
     def validate_evidence(self) -> Self:
+        if self.schema_version < 7 and (
+            self.submission_payload is not None or self.submission_evidence is not None
+        ):
+            raise ValueError(
+                "legacy Planning turns cannot contain typed submission evidence"
+            )
         if self.schema_version < 6 and (
             self.execution.status is AgentExecutionStatus.RESPONSE_FINALIZATION_STALLED
             or (
@@ -2806,14 +2830,51 @@ class PlanningTurn(BaseModel):
         if _digest_text(self.prompt) != self.prompt_sha256:
             raise ValueError("Planning prompt digest does not match its content")
         if self.response_text is None:
-            if (
-                self.response_sha256 is not None
-                or self.parsed_response is not None
-                or self.response_normalizations
+            if self.response_sha256 is not None:
+                raise ValueError("missing response text cannot have a digest")
+            if self.schema_version < 7 and (
+                self.parsed_response is not None or self.response_normalizations
             ):
-                raise ValueError("missing response text cannot have parsed evidence")
+                raise ValueError(
+                    "legacy missing response text cannot have parsed evidence"
+                )
         elif _digest_text(self.response_text) != self.response_sha256:
             raise ValueError("Planning response digest does not match its content")
+        if self.submission_payload is not None:
+            if (
+                self.submission_evidence is None
+                or self.submission_evidence.status is not AgentSubmissionStatus.ACCEPTED
+                or self.submission_evidence.payload_sha256
+                != canonical_json_sha256(self.submission_payload)
+            ):
+                raise ValueError(
+                    "Planning submission payload requires matching accepted evidence"
+                )
+        elif (
+            self.submission_evidence is not None
+            and self.submission_evidence.status is AgentSubmissionStatus.ACCEPTED
+        ):
+            raise ValueError(
+                "accepted Planning submission evidence requires its payload"
+            )
+        if self.schema_version >= 7 and self.submission_evidence is not None:
+            expected_purpose = (
+                AgentSubmissionPurpose.SEMANTIC_CORRECTION
+                if self.semantic_correction_request is not None
+                else AgentSubmissionPurpose.PLANNING_RESPONSE
+            )
+            if self.submission_evidence.purpose is not expected_purpose:
+                raise ValueError(
+                    "Planning submission purpose does not match the turn contract"
+                )
+        if (
+            self.schema_version >= 7
+            and self.parsed_response is not None
+            and self.submission_payload is None
+        ):
+            raise ValueError(
+                "current parsed Planning response requires its typed submission"
+            )
         if self.parsed_response is not None and self.validation_error is not None:
             raise ValueError("valid Planning turns cannot contain a validation error")
         if (self.semantic_correction_request is None) != (
@@ -2823,8 +2884,19 @@ class PlanningTurn(BaseModel):
                 "Planning correction request and outcome must appear together"
             )
         if self.execution.status is AgentExecutionStatus.COMPLETED:
-            if self.response_text is None:
-                raise ValueError("completed Planning execution requires response text")
+            if self.schema_version >= 7 and (
+                self.submission_evidence is None
+                or self.submission_evidence.status is not AgentSubmissionStatus.ACCEPTED
+            ):
+                raise ValueError(
+                    "current completed Planning execution requires accepted typed "
+                    "submission evidence"
+                )
+            if self.response_text is None and self.submission_payload is None:
+                raise ValueError(
+                    "completed Planning execution requires response text or a typed "
+                    "submission"
+                )
             if self.parsed_response is None and self.validation_error is None:
                 raise ValueError(
                     "completed Planning response requires validation state"
@@ -2839,7 +2911,7 @@ class PlanningProposal(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, PLANNING_SCHEMA_VERSION] = (
+    schema_version: Literal[2, 3, 4, 5, 6, PLANNING_SCHEMA_VERSION] = (
         PLANNING_SCHEMA_VERSION
     )
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -2899,7 +2971,7 @@ class PlanningSession(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, PLANNING_SCHEMA_VERSION] = (
+    schema_version: Literal[2, 3, 4, 5, 6, PLANNING_SCHEMA_VERSION] = (
         PLANNING_SCHEMA_VERSION
     )
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -3080,7 +3152,7 @@ class PlanningApproval(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, PLANNING_SCHEMA_VERSION] = (
+    schema_version: Literal[2, 3, 4, 5, 6, PLANNING_SCHEMA_VERSION] = (
         PLANNING_SCHEMA_VERSION
     )
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -4278,6 +4350,12 @@ class PlanningStore:
             response_sha256=(
                 None if response_text is None else _digest_text(response_text)
             ),
+            submission_payload=(
+                None
+                if result.semantic_submission is None
+                else result.semantic_submission.payload
+            ),
+            submission_evidence=result.submission_evidence,
             parsed_response=parsed_response,
             response_normalizations=response_normalizations,
             validation_error=validation_error,
@@ -4742,6 +4820,18 @@ class AdaptivePlanningCoordinator:
                 change_request=change_request,
                 correction_plan=correction_plan,
             )
+            submission_contract = AgentSubmissionContract.from_schema(
+                (
+                    _planning_response_schema()
+                    if correction_plan is None
+                    else semantic_correction_schema(correction_plan)
+                ),
+                purpose=(
+                    AgentSubmissionPurpose.PLANNING_RESPONSE
+                    if correction_plan is None
+                    else AgentSubmissionPurpose.SEMANTIC_CORRECTION
+                ),
+            )
             execution_request = AgentExecutionRequest(
                 run_id=request.run_id,
                 team_id="adaptive_planning",
@@ -4751,6 +4841,7 @@ class AdaptivePlanningCoordinator:
                 prompt=prompt,
                 timeout_seconds=self.policy.planning_timeout_seconds,
                 model=request.model,
+                submission_contract=submission_contract,
             )
             self._emit_activity(
                 activity_handler,
@@ -4873,7 +4964,22 @@ class AdaptivePlanningCoordinator:
             else:
                 payload: dict[str, object] | None = None
                 try:
-                    payload = parse_json_object_response(result.response_text)
+                    semantic_submission = result.semantic_submission
+                    if semantic_submission is None:
+                        raise PlanningError(
+                            "Planning execution omitted its required typed submission"
+                        )
+                    if (
+                        semantic_submission.evidence.purpose
+                        is not submission_contract.purpose
+                        or semantic_submission.evidence.schema_sha256
+                        != submission_contract.schema_sha256
+                    ):
+                        raise PlanningError(
+                            "Planning typed submission differs from its invocation "
+                            "contract"
+                        )
+                    payload = dict(semantic_submission.payload)
                     if correction_plan is not None:
                         payload = apply_semantic_correction(payload, correction_plan)
                         correction_applied = True
@@ -4998,6 +5104,12 @@ class AdaptivePlanningCoordinator:
                             subjects=(),
                             message=validation_error,
                             paths=("/",),
+                        )
+                    else:
+                        response_validation = diagnostic_from_transport(
+                            result.response_text or "",
+                            code="planning_typed_submission_missing",
+                            message=validation_error,
                         )
                     if correction_plan is not None and not correction_applied:
                         current_correction_outcome = (
@@ -5311,9 +5423,13 @@ class AdaptivePlanningCoordinator:
                 indent=2,
             ),
             repair_context_json="null",
+            submission_tool=ARTIFACT_SUBMISSION_TOOL,
         )
         if correction_plan is not None:
-            rendered += correction_prompt(correction_plan)
+            rendered += correction_prompt(
+                correction_plan,
+                submission_tool=ARTIFACT_SUBMISSION_TOOL,
+            )
         return rendered
 
 

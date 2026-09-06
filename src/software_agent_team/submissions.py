@@ -30,6 +30,7 @@ class AgentSubmissionPurpose(StrEnum):
     """The semantic contract active for one model invocation."""
 
     ARTIFACT = "artifact"
+    PLANNING_RESPONSE = "planning_response"
     SEMANTIC_CORRECTION = "semantic_correction"
 
 

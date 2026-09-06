@@ -56,8 +56,6 @@ def test_plan_targets_only_invalid_fields_and_preserves_other_content() -> None:
 
     corrected = apply_semantic_correction(
         {
-            "kind": "semantic_correction_v2",
-            "base_response_sha256": semantic_payload_sha256(payload),
             "replacement_values": ["valid summary"],
         },
         plan,
@@ -81,8 +79,6 @@ def test_correction_rejects_a_value_count_that_cannot_bind_all_targets() -> None
     try:
         apply_semantic_correction(
             {
-                "kind": "semantic_correction_v2",
-                "base_response_sha256": semantic_payload_sha256(payload),
                 "replacement_values": ["valid"],
             },
             plan,
@@ -132,7 +128,7 @@ def test_correction_prompt_keeps_path_authority_in_the_controller() -> None:
     prompt = correction_prompt(plan)
     schema = prompt.split("CORRECTION_SCHEMA_JSON\n", maxsplit=1)[1]
 
-    assert "TARGETED_SEMANTIC_CORRECTION_V2" in prompt
+    assert "TARGETED_SEMANTIC_CORRECTION_VALUES_V1" in prompt
     assert "Do not repeat or choose target paths" in prompt
     assert "derived parent error must not be requested" not in prompt
     assert '"target_path": "/items/0/id"' in prompt
@@ -141,11 +137,16 @@ def test_correction_prompt_keeps_path_authority_in_the_controller() -> None:
     assert '"minItems": 2' in schema
     assert '"maxItems": 2' in schema
     assert '"path"' not in schema
+    assert '"kind"' not in schema
+    assert '"base_response_sha256"' not in schema
+
+    tool_prompt = correction_prompt(plan, submission_tool="sat_submit_artifact")
+    assert "Call `sat_submit_artifact` exactly once" in tool_prompt
+    assert "Do not serialize the values in assistant text" in tool_prompt
+    assert plan.evidence.base_response_sha256 not in tool_prompt
 
     corrected = apply_semantic_correction(
         {
-            "kind": "semantic_correction_v2",
-            "base_response_sha256": semantic_payload_sha256(payload),
             "replacement_values": ["FIRST", "SECOND"],
         },
         plan,
@@ -154,6 +155,16 @@ def test_correction_prompt_keeps_path_authority_in_the_controller() -> None:
         "items": [{"id": "FIRST"}, {"id": "SECOND"}],
         "preserved": "keep",
     }
+
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        apply_semantic_correction(
+            {
+                "kind": "semantic_correction_v2",
+                "base_response_sha256": plan.evidence.base_response_sha256,
+                "replacement_values": ["FIRST", "SECOND"],
+            },
+            plan,
+        )
 
 
 def test_outcome_requires_targeted_errors_to_disappear_and_rejects_cycles() -> None:
@@ -214,8 +225,6 @@ def test_outcome_distinguishes_a_new_container_error_from_the_fixed_child() -> N
     assert plan is not None
     corrected = apply_semantic_correction(
         {
-            "kind": "semantic_correction_v2",
-            "base_response_sha256": semantic_payload_sha256(payload),
             "replacement_values": ["valid"],
         },
         plan,

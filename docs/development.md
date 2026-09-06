@@ -222,7 +222,7 @@ missing or malformed state observation, exact user interrupt/cancel, user
 deadline, controlled-evaluation timeout, TERM exit, KILL escalation, evidence
 collection, and absence of stale working heartbeats. `RunEvent` schema v4 must
 remain canonically readable from v2 through v3, Artifact schema v6 from v2
-through v5, and Planning schema v6 from v2 through v5.
+through v5, and Planning schema v7 from v2 through v6.
 Any added phase, stop reason, or infrastructure threshold belongs in the one
 shared lifecycle or decision-limit registry rather than a parallel adapter.
 

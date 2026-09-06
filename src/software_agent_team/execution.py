@@ -3258,6 +3258,7 @@ class ScriptedAgentResponse(BaseModel):
     usage: AgentTokenUsage | None = None
     duration_ms: int = Field(default=0, ge=0)
     stderr: str = ""
+    provider_liveness: ProviderLivenessEvidence | None = None
     tool_calls: tuple[AgentToolCallEvidence, ...] = ()
     submission_payload: dict[str, JsonValue] | None = None
 
@@ -3452,6 +3453,7 @@ class ScriptedAgentExecutor:
             provider=response.provider,
             model=response.model,
             usage=response.usage,
+            provider_liveness=response.provider_liveness,
             tool_evidence_status=(
                 AgentToolEvidenceStatus.CAPTURED
                 if tool_calls

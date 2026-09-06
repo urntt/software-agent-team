@@ -35,9 +35,6 @@ from software_agent_team.budgets import (
 from software_agent_team.execution import (
     AgentExecutionActivity,
     AgentExecutionActivityKind,
-    AgentExecutionResult,
-    AgentExecutionStatus,
-    AgentExecutionTelemetry,
     AgentTokenUsage,
     ScriptedAgentExecutor,
     ScriptedAgentResponse,
@@ -81,7 +78,7 @@ from software_agent_team.planning import (
     render_planning_overview,
     run_interactive_planning,
 )
-from software_agent_team.response_corrections import semantic_payload_sha256
+from software_agent_team.submissions import AgentSubmissionPurpose
 from software_agent_team.teams import (
     AgentCapability,
     ModelRouteSelectionSource,
@@ -435,10 +432,9 @@ def correction_response(
     base_payload: dict[str, object],
     replacements: dict[str, object],
 ) -> str:
+    del base_payload
     return json.dumps(
         {
-            "kind": "semantic_correction_v2",
-            "base_response_sha256": semantic_payload_sha256(base_payload),
             "replacement_values": [replacements[path] for path in sorted(replacements)],
         }
     )
@@ -590,6 +586,49 @@ def test_planning_request_requires_explicit_pre_model_authorization() -> None:
 
     with pytest.raises(ValidationError, match="user_confirmed"):
         PlanningRequest.model_validate(payload)
+
+
+def test_planning_uses_typed_submission_instead_of_assistant_text(
+    tmp_path: Path,
+) -> None:
+    payload = proposal_response().model_dump(mode="json")
+    executor = ScriptedAgentExecutor(
+        [
+            ScriptedAgentResponse(
+                text="This presentation is deliberately not JSON.",
+                submission_payload=payload,
+            )
+        ]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(),
+        clock=AdvancingClock(),
+    )
+
+    created = coordinator.start(
+        request(),
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+
+    assert created is not None
+    contract = executor.requests[0].submission_contract
+    assert contract is not None
+    assert contract.purpose is AgentSubmissionPurpose.PLANNING_RESPONSE
+    turn = store.load_turn(request().run_id, 1)
+    assert turn.response_text == "This presentation is deliberately not JSON."
+    assert turn.submission_payload == payload
+    assert turn.submission_evidence is not None
+    assert turn.parsed_response == proposal_response()
+
+    without_presentation = turn.model_dump(mode="json")
+    without_presentation["response_text"] = None
+    without_presentation["response_sha256"] = None
+    loaded = PlanningTurn.model_validate(without_presentation)
+    assert loaded.response_text is None
+    assert loaded.parsed_response == proposal_response()
 
 
 def test_question_requires_suggestions_and_preserves_custom_answers() -> None:
@@ -2457,6 +2496,8 @@ def test_schema_three_turn_remains_readable_without_correction_evidence(
     payload.pop("response_validation", None)
     payload.pop("semantic_correction_request", None)
     payload.pop("semantic_correction_outcome", None)
+    payload.pop("submission_payload", None)
+    payload.pop("submission_evidence", None)
 
     loaded = PlanningTurn.model_validate(payload)
 
@@ -2475,6 +2516,64 @@ def test_schema_three_turn_remains_readable_without_correction_evidence(
     assert loaded.response_validation is None
     assert loaded.semantic_correction_request is None
     assert loaded.semantic_correction_outcome is None
+
+
+def test_schema_six_turn_remains_canonical_without_typed_submission(
+    tmp_path: Path,
+) -> None:
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=ScriptedAgentExecutor([response(proposal_response())]),
+        store=store,
+        policy=policy(),
+        clock=AdvancingClock(),
+    )
+    coordinator.start(
+        request(),
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+    payload = store.load_turn(request().run_id, 1).model_dump(mode="json")
+    payload["schema_version"] = 6
+    payload.pop("submission_payload")
+    payload.pop("submission_evidence")
+    expected = hashlib.sha256(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+
+    loaded = PlanningTurn.model_validate(payload)
+
+    assert loaded.schema_version == 6
+    assert loaded.submission_payload is None
+    assert loaded.submission_evidence is None
+    assert loaded.model_dump(mode="json") == payload
+    assert canonical_model_sha256(loaded) == expected
+
+
+def test_current_planning_turn_rejects_tampered_submission_payload(
+    tmp_path: Path,
+) -> None:
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=ScriptedAgentExecutor([response(proposal_response())]),
+        store=store,
+        policy=policy(),
+        clock=AdvancingClock(),
+    )
+    coordinator.start(
+        request(),
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+    payload = store.load_turn(request().run_id, 1).model_dump(mode="json")
+    assert isinstance(payload["submission_payload"], dict)
+    payload["submission_payload"]["unexpected"] = True
+
+    with pytest.raises(ValidationError, match="matching accepted evidence"):
+        PlanningTurn.model_validate(payload)
 
 
 def test_planning_store_accepts_evidence_indexes_beyond_three_digits(
@@ -2604,27 +2703,19 @@ def test_planning_persists_provider_liveness_evidence(tmp_path: Path) -> None:
         stall_recovered_count=1,
         stalled=False,
     )
-    execution_result = AgentExecutionResult(
-        status=AgentExecutionStatus.COMPLETED,
-        response_text=response(proposal_response()),
-        telemetry=AgentExecutionTelemetry(
-            role=planning.AgentRole.CLARIFIER,
-            agent_id="clarifier",
-            capability=AgentCapability.CLARIFICATION,
-            session_key="agent:clarifier:test",
-            command=("fake-openclaw",),
-            started_at=FIXED_TIME,
-            finished_at=FIXED_TIME,
-            duration_ms=125,
-            exit_code=0,
-            provider="provider",
-            model="provider/model",
-            provider_liveness=liveness,
-        ),
-    )
     store = PlanningStore(tmp_path / "planning")
     coordinator = AdaptivePlanningCoordinator(
-        executor=ScriptedAgentExecutor([execution_result]),
+        executor=ScriptedAgentExecutor(
+            [
+                ScriptedAgentResponse(
+                    text=response(proposal_response()),
+                    model="provider/model",
+                    provider="provider",
+                    duration_ms=125,
+                    provider_liveness=liveness,
+                )
+            ]
+        ),
         store=store,
         policy=policy(),
         clock=AdvancingClock(),
@@ -2859,8 +2950,6 @@ def test_invalid_complete_proposal_is_repaired_before_it_is_shown(
     invalid_payload = proposal_response().model_dump(mode="json")
     invalid_payload["proposal"]["tasks"][0]["owner_agent_id"] = "absent_agent"
     correction = {
-        "kind": "semantic_correction_v2",
-        "base_response_sha256": semantic_payload_sha256(invalid_payload),
         "replacement_values": [
             valid_payload["proposal"]["tasks"][0]["owner_agent_id"],
         ],
@@ -2868,7 +2957,12 @@ def test_invalid_complete_proposal_is_repaired_before_it_is_shown(
     executor = ScriptedAgentExecutor(
         [
             json.dumps(invalid_payload),
-            json.dumps(correction),
+            ScriptedAgentResponse(
+                text=(
+                    '{"kind"="semantic_correction_v2","base_response_sha256"=unquoted}'
+                ),
+                submission_payload=correction,
+            ),
         ]
     )
     store = PlanningStore(tmp_path / "planning")
@@ -2894,7 +2988,20 @@ def test_invalid_complete_proposal_is_repaired_before_it_is_shown(
     assert "tasks reference unknown Agent owners: absent_agent" in (
         rejected.validation_error
     )
-    assert "TARGETED_SEMANTIC_CORRECTION_V2" in executor.requests[1].prompt
+    assert (
+        executor.requests[0].submission_contract is not None
+        and executor.requests[0].submission_contract.purpose
+        is AgentSubmissionPurpose.PLANNING_RESPONSE
+    )
+    assert "Call `sat_submit_artifact` exactly once" in executor.requests[0].prompt
+    assert (
+        executor.requests[1].submission_contract is not None
+        and executor.requests[1].submission_contract.purpose
+        is AgentSubmissionPurpose.SEMANTIC_CORRECTION
+    )
+    correction_schema = executor.requests[1].submission_contract.parameters_schema()
+    assert set(correction_schema["properties"]) == {"replacement_values"}
+    assert "TARGETED_SEMANTIC_CORRECTION_VALUES_V1" in executor.requests[1].prompt
     assert "Do not regenerate or repeat that object" in executor.requests[1].prompt
     assert "Do not repeat or choose target paths" in executor.requests[1].prompt
     assert rejected.response_validation is not None
@@ -2902,6 +3009,13 @@ def test_invalid_complete_proposal_is_repaired_before_it_is_shown(
         "/proposal/tasks/0/owner_agent_id",
     )
     corrected = store.load_turn(request().run_id, 2)
+    assert rejected.submission_payload == invalid_payload
+    assert rejected.submission_evidence is not None
+    assert corrected.submission_payload == correction
+    assert corrected.submission_evidence is not None
+    assert corrected.response_text == (
+        '{"kind"="semantic_correction_v2","base_response_sha256"=unquoted}'
+    )
     assert corrected.semantic_correction_request is not None
     assert corrected.semantic_correction_outcome == "accepted"
     invocation = [
