@@ -1560,11 +1560,16 @@ def test_slow_initialization_reaches_current_turn_before_provider_lease(
         + FAKE_OPENCLAW_SETUP
         + "\ntime.sleep(0.05)\nappend_raw('ready')\nfinish()\n",
         initialization_policy=InitializationLivenessPolicy(
-            no_progress_seconds=0.35,
-            stall_grace_seconds=0.10,
+            no_progress_seconds=2.0,
+            stall_grace_seconds=0.40,
             source="test initialization contract",
         ),
     )
+    # This test owns delayed current-turn publication, not whether a newly
+    # spawned interpreter receives CPU inside a subsecond race. Establish the
+    # earlier attributed checkpoint before the timed child behavior begins.
+    sessions = tmp_path / "state" / "agents" / "planner" / "sessions"
+    sessions.mkdir(parents=True)
     activities = []
 
     result = executor.execute(
@@ -1714,21 +1719,9 @@ time.sleep(0.04)
 def test_initialization_observer_failure_stops_with_typed_process_evidence(
     tmp_path: Path,
 ) -> None:
-    program = r"""
-import os
-import sys
-import time
-from pathlib import Path
-
-agent_id = sys.argv[sys.argv.index("--agent") + 1]
-sessions = Path(os.environ["OPENCLAW_STATE_DIR"]) / "agents" / agent_id / "sessions"
-sessions.mkdir(parents=True, exist_ok=True)
-(sessions / "sessions.json").write_text("not-json", encoding="utf-8")
-time.sleep(30)
-"""
     executor = live_liveness_executor(
         tmp_path,
-        program,
+        "import time\ntime.sleep(30)\n",
         initialization_policy=InitializationLivenessPolicy(
             no_progress_seconds=0.40,
             stall_grace_seconds=0.10,
@@ -1736,6 +1729,12 @@ time.sleep(30)
         ),
         process_grace_seconds=0.10,
     )
+    # Malformed observer evidence is this fixture's precondition. Publish it
+    # before process launch so the expected failure cannot lose a race with the
+    # accelerated initialization-stall guard.
+    sessions = tmp_path / "state" / "agents" / "planner" / "sessions"
+    sessions.mkdir(parents=True)
+    (sessions / "sessions.json").write_text("not-json", encoding="utf-8")
     activities = []
 
     result = executor.execute(

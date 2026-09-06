@@ -729,6 +729,11 @@ content-free provider-liveness policy and counters, collection status,
 transcript digest, current-turn record count, ordered sanitized tool records,
 and any bounded integrity error. Missing model, provider, token, or required
 Reviewer tool evidence is never treated as zero usage or success. A model call
+whose usage is unknown blocks any later model call under a user-task budget,
+but accounting remains a separate evidence dimension: an already-attributed
+runtime or response failure stays the primary termination reason. When no
+earlier failure exists, a post-call budget rejection remains the primary
+resource-limit reason. A model call
 for correction is permitted only for a typed model-owned semantic failure with
 exact correction paths. Product correction uses the same
 provider-liveness and remaining whole-run deadline authority; controlled

@@ -31,6 +31,7 @@ from software_agent_team.artifacts import (
 from software_agent_team.budgets import (
     AgentBudget,
     AgentBudgetLedger,
+    BudgetAuthority,
     ModelPricing,
 )
 from software_agent_team.dynamic_runner import DynamicAgentRunner
@@ -52,6 +53,7 @@ from software_agent_team.invocation_lifecycle import (
     InvocationPhase,
     InvocationStopReason,
 )
+from software_agent_team.model_metadata import ModelMetadataSource
 from software_agent_team.planning import AdaptiveImplementationPlan, ProposedTask
 from software_agent_team.progress import ProgressEvent, ProgressEventKind
 from software_agent_team.responses import (
@@ -364,10 +366,12 @@ class DynamicExecutor:
         invalid_writer_once: bool = False,
         invalid_writer_transport: bool = False,
         omit_model_for: str | None = None,
+        omit_usage_for: str | None = None,
         mutate_reader: str | None = None,
         synchronize_quality: bool = False,
         provider_fail_once_for: str | None = None,
         provider_stall_once_for: str | None = None,
+        initialization_stall_for: str | None = None,
         zero_review_tool_calls_once: bool = False,
         invalid_review_response_once: bool = False,
         invalid_review_evidence: bool = False,
@@ -379,9 +383,11 @@ class DynamicExecutor:
         self.invalid_writer_once = invalid_writer_once
         self.invalid_writer_transport = invalid_writer_transport
         self.omit_model_for = omit_model_for
+        self.omit_usage_for = omit_usage_for
         self.mutate_reader = mutate_reader
         self.provider_fail_once_for = provider_fail_once_for
         self.provider_stall_once_for = provider_stall_once_for
+        self.initialization_stall_for = initialization_stall_for
         self.zero_review_tool_calls_once = zero_review_tool_calls_once
         self.invalid_review_response_once = invalid_review_response_once
         self.invalid_review_evidence = invalid_review_evidence
@@ -403,7 +409,51 @@ class DynamicExecutor:
             self.requests.append(request)
             count = self._counts.get(request.agent_id, 0) + 1
             self._counts[request.agent_id] = count
-        self._emit_lifecycle_start(request, activity_handler)
+        self._emit_lifecycle_start(
+            request,
+            activity_handler,
+            provider_ready=self.initialization_stall_for != request.agent_id,
+        )
+        if self.initialization_stall_for == request.agent_id:
+            if activity_handler is not None:
+                activity_handler(
+                    AgentExecutionActivity(
+                        kind=AgentExecutionActivityKind.INITIALIZATION_STALLED,
+                        agent_id=request.agent_id,
+                        session_key=request.session_key,
+                        model=request.model,
+                        elapsed_ms=90_000,
+                        initialization_checkpoint=(
+                            InitializationCheckpoint.TRANSCRIPT_HEADER
+                        ),
+                        silence_seconds=90,
+                        stall_grace_seconds=15,
+                        policy_source="test initialization contract",
+                    )
+                )
+            self._emit_lifecycle_stop(
+                request,
+                activity_handler,
+                InvocationStopReason.INITIALIZATION_STALL,
+            )
+            return AgentExecutionResult(
+                status=AgentExecutionStatus.INITIALIZATION_STALLED,
+                error="scripted initialization stall",
+                telemetry=AgentExecutionTelemetry(
+                    role=None,
+                    agent_id=request.agent_id,
+                    capability=request.capability,
+                    session_key=request.session_key,
+                    command=("fake-agent", request.agent_id),
+                    started_at=FIXED_TIME,
+                    finished_at=FIXED_TIME,
+                    duration_ms=90_000,
+                    exit_code=-15,
+                    stdout="",
+                    stderr="scripted initialization stall",
+                    session_id=f"session-{request.agent_id}",
+                ),
+            )
         if self.provider_fail_once_for == request.agent_id and count == 1:
             self._emit_lifecycle_stop(
                 request,
@@ -622,10 +672,12 @@ class DynamicExecutor:
     def _emit_lifecycle_start(
         request: AgentExecutionRequest,
         activity_handler: AgentExecutionActivityHandler | None,
+        *,
+        provider_ready: bool = True,
     ) -> None:
         if activity_handler is None:
             return
-        for kind, phase, checkpoint, action in (
+        activities = (
             (
                 AgentExecutionActivityKind.INVOCATION_LAUNCHED,
                 InvocationPhase.LAUNCHED,
@@ -644,7 +696,10 @@ class DynamicExecutor:
                 InitializationCheckpoint.CURRENT_TURN,
                 "Test adapter is waiting for the approved model",
             ),
-        ):
+        )
+        if not provider_ready:
+            activities = activities[:2]
+        for kind, phase, checkpoint, action in activities:
             activity_handler(
                 AgentExecutionActivity(
                     kind=kind,
@@ -799,10 +854,14 @@ class DynamicExecutor:
             session_id=f"session-{request.agent_id}",
             provider="test",
             model=(None if self.omit_model_for == request.agent_id else request.model),
-            usage=AgentTokenUsage(
-                input_tokens=10,
-                output_tokens=5,
-                total_tokens=15,
+            usage=(
+                None
+                if self.omit_usage_for == request.agent_id
+                else AgentTokenUsage(
+                    input_tokens=10,
+                    output_tokens=5,
+                    total_tokens=15,
+                )
             ),
             tool_evidence_status=(
                 AgentToolEvidenceStatus.INVALID
@@ -928,7 +987,17 @@ def runtime(
         quality_gate=quality_gate,
         budget_ledger=AgentBudgetLedger(team_plan.budget),
         pricing_by_model={
-            route.model: ModelPricing(model=route.model)
+            route.model: (
+                ModelPricing(
+                    model=route.model,
+                    input_cost_per_million_usd="1",
+                    output_cost_per_million_usd="2",
+                    pricing_source=ModelMetadataSource.USER_SUPPLIED,
+                    pricing_observed_at=FIXED_TIME,
+                )
+                if team_plan.budget.authority is BudgetAuthority.USER_TASK
+                else ModelPricing(model=route.model)
+            )
             for route in team_plan.model_routes.routes
         },
         manual_review_criteria=("AC_REVIEW",),
@@ -1611,6 +1680,71 @@ def test_post_call_budget_rejection_is_persisted_before_schedule_stops(
     assert usage.input_tokens == 10
     assert usage.calls_completed == 1
     assert usage.active_calls == 0
+
+
+def test_unknown_usage_does_not_replace_initialization_failure(
+    tmp_path: Path,
+) -> None:
+    user_budget = AgentBudget(
+        authority=BudgetAuthority.USER_TASK,
+        max_estimated_cost_usd="5",
+    )
+    runner, team_plan, _, quality_gate, _ = runtime(
+        tmp_path,
+        run_budget=user_budget,
+        executor_options={"initialization_stall_for": "builder"},
+    )
+
+    result = DagScheduler().execute(team_plan, runner)
+
+    assert result.status is ScheduleStatus.FAILED
+    assert result.failed_agent_id == "builder"
+    assert runner.termination_reasons["builder"] is (
+        TerminationReason.DEPENDENCY_UNAVAILABLE
+    )
+    assert quality_gate.calls == 0
+    record = runner.artifact_store.load(runner.execution_records[0])
+    assert isinstance(record, AgentExecutionRecord)
+    assert record.execution_status is AgentExecutionStatus.INITIALIZATION_STALLED
+    assert "scripted initialization stall" in (record.error or "")
+    assert "budget rejection" in (record.error or "")
+    usage = runner.budget_ledger.snapshot()
+    assert usage.calls_started == 1
+    assert usage.calls_completed == 1
+    assert usage.active_calls == 0
+    assert usage.unreported_token_calls == 1
+
+
+def test_completed_call_with_unknown_usage_keeps_dependency_failure_primary(
+    tmp_path: Path,
+) -> None:
+    user_budget = AgentBudget(
+        authority=BudgetAuthority.USER_TASK,
+        max_estimated_cost_usd="5",
+    )
+    runner, team_plan, _, quality_gate, _ = runtime(
+        tmp_path,
+        run_budget=user_budget,
+        executor_options={"omit_usage_for": "builder"},
+    )
+
+    result = DagScheduler().execute(team_plan, runner)
+
+    assert result.status is ScheduleStatus.FAILED
+    assert runner.termination_reasons["builder"] is (
+        TerminationReason.DEPENDENCY_UNAVAILABLE
+    )
+    assert quality_gate.calls == 0
+    record = runner.artifact_store.load(runner.execution_records[0])
+    assert isinstance(record, AgentExecutionRecord)
+    assert record.execution_status is AgentExecutionStatus.COMPLETED
+    assert "successful execution omitted token usage" in (record.error or "")
+    assert "budget rejection" in (record.error or "")
+    usage = runner.budget_ledger.snapshot()
+    assert usage.calls_started == 1
+    assert usage.calls_completed == 1
+    assert usage.active_calls == 0
+    assert usage.unreported_token_calls == 1
 
 
 def test_missing_success_model_is_dependency_failure_without_semantic_repair(

@@ -787,6 +787,17 @@ class DynamicAgentRunner:
                 ),
             )
             if persisted.budget_error is not None:
+                # Accounting is an independent terminal evidence dimension. If
+                # this invocation already has an attributable failure, unknown
+                # usage must stop any further call without reclassifying that
+                # primary runtime or response failure.
+                if failure is not None:
+                    if response_validation is not None:
+                        raise DynamicAgentRunnerError(
+                            record_error or self._error_detail(failure),
+                            TerminationReason.ARTIFACT_INVALID,
+                        ) from failure
+                    raise failure
                 raise DynamicAgentRunnerError(
                     persisted.budget_error,
                     TerminationReason.RESOURCE_LIMIT_REACHED,

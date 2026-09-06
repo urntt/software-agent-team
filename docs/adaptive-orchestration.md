@@ -856,7 +856,11 @@ route reference, resolution source and reason, frozen price source and
 observation time, telemetry, estimated cost, and remaining task authorization.
 The standard progress view shows the updated amount after every invocation;
 the terminal ledger and report preserve the complete Planning-to-delivery
-breakdown by phase, Agent, attempt, route, and model.
+breakdown by phase, Agent, attempt, route, and model. Unknown usage is retained
+as unknown and prevents another user-budget call, but it does not rewrite an
+already-attributed initialization, provider, transport, or semantic failure.
+When no earlier failure exists, a post-call budget rejection remains the
+primary resource-limit reason.
 Runtime switching is currently permitted only after an attributable
 `provider_failure`, only when the approved Agent assignment lists a next route,
 and only within that finite approved route list. The failed invocation is

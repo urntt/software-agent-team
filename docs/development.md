@@ -251,6 +251,12 @@ through v5, and Planning schema v8 from v2 through v7.
 Initialization file-race tests must distinguish an exact open-time missing file
 from malformed or unsafe evidence and must cover atomic publication between
 observations. Do not infer an earlier `open` result from a later `exists` check.
+Accelerated live-process fixtures must also own their semantic preconditions:
+publish malformed observer input before launch when malformed input is under
+test, and establish an earlier attributed checkpoint before deliberately
+delaying a later one. Leave a clear order-of-magnitude margin between host
+scheduling jitter and the tested delay; never require a child interpreter to
+win a subsecond race merely to select the expected test branch.
 Any added phase, stop reason, or infrastructure threshold belongs in the one
 shared lifecycle or decision-limit registry rather than a parallel adapter.
 

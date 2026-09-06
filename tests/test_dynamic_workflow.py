@@ -14,6 +14,7 @@ import software_agent_team.dynamic_workflow as dynamic_workflow_module
 from software_agent_team.artifact_store import ArtifactStore
 from software_agent_team.artifacts import (
     AcceptanceCriterion,
+    AgentExecutionRecord,
     AgentToolCallEvidence,
     AgentToolEvidenceStatus,
     ArtifactKind,
@@ -27,7 +28,12 @@ from software_agent_team.artifacts import (
     ReviewSeverity,
     TaskBrief,
 )
-from software_agent_team.budgets import AgentBudget, AgentBudgetLedger, ModelPricing
+from software_agent_team.budgets import (
+    AgentBudget,
+    AgentBudgetLedger,
+    BudgetAuthority,
+    ModelPricing,
+)
 from software_agent_team.controls import (
     ControlApplicationBoundary,
     ControlCommandStatus,
@@ -48,6 +54,7 @@ from software_agent_team.execution import (
     AgentExecutionResult,
     AgentExecutionStatus,
     AgentExecutionTelemetry,
+    AgentExecutor,
     AgentTokenUsage,
 )
 from software_agent_team.integrity import canonical_model_sha256
@@ -56,6 +63,7 @@ from software_agent_team.invocation_lifecycle import (
     InvocationPhase,
     InvocationStopReason,
 )
+from software_agent_team.model_metadata import ModelMetadataSource
 from software_agent_team.planning import (
     AdaptiveImplementationPlan,
     AgentTimeoutResolution,
@@ -183,6 +191,7 @@ def approved_inputs(
     run_id: str,
     iteration_limit: int = 1,
     include_reviewer: bool = True,
+    run_budget: AgentBudget | None = None,
 ) -> ApprovedPlanningResult:
     """Build one coherent user-approved adaptive input bundle."""
 
@@ -291,12 +300,15 @@ def approved_inputs(
             default_route_id="default",
             routes=(ModelRoute(id="default", model=MODEL),),
         ),
-        budget=AgentBudget(
-            max_calls=8,
-            max_input_tokens=10_000,
-            max_output_tokens=5_000,
-            max_agent_duration_seconds=120,
-            max_estimated_cost_usd="5",
+        budget=(
+            run_budget
+            or AgentBudget(
+                max_calls=8,
+                max_input_tokens=10_000,
+                max_output_tokens=5_000,
+                max_agent_duration_seconds=120,
+                max_estimated_cost_usd="5",
+            )
         ),
         iteration_limit=iteration_limit,
         max_concurrency=2,
@@ -668,7 +680,7 @@ class AdaptiveExecutor:
 def coordinator(
     tmp_path: Path,
     approved: ApprovedPlanningResult,
-    executor: AdaptiveExecutor,
+    executor: AgentExecutor,
     gates: RecordingQualityGateFactory,
     *,
     control_store_handler=None,
@@ -689,7 +701,19 @@ def coordinator(
         workspaces_root=tmp_path / "workspaces",
         executor=executor,
         quality_gate_factory=gates,
-        pricing_by_model={MODEL: ModelPricing(model=MODEL)},
+        pricing_by_model={
+            MODEL: (
+                ModelPricing(
+                    model=MODEL,
+                    input_cost_per_million_usd="1",
+                    output_cost_per_million_usd="2",
+                    pricing_source=ModelMetadataSource.USER_SUPPLIED,
+                    pricing_observed_at=FIXED_TIME,
+                )
+                if approved.team_plan.budget.authority is BudgetAuthority.USER_TASK
+                else ModelPricing(model=MODEL)
+            )
+        },
         software_version=software_version(),
         budget_ledger=budget_ledger,
         manual_review_criteria=manual,
@@ -931,6 +955,79 @@ def test_dynamic_workflow_persists_runner_failure_without_claiming_new_commit(
     assert gates.calls == []
     assert outcome.schedules[0].status is ScheduleStatus.FAILED
     assert len(outcome.execution_records) == 1
+
+
+def test_dynamic_workflow_preserves_runtime_failure_when_usage_is_unknown(
+    tmp_path: Path,
+) -> None:
+    user_budget = AgentBudget(
+        authority=BudgetAuthority.USER_TASK,
+        max_estimated_cost_usd="5",
+    )
+    approved = approved_inputs(
+        run_id="adaptive-initialization-stall",
+        run_budget=user_budget,
+    )
+    source = initialize_source(tmp_path)
+
+    class InitializationStallExecutor:
+        def execute(
+            self,
+            request: AgentExecutionRequest,
+            *,
+            activity_handler: AgentExecutionActivityHandler | None = None,
+        ) -> AgentExecutionResult:
+            del activity_handler
+            return AgentExecutionResult(
+                status=AgentExecutionStatus.INITIALIZATION_STALLED,
+                error="scripted initialization stall",
+                telemetry=AgentExecutionTelemetry(
+                    role=None,
+                    agent_id=request.agent_id,
+                    capability=request.capability,
+                    session_key=request.session_key,
+                    command=("fake-agent", request.agent_id),
+                    started_at=FIXED_TIME,
+                    finished_at=FIXED_TIME,
+                    duration_ms=90_000,
+                    exit_code=-15,
+                    stdout="",
+                    stderr="scripted initialization stall",
+                ),
+            )
+
+    gates = RecordingQualityGateFactory()
+    executor = InitializationStallExecutor()
+    outcome = coordinator(
+        tmp_path,
+        approved,
+        executor,
+        gates,
+    ).execute(approved, source_repository=source)
+    store, report = load_report(tmp_path, outcome, approved)
+
+    assert outcome.record.phase is RunPhase.FAILED
+    assert outcome.record.termination_reason is TerminationReason.DEPENDENCY_UNAVAILABLE
+    assert report.status is FinalStatus.FAILED
+    assert report.termination_reason == TerminationReason.DEPENDENCY_UNAVAILABLE.value
+    assert "scripted initialization stall" in report.unresolved_findings[0]
+    execution = store.load(outcome.execution_records[0])
+    assert isinstance(execution, AgentExecutionRecord)
+    assert execution.execution_status is AgentExecutionStatus.INITIALIZATION_STALLED
+    assert "budget rejection" in (execution.error or "")
+    ledger = json.loads(
+        (
+            tmp_path / "runs" / approved.task_brief.run_id / "budget-ledger.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert ledger["usage"]["calls_started"] == 1
+    assert ledger["usage"]["calls_completed"] == 1
+    assert ledger["usage"]["active_calls"] == 0
+    assert ledger["usage"]["unreported_token_calls"] == 1
+    markdown = tmp_path / "runs" / approved.task_brief.run_id / "final-report.md"
+    rendered = markdown.read_text(encoding="utf-8")
+    assert "Termination reason: `dependency_unavailable`" in rendered
+    assert "Calls with unknown cost: 1" in rendered
 
 
 def test_dynamic_workflow_stops_an_unchanged_correctable_blocker(
