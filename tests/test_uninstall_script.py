@@ -134,8 +134,9 @@ esac
         **os.environ,
         "PATH": f"{fake_bin}:/usr/bin:/bin",
         "HOME": str(home),
+        "XDG_CONFIG_HOME": str(home / ".config"),
+        "SAT_CONFIG_PATH": "",
         "SAT_BIN_DIR": str(install_bin),
-        "SAT_CONFIG_PATH": str(configuration),
         "SAT_STATE_ROOT": str(state),
         "PYTHONPATH": os.pathsep.join(
             filter(
@@ -289,6 +290,7 @@ def test_uninstaller_exports_before_explicit_purge(tmp_path: Path) -> None:
 
     assert completed.returncode == 0, completed.stderr
     assert not configuration.exists()
+    assert not configuration.parent.exists()
     state = Path(environment["SAT_STATE_ROOT"])
     assert not (state / "runs").exists()
     assert not (state / "workspaces").exists()
@@ -413,9 +415,35 @@ def test_uninstaller_full_purge_removes_the_complete_owned_state_root(
 
     assert completed.returncode == 0, completed.stderr
     assert not configuration.exists()
+    assert not configuration.parent.exists()
     assert not state.exists()
     assert not (install_bin / "sat").exists()
     assert "self-check evidence" in completed.stdout
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="uninstaller supports Linux/WSL")
+def test_uninstaller_custom_config_path_never_claims_its_parent(
+    tmp_path: Path,
+) -> None:
+    checkout, install_bin, configuration, environment = prepare_installation(tmp_path)
+    configuration.unlink()
+    custom_parent = tmp_path / "shared-configuration"
+    custom_parent.mkdir()
+    custom_config = custom_parent / "sat.json"
+    custom_config.write_text("{}\n", encoding="utf-8")
+    environment["SAT_CONFIG_PATH"] = str(custom_config)
+
+    completed = run_uninstaller(
+        checkout,
+        environment,
+        "--purge-config",
+        "--yes",
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert not custom_config.exists()
+    assert custom_parent.is_dir()
+    assert not (install_bin / "sat").exists()
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="uninstaller supports Linux/WSL")
@@ -492,7 +520,9 @@ def test_uninstaller_removes_a_versioned_managed_lifecycle_but_preserves_state(
     old_release = managed_root / "versions/0.0.9-gbbbbbbbbbbbb"
     old_release.mkdir()
     (old_release / "retained.txt").write_text("old release\n", encoding="utf-8")
-    configuration = Path(environment["SAT_CONFIG_PATH"])
+    configuration = Path(environment["XDG_CONFIG_HOME"]) / (
+        "software-agent-team/config.json"
+    )
     state = Path(environment["SAT_STATE_ROOT"])
 
     completed = run_uninstaller(release, environment, "--yes")
@@ -541,7 +571,9 @@ def test_versioned_uninstall_refuses_conflicting_metadata_before_purge(
     payload = json.loads(marker_path.read_text(encoding="utf-8"))
     payload["application_link"] = str(tmp_path / "different-application")
     marker_path.write_text(json.dumps(payload), encoding="utf-8")
-    configuration = Path(environment["SAT_CONFIG_PATH"])
+    configuration = Path(environment["XDG_CONFIG_HOME"]) / (
+        "software-agent-team/config.json"
+    )
 
     completed = run_uninstaller(
         release,

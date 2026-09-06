@@ -12,7 +12,13 @@ task_sat_link="$task_bin_dir/sat"
 task_uninstall_target="$task_root/scripts/uninstall.sh"
 task_uninstall_link="$task_bin_dir/sat-uninstall"
 task_xdg_config_root="${XDG_CONFIG_HOME:-$HOME/.config}"
-task_config_path="${SAT_CONFIG_PATH:-$task_xdg_config_root/software-agent-team/config.json}"
+task_config_directory=""
+if [[ -n "${SAT_CONFIG_PATH:-}" ]]; then
+  task_config_path="$SAT_CONFIG_PATH"
+else
+  task_config_directory="$task_xdg_config_root/software-agent-team"
+  task_config_path="$task_config_directory/config.json"
+fi
 task_xdg_state_root="${XDG_STATE_HOME:-$HOME/.local/state}"
 task_state_root="${SAT_STATE_ROOT:-$task_xdg_state_root/software-agent-team}"
 task_workspaces_root="$task_state_root/workspaces"
@@ -440,6 +446,9 @@ task_state_arguments=(
   --data-policy "$task_data_policy"
   --provider-policy "$task_provider_policy"
 )
+if [[ -n "$task_config_directory" ]]; then
+  task_state_arguments+=(--config-directory "$task_config_directory")
+fi
 if [[ -n "$task_export_to" ]]; then
   task_state_arguments+=(--export-to "$task_export_to")
 fi

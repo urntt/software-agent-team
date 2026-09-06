@@ -684,6 +684,13 @@ field to one category. Uninstall refuses active runs, active or orphaned
 provider processes, symbolic or foreign category roots, and unknown categories
 before it changes configuration or state.
 
+Configuration belongs to the same typed uninstall transaction without being a
+state-root category. The standard SAT configuration directory is removed only
+after its selected file is purged and only when the exact user-owned canonical
+directory is empty. A custom `SAT_CONFIG_PATH` grants file authority only, so
+its parent and unrelated XDG configuration siblings are never inferred as SAT
+property.
+
 Every new completed, failed, or user-cancelled `FinalReport` embeds the same
 typed `SoftwareVersionReport` captured at task admission (or immediately before
 an explicit evaluation run). This binds the controlling release, full source

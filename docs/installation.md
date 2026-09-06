@@ -593,6 +593,16 @@ data and provider state are both purged, the ownership marker and empty state
 root are removed too. An unknown future category fails closed instead of being
 silently preserved under a successful full-purge message.
 
+The same Python lifecycle transaction owns configuration removal. With the
+normal or `XDG_CONFIG_HOME` layout, `--purge-config` removes `config.json` and
+then removes the exact SAT-dedicated configuration directory only when it is
+empty. It never removes the XDG configuration root or another application's
+sibling. If unknown content remains in the SAT directory, the uninstaller
+preserves that content and reports the non-empty directory. An explicit
+`SAT_CONFIG_PATH` authorizes removal of that file only; SAT does not infer
+ownership of its custom parent directory. Symbolic or non-canonical
+configuration paths fail before export or deletion.
+
 Releases that predate user-owned sandbox mountpoint preparation can leave one
 empty root-owned `.openclaw/sandbox-skills/skills` tree inside an otherwise
 user-owned SAT workspace. Before exporting data or deleting any selected

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import json
 import os
 import shutil
@@ -46,6 +47,7 @@ class UninstallStateRequest:
     config_policy: UninstallPolicy
     data_policy: UninstallPolicy
     provider_policy: UninstallPolicy
+    config_directory: Path | None = None
     export_to: Path | None = None
 
 
@@ -54,6 +56,7 @@ class UninstallStateResult:
     """User-visible facts from one applied state transaction."""
 
     messages: tuple[str, ...]
+    config_directory_removed: bool
     state_root_removed: bool
 
 
@@ -82,8 +85,39 @@ def _require_owned_real_directory(path: Path, *, label: str) -> os.stat_result:
     return metadata
 
 
-def _validate_configuration(path: Path) -> None:
+def _require_real_canonical_directory(path: Path, *, label: str) -> os.stat_result:
+    try:
+        metadata = path.lstat()
+    except OSError as error:
+        raise UninstallStateError(f"{label} cannot be inspected: {path}") from error
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+        raise UninstallStateError(f"{label} must be a real directory: {path}")
+    if path.resolve(strict=True) != path:
+        raise UninstallStateError(f"{label} must be canonical: {path}")
+    return metadata
+
+
+def _validate_configuration(request: UninstallStateRequest) -> None:
+    path = request.config_path
     _require_specific_absolute(path, label="configuration path")
+    parent = path.parent
+    if _lexists(parent):
+        _require_real_canonical_directory(parent, label="configuration directory")
+    config_directory = request.config_directory
+    if config_directory is not None:
+        _require_specific_absolute(
+            config_directory,
+            label="SAT configuration directory",
+        )
+        if config_directory != parent:
+            raise UninstallStateError(
+                "SAT configuration directory must be the configuration parent"
+            )
+        if _lexists(config_directory):
+            _require_owned_real_directory(
+                config_directory,
+                label="SAT configuration directory",
+            )
     if not _lexists(path):
         return
     try:
@@ -114,6 +148,13 @@ def _validate_export_destination(request: UninstallStateRequest) -> None:
     resolved_state = request.state_root.resolve(strict=False)
     if destination == resolved_state or destination.is_relative_to(resolved_state):
         raise UninstallStateError("export destination must be outside SAT state")
+    if request.config_directory is not None and (
+        destination == request.config_directory
+        or destination.is_relative_to(request.config_directory)
+    ):
+        raise UninstallStateError(
+            "export destination must be outside the SAT configuration directory"
+        )
 
 
 def _validate_run_liveness(paths: ProductStatePaths) -> None:
@@ -189,7 +230,7 @@ def preflight_uninstall_state(request: UninstallStateRequest) -> ProductStatePat
     """Validate every state and liveness boundary without changing it."""
 
     _require_specific_absolute(request.state_root, label="SAT state root")
-    _validate_configuration(request.config_path)
+    _validate_configuration(request)
     _validate_export_destination(request)
     paths = ProductStatePaths.below(request.state_root)
     if not _lexists(paths.root):
@@ -309,6 +350,7 @@ def apply_uninstall_state(request: UninstallStateRequest) -> UninstallStateResul
     if request.export_to is not None:
         messages.append(f"uninstall: exported preserved state to {request.export_to}")
 
+    config_directory_removed = False
     if request.config_policy is UninstallPolicy.PURGE:
         try:
             request.config_path.unlink(missing_ok=True)
@@ -317,6 +359,29 @@ def apply_uninstall_state(request: UninstallStateRequest) -> UninstallStateResul
                 "SAT configuration could not be deleted"
             ) from error
         messages.append(f"uninstall: deleted SAT configuration {request.config_path}")
+        config_directory = request.config_directory
+        if config_directory is not None and _lexists(config_directory):
+            _require_owned_real_directory(
+                config_directory,
+                label="SAT configuration directory",
+            )
+            try:
+                config_directory.rmdir()
+            except OSError as error:
+                if error.errno not in {errno.ENOTEMPTY, errno.EEXIST}:
+                    raise UninstallStateError(
+                        "empty SAT configuration directory could not be deleted"
+                    ) from error
+                messages.append(
+                    "uninstall: preserved non-empty SAT configuration directory "
+                    f"{config_directory}"
+                )
+            else:
+                config_directory_removed = True
+                messages.append(
+                    "uninstall: removed empty SAT configuration directory "
+                    f"{config_directory}"
+                )
     else:
         messages.append(f"uninstall: preserved SAT configuration {request.config_path}")
 
@@ -381,6 +446,7 @@ def apply_uninstall_state(request: UninstallStateRequest) -> UninstallStateResul
             state_root_removed = True
     return UninstallStateResult(
         messages=tuple(messages),
+        config_directory_removed=config_directory_removed,
         state_root_removed=state_root_removed,
     )
 
@@ -390,6 +456,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("action", choices=("preflight", "apply"))
     parser.add_argument("--state-root", type=Path, required=True)
     parser.add_argument("--config-path", type=Path, required=True)
+    parser.add_argument("--config-directory", type=Path)
     parser.add_argument(
         "--config-policy", choices=tuple(UninstallPolicy), required=True
     )
@@ -414,6 +481,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             config_policy=UninstallPolicy(arguments.config_policy),
             data_policy=UninstallPolicy(arguments.data_policy),
             provider_policy=UninstallPolicy(arguments.provider_policy),
+            config_directory=arguments.config_directory,
             export_to=arguments.export_to,
         )
         if arguments.action == "preflight":

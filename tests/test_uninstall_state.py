@@ -65,6 +65,7 @@ def request_for(
     data_policy: UninstallPolicy = UninstallPolicy.KEEP,
     provider_policy: UninstallPolicy = UninstallPolicy.KEEP,
     export_to: Path | None = None,
+    manage_config_directory: bool = True,
 ) -> UninstallStateRequest:
     """Build one explicit state lifecycle request."""
 
@@ -74,6 +75,7 @@ def request_for(
         config_policy=config_policy,
         data_policy=data_policy,
         provider_policy=provider_policy,
+        config_directory=config.parent if manage_config_directory else None,
         export_to=export_to,
     )
 
@@ -109,8 +111,10 @@ def test_export_includes_every_data_category_then_full_purge_removes_state(
     )
 
     assert result.state_root_removed is True
+    assert result.config_directory_removed is True
     assert not paths.root.exists()
     assert not config.exists()
+    assert not config.parent.exists()
     assert (export / "configuration/config.json").is_file()
     assert (export / "data/runs/finished/run.json").is_file()
     assert (export / "data/workspaces/finished/result.py").is_file()
@@ -137,7 +141,9 @@ def test_partial_purge_preserves_unselected_data_and_marker(tmp_path: Path) -> N
     )
 
     assert result.state_root_removed is False
+    assert result.config_directory_removed is False
     assert config.is_file()
+    assert config.parent.is_dir()
     assert (paths.self_checks / "finished/0001.json").is_file()
     assert (paths.workspaces / "finished/result.py").is_file()
     assert not paths.openclaw.exists()
@@ -210,7 +216,7 @@ def test_full_purge_is_idempotent_when_selected_state_is_already_absent(
     tmp_path: Path,
 ) -> None:
     paths = ProductStatePaths.below((tmp_path / "missing-state").resolve())
-    config = (tmp_path / "missing-config.json").resolve()
+    config = (tmp_path / "missing-configuration/config.json").resolve()
     request = request_for(
         paths,
         config,
@@ -224,3 +230,85 @@ def test_full_purge_is_idempotent_when_selected_state_is_already_absent(
 
     assert first.state_root_removed is False
     assert second == first
+
+
+def test_config_purge_preserves_unknown_content_and_xdg_siblings(
+    tmp_path: Path,
+) -> None:
+    paths, config = prepare_state(tmp_path)
+    unknown = config.parent / "user-note.txt"
+    unknown.write_text("preserve\n", encoding="utf-8")
+    sibling = config.parent.parent / "another-application/settings.json"
+    sibling.parent.mkdir()
+    sibling.write_text("{}\n", encoding="utf-8")
+
+    result = apply_uninstall_state(
+        request_for(paths, config, config_policy=UninstallPolicy.PURGE)
+    )
+
+    assert result.config_directory_removed is False
+    assert not config.exists()
+    assert unknown.read_text(encoding="utf-8") == "preserve\n"
+    assert sibling.read_text(encoding="utf-8") == "{}\n"
+    assert any("preserved non-empty" in message for message in result.messages)
+
+
+def test_custom_config_path_purges_only_the_explicit_file(tmp_path: Path) -> None:
+    paths, _ = prepare_state(tmp_path)
+    custom_parent = (tmp_path / "custom-configuration").resolve()
+    custom_parent.mkdir()
+    config = custom_parent / "sat.json"
+    config.write_text("{}\n", encoding="utf-8")
+
+    result = apply_uninstall_state(
+        request_for(
+            paths,
+            config,
+            config_policy=UninstallPolicy.PURGE,
+            manage_config_directory=False,
+        )
+    )
+
+    assert result.config_directory_removed is False
+    assert not config.exists()
+    assert custom_parent.is_dir()
+
+
+def test_config_directory_symlink_is_rejected_without_touching_target(
+    tmp_path: Path,
+) -> None:
+    paths, original_config = prepare_state(tmp_path)
+    original_config.unlink()
+    original_config.parent.rmdir()
+    outside = (tmp_path / "outside-configuration").resolve()
+    outside.mkdir()
+    outside_config = outside / "config.json"
+    outside_config.write_text("outside\n", encoding="utf-8")
+    original_config.parent.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(UninstallStateError, match="must be a real directory"):
+        apply_uninstall_state(
+            request_for(
+                paths,
+                original_config,
+                config_policy=UninstallPolicy.PURGE,
+            )
+        )
+
+    assert outside_config.read_text(encoding="utf-8") == "outside\n"
+
+
+def test_export_destination_cannot_be_inside_managed_config_directory(
+    tmp_path: Path,
+) -> None:
+    paths, config = prepare_state(tmp_path)
+    destination = config.parent / "backup"
+
+    with pytest.raises(
+        UninstallStateError,
+        match="outside the SAT configuration directory",
+    ):
+        preflight_uninstall_state(request_for(paths, config, export_to=destination))
+
+    assert config.is_file()
+    assert not destination.exists()
