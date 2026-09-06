@@ -86,7 +86,7 @@ from software_agent_team.response_corrections import (
     ResponseValidationDiagnostic,
     SemanticCorrectionOutcome,
     SemanticCorrectionPlan,
-    apply_semantic_correction,
+    apply_semantic_correction_with_evidence,
     build_semantic_correction_plan,
     correction_outcome,
 )
@@ -96,6 +96,7 @@ from software_agent_team.responses import (
     ReviewToolEvidenceAttempt,
     TestReportResponse,
     WorkResultResponse,
+    bind_review_evidence_correction_candidates,
     controller_fields_for,
     parse_dynamic_agent_response,
 )
@@ -555,6 +556,7 @@ class DynamicAgentRunner:
             response_reference: ArtifactReference | None = None
             ignored_fields: tuple[str, ...] = ()
             response_normalizations: tuple[str, ...] = ()
+            correction_binding_normalizations: tuple[str, ...] = ()
             response_validation: ResponseValidationDiagnostic | None = None
             correction_request = (
                 None if correction_plan is None else correction_plan.evidence
@@ -615,9 +617,13 @@ class DynamicAgentRunner:
                                 raise AgentArtifactResponseError(
                                     "semantic correction omitted its typed submission"
                                 )
-                            controller_semantic_payload = apply_semantic_correction(
+                            application = apply_semantic_correction_with_evidence(
                                 result.semantic_submission.payload,
                                 correction_plan,
+                            )
+                            controller_semantic_payload = application.payload
+                            correction_binding_normalizations = (
+                                application.normalizations
                             )
                             correction_applied = True
                         parsed = parse_dynamic_agent_response(
@@ -640,7 +646,14 @@ class DynamicAgentRunner:
                         )
                     except AgentArtifactResponseError as error:
                         record_error = self._error_detail(error)
-                        response_normalizations = error.response_normalizations
+                        response_normalizations = tuple(
+                            dict.fromkeys(
+                                (
+                                    *correction_binding_normalizations,
+                                    *error.response_normalizations,
+                                )
+                            )
+                        )
                         response_validation = error.diagnostic
                         if correction_plan is None:
                             if (
@@ -651,6 +664,24 @@ class DynamicAgentRunner:
                                     error.semantic_payload,
                                     error.diagnostic,
                                 )
+                                if (
+                                    next_correction_plan is not None
+                                    and agent.capability is AgentCapability.REVIEW
+                                ):
+                                    next_correction_plan = (
+                                        bind_review_evidence_correction_candidates(
+                                            next_correction_plan,
+                                            evidence_attempts=(
+                                                *review_evidence_attempts,
+                                                *(
+                                                    ()
+                                                    if current_review_evidence is None
+                                                    else (current_review_evidence,)
+                                                ),
+                                            ),
+                                            command_evidence=commands,
+                                        )
+                                    )
                                 seen_correction_fingerprints.add(
                                     error.diagnostic.fingerprint
                                 )
@@ -675,6 +706,24 @@ class DynamicAgentRunner:
                                     error.semantic_payload,
                                     error.diagnostic,
                                 )
+                                if (
+                                    next_correction_plan is not None
+                                    and agent.capability is AgentCapability.REVIEW
+                                ):
+                                    next_correction_plan = (
+                                        bind_review_evidence_correction_candidates(
+                                            next_correction_plan,
+                                            evidence_attempts=(
+                                                *review_evidence_attempts,
+                                                *(
+                                                    ()
+                                                    if current_review_evidence is None
+                                                    else (current_review_evidence,)
+                                                ),
+                                            ),
+                                            command_evidence=commands,
+                                        )
+                                    )
                                 seen_correction_fingerprints.add(
                                     error.diagnostic.fingerprint
                                 )
@@ -692,7 +741,14 @@ class DynamicAgentRunner:
                         failure = error
                     else:
                         ignored_fields = parsed.ignored_controller_fields
-                        response_normalizations = parsed.response_normalizations
+                        response_normalizations = tuple(
+                            dict.fromkeys(
+                                (
+                                    *correction_binding_normalizations,
+                                    *parsed.response_normalizations,
+                                )
+                            )
+                        )
                         if correction_plan is not None:
                             current_correction_outcome = (
                                 SemanticCorrectionOutcome.ACCEPTED
@@ -1008,6 +1064,19 @@ class DynamicAgentRunner:
         stall_grace_seconds = activity.stall_grace_seconds or 0
         silence_seconds = activity.silence_seconds or 0
         shutdown_grace_seconds = activity.shutdown_grace_seconds or 0
+        tool_action = (
+            "using"
+            if activity.tool_action_class is None
+            else activity.tool_action_class.value
+        )
+        tool_target = (
+            "a sandboxed tool operation"
+            if activity.tool_target_class is None
+            else activity.tool_target_class.value.replace("_", " ")
+        )
+        tool_detail = (
+            "" if activity.tool_detail is None else f" ({activity.tool_detail})"
+        )
         message = {
             AgentExecutionActivityKind.INVOCATION_LAUNCHED: (
                 f"{agent.label} invocation {attempt} entered the execution adapter"
@@ -1065,10 +1134,10 @@ class DynamicAgentRunner:
                 f"{agent.label} received provider stream activity"
             ),
             AgentExecutionActivityKind.TOOL_STARTED: (
-                f"{agent.label} started a sandboxed tool operation"
+                f"{agent.label} started {tool_action} {tool_target}{tool_detail}"
             ),
             AgentExecutionActivityKind.TOOL_COMPLETED: (
-                f"{agent.label} completed a sandboxed tool operation"
+                f"{agent.label} completed {tool_action} {tool_target}{tool_detail}"
             ),
             AgentExecutionActivityKind.LIVENESS_DEGRADED: (
                 f"{agent.label} provider liveness is degraded: "
@@ -1180,7 +1249,7 @@ class DynamicAgentRunner:
         elif activity.kind is AgentExecutionActivityKind.TOOL_COMPLETED:
             last_checkpoint = (
                 f"Completed {activity.completed_tool_count} attributable tool "
-                "operation(s)"
+                f"operation(s); latest action {tool_action} {tool_target}{tool_detail}"
             )
         elif activity.kind in {
             AgentExecutionActivityKind.INVOCATION_FINALIZING_RESPONSE,

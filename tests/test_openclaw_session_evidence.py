@@ -273,6 +273,10 @@ def test_activity_inspection_tracks_current_tool_lifecycle_without_content(
     assert active.tool_started_count == 1
     assert active.tool_completed_count == 0
     assert active.active_tool_count == 1
+    assert [(item.tool_name, item.executable) for item in active.started_tools] == [
+        ("exec", "read")
+    ]
+    assert active.completed_tools == ()
     assert not active.terminal_response_observed
     assert "SECRET_ACTIVITY_CONTENT" not in repr(active)
 
@@ -293,6 +297,9 @@ def test_activity_inspection_tracks_current_tool_lifecycle_without_content(
     assert completed.tool_started_count == 1
     assert completed.tool_completed_count == 1
     assert completed.active_tool_count == 0
+    assert [
+        (item.tool_name, item.executable) for item in completed.completed_tools
+    ] == [("exec", "read")]
     assert not completed.terminal_response_observed
     assert "SECRET_ACTIVITY_CONTENT" not in repr(completed)
 
@@ -313,6 +320,34 @@ def test_activity_inspection_tracks_current_tool_lifecycle_without_content(
     assert terminal.active_tool_count == 0
     assert terminal.terminal_response_observed
     assert "SECRET_ACTIVITY_CONTENT" not in repr(terminal)
+
+
+def test_activity_identity_drops_unlisted_executable_content(tmp_path: Path) -> None:
+    invocation = request(prompt="Inspect without exposing activity arguments.")
+    write_session_state(
+        tmp_path,
+        invocation=invocation,
+        records=[
+            session_record(),
+            user_record(invocation.prompt),
+            tool_call_record(
+                "current-call",
+                command="/tmp/SECRET_ACTIVITY_EXECUTABLE --token hidden",
+            ),
+        ],
+    )
+
+    activity = inspect_openclaw_session_activity(
+        state_dir=tmp_path,
+        agent_id=invocation.agent_id,
+        session_key=invocation.session_key,
+        prompt=invocation.prompt,
+    )
+
+    assert activity is not None
+    assert activity.started_tools[0].tool_name == "exec"
+    assert activity.started_tools[0].executable is None
+    assert "SECRET_ACTIVITY_EXECUTABLE" not in repr(activity)
 
 
 def test_activity_inspection_returns_none_until_current_session_exists(

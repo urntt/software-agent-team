@@ -323,15 +323,17 @@ binds its canonical SHA-256 into persisted correction-request evidence, assigns
 the exact paths to ordered Controller-owned slots, and asks the model to submit
 only the corresponding `replacement_values`—never the digest, paths, or the
 complete object. Each model-visible slot includes a self-contained projection of
-the target value's exact response schema plus the validator-owned error constraints;
-the schema is guidance, not new path authority. ProductDefinition validation reports
+the target value's exact response schema plus the validator-owned error constraints.
+The correction submission schema itself uses those ordered slot schemas; it is
+not an untyped `JsonValue` list with stricter prose beside it. ProductDefinition validation reports
 independent invalid dimensions together, and each complete dimension is the atomic
 repair value so coupled disposition, source, statement, and downstream references
 cannot be repaired as a misleading sequence of isolated scalar edits. The exact
 semantic correction schema requires the slot count;
 dynamic Agents expose it directly inside the canonical `artifact` argument, while
-Adaptive Planning retains it in the Controller binding behind the object-only inner
-transport schema. In either case the model cannot repeat or widen field authority.
+Adaptive Planning uses the same exact correction schema at its submission boundary.
+Only an initial Planning question or proposal uses the object-only capture schema
+before exact Controller validation. In either case the model cannot repeat or widen field authority.
 The model calls the same submission tool once,
 and assistant prose is again non-authoritative. The
 Controller applies each value to its pre-authorized path on a copy, preserves
@@ -342,7 +344,11 @@ protocol. Transport failures, unlocated errors, invalid submissions, repeated
 invariant/subject fingerprints, and corrections that leave the same typed defect in place
 stop rather than consuming a random full-response retry. JSON-pointer ancestry
 alone does not identify the same defect: a newly exposed container relation may
-be a different root cause. Planning relational validators emit their stable
+be a different root cause. Correction convergence also follows a constraint
+partial order: exposing a more specific declarative or semantic invariant after a
+coarse schema defect can be improvement, but regressing a schema-valid or
+semantically constrained slot to a coarser type or shape failure cannot be
+improvement merely because its fingerprint changed. Planning relational validators emit their stable
 identity and authority field directly rather than recovering either from error
 prose; an unclassified relation fails closed instead of authorizing a broad
 proposal replacement. Ordinary product flow may
@@ -366,9 +372,14 @@ positive selector records its criterion as the stable subject and its exact
 `criterion_assessments/.../tool_evidence/.../observable` leaf as model authority.
 All such leaves within the protocol ceiling are offered together in one bounded
 correction; unaffected assessments, boundary descriptions, findings, verdict,
-and summary remain immutable. SAT does not ask the model to regenerate the
-assessment array and does not infer a replacement fragment from explanatory
-prose.
+and summary remain immutable. SAT derives up to a bounded number of exact candidate
+fragments per leaf from eligible same-chain tool results and deterministic command
+evidence, excluding failed positive proof and submission-tool output. The correction
+schema accepts only the opaque handles for those candidates. The model chooses the
+semantic evidence; the Controller replaces the handle with exact bytes and records
+the binding as a normalization. No eligible candidate means no evidence-selector
+correction call. SAT does not ask the model to regenerate the assessment array and
+does not infer a replacement fragment from explanatory prose.
 
 If a model returns controller-owned fields, they are ignored and recorded in
 the execution record. Missing or incorrect echoes such as `kind`, commit
@@ -398,6 +409,10 @@ malformed, or unpaired session is invalid runtime evidence and stops Review at
 the safety boundary rather than spending a semantic correction. On the adaptive
 path, a correction may reuse an earlier eligible attempt without repeating an
 unchanged probe; every reference records the originating execution attempt.
+Live progress uses a stricter projection than persisted Review evidence: the
+session observer immediately reduces tool identity to an allow-listed tool class
+and optional executable basename. Full commands, arguments, outputs, paths, and
+unknown names never enter the activity object or terminal renderer.
 Raw OpenClaw session JSONL is never copied into run artifacts; the sanitized
 records, transcript SHA-256, and current-turn record count make the accepted
 claim auditable without making raw session history a later replay dependency.

@@ -47,6 +47,70 @@ class CapturedOpenClawToolEvidence:
 
 
 @dataclass(frozen=True)
+class OpenClawToolActivity:
+    """Content-free tool identity safe for live activity classification."""
+
+    tool_name: str
+    executable: str | None
+
+
+_ACTIVITY_TOOL_NAMES = {
+    "apply_patch",
+    "edit",
+    "exec",
+    "read",
+    "sat_submit_artifact",
+    "write",
+}
+_ACTIVITY_EXECUTABLES = {
+    "cat",
+    "eslint",
+    "find",
+    "git",
+    "grep",
+    "head",
+    "ls",
+    "make",
+    "mypy",
+    "npm",
+    "pip",
+    "pnpm",
+    "pwd",
+    "pyright",
+    "pytest",
+    "read",
+    "readlink",
+    "rg",
+    "ruff",
+    "sat-probe-run",
+    "sat-probe-write",
+    "sed",
+    "stat",
+    "tail",
+    "uv",
+    "yarn",
+}
+
+
+def _safe_activity_identity(
+    tool_name: str,
+    executable: str | None,
+) -> OpenClawToolActivity:
+    """Reduce runtime-owned identities to a bounded progress allow-list."""
+
+    safe_name = tool_name if tool_name in _ACTIVITY_TOOL_NAMES else "other"
+    safe_executable = None
+    if executable is not None:
+        basename = executable.rsplit("/", maxsplit=1)[-1]
+        if basename in _ACTIVITY_EXECUTABLES:
+            safe_executable = basename
+    return OpenClawToolActivity(
+        tool_name=safe_name,
+        executable=safe_executable,
+    )
+
+
+@dataclass(frozen=True)
 class OpenClawSessionActivity:
     """Content-free liveness facts for the current OpenClaw invocation."""
 
@@ -55,6 +119,8 @@ class OpenClawSessionActivity:
     tool_completed_count: int
     active_tool_count: int
     terminal_response_observed: bool
+    started_tools: tuple[OpenClawToolActivity, ...] = ()
+    completed_tools: tuple[OpenClawToolActivity, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -400,8 +466,10 @@ def inspect_openclaw_session_activity(
         return None
     invocation = snapshot.invocation_records
 
-    started: set[str] = set()
+    started: dict[str, OpenClawToolActivity] = {}
+    started_names: dict[str, str] = {}
     completed: set[str] = set()
+    completed_tools: list[OpenClawToolActivity] = []
     trusted_records = 0
     last_message_role: object = "user"
     last_assistant_has_tool_call = False
@@ -428,7 +496,14 @@ def inspect_openclaw_session_activity(
                     continue
                 last_assistant_has_tool_call = True
                 external_id = item.get("id")
-                if not isinstance(external_id, str) or not external_id:
+                tool_name = item.get("name")
+                if (
+                    not isinstance(external_id, str)
+                    or not external_id
+                    or not isinstance(tool_name, str)
+                    or not tool_name
+                    or tool_name.strip() != tool_name
+                ):
                     raise OpenClawSessionEvidenceError(
                         "OpenClaw tool-call identity is invalid"
                     )
@@ -436,7 +511,12 @@ def inspect_openclaw_session_activity(
                     raise OpenClawSessionEvidenceError(
                         "OpenClaw session repeats a tool-call identity"
                     )
-                started.add(external_id)
+                executable = _exec_executable(tool_name, item.get("arguments"))
+                started_names[external_id] = tool_name
+                started[external_id] = _safe_activity_identity(
+                    tool_name,
+                    executable,
+                )
         elif role == "toolResult":
             trusted_records += 1
             external_id = message.get("toolCallId")
@@ -448,18 +528,26 @@ def inspect_openclaw_session_activity(
                 raise OpenClawSessionEvidenceError(
                     "OpenClaw session repeats a tool result"
                 )
+            activity = started[external_id]
+            if message.get("toolName") != started_names[external_id]:
+                raise OpenClawSessionEvidenceError(
+                    "OpenClaw tool result names a different tool"
+                )
             completed.add(external_id)
+            completed_tools.append(activity)
 
     return OpenClawSessionActivity(
         trusted_record_count=trusted_records,
         tool_started_count=len(started),
         tool_completed_count=len(completed),
-        active_tool_count=len(started - completed),
+        active_tool_count=len(set(started) - completed),
         terminal_response_observed=(
             last_message_role == "assistant"
             and not last_assistant_has_tool_call
-            and not (started - completed)
+            and not (set(started) - completed)
         ),
+        started_tools=tuple(started.values()),
+        completed_tools=tuple(completed_tools),
     )
 
 

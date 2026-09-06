@@ -989,6 +989,7 @@ class TerminalProgressRenderer:
         self._waiting: dict[
             tuple[str, int, int], tuple[threading.Event, threading.Thread]
         ] = {}
+        self._rendered_checkpoint_digests: dict[tuple[str, int, int], str] = {}
 
     def __call__(self, event: RunEvent) -> None:
         """Render one persisted event and manage its elapsed-time heartbeat."""
@@ -1152,6 +1153,7 @@ class TerminalProgressRenderer:
             return
         with self._lock:
             waiting = self._waiting.pop(key, None)
+            self._rendered_checkpoint_digests.pop(key, None)
         if waiting is not None:
             waiting[0].set()
             waiting[1].join(timeout=min(self.heartbeat_seconds, 0.2))
@@ -1166,6 +1168,8 @@ class TerminalProgressRenderer:
                 if key[:2] == (event.agent_id, event.iteration)
             )
             waiting = tuple(self._waiting.pop(key) for key in keys)
+            for key in keys:
+                self._rendered_checkpoint_digests.pop(key, None)
         for stop, thread in waiting:
             stop.set()
             thread.join(timeout=min(self.heartbeat_seconds, 0.2))
@@ -1200,6 +1204,7 @@ class TerminalProgressRenderer:
         if (
             self.visibility is not RunEventVisibility.COMPACT
             and event.checkpoint is not None
+            and self._checkpoint_details_changed(event)
         ):
             checkpoint = event.checkpoint
             task_ids = ",".join(checkpoint.approved_task_ids) or "none"
@@ -1245,6 +1250,19 @@ class TerminalProgressRenderer:
                 f"known_cost_usd={usage.known_estimated_cost_usd} "
                 f"unpriced_calls={usage.unpriced_calls}"
             )
+
+    def _checkpoint_details_changed(self, event: RunEvent) -> bool:
+        """Suppress repeated projections while retaining every persisted event."""
+
+        key = self._key(event)
+        assert event.checkpoint is not None
+        if key is None:
+            return True
+        digest = canonical_model_sha256(event.checkpoint)
+        with self._lock:
+            previous = self._rendered_checkpoint_digests.get(key)
+            self._rendered_checkpoint_digests[key] = digest
+        return previous != digest
 
     def _print(self, value: str) -> None:
         with self._lock:

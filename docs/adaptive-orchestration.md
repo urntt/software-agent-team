@@ -296,9 +296,14 @@ boundary. Evidence validation collects all independently invalid selectors in
 one pass and assigns each a stable grounding invariant, its criterion subject,
 and the exact `observable` leaf. A bounded correction may replace those leaf
 strings together while every other assessment field and the containing array
-remain frozen. The Controller cannot guess a replacement from the Reviewer's
-summary or source assertions; it only binds a fragment after the submitted
-selector matches protocol-eligible evidence.
+remain frozen. For each invalid leaf, the Controller derives a bounded catalog
+of exact fragments from protocol-eligible results in the same Review chain. The
+model selects an opaque handle; the Controller binds that handle back to the
+exact fragment and records the binding. The model therefore decides which
+evidence supports its claim without retyping evidence bytes or inventing an
+attempt, tool, or command identity. If no eligible candidate exists, SAT does
+not spend a random correction call. The Controller cannot guess a replacement
+from the Reviewer's summary or source assertions.
 
 The current response schema exposes only one `requirements` array of atomic
 `{id, description}` objects. It does not expose a sibling `requirement_ids`
@@ -328,10 +333,12 @@ authorized tool, but the Agent remains free to use work or evidence tools before
 terminal submission. It leaves model inspection, provider smoke, and legacy
 text-compatibility requests unchanged, because those requests do not expose an
 invocation binding. SAT gives dynamic Agents the exact AgentSpec-derived semantic JSON Schema
-inside the envelope. Planning instead uses a permissive object-only inner transport
-schema so every syntactically structured proposal or correction reaches the
-Controller's exact semantic validator; the private envelope still binds the exact
-Planning semantic-schema digest. This allows deterministic forbidden-field
+inside the envelope. Planning uses a permissive object-only inner transport
+schema for an initial question or proposal so every syntactically structured
+response reaches the Controller's exact semantic validator; the private envelope
+still binds the exact Planning semantic-schema digest. A targeted Planning
+correction instead exposes its exact ordered replacement-slot schema at both the
+submission and Controller boundaries. This allows deterministic forbidden-field
 normalization and targeted semantic correction to operate after transport without
 trusting invalid content. SAT gives every invocation a fresh controller binding, then
 requires the private envelope to match the final successful attributable tool call.
@@ -377,8 +384,11 @@ validator supplies a stable invariant ID, structured criterion/task/Agent or
 other entity subjects, and the smallest model-owned authority path it can
 justify. Error prose is display-only. An unclassified relation fails closed
 without guessing a broad replacement. A repeated fingerprint or the same typed
-issue stops, while controlled evaluation may intentionally impose a zero-or-one
-correction cap.
+issue stops. Constraint progress is ordered as well: a replacement that falls
+back from a valid or semantically constrained value to a coarser type or shape
+failure in the same authority slot is a regression, not a new improvement. A
+more specific constraint exposed after a coarse schema defect may still proceed.
+Controlled evaluation may intentionally impose a zero-or-one correction cap.
 
 Every workspace scope describes controller authority inside the generated
 repository: `repository` grants whole-project access and `repository/path`
@@ -734,7 +744,12 @@ counters in every event describe the current Controller snapshot. The adapter
 applies that snapshot before publishing its deltas. If one observation contains
 both a start and its completion, the UI may show both historical events, but it
 must show zero active tools, the updated completion count, and no synthetic
-return to `tool_active`.
+return to `tool_active`. The live label is derived from an allow-listed tool name
+or executable and contains only a bounded action class, target class, and optional
+safe executable basename. Arbitrary tool names, full commands, arguments, output,
+paths, and secrets are excluded. Identical checkpoint and budget projections are
+suppressed within an invocation, but every real `RunEvent` summary remains visible
+and every event remains persisted.
 
 ### Visibility Levels
 

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from collections.abc import Collection
 from dataclasses import dataclass
+from difflib import SequenceMatcher
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
@@ -45,6 +47,10 @@ from software_agent_team.response_corrections import (
     ResponseIssueSubjectKind,
     ResponseValidationDiagnostic,
     ResponseValidationIssue,
+    SemanticCorrectionCandidate,
+    SemanticCorrectionCandidateSlot,
+    SemanticCorrectionPlan,
+    attach_semantic_correction_candidates,
     deterministically_remove_forbidden_fields,
     diagnostic_from_invariant,
     diagnostic_from_message,
@@ -775,6 +781,206 @@ class ReviewToolEvidenceClaim(BaseModel):
         if not cleaned or "\x00" in cleaned:
             raise ValueError("tool evidence observables must be nonblank text")
         return cleaned
+
+
+_MAX_REVIEW_EVIDENCE_CANDIDATES_PER_SLOT = 64
+_MAX_REVIEW_EVIDENCE_FRAGMENT_CHARACTERS = 256
+
+
+def _review_evidence_candidate_fragments(value: str) -> tuple[str, ...]:
+    """Return bounded exact substrings suitable for model-visible selection."""
+
+    lines = value.splitlines()
+    candidates: list[str] = []
+
+    def add(candidate: str) -> None:
+        cleaned = candidate.strip()
+        if (
+            not cleaned
+            or "\x00" in cleaned
+            or len(cleaned) > _MAX_REVIEW_EVIDENCE_FRAGMENT_CHARACTERS
+            or cleaned in candidates
+        ):
+            return
+        candidates.append(cleaned)
+
+    add(value)
+    for index, line in enumerate(lines):
+        add(line)
+        for width in (2, 3):
+            add("\n".join(lines[index : index + width]))
+        if len(line) > _MAX_REVIEW_EVIDENCE_FRAGMENT_CHARACTERS:
+            step = _MAX_REVIEW_EVIDENCE_FRAGMENT_CHARACTERS - 64
+            for start in range(0, len(line), step):
+                add(line[start : start + _MAX_REVIEW_EVIDENCE_FRAGMENT_CHARACTERS])
+    return tuple(candidates)
+
+
+def _semantic_value_at_pointer(payload: dict[str, object], pointer: str) -> object:
+    """Resolve one already-validated correction pointer without guessing."""
+
+    current: object = payload
+    for encoded in pointer.removeprefix("/").split("/"):
+        part = encoded.replace("~1", "/").replace("~0", "~")
+        if isinstance(current, dict) and part in current:
+            current = current[part]
+        elif (
+            isinstance(current, list) and part.isdecimal() and int(part) < len(current)
+        ):
+            current = current[int(part)]
+        else:
+            raise ValueError("review evidence correction pointer is unreachable")
+    return current
+
+
+def _review_assessment_status_for_path(
+    payload: dict[str, object],
+    pointer: str,
+) -> ReviewCriterionStatus:
+    """Resolve the owning assessment status for one exact observable leaf."""
+
+    parts = pointer.removeprefix("/").split("/")
+    if (
+        len(parts) < 5
+        or parts[0] != "criterion_assessments"
+        or not parts[1].isdecimal()
+        or parts[-1] != "observable"
+    ):
+        raise ValueError("review evidence candidate path is not an observable leaf")
+    assessments = payload.get("criterion_assessments")
+    if not isinstance(assessments, list) or int(parts[1]) >= len(assessments):
+        raise ValueError("review evidence assessment is unavailable")
+    assessment = assessments[int(parts[1])]
+    if not isinstance(assessment, dict):
+        raise ValueError("review evidence assessment is invalid")
+    return ReviewCriterionStatus(assessment.get("status"))
+
+
+def _candidate_similarity(reference: str, candidate: str) -> tuple[float, float]:
+    """Rank bounded exact choices by lexical relation to the rejected selector."""
+
+    reference_tokens = set(re.findall(r"[a-z0-9_]+", reference.casefold()))
+    candidate_tokens = set(re.findall(r"[a-z0-9_]+", candidate.casefold()))
+    overlap = (
+        0.0
+        if not reference_tokens
+        else len(reference_tokens & candidate_tokens) / len(reference_tokens)
+    )
+    return (
+        overlap,
+        SequenceMatcher(None, reference.casefold(), candidate.casefold()).ratio(),
+    )
+
+
+def bind_review_evidence_correction_candidates(
+    plan: SemanticCorrectionPlan,
+    *,
+    evidence_attempts: tuple[ReviewToolEvidenceAttempt, ...],
+    command_evidence: tuple[CommandEvidence, ...] = (),
+) -> SemanticCorrectionPlan | None:
+    """Replace free-form Review evidence bytes with controller-issued handles.
+
+    The Reviewer still decides which eligible result supports a semantic claim.
+    The controller owns the exact bytes and attributable result identity. If no
+    eligible candidate exists for an observable slot, targeted string repair is
+    unreachable and must not be offered as a random retry.
+    """
+
+    observable_paths = tuple(
+        path for path in plan.evidence.target_paths if path.endswith("/observable")
+    )
+    if not observable_paths:
+        return plan
+    slots: list[SemanticCorrectionCandidateSlot] = []
+    for path in observable_paths:
+        try:
+            rejected_value = _semantic_value_at_pointer(plan.base_payload, path)
+            status = _review_assessment_status_for_path(plan.base_payload, path)
+        except (TypeError, ValueError):
+            return None
+        if not isinstance(rejected_value, str):
+            return None
+        sources: list[tuple[str, str]] = []
+        for attempt in evidence_attempts:
+            for call in attempt.tool_calls:
+                if call.tool_name == "sat_submit_artifact":
+                    continue
+                if (
+                    status is ReviewCriterionStatus.SATISFIED
+                    and _matched_tool_result_failed(call)
+                ):
+                    continue
+                surface = (
+                    _positive_probe_match_surface(call)
+                    if status is ReviewCriterionStatus.SATISFIED
+                    else call.output_excerpt
+                )
+                executable = "" if call.executable is None else f"/{call.executable}"
+                sources.append(
+                    (
+                        f"attempt {attempt.execution_attempt} {call.id} "
+                        f"{call.tool_name}{executable} result",
+                        surface,
+                    )
+                )
+        for command in command_evidence:
+            if status is ReviewCriterionStatus.SATISFIED and _matched_command_failed(
+                command
+            ):
+                continue
+            sources.extend(
+                (
+                    (f"deterministic command {command.id} stdout", command.stdout_tail),
+                    (f"deterministic command {command.id} stderr", command.stderr_tail),
+                )
+            )
+
+        ranked: list[tuple[tuple[float, float], int, str, str]] = []
+        seen_values: set[str] = set()
+        source_order = 0
+        for source, surface in sources:
+            for fragment in _review_evidence_candidate_fragments(surface):
+                if fragment in seen_values:
+                    continue
+                seen_values.add(fragment)
+                ranked.append(
+                    (
+                        _candidate_similarity(rejected_value, fragment),
+                        source_order,
+                        source,
+                        fragment,
+                    )
+                )
+                source_order += 1
+        ranked.sort(key=lambda item: (-item[0][0], -item[0][1], item[1]))
+        selected = ranked[:_MAX_REVIEW_EVIDENCE_CANDIDATES_PER_SLOT]
+        candidates: list[SemanticCorrectionCandidate] = []
+        used_handles: set[str] = set()
+        for _, _, source, fragment in selected:
+            salt = 0
+            while True:
+                seed = fragment if salt == 0 else f"{fragment}\x00{salt}"
+                handle = f"evidence_{hashlib.sha256(seed.encode()).hexdigest()[:16]}"
+                if handle not in used_handles:
+                    break
+                salt += 1
+            used_handles.add(handle)
+            candidates.append(
+                SemanticCorrectionCandidate(
+                    handle=handle,
+                    replacement_value=fragment,
+                    source=source,
+                )
+            )
+        if not candidates:
+            return None
+        slots.append(
+            SemanticCorrectionCandidateSlot(
+                target_path=path,
+                candidates=tuple(candidates),
+            )
+        )
+    return attach_semantic_correction_candidates(plan, tuple(slots))
 
 
 class ReviewBoundaryCheckResponse(BaseModel):

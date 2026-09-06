@@ -438,6 +438,55 @@ def test_checkpoint_projection_is_hidden_in_compact_and_explained_in_standard(
     assert "$0.125000 estimated / $1.00 authorized" in rendered
 
 
+def test_renderer_suppresses_repeated_checkpoint_details_but_keeps_real_events(
+    tmp_path: Path,
+) -> None:
+    snapshot = ProgressCheckpointSnapshot(
+        approved_task_ids=("TASK_BUILD",),
+        invocation_phase=InvocationPhase.TOOL_ACTIVE,
+        last_verified_checkpoint="Completed 2 attributable tool operations",
+        next_controller_checkpoint="Observe completion of the active operation",
+        completed_tool_operations=2,
+        git_state="working",
+        gate_state="not_started",
+        review_state="not_applicable",
+        known_estimated_cost_usd="0.125",
+        authorized_cost_usd="1.00",
+        remaining_estimated_cost_usd="0.875",
+    )
+    output = StringIO()
+    event_journal = journal(
+        tmp_path,
+        handler=TerminalProgressRenderer(
+            output=output,
+            visibility=RunEventVisibility.DETAILED,
+            heartbeat_seconds=1,
+        ),
+    )
+    for kind, message in (
+        (ProgressEventKind.AGENT_TOOL_ACTIVE, "Builder is testing quality checks"),
+        (ProgressEventKind.AGENT_TOOL_STARTED, "Builder started pytest"),
+    ):
+        event_journal.append(
+            ProgressEvent(
+                kind=kind,
+                message=message,
+                agent_id="builder",
+                iteration=1,
+                attempt=1,
+                checkpoint=snapshot,
+            ),
+            lifecycle_revision=3,
+            phase=RunPhase.IMPLEMENTING,
+        )
+
+    rendered = output.getvalue()
+    assert "Builder is testing quality checks" in rendered
+    assert "Builder started pytest" in rendered
+    assert rendered.count("progress phase=tool_active") == 1
+    assert rendered.count("task budget") == 1
+
+
 def test_stopping_transition_prevents_stale_working_heartbeat(tmp_path: Path) -> None:
     output = StringIO()
     renderer = TerminalProgressRenderer(output=output, heartbeat_seconds=0.01)

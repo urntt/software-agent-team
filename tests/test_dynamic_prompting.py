@@ -31,7 +31,12 @@ from software_agent_team.prompting import (
     build_dynamic_agent_execution_request,
     render_dynamic_agent_prompt,
 )
-from software_agent_team.response_corrections import ResponseIssueAuthority
+from software_agent_team.response_corrections import (
+    ResponseIssueAuthority,
+    apply_semantic_correction_with_evidence,
+    build_semantic_correction_plan,
+    correction_prompt,
+)
 from software_agent_team.responses import (
     AgentArtifactResponseError,
     GroundedReviewReportResponse,
@@ -41,6 +46,7 @@ from software_agent_team.responses import (
     ReviewToolEvidenceAttempt,
     ReviewToolEvidenceClaim,
     WorkResultResponse,
+    bind_review_evidence_correction_candidates,
     parse_dynamic_agent_response,
 )
 from software_agent_team.submissions import AgentSubmissionPurpose
@@ -635,6 +641,86 @@ def test_dynamic_review_response_rejects_an_unmatched_tool_claim() -> None:
     assert [
         subject.model_dump(mode="json") for subject in diagnostic.issues[0].subjects
     ] == [{"kind": "criterion", "identifier": "AC_LINKS"}]
+
+
+def test_review_correction_selects_controller_catalog_instead_of_retyping_output() -> (
+    None
+):
+    assessment = ReviewCriterionAssessmentResponse(
+        criterion_id="AC_LINKS",
+        status="satisfied",
+        adversarial_check="Exercised recursive input discovery.",
+        evidence="The result demonstrates recursive discovery.",
+        tool_evidence=(
+            review_tool_claim("Nested child directories are scanned recursively"),
+        ),
+    )
+    request, result = _review_result(
+        ReviewReportResponse(
+            verdict="accept",
+            criterion_assessments=(assessment,),
+            summary="The assigned criterion is satisfied.",
+        )
+    )
+    calls = (
+        captured_tool_call(
+            1,
+            "Nested child\ndirectories are scanned recursively\n12 passed",
+        ),
+        captured_tool_call(
+            2,
+            framed_probe_output(stdout="NESTED_SCAN_OK"),
+            executable="sat-probe-run",
+        ),
+        captured_tool_call(3, "FAILED_ONLY", executable="pytest", failed=True),
+    )
+    result = result.model_copy(
+        update={"telemetry": result.telemetry.model_copy(update={"tool_calls": calls})}
+    )
+
+    with pytest.raises(AgentArtifactResponseError) as captured:
+        parse_dynamic_agent_response(
+            result,
+            request,
+            task_brief=task_brief(),
+            team_plan=team_plan(),
+            reviewed_criterion_ids=("AC_LINKS",),
+        )
+    error = captured.value
+    assert error.semantic_payload is not None
+    assert error.diagnostic is not None
+    plan = build_semantic_correction_plan(
+        error.semantic_payload,
+        error.diagnostic,
+    )
+    assert plan is not None
+    bound = bind_review_evidence_correction_candidates(
+        plan,
+        evidence_attempts=(
+            ReviewToolEvidenceAttempt(execution_attempt=1, tool_calls=calls),
+        ),
+    )
+    assert bound is not None
+    prompt = correction_prompt(bound)
+    assert "EVIDENCE_CANDIDATE_CATALOG" in prompt
+    assert "FAILED_ONLY" not in prompt
+    slot = bound.candidate_slots[0]
+    selected = next(
+        candidate
+        for candidate in slot.candidates
+        if candidate.replacement_value
+        == "Nested child\ndirectories are scanned recursively"
+    )
+
+    application = apply_semantic_correction_with_evidence(
+        {"replacement_values": [selected.handle]},
+        bound,
+    )
+    corrected = application.payload["criterion_assessments"]
+    assert isinstance(corrected, list)
+    claim = corrected[0]["tool_evidence"][0]
+    assert claim["observable"] == ("Nested child\ndirectories are scanned recursively")
+    assert "Nested child directories are scanned recursively" not in prompt
 
 
 def test_controller_matches_only_json_outside_string_whitespace_variants() -> None:

@@ -44,6 +44,8 @@ from software_agent_team.execution import (
     AgentExecutionStatus,
     AgentExecutionTelemetry,
     AgentTokenUsage,
+    AgentToolActionClass,
+    AgentToolTargetClass,
     ProviderLivenessEvidence,
 )
 from software_agent_team.git_workspace import GitWorkspace, GitWorkspaceManager
@@ -373,6 +375,7 @@ class DynamicExecutor:
         provider_stall_once_for: str | None = None,
         initialization_stall_for: str | None = None,
         zero_review_tool_calls_once: bool = False,
+        invalid_review_selector_once: bool = False,
         invalid_review_response_once: bool = False,
         invalid_review_evidence: bool = False,
         unapproved_review_boundaries: bool = False,
@@ -389,6 +392,7 @@ class DynamicExecutor:
         self.provider_stall_once_for = provider_stall_once_for
         self.initialization_stall_for = initialization_stall_for
         self.zero_review_tool_calls_once = zero_review_tool_calls_once
+        self.invalid_review_selector_once = invalid_review_selector_once
         self.invalid_review_response_once = invalid_review_response_once
         self.invalid_review_evidence = invalid_review_evidence
         self.unapproved_review_boundaries = unapproved_review_boundaries
@@ -653,24 +657,29 @@ class DynamicExecutor:
                         {"/summary": valid_payload["summary"]},
                     )
                     submission_payload = json.loads(response_text)
-            elif self.zero_review_tool_calls_once and count == 2:
-                assessments = valid_payload["criterion_assessments"]
-                assert isinstance(assessments, list)
-                assessment = assessments[0]
-                assert isinstance(assessment, dict)
-                claims = assessment["tool_evidence"]
-                assert isinstance(claims, list)
-                claim = claims[0]
-                assert isinstance(claim, dict)
-                response_text = semantic_correction_response(
-                    valid_payload,
-                    {
-                        "/criterion_assessments/0/tool_evidence/0/observable": (
-                            claim["observable"]
-                        )
-                    },
-                )
-                submission_payload = json.loads(response_text)
+            elif self.invalid_review_selector_once:
+                if count == 1:
+                    assessments = valid_payload["criterion_assessments"]
+                    assert isinstance(assessments, list)
+                    assessment = assessments[0]
+                    assert isinstance(assessment, dict)
+                    claims = assessment["tool_evidence"]
+                    assert isinstance(claims, list)
+                    claim = claims[0]
+                    assert isinstance(claim, dict)
+                    claim["observable"] = "fabricated-review-observation"
+                    submission_payload = valid_payload
+                    response_text = json.dumps(valid_payload)
+                else:
+                    assert request.submission_contract is not None
+                    correction_schema = request.submission_contract.parameters_schema()
+                    replacement_schema = correction_schema["properties"][
+                        "replacement_values"
+                    ]
+                    handles = replacement_schema["prefixItems"][0]["enum"]
+                    assert isinstance(handles, list) and handles
+                    submission_payload = {"replacement_values": [handles[0]]}
+                    response_text = json.dumps(submission_payload)
         else:  # pragma: no cover - the fixture owns the complete team
             raise AssertionError(f"unexpected Agent: {request.agent_id}")
         self._emit_lifecycle_stop(
@@ -1238,7 +1247,7 @@ def test_dynamic_writer_missing_typed_submission_fails_without_correction(
     assert writer_record.semantic_correction_request is None
 
 
-def test_dynamic_reviewer_repairs_a_zero_call_fabricated_tool_citation(
+def test_dynamic_reviewer_does_not_retry_when_no_evidence_candidate_exists(
     tmp_path: Path,
 ) -> None:
     runner, team_plan, executor, _, _ = runtime(
@@ -1248,29 +1257,23 @@ def test_dynamic_reviewer_repairs_a_zero_call_fabricated_tool_citation(
 
     result = DagScheduler().execute(team_plan, runner)
 
-    assert result.status is ScheduleStatus.COMPLETED
+    assert result.status is ScheduleStatus.FAILED
     reviewer_requests = [
         request for request in executor.requests if request.agent_id == "reviewer"
     ]
-    assert len(reviewer_requests) == 2
-    assert [request.timeout_seconds for request in reviewer_requests] == [47, 47]
-    assert "TARGETED_SEMANTIC_CORRECTION_VALUES_V1" in reviewer_requests[1].prompt
-    normalized_prompt = " ".join(reviewer_requests[1].prompt.split())
-    assert "/criterion_assessments/0/tool_evidence/0/observable" in (
-        reviewer_requests[1].prompt
-    )
-    assert '"type": "string"' in reviewer_requests[1].prompt
-    assert "provide only a bounded result fragment" in normalized_prompt
-    assert "deterministic command stdout/stderr from this immutable" in (
-        normalized_prompt
-    )
-    assert "controller binds every protocol-eligible result" in normalized_prompt
+    assert len(reviewer_requests) == 1
+    normalized_prompt = " ".join(reviewer_requests[0].prompt.split())
     reviewer_records = [
         runner.artifact_store.load(reference)
         for reference in runner.execution_records
         if "/verify/reviewer-" in reference.path
     ]
-    assert len(reviewer_records) == 2
+    assert "provide only a bounded result fragment" in normalized_prompt
+    assert "deterministic command stdout/stderr from this immutable" in (
+        normalized_prompt
+    )
+    assert "controller binds every protocol-eligible result" in normalized_prompt
+    assert len(reviewer_records) == 1
     assert isinstance(reviewer_records[0], AgentExecutionRecord)
     assert reviewer_records[0].tool_evidence_status is AgentToolEvidenceStatus.CAPTURED
     assert reviewer_records[0].response_contract == "semantic_body_v4"
@@ -1290,14 +1293,47 @@ def test_dynamic_reviewer_repairs_a_zero_call_fabricated_tool_citation(
     assert [(subject.kind.value, subject.identifier) for subject in issue.subjects] == [
         ("criterion", "AC_REVIEW")
     ]
-    assert isinstance(reviewer_records[1], AgentExecutionRecord)
-    assert reviewer_records[1].semantic_correction_request is not None
-    assert reviewer_records[1].semantic_correction_outcome == "accepted"
-    assert [call.tool_name for call in reviewer_records[1].tool_calls] == [
-        "read",
-        "sat_submit_artifact",
+
+
+def test_dynamic_reviewer_correction_uses_controller_evidence_handle(
+    tmp_path: Path,
+) -> None:
+    runner, team_plan, executor, _, _ = runtime(
+        tmp_path,
+        executor_options={"invalid_review_selector_once": True},
+    )
+
+    result = DagScheduler().execute(team_plan, runner)
+
+    assert result.status is ScheduleStatus.COMPLETED
+    reviewer_requests = [
+        request for request in executor.requests if request.agent_id == "reviewer"
     ]
-    assert reviewer_records[1].response_artifact == runner.outputs["reviewer"]
+    assert len(reviewer_requests) == 2
+    correction = reviewer_requests[1]
+    assert "EVIDENCE_CANDIDATE_CATALOG" in correction.prompt
+    assert "fake-review-observation" in correction.prompt
+    schema = correction.submission_contract.parameters_schema()
+    handle = schema["properties"]["replacement_values"]["prefixItems"][0]["enum"][0]
+    assert handle.startswith("evidence_")
+    reviewer_records = [
+        runner.artifact_store.load(reference)
+        for reference in runner.execution_records
+        if "/verify/reviewer-" in reference.path
+    ]
+    assert len(reviewer_records) == 2
+    corrected = reviewer_records[1]
+    assert isinstance(corrected, AgentExecutionRecord)
+    assert corrected.semantic_correction_outcome == "accepted"
+    assert corrected.response_normalizations == (
+        "bound controller evidence candidate "
+        f"{handle} to /criterion_assessments/0/tool_evidence/0/observable",
+    )
+    artifact = runner.artifact_store.load(runner.outputs["reviewer"])
+    assert isinstance(artifact, ReviewReport)
+    assert artifact.criterion_assessments[0].tool_evidence[0].observable == (
+        "fake-review-observation"
+    )
 
 
 def test_dynamic_reviewer_repair_reuses_prior_attempt_tool_evidence(
@@ -1621,6 +1657,9 @@ def test_dynamic_runner_projects_tool_history_from_current_snapshot(
                 silence_seconds=120,
                 stall_grace_seconds=30,
                 policy_source="test provider contract",
+                tool_action_class=AgentToolActionClass.TESTING,
+                tool_target_class=AgentToolTargetClass.QUALITY_CHECKS,
+                tool_detail="pytest",
             ),
         )
 
@@ -1634,6 +1673,8 @@ def test_dynamic_runner_projects_tool_history_from_current_snapshot(
         and event.checkpoint.completed_tool_operations == 1
         for event in events
     )
+    assert events[0].message == "Builder started testing quality checks (pytest)"
+    assert events[1].message == "Builder completed testing quality checks (pytest)"
 
 
 def test_dynamic_runner_refuses_unapproved_provider_fallback(

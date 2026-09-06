@@ -699,14 +699,15 @@ def build_semantic_correction_request(
                 )
             }
         )
+    response_schema = contract.parameters_schema()
     correction_contract = AgentSubmissionContract.from_schema(
-        semantic_correction_schema(plan),
+        semantic_correction_schema(plan, response_schema=response_schema),
         purpose=AgentSubmissionPurpose.SEMANTIC_CORRECTION,
     )
     correction = correction_prompt(
         plan,
         submission_tool=contract.tool_name,
-        response_schema=contract.parameters_schema(),
+        response_schema=response_schema,
     )
     return request.model_copy(
         update={

@@ -59,6 +59,8 @@ from software_agent_team.execution import (
     AgentExecutionResult,
     AgentExecutionStatus,
     AgentExecutor,
+    AgentToolActionClass,
+    AgentToolTargetClass,
 )
 from software_agent_team.integrity import canonical_model_sha256
 from software_agent_team.invocation_lifecycle import (
@@ -82,7 +84,7 @@ from software_agent_team.response_corrections import (
     SemanticCorrectionOutcome,
     SemanticCorrectionPlan,
     SemanticCorrectionRequestEvidence,
-    apply_semantic_correction,
+    apply_semantic_correction_with_evidence,
     build_semantic_correction_plan,
     correction_outcome,
     correction_prompt,
@@ -437,6 +439,9 @@ class PlanningActivity:
     initialization_checkpoint: InitializationCheckpoint | None = None
     shutdown_grace_seconds: float | None = None
     action: str | None = None
+    tool_action_class: AgentToolActionClass | None = None
+    tool_target_class: AgentToolTargetClass | None = None
+    tool_detail: str | None = None
     budget_usage: AgentBudgetUsage | None = None
     budget_ceiling_usd: Decimal | None = None
     pricing_source: ModelMetadataSource | None = None
@@ -581,9 +586,35 @@ class TerminalPlanningProgress:
                 "result finalization remained stalled; a typed stop follows"
             )
         elif activity.kind is PlanningActivityKind.TOOL_STARTED:
-            intermediate = "  Planning started a sandboxed tool operation"
+            action = (
+                "using"
+                if activity.tool_action_class is None
+                else activity.tool_action_class.value
+            )
+            target = (
+                "a sandboxed tool operation"
+                if activity.tool_target_class is None
+                else activity.tool_target_class.value.replace("_", " ")
+            )
+            detail = (
+                "" if activity.tool_detail is None else f" ({activity.tool_detail})"
+            )
+            intermediate = f"  Planning started {action} {target}{detail}"
         elif activity.kind is PlanningActivityKind.TOOL_COMPLETED:
-            intermediate = "  Planning completed a sandboxed tool operation"
+            action = (
+                "using"
+                if activity.tool_action_class is None
+                else activity.tool_action_class.value
+            )
+            target = (
+                "a sandboxed tool operation"
+                if activity.tool_target_class is None
+                else activity.tool_target_class.value.replace("_", " ")
+            )
+            detail = (
+                "" if activity.tool_detail is None else f" ({activity.tool_detail})"
+            )
+            intermediate = f"  Planning completed {action} {target}{detail}"
         elif activity.kind is PlanningActivityKind.LIVENESS_DEGRADED:
             intermediate = (
                 "! Planning provider liveness is degraded: "
@@ -5702,14 +5733,21 @@ class AdaptivePlanningCoordinator:
                 (
                     _planning_response_schema()
                     if correction_plan is None
-                    else semantic_correction_schema(correction_plan)
+                    else semantic_correction_schema(
+                        correction_plan,
+                        response_schema=_planning_response_schema(),
+                    )
                 ),
                 purpose=(
                     AgentSubmissionPurpose.PLANNING_RESPONSE
                     if correction_plan is None
                     else AgentSubmissionPurpose.SEMANTIC_CORRECTION
                 ),
-                transport_schema=_planning_submission_transport_schema(),
+                transport_schema=(
+                    _planning_submission_transport_schema()
+                    if correction_plan is None
+                    else None
+                ),
             )
             execution_request = AgentExecutionRequest(
                 run_id=request.run_id,
@@ -5785,6 +5823,7 @@ class AdaptivePlanningCoordinator:
             )
             parsed: PlanningModelResponse | None = None
             response_normalizations: tuple[str, ...] = ()
+            correction_binding_normalizations: tuple[str, ...] = ()
             validation_error: str | None = None
             response_validation: ResponseValidationDiagnostic | None = None
             correction_request = (
@@ -5860,7 +5899,12 @@ class AdaptivePlanningCoordinator:
                         )
                     payload = dict(semantic_submission.payload)
                     if correction_plan is not None:
-                        payload = apply_semantic_correction(payload, correction_plan)
+                        application = apply_semantic_correction_with_evidence(
+                            payload,
+                            correction_plan,
+                        )
+                        payload = application.payload
+                        correction_binding_normalizations = application.normalizations
                         correction_applied = True
                     payload, initial_normalizations = (
                         _normalize_planning_response_payload(
@@ -5875,7 +5919,10 @@ class AdaptivePlanningCoordinator:
                             ),
                         )
                     )
-                    normalization_list = list(initial_normalizations)
+                    normalization_list = [
+                        *correction_binding_normalizations,
+                        *initial_normalizations,
+                    ]
                     response_normalizations = tuple(normalization_list)
                     while True:
                         try:
@@ -6214,6 +6261,9 @@ class AdaptivePlanningCoordinator:
                 initialization_checkpoint=activity.initialization_checkpoint,
                 shutdown_grace_seconds=activity.shutdown_grace_seconds,
                 action=activity.action,
+                tool_action_class=activity.tool_action_class,
+                tool_target_class=activity.tool_target_class,
+                tool_detail=activity.tool_detail,
             ),
         )
 

@@ -26,6 +26,8 @@ from software_agent_team.execution import (
     AgentExecutionStatus,
     AgentExecutor,
     AgentTokenUsage,
+    AgentToolActionClass,
+    AgentToolTargetClass,
     InitializationLivenessPolicy,
     OpenClawSubprocessExecutor,
     ProviderLivenessPolicy,
@@ -1059,7 +1061,7 @@ records.append({
     "type": "message",
     "message": {"role": "assistant", "content": [{
         "type": "toolCall", "id": "tool-1", "name": "exec",
-        "arguments": {"command": "test"}
+        "arguments": {"command": "pytest -q"}
     }]},
 })
 write_records()
@@ -1102,8 +1104,14 @@ finish()
     )
     assert started.active_tool_count == 1
     assert started.completed_tool_count == 0
+    assert started.tool_action_class is AgentToolActionClass.TESTING
+    assert started.tool_target_class is AgentToolTargetClass.QUALITY_CHECKS
+    assert started.tool_detail == "pytest"
     assert completed.active_tool_count == 0
     assert completed.completed_tool_count == 1
+    assert completed.tool_action_class is AgentToolActionClass.TESTING
+    assert completed.tool_target_class is AgentToolTargetClass.QUALITY_CHECKS
+    assert completed.tool_detail == "pytest"
     assert (
         "private tool output"
         not in result.telemetry.provider_liveness.model_dump_json()

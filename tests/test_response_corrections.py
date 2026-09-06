@@ -14,8 +14,12 @@ from software_agent_team.response_corrections import (
     ResponseIssueSubjectKind,
     ResponseValidationDiagnostic,
     ResponseValidationIssue,
+    SemanticCorrectionCandidate,
+    SemanticCorrectionCandidateSlot,
     SemanticCorrectionOutcome,
     apply_semantic_correction,
+    apply_semantic_correction_with_evidence,
+    attach_semantic_correction_candidates,
     build_semantic_correction_plan,
     correction_outcome,
     correction_prompt,
@@ -23,6 +27,7 @@ from software_agent_team.response_corrections import (
     diagnostic_from_invariant,
     diagnostic_from_message,
     diagnostic_from_validation_error,
+    semantic_correction_schema,
     semantic_payload_sha256,
 )
 
@@ -239,6 +244,126 @@ def test_correction_prompt_projects_each_target_value_schema() -> None:
         }
     ]
 
+    schema = semantic_correction_schema(plan, response_schema=response_schema)
+    replacement_schema = schema["properties"]["replacement_values"]
+    assert replacement_schema["prefixItems"] == [
+        {
+            "type": "string",
+            "pattern": "^[A-Z][A-Z0-9_]+$",
+        }
+    ]
+    assert replacement_schema["items"] is False
+
+
+def test_controller_candidate_handles_replace_exact_values_without_model_bytes() -> (
+    None
+):
+    payload: dict[str, object] = {
+        "summary": "",
+        "tasks": ["TASK_ONE"],
+        "preserved": "keep this exact value",
+    }
+    plan = build_semantic_correction_plan(payload, diagnostic(payload))
+    assert plan is not None
+    candidate = SemanticCorrectionCandidate(
+        handle="evidence_0123456789abcdef",
+        replacement_value="exact\ncontroller-owned output",
+        source="attempt 1 tool-004 read result",
+    )
+    bound = attach_semantic_correction_candidates(
+        plan,
+        (
+            SemanticCorrectionCandidateSlot(
+                target_path="/summary",
+                candidates=(candidate,),
+            ),
+        ),
+    )
+
+    prompt = correction_prompt(bound)
+    schema = semantic_correction_schema(bound)
+    replacement_schema = schema["properties"]["replacement_values"]
+    assert "EVIDENCE_CANDIDATE_CATALOG" in prompt
+    assert "exact\\ncontroller-owned output" in prompt
+    assert replacement_schema["prefixItems"] == [
+        {
+            "type": "string",
+            "enum": ["evidence_0123456789abcdef"],
+        }
+    ]
+
+    application = apply_semantic_correction_with_evidence(
+        {"replacement_values": ["evidence_0123456789abcdef"]},
+        bound,
+    )
+    assert application.payload == {
+        "summary": "exact\ncontroller-owned output",
+        "tasks": ["TASK_ONE"],
+        "preserved": "keep this exact value",
+    }
+    assert application.normalizations == (
+        "bound controller evidence candidate evidence_0123456789abcdef to /summary",
+    )
+
+    with pytest.raises(ValueError, match="not authorized for correction slot"):
+        apply_semantic_correction(
+            {"replacement_values": ["evidence_ffffffffffffffff"]},
+            bound,
+        )
+
+
+def test_candidate_schema_does_not_invent_cross_slot_distinctness() -> None:
+    payload: dict[str, object] = {
+        "summary": "bad one",
+        "tasks": ["TASK_ONE"],
+        "preserved": "bad two",
+    }
+    issue = diagnostic_from_invariant(
+        payload,
+        failure_class=ResponseFailureClass.EVIDENCE_GROUNDING,
+        authority=ResponseIssueAuthority.MODEL,
+        code="review_evidence_grounding",
+        invariant_id="review_evidence_fragment_unmatched",
+        subjects=(),
+        message="two unrelated claims need grounding",
+        paths=("/summary", "/preserved"),
+    )
+    plan = build_semantic_correction_plan(payload, issue)
+    assert plan is not None
+    shared = SemanticCorrectionCandidate(
+        handle="evidence_0123456789abcdef",
+        replacement_value="shared eligible observation",
+        source="one eligible result",
+    )
+    bound = attach_semantic_correction_candidates(
+        plan,
+        tuple(
+            SemanticCorrectionCandidateSlot(
+                target_path=target_path,
+                candidates=(shared,),
+            )
+            for target_path in plan.evidence.target_paths
+        ),
+    )
+    values_schema = semantic_correction_schema(bound)["properties"][
+        "replacement_values"
+    ]
+
+    assert "uniqueItems" not in values_schema
+    assert apply_semantic_correction(
+        {
+            "replacement_values": [
+                "evidence_0123456789abcdef",
+                "evidence_0123456789abcdef",
+            ]
+        },
+        bound,
+    ) == {
+        "summary": "shared eligible observation",
+        "tasks": ["TASK_ONE"],
+        "preserved": "shared eligible observation",
+    }
+
 
 def test_outcome_requires_targeted_errors_to_disappear_and_rejects_cycles() -> None:
     first: dict[str, object] = {
@@ -284,6 +409,87 @@ def test_outcome_requires_targeted_errors_to_disappear_and_rejects_cycles() -> N
             seen_fingerprints=frozenset({first_diagnostic.fingerprint}),
         )
         is SemanticCorrectionOutcome.ACCEPTED
+    )
+
+
+def test_outcome_rejects_a_schema_regression_in_the_same_authority_slot() -> None:
+    payload: dict[str, object] = {
+        "summary": "candidate",
+        "tasks": ["TASK_ONE"],
+        "preserved": "keep",
+    }
+    first = diagnostic_from_invariant(
+        payload,
+        failure_class=ResponseFailureClass.EVIDENCE_GROUNDING,
+        authority=ResponseIssueAuthority.MODEL,
+        code="review_evidence_grounding",
+        invariant_id="review_evidence_fragments_distinct",
+        subjects=(),
+        message="the evidence fragments must be distinct",
+        paths=("/summary",),
+    )
+    plan = build_semantic_correction_plan(payload, first)
+    assert plan is not None
+    regressed_payload = {**payload, "summary": []}
+    regressed = diagnostic_from_invariant(
+        regressed_payload,
+        failure_class=ResponseFailureClass.SEMANTIC_SCHEMA,
+        authority=ResponseIssueAuthority.MODEL,
+        code="tuple_type",
+        invariant_id="tuple_type",
+        subjects=(),
+        message="Input should be a valid tuple",
+        paths=("/summary",),
+    )
+
+    assert first.fingerprint != regressed.fingerprint
+    assert (
+        correction_outcome(
+            plan,
+            regressed,
+            seen_fingerprints=frozenset({first.fingerprint}),
+        )
+        is SemanticCorrectionOutcome.NO_IMPROVEMENT
+    )
+
+
+def test_outcome_allows_a_more_specific_constraint_in_the_same_slot() -> None:
+    payload: dict[str, object] = {
+        "summary": [],
+        "tasks": ["TASK_ONE"],
+        "preserved": "keep",
+    }
+    first = diagnostic_from_invariant(
+        payload,
+        failure_class=ResponseFailureClass.SEMANTIC_SCHEMA,
+        authority=ResponseIssueAuthority.MODEL,
+        code="string_type",
+        invariant_id="string_type",
+        subjects=(),
+        message="Input should be a valid string",
+        paths=("/summary",),
+    )
+    plan = build_semantic_correction_plan(payload, first)
+    assert plan is not None
+    refined_payload = {**payload, "summary": "duplicate evidence"}
+    refined = diagnostic_from_invariant(
+        refined_payload,
+        failure_class=ResponseFailureClass.SEMANTIC_SCHEMA,
+        authority=ResponseIssueAuthority.MODEL,
+        code="value_error",
+        invariant_id="review_evidence_fragments_distinct",
+        subjects=(),
+        message="the evidence fragments must be distinct",
+        paths=("/summary",),
+    )
+
+    assert (
+        correction_outcome(
+            plan,
+            refined,
+            seen_fingerprints=frozenset({first.fingerprint}),
+        )
+        is SemanticCorrectionOutcome.IMPROVED
     )
 
 

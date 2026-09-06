@@ -208,6 +208,18 @@ bootstrap named choice, the dynamic work-tool-to-submission sequence, canonical
 single `artifact` envelope, terminal one-request behavior, and exact sandbox cleanup.
 Do not treat a prompt instruction as evidence that the provider must call a tool.
 
+When changing targeted correction, test the exact per-slot submission schema as
+well as post-application validation. A different diagnostic fingerprint is not by
+itself improvement: regressions to a coarser type or shape in the same authority
+slot must stop. Review evidence-selector correction must use Controller-issued
+candidate handles and exact-byte binding; a model-authored replacement string is
+not an acceptable compatibility path.
+
+When changing live progress, derive labels only from allow-listed tool identity.
+Tests must prove that unknown executable names, command arguments, output, paths,
+and secrets do not enter activity records or rendered summaries, and that
+coalesced start/completion history retains the current lifecycle counters.
+
 Startup and run preflight inspect OpenClaw's configured model view without a
 provider filter so the check stays on configured local catalog/auth evidence
 and does not invoke provider discovery or content generation. A real provider

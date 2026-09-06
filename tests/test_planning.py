@@ -36,6 +36,8 @@ from software_agent_team.execution import (
     AgentExecutionActivity,
     AgentExecutionActivityKind,
     AgentTokenUsage,
+    AgentToolActionClass,
+    AgentToolTargetClass,
     ScriptedAgentExecutor,
     ScriptedAgentResponse,
 )
@@ -4137,6 +4139,13 @@ def test_invalid_complete_proposal_is_repaired_before_it_is_shown(
     )
     correction_schema = executor.requests[1].submission_contract.parameters_schema()
     assert set(correction_schema["properties"]) == {"replacement_values"}
+    replacement_schema = correction_schema["properties"]["replacement_values"]
+    assert replacement_schema["prefixItems"][0]["type"] == "string"
+    assert replacement_schema["items"] is False
+    assert (
+        executor.requests[1].submission_contract.transport_payload_schema()
+        == correction_schema
+    )
     assert "TARGETED_SEMANTIC_CORRECTION_VALUES_V1" in executor.requests[1].prompt
     assert "Do not regenerate or repeat that object" in executor.requests[1].prompt
     assert "Do not repeat or choose target paths" in executor.requests[1].prompt
@@ -4592,6 +4601,40 @@ def test_terminal_planning_progress_shows_heartbeat_and_stops_cleanly() -> None:
     assert any("Planning invocation is queued" in line for line in output)
     assert any("response received in 0.0s (completed)" in line for line in output)
     assert tuple(output) == rendered_at_completion
+
+
+def test_terminal_planning_progress_shows_safe_tool_action() -> None:
+    output: list[str] = []
+    progress = TerminalPlanningProgress(write=output.append)
+
+    progress(
+        PlanningActivity(
+            kind=PlanningActivityKind.TOOL_STARTED,
+            attempt=1,
+            maximum_attempts=2,
+            model="provider/model",
+            tool_action_class=AgentToolActionClass.TESTING,
+            tool_target_class=AgentToolTargetClass.QUALITY_CHECKS,
+            tool_detail="pytest",
+        )
+    )
+    progress(
+        PlanningActivity(
+            kind=PlanningActivityKind.TOOL_COMPLETED,
+            attempt=1,
+            maximum_attempts=2,
+            model="provider/model",
+            tool_action_class=AgentToolActionClass.TESTING,
+            tool_target_class=AgentToolTargetClass.QUALITY_CHECKS,
+            tool_detail="pytest",
+        )
+    )
+    progress.close()
+
+    assert output == [
+        "  Planning started testing quality checks (pytest)",
+        "  Planning completed testing quality checks (pytest)",
+    ]
 
 
 def test_terminal_planning_progress_explains_stall_policy_and_recovery() -> None:

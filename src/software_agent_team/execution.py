@@ -47,6 +47,7 @@ from software_agent_team.invocation_lifecycle import (
 from software_agent_team.openclaw_session_evidence import (
     CapturedOpenClawToolEvidence,
     OpenClawSessionEvidenceError,
+    OpenClawToolActivity,
     capture_openclaw_tool_evidence,
     inspect_openclaw_initialization,
     inspect_openclaw_session_activity,
@@ -133,6 +134,117 @@ class AgentExecutionActivityKind(StrEnum):
     FINALIZATION_STALL_SUSPECTED = "finalization_stall_suspected"
     FINALIZATION_STALL_RECOVERED = "finalization_stall_recovered"
     RESPONSE_FINALIZATION_STALLED = "response_finalization_stalled"
+
+
+class AgentToolActionClass(StrEnum):
+    """Safe controller classification of an attributable tool operation."""
+
+    INSPECTING = "inspecting"
+    EDITING = "editing"
+    TESTING = "testing"
+    BUILDING = "building"
+    RUNNING = "running"
+    PREPARING = "preparing"
+    SUBMITTING = "submitting"
+
+
+class AgentToolTargetClass(StrEnum):
+    """Bounded target category that never exposes tool arguments or content."""
+
+    PROJECT_CONTENT = "project_content"
+    PROJECT_FILES = "project_files"
+    QUALITY_CHECKS = "quality_checks"
+    VERSION_CONTROL = "version_control"
+    REVIEW_PROBE = "review_probe"
+    TYPED_ARTIFACT = "typed_artifact"
+    SANDBOX_WORKSPACE = "sandbox_workspace"
+
+
+def _classify_tool_activity(
+    activity: OpenClawToolActivity,
+) -> tuple[AgentToolActionClass, AgentToolTargetClass, str | None]:
+    """Project only allow-listed action metadata from a tool identity."""
+
+    tool_name = activity.tool_name
+    if tool_name == "read":
+        return (
+            AgentToolActionClass.INSPECTING,
+            AgentToolTargetClass.PROJECT_CONTENT,
+            "read",
+        )
+    if tool_name in {"write", "edit", "apply_patch"}:
+        return (
+            AgentToolActionClass.EDITING,
+            AgentToolTargetClass.PROJECT_FILES,
+            tool_name,
+        )
+    if tool_name == "sat_submit_artifact":
+        return (
+            AgentToolActionClass.SUBMITTING,
+            AgentToolTargetClass.TYPED_ARTIFACT,
+            None,
+        )
+    if tool_name != "exec" or activity.executable is None:
+        return (
+            AgentToolActionClass.RUNNING,
+            AgentToolTargetClass.SANDBOX_WORKSPACE,
+            None,
+        )
+    executable = activity.executable.rsplit("/", maxsplit=1)[-1]
+    if executable in {"pytest", "ruff", "mypy", "pyright", "eslint"}:
+        return (
+            AgentToolActionClass.TESTING,
+            AgentToolTargetClass.QUALITY_CHECKS,
+            executable,
+        )
+    if executable == "git":
+        return (
+            AgentToolActionClass.INSPECTING,
+            AgentToolTargetClass.VERSION_CONTROL,
+            executable,
+        )
+    if executable == "sat-probe-run":
+        return (
+            AgentToolActionClass.TESTING,
+            AgentToolTargetClass.REVIEW_PROBE,
+            executable,
+        )
+    if executable == "sat-probe-write":
+        return (
+            AgentToolActionClass.PREPARING,
+            AgentToolTargetClass.REVIEW_PROBE,
+            executable,
+        )
+    if executable in {"uv", "pip", "npm", "pnpm", "yarn", "make"}:
+        return (
+            AgentToolActionClass.BUILDING,
+            AgentToolTargetClass.SANDBOX_WORKSPACE,
+            executable,
+        )
+    if executable in {
+        "cat",
+        "find",
+        "grep",
+        "head",
+        "ls",
+        "pwd",
+        "read",
+        "readlink",
+        "rg",
+        "sed",
+        "stat",
+        "tail",
+    }:
+        return (
+            AgentToolActionClass.INSPECTING,
+            AgentToolTargetClass.PROJECT_CONTENT,
+            executable,
+        )
+    return (
+        AgentToolActionClass.RUNNING,
+        AgentToolTargetClass.SANDBOX_WORKSPACE,
+        None,
+    )
 
 
 class ProviderLivenessPolicy(BaseModel):
@@ -266,6 +378,12 @@ class AgentExecutionActivity(BaseModel):
     initialization_checkpoint: InitializationCheckpoint | None = None
     shutdown_grace_seconds: float | None = Field(default=None, gt=0)
     action: str | None = Field(default=None, min_length=1, max_length=500)
+    tool_action_class: AgentToolActionClass | None = None
+    tool_target_class: AgentToolTargetClass | None = None
+    tool_detail: str | None = Field(
+        default=None,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$",
+    )
 
     @model_validator(mode="after")
     def bind_degradation_reason(self) -> Self:
@@ -373,6 +491,19 @@ class AgentExecutionActivity(BaseModel):
             raise ValueError(
                 "initialization checkpoints belong only to initialization readiness"
             )
+        tool_kinds = {
+            AgentExecutionActivityKind.TOOL_STARTED,
+            AgentExecutionActivityKind.TOOL_COMPLETED,
+        }
+        tool_classified = (
+            self.tool_action_class is not None and self.tool_target_class is not None
+        )
+        if (self.tool_action_class is None) != (self.tool_target_class is None):
+            raise ValueError("tool action and target classes must appear together")
+        if (tool_classified or self.tool_detail is not None) and self.kind not in (
+            tool_kinds
+        ):
+            raise ValueError("tool classification belongs only to tool history events")
         return self
 
 
@@ -974,6 +1105,8 @@ class _InvocationLifecycleRecorder:
         self.terminate_sent = False
         self.kill_sent = False
         self.process_lease_released = True
+        self.active_tool_count = 0
+        self.completed_tool_count = 0
         self.initialization_evidence = InitializationLivenessEvidence(
             mode="unavailable",
             policy_source=initialization_policy.source,
@@ -1085,13 +1218,21 @@ class _InvocationLifecycleRecorder:
             action="Provider activity lease is now attributable to this invocation",
         )
 
-    def tool_state(self, active_tool_count: int, *, now: float) -> None:
+    def tool_state(
+        self,
+        active_tool_count: int,
+        completed_tool_count: int,
+        *,
+        now: float,
+    ) -> None:
         desired_phase = (
             InvocationPhase.TOOL_ACTIVE
             if active_tool_count > 0
             else InvocationPhase.PROVIDER_WAIT
         )
         with self._lock:
+            self.active_tool_count = active_tool_count
+            self.completed_tool_count = completed_tool_count
             if (
                 self.phase
                 in {
@@ -1294,6 +1435,8 @@ class _InvocationLifecycleRecorder:
                     else None
                 ),
                 action=transition.action,
+                active_tool_count=self.active_tool_count,
+                completed_tool_count=self.completed_tool_count,
             )
         )
 
@@ -1577,6 +1720,8 @@ class _ProviderLivenessMonitor:
             completed_delta = (
                 session.tool_completed_count - self.previous_tool_completed
             )
+            started_tools = session.started_tools[self.previous_tool_started :]
+            completed_tools = session.completed_tools[self.previous_tool_completed :]
             self.previous_trusted_records = session.trusted_record_count
             self.previous_tool_started = session.tool_started_count
             self.previous_tool_completed = session.tool_completed_count
@@ -1589,11 +1734,32 @@ class _ProviderLivenessMonitor:
                 # once, so the event kind alone is not the current lifecycle
                 # state.
                 if started_delta > 0 or completed_delta > 0:
-                    self.lifecycle.tool_state(self.active_tool_count, now=now)
-                for _ in range(started_delta):
-                    self._emit(AgentExecutionActivityKind.TOOL_STARTED, now)
-                for _ in range(completed_delta):
-                    self._emit(AgentExecutionActivityKind.TOOL_COMPLETED, now)
+                    self.lifecycle.tool_state(
+                        self.active_tool_count,
+                        self.previous_tool_completed,
+                        now=now,
+                    )
+                if len(started_tools) != started_delta:
+                    self._degrade("OpenClaw tool-start metadata is inconsistent", now)
+                else:
+                    for tool_activity in started_tools:
+                        self._emit(
+                            AgentExecutionActivityKind.TOOL_STARTED,
+                            now,
+                            tool_activity=tool_activity,
+                        )
+                if len(completed_tools) != completed_delta:
+                    self._degrade(
+                        "OpenClaw tool-completion metadata is inconsistent",
+                        now,
+                    )
+                else:
+                    for tool_activity in completed_tools:
+                        self._emit(
+                            AgentExecutionActivityKind.TOOL_COMPLETED,
+                            now,
+                            tool_activity=tool_activity,
+                        )
             if (
                 session.terminal_response_observed
                 and not self.terminal_response_observed
@@ -1664,11 +1830,20 @@ class _ProviderLivenessMonitor:
         self.degradation_reason = reason
         self._emit(AgentExecutionActivityKind.LIVENESS_DEGRADED, now)
 
-    def _emit(self, kind: AgentExecutionActivityKind, now: float) -> None:
+    def _emit(
+        self,
+        kind: AgentExecutionActivityKind,
+        now: float,
+        *,
+        tool_activity: OpenClawToolActivity | None = None,
+    ) -> None:
         if self.activity_handler is None:
             return
         inactivity = (
             0.0 if self.last_activity is None else max(0.0, now - self.last_activity)
+        )
+        tool_classification = (
+            None if tool_activity is None else _classify_tool_activity(tool_activity)
         )
         activity = AgentExecutionActivity(
             kind=kind,
@@ -1689,6 +1864,15 @@ class _ProviderLivenessMonitor:
                 self.degradation_reason
                 if kind is AgentExecutionActivityKind.LIVENESS_DEGRADED
                 else None
+            ),
+            tool_action_class=(
+                None if tool_classification is None else tool_classification[0]
+            ),
+            tool_target_class=(
+                None if tool_classification is None else tool_classification[1]
+            ),
+            tool_detail=(
+                None if tool_classification is None else tool_classification[2]
             ),
         )
         try:

@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** Phase 3E implemented; invocation lifecycle, checkpoint progress, ProductDefinition, typed submission, and leaf-scoped Review evidence correction are offline-verified; final fresh-run and release validation remain in progress
+**Current milestone:** Phase 3E implemented; invocation lifecycle, classified checkpoint progress, ProductDefinition, typed submission, exact-slot correction, and Controller-bound Review evidence selection are offline-verified; final fresh-run and release validation remain in progress
 
 **Last updated:** September 6, 2026
 
@@ -34,6 +34,14 @@ supervisor. Its dirty-tree diagnostic report recorded a 224,661,504-byte
 aggregate peak RSS, no new cgroup or kernel OOM event, and zero residual stage
 processes, process leases, sandbox containers, or volumes. Repeated clean gates
 on the eventual frozen revision remain required.
+The latest dirty-tree diagnostic gate passed all **1,099 tests** in 326.84
+seconds. It recorded a 289,669,120-byte aggregate peak RSS, peak process/thread
+counts of 5/19, no new cgroup or kernel OOM event, and zero residual stage
+processes, process leases, sandbox containers, or volumes. It covers exact
+correction-slot schemas, constraint-aware convergence, Controller-issued Review
+evidence handles, safe tool-action classification, and repeated checkpoint
+projection suppression. A clean committed gate and fresh provider journey are
+still required before those corrections are considered closed.
 
 The current development head implements configuration schema v8 model metadata
 with attributable price/context sources, task-scoped route snapshots, one
@@ -111,14 +119,24 @@ Review grounding failures now identify every independently invalid selector in
 one pass with a stable invariant, criterion subject, and exact `observable`
 leaf. Targeted correction can therefore replace those selector strings together
 while preserving every assessment, finding, verdict, and summary field that
-already passed validation; it never asks the model to regenerate the whole
-assessment array. A remaining targetable model-owned failure creates a
+already passed validation. The Controller now derives a bounded catalog of exact
+eligible same-chain evidence fragments for each invalid leaf; the model selects
+an opaque handle and the Controller records the exact-byte binding. No eligible
+candidate means no random correction call. It never asks the model to regenerate
+the whole assessment array or hand-type previously observed output. A remaining
+targetable model-owned failure creates a
 diagnostic-v2 invariant ID,
 structured affected-entity subjects, precise model-owned JSON-pointer authority,
 and SHA-bound correction-request evidence. The Controller binds those paths to
 ordered slots and the model submits only corresponding `replacement_values`, so
 it cannot repeat the response digest, select a parent container, or otherwise
-widen correction authority. The
+widen correction authority. The correction submission contract itself now
+projects the exact ordered value schema for every slot instead of accepting a
+generic `JsonValue` vector. Constraint convergence distinguishes genuine
+refinement from regression: a more specific invariant exposed after a coarse
+schema failure may continue, while falling back to a coarser type/shape error in
+the same authority slot is not improvement merely because its fingerprint
+changed. The
 controller retains every unrelated field, freezes a writer's verified Git
 result, and records each request and outcome. Planning relational validation no
 longer infers identity or correction scope from human error prose; unclassified
@@ -132,6 +150,14 @@ the latest distinct writer-coverage then verifier-authority failure now yields
 different fingerprints and narrows correction from four proposal containers to
 `tasks`, followed by the exact criterion `verification_agent_ids`; a corrected
 Reviewer provider run remains pending.
+
+Live progress now derives tool-action text from an allow-list at session capture
+time. Planning and runtime Agents may show bounded labels such as `testing
+quality checks (pytest)`, but unknown names, full commands, arguments, output,
+paths, and secrets do not enter the activity object or renderer. Every real
+event remains persisted and summarized; identical checkpoint and budget blocks
+are suppressed within an invocation to avoid repeated terminal walls. Provider-
+backed validation of the richer projection remains pending.
 
 A fresh installed run at `4095086` exposed the final v1 authority defect before
 this replacement: six lowercase-suffix decision IDs were the only invalid
