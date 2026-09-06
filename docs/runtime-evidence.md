@@ -226,11 +226,16 @@ ineligible evidence remain typed model-owned failures.
 
 Adaptive Planning and dynamic execution Agents deliver semantic values through
 an invocation-bound `sat_submit_artifact` tool, not through assistant-message
-framing. Before each call, the controller freezes the exact response JSON
-Schema, writes it to an owner-private temporary directory, creates a fresh
-invocation binding, and starts the isolated OpenClaw process with only those
-paths and digests. The
-SAT-owned OpenClaw plugin registers the tool with that exact schema. A
+framing. Before each call, the controller freezes the exact semantic response JSON
+Schema, creates a fresh invocation binding, and starts the isolated OpenClaw process
+with only owner-private paths and digests. Dynamic Agents expose that exact schema at
+the tool boundary. Adaptive Planning exposes an object-only transport schema while
+retaining the exact Planning semantic-schema digest in the private binding. This
+separation ensures that valid JSON arguments reach Controller validation even when a
+proposal contains a harmless extra field or a targetable semantic defect; OpenClaw
+cannot discard the only payload before SAT records normalization or correction
+evidence. The SAT-owned OpenClaw plugin verifies the transport-schema file under a
+separate integrity digest. A
 successful call exclusively writes one private envelope and terminates the
 Agent turn. After the process exits, the controller requires exactly one
 successful final submission-tool call in the attributable session transcript
@@ -247,6 +252,14 @@ still validates those submitted arguments against the semantic Pydantic model,
 controller-owned identity, approved tasks and criteria, Git state, and evidence
 rules before assembling an artifact. Thus typed transport removes presentation
 framing as a source of semantic failure without weakening content validation.
+
+The Planning prompt receives an explicit model-facing request projection: project
+name, source request, execution profile, and base constraints. Run/session identity,
+destination, selected route, authorization state, and authorization timestamp remain
+Controller-owned and are not copied into model context. Besides reducing irrelevant
+context, this prevents secret-key redaction rules in an execution adapter from
+rewriting an authorization-shaped field and breaking exact prompt-to-session
+attribution.
 
 Only the legacy fixed-role compatibility path still uses a deterministic text
 transport. On that compatibility boundary, the controller
@@ -297,10 +310,10 @@ semantic object,
 binds its canonical SHA-256 into persisted correction-request evidence, assigns
 the exact paths to ordered Controller-owned slots, and asks the model to submit
 only the corresponding `replacement_values`—never the digest, paths, or the
-complete object. For Adaptive Planning or a dynamic Agent, the controller
-replaces the tool parameters with the exact value-only correction schema for
-that invocation; the schema requires the exact slot count, so the model cannot
-repeat or widen field authority. The model calls the same submission tool once,
+complete object. The exact semantic correction schema requires the slot count;
+dynamic Agents expose it directly, while Adaptive Planning retains it in the
+Controller binding behind the object-only transport schema. In either case the
+model cannot repeat or widen field authority. The model calls the same submission tool once,
 and assistant prose is again non-authoritative. The
 Controller applies each value to its pre-authorized path on a copy, preserves
 every unrelated field, and revalidates the compiled result. A writer's verified commit and snapshot

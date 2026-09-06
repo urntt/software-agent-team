@@ -24,14 +24,23 @@ function loadInvocationContract() {
   const schemaPath = process.env.SAT_ARTIFACT_SUBMISSION_SCHEMA_PATH;
   const outputPath = process.env.SAT_ARTIFACT_SUBMISSION_OUTPUT_PATH;
   const schemaSha256 = process.env.SAT_ARTIFACT_SUBMISSION_SCHEMA_SHA256;
+  const parametersSha256 =
+    process.env.SAT_ARTIFACT_SUBMISSION_PARAMETERS_SHA256;
   const bindingSha256 = process.env.SAT_ARTIFACT_SUBMISSION_BINDING_SHA256;
-  if (!schemaPath || !outputPath || !schemaSha256 || !bindingSha256) {
+  if (
+    !schemaPath ||
+    !outputPath ||
+    !schemaSha256 ||
+    !parametersSha256 ||
+    !bindingSha256
+  ) {
     return unavailableContract();
   }
   if (
     !path.isAbsolute(schemaPath) ||
     !path.isAbsolute(outputPath) ||
     !SHA256_PATTERN.test(schemaSha256) ||
+    !SHA256_PATTERN.test(parametersSha256) ||
     !SHA256_PATTERN.test(bindingSha256)
   ) {
     throw new Error("SAT artifact submission environment is invalid");
@@ -44,8 +53,11 @@ function loadInvocationContract() {
     throw new Error("SAT artifact submission schema exceeds its size limit");
   }
   const encoded = fs.readFileSync(schemaPath);
-  if (crypto.createHash("sha256").update(encoded).digest("hex") !== schemaSha256) {
-    throw new Error("SAT artifact submission schema digest differs");
+  if (
+    crypto.createHash("sha256").update(encoded).digest("hex") !==
+    parametersSha256
+  ) {
+    throw new Error("SAT artifact submission parameters digest differs");
   }
   const parameters = JSON.parse(encoded.toString("utf8"));
   if (!parameters || typeof parameters !== "object" || Array.isArray(parameters)) {

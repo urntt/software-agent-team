@@ -86,6 +86,11 @@ class AgentSubmissionContract(BaseModel):
         max_length=MAX_SUBMISSION_SCHEMA_BYTES,
     )
     schema_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    transport_schema_json: str | None = Field(
+        default=None,
+        min_length=2,
+        max_length=MAX_SUBMISSION_SCHEMA_BYTES,
+    )
 
     @classmethod
     def from_schema(
@@ -93,36 +98,64 @@ class AgentSubmissionContract(BaseModel):
         schema: dict[str, JsonValue],
         *,
         purpose: AgentSubmissionPurpose,
+        transport_schema: dict[str, JsonValue] | None = None,
     ) -> Self:
-        """Freeze a generated JSON Schema and its exact content identity."""
+        """Freeze a semantic schema and an optional transport-only schema."""
 
         encoded = canonical_json_bytes(schema)
         return cls(
             purpose=purpose,
             parameters_schema_json=encoded.decode("utf-8"),
             schema_sha256=hashlib.sha256(encoded).hexdigest(),
+            transport_schema_json=(
+                None
+                if transport_schema is None
+                else canonical_json_bytes(transport_schema).decode("utf-8")
+            ),
         )
 
     @model_validator(mode="after")
     def validate_schema_identity(self) -> Self:
+        self._validate_schema_json(
+            self.parameters_schema_json,
+            expected_sha256=self.schema_sha256,
+            label="submission schema",
+        )
+        if self.transport_schema_json is not None:
+            self._validate_schema_json(
+                self.transport_schema_json,
+                expected_sha256=None,
+                label="submission transport schema",
+            )
+        return self
+
+    @staticmethod
+    def _validate_schema_json(
+        encoded: str,
+        *,
+        expected_sha256: str | None,
+        label: str,
+    ) -> None:
         try:
             schema = json.loads(
-                self.parameters_schema_json,
+                encoded,
                 object_pairs_hook=_reject_duplicate_keys,
                 parse_constant=lambda value: (_ for _ in ()).throw(
                     ValueError(f"non-standard JSON constant: {value}")
                 ),
             )
         except (TypeError, ValueError, json.JSONDecodeError) as error:
-            raise ValueError("submission schema must be strict JSON") from error
+            raise ValueError(f"{label} must be strict JSON") from error
         if not isinstance(schema, dict) or schema.get("type") != "object":
-            raise ValueError("submission schema must describe one JSON object")
+            raise ValueError(f"{label} must describe one JSON object")
         canonical = canonical_json_bytes(schema)
-        if canonical.decode("utf-8") != self.parameters_schema_json:
-            raise ValueError("submission schema JSON must use canonical encoding")
-        if hashlib.sha256(canonical).hexdigest() != self.schema_sha256:
-            raise ValueError("submission schema digest does not match its content")
-        return self
+        if canonical.decode("utf-8") != encoded:
+            raise ValueError(f"{label} JSON must use canonical encoding")
+        if (
+            expected_sha256 is not None
+            and hashlib.sha256(canonical).hexdigest() != expected_sha256
+        ):
+            raise ValueError(f"{label} digest does not match its content")
 
     def parameters_schema(self) -> dict[str, JsonValue]:
         """Decode the already-validated schema for display or file materialization."""
@@ -130,6 +163,21 @@ class AgentSubmissionContract(BaseModel):
         value = json.loads(self.parameters_schema_json)
         assert isinstance(value, dict)
         return value
+
+    def transport_schema(self) -> dict[str, JsonValue]:
+        """Return the schema exposed to the tool transport for this invocation."""
+
+        encoded = self.transport_schema_json or self.parameters_schema_json
+        value = json.loads(encoded)
+        assert isinstance(value, dict)
+        return value
+
+    @property
+    def transport_schema_sha256(self) -> str:
+        """Return the integrity digest for the tool transport schema file."""
+
+        encoded = self.transport_schema_json or self.parameters_schema_json
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 class AgentSubmissionEvidence(BaseModel):

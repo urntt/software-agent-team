@@ -243,8 +243,13 @@ selects the fields it may replace.
 
 Adaptive Planning and dynamic execution Agents call the invocation-bound
 `sat_submit_artifact` tool exactly once with their semantic response. SAT gives
-the plugin the exact Planning- or AgentSpec-derived JSON Schema and a fresh
-controller binding, then requires the private envelope to match the final
+dynamic Agents the exact AgentSpec-derived JSON Schema. Planning uses a separate
+object-only transport schema so every syntactically structured proposal or correction
+reaches the Controller's exact semantic validator; the private envelope still binds
+the exact Planning semantic-schema digest. This allows deterministic forbidden-field
+normalization and targeted semantic correction to operate after transport without
+trusting invalid content. SAT gives every invocation a fresh controller binding, then
+requires the private envelope to match the final
 successful attributable tool call. Visible
 assistant payloads remain raw telemetry but are not parsed as Planning or
 dynamic semantics, so prose, truncation, or ancillary diagnostics cannot
@@ -254,15 +259,22 @@ compatibility path retains the bounded single-object text parser; on that path,
 payload count is not mistaken for semantic object count and two real object
 candidates remain ambiguous.
 
+The model-facing Planning request contains only the project name, source request,
+execution profile, and base constraints. Run/session identity, destination, selected
+route, authorization state, and authorization timestamp stay Controller-owned. This
+prevents execution-layer secret redaction of authorization-shaped metadata from
+changing the persisted prompt and invalidating exact session attribution.
+
 The pinned OpenClaw Agent CLI does not expose a response-schema parameter for a
-tool-using turn. SAT supplies that schema through its isolated submission plugin
-and then compiles the submitted values at the controller boundary.
+tool-using turn. SAT supplies the appropriate transport schema through its isolated
+submission plugin, binds the exact semantic schema separately, and compiles submitted
+values at the controller boundary.
 Transport failures and unlocated errors stop. A targetable model-owned failure
 produces a content-free diagnostic and a correction request whose persisted
 evidence is bound to the retained object's SHA-256. The Controller assigns an
 ordered slot to each exact validator-owned JSON-pointer path; the model submits
 only `replacement_values` through the same typed tool under a correction-only
-schema. It cannot repeat, replace, widen, or reorder the response identity or
+semantic schema. It cannot repeat, replace, widen, or reorder the response identity or
 path authority. Derived parent
 errors are not copied into a child-field request. Every other value remains
 immutable. Product

@@ -1984,7 +1984,10 @@ class OpenClawSubprocessExecutor:
             if request.submission_contract is not None:
                 submission_schema_path = temporary_path / "submission-schema.json"
                 submission_schema_path.write_text(
-                    request.submission_contract.parameters_schema_json,
+                    (
+                        request.submission_contract.transport_schema_json
+                        or request.submission_contract.parameters_schema_json
+                    ),
                     encoding="utf-8",
                 )
                 submission_schema_path.chmod(0o600)
@@ -2007,6 +2010,9 @@ class OpenClawSubprocessExecutor:
                     ),
                     "SAT_ARTIFACT_SUBMISSION_SCHEMA_SHA256": (
                         request.submission_contract.schema_sha256
+                    ),
+                    "SAT_ARTIFACT_SUBMISSION_PARAMETERS_SHA256": (
+                        request.submission_contract.transport_schema_sha256
                     ),
                     "SAT_ARTIFACT_SUBMISSION_BINDING_SHA256": (
                         submission_binding_sha256

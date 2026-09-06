@@ -2674,6 +2674,23 @@ def _planning_response_schema() -> dict[str, object]:
     return schema
 
 
+def _planning_submission_transport_schema() -> dict[str, object]:
+    """Capture one JSON object before Controller-owned semantic validation."""
+
+    return {"type": "object", "additionalProperties": True}
+
+
+def _planning_request_prompt_context(request: PlanningRequest) -> dict[str, object]:
+    """Project only model-relevant request facts into the Planning prompt."""
+
+    return {
+        "project_name": request.project_name,
+        "source_request": request.source_request,
+        "execution_profile": list(request.execution_profile),
+        "base_constraints": list(request.base_constraints),
+    }
+
+
 class AdaptiveImplementationPlan(BaseModel):
     """Approved task-to-Agent intent bound by an adaptive TeamPlan."""
 
@@ -4831,6 +4848,7 @@ class AdaptivePlanningCoordinator:
                     if correction_plan is None
                     else AgentSubmissionPurpose.SEMANTIC_CORRECTION
                 ),
+                transport_schema=_planning_submission_transport_schema(),
             )
             execution_request = AgentExecutionRequest(
                 run_id=request.run_id,
@@ -5327,7 +5345,7 @@ class AdaptivePlanningCoordinator:
     ) -> str:
         template = Template(PLANNING_TEMPLATE.read_text(encoding="utf-8"))
         context = {
-            "request": request.model_dump(mode="json"),
+            "request": _planning_request_prompt_context(request),
             "dialogue": transcript,
             "current_proposal": (
                 None

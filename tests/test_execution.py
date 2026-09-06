@@ -46,6 +46,7 @@ from software_agent_team.submissions import (
     AgentSubmissionContract,
     AgentSubmissionPurpose,
     AgentSubmissionStatus,
+    canonical_json_sha256,
 )
 from software_agent_team.teams import AgentCapability
 
@@ -406,14 +407,17 @@ def test_openclaw_adapter_uses_bound_submission_not_visible_text(
     state = tmp_path / "state"
     state.mkdir()
     semantic_payload = {"summary": "typed result"}
+    semantic_schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {"summary": {"type": "string"}},
+        "required": ["summary"],
+    }
+    transport_schema = {"type": "object", "additionalProperties": True}
     submission_contract = AgentSubmissionContract.from_schema(
-        {
-            "type": "object",
-            "additionalProperties": False,
-            "properties": {"summary": {"type": "string"}},
-            "required": ["summary"],
-        },
+        semantic_schema,
         purpose=AgentSubmissionPurpose.ARTIFACT,
+        transport_schema=transport_schema,
     )
 
     def runner(
@@ -426,6 +430,14 @@ def test_openclaw_adapter_uses_bound_submission_not_visible_text(
         session_key = command[command.index("--session-key") + 1]
         prompt_path = Path(command[command.index("--message-file") + 1])
         prompt = prompt_path.read_text(encoding="utf-8")
+        schema_path = Path(environment["SAT_ARTIFACT_SUBMISSION_SCHEMA_PATH"])
+        assert json.loads(schema_path.read_text(encoding="utf-8")) == transport_schema
+        assert environment["SAT_ARTIFACT_SUBMISSION_SCHEMA_SHA256"] == (
+            canonical_json_sha256(semantic_schema)
+        )
+        assert environment["SAT_ARTIFACT_SUBMISSION_PARAMETERS_SHA256"] == (
+            canonical_json_sha256(transport_schema)
+        )
         external_id = "provider-call-1"
         output_path = Path(environment["SAT_ARTIFACT_SUBMISSION_OUTPUT_PATH"])
         output_path.write_text(

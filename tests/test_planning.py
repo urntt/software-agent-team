@@ -617,6 +617,10 @@ def test_planning_uses_typed_submission_instead_of_assistant_text(
     contract = executor.requests[0].submission_contract
     assert contract is not None
     assert contract.purpose is AgentSubmissionPurpose.PLANNING_RESPONSE
+    assert contract.transport_schema() == {
+        "type": "object",
+        "additionalProperties": True,
+    }
     turn = store.load_turn(request().run_id, 1)
     assert turn.response_text == "This presentation is deliberately not JSON."
     assert turn.submission_payload == payload
@@ -629,6 +633,36 @@ def test_planning_uses_typed_submission_instead_of_assistant_text(
     loaded = PlanningTurn.model_validate(without_presentation)
     assert loaded.response_text is None
     assert loaded.parsed_response == proposal_response()
+
+
+def test_planning_captures_extra_fields_before_deterministic_normalization(
+    tmp_path: Path,
+) -> None:
+    payload = proposal_response().model_dump(mode="json")
+    payload["proposal"]["non_goals_note"] = "legacy extra field"
+    executor = ScriptedAgentExecutor(
+        [ScriptedAgentResponse(text="ignored", submission_payload=payload)]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(),
+        clock=AdvancingClock(),
+    )
+
+    created = coordinator.start(
+        request(),
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+
+    assert created is not None
+    assert len(executor.requests) == 1
+    turn = store.load_turn(request().run_id, 1)
+    assert turn.submission_payload == payload
+    assert turn.response_normalizations == (
+        "removed schema-forbidden field /proposal/non_goals_note",
+    )
 
 
 def test_question_requires_suggestions_and_preserves_custom_answers() -> None:
@@ -2840,6 +2874,14 @@ def test_dialogue_revision_structured_edit_and_approval_are_recoverable(
         .split("\n\nRESPONSE_SCHEMA_JSON", 1)[0]
     )
     planning_context = json.loads(planning_context_text)
+    assert set(planning_context["request"]) == {
+        "project_name",
+        "source_request",
+        "execution_profile",
+        "base_constraints",
+    }
+    assert "authorization" not in planning_context_text
+    assert "authorized_at" not in planning_context_text
     boundary_definitions = planning_context["controller_policy"][
         "review_boundary_definitions"
     ]

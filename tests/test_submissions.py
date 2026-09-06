@@ -100,6 +100,21 @@ def test_submission_contract_freezes_canonical_schema_identity() -> None:
         )
 
 
+def test_submission_contract_separates_transport_from_semantic_schema() -> None:
+    transport_schema = {"type": "object", "additionalProperties": True}
+
+    value = AgentSubmissionContract.from_schema(
+        SCHEMA,
+        purpose=AgentSubmissionPurpose.PLANNING_RESPONSE,
+        transport_schema=transport_schema,
+    )
+
+    assert value.parameters_schema() == SCHEMA
+    assert value.schema_sha256 == canonical_json_sha256(SCHEMA)
+    assert value.transport_schema() == transport_schema
+    assert value.transport_schema_sha256 == canonical_json_sha256(transport_schema)
+
+
 def test_submission_capture_accepts_one_final_bound_call() -> None:
     payload = {"summary": "complete"}
 

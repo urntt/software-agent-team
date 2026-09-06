@@ -134,6 +134,14 @@ Controller-owned. Adaptive Planning now uses invocation-bound typed submission
 for initial questions/proposals and for correction values. Planning schema v7
 persists the submitted semantic payload and content-free binding separately
 from non-authoritative assistant text while retaining canonical v2-v6 reads.
+Planning separates its permissive object-only tool transport schema from the
+exact semantic-schema digest retained by the Controller. Consequently, every
+syntactically structured Planning payload reaches strict semantic validation and
+deterministic normalization instead of being discarded by a redundant pre-Controller
+schema gate. The model-facing request projection excludes Controller-only run,
+destination, route, authorization, and timestamp metadata, preventing execution-layer
+redaction from breaking exact prompt/session attribution. Dynamic Agent submission
+schemas remain exact.
 An actual pinned-OpenClaw loopback invocation loaded the plugin in the read-only
 bootstrap runtime, captured the final tool call, accepted the bound payload, and
 removed its exact sandbox container. A new provider-backed product journey is
