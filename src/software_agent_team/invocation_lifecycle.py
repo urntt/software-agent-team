@@ -34,6 +34,7 @@ class InvocationStopReason(StrEnum):
     EVALUATION_TIMEOUT = "evaluation_timeout"
     PROCESS_FAILURE = "process_failure"
     PROVIDER_FAILURE = "provider_failure"
+    UPSTREAM_INCOMPLETE = "upstream_incomplete"
     INVALID_RESPONSE = "invalid_response"
     LAUNCH_FAILURE = "launch_failure"
 

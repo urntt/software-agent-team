@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from software_agent_team.artifacts import (
     AgentExecutionRecord,
+    AgentExecutionStatus,
     HandoffEnvelope,
     HandoffStatus,
     ReviewBoundaryCheck,
@@ -329,7 +330,9 @@ def test_schema_four_execution_record_keeps_canonical_shape_without_lifecycle() 
 def test_current_execution_record_binds_lifecycle_reason_to_typed_status() -> None:
     payload = valid_execution_payload()
     payload["execution_status"] = "completed"
-    payload["invocation_lifecycle"] = lifecycle_payload()
+    payload["invocation_lifecycle"] = InvocationLifecycleEvidence.model_validate(
+        lifecycle_payload()
+    ).model_dump(mode="json")
 
     record = AgentExecutionRecord.model_validate(payload)
 
@@ -358,6 +361,45 @@ def test_schema_five_execution_record_keeps_lifecycle_v1_canonical() -> None:
     assert restored.invocation_lifecycle is not None
     assert restored.invocation_lifecycle.schema_version == 1
     assert restored.model_dump(mode="json") == payload
+
+
+def test_schema_six_execution_record_keeps_lifecycle_v2_canonical() -> None:
+    payload = AgentExecutionRecord.model_validate(valid_execution_payload()).model_dump(
+        mode="json"
+    )
+    payload["schema_version"] = 6
+    payload["execution_status"] = "completed"
+    payload["invocation_lifecycle"] = InvocationLifecycleEvidence.model_validate(
+        lifecycle_payload()
+    ).model_dump(mode="json")
+
+    restored = AgentExecutionRecord.model_validate(payload)
+
+    assert restored.schema_version == 6
+    assert restored.invocation_lifecycle is not None
+    assert restored.invocation_lifecycle.schema_version == 2
+    assert restored.model_dump(mode="json") == payload
+
+
+def test_upstream_incomplete_outcome_requires_artifact_schema_seven() -> None:
+    payload = valid_execution_payload()
+    payload.update(
+        {
+            "schema_version": 6,
+            "execution_status": "upstream_incomplete",
+            "error": "upstream tool loop stopped before terminal submission",
+            "response_artifact": None,
+            "invocation_lifecycle": lifecycle_payload("upstream_incomplete"),
+        }
+    )
+
+    with pytest.raises(ValidationError, match="upstream-incomplete"):
+        AgentExecutionRecord.model_validate(payload)
+
+    payload["schema_version"] = 7
+    restored = AgentExecutionRecord.model_validate(payload)
+
+    assert restored.execution_status is AgentExecutionStatus.UPSTREAM_INCOMPLETE
 
 
 def test_schema_versions_reject_mismatched_finalization_state() -> None:

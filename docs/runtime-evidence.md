@@ -473,8 +473,11 @@ workspaces/<run_id>/
 └── detached self-contained Git clone and generated result
 ```
 
-Artifact schema v6 adds terminal-response/finalization status and lifecycle-v2
-evidence while retaining schema-v2 through schema-v5 reads. Artifact schema v5
+Artifact schema v7 adds the distinct `upstream_incomplete` execution outcome
+for an attributable invocation that ends on a paired tool result before its
+bound terminal submission. Artifact schema v6 added terminal-response/finalization
+status and lifecycle-v2 evidence. Schema-v2 through schema-v6 records remain
+readable. Artifact schema v5
 added the versioned, content-free invocation lifecycle to execution telemetry.
 Lifecycle schema v2 adds terminal-response handoff and renewable
 response-finalization evidence while retaining schema-v1 reads. It
@@ -484,7 +487,7 @@ evidence collection, process-lease release, and cleanup completion. Schema v4 ad
 response-transport identity and bound submission evidence; schema v3 introduced
 typed response diagnostics, deterministic normalization, targeted-correction
 requests, and correction outcomes. SAT retains read support for schema v2
-through v5. Optional compatibility fields omit themselves when absent, so
+through v6. Optional compatibility fields omit themselves when absent, so
 loading and serializing historical evidence preserves its canonical bytes. All
 readable versions
 attribute handoffs, execution telemetry, and Agent-owned artifacts to run-scoped Agent IDs. The Agent namespace prevents two Agents with
@@ -626,8 +629,12 @@ dependency closure remain valid; a model/configuration change or a dynamic
 plan graph addition, removal, or redefinition refreshes the affected result
 and every transitive dependent. A checkpoint transition creates one linked
 revision, while an identical observation creates none. This is self-check
-recovery; automatic continuation of an interrupted Agent workflow remains a
-separate control-plane milestone.
+recovery and is independent of Agent execution recovery. A user-interrupted or
+cancelled Agent remains stopped. The narrower upstream-incomplete case may
+continue the same Agent session only after the Controller verifies repository
+identity, input ancestry, approved changed paths, and a new content-sensitive
+workspace state; task budget, optional deadline, and user stop authority still
+apply before every continuation call.
 
 The ordinary product entry now consumes that contract at both mandatory
 boundaries. Revision 1 is persisted after request/model metadata/USD/deadline

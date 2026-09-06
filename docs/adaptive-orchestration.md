@@ -1045,7 +1045,17 @@ that actually exists in the foreground execution surface. `sat-probe-run`
 provides the matching fixed, bounded, controller-verifiable execution path; the
 runtime also contains pinned `uv` for relevant bounded probes. The OpenClaw adapter validates
 each exact session turn, pairs actual tool calls and results, and persists only
-bounded sanitized records. Dynamic semantic correction may carry those records
+bounded sanitized records. When a process exits after a paired tool result but
+before the bound terminal submission, the adapter records
+`upstream_incomplete` rather than a generic semantic failure. A write-capable
+Agent can continue only in the same task, session, workspace, model route, and
+authority after the Controller verifies identity, ancestry, approved path scope,
+and a previously unseen content-sensitive workspace state. Every continuation
+reserves against the original USD budget and optional deadline and checks for a
+user stop first. No progress, repeated state, unsafe state, or exhausted
+authority terminates without another call; eventual work still requires the
+normal commit, typed submission, gates, Review, delivery, and cleanup. Dynamic
+semantic correction may carry those records
 forward only within one Reviewer, role stage, immutable commit, and invocation
 chain. Every protocol-eligible semantic fragment is bound to an
 attempt-qualified controller-owned tool ID; overlapping selectors are

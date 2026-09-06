@@ -381,6 +381,7 @@ class DynamicExecutor:
         unapproved_review_boundaries: bool = False,
         writer_presentation_arrays: bool = False,
         writer_summary: str = "Implemented and documented the greeting utility.",
+        upstream_writer_mode: str | None = None,
     ) -> None:
         self.workspace = workspace
         self.invalid_writer_once = invalid_writer_once
@@ -398,6 +399,16 @@ class DynamicExecutor:
         self.unapproved_review_boundaries = unapproved_review_boundaries
         self.writer_presentation_arrays = writer_presentation_arrays
         self.writer_summary = writer_summary
+        if upstream_writer_mode not in {
+            None,
+            "complete_after_one",
+            "invalid_after_one",
+            "no_progress",
+            "outside_scope",
+            "repeat_without_progress",
+        }:
+            raise ValueError("unknown upstream writer mode")
+        self.upstream_writer_mode = upstream_writer_mode
         self.requests: list[AgentExecutionRequest] = []
         self._counts: dict[str, int] = {}
         self._lock = threading.Lock()
@@ -547,6 +558,44 @@ class DynamicExecutor:
                 ),
             )
         if request.agent_id == "builder":
+            if self.upstream_writer_mode is not None and count == 1:
+                if self.upstream_writer_mode == "outside_scope":
+                    (self.workspace / "outside.py").write_text(
+                        "outside = True\n",
+                        encoding="utf-8",
+                    )
+                elif self.upstream_writer_mode != "no_progress":
+                    (self.workspace / "greeting.py").write_text(
+                        "def greet(name: str) -> str:\n    return f'Hello, {name}!'\n",
+                        encoding="utf-8",
+                    )
+                self._emit_lifecycle_stop(
+                    request,
+                    activity_handler,
+                    InvocationStopReason.UPSTREAM_INCOMPLETE,
+                )
+                return self._upstream_incomplete_result(request)
+            if self.upstream_writer_mode == "repeat_without_progress" and count == 2:
+                self._emit_lifecycle_stop(
+                    request,
+                    activity_handler,
+                    InvocationStopReason.UPSTREAM_INCOMPLETE,
+                )
+                return self._upstream_incomplete_result(request)
+            if self.upstream_writer_mode == "invalid_after_one" and count == 2:
+                self._emit_lifecycle_stop(
+                    request,
+                    activity_handler,
+                    InvocationStopReason.INVALID_RESPONSE,
+                )
+                return self._result(request, "not valid JSON", None)
+            if self.upstream_writer_mode == "complete_after_one" and count == 2:
+                with (self.workspace / "README.md").open(
+                    "a", encoding="utf-8"
+                ) as readme:
+                    readme.write("\nUse `greet(name)` to create a greeting.\n")
+                git(self.workspace, "add", "greeting.py", "README.md")
+                git(self.workspace, "commit", "-m", "feat: add greeting utility")
             if not (self.workspace / "greeting.py").exists():
                 (self.workspace / "greeting.py").write_text(
                     "def greet(name: str) -> str:\n    return f'Hello, {name}!'\n",
@@ -927,6 +976,72 @@ class DynamicExecutor:
             submission_evidence=submission_evidence,
         )
 
+    @staticmethod
+    def _upstream_incomplete_result(
+        request: AgentExecutionRequest,
+    ) -> AgentExecutionResult:
+        contract = request.submission_contract
+        assert contract is not None
+        binding_sha256 = hashlib.sha256(
+            f"{request.session_key}\x00{contract.schema_sha256}".encode()
+        ).hexdigest()
+        output = b"No changes made by the final edit call."
+        tool_call = AgentToolCallEvidence(
+            id="tool-001",
+            tool_name="edit",
+            external_call_sha256=hashlib.sha256(b"fake-edit-call").hexdigest(),
+            arguments_sha256=hashlib.sha256(b"fake-edit-arguments").hexdigest(),
+            outcome="succeeded",
+            is_error=False,
+            reported_status="completed",
+            output_sha256=hashlib.sha256(output).hexdigest(),
+            output_bytes=len(output),
+            output_excerpt=output.decode(),
+        )
+        submission_evidence = rejected_submission_evidence(
+            contract,
+            binding_sha256=binding_sha256,
+            status=AgentSubmissionStatus.MISSING,
+            code="upstream_incomplete_after_tool_result",
+            detail=(
+                "the attributable OpenClaw turn ended after the paired edit tool "
+                "result before the required terminal submission"
+            ),
+        )
+        return AgentExecutionResult(
+            status=AgentExecutionStatus.UPSTREAM_INCOMPLETE,
+            error=(
+                "OpenClaw ended the invocation after a tool result before the "
+                "required typed submission"
+            ),
+            telemetry=AgentExecutionTelemetry(
+                role=None,
+                agent_id=request.agent_id,
+                capability=request.capability,
+                session_key=request.session_key,
+                command=("fake-agent", request.agent_id),
+                started_at=FIXED_TIME,
+                finished_at=FIXED_TIME,
+                duration_ms=10,
+                exit_code=0,
+                stdout="",
+                stderr="",
+                session_id=f"session-{request.agent_id}",
+                provider="test",
+                model=request.model,
+                usage=AgentTokenUsage(
+                    input_tokens=10,
+                    output_tokens=5,
+                    total_tokens=15,
+                ),
+                tool_evidence_status=AgentToolEvidenceStatus.CAPTURED,
+                session_transcript_sha256="e" * 64,
+                session_record_count=3,
+                tool_calls=(tool_call,),
+            ),
+            submission_evidence=submission_evidence,
+        )
+
 
 def runtime(
     tmp_path: Path,
@@ -1201,10 +1316,13 @@ def test_dynamic_writer_targeted_correction_keeps_timeout_and_git_evidence(
     assert "TARGETED_SEMANTIC_CORRECTION_VALUES_V1" in writer_requests[1].prompt
     assert "Do not regenerate or repeat that object" in writer_requests[1].prompt
     assert len(runner.execution_records) == 4
-    writer_records = [
-        runner.artifact_store.load(reference)
+    writer_references = [
+        reference
         for reference in runner.execution_records
         if "/implement/builder-" in reference.path
+    ]
+    writer_records = [
+        runner.artifact_store.load(reference) for reference in writer_references
     ]
     assert len(writer_records) == 2
     assert isinstance(writer_records[0], AgentExecutionRecord)
@@ -1245,6 +1363,172 @@ def test_dynamic_writer_missing_typed_submission_fails_without_correction(
     assert writer_record.submission_evidence.status is AgentSubmissionStatus.MISSING
     assert writer_record.submission_evidence.diagnostic_code == "submission_missing"
     assert writer_record.semantic_correction_request is None
+
+
+def test_dynamic_writer_continues_verified_partial_work_in_the_same_session(
+    tmp_path: Path,
+) -> None:
+    runner, team_plan, executor, quality_gate, workspace = runtime(
+        tmp_path,
+        executor_options={"upstream_writer_mode": "complete_after_one"},
+    )
+    events: list[ProgressEvent] = []
+    runner.activity_handler = events.append
+
+    result = DagScheduler().execute(team_plan, runner)
+
+    assert result.status is ScheduleStatus.COMPLETED
+    assert quality_gate.calls == 1
+    writer_requests = [
+        request for request in executor.requests if request.agent_id == "builder"
+    ]
+    assert len(writer_requests) == 2
+    assert writer_requests[0].session_key == writer_requests[1].session_key
+    assert "CONTROLLED_UPSTREAM_CONTINUATION_V1" in writer_requests[1].prompt
+    writer_references = [
+        reference
+        for reference in runner.execution_records
+        if "/implement/builder-" in reference.path
+    ]
+    writer_records = [
+        runner.artifact_store.load(reference) for reference in writer_references
+    ]
+    assert [record.execution_status for record in writer_records] == [
+        AgentExecutionStatus.UPSTREAM_INCOMPLETE,
+        AgentExecutionStatus.COMPLETED,
+    ]
+    assert writer_records[0].submission_evidence is not None
+    assert writer_records[0].submission_evidence.diagnostic_code == (
+        "upstream_incomplete_after_tool_result"
+    )
+    assert writer_records[0].response_artifact is None
+    assert writer_records[1].response_artifact == runner.outputs["builder"]
+    assert git(workspace, "status", "--short").stdout == ""
+    continuation_events = [
+        event
+        for event in events
+        if event.kind is ProgressEventKind.AGENT_RETRY
+        and "Continuing the same task and session" in event.message
+    ]
+    assert len(continuation_events) == 1
+    assert continuation_events[0].references[0].sha256 == writer_references[0].sha256
+
+
+def test_dynamic_writer_stops_upstream_incomplete_without_workspace_progress(
+    tmp_path: Path,
+) -> None:
+    runner, team_plan, executor, _, _ = runtime(
+        tmp_path,
+        executor_options={"upstream_writer_mode": "no_progress"},
+    )
+
+    result = DagScheduler().execute(team_plan, runner)
+
+    assert result.status is ScheduleStatus.FAILED
+    assert [request.agent_id for request in executor.requests] == ["builder"]
+    assert "no verifiable workspace progress" in (result.records[0].error or "")
+    assert runner.termination_reasons["builder"] is (
+        TerminationReason.DEPENDENCY_UNAVAILABLE
+    )
+
+
+def test_dynamic_writer_stops_repeated_upstream_incomplete_without_improvement(
+    tmp_path: Path,
+) -> None:
+    runner, team_plan, executor, _, _ = runtime(
+        tmp_path,
+        executor_options={"upstream_writer_mode": "repeat_without_progress"},
+    )
+
+    result = DagScheduler().execute(team_plan, runner)
+
+    assert result.status is ScheduleStatus.FAILED
+    writer_requests = [
+        request for request in executor.requests if request.agent_id == "builder"
+    ]
+    assert len(writer_requests) == 2
+    assert "no measurable workspace progress" in (result.records[0].error or "")
+
+
+def test_dynamic_writer_partial_work_cannot_cross_its_approved_scope(
+    tmp_path: Path,
+) -> None:
+    runner, team_plan, executor, _, _ = runtime(
+        tmp_path,
+        writer_scope="repository/src",
+        executor_options={"upstream_writer_mode": "outside_scope"},
+    )
+
+    result = DagScheduler().execute(team_plan, runner)
+
+    assert result.status is ScheduleStatus.FAILED
+    assert [request.agent_id for request in executor.requests] == ["builder"]
+    assert "outside repository/src" in (result.records[0].error or "")
+    assert runner.termination_reasons["builder"] is (
+        TerminationReason.SAFETY_BOUNDARY_CROSSED
+    )
+
+
+def test_dynamic_writer_continuation_does_not_mask_a_later_invalid_submission(
+    tmp_path: Path,
+) -> None:
+    runner, team_plan, executor, _, _ = runtime(
+        tmp_path,
+        executor_options={"upstream_writer_mode": "invalid_after_one"},
+    )
+
+    result = DagScheduler().execute(team_plan, runner)
+
+    assert result.status is ScheduleStatus.FAILED
+    writer_requests = [
+        request for request in executor.requests if request.agent_id == "builder"
+    ]
+    assert len(writer_requests) == 2
+    assert "submission_missing" in (result.records[0].error or "")
+    assert "uncommitted changes" not in (result.records[0].error or "")
+    assert runner.termination_reasons["builder"] is TerminationReason.ARTIFACT_INVALID
+
+
+def test_dynamic_writer_budget_prevents_an_unfunded_continuation(
+    tmp_path: Path,
+) -> None:
+    runner, team_plan, executor, _, _ = runtime(
+        tmp_path,
+        run_budget=AgentBudget(
+            authority=BudgetAuthority.USER_TASK,
+            max_estimated_cost_usd="0.00001",
+        ),
+        executor_options={"upstream_writer_mode": "complete_after_one"},
+    )
+
+    result = DagScheduler().execute(team_plan, runner)
+
+    assert result.status is ScheduleStatus.FAILED
+    assert [request.agent_id for request in executor.requests] == ["builder"]
+    assert "cost budget" in (result.records[0].error or "")
+    assert runner.termination_reasons["builder"] is (
+        TerminationReason.RESOURCE_LIMIT_REACHED
+    )
+
+
+def test_dynamic_writer_pending_user_cancellation_prevents_a_continuation_call(
+    tmp_path: Path,
+) -> None:
+    runner, team_plan, executor, _, _ = runtime(
+        tmp_path,
+        executor_options={"upstream_writer_mode": "complete_after_one"},
+    )
+    runner.continuation_stop_provider = lambda _: TerminationReason.USER_CANCELLED
+
+    result = DagScheduler().execute(team_plan, runner)
+
+    assert result.status is ScheduleStatus.FAILED
+    writer_requests = [
+        request for request in executor.requests if request.agent_id == "builder"
+    ]
+    assert len(writer_requests) == 1
+    assert result.records[0].state is ScheduledAgentState.INTERRUPTED
+    assert runner.termination_reasons["builder"] is TerminationReason.USER_CANCELLED
 
 
 def test_dynamic_reviewer_does_not_retry_when_no_evidence_candidate_exists(

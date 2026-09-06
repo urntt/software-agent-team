@@ -36,7 +36,7 @@ from software_agent_team.submissions import (
 )
 from software_agent_team.versioning import SoftwareVersionReport
 
-ARTIFACT_SCHEMA_VERSION = 6
+ARTIFACT_SCHEMA_VERSION = 7
 MINIMUM_READABLE_ARTIFACT_SCHEMA_VERSION = 2
 COMMIT_PATTERN = r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
 AGENT_ID_PATTERN = r"^[a-z][a-z0-9_]*$"
@@ -102,6 +102,7 @@ class AgentExecutionStatus(StrEnum):
     INITIALIZATION_STALLED = "initialization_stalled"
     RESPONSE_FINALIZATION_STALLED = "response_finalization_stalled"
     TIMED_OUT = "timed_out"
+    UPSTREAM_INCOMPLETE = "upstream_incomplete"
     INVALID_RESPONSE = "invalid_response"
     LAUNCH_FAILED = "launch_failed"
     INTERRUPTED = "interrupted"
@@ -572,7 +573,7 @@ class HandoffEnvelope(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, ARTIFACT_SCHEMA_VERSION] = (
+    schema_version: Literal[2, 3, 4, 5, 6, ARTIFACT_SCHEMA_VERSION] = (
         ARTIFACT_SCHEMA_VERSION
     )
     kind: Literal[ArtifactKind.HANDOFF_ENVELOPE] = ArtifactKind.HANDOFF_ENVELOPE
@@ -637,7 +638,7 @@ class PhaseArtifact(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, ARTIFACT_SCHEMA_VERSION] = (
+    schema_version: Literal[2, 3, 4, 5, 6, ARTIFACT_SCHEMA_VERSION] = (
         ARTIFACT_SCHEMA_VERSION
     )
     kind: ArtifactKind
@@ -798,7 +799,7 @@ class AgentExecutionRecord(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, ARTIFACT_SCHEMA_VERSION] = (
+    schema_version: Literal[2, 3, 4, 5, 6, ARTIFACT_SCHEMA_VERSION] = (
         ARTIFACT_SCHEMA_VERSION
     )
     kind: Literal[ArtifactKind.AGENT_EXECUTION_RECORD] = (
@@ -1118,6 +1119,9 @@ class AgentExecutionRecord(BaseModel):
                     InvocationStopReason.RUN_DEADLINE,
                     InvocationStopReason.EVALUATION_TIMEOUT,
                 },
+                AgentExecutionStatus.UPSTREAM_INCOMPLETE: {
+                    InvocationStopReason.UPSTREAM_INCOMPLETE
+                },
                 AgentExecutionStatus.INVALID_RESPONSE: {
                     InvocationStopReason.INVALID_RESPONSE
                 },
@@ -1142,6 +1146,13 @@ class AgentExecutionRecord(BaseModel):
         ):
             raise ValueError(
                 "legacy execution records cannot contain response-finalization state"
+            )
+        if (
+            self.schema_version < 7
+            and self.execution_status is AgentExecutionStatus.UPSTREAM_INCOMPLETE
+        ):
+            raise ValueError(
+                "legacy execution records cannot contain upstream-incomplete state"
             )
         return self
 

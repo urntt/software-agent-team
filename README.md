@@ -193,11 +193,20 @@ separate `finalizing_response` phase, so OpenClaw result serialization and exit
 cannot be mistaken for provider silence. Observable process output renews that
 60-second no-progress guard; a final 10-second diagnostic window precedes a
 typed finalization stall. Any stop then remains visibly `stopping` and
-`collecting_evidence` until
-the exact process outcome, output, evidence, and cleanup are known; only then is
-it `stopped` and terminal. SAT applies a whole-run deadline only when the user
-explicitly authorized one for that task. If catalog inspection expires, SAT
-reports that no provider request was made and does not create an Agent.
+`collecting_evidence` until the exact process outcome, output, evidence, and
+cleanup are known; only then is it `stopped` and terminal. SAT applies a
+whole-run deadline only when the user explicitly authorized one for that task.
+If catalog inspection expires, SAT reports that no provider request was made
+and does not create an Agent.
+
+If an upstream tool loop exits immediately after a completed tool result and
+before the required typed submission, SAT records that distinct incomplete
+state instead of reporting a normal semantic failure. A write-capable Agent may
+continue the same task and session only when repository identity, ancestry,
+approved path scope, and content-sensitive workspace progress all verify, the
+task budget and optional deadline still permit another call, and the user has
+not stopped it. An unchanged repeated state stops; partial work is never
+accepted, committed by the Controller, or allowed to bypass gates and Review.
 
 Every live OpenClaw subprocess launched by SAT also receives a private durable
 ownership lease. Startup distinguishes invocations owned by another live SAT
@@ -271,7 +280,7 @@ the export and purge options.
 SAT is experimental software. Its current product profile builds new, small
 Python 3.12 projects, including Web applications, CLI tools, and local
 automation. It does not yet modify existing codebases, provide additional
-generated-project runtimes, resume an interrupted process automatically,
+generated-project runtimes, resume a user-interrupted run automatically,
 deploy, or publish a generated project.
 
 Read [`STATUS.md`](STATUS.md) for current evidence and known gaps, and

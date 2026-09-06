@@ -57,8 +57,9 @@ lifecycle without persisting their content, visibly separates suspected stall,
 grace, recovery, degraded observation, and terminal stall, and does not publish
 terminal failure before process reaping and evidence collection. RunEvent v4
 adds a Controller-owned approved-task/checkpoint/Git/gate/Review/cost snapshot
-while preserving canonical v2-v3 reads; Artifact schema v6 carries invocation
-lifecycle and response-finalization evidence and retains v2-v5 reads. One
+while preserving canonical v2-v3 reads; Artifact schema v7 carries invocation
+lifecycle, response-finalization, and upstream-incomplete evidence and retains
+v2-v6 reads. One
 controller-priced ledger now covers Planning through terminal execution,
 standard progress exposes spend and remaining authorization, and final reports
 include attributable per-call cost evidence. Terminal JSON, Markdown, and the
@@ -89,11 +90,18 @@ live SAT-launched OpenClaw child also has a private PID/start-time/process-group
 lease. A real controller-kill test proves that a new process can distinguish
 and reclaim the exact orphan while holding a Linux pidfd across signalling;
 active owners and PID-reused processes are not signalled, and sandbox recovery
-additionally requires the exact leased session under SAT-owned state. Automatic
-continuation of an interrupted Agent workflow
-and fresh provider/device cost, liveness, self-check, process cleanup, and
-managed-release validation remain incomplete; the corresponding issues are not
-closed by offline evidence.
+additionally requires the exact leased session under SAT-owned state. The
+execution adapter now distinguishes an invocation that ends after a paired tool
+result but before terminal typed submission. For write-capable work, the
+Controller continues the same task/session only after verifying repository
+identity, ancestry, approved scope, and a new content-sensitive workspace state;
+the original task budget, optional deadline, and user stop authority remain in
+force. An unchanged state stops, and completion still requires normal commit,
+gates, independent Review, delivery, and cleanup. User-interrupted or cancelled
+work is intentionally not resumed automatically. Fresh provider/device cost,
+liveness, continuation, self-check, process cleanup, and managed-release
+validation remain incomplete; the corresponding issues are not closed by
+offline evidence.
 
 The response compiler now distinguishes transport, schema, contextual, and
 evidence-grounding failures; a missing user-owned decision remains on the

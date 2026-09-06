@@ -717,6 +717,45 @@ def build_semantic_correction_request(
     )
 
 
+def build_upstream_continuation_request(
+    request: AgentExecutionRequest,
+    *,
+    workspace_state_sha256: str,
+    changed_path_count: int,
+) -> AgentExecutionRequest:
+    """Continue verified partial work after an upstream tool-loop truncation."""
+
+    if request.submission_contract is None:
+        raise AgentPromptError("controlled continuation requires typed submission")
+    if len(workspace_state_sha256) != 64 or any(
+        character not in "0123456789abcdef" for character in workspace_state_sha256
+    ):
+        raise AgentPromptError("controlled continuation requires a valid state digest")
+    if changed_path_count < 1:
+        raise AgentPromptError("controlled continuation requires workspace progress")
+    continuation = f"""
+
+CONTROLLED_UPSTREAM_CONTINUATION_V1
+The preceding invocation in this same Agent session ended immediately after a
+paired tool result, before the required terminal
+`{request.submission_contract.tool_name}` call. The Controller did not accept or
+commit partial work on your behalf. It verified the workspace identity, ancestry,
+permission scope, and {changed_path_count} changed path(s); the exact non-semantic
+state fingerprint is
+`{workspace_state_sha256}`.
+
+Continue the same approved task from the existing workspace and session. Inspect
+the current Git diff and status before acting; preserve correct work and do not
+blindly restart, revert, or repeat completed side effects. Finish the implementation,
+run the required checks, create the required commit, and then call
+`{request.submission_contract.tool_name}` exactly once with the requested artifact.
+The original task, permission, model route, deadline, and aggregate USD budget are
+unchanged. If completion is unsafe or blocked, submit that truthful terminal result
+instead of fabricating success.
+"""
+    return request.model_copy(update={"prompt": f"{request.prompt}{continuation}"})
+
+
 def _dynamic_prompt_context(inputs: DynamicAgentPromptInputs) -> dict[str, object]:
     agent = inputs.agent
     route = inputs.team_plan.model_routes.get_route(inputs.model_route_id)

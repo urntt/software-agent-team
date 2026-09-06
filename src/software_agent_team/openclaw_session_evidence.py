@@ -9,6 +9,7 @@ import re
 import shlex
 import stat
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -37,6 +38,13 @@ class _OpenClawSessionFileMissing(OpenClawSessionEvidenceError):
     """Preserve an exact open-time missing result during initialization."""
 
 
+class OpenClawInvocationTerminalState(StrEnum):
+    """Last attributable message state for one completed OpenClaw invocation."""
+
+    ASSISTANT_RESPONSE = "assistant_response"
+    TOOL_RESULT = "tool_result"
+
+
 @dataclass(frozen=True)
 class CapturedOpenClawToolEvidence:
     """Sanitized current-invocation evidence ready for telemetry persistence."""
@@ -44,6 +52,7 @@ class CapturedOpenClawToolEvidence:
     transcript_sha256: str
     record_count: int
     tool_calls: tuple[AgentToolCallEvidence, ...]
+    terminal_state: OpenClawInvocationTerminalState
 
 
 @dataclass(frozen=True)
@@ -291,6 +300,44 @@ def _current_invocation_records(
             "current OpenClaw invocation has no completed response record"
         )
     return invocation
+
+
+def _invocation_terminal_state(
+    records: tuple[dict[str, object], ...],
+) -> OpenClawInvocationTerminalState:
+    """Classify the final attributable message without retaining its content."""
+
+    for record in reversed(records[1:]):
+        if record.get("type") != "message":
+            continue
+        message = record.get("message")
+        if not isinstance(message, dict):
+            raise OpenClawSessionEvidenceError("OpenClaw message record is invalid")
+        role = message.get("role")
+        if role == "toolResult":
+            return OpenClawInvocationTerminalState.TOOL_RESULT
+        if role == "assistant":
+            content = message.get("content")
+            if isinstance(content, str):
+                return OpenClawInvocationTerminalState.ASSISTANT_RESPONSE
+            if not isinstance(content, list):
+                raise OpenClawSessionEvidenceError(
+                    "OpenClaw assistant content is invalid"
+                )
+            if any(
+                isinstance(item, dict) and item.get("type") == "toolCall"
+                for item in content
+            ):
+                raise OpenClawSessionEvidenceError(
+                    "OpenClaw invocation ends with an incomplete tool call"
+                )
+            return OpenClawInvocationTerminalState.ASSISTANT_RESPONSE
+        raise OpenClawSessionEvidenceError(
+            "OpenClaw invocation ends with an unsupported message role"
+        )
+    raise OpenClawSessionEvidenceError(
+        "current OpenClaw invocation has no completed response record"
+    )
 
 
 def _inspect_openclaw_session_snapshot(
@@ -859,4 +906,5 @@ def capture_openclaw_tool_evidence(
         transcript_sha256=_sha256(transcript),
         record_count=len(invocation),
         tool_calls=_extract_tool_calls(invocation),
+        terminal_state=_invocation_terminal_state(invocation),
     )

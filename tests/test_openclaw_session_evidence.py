@@ -22,6 +22,7 @@ from software_agent_team.execution import (
 )
 from software_agent_team.invocation_lifecycle import InitializationCheckpoint
 from software_agent_team.openclaw_session_evidence import (
+    OpenClawInvocationTerminalState,
     OpenClawSessionEvidenceError,
     capture_openclaw_tool_evidence,
     inspect_openclaw_initialization,
@@ -205,6 +206,7 @@ def test_capture_excludes_prior_turns_and_pairs_current_tool_results(
     assert len(call.arguments_sha256) == 64
     assert len(call.output_sha256) == 64
     assert captured.transcript_sha256 != call.output_sha256
+    assert captured.terminal_state is OpenClawInvocationTerminalState.ASSISTANT_RESPONSE
     assert transcript.is_file()
 
 
@@ -244,6 +246,28 @@ def test_capture_records_a_complete_zero_tool_invocation(tmp_path: Path) -> None
 
     assert captured.record_count == 2
     assert captured.tool_calls == ()
+    assert captured.terminal_state is OpenClawInvocationTerminalState.ASSISTANT_RESPONSE
+
+
+def test_capture_distinguishes_a_turn_ending_after_a_paired_tool_result(
+    tmp_path: Path,
+) -> None:
+    invocation = request()
+    write_session_state(
+        tmp_path,
+        invocation=invocation,
+        records=[
+            session_record(),
+            user_record(invocation.prompt),
+            tool_call_record("terminating-call", command="read README.md"),
+            tool_result_record("terminating-call", output="observed"),
+        ],
+    )
+
+    captured = capture(tmp_path, invocation)
+
+    assert len(captured.tool_calls) == 1
+    assert captured.terminal_state is OpenClawInvocationTerminalState.TOOL_RESULT
 
 
 def test_activity_inspection_tracks_current_tool_lifecycle_without_content(

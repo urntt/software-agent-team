@@ -46,6 +46,7 @@ from software_agent_team.invocation_lifecycle import (
 )
 from software_agent_team.openclaw_session_evidence import (
     CapturedOpenClawToolEvidence,
+    OpenClawInvocationTerminalState,
     OpenClawSessionEvidenceError,
     OpenClawToolActivity,
     capture_openclaw_tool_evidence,
@@ -2524,6 +2525,37 @@ class OpenClawSubprocessExecutor:
             )
             if semantic_submission is None:
                 assert submission_evidence.diagnostic_code is not None
+                if (
+                    submission_evidence.diagnostic_code == "submission_missing"
+                    and captured_tools is not None
+                    and captured_tools.terminal_state
+                    is OpenClawInvocationTerminalState.TOOL_RESULT
+                ):
+                    final_tool = captured_tools.tool_calls[-1]
+                    submission_evidence = rejected_submission_evidence(
+                        request.submission_contract,
+                        binding_sha256=submission_binding_sha256,
+                        status=AgentSubmissionStatus.MISSING,
+                        code="upstream_incomplete_after_tool_result",
+                        detail=(
+                            "the attributable OpenClaw turn ended after the paired "
+                            f"{final_tool.tool_name} tool result before the required "
+                            "terminal submission"
+                        ),
+                    )
+                    return self._finalize_lifecycle_result(
+                        AgentExecutionResult(
+                            status=AgentExecutionStatus.UPSTREAM_INCOMPLETE,
+                            error=(
+                                "OpenClaw ended the invocation after a tool result "
+                                "before the required typed submission"
+                            ),
+                            telemetry=telemetry,
+                            submission_evidence=submission_evidence,
+                        ),
+                        lifecycle=lifecycle,
+                        reason=InvocationStopReason.UPSTREAM_INCOMPLETE,
+                    )
                 return self._finalize_lifecycle_result(
                     AgentExecutionResult(
                         status=AgentExecutionStatus.INVALID_RESPONSE,

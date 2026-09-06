@@ -457,6 +457,9 @@ class DynamicWorkflowCoordinator:
                 artifact_repair_limit=self.artifact_repair_limit,
                 revision_feedback=revision_feedback,
                 guidance_provider=context.control_channel.consume_guidance,
+                continuation_stop_provider=(
+                    context.control_channel.continuation_stop_reason
+                ),
                 activity_handler=lambda event: self._emit(context, event),
                 clock=self.clock,
             )

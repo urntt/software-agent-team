@@ -20,7 +20,7 @@ from software_agent_team.controls import (
     ControlTargetKind,
 )
 from software_agent_team.progress import ProgressEvent, ProgressEventKind
-from software_agent_team.run_control import RunPhase
+from software_agent_team.run_control import RunPhase, TerminationReason
 from software_agent_team.runtime_controls import (
     RuntimeControlChannel,
     RuntimeControlDecision,
@@ -292,6 +292,26 @@ def test_interrupt_retries_registration_and_records_provider_cost_caveat(
     assert resolved.provider_cost_caveat is not None
 
 
+def test_pending_user_stop_blocks_only_the_matching_continuation(
+    tmp_path: Path,
+) -> None:
+    store, channel, _ = _channel(tmp_path)
+    store.request(
+        command=ControlCommandType.INTERRUPT,
+        target=ControlTarget(
+            kind=ControlTargetKind.AGENT,
+            agent_id="feature_builder",
+        ),
+        application_boundary=ControlApplicationBoundary.IMMEDIATE,
+        command_id="ctl-stop-before-continuation",
+    )
+
+    assert channel.continuation_stop_reason("feature_builder") is (
+        TerminationReason.USER_INTERRUPTED
+    )
+    assert channel.continuation_stop_reason("quality_auditor") is None
+
+
 def test_correction_stops_launches_then_resolves_at_a_safe_checkpoint(
     tmp_path: Path,
 ) -> None:
@@ -349,6 +369,9 @@ def test_cancel_is_terminal_and_interrupts_only_active_owned_calls(
     assert resolved.status is ControlCommandStatus.APPLIED
     assert resolved.provider_cost_caveat is not None
     assert calls
+    assert channel.continuation_stop_reason("feature_builder") is (
+        TerminationReason.USER_CANCELLED
+    )
 
 
 def test_plain_language_console_queues_typed_controls_without_internal_files(

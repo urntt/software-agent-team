@@ -155,6 +155,55 @@ def test_snapshot_records_a_clean_descendant_without_moving_source_branch(
     validate_work_result_snapshot(result, snapshot)
 
 
+def test_progress_digest_distinguishes_clean_dirty_changed_and_committed_states(
+    tmp_path: Path,
+) -> None:
+    source = initialize_repository(tmp_path)
+    workspace_manager = manager(tmp_path / "workspaces")
+    workspace = workspace_manager.prepare("run-001", source_repository=source)
+    run_workspace = Path(workspace.workspace_path)
+
+    clean = workspace_manager.inspect_progress(
+        workspace,
+        input_commit=workspace.base_commit,
+    )
+    assert not clean.made_progress
+    assert clean.changed_files == ()
+    assert clean.commits_ahead == 0
+    assert not clean.has_uncommitted_changes
+
+    (run_workspace / "app.py").write_text("step = 1\n", encoding="utf-8")
+    first = workspace_manager.inspect_progress(
+        workspace,
+        input_commit=workspace.base_commit,
+    )
+    assert first.made_progress
+    assert first.changed_files == ("app.py",)
+    assert first.commits_ahead == 0
+    assert first.has_uncommitted_changes
+    assert first.state_sha256 != clean.state_sha256
+
+    (run_workspace / "app.py").write_text("step = 2\n", encoding="utf-8")
+    second = workspace_manager.inspect_progress(
+        workspace,
+        input_commit=workspace.base_commit,
+    )
+    assert second.changed_files == first.changed_files
+    assert second.state_sha256 != first.state_sha256
+
+    git(run_workspace, "add", "app.py")
+    git(run_workspace, "commit", "--no-verify", "-m", "feat: add progress")
+    committed = workspace_manager.inspect_progress(
+        workspace,
+        input_commit=workspace.base_commit,
+    )
+    assert committed.made_progress
+    assert committed.changed_files == ("app.py",)
+    assert committed.commits_ahead == 1
+    assert not committed.has_uncommitted_changes
+    assert committed.state_sha256 != second.state_sha256
+
+
 def test_work_result_must_match_verified_snapshot(tmp_path: Path) -> None:
     source = initialize_repository(tmp_path)
     workspace_manager = manager(tmp_path / "workspaces")

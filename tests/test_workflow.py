@@ -1308,6 +1308,61 @@ def test_workflow_records_openclaw_declared_timeout_as_resource_limit(
     assert execution["remaining_timeout_seconds"] == 30
 
 
+def test_workflow_records_upstream_incomplete_as_dependency_failure(
+    tmp_path: Path,
+) -> None:
+    source = initialize_source(tmp_path)
+
+    class UpstreamIncompleteExecutor:
+        def execute(
+            self,
+            request: AgentExecutionRequest,
+            *,
+            activity_handler: AgentExecutionActivityHandler | None = None,
+        ) -> AgentExecutionResult:
+            del activity_handler
+            return AgentExecutionResult(
+                status=AgentExecutionStatus.UPSTREAM_INCOMPLETE,
+                error="OpenClaw ended after a tool result without a submission",
+                telemetry=AgentExecutionTelemetry(
+                    role=request.role,
+                    session_key=request.session_key,
+                    command=("openclaw", "agent"),
+                    started_at=FIXED_TIME,
+                    finished_at=FIXED_TIME,
+                    duration_ms=5,
+                    exit_code=0,
+                    stdout='{"payloads": []}',
+                    stderr="",
+                    session_id="upstream-incomplete-session",
+                    provider="offline",
+                    model="offline/test-model",
+                    usage=AgentTokenUsage(
+                        input_tokens=10,
+                        output_tokens=5,
+                        total_tokens=15,
+                    ),
+                ),
+            )
+
+    outcome = coordinator(tmp_path, UpstreamIncompleteExecutor()).execute(
+        task_brief(),
+        source_repository=source,
+    )
+
+    assert outcome.record.phase is RunPhase.FAILED
+    assert outcome.record.termination_reason is TerminationReason.DEPENDENCY_UNAVAILABLE
+    execution = json.loads(
+        (
+            tmp_path / "runs" / task_brief().run_id / outcome.execution_records[0].path
+        ).read_text(encoding="utf-8")
+    )
+    assert execution["execution_status"] == "upstream_incomplete"
+    assert execution["error"] == (
+        "OpenClaw ended after a tool result without a submission"
+    )
+
+
 def test_workflow_stops_at_the_phase1_iteration_limit(tmp_path: Path) -> None:
     source = initialize_source(tmp_path)
     workspace = tmp_path / "workspaces" / task_brief().run_id

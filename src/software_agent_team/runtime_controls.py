@@ -22,7 +22,7 @@ from software_agent_team.progress import (
     RunEventReferenceKind,
 )
 from software_agent_team.prompting import DynamicUserGuidance
-from software_agent_team.run_control import RunPhase
+from software_agent_team.run_control import RunPhase, TerminationReason
 from software_agent_team.teams import AgentCapability, TeamPlan
 
 
@@ -135,6 +135,34 @@ class RuntimeControlChannel:
             values = tuple(self._guidance[agent_id])
             self._guidance[agent_id].clear()
             return values
+
+    def continuation_stop_reason(self, agent_id: str) -> TerminationReason | None:
+        """Return a user stop that must prevent a same-task continuation call."""
+
+        if agent_id not in {agent.id for agent in self.team_plan.agents}:
+            raise ValueError(f"unknown Agent for continuation: {agent_id}")
+        with self._lock:
+            if self._cancel_request is not None:
+                return TerminationReason.USER_CANCELLED
+            if any(
+                command.target.agent_id == agent_id
+                for command in self._interrupt_requests.values()
+            ):
+                return TerminationReason.USER_INTERRUPTED
+            for command in self.store.list_latest():
+                if command.status in {
+                    ControlCommandStatus.REJECTED,
+                    ControlCommandStatus.SUPERSEDED,
+                }:
+                    continue
+                if command.command is ControlCommandType.CANCEL:
+                    return TerminationReason.USER_CANCELLED
+                if (
+                    command.command is ControlCommandType.INTERRUPT
+                    and command.target.agent_id == agent_id
+                ):
+                    return TerminationReason.USER_INTERRUPTED
+            return None
 
     def _accept_or_reject(
         self,

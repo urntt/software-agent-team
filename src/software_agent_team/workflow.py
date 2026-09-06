@@ -1095,6 +1095,7 @@ class WorkflowCoordinator:
                     AgentExecutionStatus.PROVIDER_FAILED,
                     AgentExecutionStatus.PROVIDER_STALLED,
                     AgentExecutionStatus.RESPONSE_FINALIZATION_STALLED,
+                    AgentExecutionStatus.UPSTREAM_INCOMPLETE,
                 }:
                     failure_reason = TerminationReason.DEPENDENCY_UNAVAILABLE
 
@@ -1552,6 +1553,7 @@ class WorkflowCoordinator:
             AgentExecutionStatus.PROVIDER_FAILED,
             AgentExecutionStatus.PROVIDER_STALLED,
             AgentExecutionStatus.RESPONSE_FINALIZATION_STALLED,
+            AgentExecutionStatus.UPSTREAM_INCOMPLETE,
         }:
             return TerminationReason.DEPENDENCY_UNAVAILABLE
         return TerminationReason.EXECUTION_FAILED

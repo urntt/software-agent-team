@@ -581,6 +581,108 @@ def test_openclaw_adapter_rejects_missing_required_submission() -> None:
     assert result.submission_evidence.diagnostic_code == "submission_missing"
 
 
+def test_openclaw_adapter_classifies_tool_result_termination_before_submission(
+    tmp_path: Path,
+) -> None:
+    state = tmp_path / "state"
+    submission_contract = AgentSubmissionContract.from_schema(
+        {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {"summary": {"type": "string"}},
+            "required": ["summary"],
+        },
+        purpose=AgentSubmissionPurpose.ARTIFACT,
+    )
+
+    def runner(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        session_id = "incomplete-session"
+        agent_id = command[command.index("--agent") + 1]
+        session_key = command[command.index("--session-key") + 1]
+        prompt = Path(command[command.index("--message-file") + 1]).read_text(
+            encoding="utf-8"
+        )
+        sessions = state / "agents" / agent_id / "sessions"
+        sessions.mkdir(parents=True)
+        records = [
+            {"type": "session", "id": session_id},
+            {"type": "message", "message": {"role": "user", "content": prompt}},
+            {
+                "type": "message",
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "toolCall",
+                            "id": "provider-edit-1",
+                            "name": "edit",
+                            "arguments": {
+                                "path": "README.md",
+                                "oldText": "same",
+                                "newText": "same",
+                            },
+                        }
+                    ],
+                },
+            },
+            {
+                "type": "message",
+                "message": {
+                    "role": "toolResult",
+                    "toolCallId": "provider-edit-1",
+                    "toolName": "edit",
+                    "isError": False,
+                    "content": [{"type": "text", "text": "No changes made."}],
+                    "details": {"status": "completed"},
+                },
+            },
+        ]
+        transcript = sessions / f"{session_id}.jsonl"
+        transcript.write_text(
+            "\n".join(json.dumps(record) for record in records) + "\n",
+            encoding="utf-8",
+        )
+        (sessions / "sessions.json").write_text(
+            json.dumps(
+                {
+                    session_key: {
+                        "sessionId": session_id,
+                        "sessionFile": str(transcript),
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        response = json.loads(openclaw_result("No changes made."))
+        response["meta"]["agentMeta"]["sessionId"] = session_id
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=json.dumps(response),
+            stderr="",
+        )
+
+    result = executor_with_clocks(
+        runner,
+        environment={"OPENCLAW_STATE_DIR": str(state)},
+    ).execute(request(submission_contract=submission_contract))
+
+    assert result.status is AgentExecutionStatus.UPSTREAM_INCOMPLETE
+    assert result.response_text is None
+    assert result.semantic_submission is None
+    assert result.submission_evidence is not None
+    assert result.submission_evidence.status is AgentSubmissionStatus.MISSING
+    assert result.submission_evidence.diagnostic_code == (
+        "upstream_incomplete_after_tool_result"
+    )
+    assert result.telemetry.tool_calls[-1].tool_name == "edit"
+    assert result.telemetry.invocation_lifecycle is not None
+    assert (
+        result.telemetry.invocation_lifecycle.shutdown.reason
+        is InvocationStopReason.UPSTREAM_INCOMPLETE
+    )
+
+
 def test_live_openclaw_process_acquires_and_releases_durable_ownership(
     tmp_path: Path,
 ) -> None:

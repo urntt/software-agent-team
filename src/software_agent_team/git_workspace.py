@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import stat
 import subprocess
+import tempfile
 from collections.abc import Callable, Collection
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
@@ -137,6 +139,50 @@ class GitSnapshot(BaseModel):
         if self.input_commit == self.output_commit:
             raise ValueError("snapshot output commit must differ from input")
         return self
+
+
+class GitWorkspaceProgress(BaseModel):
+    """Content-digested, non-deliverable state used for safe continuation."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    input_commit: str = Field(pattern=COMMIT_PATTERN)
+    current_commit: str = Field(pattern=COMMIT_PATTERN)
+    commits_ahead: int = Field(ge=0)
+    changed_files: tuple[str, ...] = ()
+    has_uncommitted_changes: bool
+    state_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @field_validator("changed_files")
+    @classmethod
+    def require_safe_changed_files(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        """Keep progress paths ordered, unique, and repository-relative."""
+
+        if tuple(sorted(values)) != values or len(values) != len(set(values)):
+            raise ValueError("workspace progress paths must be sorted and unique")
+        return tuple(_require_safe_repository_path(value) for value in values)
+
+    @model_validator(mode="after")
+    def bind_progress_to_git_state(self) -> Self:
+        """Keep commit, dirty-state, and path evidence coherent."""
+
+        if (self.current_commit == self.input_commit) != (self.commits_ahead == 0):
+            raise ValueError("workspace progress commit evidence is inconsistent")
+        if (self.commits_ahead > 0 or self.has_uncommitted_changes) and not (
+            self.changed_files
+        ):
+            raise ValueError("workspace progress requires changed paths")
+        if self.changed_files and not (
+            self.commits_ahead > 0 or self.has_uncommitted_changes
+        ):
+            raise ValueError("unchanged workspace cannot report changed paths")
+        return self
+
+    @property
+    def made_progress(self) -> bool:
+        """Return whether this state differs materially from the input commit."""
+
+        return bool(self.changed_files)
 
 
 def validate_work_result_snapshot(
@@ -334,6 +380,106 @@ class GitWorkspaceManager:
         if require_clean and self._status(run_workspace):
             raise WorkspaceIntegrityError("workspace contains uncommitted changes")
         return head
+
+    def inspect_progress(
+        self,
+        workspace: GitWorkspace,
+        *,
+        input_commit: str,
+    ) -> GitWorkspaceProgress:
+        """Verify and digest a possibly dirty descendant without accepting it."""
+
+        if not re.fullmatch(COMMIT_PATTERN, input_commit):
+            raise WorkspaceIntegrityError("workspace progress input commit is invalid")
+        run_workspace = Path(workspace.workspace_path)
+        current_commit = self.verify_workspace(workspace, require_clean=False)
+        try:
+            resolved_input = self._resolve_commit(run_workspace, input_commit)
+        except (GitCommandError, RepositoryValidationError) as error:
+            raise WorkspaceIntegrityError(
+                "workspace progress input commit is unavailable"
+            ) from error
+        if resolved_input != input_commit:
+            raise WorkspaceIntegrityError(
+                "workspace progress input commit is ambiguous"
+            )
+        ancestor = self._git(
+            run_workspace,
+            ["merge-base", "--is-ancestor", input_commit, current_commit],
+            allowed_returncodes={0, 1},
+        )
+        if ancestor.returncode != 0:
+            raise WorkspaceIntegrityError(
+                "workspace progress commit is not a descendant of its input"
+            )
+        commits_ahead = int(
+            self._git_text(
+                run_workspace,
+                ["rev-list", "--count", f"{input_commit}..{current_commit}"],
+            )
+        )
+        changed_output = self._git(
+            run_workspace,
+            ["diff", "--name-only", "-z", input_commit, "--"],
+        ).stdout
+        untracked_output = self._git(
+            run_workspace,
+            ["ls-files", "--others", "--exclude-standard", "-z", "--"],
+        ).stdout
+        changed_files = tuple(
+            sorted(
+                set(
+                    self._decode_repository_paths(
+                        changed_output + untracked_output,
+                        label="workspace progress",
+                    )
+                )
+            )
+        )
+        status = self._git(
+            run_workspace,
+            ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+        ).stdout
+        has_uncommitted_changes = bool(status)
+        state = hashlib.sha256()
+        state.update(current_commit.encode("ascii"))
+        state.update(b"\0status\0")
+        state.update(hashlib.sha256(status).digest())
+        state.update(b"\0tracked-diff\0")
+        state.update(
+            bytes.fromhex(
+                self._git_output_sha256(
+                    run_workspace,
+                    [
+                        "diff",
+                        "--no-ext-diff",
+                        "--no-textconv",
+                        "--binary",
+                        "--full-index",
+                        input_commit,
+                        "--",
+                    ],
+                )
+            )
+        )
+        for path in self._decode_repository_paths(
+            untracked_output,
+            label="untracked workspace progress",
+        ):
+            state.update(b"\0untracked\0")
+            state.update(path.encode("utf-8"))
+            state.update(b"\0")
+            state.update(
+                bytes.fromhex(self._untracked_path_sha256(run_workspace, path))
+            )
+        return GitWorkspaceProgress(
+            input_commit=input_commit,
+            current_commit=current_commit,
+            commits_ahead=commits_ahead,
+            changed_files=changed_files,
+            has_uncommitted_changes=has_uncommitted_changes,
+            state_sha256=state.hexdigest(),
+        )
 
     def recover_prepared(
         self,
@@ -604,6 +750,112 @@ class GitWorkspaceManager:
                     "working-tree attributes select a checkout filter"
                 )
 
+    @staticmethod
+    def _decode_repository_paths(payload: bytes, *, label: str) -> tuple[str, ...]:
+        try:
+            values = tuple(
+                item.decode("utf-8", errors="strict")
+                for item in payload.split(b"\0")
+                if item
+            )
+        except UnicodeDecodeError as error:
+            raise WorkspaceIntegrityError(
+                f"{label} contains a non-UTF-8 repository path"
+            ) from error
+        try:
+            return tuple(_require_safe_repository_path(value) for value in values)
+        except ValueError as error:
+            raise WorkspaceIntegrityError(
+                f"{label} contains an unsafe repository path"
+            ) from error
+
+    @staticmethod
+    def _untracked_path_sha256(repository: Path, relative_path: str) -> str:
+        """Hash one untracked entry without following repository-controlled links."""
+
+        root = repository.resolve(strict=True)
+        candidate = root.joinpath(*PurePosixPath(relative_path).parts)
+        try:
+            parent = candidate.parent.resolve(strict=True)
+            metadata = candidate.lstat()
+        except OSError as error:
+            raise WorkspaceIntegrityError(
+                "untracked workspace progress changed during inspection"
+            ) from error
+        if parent != root and not parent.is_relative_to(root):
+            raise WorkspaceIntegrityError(
+                "untracked workspace progress escapes the workspace"
+            )
+        digest = hashlib.sha256()
+        digest.update(f"{stat.S_IFMT(metadata.st_mode):o}\0".encode("ascii"))
+        if stat.S_ISLNK(metadata.st_mode):
+            try:
+                target = os.readlink(candidate)
+            except OSError as error:
+                raise WorkspaceIntegrityError(
+                    "cannot inspect an untracked workspace symbolic link"
+                ) from error
+            digest.update(target.encode("utf-8", errors="surrogateescape"))
+            return digest.hexdigest()
+        if not stat.S_ISREG(metadata.st_mode):
+            raise WorkspaceIntegrityError(
+                "untracked workspace progress must be a regular file or symlink"
+            )
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            descriptor = os.open(candidate, flags)
+        except OSError as error:
+            raise WorkspaceIntegrityError(
+                "cannot open untracked workspace progress safely"
+            ) from error
+        try:
+            opened = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(opened.st_mode)
+                or opened.st_dev != metadata.st_dev
+                or opened.st_ino != metadata.st_ino
+            ):
+                raise WorkspaceIntegrityError(
+                    "untracked workspace progress changed during inspection"
+                )
+            while chunk := os.read(descriptor, 64 * 1024):
+                digest.update(chunk)
+        finally:
+            os.close(descriptor)
+        return digest.hexdigest()
+
+    def _git_output_sha256(self, repository: Path, args: list[str]) -> str:
+        """Hash bounded-time Git stdout without retaining arbitrarily large diffs."""
+
+        environment = self._git_environment()
+        command = self._git_command(repository, args, controller_config=True)
+        with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as errors:
+            try:
+                result = subprocess.run(
+                    command,
+                    check=False,
+                    stdout=output,
+                    stderr=errors,
+                    timeout=self.timeout_seconds,
+                    env=environment,
+                )
+            except (OSError, subprocess.TimeoutExpired) as error:
+                raise GitCommandError(
+                    f"cannot execute Git operation: {args[0]}"
+                ) from error
+            if result.returncode != 0:
+                errors.seek(0)
+                detail = errors.read(4096).decode("utf-8", errors="replace").strip()
+                raise GitCommandError(
+                    f"Git operation {args[0]} failed with {result.returncode}: "
+                    f"{detail or 'no diagnostic output'}"
+                )
+            output.seek(0)
+            digest = hashlib.sha256()
+            while chunk := output.read(64 * 1024):
+                digest.update(chunk)
+            return digest.hexdigest()
+
     def _status(self, repository: Path) -> bytes:
         return self._git(
             repository,
@@ -639,28 +891,12 @@ class GitWorkspaceManager:
         allowed_returncodes: Collection[int] = (0,),
         controller_config: bool = True,
     ) -> subprocess.CompletedProcess[bytes]:
-        environment = {
-            "GIT_CONFIG_GLOBAL": os.devnull,
-            "GIT_CONFIG_NOSYSTEM": "1",
-            "GIT_TERMINAL_PROMPT": "0",
-            "HOME": str(self.root.resolve(strict=False)),
-            "LANG": "C",
-            "LC_ALL": "C",
-            "PATH": os.environ.get("PATH", ""),
-        }
-        command = [self.git_binary]
-        if controller_config:
-            command.extend(
-                [
-                    "-c",
-                    "core.hooksPath=/dev/null",
-                    "-c",
-                    "core.fsmonitor=false",
-                    "-c",
-                    "credential.helper=",
-                ]
-            )
-        command.extend(["-C", str(repository), *args])
+        environment = self._git_environment()
+        command = self._git_command(
+            repository,
+            args,
+            controller_config=controller_config,
+        )
         try:
             result = subprocess.run(
                 command,
@@ -679,3 +915,36 @@ class GitWorkspaceManager:
                 f"Git operation {args[0]} failed with {result.returncode}: {detail}"
             )
         return result
+
+    def _git_environment(self) -> dict[str, str]:
+        return {
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_TERMINAL_PROMPT": "0",
+            "HOME": str(self.root.resolve(strict=False)),
+            "LANG": "C",
+            "LC_ALL": "C",
+            "PATH": os.environ.get("PATH", ""),
+        }
+
+    def _git_command(
+        self,
+        repository: Path,
+        args: list[str],
+        *,
+        controller_config: bool,
+    ) -> list[str]:
+        command = [self.git_binary]
+        if controller_config:
+            command.extend(
+                [
+                    "-c",
+                    "core.hooksPath=/dev/null",
+                    "-c",
+                    "core.fsmonitor=false",
+                    "-c",
+                    "credential.helper=",
+                ]
+            )
+        command.extend(["-C", str(repository), *args])
+        return command

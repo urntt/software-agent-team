@@ -29,6 +29,7 @@ from software_agent_team.prompting import (
     DynamicUpstreamResult,
     DynamicUserGuidance,
     build_dynamic_agent_execution_request,
+    build_upstream_continuation_request,
     render_dynamic_agent_prompt,
 )
 from software_agent_team.response_corrections import (
@@ -364,6 +365,27 @@ def test_dynamic_prompt_is_compiled_from_the_approved_agent_spec() -> None:
     assert "clean-workspace pytest entrypoint" in rendered
     assert "pytest's import path" in rendered
     assert "exact shell form" in rendered
+
+
+def test_upstream_continuation_preserves_identity_and_recovery_context() -> None:
+    original = build_dynamic_agent_execution_request(developer_inputs())
+
+    continuation = build_upstream_continuation_request(
+        original,
+        workspace_state_sha256="a" * 64,
+        changed_path_count=2,
+    )
+
+    assert continuation.session_key == original.session_key
+    assert continuation.model == original.model
+    assert continuation.timeout_seconds == original.timeout_seconds
+    assert continuation.submission_contract == original.submission_contract
+    assert continuation.prompt.startswith(original.prompt)
+    assert "CONTROLLED_UPSTREAM_CONTINUATION_V1" in continuation.prompt
+    normalized = " ".join(continuation.prompt.split())
+    assert "and 2 changed path(s)" in normalized
+    assert "a" * 64 in continuation.prompt
+    assert "do not blindly restart" in normalized
 
 
 def test_dynamic_prompt_includes_unique_persisted_user_guidance() -> None:

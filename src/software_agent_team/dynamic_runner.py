@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import PurePosixPath
 from threading import Condition, RLock
@@ -51,6 +52,7 @@ from software_agent_team.git_workspace import (
     GitWorkspace,
     GitWorkspaceError,
     GitWorkspaceManager,
+    GitWorkspaceProgress,
     WorkspaceIntegrityError,
 )
 from software_agent_team.integrity import canonical_model_sha256
@@ -76,6 +78,7 @@ from software_agent_team.prompting import (
     DynamicUserGuidance,
     build_dynamic_agent_execution_request,
     build_semantic_correction_request,
+    build_upstream_continuation_request,
 )
 from software_agent_team.quality_gates import (
     QualityGateBudgetExceeded,
@@ -130,6 +133,15 @@ class DynamicAgentRunnerError(RuntimeError):
         self.reason = reason
 
 
+@dataclass(frozen=True)
+class _UpstreamContinuation:
+    """Verified state and evidence binding for one same-session continuation."""
+
+    progress: GitWorkspaceProgress
+    prior_execution: ArtifactReference
+    completed_tool_operations: int
+
+
 _SCHEDULER_SUMMARY_LIMIT = 2_000
 _UPSTREAM_SUMMARY_LIMIT = 1_000
 
@@ -153,6 +165,7 @@ def _bounded_artifact_summary(value: str, *, limit: int) -> str:
 
 
 type GuidanceProvider = Callable[[str], tuple[DynamicUserGuidance, ...]]
+type ContinuationStopProvider = Callable[[str], TerminationReason | None]
 
 
 def _system_clock() -> datetime:
@@ -197,6 +210,7 @@ class DynamicAgentRunner:
         artifact_repair_limit: int | None = None,
         revision_feedback: DynamicRevisionFeedback | None = None,
         guidance_provider: GuidanceProvider | None = None,
+        continuation_stop_provider: ContinuationStopProvider | None = None,
         activity_handler: ProgressDraftHandler | None = None,
         clock: Callable[[], datetime] = _system_clock,
     ) -> None:
@@ -296,6 +310,7 @@ class DynamicAgentRunner:
         self.artifact_repair_limit = artifact_repair_limit
         self.revision_feedback = revision_feedback
         self.guidance_provider = guidance_provider
+        self.continuation_stop_provider = continuation_stop_provider
         self.activity_handler = activity_handler
         self.clock = clock
 
@@ -463,7 +478,11 @@ class DynamicAgentRunner:
             agent_id=agent.id,
             status=(
                 AgentRunStatus.INTERRUPTED
-                if reason is TerminationReason.USER_INTERRUPTED
+                if reason
+                in {
+                    TerminationReason.USER_INTERRUPTED,
+                    TerminationReason.USER_CANCELLED,
+                }
                 else AgentRunStatus.FAILED
             ),
             evidence=evidence,
@@ -500,6 +519,8 @@ class DynamicAgentRunner:
         semantic_corrections = 0
         frozen_writer_snapshot: GitSnapshot | None = None
         frozen_writer_commit: str | None = None
+        continuation: _UpstreamContinuation | None = None
+        seen_continuation_states: set[str] = set()
         attempt = 1
         review_evidence_attempts: list[ReviewToolEvidenceAttempt] = []
         route_ids = self.team_plan.model_routes.authorized_route_ids(agent.id)
@@ -529,11 +550,45 @@ class DynamicAgentRunner:
                 user_guidance=tuple(guidance_by_id.values()),
             )
             base_request = build_dynamic_agent_execution_request(prompt_inputs)
-            request = (
-                base_request
-                if correction_plan is None
-                else build_semantic_correction_request(base_request, correction_plan)
-            )
+            current_continuation = continuation
+            continuation = None
+            if (
+                current_continuation is not None
+                and self.continuation_stop_provider is not None
+            ):
+                continuation_stop = self.continuation_stop_provider(agent.id)
+                if continuation_stop is not None:
+                    if continuation_stop not in {
+                        TerminationReason.USER_INTERRUPTED,
+                        TerminationReason.USER_CANCELLED,
+                    }:
+                        raise DynamicAgentRunnerError(
+                            "continuation stop provider returned an invalid reason",
+                            TerminationReason.CONTROLLER_ERROR,
+                        )
+                    raise DynamicAgentRunnerError(
+                        "Controlled continuation was not started because the user "
+                        "stopped this work.",
+                        continuation_stop,
+                    )
+            if current_continuation is not None and correction_plan is not None:
+                raise DynamicAgentRunnerError(
+                    "semantic correction and upstream continuation cannot overlap",
+                    TerminationReason.CONTROLLER_ERROR,
+                )
+            if current_continuation is not None:
+                request = build_upstream_continuation_request(
+                    base_request,
+                    workspace_state_sha256=(current_continuation.progress.state_sha256),
+                    changed_path_count=len(current_continuation.progress.changed_files),
+                )
+            elif correction_plan is not None:
+                request = build_semantic_correction_request(
+                    base_request,
+                    correction_plan,
+                )
+            else:
+                request = base_request
             pricing = self.pricing_by_model[cast(str, request.model)]
             reservation = self.budget_ledger.reserve_call(
                 agent.id,
@@ -543,6 +598,43 @@ class DynamicAgentRunner:
                 route_id=route_id,
                 pricing=pricing,
             )
+            if current_continuation is not None:
+                self._emit_activity(
+                    agent,
+                    kind=ProgressEventKind.AGENT_RETRY,
+                    message=(
+                        f"{agent.label} upstream turn ended after a tool result "
+                        "before submission; workspace identity, ancestry, scope, "
+                        f"and {len(current_continuation.progress.changed_files)} "
+                        "changed path(s) were verified. Continuing the same task "
+                        "and session under the approved budget."
+                    ),
+                    attempt=attempt,
+                    model=request.model,
+                    references=(
+                        RunEventReference(
+                            kind=RunEventReferenceKind.ARTIFACT,
+                            id=f"{agent.id}-invocation-{attempt - 1}",
+                            path=current_continuation.prior_execution.path,
+                            sha256=current_continuation.prior_execution.sha256,
+                        ),
+                    ),
+                    checkpoint=self._checkpoint_snapshot(
+                        agent,
+                        phase=InvocationPhase.STOPPED,
+                        last_verified_checkpoint=(
+                            "Partial workspace identity, ancestry, permission scope, "
+                            "and state digest were verified"
+                        ),
+                        next_controller_checkpoint=(
+                            "Resume the same Agent session and require commit plus "
+                            "typed submission"
+                        ),
+                        completed_tool_operations=(
+                            current_continuation.completed_tool_operations
+                        ),
+                    ),
+                )
             result = self._execute(
                 request,
                 activity_handler=lambda activity, current_attempt=attempt: (
@@ -571,6 +663,7 @@ class DynamicAgentRunner:
             record_error: str | None = None
             failure: Exception | None = None
             current_review_evidence: ReviewToolEvidenceAttempt | None = None
+            next_continuation_progress: GitWorkspaceProgress | None = None
             try:
                 self._validate_execution_result(result, request)
                 if (
@@ -583,6 +676,56 @@ class DynamicAgentRunner:
                     )
                 if result.status is AgentExecutionStatus.INTERRUPTED:
                     snapshot = None
+                    record_error = result.error or (
+                        f"Agent execution ended as {result.status.value}"
+                    )
+                    failure = DynamicAgentRunnerError(
+                        record_error,
+                        self._execution_termination_reason(result.status),
+                    )
+                elif result.status is not AgentExecutionStatus.COMPLETED:
+                    snapshot = None
+                    record_error = result.error or (
+                        f"Agent execution ended as {result.status.value}"
+                    )
+                    execution_failure = DynamicAgentRunnerError(
+                        record_error,
+                        self._execution_termination_reason(result.status),
+                    )
+                    if agent.permission_profile is PermissionProfile.WORKSPACE_WRITE:
+                        progress = self.workspace_manager.inspect_progress(
+                            self.workspace,
+                            input_commit=input_commit,
+                        )
+                        self._validate_workspace_scope(agent, progress.changed_files)
+                        if (
+                            result.status is AgentExecutionStatus.UPSTREAM_INCOMPLETE
+                            and correction_plan is None
+                        ):
+                            if not progress.made_progress:
+                                failure = DynamicAgentRunnerError(
+                                    f"{record_error}; no verifiable workspace progress "
+                                    "exists for controlled continuation",
+                                    TerminationReason.DEPENDENCY_UNAVAILABLE,
+                                )
+                            elif progress.state_sha256 in seen_continuation_states:
+                                failure = DynamicAgentRunnerError(
+                                    f"{record_error}; controlled continuation made no "
+                                    "measurable workspace progress and was stopped",
+                                    TerminationReason.DEPENDENCY_UNAVAILABLE,
+                                )
+                            else:
+                                seen_continuation_states.add(progress.state_sha256)
+                                next_continuation_progress = progress
+                        else:
+                            failure = execution_failure
+                    else:
+                        self.workspace_manager.verify_workspace(
+                            self.workspace,
+                            expected_commit=input_commit,
+                            require_clean=True,
+                        )
+                        failure = execution_failure
                 elif (
                     correction_plan is not None
                     and agent.permission_profile is PermissionProfile.WORKSPACE_WRITE
@@ -601,15 +744,7 @@ class DynamicAgentRunner:
                         frozen_writer_commit = (
                             input_commit if snapshot is None else snapshot.output_commit
                         )
-                if result.status is not AgentExecutionStatus.COMPLETED:
-                    record_error = result.error or (
-                        f"Agent execution ended as {result.status.value}"
-                    )
-                    failure = DynamicAgentRunnerError(
-                        record_error,
-                        self._execution_termination_reason(result.status),
-                    )
-                else:
+                if result.status is AgentExecutionStatus.COMPLETED:
                     try:
                         controller_semantic_payload: dict[str, object] | None = None
                         if correction_plan is not None:
@@ -865,6 +1000,14 @@ class DynamicAgentRunner:
                     )
                     self._finish_writer(agent, input_commit, work.output_commit)
                 return response_reference
+            if next_continuation_progress is not None:
+                continuation = _UpstreamContinuation(
+                    progress=next_continuation_progress,
+                    prior_execution=persisted.reference,
+                    completed_tool_operations=len(result.telemetry.tool_calls),
+                )
+                attempt += 1
+                continue
             if (
                 result.status
                 in {
@@ -1892,6 +2035,7 @@ class DynamicAgentRunner:
             AgentExecutionStatus.RESPONSE_FINALIZATION_STALLED,
             AgentExecutionStatus.PROVIDER_FAILED,
             AgentExecutionStatus.PROVIDER_STALLED,
+            AgentExecutionStatus.UPSTREAM_INCOMPLETE,
         }:
             return TerminationReason.DEPENDENCY_UNAVAILABLE
         if status is AgentExecutionStatus.INVALID_RESPONSE:

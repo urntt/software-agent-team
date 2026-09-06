@@ -271,8 +271,8 @@ snapshot before publishing any tool-history delta from that observation. When a
 single poll coalesces a start and completion, both history events therefore carry
 the current inactive state and the current completed count; neither event may
 reconstruct a stale `tool_active` phase from its kind. `RunEvent` schema v4 must
-remain canonically readable from v2 through v3, Artifact schema v6 from v2
-through v5, and Planning schema v8 from v2 through v7.
+remain canonically readable from v2 through v3, Artifact schema v7 from v2
+through v6, and Planning schema v8 from v2 through v7.
 Initialization file-race tests must distinguish an exact open-time missing file
 from malformed or unsafe evidence and must cover atomic publication between
 observations. Do not infer an earlier `open` result from a later `exists` check.
