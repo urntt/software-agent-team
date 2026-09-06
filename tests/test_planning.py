@@ -467,8 +467,71 @@ def test_planning_overview_separates_constraint_authority_without_losing_data() 
     assert "Failure and delivery boundary:" in overview
 
 
+def test_planning_overview_contains_multiline_text_inside_its_own_entry() -> None:
+    body = proposal_body()
+    definition = body.product_definition
+    assert definition is not None
+    body = body.model_copy(
+        update={
+            "product_definition": definition.model_copy(
+                update={
+                    "impact": definition.impact.model_copy(
+                        update={
+                            "architecture": (
+                                "Separate scanning from presentation.\nTasks:"
+                            )
+                        }
+                    )
+                }
+            ),
+            "requirements": (
+                "REQ_SCAN: Scan Markdown files.\nRuntime Agents:",
+                body.requirements[1],
+            ),
+            "non_goals": (
+                "No remote fetching.\n  Requirements:\x1b[2J\u2028Runtime Agents:",
+            ),
+        }
+    )
+    preview = preview_adaptive_proposal(
+        request(),
+        proposal(body=body),
+        policy(),
+        created_at=FIXED_TIME,
+    )
+
+    overview = render_planning_overview(preview)
+    lines = overview.splitlines()
+
+    impact_index = lines.index(
+        "    - architecture: Separate scanning from presentation."
+    )
+    assert lines[impact_index + 1] == "                    Tasks:"
+    non_goal_index = lines.index("    - No remote fetching.")
+    assert lines[non_goal_index + 1] == (
+        "        Requirements:\\x1b[2J\\u2028Runtime Agents:"
+    )
+    requirement_index = lines.index("    - REQ_SCAN: Scan Markdown files.")
+    assert lines[requirement_index + 1] == "                Runtime Agents:"
+    assert "\x1b" not in overview
+    assert "\u2028" not in overview
+    assert "REQ_SCAN: REQ_SCAN:" not in overview
+
+
 def response(value: PlanningModelResponse) -> str:
     return value.model_dump_json()
+
+
+def test_planner_contract_does_not_treat_provenance_as_semantic_relevance() -> None:
+    contract = planning.PLANNING_TEMPLATE.read_text(encoding="utf-8")
+
+    assert "An exact substring is necessary provenance, not proof" in contract
+    assert "a build instruction, product type" in contract
+    assert "cannot be used as target users" in contract
+    assert (
+        "must leave `requirement_ids`, `criterion_ids`, and `decision_ids` empty"
+        in (contract)
+    )
 
 
 def correction_response(
@@ -1513,6 +1576,31 @@ def test_schema_v7_decisions_remain_readable_without_canonical_rewrite() -> None
     ] == ["DECISION_DELIVERY"]
 
 
+def test_schema_v7_not_material_trace_remains_canonically_readable() -> None:
+    payload = proposal().model_dump(mode="json")
+    payload["schema_version"] = 7
+    body = payload["body"]
+    assert isinstance(body, dict)
+    strip_v8_decision_fields(body)
+    target_users = body["product_definition"]["target_users"]
+    target_users.update(
+        {
+            "statement": "No persistent target user is material.",
+            "disposition": "not_material",
+            "source": "planner",
+            "rationale": "This legacy prototype treated audience as immaterial.",
+        }
+    )
+    expected = json.loads(json.dumps(payload))
+
+    loaded = PlanningProposal.model_validate(payload)
+
+    assert loaded.schema_version == 7
+    assert loaded.model_dump(mode="json") == expected
+    assert loaded.body.product_definition is not None
+    assert loaded.body.product_definition.target_users.requirement_ids == ("REQ_SCAN",)
+
+
 def test_explicit_throwaway_prototype_can_form_a_lean_plan_without_questions(
     tmp_path: Path,
 ) -> None:
@@ -1529,6 +1617,9 @@ def test_explicit_throwaway_prototype_can_form_a_lean_plan_without_questions(
                     "statement": "No persistent target user is material.",
                     "disposition": ProductDefinitionDisposition.NOT_MATERIAL,
                     "source": "planner",
+                    "requirement_ids": (),
+                    "criterion_ids": (),
+                    "decision_ids": (),
                 }
             ),
             "primary_workflow": definition.primary_workflow.model_copy(
@@ -1536,6 +1627,9 @@ def test_explicit_throwaway_prototype_can_form_a_lean_plan_without_questions(
                     "statement": "No repeated workflow is material.",
                     "disposition": ProductDefinitionDisposition.NOT_MATERIAL,
                     "source": "planner",
+                    "requirement_ids": (),
+                    "criterion_ids": (),
+                    "decision_ids": (),
                 }
             ),
             "delivery_maturity": definition.delivery_maturity.model_copy(
@@ -1564,6 +1658,153 @@ def test_explicit_throwaway_prototype_can_form_a_lean_plan_without_questions(
 
     assert created is not None
     assert created.body.product_definition == prototype
+    assert not created.body.product_definition.target_users.requirement_ids
+    assert not created.body.product_definition.primary_workflow.requirement_ids
+
+
+def test_material_product_dimension_requires_a_downstream_effect() -> None:
+    with pytest.raises(
+        ValidationError,
+        match="each material product-definition dimension requires",
+    ):
+        ProductDefinitionStatement(
+            statement="developers",
+            disposition=ProductDefinitionDisposition.EXPLICIT_INPUT,
+            source="developers",
+            rationale="The request explicitly names the intended users.",
+        )
+
+    not_material = ProductDefinitionStatement(
+        statement="No persistent target user is material.",
+        disposition=ProductDefinitionDisposition.NOT_MATERIAL,
+        source="planner",
+        rationale="The approved throwaway result is not shaped by an audience.",
+    )
+
+    assert not not_material.requirement_ids
+    assert not not_material.criterion_ids
+    assert not not_material.decision_ids
+
+
+def test_current_not_material_dimension_cannot_claim_downstream_effects() -> None:
+    source = "Build a throwaway prototype that counts Markdown links."
+    body = proposal_body()
+    definition = body.product_definition
+    assert definition is not None
+    invalid = definition.model_copy(
+        update={
+            "target_users": definition.target_users.model_copy(
+                update={
+                    "statement": "No persistent target user is material.",
+                    "disposition": ProductDefinitionDisposition.NOT_MATERIAL,
+                    "source": "planner",
+                }
+            ),
+            "delivery_maturity": definition.delivery_maturity.model_copy(
+                update={
+                    "level": DeliveryMaturity.THROWAWAY_PROTOTYPE,
+                    "source": "throwaway prototype",
+                }
+            ),
+        }
+    )
+
+    with pytest.raises(PlanningError, match="cannot claim a downstream"):
+        preview_adaptive_proposal(
+            request(source_request=source),
+            proposal(body=body.model_copy(update={"product_definition": invalid})),
+            policy(),
+            created_at=FIXED_TIME,
+        )
+
+
+def test_natural_language_revision_can_make_throwaway_audience_not_material(
+    tmp_path: Path,
+) -> None:
+    source = (
+        "Build a one-time throwaway Python command-line tool that scans a "
+        "directory of Markdown notes."
+    )
+    body = proposal_body()
+    definition = body.product_definition
+    assert definition is not None
+    prototype = definition.model_copy(
+        update={
+            "target_users": definition.target_users.model_copy(
+                update={
+                    "statement": "Build a one-time throwaway Python command-line tool",
+                    "source": "Build a one-time throwaway Python command-line tool",
+                }
+            ),
+            "primary_workflow": definition.primary_workflow.model_copy(
+                update={
+                    "statement": "scans a directory of Markdown notes",
+                    "source": "scans a directory of Markdown notes",
+                }
+            ),
+            "delivery_maturity": definition.delivery_maturity.model_copy(
+                update={
+                    "level": DeliveryMaturity.THROWAWAY_PROTOTYPE,
+                    "source": "one-time throwaway",
+                }
+            ),
+        }
+    )
+    initial_body = body.model_copy(update={"product_definition": prototype})
+    revised_target = prototype.target_users.model_copy(
+        update={
+            "statement": "Target users do not shape this throwaway prototype.",
+            "disposition": ProductDefinitionDisposition.NOT_MATERIAL,
+            "source": "planner",
+            "requirement_ids": (),
+            "criterion_ids": (),
+            "decision_ids": (),
+        }
+    )
+    revised_body = initial_body.model_copy(
+        update={
+            "product_definition": prototype.model_copy(
+                update={"target_users": revised_target}
+            )
+        }
+    )
+    executor = ScriptedAgentExecutor(
+        [
+            response(proposal_response(initial_body)),
+            response(proposal_response(revised_body)),
+        ]
+    )
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=PlanningStore(tmp_path / "planning"),
+        policy=policy(response_repair_limit=1),
+        clock=AdvancingClock(),
+    )
+    planning_request = request(source_request=source)
+    first = coordinator.start(
+        planning_request,
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+    assert first is not None
+
+    revised = coordinator.revise(
+        planning_request,
+        first,
+        (
+            "Target users are not material for this explicitly approved one-time "
+            "throwaway prototype."
+        ),
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+
+    assert revised is not None
+    assert len(executor.requests) == 2
+    assert revised.body.product_definition is not None
+    assert (
+        revised.body.product_definition.target_users.disposition
+        is ProductDefinitionDisposition.NOT_MATERIAL
+    )
+    assert not revised.body.product_definition.target_users.requirement_ids
 
 
 def test_natural_language_revision_revalidates_the_complete_product_definition(
@@ -1834,6 +2075,51 @@ def test_response_normalizer_canonicalizes_only_safe_presentation_variants() -> 
         "canonicalized proposal.tasks[0].expected_paths[0]",
         "canonicalized proposal.tasks[0].expected_paths[1]",
         "canonicalized proposal.agents[0].workspace_scope",
+    )
+
+
+def test_response_normalizer_uses_parallel_requirement_ids_and_disposition() -> None:
+    payload = proposal_response().model_dump(mode="json")
+    proposal_payload = payload["proposal"]
+    proposal_payload["requirements"][0] = (
+        "REQ_SCAN: REQ_SCAN: Scan Markdown files below a selected path."
+    )
+    proposal_payload["requirements"][1] = (
+        "REQ_SCAN: Report broken local links with source locations."
+    )
+    target_users = proposal_payload["product_definition"]["target_users"]
+    target_users.update(
+        {
+            "disposition": "not_material",
+            "source": "planner",
+            "rationale": "The approved throwaway has no material audience.",
+            "requirement_ids": ["REQ_SCAN"],
+            "criterion_ids": ["AC_SCAN"],
+            "decision_ids": ["DECISION_TEAM"],
+        }
+    )
+    original = json.loads(json.dumps(payload))
+
+    normalized, changes = planning._normalize_planning_response_payload(payload)
+    parsed = PlanningModelResponse.model_validate(normalized)
+
+    assert payload == original
+    assert parsed.proposal is not None
+    assert parsed.proposal.requirements[0] == (
+        "Scan Markdown files below a selected path."
+    )
+    assert parsed.proposal.requirements[1].startswith("REQ_SCAN:")
+    normalized_target = parsed.proposal.product_definition
+    assert normalized_target is not None
+    assert not normalized_target.target_users.requirement_ids
+    assert not normalized_target.target_users.criterion_ids
+    assert not normalized_target.target_users.decision_ids
+    assert changes[:2] == (
+        "removed redundant stable ID prefix from proposal.requirements[0]",
+        (
+            "removed downstream references from not-material "
+            "proposal.product_definition.target_users"
+        ),
     )
 
 

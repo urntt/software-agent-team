@@ -197,7 +197,9 @@ with six dimensions:
 Each dimension records a statement or maturity level, one of
 `explicit_input`, `resolved_question`, `planner_recommendation`, or
 `not_material`, attributable source and rationale, and stable downstream
-requirement, criterion, and decision references. An explicit-input source and
+requirement, criterion, and decision references when it is material. A
+`not_material` dimension has no downstream references; its source and rationale
+instead make the explicit absence of an effect auditable. An explicit-input source and
 statement preserve one contiguous verbatim user-input substring without citation
 labels, quote delimiters, stitched fragments, or commentary. An unambiguous phrase
 such as `one-time throwaway` may map to the matching delivery-maturity enum; the
@@ -207,6 +209,10 @@ resolves; each resolved statement must be an exact fragment of that answer, and
 the answer must reach one unchanged user-owned product decision. If an answer
 does not cover a declared dimension, Planning must ask again rather than infer it.
 Planning cannot silently recommend target users, primary workflow, or maturity.
+An exact substring establishes provenance but does not establish semantic
+relevance: target users must name an actor that uses or receives the result, and
+the primary workflow must describe that actor's activity with the result rather
+than a build instruction or delivery qualifier.
 Target users or workflow may be `not_material` only for an explicitly approved
 throwaway prototype. Usability, operations, and delivery may be reasoned
 Planner recommendations that become user-approved with the overview.
@@ -249,9 +255,14 @@ may perform only these bounded, semantics-preserving normalizations:
   Planner, and Agent source fields into typed provenance, and remove redundant
   legacy direct-product decision records only when the ProductDefinition retains
   its exact source and downstream requirement or criterion traces;
-- Remove decision references from `explicit_input` and `not_material`
-  ProductDefinition dimensions when a requirement or criterion trace remains,
-  because their own typed source is authoritative;
+- Remove decision references from `explicit_input` ProductDefinition dimensions
+  when a requirement or criterion trace remains, because their own typed source
+  is authoritative;
+- Remove every downstream reference from a `not_material` ProductDefinition
+  dimension, because retaining one would contradict the approved disposition;
+- Remove one or more repeated copies of a requirement's exact parallel `REQ_`
+  ID prefix from its description, because the ID array is the sole identity
+  authority and the submitted value remains in raw turn evidence;
 - Remove a schema-forbidden field only when removing it cannot grant or hide
   controller/evidence authority.
 
@@ -267,6 +278,12 @@ fields are rejected rather than normalized away. Other model-owned defects are
 eligible only for digest-bound correction of the exact typed fields identified
 by validation; the model never regenerates the complete retained object or
 selects the fields it may replace.
+
+The terminal overview treats every user- or model-authored string as untrusted
+display text. Each newline is rendered as an indented continuation of its own
+field or list item, and terminal control characters are escaped, so content
+cannot impersonate a neighboring section or entry. This changes only the
+projection; persisted source text remains exact.
 
 Adaptive Planning and dynamic execution Agents call the invocation-bound
 `sat_submit_artifact` tool exactly once through the canonical

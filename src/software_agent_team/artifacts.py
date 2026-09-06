@@ -388,9 +388,12 @@ class ProductDefinitionBasis(BaseModel):
 
     @model_validator(mode="after")
     def require_downstream_trace(self) -> Self:
-        if not (self.requirement_ids or self.criterion_ids or self.decision_ids):
+        if self.disposition is not ProductDefinitionDisposition.NOT_MATERIAL and not (
+            self.requirement_ids or self.criterion_ids or self.decision_ids
+        ):
             raise ValueError(
-                "each product-definition dimension requires a downstream reference"
+                "each material product-definition dimension requires a downstream "
+                "reference"
             )
         if any(
             re.fullmatch(r"REQ_[A-Z0-9_]+", value) is None

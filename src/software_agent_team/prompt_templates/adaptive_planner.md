@@ -35,6 +35,15 @@ Choose the next response by decision value:
   quote delimiters, stitched excerpts, ellipses, or commentary. Map an unambiguous
   natural-language maturity phrase such as `one-time throwaway` to the matching
   delivery-maturity enum; the supporting `source` remains the user's exact words.
+  An exact substring is necessary provenance, not proof that it belongs to the
+  dimension. A target user is a person, group, organization, or external system
+  that will use or receive the result; a build instruction, product type,
+  delivery qualifier, or workflow phrase is not an audience. A primary workflow
+  is the user's end-to-end activity with the result, not the instruction to
+  create it. For example, `Build a one-time throwaway Python command-line tool`
+  cannot be used as target users. If an explicitly approved throwaway request
+  names no material audience, use `not_material` instead of borrowing an
+  unrelated source fragment.
   Never silently choose those three as a Planner recommendation. For
   `resolved_question`, copy each natural-language statement as an exact fragment
   of the user's answer. If the answer does not
@@ -45,9 +54,12 @@ Choose the next response by decision value:
   that the user approves in the overview, or `not_material` when the rationale
   explains why. Use `source: "planner"` for either Planner disposition and the
   answered question ID for `resolved_question`.
-- Every product-definition dimension must reference the stable requirements and
-  criteria it affects. An `explicit_input` or `not_material` dimension uses its
-  own typed `source` as provenance and must leave `decision_ids` empty. A
+- Every material product-definition dimension must reference the stable
+  requirements, criteria, or decisions it affects. A `not_material` dimension
+  must leave `requirement_ids`, `criterion_ids`, and `decision_ids` empty: its
+  rationale explains why no downstream product choice changes. An
+  `explicit_input` dimension uses its own typed `source` as provenance and must
+  leave `decision_ids` empty. A
   `resolved_question` dimension references exactly the one decision produced by
   that question. A `planner_recommendation` dimension references only Planner
   decisions of its matching category: `acceptance_scope` for usability and

@@ -8,6 +8,7 @@ import os
 import re
 import threading
 import time
+import unicodedata
 from collections.abc import Callable, Collection, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
@@ -717,6 +718,31 @@ def _clean_unique(values: tuple[str, ...], *, label: str) -> tuple[str, ...]:
     return cleaned
 
 
+def _strip_redundant_stable_id_prefix(value: str, stable_id: str) -> str:
+    """Remove only repeated copies of the parallel stable-ID presentation."""
+
+    return re.sub(rf"^(?:{re.escape(stable_id)}\s*:\s*)+", "", value)
+
+
+def _render_prefixed_text(prefix: str, value: str) -> tuple[str, ...]:
+    """Render untrusted text without letting continuations escape their field."""
+
+    normalized = value.replace("\r\n", "\n").replace("\r", "\n")
+    visible = "".join(
+        character
+        if character == "\n"
+        or unicodedata.category(character) not in {"Cc", "Cf", "Zl", "Zp"}
+        else character.encode("unicode_escape").decode("ascii")
+        for character in normalized
+    )
+    fragments = visible.split("\n")
+    continuation = " " * len(prefix)
+    return (
+        prefix + fragments[0],
+        *(continuation + fragment for fragment in fragments[1:]),
+    )
+
+
 def _safe_path(value: str) -> str:
     cleaned = value.strip()
     path = PurePosixPath(cleaned)
@@ -790,6 +816,57 @@ def _normalize_planning_response_payload(
     proposal = normalized.get("proposal")
     if not isinstance(proposal, dict):
         return normalized, tuple(changes)
+    requirements = proposal.get("requirements")
+    requirement_ids = proposal.get("requirement_ids")
+    if (
+        isinstance(requirements, list)
+        and isinstance(requirement_ids, list)
+        and len(requirements) == len(requirement_ids)
+    ):
+        for requirement_index, (description, requirement_id) in enumerate(
+            zip(requirements, requirement_ids, strict=True)
+        ):
+            if (
+                not isinstance(description, str)
+                or not isinstance(requirement_id, str)
+                or re.fullmatch(r"REQ_[A-Z0-9_]+", requirement_id) is None
+            ):
+                continue
+            canonical_description = _strip_redundant_stable_id_prefix(
+                description,
+                requirement_id,
+            )
+            if canonical_description != description:
+                requirements[requirement_index] = canonical_description
+                changes.append(
+                    "removed redundant stable ID prefix from "
+                    f"proposal.requirements[{requirement_index}]"
+                )
+
+    product_definition = proposal.get("product_definition")
+    product_dimensions = (
+        product_definition if isinstance(product_definition, dict) else {}
+    )
+    for dimension in ProductDefinitionDimension:
+        item = product_dimensions.get(dimension.value)
+        if (
+            not isinstance(item, dict)
+            or item.get("disposition")
+            != ProductDefinitionDisposition.NOT_MATERIAL.value
+        ):
+            continue
+        removed_references = False
+        for field_name in ("requirement_ids", "criterion_ids", "decision_ids"):
+            references = item.get(field_name)
+            if isinstance(references, list) and references:
+                item[field_name] = []
+                removed_references = True
+        if removed_references:
+            changes.append(
+                "removed downstream references from not-material "
+                f"proposal.product_definition.{dimension.value}"
+            )
+
     decisions = proposal.get("decisions")
     assumption_decision_ids = proposal.get("assumption_decision_ids")
     if isinstance(decisions, list):
@@ -844,10 +921,6 @@ def _normalize_planning_response_payload(
                     f"{canonical_id}"
                 )
 
-        product_definition = proposal.get("product_definition")
-        product_dimensions = (
-            product_definition if isinstance(product_definition, dict) else {}
-        )
         explicit_sources_by_decision: dict[str, set[str]] = {}
         for dimension in ProductDefinitionDimension:
             item = product_dimensions.get(dimension.value)
@@ -991,10 +1064,7 @@ def _normalize_planning_response_payload(
             references = item.get("decision_ids")
             if (
                 item.get("disposition")
-                in {
-                    ProductDefinitionDisposition.EXPLICIT_INPUT.value,
-                    ProductDefinitionDisposition.NOT_MATERIAL.value,
-                }
+                == ProductDefinitionDisposition.EXPLICIT_INPUT.value
                 and isinstance(references, list)
                 and references
                 and (item.get("requirement_ids") or item.get("criterion_ids"))
@@ -2386,6 +2456,19 @@ def _product_definition_dimension_invariant(
             subjects=subjects,
         )
 
+    if (
+        item.disposition is ProductDefinitionDisposition.NOT_MATERIAL
+        and not allow_legacy_decision_links
+        and (item.requirement_ids or item.criterion_ids or item.decision_ids)
+    ):
+        return issue(
+            "planning_product_not_material_trace",
+            (
+                f"{dimension.value} is not material and cannot claim a "
+                "downstream requirement, criterion, or decision effect"
+            ),
+        )
+
     unknown_requirements = set(item.requirement_ids) - requirement_ids
     unknown_criteria = set(item.criterion_ids) - criterion_ids
     unknown_decisions = set(item.decision_ids) - decision_ids
@@ -2578,14 +2661,6 @@ def _product_definition_dimension_invariant(
                 "attributable to Planning"
             ),
         )
-    if item.decision_ids and not allow_legacy_decision_links:
-        return issue(
-            "planning_product_not_material_decision_trace",
-            (
-                f"{dimension.value} not_material is attributable to the Planner "
-                "disposition itself and cannot cite a separate decision record"
-            ),
-        )
     return None
 
 
@@ -2637,13 +2712,21 @@ def _validate_product_definition(
     if dimension_invariants:
         raise _PlanningContextInvariantsError(dimension_invariants)
 
-    if not definition.target_users.requirement_ids:
+    if (
+        definition.target_users.disposition
+        is not ProductDefinitionDisposition.NOT_MATERIAL
+        and not definition.target_users.requirement_ids
+    ):
         raise _planning_context_invariant(
             "planning_product_audience_effect",
             "target users must affect at least one requirement",
             paths=("/proposal/product_definition/target_users/requirement_ids",),
         )
-    if not definition.primary_workflow.requirement_ids:
+    if (
+        definition.primary_workflow.disposition
+        is not ProductDefinitionDisposition.NOT_MATERIAL
+        and not definition.primary_workflow.requirement_ids
+    ):
         raise _planning_context_invariant(
             "planning_product_workflow_effect",
             "primary workflow must affect at least one requirement",
@@ -4310,69 +4393,83 @@ def render_planning_overview(
             for index, text in enumerate(brief.requirements, start=1)
         )
     )
-    lines = [
-        "Planning overview",
-        "  Product definition and scope:",
-        f"  Product: {brief.title}",
-        f"  Request: {brief.source_request}",
-    ]
+    lines = ["Planning overview", "  Product definition and scope:"]
+    lines.extend(_render_prefixed_text("  Product: ", brief.title))
+    lines.extend(_render_prefixed_text("  Request: ", brief.source_request))
     definition = implementation.product_definition
     if definition is None:
         lines.append("  Product depth: unavailable in legacy Planning evidence")
     else:
+        lines.append("  Audience and killer workflow:")
         lines.extend(
-            (
-                "  Audience and killer workflow:",
-                "    - target users "
-                f"[{definition.target_users.disposition.value}]: "
-                + definition.target_users.statement,
-                "    - primary workflow "
-                f"[{definition.primary_workflow.disposition.value}]: "
-                + definition.primary_workflow.statement,
-                "    - delivery maturity: "
-                + definition.delivery_maturity.level.value
-                + f" [{definition.delivery_maturity.disposition.value}]",
-                "  Quality and delivery expectations:",
-                "    - usability "
-                f"[{definition.usability_expectations.disposition.value}]: "
-                + definition.usability_expectations.statement,
-                "    - operations "
-                f"[{definition.operational_expectations.disposition.value}]: "
-                + definition.operational_expectations.statement,
-                "    - delivery "
-                f"[{definition.delivery_expectations.disposition.value}]: "
-                + definition.delivery_expectations.statement,
-                "  Product-definition effects:",
-                "    - architecture: " + definition.impact.architecture,
-                "    - team: " + definition.impact.team,
-                "    - cost: " + definition.impact.cost,
-                "    - delivery: " + definition.impact.delivery,
+            _render_prefixed_text(
+                f"    - target users [{definition.target_users.disposition.value}]: ",
+                definition.target_users.statement,
             )
         )
-    lines.extend(
-        (
-            "  Non-goals:",
-            *(
-                (f"    - {item}" for item in implementation.non_goals)
-                if implementation.non_goals
-                else ("    - unavailable in legacy Planning evidence",)
-            ),
-            f"  Destination: {preview.destination}",
-            "  Execution profile:",
-            *(f"    - {item}" for item in preview.execution_profile),
-            "  Requirements:",
-            *(
-                f"    - {requirement_id}: {text}"
-                for requirement_id, text in requirement_pairs
-            ),
+        lines.extend(
+            _render_prefixed_text(
+                "    - primary workflow "
+                f"[{definition.primary_workflow.disposition.value}]: ",
+                definition.primary_workflow.statement,
+            )
         )
-    )
+        lines.append(
+            "    - delivery maturity: "
+            + definition.delivery_maturity.level.value
+            + f" [{definition.delivery_maturity.disposition.value}]"
+        )
+        lines.append("  Quality and delivery expectations:")
+        for label, item in (
+            ("usability", definition.usability_expectations),
+            ("operations", definition.operational_expectations),
+            ("delivery", definition.delivery_expectations),
+        ):
+            lines.extend(
+                _render_prefixed_text(
+                    f"    - {label} [{item.disposition.value}]: ",
+                    item.statement,
+                )
+            )
+        lines.append("  Product-definition effects:")
+        for label, value in (
+            ("architecture", definition.impact.architecture),
+            ("team", definition.impact.team),
+            ("cost", definition.impact.cost),
+            ("delivery", definition.impact.delivery),
+        ):
+            lines.extend(_render_prefixed_text(f"    - {label}: ", value))
+
+    lines.append("  Non-goals:")
+    if implementation.non_goals:
+        for item in implementation.non_goals:
+            lines.extend(_render_prefixed_text("    - ", item))
+    else:
+        lines.append("    - unavailable in legacy Planning evidence")
+    lines.extend(_render_prefixed_text("  Destination: ", preview.destination))
+    lines.append("  Execution profile:")
+    for item in preview.execution_profile:
+        lines.extend(_render_prefixed_text("    - ", item))
+    lines.append("  Requirements:")
+    for requirement_id, description in requirement_pairs:
+        canonical_description = _strip_redundant_stable_id_prefix(
+            description,
+            requirement_id,
+        )
+        lines.extend(
+            _render_prefixed_text(
+                f"    - {requirement_id}: ",
+                canonical_description,
+            )
+        )
     if preview.execution_profile_constraints:
         lines.append("  Execution-profile constraints (controller-owned):")
-        lines.extend(f"    - {item}" for item in preview.execution_profile_constraints)
+        for item in preview.execution_profile_constraints:
+            lines.extend(_render_prefixed_text("    - ", item))
     if preview.planner_constraints:
         lines.append("  Additional task constraints proposed by Planning:")
-        lines.extend(f"    - {item}" for item in preview.planner_constraints)
+        for item in preview.planner_constraints:
+            lines.extend(_render_prefixed_text("    - ", item))
     lines.append("  Decisions and assumptions:")
     decision_groups = (
         (
@@ -4411,10 +4508,12 @@ def render_planning_overview(
                 is not PlanningDecisionProvenanceKind.EXPLICIT_INPUT
                 else f"; source={decision.provenance.source!r}"
             )
-            lines.append(
-                f"      - {decision.id} "
-                f"[{decision.category.value}{question}{direct_source}]: "
-                f"{decision.summary} (why: {decision.rationale})"
+            lines.extend(
+                _render_prefixed_text(
+                    f"      - {decision.id} "
+                    f"[{decision.category.value}{question}{direct_source}]: ",
+                    f"{decision.summary} (why: {decision.rationale})",
+                )
             )
     lines.append("    Assumptions:")
     if not implementation.assumptions:
@@ -4425,11 +4524,10 @@ def render_planning_overview(
             implementation.assumption_decision_ids,
             strict=True,
         ):
-            lines.append(f"      - {decision_id}: {assumption}")
+            lines.extend(_render_prefixed_text(f"      - {decision_id}: ", assumption))
     else:
-        lines.extend(
-            f"      - legacy/unowned: {item}" for item in implementation.assumptions
-        )
+        for item in implementation.assumptions:
+            lines.extend(_render_prefixed_text("      - legacy/unowned: ", item))
     lines.extend(
         (
             "    Non-negotiable Controller policy:",
@@ -4439,21 +4537,18 @@ def render_planning_overview(
             "      - only a verified accepted workspace may be delivered",
         )
     )
-    lines.extend(
-        (
-            "  Acceptance criteria:",
-            *(
-                f"    - {item.id}: {item.description} (verify: "
-                f"{item.verification}; Review boundaries: "
-                + (
-                    ", ".join(boundary.value for boundary in item.review_boundaries)
-                    or "none"
-                )
-                + ")"
-                for item in brief.acceptance_criteria
-            ),
+    lines.append("  Acceptance criteria:")
+    for item in brief.acceptance_criteria:
+        review_boundaries = (
+            ", ".join(boundary.value for boundary in item.review_boundaries) or "none"
         )
-    )
+        lines.extend(
+            _render_prefixed_text(
+                f"    - {item.id}: ",
+                f"{item.description} (verify: {item.verification}; "
+                f"Review boundaries: {review_boundaries})",
+            )
+        )
     used_boundaries = tuple(
         dict.fromkeys(
             boundary
@@ -4503,13 +4598,10 @@ def render_planning_overview(
             )
     if set(proposal_criteria) != rendered_criterion_ids:
         raise PlanningError("rendered traceability omitted a proposal criterion")
-    lines.extend(
-        (
-            "  Implementation approach:",
-            *(f"    - {item}" for item in implementation.approach),
-            "  Tasks:",
-        )
-    )
+    lines.append("  Implementation approach:")
+    for item in implementation.approach:
+        lines.extend(_render_prefixed_text("    - ", item))
+    lines.append("  Tasks:")
     for task in implementation.tasks:
         task_dependencies = ", ".join(task.dependencies) or "none"
         task_criteria = ", ".join(task.acceptance_criteria)
@@ -4520,8 +4612,13 @@ def render_planning_overview(
             else "read-only verification focus; no project changes permitted"
         )
         lines.extend(
+            _render_prefixed_text(
+                f"    - {task.id} -> {task.owner_agent_id}: ",
+                task.description,
+            )
+        )
+        lines.extend(
             (
-                f"    - {task.id} -> {task.owner_agent_id}: {task.description}",
                 f"      authority: {task_authority}",
                 f"      acceptance: {task_criteria}",
                 f"      dependencies: {task_dependencies}",
@@ -4581,10 +4678,17 @@ def render_planning_overview(
             else "durable artifact to " + ", ".join(dependents)
         )
         lines.extend(
+            _render_prefixed_text(
+                f"    - {agent.id} (",
+                agent.label + ")",
+            )
+        )
+        lines.extend(
+            _render_prefixed_text("      responsibility: ", agent.responsibility)
+        )
+        lines.extend(_render_prefixed_text("      why: ", agent.rationale))
+        lines.extend(
             (
-                f"    - {agent.id} ({agent.label})",
-                f"      responsibility: {agent.responsibility}",
-                f"      why: {agent.rationale}",
                 f"      capability: {agent.capability.value}",
                 f"      dependencies: {dependencies}",
                 f"      permission: {agent.permission_profile.value}",
@@ -4594,7 +4698,11 @@ def render_planning_overview(
                 f"      handoff: {handoff}",
                 f"      model: {route.model} (profile {route.id}; "
                 f"{assignment.selection_source.value})",
-                f"      model reason: {assignment.reason}",
+            )
+        )
+        lines.extend(_render_prefixed_text("      model reason: ", assignment.reason))
+        lines.extend(
+            (
                 "      authorized fallback profiles: "
                 + (
                     ", ".join(
@@ -4673,7 +4781,8 @@ def render_planning_overview(
     )
     if implementation.risks:
         lines.append("  Risks:")
-        lines.extend(f"    - {item}" for item in implementation.risks)
+        for item in implementation.risks:
+            lines.extend(_render_prefixed_text("    - ", item))
     else:
         lines.extend(("  Risks:", "    - none identified"))
     lines.extend(
