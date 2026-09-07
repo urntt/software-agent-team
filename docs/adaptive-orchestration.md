@@ -666,7 +666,12 @@ invocation. During a targeted correction, the same Reviewer may also reuse
 integrity-checked results captured by
 an earlier attempt in that same role-stage, immutable-commit, and invocation
 chain. Deterministic command stdout/stderr from the same immutable iteration is
-also eligible. The controller requires every fragment to occur in at least one
+also eligible. Targeted correction derives opaque candidate handles under the
+same whole-chain matching policy used by final grounding. A fragment from a
+successful result is excluded when the same selector would also match an
+ineligible failed tool result or failed deterministic command, so the catalog
+cannot offer a handle that the unchanged validator must reject. The controller
+requires every fragment to occur in at least one
 eligible output, enriches the persisted assessment with every protocol-eligible
 actual attempt-qualified tool ID or command ID and available provenance, and
 deduplicates repeated or overlapping selectors. Evidence cannot cross an Agent,

@@ -225,8 +225,13 @@ When changing targeted correction, test the exact per-slot submission schema as
 well as post-application validation. A different diagnostic fingerprint is not by
 itself improvement: regressions to a coarser type or shape in the same authority
 slot must stop. Review evidence-selector correction must use Controller-issued
-candidate handles and exact-byte binding; a model-authored replacement string is
-not an acceptable compatibility path.
+candidate handles and exact-byte binding; candidate generation and final
+grounding must share the same whole-chain eligibility policy, including
+cross-result failed-match contamination. A model-authored replacement string is
+not an acceptable compatibility path. Add a regression where one exact fragment
+appears in both a successful result and an otherwise failed result, and prove it
+is absent from the correction catalog while an uncontaminated candidate still
+passes post-application grounding.
 
 When changing live progress, derive labels only from allow-listed tool identity.
 Tests must prove that unknown executable names, command arguments, output, paths,

@@ -2,7 +2,7 @@
 
 **Current milestone:** Phase 3E implemented; invocation lifecycle, classified checkpoint progress, ProductDefinition, typed submission, exact-slot correction, and Controller-bound Review evidence selection are offline-verified; final fresh-run and release validation remain in progress
 
-**Last updated:** September 6, 2026
+**Last updated:** September 7, 2026
 
 This document records what the repository implements now, what evidence
 supports that claim, and what remains unavailable. It does not redefine the
@@ -42,6 +42,14 @@ correction-slot schemas, constraint-aware convergence, Controller-issued Review
 evidence handles, safe tool-action classification, and repeated checkpoint
 projection suppression. A clean committed gate and fresh provider journey are
 still required before those corrections are considered closed.
+The subsequent Review candidate-eligibility diagnostic gate passed all **1,140
+tests** in 417.29 seconds. Its schema-v3 report recorded a 347,787,264-byte
+aggregate peak RSS, peak process/thread counts of 5/18, no new cgroup or kernel
+OOM event, and zero residual stage processes, process leases, sandbox
+containers, or volumes. It covers whole-chain rejection of correction candidates
+whose exact fragment would also match an ineligible failed result. A clean
+committed gate, exact captured-response replay, and fresh provider journey remain
+required before that fix is considered closed.
 
 The current development head implements configuration schema v8 model metadata
 with attributable price/context sources, task-scoped route snapshots, one
@@ -129,7 +137,10 @@ leaf. Targeted correction can therefore replace those selector strings together
 while preserving every assessment, finding, verdict, and summary field that
 already passed validation. The Controller now derives a bounded catalog of exact
 eligible same-chain evidence fragments for each invalid leaf; the model selects
-an opaque handle and the Controller records the exact-byte binding. No eligible
+an opaque handle and the Controller records the exact-byte binding. Candidate
+construction and final grounding now share the same whole-chain match policy, so
+a successful source fragment is not offered when that selector would also match
+an ineligible failed tool result or failed deterministic command. No eligible
 candidate means no random correction call. It never asks the model to regenerate
 the whole assessment array or hand-type previously observed output. A remaining
 targetable model-owned failure creates a

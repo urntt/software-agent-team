@@ -745,6 +745,132 @@ def test_review_correction_selects_controller_catalog_instead_of_retyping_output
     assert "Nested child directories are scanned recursively" not in prompt
 
 
+def test_review_correction_catalog_excludes_fragments_contaminated_by_failures() -> (
+    None
+):
+    """A controller-issued handle must be acceptable to final grounding."""
+
+    assessment = ReviewCriterionAssessmentResponse(
+        criterion_id="AC_LINKS",
+        status="satisfied",
+        adversarial_check="Checked the documented invocation and lock policy.",
+        evidence="The initial selector is intentionally unavailable.",
+        tool_evidence=(review_tool_claim("fabricated observation"),),
+    )
+    request, result = _review_result(
+        ReviewReportResponse(
+            verdict="accept",
+            criterion_assessments=(assessment,),
+            summary="The assigned criterion is satisfied.",
+        )
+    )
+    calls = (
+        captured_tool_call(
+            1,
+            "SAFE_RESULT\nuv run notes-todo\nuv.lock",
+            executable="sh",
+        ),
+        captured_tool_call(
+            2,
+            "uv run notes-todo\ncommand failed",
+            executable="sh",
+            failed=True,
+        ),
+        captured_tool_call(
+            3,
+            "uv.lock\nrepository check failed",
+            executable="git",
+            failed=True,
+        ),
+    )
+    result = result.model_copy(
+        update={"telemetry": result.telemetry.model_copy(update={"tool_calls": calls})}
+    )
+    commands = (
+        CommandEvidence(
+            id="CHECK_SAFE",
+            argv=("python", "check.py"),
+            exit_code=0,
+            duration_ms=10,
+            stdout_path="iterations/01/commands/safe.stdout.txt",
+            stderr_path="iterations/01/commands/safe.stderr.txt",
+            stdout_tail="SAFE_COMMAND\nshared command output\n",
+            summary="The safe command passed.",
+        ),
+        CommandEvidence(
+            id="CHECK_FAILED",
+            argv=("python", "failed.py"),
+            exit_code=1,
+            duration_ms=10,
+            stdout_path="iterations/01/commands/failed.stdout.txt",
+            stderr_path="iterations/01/commands/failed.stderr.txt",
+            stdout_tail="shared command output\n",
+            summary="The comparison command failed.",
+        ),
+    )
+
+    with pytest.raises(AgentArtifactResponseError) as captured:
+        parse_dynamic_agent_response(
+            result,
+            request,
+            task_brief=task_brief(),
+            team_plan=team_plan(),
+            reviewed_criterion_ids=("AC_LINKS",),
+            review_command_evidence=commands,
+        )
+    error = captured.value
+    assert error.semantic_payload is not None
+    assert error.diagnostic is not None
+    plan = build_semantic_correction_plan(error.semantic_payload, error.diagnostic)
+    assert plan is not None
+    bound = bind_review_evidence_correction_candidates(
+        plan,
+        evidence_attempts=(
+            ReviewToolEvidenceAttempt(execution_attempt=1, tool_calls=calls),
+        ),
+        command_evidence=commands,
+    )
+    assert bound is not None
+    catalog = {
+        candidate.replacement_value for candidate in bound.candidate_slots[0].candidates
+    }
+    assert "SAFE_RESULT" in catalog
+    assert "SAFE_COMMAND" in catalog
+    assert "uv run notes-todo" not in catalog
+    assert "uv.lock" not in catalog
+    assert "shared command output" not in catalog
+
+    selected = next(
+        candidate
+        for candidate in bound.candidate_slots[0].candidates
+        if candidate.replacement_value == "SAFE_RESULT"
+    )
+    corrected = apply_semantic_correction_with_evidence(
+        {"replacement_values": [selected.handle]},
+        bound,
+    ).payload
+    corrected_request = request.model_copy(update={"submission_contract": None})
+    corrected_result = result.model_copy(
+        update={
+            "response_text": json.dumps(corrected),
+            "semantic_submission": None,
+            "submission_evidence": None,
+        }
+    )
+    parsed = parse_dynamic_agent_response(
+        corrected_result,
+        corrected_request,
+        task_brief=task_brief(),
+        team_plan=team_plan(),
+        reviewed_criterion_ids=("AC_LINKS",),
+        review_command_evidence=commands,
+    )
+    assert isinstance(parsed.body, GroundedReviewReportResponse)
+    assert parsed.body.criterion_assessments[0].tool_evidence[0].observable == (
+        "SAFE_RESULT"
+    )
+
+
 def test_controller_matches_only_json_outside_string_whitespace_variants() -> None:
     assessment = ReviewCriterionAssessmentResponse(
         criterion_id="AC_LINKS",

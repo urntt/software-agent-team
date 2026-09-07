@@ -125,6 +125,15 @@ class ReviewToolEvidenceAttempt:
             raise ValueError("review evidence attempt must be positive")
 
 
+@dataclass(frozen=True)
+class _ReviewEvidenceMatches:
+    """One selector's matches under the canonical Review evidence policy."""
+
+    tool_matches: tuple[tuple[int, AgentToolCallEvidence], ...]
+    ineligible_probe_matches: tuple[tuple[int, AgentToolCallEvidence], ...]
+    command_matches: tuple[CommandEvidence, ...]
+
+
 def _clean_unique_text(values: tuple[str, ...]) -> tuple[str, ...]:
     cleaned = tuple(value.strip() for value in values)
     if any(not value for value in cleaned):
@@ -297,6 +306,84 @@ def _matched_command_failed(command: CommandEvidence) -> bool:
     return command.timed_out or command.exit_code != 0
 
 
+def _match_review_evidence(
+    observable: str,
+    *,
+    status: ReviewCriterionStatus,
+    evidence_attempts: tuple[ReviewToolEvidenceAttempt, ...],
+    command_evidence: tuple[CommandEvidence, ...],
+) -> _ReviewEvidenceMatches:
+    """Apply the one authoritative match policy used by catalog and grounding."""
+
+    satisfied = status is ReviewCriterionStatus.SATISFIED
+    tool_matches = tuple(
+        (attempt.execution_attempt, call)
+        for attempt in evidence_attempts
+        for call in attempt.tool_calls
+        if _observable_matches_output(
+            observable,
+            _positive_probe_match_surface(call) if satisfied else call.output_excerpt,
+        )
+    )
+    ineligible_probe_matches = tuple(
+        (attempt.execution_attempt, call)
+        for attempt in evidence_attempts
+        for call in attempt.tool_calls
+        if satisfied
+        and _is_direct_probe(call)
+        and _observable_matches_output(observable, call.output_excerpt)
+        and not _observable_matches_output(
+            observable,
+            _positive_probe_match_surface(call),
+        )
+    )
+    command_matches = tuple(
+        command
+        for command in command_evidence
+        if _observable_matches_output(observable, command.stdout_tail)
+        or _observable_matches_output(observable, command.stderr_tail)
+    )
+    if satisfied and any(
+        _is_direct_probe(call) and not _matched_tool_result_failed(call)
+        for _, call in tool_matches
+    ):
+        tool_matches = tuple(
+            match
+            for match in tool_matches
+            if not (
+                _is_direct_probe(match[1]) and _matched_tool_result_failed(match[1])
+            )
+        )
+    return _ReviewEvidenceMatches(
+        tool_matches=tool_matches,
+        ineligible_probe_matches=ineligible_probe_matches,
+        command_matches=command_matches,
+    )
+
+
+def _is_safe_satisfied_evidence_candidate(
+    observable: str,
+    *,
+    evidence_attempts: tuple[ReviewToolEvidenceAttempt, ...],
+    command_evidence: tuple[CommandEvidence, ...],
+) -> bool:
+    """Return whether final grounding can accept one catalog candidate."""
+
+    matches = _match_review_evidence(
+        observable,
+        status=ReviewCriterionStatus.SATISFIED,
+        evidence_attempts=evidence_attempts,
+        command_evidence=command_evidence,
+    )
+    if not matches.tool_matches and not matches.command_matches:
+        return False
+    return not any(
+        _matched_tool_result_failed(call) for _, call in matches.tool_matches
+    ) and not any(
+        _matched_command_failed(command) for command in matches.command_matches
+    )
+
+
 def _bind_unambiguous_blocking_finding_scope(
     findings: tuple[ReviewFinding, ...],
     assessments: tuple[ReviewCriterionAssessment, ...],
@@ -385,40 +472,15 @@ def _ground_review_tool_evidence(
     ]:
         """Resolve one selector or raise its exact typed grounding failure."""
 
-        tool_matches = tuple(
-            (attempt.execution_attempt, call)
-            for attempt in attempts
-            for call in attempt.tool_calls
-            if _observable_matches_output(
-                claim.observable,
-                (
-                    _positive_probe_match_surface(call)
-                    if status is ReviewCriterionStatus.SATISFIED
-                    else call.output_excerpt
-                ),
-            )
+        matches = _match_review_evidence(
+            claim.observable,
+            status=status,
+            evidence_attempts=attempts,
+            command_evidence=command_evidence,
         )
-        ineligible_probe_matches = tuple(
-            (attempt.execution_attempt, call)
-            for attempt in attempts
-            for call in attempt.tool_calls
-            if status is ReviewCriterionStatus.SATISFIED
-            and _is_direct_probe(call)
-            and _observable_matches_output(
-                claim.observable,
-                call.output_excerpt,
-            )
-            and not _observable_matches_output(
-                claim.observable,
-                _positive_probe_match_surface(call),
-            )
-        )
-        command_matches = tuple(
-            command
-            for command in command_evidence
-            if _observable_matches_output(claim.observable, command.stdout_tail)
-            or _observable_matches_output(claim.observable, command.stderr_tail)
-        )
+        tool_matches = matches.tool_matches
+        ineligible_probe_matches = matches.ineligible_probe_matches
+        command_matches = matches.command_matches
         if not tool_matches and not command_matches:
             if ineligible_probe_matches:
                 raise _UnsafeSatisfiedEvidenceError(
@@ -438,21 +500,6 @@ def _ground_review_tool_evidence(
                 criterion_id=criterion_id,
             )
         if status is ReviewCriterionStatus.SATISFIED:
-            successful_probe_matches = tuple(
-                match
-                for match in tool_matches
-                if _is_direct_probe(match[1])
-                and not _matched_tool_result_failed(match[1])
-            )
-            if successful_probe_matches:
-                tool_matches = tuple(
-                    match
-                    for match in tool_matches
-                    if not (
-                        _is_direct_probe(match[1])
-                        and _matched_tool_result_failed(match[1])
-                    )
-                )
             if any(_matched_tool_result_failed(call) for _, call in tool_matches):
                 raise _UnsafeSatisfiedEvidenceError(
                     f"{label} satisfied evidence selects an overall failed "
@@ -953,7 +1000,20 @@ def bind_review_evidence_correction_candidates(
                 )
                 source_order += 1
         ranked.sort(key=lambda item: (-item[0][0], -item[0][1], item[1]))
-        selected = ranked[:_MAX_REVIEW_EVIDENCE_CANDIDATES_PER_SLOT]
+        selected: list[tuple[tuple[float, float], int, str, str]] = []
+        for candidate in ranked:
+            fragment = candidate[3]
+            if status is ReviewCriterionStatus.SATISFIED and not (
+                _is_safe_satisfied_evidence_candidate(
+                    fragment,
+                    evidence_attempts=evidence_attempts,
+                    command_evidence=command_evidence,
+                )
+            ):
+                continue
+            selected.append(candidate)
+            if len(selected) == _MAX_REVIEW_EVIDENCE_CANDIDATES_PER_SLOT:
+                break
         candidates: list[SemanticCorrectionCandidate] = []
         used_handles: set[str] = set()
         for _, _, source, fragment in selected:
