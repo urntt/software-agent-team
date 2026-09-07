@@ -192,6 +192,7 @@ echo 'OpenClaw 2026.7.1-2 (test)'
     write_executable(
         openclaw_prefix / "tools/node-v24.19.0/bin/node",
         """#!/usr/bin/env bash
+[[ -z "${STATE_DIRECTORY-}${NODE_OPTIONS-}${NODE_PATH-}" ]] || exit 9
 echo 'v24.19.0'
 """,
     )
@@ -412,6 +413,33 @@ def test_installer_refuses_an_unowned_private_runtime_and_preserves_openclaw(
         '{"existing":"must stay unchanged"}\n'
     )
     assert not (tmp_path / "existing-openclaw.log").exists()
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="setup supports Linux/WSL")
+def test_setup_reuses_owned_runtime_despite_foreign_node_selectors(
+    tmp_path: Path,
+) -> None:
+    checkout = prepare_checkout(tmp_path)
+    environment, _, _, _ = fake_environment(tmp_path, checkout)
+    environment.update(
+        STATE_DIRECTORY="/foreign/state",
+        NODE_OPTIONS="--require=/foreign/preload.js",
+        NODE_PATH="/foreign/modules",
+    )
+    write_executable(
+        checkout / "scripts/install-openclaw.sh",
+        "#!/bin/sh\necho unexpected-reinstall >&2\nexit 33\n",
+    )
+    result = subprocess.run(
+        ["bash", str(checkout / "scripts/setup.sh")],
+        cwd=checkout,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "unexpected-reinstall" not in result.stderr
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="setup supports Linux/WSL")

@@ -1146,9 +1146,21 @@ def test_openclaw_adapter_records_launch_failure() -> None:
     assert "/opt/openclaw" in result.telemetry.stderr
 
 
+@pytest.mark.parametrize("stream_first", [False, True])
 def test_provider_stream_activity_renews_lease_beyond_total_wall_clock(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stream_first: bool,
 ) -> None:
+    if stream_first:
+        # Raw transport may become attributable before either session observer.
+        # Force that ordering without depending on interpreter scheduling.
+        monkeypatch.setattr(
+            execution, "inspect_openclaw_initialization", lambda **_: None
+        )
+        monkeypatch.setattr(
+            execution, "inspect_openclaw_session_activity", lambda **_: None
+        )
     executor = live_liveness_executor(
         tmp_path,
         FAKE_OPENCLAW_SETUP
@@ -1171,7 +1183,14 @@ finish()
     assert result.telemetry.provider_liveness is not None
     assert result.telemetry.provider_liveness.raw_stream_observed
     assert result.telemetry.provider_liveness.lease_started
-    assert result.telemetry.provider_liveness.lease_start_source == "current_turn"
+    assert result.telemetry.provider_liveness.lease_start_source in {
+        "current_turn",
+        "provider_stream",
+    }
+    if stream_first:
+        assert (
+            result.telemetry.provider_liveness.lease_start_source == "provider_stream"
+        )
     assert result.telemetry.provider_liveness.provider_activity_observations >= 5
     assert not result.telemetry.provider_liveness.stalled
     assert AgentExecutionActivityKind.PROVIDER_STREAM in {
@@ -1802,7 +1821,8 @@ def test_slow_initialization_reaches_current_turn_before_provider_lease(
         tmp_path,
         "import time\ntime.sleep(0.18)\n"
         + FAKE_OPENCLAW_SETUP
-        + "\ntime.sleep(0.05)\nappend_raw('ready')\nfinish()\n",
+        # This case owns current-turn startup, not transport/session ordering.
+        + "\ntime.sleep(0.05)\nfinish()\n",
         initialization_policy=InitializationLivenessPolicy(
             no_progress_seconds=2.0,
             stall_grace_seconds=0.40,

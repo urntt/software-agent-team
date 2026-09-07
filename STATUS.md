@@ -15,7 +15,9 @@ checksum-verified Node/OpenClaw artifacts, with one shared version manifest and
 no Gateway lifecycle delegation. The fixed OpenClaw version starts successfully
 with Node 24.19.0 in contributor setup. Focused installation regressions cover
 checksum failures, launcher preservation, private npm configuration, and ambient
-service-state/preload isolation; complete fresh managed validation remains pending.
+service-state/preload isolation. The same selectors are neutralized by the
+runtime subprocess boundary, with cross-consumer regression coverage;
+complete fresh managed validation remains pending.
 
 The implementation gate for `5acbae8` passed all 1,201 tests before commit,
 with no new OOM events or residual owned resources. Immutable installation

@@ -69,7 +69,13 @@ task_installed_openclaw_version="$(
     "$task_installer_home/state/openclaw.json" \
     "$task_openclaw_bin" --version 2>/dev/null || true
 )"
-task_installed_node_version="$("$task_node_bin" --version 2>/dev/null || true)"
+task_installed_node_version="$(
+  sat_run_openclaw_isolated \
+    "$task_installer_home" \
+    "$task_installer_home/state" \
+    "$task_installer_home/state/openclaw.json" \
+    "$task_node_bin" --version 2>/dev/null || true
+)"
 if [[ ! -x "$task_openclaw_bin" ]] || \
   [[ "$task_installed_openclaw_version" != *"$task_openclaw_version"* ]] || \
   [[ "$task_installed_node_version" != "v$task_node_version" ]]; then
@@ -89,7 +95,11 @@ fi
   *"$task_openclaw_version"* ]] || \
   fail "SAT OpenClaw version does not match the pinned version"
 [[ -x "$task_node_bin" ]] || fail "SAT OpenClaw Node runtime is missing after setup"
-[[ "$("$task_node_bin" --version)" == "v$task_node_version" ]] || \
+[[ "$(sat_run_openclaw_isolated \
+  "$task_installer_home" \
+  "$task_installer_home/state" \
+  "$task_installer_home/state/openclaw.json" \
+  "$task_node_bin" --version)" == "v$task_node_version" ]] || \
   fail "SAT OpenClaw Node version does not match the pinned version"
 [[ -f "$task_openclaw_marker" && ! -L "$task_openclaw_marker" ]] || \
   fail "SAT OpenClaw runtime ownership marker was removed during setup"

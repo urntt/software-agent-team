@@ -986,7 +986,8 @@ when investigating it rather than editing artifacts in place.
 - SAT installs and invokes only its marked private OpenClaw binary. Every
   invocation receives explicit SAT-owned config, credential, state, workspace,
   and Agent paths; ambient `OPENCLAW_*` settings and the legacy Agent-directory
-  selector are neutralized. Ordinary provider API-key variables may still be
+  selector, `STATE_DIRECTORY`, `NODE_OPTIONS`, and `NODE_PATH` are neutralized
+  in both bootstrap and runtime subprocess environments. Ordinary provider API-key variables may still be
   inherited from the trusted caller environment.
 - An OpenClaw binary, Gateway, process, config, profile, credential store,
   session, cache, or workspace outside those marked paths is never probed,

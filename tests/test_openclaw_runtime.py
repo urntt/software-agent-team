@@ -1,10 +1,64 @@
 """Tests for the SAT-owned OpenClaw process boundary."""
 
+import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 from software_agent_team.openclaw_runtime import isolated_openclaw_environment
+
+
+def test_shell_and_runtime_neutralize_shared_foreign_selectors(tmp_path: Path) -> None:
+    selectors = ("STATE_DIRECTORY", "NODE_OPTIONS", "NODE_PATH", "PI_CODING_AGENT_DIR")
+    ambient = {"PATH": os.defpath}
+    ambient.update({name: "/foreign/runtime" for name in selectors})
+    ambient.update(
+        OPENAI_API_KEY="test-provider-value", HTTPS_PROXY="http://127.0.0.1:9"
+    )
+    state = tmp_path / "state"
+    config = state / "openclaw.json"
+    overrides = isolated_openclaw_environment(
+        state_dir=state, config_path=config, ambient_environment=ambient
+    )
+    effective = ambient | overrides
+    for name in selectors:
+        assert not effective.get(name), name
+    assert effective["OPENAI_API_KEY"] == ambient["OPENAI_API_KEY"]
+    assert effective["HTTPS_PROXY"] == ambient["HTTPS_PROXY"]
+
+    helper = Path(__file__).parents[1] / "scripts/openclaw-environment.sh"
+    probe = (
+        "import json, os; print(json.dumps({k: os.environ.get(k) for k in "
+        + repr((*selectors, "OPENAI_API_KEY", "HTTPS_PROXY"))
+        + "}))"
+    )
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; shift; sat_run_openclaw_isolated "$@"',
+            "probe",
+            str(helper),
+            str(tmp_path),
+            str(state),
+            str(config),
+            sys.executable,
+            "-c",
+            probe,
+        ],
+        env=ambient,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    observed = json.loads(result.stdout)
+    for name in selectors:
+        assert not observed[name], name
+    assert observed["OPENAI_API_KEY"] == effective["OPENAI_API_KEY"]
+    assert observed["HTTPS_PROXY"] == effective["HTTPS_PROXY"]
 
 
 def test_openclaw_environment_neutralizes_ambient_path_selectors(
@@ -33,6 +87,9 @@ def test_openclaw_environment_neutralizes_ambient_path_selectors(
         "OPENCLAW_PROFILE": "",
         "OPENCLAW_SHOW_SECRETS": "",
         "PI_CODING_AGENT_DIR": "",
+        "STATE_DIRECTORY": "",
+        "NODE_OPTIONS": "",
+        "NODE_PATH": "",
         "OPENCLAW_AUTH_PROFILE_SECRET_DIR": str(state / "credentials"),
         "OPENCLAW_CONFIG_DIR": str(state),
         "OPENCLAW_CONFIG_PATH": str(config),

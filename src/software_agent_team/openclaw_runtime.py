@@ -19,6 +19,11 @@ _ALWAYS_NEUTRALIZED = (
     "OPENCLAW_GATEWAY_URL",
     "OPENCLAW_PROFILE",
     "PI_CODING_AGENT_DIR",
+    # Match bootstrap isolation: neither Node preload/modules nor systemd's
+    # service state may redirect the private runtime into caller-owned paths.
+    "STATE_DIRECTORY",
+    "NODE_OPTIONS",
+    "NODE_PATH",
 )
 
 

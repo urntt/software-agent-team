@@ -29,7 +29,12 @@ def prepare(root: Path) -> dict[str, str]:
     ):
         executable = prefix / relative
         executable.parent.mkdir(parents=True, exist_ok=True)
-        executable.write_text(f"#!/bin/sh\necho '{output}'\n", encoding="utf-8")
+        executable.write_text(
+            "#!/bin/sh\n"
+            '[ -z "${STATE_DIRECTORY-}${NODE_OPTIONS-}${NODE_PATH-}" ] || exit 9\n'
+            f"echo '{output}'\n",
+            encoding="utf-8",
+        )
         executable.chmod(0o700)
     (prefix / ".sat-owned-runtime").write_text(
         f"software-agent-team-openclaw-runtime-v1\nroot={prefix}\n",
@@ -39,6 +44,11 @@ def prepare(root: Path) -> dict[str, str]:
     uv.write_text("#!/bin/sh\necho 3.12\n", encoding="utf-8")
     uv.chmod(0o700)
     environment = dict(os.environ, UV_BIN=str(uv))
+    environment.update(
+        STATE_DIRECTORY="/foreign/state",
+        NODE_OPTIONS="--require=/foreign/preload.js",
+        NODE_PATH="/foreign/modules",
+    )
     return environment
 
 

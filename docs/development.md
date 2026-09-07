@@ -345,6 +345,9 @@ test, and establish an earlier attributed checkpoint before deliberately
 delaying a later one. Leave a clear order-of-magnitude margin between host
 scheduling jitter and the tested delay; never require a child interpreter to
 win a subsecond race merely to select the expected test branch.
+Streaming-renewal tests must accept either attributable lease-start source;
+test a specific source by controlling observer availability or publishing only
+that source, not by assuming session polling wins a short sleep before streaming.
 Any added phase, stop reason, or infrastructure threshold belongs in the one
 shared lifecycle or decision-limit registry rather than a parallel adapter.
 

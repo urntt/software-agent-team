@@ -46,7 +46,7 @@
     {
       "id": "private-toolchain-install-authority",
       "impact": "patch",
-      "summary": "Own checksum-verified private runtime setup with shared Node and OpenClaw pins, isolated npm configuration and no upstream Gateway lifecycle"
+      "summary": "Own checksum-verified private runtime setup with shared Node and OpenClaw pins, isolated npm and runtime environments, and no upstream Gateway lifecycle"
     }
   ]
 }

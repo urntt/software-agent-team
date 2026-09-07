@@ -56,7 +56,11 @@ task_openclaw_version="$(
 )"
 [[ "$task_openclaw_version" == *"$task_expected_openclaw_version"* ]] || \
   fail "OpenClaw must be version $task_expected_openclaw_version"
-[[ "$("$task_node_bin" --version)" == "v$task_node_version" ]] || \
+[[ "$(sat_run_openclaw_isolated \
+  "$task_openclaw_probe_home" \
+  "$task_openclaw_probe_home/state" \
+  "$task_openclaw_probe_home/state/openclaw.json" \
+  "$task_node_bin" --version)" == "v$task_node_version" ]] || \
   fail "OpenClaw must use Node v$task_node_version"
 
 cd "$task_root"
