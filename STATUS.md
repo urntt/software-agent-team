@@ -1513,6 +1513,10 @@ The acceptance contract is
   version-pinned local and Gateway JSON parsing, private content-free stream
   observation, provider/model-aware renewable inactivity leases, and canonical
   `provider/model` telemetry;
+- A maintained real-transport loopback gate whose productive stream,
+  Controller-observed recovery, disconnect, and permanent-silence scenarios
+  each have typed status, lifecycle, liveness, response, and exact-cleanup
+  oracles; an outcome mismatch returns non-zero even when cleanup succeeds;
 - Sanitized OpenClaw Agent registry, permission checks, approved-Agent-only
   run-scoped configuration, non-root identity, exact per-Agent model-route
   enforcement, and offline preflight across every authorized route;

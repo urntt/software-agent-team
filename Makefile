@@ -1,6 +1,7 @@
-.PHONY: install uninstall setup doctor validate lock lock-runtime format format-check lint test check
+.PHONY: install uninstall setup doctor validate loopback-check lock lock-runtime format format-check lint test check
 
 UV ?= $(HOME)/.local/bin/uv
+OPENCLAW ?= $(CURDIR)/.sat/openclaw/bin/openclaw
 RUNTIME_EXCLUDE_NEWER ?= 2026-08-09
 
 install:
@@ -17,6 +18,10 @@ doctor:
 
 validate:
 	$(UV) run --frozen sat validate-config
+
+loopback-check:
+	$(UV) run --frozen python -m software_agent_team.loopback_validation \
+		--openclaw "$(OPENCLAW)"
 
 lock:
 	$(UV) lock

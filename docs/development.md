@@ -82,7 +82,26 @@ make format-check
 make lint
 make test
 make check
+make loopback-check OPENCLAW=/absolute/path/to/the/pinned/openclaw
 make lock-runtime
+```
+
+`make loopback-check` is an explicit live-local maintainer gate: it uses the
+real pinned OpenClaw transport and Docker sandbox against a process-local
+OpenAI-compatible SSE endpoint, but it makes no external provider request and
+uses no real credential. Its four scenarios cover productive streaming,
+Controller-observed stall recovery, network disconnect, and permanent silence.
+The recovery endpoint releases activity only after the Controller has actually
+published `stall_suspected`, leaving the declared diagnostic grace independent
+of host scheduling jitter. Every scenario has a machine-readable status,
+reason, phase, response, liveness, and cleanup oracle; any mismatch returns a
+non-zero exit status even when resource cleanup succeeds. Use the module entry
+point directly with `--output` to preserve a full JSON record:
+
+```bash
+uv run --frozen python -m software_agent_team.loopback_validation \
+  --openclaw /absolute/path/to/the/pinned/openclaw \
+  --output /absolute/private/evidence/loopback.json
 ```
 
 Use `make format` when source formatting changes are required. Always run
@@ -394,6 +413,7 @@ src/software_agent_team/
   git_workspace.py             Standalone clones and snapshot verification
   integrity.py                 Canonical persisted-model integrity digest
   invocation.py                Controller-owned call accounting and evidence
+  loopback_validation.py       Controlled real-transport lifecycle oracle
   model_metadata.py            Attributable model price/context source values
   openclaw_session_evidence.py Pinned current-turn tool-evidence extraction
   openclaw_runtime.py          Private OpenClaw path and environment isolation
