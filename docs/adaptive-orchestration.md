@@ -892,7 +892,9 @@ Interrupt requests best-effort termination of one active invocation or Agent
 attempt. The attempt and any partial output remain evidence. Provider usage may
 already have been incurred. The controller does not retry automatically; the
 user chooses whether to replan, retry within budget, continue other independent
-work, or cancel.
+work, or cancel. An interrupt is reported as accepted only when it atomically
+claims the invocation's terminal stop authority; a process already stopping for
+another reason is never presented as user-interrupted.
 
 ### Cancel
 

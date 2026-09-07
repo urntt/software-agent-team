@@ -759,7 +759,10 @@ line-mode palette. `RuntimeControlChannel` applies them only at controller
 checkpoints: guidance is consumed once by a future Agent invocation; pause and
 correction stop new launches and drain active work; resume withdraws or resumes
 a cooperative pause; interrupt and cancel request best-effort termination only
-for SAT-owned OpenClaw process groups. Received and resolved commands are
+for SAT-owned OpenClaw process groups. An invocation counts as interrupted only
+when that request wins its atomic terminal stop-reason transition; merely
+matching a still-live process whose stop is already owned does not report false
+acceptance. Received and resolved commands are
 correlated from the append-only event stream to the exact command revision and
 digest. Provider cost already incurred before termination is never presented
 as reversible.

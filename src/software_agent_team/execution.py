@@ -2682,7 +2682,7 @@ class OpenClawSubprocessExecutor:
         *,
         reason: InvocationStopReason = InvocationStopReason.USER_INTERRUPT,
     ) -> int:
-        """Request typed, exact-process termination for one active Agent."""
+        """Claim stop authority for one Agent and return accepted invocations."""
 
         self._require_user_stop_reason(reason)
         with self._process_lock:
@@ -2691,23 +2691,14 @@ class OpenClawSubprocessExecutor:
                 for session_key, (request, process) in self._active_processes.items()
                 if request.agent_id == agent_id and process.poll() is None
             ]
-            for session_key, _, _ in matches:
-                self._interrupt_requests.setdefault(session_key, reason)
-        for _, process, lifecycle in matches:
-            self._begin_stop(
-                process,
-                lifecycle,
-                reason=reason,
-                now=self.monotonic(),
-            )
-        return len(matches)
+        return self._claim_interrupts(matches, reason=reason)
 
     def interrupt_all(
         self,
         *,
         reason: InvocationStopReason = InvocationStopReason.USER_CANCEL,
     ) -> int:
-        """Request typed termination of every active SAT-owned invocation."""
+        """Claim stop authority for all active SAT-owned invocations."""
 
         self._require_user_stop_reason(reason)
         with self._process_lock:
@@ -2716,16 +2707,33 @@ class OpenClawSubprocessExecutor:
                 for session_key, (_, process) in self._active_processes.items()
                 if process.poll() is None
             ]
-            for session_key, _, _ in matches:
-                self._interrupt_requests.setdefault(session_key, reason)
-        for _, process, lifecycle in matches:
-            self._begin_stop(
+        return self._claim_interrupts(matches, reason=reason)
+
+    def _claim_interrupts(
+        self,
+        matches: Sequence[
+            tuple[str, subprocess.Popen[str], _InvocationLifecycleRecorder]
+        ],
+        *,
+        reason: InvocationStopReason,
+    ) -> int:
+        """Stop matched processes whose lifecycle still accepts this reason."""
+
+        accepted = 0
+        for session_key, process, lifecycle in matches:
+            if not self._begin_stop(
                 process,
                 lifecycle,
                 reason=reason,
                 now=self.monotonic(),
-            )
-        return len(matches)
+            ):
+                continue
+            accepted += 1
+            with self._process_lock:
+                current = self._active_processes.get(session_key)
+                if current is not None and current[1] is process:
+                    self._interrupt_requests[session_key] = reason
+        return accepted
 
     def _run_interruptible_process(
         self,
@@ -2988,7 +2996,9 @@ class OpenClawSubprocessExecutor:
         *,
         reason: InvocationStopReason,
         now: float,
-    ) -> None:
+    ) -> bool:
+        """Atomically claim the terminal reason and signal only its winner."""
+
         first = lifecycle.request_stop(
             reason,
             now=now,
@@ -3000,6 +3010,7 @@ class OpenClawSubprocessExecutor:
         if first:
             self._signal_process(process)
             lifecycle.mark_terminate_sent()
+        return first
 
     def _await_process_stop(
         self,

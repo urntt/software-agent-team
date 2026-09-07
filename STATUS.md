@@ -378,6 +378,9 @@ dynamic scheduler polls the mailbox, stops new launches at cooperative
 boundaries, applies guidance to the next invocation, and requests best-effort
 termination only for exact SAT-owned OpenClaw process groups. Every receipt and
 resolution is correlated to its command revision and digest in `RunEvent`.
+Interrupt admission reports only invocations whose lifecycle atomically accepts
+the user stop reason; a still-live process already stopping for another reason
+is neither counted nor relabeled, and a repeated request is not reaccepted.
 
 The Phase 3B Planning engine is also implemented. A versioned `PlanningRequest`
 proves explicit model-work authorization before the first invocation. The

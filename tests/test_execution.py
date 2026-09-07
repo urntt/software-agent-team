@@ -2246,9 +2246,8 @@ def test_interrupt_escalates_when_the_process_ignores_termination(
     ready_host, ready_port = ready_socket.getsockname()
     ready_socket.listen(1)
     ready_socket.settimeout(15)
-    binary = tmp_path / "stubborn-openclaw"
-    binary.write_text(
-        "#!/usr/bin/env python3\n"
+    executor = live_liveness_executor(
+        tmp_path,
         "import signal\n"
         "import socket\n"
         "import time\n"
@@ -2257,11 +2256,6 @@ def test_interrupt_escalates_when_the_process_ignores_termination(
         "ready.sendall(b'ready')\n"
         "ready.close()\n"
         "time.sleep(30)\n",
-        encoding="utf-8",
-    )
-    binary.chmod(0o700)
-    executor = OpenClawSubprocessExecutor(
-        openclaw_binary=binary,
         process_grace_seconds=1,
     )
     observed: dict[str, object] = {}
@@ -2298,6 +2292,7 @@ def test_interrupt_escalates_when_the_process_ignores_termination(
             assert connection.recv(5) == b"ready"
 
     assert executor.interrupt("planner") == 1
+    assert executor.interrupt("planner") == 0
     worker.join(timeout=5)
 
     assert not worker.is_alive()
@@ -2307,6 +2302,79 @@ def test_interrupt_escalates_when_the_process_ignores_termination(
     assert lifecycle is not None
     assert lifecycle.shutdown.kill_sent
     assert lifecycle.shutdown.signal == 9
+    assert lifecycle.shutdown.cleanup_completed
+
+
+@pytest.mark.parametrize("control", ["agent", "all"])
+def test_interrupt_reports_only_newly_accepted_stop_authority(
+    tmp_path: Path,
+    control: str,
+) -> None:
+    ready_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    ready_socket.bind(("127.0.0.1", 0))
+    ready_host, ready_port = ready_socket.getsockname()
+    ready_socket.listen(1)
+    ready_socket.settimeout(5)
+    binary = tmp_path / "stubborn-openclaw"
+    binary.write_text(
+        "#!/usr/bin/env python3\n"
+        "import signal\n"
+        "import socket\n"
+        "import time\n"
+        "signal.signal(signal.SIGTERM, lambda *_: None)\n"
+        f"ready = socket.create_connection(({ready_host!r}, {ready_port}), 5)\n"
+        "ready.sendall(b'ready')\n"
+        "ready.close()\n"
+        "time.sleep(30)\n",
+        encoding="utf-8",
+    )
+    binary.chmod(0o700)
+    executor = OpenClawSubprocessExecutor(
+        openclaw_binary=binary,
+        process_grace_seconds=0.5,
+        liveness_poll_seconds=1.0,
+    )
+    stopping = threading.Event()
+    observed: dict[str, AgentExecutionResult] = {}
+
+    def observe_activity(activity: AgentExecutionActivity) -> None:
+        if (
+            activity.kind is AgentExecutionActivityKind.INVOCATION_STOPPING
+            and activity.stop_reason is InvocationStopReason.PROCESS_FAILURE
+        ):
+            stopping.set()
+
+    worker = threading.Thread(
+        target=lambda: observed.setdefault(
+            "result",
+            executor.execute(
+                request(timeout_seconds=0),
+                activity_handler=observe_activity,
+            ),
+        )
+    )
+    worker.start()
+    with ready_socket:
+        connection, _ = ready_socket.accept()
+        with connection:
+            assert connection.recv(5) == b"ready"
+
+    assert stopping.wait(timeout=5)
+    accepted = (
+        executor.interrupt("planner")
+        if control == "agent"
+        else executor.interrupt_all()
+    )
+    worker.join(timeout=5)
+
+    assert not worker.is_alive()
+    assert accepted == 0
+    result = observed["result"]
+    assert result.status is AgentExecutionStatus.PROCESS_FAILED
+    lifecycle = result.telemetry.invocation_lifecycle
+    assert lifecycle is not None
+    assert lifecycle.shutdown.reason is InvocationStopReason.PROCESS_FAILURE
+    assert lifecycle.shutdown.kill_sent
     assert lifecycle.shutdown.cleanup_completed
 
 
