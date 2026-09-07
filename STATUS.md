@@ -1489,6 +1489,10 @@ The acceptance contract is
 - Versioned, explicitly authorized Adaptive Planning requests; strict
   question-or-proposal responses; high-value focused questions with suggested
   and custom answers; controller validation and targeted semantic correction;
+- Atomic Planning-question correction: current question submissions must carry
+  their complete authority-key set, unknown or misspelled question keys fail
+  closed, and any question-contract defect replaces the complete user-visible
+  question while legacy persisted records remain readable;
 - Model-facing atomic requirement and assumption relations, with
   Controller-compiled backward-compatible persistence and correction-time
   assumption references restricted to retained Agent-autonomy decisions;

@@ -524,7 +524,15 @@ def test_planning_overview_contains_multiline_text_inside_its_own_entry() -> Non
 
 def response(value: PlanningModelResponse) -> str:
     payload = value.model_dump(mode="json")
-    if value.kind is PlanningResponseKind.PROPOSAL:
+    if value.kind is PlanningResponseKind.QUESTION:
+        assert value.question is not None
+        question = payload["question"]
+        assert isinstance(question, dict)
+        question.setdefault(
+            "product_definition_dimensions",
+            [item.value for item in value.question.product_definition_dimensions],
+        )
+    else:
         assert value.proposal is not None
         payload["proposal"] = planning._planning_proposal_body_for_model(value.proposal)
     return json.dumps(payload)
@@ -1066,6 +1074,155 @@ def test_one_free_text_answer_cannot_authorize_multiple_product_dimensions(
                 "bundled product question reached the user"
             ),
         )
+
+
+def test_bundled_product_question_is_replaced_as_one_authority_unit(
+    tmp_path: Path,
+) -> None:
+    initial = product_intent_question_response().model_dump(mode="json")
+    initial_question = initial["question"]
+    initial_question["text"] = (
+        "Who will use the tool, and what repeated workflow should it support?"
+    )
+    initial_question["why"] = (
+        "The audience and workflow both change the product and its interface."
+    )
+    initial_question["missing_evidence"] = [
+        "The request identifies neither the audience nor the repeated workflow."
+    ]
+    initial_question["material_consequences"] = [
+        "The answer changes audience, workflow, interface, and acceptance behavior."
+    ]
+    initial_question["product_definition_dimensions"] = [
+        "target_users",
+        "primary_workflow",
+    ]
+    initial_question["options"] = [
+        {
+            "id": "developers_scan",
+            "label": "Developers scanning notes",
+            "description": "Developers repeatedly scan a notes directory.",
+        },
+        {
+            "id": "researchers_export",
+            "label": "Researchers exporting summaries",
+            "description": "Researchers repeatedly export deterministic summaries.",
+        },
+    ]
+    initial_question.pop("decision_owner")
+    correction_base, _ = planning._normalize_planning_response_payload(initial)
+
+    corrected = product_intent_question_response().question
+    assert corrected is not None
+    corrected_payload = corrected.model_dump(mode="json")
+    corrected_payload.pop("decision_owner")
+    executor = ScriptedAgentExecutor(
+        [
+            ScriptedAgentResponse(text="ignored", submission_payload=initial),
+            ScriptedAgentResponse(
+                text="ignored",
+                submission_payload=json.loads(
+                    correction_response(
+                        correction_base,
+                        {"/question": corrected_payload},
+                    )
+                ),
+            ),
+        ]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(response_repair_limit=1),
+        clock=AdvancingClock(),
+    )
+    shown: list[PlanningQuestion] = []
+
+    created = coordinator.start(
+        request(),
+        answer_question=lambda question: shown.append(question) or None,
+    )
+
+    assert created is None
+    assert shown == [corrected]
+    first = store.load_turn(request().run_id, 1)
+    assert first.response_validation is not None
+    assert first.response_validation.correction_paths == ("/question",)
+    correction_schema = executor.requests[1].submission_contract
+    assert correction_schema is not None
+    replacement = correction_schema.parameters_schema()["properties"]["replacements"]
+    value_schema = replacement["items"]["oneOf"][0]["properties"]["replacement_value"]
+    assert value_schema["type"] == "object"
+    assert "text" in value_schema["required"]
+    assert "product_definition_dimensions" in value_schema["required"]
+
+
+def test_question_authority_field_typo_requires_whole_question_replacement(
+    tmp_path: Path,
+) -> None:
+    initial = product_intent_question_response().model_dump(mode="json")
+    initial_question = initial["question"]
+    initial_question.pop("decision_owner")
+    dimensions = initial_question.pop("product_definition_dimensions")
+    initial_question["products_definition_dimensions"] = dimensions
+    correction_base, _ = planning._normalize_planning_response_payload(initial)
+
+    corrected = product_intent_question_response().question
+    assert corrected is not None
+    corrected_payload = corrected.model_dump(mode="json")
+    corrected_payload.pop("decision_owner")
+    executor = ScriptedAgentExecutor(
+        [
+            ScriptedAgentResponse(text="ignored", submission_payload=initial),
+            ScriptedAgentResponse(
+                text="ignored",
+                submission_payload=json.loads(
+                    correction_response(
+                        correction_base,
+                        {"/question": corrected_payload},
+                    )
+                ),
+            ),
+        ]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(response_repair_limit=1),
+        clock=AdvancingClock(),
+    )
+    shown: list[PlanningQuestion] = []
+
+    created = coordinator.start(
+        request(),
+        answer_question=lambda question: shown.append(question) or None,
+    )
+
+    assert created is None
+    assert shown == [corrected]
+    first = store.load_turn(request().run_id, 1)
+    assert first.parsed_response is None
+    assert first.response_normalizations == (
+        "compiled question.decision_owner from category product_requirement",
+    )
+    assert first.response_validation is not None
+    assert first.response_validation.correction_paths == ("/question",)
+    assert {issue.invariant_id for issue in first.response_validation.issues} == {
+        "planning_current_question_wire_contract"
+    }
+
+
+def test_legacy_question_without_current_dimension_field_remains_readable() -> None:
+    payload = product_intent_question_response().question
+    assert payload is not None
+    legacy = payload.model_dump(mode="json")
+    legacy.pop("product_definition_dimensions")
+
+    parsed = PlanningQuestion.model_validate(legacy)
+
+    assert parsed.product_definition_dimensions == ()
 
 
 def test_product_dimensions_cannot_be_attached_to_non_product_questions(
@@ -4126,6 +4283,9 @@ def test_dialogue_revision_structured_edit_and_approval_are_recoverable(
     }
     assert "decision_owner" not in question_schema["properties"]
     assert "decision_owner" not in question_schema["required"]
+    assert (
+        question_schema["properties"]["product_definition_dimensions"]["maxItems"] == 1
+    )
     assert {"requirement_ids", "verification_agent_ids"}.issubset(
         criterion_schema["required"]
     )

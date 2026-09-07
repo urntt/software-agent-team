@@ -1532,7 +1532,25 @@ def _planning_validation_diagnostic(
             message="Planning relational validation has no typed correction authority",
             paths=("/",),
         )
-    return diagnostic_from_validation_error(error, payload)
+    diagnostic = diagnostic_from_validation_error(error, payload)
+    if any(
+        issue.path == "/question" or issue.path.startswith("/question/")
+        for issue in diagnostic.issues
+    ):
+        correction_paths = tuple(
+            sorted(
+                {
+                    (
+                        "/question"
+                        if path == "/question" or path.startswith("/question/")
+                        else path
+                    )
+                    for path in diagnostic.correction_paths
+                }
+            )
+        )
+        return diagnostic.model_copy(update={"correction_paths": correction_paths})
+    return diagnostic
 
 
 class PlanningRequest(BaseModel):
@@ -2445,7 +2463,7 @@ def validate_question_admission(
         raise _planning_context_invariant(
             "planning_question_id_reused",
             f"Planning question ID was already used: {question.id}",
-            paths=("/question/id",),
+            paths=("/question",),
             subjects=_planning_subjects(
                 (ResponseIssueSubjectKind.QUESTION, question.id)
             ),
@@ -2454,10 +2472,7 @@ def validate_question_admission(
         raise _planning_context_invariant(
             "planning_question_contract_required",
             "Planning question is missing decision category or owner",
-            paths=(
-                "/question/decision_category",
-                "/question/decision_owner",
-            ),
+            paths=("/question",),
             subjects=_planning_subjects(
                 (ResponseIssueSubjectKind.QUESTION, question.id)
             ),
@@ -2471,10 +2486,7 @@ def validate_question_admission(
         raise _planning_context_invariant(
             "planning_question_authority",
             message,
-            paths=(
-                "/question/decision_category",
-                "/question/decision_owner",
-            ),
+            paths=("/question",),
             subjects=_planning_subjects(
                 (ResponseIssueSubjectKind.QUESTION, question.id)
             ),
@@ -2489,10 +2501,7 @@ def validate_question_admission(
                 "Planning cannot ask the user to decide "
                 f"{question.decision_category.value}"
             ),
-            paths=(
-                "/question/decision_category",
-                "/question/decision_owner",
-            ),
+            paths=("/question",),
             subjects=_planning_subjects(
                 (ResponseIssueSubjectKind.QUESTION, question.id)
             ),
@@ -2505,10 +2514,7 @@ def validate_question_admission(
         raise _planning_context_invariant(
             "planning_product_question_authority",
             "product-definition clarification belongs to user product requirements",
-            paths=(
-                "/question/decision_category",
-                "/question/product_definition_dimensions",
-            ),
+            paths=("/question",),
             subjects=_planning_subjects(
                 (ResponseIssueSubjectKind.QUESTION, question.id)
             ),
@@ -2520,7 +2526,7 @@ def validate_question_admission(
                 "one free-text Planning answer cannot authorize multiple "
                 "product-definition dimensions"
             ),
-            paths=("/question/product_definition_dimensions",),
+            paths=("/question",),
             subjects=_planning_subjects(
                 (ResponseIssueSubjectKind.QUESTION, question.id)
             ),
@@ -2529,7 +2535,7 @@ def validate_question_admission(
         raise _planning_context_invariant(
             "planning_question_missing_evidence",
             "Planning question must name the missing evidence",
-            paths=("/question/missing_evidence",),
+            paths=("/question",),
             subjects=_planning_subjects(
                 (ResponseIssueSubjectKind.QUESTION, question.id)
             ),
@@ -2538,7 +2544,7 @@ def validate_question_admission(
         raise _planning_context_invariant(
             "planning_question_material_consequence",
             "Planning question must name a material consequence",
-            paths=("/question/material_consequences",),
+            paths=("/question",),
             subjects=_planning_subjects(
                 (ResponseIssueSubjectKind.QUESTION, question.id)
             ),
@@ -3433,6 +3439,8 @@ def _planning_response_schema() -> dict[str, object]:
             if field_name not in required:
                 required.append(field_name)
     question_properties = definitions["PlanningQuestion"]["properties"]
+    dimension_schema = question_properties["product_definition_dimensions"]
+    dimension_schema["maxItems"] = 1
     for field_name in ("decision_category",):
         field_schema = question_properties[field_name]
         options = field_schema.get("anyOf")
@@ -3603,6 +3611,57 @@ def _planning_response_schema() -> dict[str, object]:
     return schema
 
 
+def _validate_current_planning_response_wire(
+    payload: dict[str, object],
+    *,
+    response_schema: dict[str, object],
+) -> None:
+    """Enforce current question keys without breaking persisted legacy records."""
+
+    if payload.get("kind") != PlanningResponseKind.QUESTION.value:
+        return
+    question = payload.get("question")
+    if not isinstance(question, dict):
+        return
+    definitions = response_schema.get("$defs")
+    definition = (
+        None
+        if not isinstance(definitions, dict)
+        else definitions.get("PlanningQuestion")
+    )
+    if not isinstance(definition, dict):
+        raise PlanningError("Planning response schema has no question definition")
+    properties = definition.get("properties")
+    required = definition.get("required")
+    if not isinstance(properties, dict) or not isinstance(required, list):
+        raise PlanningError("Planning response schema has invalid question fields")
+    missing = sorted(set(required) - set(question))
+    # decision_owner is compiled by the Controller after transport capture and is
+    # therefore valid in the normalized payload even though models cannot submit it.
+    unknown = sorted(set(question) - set(properties) - {"decision_owner"})
+    if not missing and not unknown:
+        return
+    details: list[str] = []
+    if missing:
+        details.append("missing current fields: " + ", ".join(missing))
+    if unknown:
+        details.append("unknown current fields: " + ", ".join(unknown))
+    question_id = question.get("id")
+    subjects = (
+        ()
+        if not isinstance(question_id, str) or not question_id
+        else _planning_subjects((ResponseIssueSubjectKind.QUESTION, question_id))
+    )
+    raise _planning_model_invariant(
+        "planning_current_question_wire_contract",
+        "Planning question violates its current wire contract ("
+        + "; ".join(details)
+        + ")",
+        paths=("/question",),
+        subjects=subjects,
+    )
+
+
 def _planning_proposal_body_for_model(
     body: PlanningProposalBody,
 ) -> dict[str, object]:
@@ -3638,6 +3697,21 @@ def _planning_response_schema_for_correction(
     """Bind correction-only assumption references to existing autonomy IDs."""
 
     schema = _planning_response_schema()
+    if "/question" in plan.evidence.target_paths:
+        question_schema = schema["properties"]["question"]
+        question_options = question_schema.get("anyOf")
+        if not isinstance(question_options, list):
+            raise PlanningError(
+                "Planning response schema has no nullable question union"
+            )
+        question_non_null = [
+            option for option in question_options if option.get("type") != "null"
+        ]
+        if len(question_non_null) != 1:
+            raise PlanningError(
+                "Planning response schema has an invalid question union"
+            )
+        schema["properties"]["question"] = question_non_null[0]
     proposal = plan.base_payload.get("proposal")
     decisions = proposal.get("decisions") if isinstance(proposal, dict) else None
     autonomous_ids: list[str] = []
@@ -6063,11 +6137,24 @@ class AdaptivePlanningCoordinator:
                         *initial_normalizations,
                     ]
                     response_normalizations = tuple(normalization_list)
+                    _validate_current_planning_response_wire(
+                        payload,
+                        response_schema=response_schema,
+                    )
                     while True:
                         try:
                             parsed = PlanningModelResponse.model_validate(payload)
                             break
                         except ValidationError as error:
+                            if any(
+                                issue["loc"] and issue["loc"][0] == "question"
+                                for issue in error.errors(
+                                    include_url=False,
+                                    include_context=False,
+                                    include_input=False,
+                                )
+                            ):
+                                raise
                             normalized, removed = (
                                 deterministically_remove_forbidden_fields(
                                     payload,

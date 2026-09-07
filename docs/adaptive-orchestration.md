@@ -176,7 +176,12 @@ When several dimensions remain undecided, Planning asks separate questions in
 consequence order. This keeps each free-text answer bound to one declared
 authority slot: an answer about audience cannot silently erase an already
 explicit workflow, maturity, or delivery expectation. The controller enforces
-this atomic question boundary before showing the question to the user.
+this atomic question boundary before showing the question to the user. The
+question text, rationale, missing evidence, consequences, choices, and declared
+dimension form one correction authority unit. A defect in any of those related
+fields requires replacement of the complete question; changing only its
+dimension label cannot reclassify preserved multi-dimensional wording as an
+atomic question.
 
 A current proposal records one stable ID per requirement, explicit non-goals,
 and attributable decision records. Every current decision has typed provenance:
@@ -289,6 +294,14 @@ may perform only these bounded, semantics-preserving normalizations:
   proposal;
 - Remove a schema-forbidden field only when removing it cannot grant or hide
   controller/evidence authority.
+
+The current model-facing question contract is enforced again at the Controller
+boundary, independently of prompt and tool-schema enforcement. Every current
+question must explicitly submit its complete required key set, including an
+empty or one-item `product_definition_dimensions` array. Unknown question keys
+are not silently discarded because a misspelling can remove or relabel user
+decision authority. Older persisted records remain readable through the
+versioned internal schema; that compatibility does not weaken new submissions.
 
 The immutable turn retains the exact typed submission, its binding evidence,
 and any assistant presentation text separately. It records every normalized
