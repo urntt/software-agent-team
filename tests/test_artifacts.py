@@ -10,6 +10,8 @@ from pydantic import ValidationError
 from software_agent_team.artifacts import (
     AgentExecutionRecord,
     AgentExecutionStatus,
+    AgentToolCallEvidence,
+    AgentToolCallOutcome,
     HandoffEnvelope,
     HandoffStatus,
     ReviewBoundaryCheck,
@@ -499,6 +501,73 @@ def test_execution_record_preserves_sanitized_tool_session_evidence() -> None:
     assert record.session_record_count == 4
     assert record.tool_calls[0].id == "tool-001"
     assert record.tool_calls[0].output_excerpt == "BOUNDARY_OK"
+
+
+def test_deferred_tool_evidence_requires_artifact_schema_eight() -> None:
+    payload = valid_execution_payload()
+    payload.update(
+        {
+            "tool_evidence_status": "captured",
+            "session_transcript_sha256": "d" * 64,
+            "session_record_count": 4,
+            "tool_calls": [
+                {
+                    "id": "tool-001",
+                    "tool_name": "exec",
+                    "executable": "uv",
+                    "external_call_sha256": "e" * 64,
+                    "arguments_sha256": "f" * 64,
+                    "outcome": "deferred",
+                    "is_error": False,
+                    "reported_status": "running",
+                    "exit_code": None,
+                    "output_sha256": "1" * 64,
+                    "output_bytes": 21,
+                    "output_excerpt": "Command still running.",
+                }
+            ],
+        }
+    )
+
+    current = AgentExecutionRecord.model_validate(payload)
+
+    assert current.schema_version == 8
+    assert current.tool_calls[0].outcome is AgentToolCallOutcome.DEFERRED
+
+    payload["schema_version"] = 7
+    with pytest.raises(ValidationError, match="deferred tool evidence"):
+        AgentExecutionRecord.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    "updates",
+    [
+        {"tool_name": "read"},
+        {"reported_status": "completed"},
+        {"exit_code": 0},
+        {"is_error": True},
+    ],
+)
+def test_deferred_tool_evidence_rejects_non_process_or_terminal_shapes(
+    updates: dict[str, object],
+) -> None:
+    payload: dict[str, object] = {
+        "id": "tool-001",
+        "tool_name": "process",
+        "external_call_sha256": "e" * 64,
+        "arguments_sha256": "f" * 64,
+        "outcome": "deferred",
+        "is_error": False,
+        "reported_status": "running",
+        "exit_code": None,
+        "output_sha256": "1" * 64,
+        "output_bytes": 21,
+        "output_excerpt": "Process still running.",
+    }
+    payload.update(updates)
+
+    with pytest.raises(ValidationError, match="deferred tool evidence"):
+        AgentToolCallEvidence.model_validate(payload)
 
 
 def test_execution_record_binds_typed_submission_to_final_tool_evidence() -> None:

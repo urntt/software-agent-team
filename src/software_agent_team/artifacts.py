@@ -36,7 +36,7 @@ from software_agent_team.submissions import (
 )
 from software_agent_team.versioning import SoftwareVersionReport
 
-ARTIFACT_SCHEMA_VERSION = 7
+ARTIFACT_SCHEMA_VERSION = 8
 MINIMUM_READABLE_ARTIFACT_SCHEMA_VERSION = 2
 COMMIT_PATTERN = r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
 AGENT_ID_PATTERN = r"^[a-z][a-z0-9_]*$"
@@ -249,6 +249,7 @@ class AgentToolCallOutcome(StrEnum):
 
     SUCCEEDED = "succeeded"
     FAILED = "failed"
+    DEFERRED = "deferred"
 
 
 class AgentToolEvidenceStatus(StrEnum):
@@ -573,7 +574,7 @@ class HandoffEnvelope(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, 6, ARTIFACT_SCHEMA_VERSION] = (
+    schema_version: Literal[2, 3, 4, 5, 6, 7, ARTIFACT_SCHEMA_VERSION] = (
         ARTIFACT_SCHEMA_VERSION
     )
     kind: Literal[ArtifactKind.HANDOFF_ENVELOPE] = ArtifactKind.HANDOFF_ENVELOPE
@@ -638,7 +639,7 @@ class PhaseArtifact(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, 6, ARTIFACT_SCHEMA_VERSION] = (
+    schema_version: Literal[2, 3, 4, 5, 6, 7, ARTIFACT_SCHEMA_VERSION] = (
         ARTIFACT_SCHEMA_VERSION
     )
     kind: ArtifactKind
@@ -715,14 +716,34 @@ class AgentToolCallEvidence(BaseModel):
             "timed_out",
             "timeout",
         }
+        reported_deferred = self.reported_status == "running"
         if self.outcome is AgentToolCallOutcome.SUCCEEDED and (
-            self.is_error or self.exit_code not in {None, 0} or reported_failure
+            self.is_error
+            or self.exit_code not in {None, 0}
+            or reported_failure
+            or reported_deferred
         ):
-            raise ValueError("successful tool evidence cannot report an error")
+            raise ValueError(
+                "successful tool evidence requires a terminal non-error result"
+            )
         if self.outcome is AgentToolCallOutcome.FAILED and (
-            not self.is_error and self.exit_code in {None, 0} and not reported_failure
+            reported_deferred
+            or (
+                not self.is_error
+                and self.exit_code in {None, 0}
+                and not reported_failure
+            )
         ):
             raise ValueError("failed tool evidence requires an observable failure")
+        if self.outcome is AgentToolCallOutcome.DEFERRED and (
+            self.is_error
+            or self.exit_code is not None
+            or not reported_deferred
+            or self.tool_name not in {"exec", "process"}
+        ):
+            raise ValueError(
+                "deferred tool evidence requires a nonterminal async process result"
+            )
         if (self.tool_name == "exec") != (self.executable is not None):
             raise ValueError("only exec tool evidence requires an executable")
         return self
@@ -799,7 +820,7 @@ class AgentExecutionRecord(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, 6, ARTIFACT_SCHEMA_VERSION] = (
+    schema_version: Literal[2, 3, 4, 5, 6, 7, ARTIFACT_SCHEMA_VERSION] = (
         ARTIFACT_SCHEMA_VERSION
     )
     kind: Literal[ArtifactKind.AGENT_EXECUTION_RECORD] = (
@@ -1153,6 +1174,12 @@ class AgentExecutionRecord(BaseModel):
         ):
             raise ValueError(
                 "legacy execution records cannot contain upstream-incomplete state"
+            )
+        if self.schema_version < 8 and any(
+            call.outcome is AgentToolCallOutcome.DEFERRED for call in self.tool_calls
+        ):
+            raise ValueError(
+                "legacy execution records cannot contain deferred tool evidence"
             )
         return self
 

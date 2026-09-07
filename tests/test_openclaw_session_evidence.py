@@ -210,6 +210,124 @@ def test_capture_excludes_prior_turns_and_pairs_current_tool_results(
     assert transcript.is_file()
 
 
+def test_capture_preserves_deferred_exec_then_terminal_process_and_submission(
+    tmp_path: Path,
+) -> None:
+    """A valid async start must not invalidate the later terminal evidence."""
+
+    invocation = request()
+    records = [
+        session_record(),
+        user_record(invocation.prompt),
+        tool_call_record("async-exec", command="uv run pytest"),
+        {
+            "type": "message",
+            "message": {
+                "role": "toolResult",
+                "toolCallId": "async-exec",
+                "toolName": "exec",
+                "isError": False,
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Command still running (session brisk-meadow).",
+                    }
+                ],
+                "details": {
+                    "status": "running",
+                    "sessionId": "brisk-meadow",
+                    "pid": 1537063,
+                    "startedAt": 1788749665172,
+                    "cwd": "/workspace",
+                    "tail": "tests are still running",
+                },
+            },
+        },
+        {
+            "type": "message",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "toolCall",
+                        "id": "process-poll",
+                        "name": "process",
+                        "arguments": {
+                            "action": "poll",
+                            "sessionId": "brisk-meadow",
+                        },
+                    }
+                ],
+            },
+        },
+        {
+            "type": "message",
+            "message": {
+                "role": "toolResult",
+                "toolCallId": "process-poll",
+                "toolName": "process",
+                "isError": False,
+                "content": [{"type": "text", "text": "243 tests passed"}],
+                "details": {
+                    "status": "completed",
+                    "sessionId": "brisk-meadow",
+                    "exitCode": 0,
+                    "exitReason": "exit",
+                    "aggregated": "243 tests passed",
+                    "name": "uv run pytest",
+                },
+            },
+        },
+        {
+            "type": "message",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "toolCall",
+                        "id": "final-submission",
+                        "name": "sat_submit_artifact",
+                        "arguments": {"artifact": {"summary": "complete"}},
+                    }
+                ],
+            },
+        },
+        {
+            "type": "message",
+            "message": {
+                "role": "toolResult",
+                "toolCallId": "final-submission",
+                "toolName": "sat_submit_artifact",
+                "isError": False,
+                "content": [{"type": "text", "text": "accepted"}],
+                "details": {
+                    "status": "completed",
+                    "submission_status": "accepted",
+                },
+            },
+        },
+        assistant_record(),
+    ]
+    write_session_state(tmp_path, invocation=invocation, records=records)
+
+    captured = capture(tmp_path, invocation)
+
+    assert captured.record_count == 8
+    assert tuple(call.tool_name for call in captured.tool_calls) == (
+        "exec",
+        "process",
+        "sat_submit_artifact",
+    )
+    assert tuple(call.outcome for call in captured.tool_calls) == (
+        AgentToolCallOutcome.DEFERRED,
+        AgentToolCallOutcome.SUCCEEDED,
+        AgentToolCallOutcome.SUCCEEDED,
+    )
+    assert captured.tool_calls[0].reported_status == "running"
+    assert captured.tool_calls[0].exit_code is None
+    assert captured.tool_calls[1].exit_code == 0
+
+
 def test_capture_uses_the_latest_matching_prompt_for_semantic_repair(
     tmp_path: Path,
 ) -> None:
@@ -695,7 +813,7 @@ def test_capture_rejects_unknown_status_or_invalid_tool_schema(tmp_path: Path) -
     call = tool_call_record("current-call", command="read /agent/README.md")
     result = tool_result_record("current-call", output="observation")
     details = result["message"]["details"]
-    details["status"] = "running"
+    details["status"] = "queued"
     write_session_state(
         tmp_path,
         invocation=invocation,
@@ -713,6 +831,70 @@ def test_capture_rejects_unknown_status_or_invalid_tool_schema(tmp_path: Path) -
         records=[session_record(), user_record(invocation.prompt), call, result],
     )
     with pytest.raises(OpenClawSessionEvidenceError, match="pinned schema"):
+        capture(tmp_path, invocation)
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "details"),
+    [
+        (
+            "exec",
+            {
+                "status": "running",
+                "startedAt": 1788749665172,
+                "cwd": "/workspace",
+                "tail": "still running",
+            },
+        ),
+        (
+            "exec",
+            {
+                "status": "running",
+                "sessionId": "brisk-meadow",
+                "startedAt": 1788749665172,
+                "cwd": "/workspace",
+                "tail": "still running",
+                "exitCode": 0,
+            },
+        ),
+        (
+            "process",
+            {"status": "running", "sessionId": "brisk-meadow"},
+        ),
+        (
+            "read",
+            {
+                "status": "running",
+                "sessionId": "brisk-meadow",
+                "name": "read",
+            },
+        ),
+    ],
+)
+def test_capture_rejects_malformed_deferred_process_results(
+    tmp_path: Path,
+    tool_name: str,
+    details: dict[str, object],
+) -> None:
+    invocation = request()
+    call = tool_call_record("current-call", command="uv run pytest")
+    result = tool_result_record("current-call", output="still running")
+    call_item = call["message"]["content"][0]
+    call_item["name"] = tool_name
+    if tool_name != "exec":
+        call_item["arguments"] = {
+            "action": "poll",
+            "sessionId": "brisk-meadow",
+        }
+    result["message"]["toolName"] = tool_name
+    result["message"]["details"] = details
+    write_session_state(
+        tmp_path,
+        invocation=invocation,
+        records=[session_record(), user_record(invocation.prompt), call, result],
+    )
+
+    with pytest.raises(OpenClawSessionEvidenceError, match="OpenClaw"):
         capture(tmp_path, invocation)
 
 

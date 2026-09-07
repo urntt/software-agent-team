@@ -276,8 +276,13 @@ snapshot before publishing any tool-history delta from that observation. When a
 single poll coalesces a start and completion, both history events therefore carry
 the current inactive state and the current completed count; neither event may
 reconstruct a stale `tool_active` phase from its kind. `RunEvent` schema v4 must
-remain canonically readable from v2 through v3, Artifact schema v7 from v2
-through v6, and Planning schema v8 from v2 through v7.
+remain canonically readable from v2 through v3, Artifact schema v8 from v2
+through v7, and Planning schema v8 from v2 through v7. Tool-evidence regression
+tests must preserve a valid async `exec` start as nonterminal `deferred`
+evidence, require a later terminal `process` result independently, and still
+require the invocation-bound terminal submission. Deferred evidence must never
+support a satisfied Review claim. Unknown status values, malformed handles, and
+running shapes with terminal fields fail closed.
 Initialization file-race tests must distinguish an exact open-time missing file
 from malformed or unsafe evidence and must cover atomic publication between
 observations. Do not infer an earlier `open` result from a later `exists` check.

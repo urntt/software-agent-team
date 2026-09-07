@@ -391,10 +391,16 @@ session ID returned by the pinned runtime, verifies direct non-symlink paths,
 requires a complete UTF-8 JSONL transcript, finds the latest user record that
 exactly matches the current prompt, and stops at the next user turn. Tool calls
 and results in that segment must pair one-to-one by the external call ID and
-tool name. SAT then assigns stable invocation-local IDs in execution order,
-normalizes success or failure from the result, hashes the external ID,
-canonical arguments, complete result, and transcript, and retains only a
-bounded output excerpt. For `exec`, it also records the direct executable token
+tool name. SAT then assigns stable invocation-local IDs in execution order and
+normalizes each result as terminal success, terminal failure, or nonterminal
+deferred async work. A deferred `exec` or `process` result must carry the pinned
+runtime's complete, well-formed process-handle shape without terminal fields;
+SAT validates that handle but leaves its raw identity in the private transcript.
+Deferred evidence cannot prove a satisfied Review claim or act as a terminal
+submission. A later paired `process` result and typed submission remain
+independent evidence records. SAT hashes the external ID, canonical arguments,
+complete result, and transcript, and retains only a bounded output excerpt. For
+`exec`, it also records the direct executable token
 while discarding the full command and any leading environment-assignment
 values. Executable attribution lazily consumes only leading assignments and the
 first executable token; it does not require an unpersisted shell suffix to
@@ -473,11 +479,12 @@ workspaces/<run_id>/
 └── detached self-contained Git clone and generated result
 ```
 
-Artifact schema v7 adds the distinct `upstream_incomplete` execution outcome
+Artifact schema v8 adds the `deferred` tool-call outcome for a valid async
+process start that has not reached a terminal result. Artifact schema v7 added
+the distinct `upstream_incomplete` execution outcome
 for an attributable invocation that ends on a paired tool result before its
 bound terminal submission. Artifact schema v6 added terminal-response/finalization
-status and lifecycle-v2 evidence. Schema-v2 through schema-v6 records remain
-readable. Artifact schema v5
+status and lifecycle-v2 evidence. Artifact schema v5
 added the versioned, content-free invocation lifecycle to execution telemetry.
 Lifecycle schema v2 adds terminal-response handoff and renewable
 response-finalization evidence while retaining schema-v1 reads. It
@@ -487,7 +494,7 @@ evidence collection, process-lease release, and cleanup completion. Schema v4 ad
 response-transport identity and bound submission evidence; schema v3 introduced
 typed response diagnostics, deterministic normalization, targeted-correction
 requests, and correction outcomes. SAT retains read support for schema v2
-through v6. Optional compatibility fields omit themselves when absent, so
+through v7. Optional compatibility fields omit themselves when absent, so
 loading and serializing historical evidence preserves its canonical bytes. All
 readable versions
 attribute handoffs, execution telemetry, and Agent-owned artifacts to run-scoped Agent IDs. The Agent namespace prevents two Agents with

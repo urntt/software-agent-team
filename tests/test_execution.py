@@ -409,7 +409,7 @@ def test_openclaw_adapter_captures_runtime_telemetry() -> None:
     )
 
 
-def test_openclaw_adapter_uses_bound_submission_not_visible_text(
+def test_openclaw_adapter_accepts_bound_submission_after_async_process_chain(
     tmp_path: Path,
 ) -> None:
     state = tmp_path / "state"
@@ -485,6 +485,73 @@ def test_openclaw_adapter_uses_bound_submission_not_visible_text(
                     "content": [
                         {
                             "type": "toolCall",
+                            "id": "async-exec",
+                            "name": "exec",
+                            "arguments": {"command": "uv run pytest"},
+                        }
+                    ],
+                },
+            },
+            {
+                "type": "message",
+                "message": {
+                    "role": "toolResult",
+                    "toolCallId": "async-exec",
+                    "toolName": "exec",
+                    "isError": False,
+                    "content": [{"type": "text", "text": "Command still running."}],
+                    "details": {
+                        "status": "running",
+                        "sessionId": "brisk-meadow",
+                        "pid": 1537063,
+                        "startedAt": 1788749665172,
+                        "cwd": "/workspace",
+                        "tail": "tests are still running",
+                    },
+                },
+            },
+            {
+                "type": "message",
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "toolCall",
+                            "id": "process-poll",
+                            "name": "process",
+                            "arguments": {
+                                "action": "poll",
+                                "sessionId": "brisk-meadow",
+                            },
+                        }
+                    ],
+                },
+            },
+            {
+                "type": "message",
+                "message": {
+                    "role": "toolResult",
+                    "toolCallId": "process-poll",
+                    "toolName": "process",
+                    "isError": False,
+                    "content": [{"type": "text", "text": "tests passed"}],
+                    "details": {
+                        "status": "completed",
+                        "sessionId": "brisk-meadow",
+                        "exitCode": 0,
+                        "exitReason": "exit",
+                        "aggregated": "tests passed",
+                        "name": "uv run pytest",
+                    },
+                },
+            },
+            {
+                "type": "message",
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "toolCall",
                             "id": external_id,
                             "name": "sat_submit_artifact",
                             "arguments": {"artifact": semantic_payload},
@@ -547,6 +614,11 @@ def test_openclaw_adapter_uses_bound_submission_not_visible_text(
     assert result.semantic_submission.payload == semantic_payload
     assert result.submission_evidence is not None
     assert result.submission_evidence.status is AgentSubmissionStatus.ACCEPTED
+    assert tuple(call.outcome.value for call in result.telemetry.tool_calls) == (
+        "deferred",
+        "succeeded",
+        "succeeded",
+    )
     assert result.telemetry.tool_calls[-1].tool_name == "sat_submit_artifact"
 
 

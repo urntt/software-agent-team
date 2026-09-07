@@ -679,6 +679,94 @@ def _optional_result_integer(value: object, *, label: str) -> int | None:
     return value
 
 
+def _require_clean_async_text(
+    value: object,
+    *,
+    label: str,
+    maximum_length: int,
+) -> str:
+    """Validate one bounded OpenClaw async-handle text field."""
+
+    if (
+        not isinstance(value, str)
+        or not value
+        or value.strip() != value
+        or "\x00" in value
+        or len(value) > maximum_length
+    ):
+        raise OpenClawSessionEvidenceError(f"OpenClaw {label} is invalid")
+    return value
+
+
+def _validate_deferred_process_result(
+    *,
+    tool_name: str,
+    details: dict[str, object],
+    is_error: bool,
+    exit_code: int | None,
+) -> None:
+    """Accept only pinned OpenClaw shapes that identify live async work.
+
+    A ``running`` result says that the tool returned an async process handle; it
+    does not say that the underlying command succeeded. Raw handle values remain
+    in the private transcript and are not copied into persisted evidence.
+    """
+
+    if tool_name not in {"exec", "process"} or is_error or exit_code is not None:
+        raise OpenClawSessionEvidenceError(
+            "OpenClaw deferred tool result is not a valid async process handle"
+        )
+    _require_clean_async_text(
+        details.get("sessionId"),
+        label="async session identity",
+        maximum_length=512,
+    )
+    if any(
+        key in details
+        for key in (
+            "exitCode",
+            "exitSignal",
+            "exitReason",
+            "timedOut",
+            "noOutputTimedOut",
+        )
+    ):
+        raise OpenClawSessionEvidenceError(
+            "OpenClaw deferred tool result contains terminal process state"
+        )
+    if tool_name == "exec":
+        started_at = _optional_result_integer(
+            details.get("startedAt"),
+            label="async process start time",
+        )
+        if started_at is None or started_at <= 0:
+            raise OpenClawSessionEvidenceError(
+                "OpenClaw async process start time is invalid"
+            )
+        pid = _optional_result_integer(
+            details.get("pid"),
+            label="async process PID",
+        )
+        if pid is not None and pid <= 0:
+            raise OpenClawSessionEvidenceError("OpenClaw async process PID is invalid")
+        _require_clean_async_text(
+            details.get("cwd"),
+            label="async process working directory",
+            maximum_length=4096,
+        )
+        tail = details.get("tail")
+        if not isinstance(tail, str) or "\x00" in tail:
+            raise OpenClawSessionEvidenceError(
+                "OpenClaw async process output tail is invalid"
+            )
+    else:
+        _require_clean_async_text(
+            details.get("name"),
+            label="async process name",
+            maximum_length=512,
+        )
+
+
 def _output_excerpt(output: str) -> str:
     safe = output.replace("\x00", "\ufffd")
     if len(safe) <= _OUTPUT_EXCERPT_CHARACTERS:
@@ -807,10 +895,19 @@ def _extract_tool_calls(
             "timed_out",
             "timeout",
         }
+        deferred_statuses = {"running"}
         if reported_status is not None and reported_status not in (
-            successful_statuses | failed_statuses
+            successful_statuses | failed_statuses | deferred_statuses
         ):
             raise OpenClawSessionEvidenceError("OpenClaw tool status is unknown")
+        deferred = reported_status in deferred_statuses
+        if deferred:
+            _validate_deferred_process_result(
+                tool_name=tool_name,
+                details=details,
+                is_error=is_error,
+                exit_code=exit_code,
+            )
         failed = (
             is_error or exit_code not in {None, 0} or reported_status in failed_statuses
         )
@@ -830,7 +927,11 @@ def _extract_tool_calls(
                 outcome=(
                     AgentToolCallOutcome.FAILED
                     if failed
-                    else AgentToolCallOutcome.SUCCEEDED
+                    else (
+                        AgentToolCallOutcome.DEFERRED
+                        if deferred
+                        else AgentToolCallOutcome.SUCCEEDED
+                    )
                 ),
                 is_error=is_error,
                 reported_status=reported_status,

@@ -283,10 +283,12 @@ def _probe_result_failed(call: AgentToolCallEvidence) -> bool | None:
     return timed_out or exit_code != 0
 
 
-def _matched_tool_result_failed(call: AgentToolCallEvidence) -> bool:
-    """Reject an overall failed result even when one substring looks positive."""
+def _tool_result_ineligible_for_satisfied_claim(
+    call: AgentToolCallEvidence,
+) -> bool:
+    """Reject nonterminal or failed results as positive Review evidence."""
 
-    if call.outcome is AgentToolCallOutcome.FAILED:
+    if call.outcome is not AgentToolCallOutcome.SUCCEEDED:
         return True
     probe_failed = _probe_result_failed(call)
     if probe_failed is not None:
@@ -344,14 +346,15 @@ def _match_review_evidence(
         or _observable_matches_output(observable, command.stderr_tail)
     )
     if satisfied and any(
-        _is_direct_probe(call) and not _matched_tool_result_failed(call)
+        _is_direct_probe(call) and not _tool_result_ineligible_for_satisfied_claim(call)
         for _, call in tool_matches
     ):
         tool_matches = tuple(
             match
             for match in tool_matches
             if not (
-                _is_direct_probe(match[1]) and _matched_tool_result_failed(match[1])
+                _is_direct_probe(match[1])
+                and _tool_result_ineligible_for_satisfied_claim(match[1])
             )
         )
     return _ReviewEvidenceMatches(
@@ -378,7 +381,8 @@ def _is_safe_satisfied_evidence_candidate(
     if not matches.tool_matches and not matches.command_matches:
         return False
     return not any(
-        _matched_tool_result_failed(call) for _, call in matches.tool_matches
+        _tool_result_ineligible_for_satisfied_claim(call)
+        for _, call in matches.tool_matches
     ) and not any(
         _matched_command_failed(command) for command in matches.command_matches
     )
@@ -500,7 +504,24 @@ def _ground_review_tool_evidence(
                 criterion_id=criterion_id,
             )
         if status is ReviewCriterionStatus.SATISFIED:
-            if any(_matched_tool_result_failed(call) for _, call in tool_matches):
+            ineligible_tool_matches = tuple(
+                call
+                for _, call in tool_matches
+                if _tool_result_ineligible_for_satisfied_claim(call)
+            )
+            if any(
+                call.outcome is AgentToolCallOutcome.DEFERRED
+                for call in ineligible_tool_matches
+            ):
+                raise _UnsafeSatisfiedEvidenceError(
+                    f"{label} satisfied evidence selects a nonterminal "
+                    "deferred tool result; wait for and cite a successful "
+                    "terminal result",
+                    path=claim_path,
+                    invariant_id="review_evidence_deferred_tool",
+                    criterion_id=criterion_id,
+                )
+            if ineligible_tool_matches:
                 raise _UnsafeSatisfiedEvidenceError(
                     f"{label} satisfied evidence selects an overall failed "
                     "tool result; rerun the direct probe successfully and cite "
@@ -954,7 +975,7 @@ def bind_review_evidence_correction_candidates(
                     continue
                 if (
                     status is ReviewCriterionStatus.SATISFIED
-                    and _matched_tool_result_failed(call)
+                    and _tool_result_ineligible_for_satisfied_claim(call)
                 ):
                     continue
                 surface = (

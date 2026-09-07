@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from software_agent_team.artifacts import (
     AcceptanceCriterion,
     AgentToolCallEvidence,
+    AgentToolCallOutcome,
     ArtifactKind,
     CommandEvidence,
     HandoffStatus,
@@ -95,6 +96,24 @@ def captured_tool_call(
         outcome="failed" if failed else "succeeded",
         is_error=failed,
         exit_code=1 if failed else (0 if executable is not None else None),
+        output_sha256=f"{index + 200:064x}",
+        output_bytes=len(encoded),
+        output_excerpt=output,
+    )
+
+
+def deferred_process_tool_call(index: int, output: str) -> AgentToolCallEvidence:
+    """Return one nonterminal async process result for Review safety tests."""
+
+    encoded = output.encode()
+    return AgentToolCallEvidence(
+        id=f"tool-{index:03d}",
+        tool_name="process",
+        external_call_sha256=f"{index:064x}",
+        arguments_sha256=f"{index + 100:064x}",
+        outcome=AgentToolCallOutcome.DEFERRED,
+        is_error=False,
+        reported_status="running",
         output_sha256=f"{index + 200:064x}",
         output_bytes=len(encoded),
         output_excerpt=output,
@@ -869,6 +888,95 @@ def test_review_correction_catalog_excludes_fragments_contaminated_by_failures()
     assert parsed.body.criterion_assessments[0].tool_evidence[0].observable == (
         "SAFE_RESULT"
     )
+
+
+def test_satisfied_review_rejects_deferred_process_evidence() -> None:
+    assessment = ReviewCriterionAssessmentResponse(
+        criterion_id="AC_LINKS",
+        status="satisfied",
+        adversarial_check="Observed an intermediate process update.",
+        evidence="The command had not reached a terminal result.",
+        tool_evidence=(review_tool_claim("INTERMEDIATE_RESULT"),),
+    )
+    request, result = _review_result(
+        ReviewReportResponse(
+            verdict="accept",
+            criterion_assessments=(assessment,),
+            summary="The assigned criterion is satisfied.",
+        )
+    )
+    result = result.model_copy(
+        update={
+            "telemetry": result.telemetry.model_copy(
+                update={
+                    "tool_calls": (
+                        deferred_process_tool_call(1, "INTERMEDIATE_RESULT"),
+                    )
+                }
+            )
+        }
+    )
+
+    with pytest.raises(AgentArtifactResponseError, match="nonterminal deferred"):
+        parse_dynamic_agent_response(
+            result,
+            request,
+            task_brief=task_brief(),
+            team_plan=team_plan(),
+            reviewed_criterion_ids=("AC_LINKS",),
+        )
+
+
+def test_review_correction_catalog_excludes_deferred_process_output() -> None:
+    assessment = ReviewCriterionAssessmentResponse(
+        criterion_id="AC_LINKS",
+        status="satisfied",
+        adversarial_check="Checked the accepted project behavior.",
+        evidence="The initial selector is intentionally unavailable.",
+        tool_evidence=(review_tool_claim("fabricated observation"),),
+    )
+    request, result = _review_result(
+        ReviewReportResponse(
+            verdict="accept",
+            criterion_assessments=(assessment,),
+            summary="The assigned criterion is satisfied.",
+        )
+    )
+    calls = (
+        deferred_process_tool_call(1, "INTERMEDIATE_RESULT"),
+        captured_tool_call(2, "TERMINAL_RESULT", executable="python"),
+    )
+    result = result.model_copy(
+        update={"telemetry": result.telemetry.model_copy(update={"tool_calls": calls})}
+    )
+
+    with pytest.raises(AgentArtifactResponseError) as captured:
+        parse_dynamic_agent_response(
+            result,
+            request,
+            task_brief=task_brief(),
+            team_plan=team_plan(),
+            reviewed_criterion_ids=("AC_LINKS",),
+        )
+    error = captured.value
+    assert error.semantic_payload is not None
+    assert error.diagnostic is not None
+    plan = build_semantic_correction_plan(error.semantic_payload, error.diagnostic)
+    assert plan is not None
+
+    bound = bind_review_evidence_correction_candidates(
+        plan,
+        evidence_attempts=(
+            ReviewToolEvidenceAttempt(execution_attempt=1, tool_calls=calls),
+        ),
+    )
+
+    assert bound is not None
+    catalog = {
+        candidate.replacement_value for candidate in bound.candidate_slots[0].candidates
+    }
+    assert "TERMINAL_RESULT" in catalog
+    assert "INTERMEDIATE_RESULT" not in catalog
 
 
 def test_controller_matches_only_json_outside_string_whitespace_variants() -> None:

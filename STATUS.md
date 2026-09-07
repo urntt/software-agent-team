@@ -42,14 +42,14 @@ correction-slot schemas, constraint-aware convergence, Controller-issued Review
 evidence handles, safe tool-action classification, and repeated checkpoint
 projection suppression. A clean committed gate and fresh provider journey are
 still required before those corrections are considered closed.
-The subsequent Review candidate-eligibility diagnostic gate passed all **1,140
-tests** in 417.29 seconds. Its schema-v3 report recorded a 347,787,264-byte
-aggregate peak RSS, peak process/thread counts of 5/18, no new cgroup or kernel
-OOM event, and zero residual stage processes, process leases, sandbox
-containers, or volumes. It covers whole-chain rejection of correction candidates
-whose exact fragment would also match an ineligible failed result. A clean
-committed gate, exact captured-response replay, and fresh provider journey remain
-required before that fix is considered closed.
+The Review candidate-eligibility revision at `5f76776` passed three consecutive
+clean canonical gates of **1,140 tests** each, exact captured-response replay,
+and focused frozen-revision matrices. Its schema-v3 reports recorded a peak
+aggregate RSS of 347,787,264 bytes, peak process/thread counts of 5/18, no new
+cgroup or kernel OOM event, and zero residual stage processes, process leases,
+sandbox containers, or volumes. It covers whole-chain rejection of correction
+candidates whose exact fragment would also match an ineligible failed result.
+A fresh provider journey remains required before that fix is considered closed.
 
 The current development head implements configuration schema v8 model metadata
 with attributable price/context sources, task-scoped route snapshots, one
@@ -65,9 +65,14 @@ lifecycle without persisting their content, visibly separates suspected stall,
 grace, recovery, degraded observation, and terminal stall, and does not publish
 terminal failure before process reaping and evidence collection. RunEvent v4
 adds a Controller-owned approved-task/checkpoint/Git/gate/Review/cost snapshot
-while preserving canonical v2-v3 reads; Artifact schema v7 carries invocation
-lifecycle, response-finalization, and upstream-incomplete evidence and retains
-v2-v6 reads. One
+while preserving canonical v2-v3 reads; Artifact schema v8 adds a distinct
+nonterminal `deferred` outcome for validated async `exec`/`process` starts,
+while retaining lifecycle, response-finalization, upstream-incomplete evidence,
+and v2-v7 reads. Deferred calls remain visible in the audit chain but cannot
+prove a satisfied Review claim or replace a later terminal process result or
+typed submission. Focused regression and exact replay of the captured
+provider-backed failure pass on the current implementation; a committed clean
+full gate and fresh delivery remain pending. One
 controller-priced ledger now covers Planning through terminal execution,
 standard progress exposes spend and remaining authorization, and final reports
 include attributable per-call cost evidence. Terminal JSON, Markdown, and the
