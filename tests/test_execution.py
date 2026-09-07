@@ -1974,7 +1974,8 @@ def test_initialization_no_progress_warns_stops_collects_and_reaps(
 
 
 def test_initialization_checkpoint_recovers_visible_grace(tmp_path: Path) -> None:
-    prefix = r"""
+    release_checkpoint = tmp_path / "release-initialization-checkpoint"
+    prefix = f"""
 import json
 import os
 import sys
@@ -1984,9 +1985,10 @@ from pathlib import Path
 agent_id = sys.argv[sys.argv.index("--agent") + 1]
 sessions = Path(os.environ["OPENCLAW_STATE_DIR"]) / "agents" / agent_id / "sessions"
 sessions.mkdir(parents=True, exist_ok=True)
-time.sleep(0.20)
+while not Path({str(release_checkpoint)!r}).exists():
+    time.sleep(0.01)
 initial_index = sessions / ".sessions.initial.json.tmp"
-initial_index.write_text("{}", encoding="utf-8")
+initial_index.write_text("{{}}", encoding="utf-8")
 os.replace(initial_index, sessions / "sessions.json")
 time.sleep(0.04)
 """
@@ -1994,16 +1996,21 @@ time.sleep(0.04)
         tmp_path,
         prefix + FAKE_OPENCLAW_SETUP + "\nappend_raw('ready')\nfinish()\n",
         initialization_policy=InitializationLivenessPolicy(
-            no_progress_seconds=0.25,
-            stall_grace_seconds=0.10,
+            no_progress_seconds=3.0,
+            stall_grace_seconds=2.0,
             source="test initialization contract",
         ),
     )
-    activities = []
+    activities: list[AgentExecutionActivity] = []
+
+    def record_activity(activity: AgentExecutionActivity) -> None:
+        activities.append(activity)
+        if activity.kind is AgentExecutionActivityKind.INITIALIZATION_STALL_SUSPECTED:
+            release_checkpoint.write_text("release\n", encoding="utf-8")
 
     result = executor.execute(
         request(timeout_seconds=0, model="provider/model"),
-        activity_handler=activities.append,
+        activity_handler=record_activity,
     )
 
     assert result.status is AgentExecutionStatus.COMPLETED
