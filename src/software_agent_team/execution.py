@@ -46,9 +46,11 @@ from software_agent_team.invocation_lifecycle import (
 )
 from software_agent_team.openclaw_session_evidence import (
     CapturedOpenClawToolEvidence,
+    OpenClawInitializationBaseline,
     OpenClawInvocationTerminalState,
     OpenClawSessionEvidenceError,
     OpenClawToolActivity,
+    capture_openclaw_initialization_baseline,
     capture_openclaw_tool_evidence,
     inspect_openclaw_initialization,
     inspect_openclaw_session_activity,
@@ -1459,12 +1461,15 @@ class _InitializationLivenessMonitor:
         request: AgentExecutionRequest,
         policy: InitializationLivenessPolicy,
         state_dir: Path | None,
+        baseline: OpenClawInitializationBaseline | None,
+        baseline_error: bool,
         started_monotonic: float,
         lifecycle: _InvocationLifecycleRecorder,
     ) -> None:
         self.request = request
         self.policy = policy
         self.state_dir = state_dir
+        self.baseline = baseline
         self.started_monotonic = started_monotonic
         self.last_progress = started_monotonic
         self.lifecycle = lifecycle
@@ -1487,6 +1492,15 @@ class _InitializationLivenessMonitor:
                 AgentExecutionActivityKind.INITIALIZATION_LIVENESS_DEGRADED,
                 now=started_monotonic,
             )
+        elif baseline_error:
+            self.degradation_reason = (
+                "OpenClaw initialization baseline could not be attributed"
+            )
+            self.lifecycle.set_initialization_evidence(self.evidence())
+            self.lifecycle.emit_initialization(
+                AgentExecutionActivityKind.INITIALIZATION_LIVENESS_DEGRADED,
+                now=started_monotonic,
+            )
 
     def poll(self, now: float) -> bool:
         """Return true only after an attributable initialization stall."""
@@ -1500,6 +1514,7 @@ class _InitializationLivenessMonitor:
                 agent_id=self.request.agent_id,
                 session_key=self.request.session_key,
                 prompt=self.request.prompt,
+                baseline=self.baseline,
             )
         except OpenClawSessionEvidenceError:
             self.degradation_reason = (
@@ -1582,9 +1597,18 @@ class _InitializationLivenessMonitor:
                 now=now,
             )
             return
+        baseline_checkpoint = (
+            None if self.baseline is None else self.baseline.checkpoint
+        )
         implied = (
             (checkpoint,)
-            if checkpoint is InitializationCheckpoint.PROVIDER_STREAM
+            if (
+                checkpoint is InitializationCheckpoint.PROVIDER_STREAM
+                or (
+                    baseline_checkpoint is not None
+                    and order.index(checkpoint) <= order.index(baseline_checkpoint)
+                )
+            )
             else tuple(
                 candidate
                 for candidate in order
@@ -1592,6 +1616,10 @@ class _InitializationLivenessMonitor:
                 and order.index(self.checkpoints[-1])
                 < order.index(candidate)
                 <= order.index(checkpoint)
+                and (
+                    baseline_checkpoint is None
+                    or order.index(candidate) > order.index(baseline_checkpoint)
+                )
             )
         )
         for candidate in implied:
@@ -1624,6 +1652,12 @@ class _InitializationLivenessMonitor:
             policy_source=self.policy.source,
             no_progress_seconds=self.policy.no_progress_seconds,
             stall_grace_seconds=self.policy.stall_grace_seconds,
+            baseline_checkpoint=(
+                None if self.baseline is None else self.baseline.checkpoint
+            ),
+            baseline_matching_turn_count=(
+                0 if self.baseline is None else self.baseline.matching_turn_count
+            ),
             checkpoints=tuple(self.checkpoints),
             stall_suspected_count=self.stall_suspected_count,
             stall_recovered_count=self.stall_recovered_count,
@@ -1701,6 +1735,7 @@ class _ProviderLivenessMonitor:
                 agent_id=self.request.agent_id,
                 session_key=self.request.session_key,
                 prompt=self.request.prompt,
+                baseline=self.initialization_monitor.baseline,
             )
         except OpenClawSessionEvidenceError:
             self._degrade("OpenClaw session activity could not be attributed", now)
@@ -2712,6 +2747,18 @@ class OpenClawSubprocessExecutor:
         """Run one process whose exact session may be interrupted by control input."""
 
         state_dir = self._state_directory()
+        initialization_baseline: OpenClawInitializationBaseline | None = None
+        initialization_baseline_error = False
+        if state_dir is not None:
+            try:
+                initialization_baseline = capture_openclaw_initialization_baseline(
+                    state_dir=state_dir,
+                    agent_id=request.agent_id,
+                    session_key=request.session_key,
+                    prompt=request.prompt,
+                )
+            except OpenClawSessionEvidenceError:
+                initialization_baseline_error = True
         process = subprocess.Popen(
             list(command),
             stdout=subprocess.PIPE,
@@ -2736,6 +2783,8 @@ class OpenClawSubprocessExecutor:
             request=request,
             policy=self.initialization_policy,
             state_dir=state_dir,
+            baseline=initialization_baseline,
+            baseline_error=initialization_baseline_error,
             started_monotonic=process_started,
             lifecycle=lifecycle,
         )

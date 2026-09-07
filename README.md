@@ -171,7 +171,10 @@ may use up to 90 seconds; that infrastructure boundary is separate from the
 30-second ordinary preflight-command limit and from model work. Product Agent
 calls have no fixed wall-clock duration. Before provider waiting begins, SAT
 observes a finite sequence of attributable OpenClaw initialization checkpoints
-in its private state. Ninety seconds without checkpoint progress opens a visible
+in its private state. It captures a content-free baseline immediately before
+launch, so a session directory, index, binding, transcript header, or matching
+turn inherited from an earlier invocation is not current progress; reusing the
+same prompt requires a newly observed turn occurrence. Ninety seconds without checkpoint progress opens a visible
 final 15-second diagnostic window; continued inactivity stops only that
 invocation, while a late checkpoint recovers the same invocation. An unavailable
 or malformed initialization observer fails closed instead of leaving an

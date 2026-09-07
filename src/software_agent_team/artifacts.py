@@ -36,7 +36,7 @@ from software_agent_team.submissions import (
 )
 from software_agent_team.versioning import SoftwareVersionReport
 
-ARTIFACT_SCHEMA_VERSION = 8
+ARTIFACT_SCHEMA_VERSION = 9
 MINIMUM_READABLE_ARTIFACT_SCHEMA_VERSION = 2
 COMMIT_PATTERN = r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
 AGENT_ID_PATTERN = r"^[a-z][a-z0-9_]*$"
@@ -574,7 +574,7 @@ class HandoffEnvelope(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, 6, 7, ARTIFACT_SCHEMA_VERSION] = (
+    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, ARTIFACT_SCHEMA_VERSION] = (
         ARTIFACT_SCHEMA_VERSION
     )
     kind: Literal[ArtifactKind.HANDOFF_ENVELOPE] = ArtifactKind.HANDOFF_ENVELOPE
@@ -639,7 +639,7 @@ class PhaseArtifact(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, 6, 7, ARTIFACT_SCHEMA_VERSION] = (
+    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, ARTIFACT_SCHEMA_VERSION] = (
         ARTIFACT_SCHEMA_VERSION
     )
     kind: ArtifactKind
@@ -820,7 +820,7 @@ class AgentExecutionRecord(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, 6, 7, ARTIFACT_SCHEMA_VERSION] = (
+    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, ARTIFACT_SCHEMA_VERSION] = (
         ARTIFACT_SCHEMA_VERSION
     )
     kind: Literal[ArtifactKind.AGENT_EXECUTION_RECORD] = (
@@ -1114,7 +1114,9 @@ class AgentExecutionRecord(BaseModel):
                 raise ValueError(
                     "invocation lifecycle requires a typed execution status"
                 )
-            expected_lifecycle_schema = 1 if self.schema_version == 5 else 2
+            expected_lifecycle_schema = (
+                1 if self.schema_version == 5 else (2 if self.schema_version < 9 else 3)
+            )
             if self.invocation_lifecycle.schema_version != expected_lifecycle_schema:
                 raise ValueError(
                     "execution-record schema does not match invocation-lifecycle schema"

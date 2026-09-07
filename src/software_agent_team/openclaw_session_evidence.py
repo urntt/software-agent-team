@@ -140,9 +140,20 @@ class OpenClawInitializationObservation:
 
 
 @dataclass(frozen=True)
+class OpenClawInitializationBaseline:
+    """Content-free state that existed before one invocation was launched."""
+
+    checkpoint: InitializationCheckpoint | None
+    session_id: str | None
+    matching_turn_count: int = 0
+
+
+@dataclass(frozen=True)
 class _OpenClawSessionSnapshot:
     observation: OpenClawInitializationObservation
     invocation_records: tuple[dict[str, object], ...] | None = None
+    session_id: str | None = None
+    matching_turn_count: int = 0
 
 
 def _sha256(value: bytes) -> str:
@@ -402,7 +413,8 @@ def _inspect_openclaw_session_snapshot(
     snapshot = _OpenClawSessionSnapshot(
         observation=OpenClawInitializationObservation(
             checkpoint=InitializationCheckpoint.SESSION_BOUND
-        )
+        ),
+        session_id=session_id,
     )
     try:
         transcript = _read_regular_file(
@@ -435,7 +447,8 @@ def _inspect_openclaw_session_snapshot(
     snapshot = _OpenClawSessionSnapshot(
         observation=OpenClawInitializationObservation(
             checkpoint=InitializationCheckpoint.TRANSCRIPT_HEADER
-        )
+        ),
+        session_id=session_id,
     )
     prompt_sha256 = _sha256(prompt.encode("utf-8"))
     matches = [
@@ -465,7 +478,60 @@ def _inspect_openclaw_session_snapshot(
             checkpoint=InitializationCheckpoint.CURRENT_TURN
         ),
         invocation_records=records[start:end],
+        session_id=session_id,
+        matching_turn_count=len(matches),
     )
+
+
+def capture_openclaw_initialization_baseline(
+    *,
+    state_dir: Path,
+    agent_id: str,
+    session_key: str,
+    prompt: str,
+) -> OpenClawInitializationBaseline:
+    """Capture state published before process launch without retaining content."""
+
+    snapshot = _inspect_openclaw_session_snapshot(
+        state_dir=state_dir,
+        agent_id=agent_id,
+        session_key=session_key,
+        prompt=prompt,
+    )
+    if snapshot is None:
+        return OpenClawInitializationBaseline(
+            checkpoint=None,
+            session_id=None,
+        )
+    return OpenClawInitializationBaseline(
+        checkpoint=snapshot.observation.checkpoint,
+        session_id=snapshot.session_id,
+        matching_turn_count=snapshot.matching_turn_count,
+    )
+
+
+def _snapshot_is_new_for_invocation(
+    snapshot: _OpenClawSessionSnapshot,
+    baseline: OpenClawInitializationBaseline | None,
+) -> bool:
+    """Exclude inherited session state from launch-to-turn progress."""
+
+    if baseline is None or baseline.checkpoint is None:
+        return True
+    checkpoint = snapshot.observation.checkpoint
+    if checkpoint is InitializationCheckpoint.CURRENT_TURN:
+        return (
+            snapshot.session_id != baseline.session_id
+            or snapshot.matching_turn_count > baseline.matching_turn_count
+        )
+    if (
+        snapshot.session_id is not None
+        and baseline.session_id is not None
+        and snapshot.session_id != baseline.session_id
+    ):
+        return True
+    order = list(InitializationCheckpoint)
+    return order.index(checkpoint) > order.index(baseline.checkpoint)
 
 
 def inspect_openclaw_initialization(
@@ -474,6 +540,7 @@ def inspect_openclaw_initialization(
     agent_id: str,
     session_key: str,
     prompt: str,
+    baseline: OpenClawInitializationBaseline | None = None,
 ) -> OpenClawInitializationObservation | None:
     """Return finite launch-to-turn progress without retaining session content."""
 
@@ -483,7 +550,9 @@ def inspect_openclaw_initialization(
         session_key=session_key,
         prompt=prompt,
     )
-    return None if snapshot is None else snapshot.observation
+    if snapshot is None or not _snapshot_is_new_for_invocation(snapshot, baseline):
+        return None
+    return snapshot.observation
 
 
 def inspect_openclaw_session_activity(
@@ -492,6 +561,7 @@ def inspect_openclaw_session_activity(
     agent_id: str,
     session_key: str,
     prompt: str,
+    baseline: OpenClawInitializationBaseline | None = None,
 ) -> OpenClawSessionActivity | None:
     """Inspect current-turn lifecycle records without retaining their content.
 
@@ -507,6 +577,7 @@ def inspect_openclaw_session_activity(
     )
     if (
         snapshot is None
+        or not _snapshot_is_new_for_invocation(snapshot, baseline)
         or snapshot.observation.checkpoint is not InitializationCheckpoint.CURRENT_TURN
         or snapshot.invocation_records is None
     ):

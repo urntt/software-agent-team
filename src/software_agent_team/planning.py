@@ -1628,8 +1628,8 @@ class PlanningQuestion(BaseModel):
         default=(),
         exclude_if=lambda values: not values,
         description=(
-            "Product-depth dimensions this answer resolves; empty for a material "
-            "product decision outside the six adequacy dimensions."
+            "The single product-depth dimension this answer resolves; empty for "
+            "a material product decision outside the six adequacy dimensions."
         ),
     )
     options: tuple[PlanningOption, ...] = Field(min_length=2, max_length=3)
@@ -2509,6 +2509,18 @@ def validate_question_admission(
                 "/question/decision_category",
                 "/question/product_definition_dimensions",
             ),
+            subjects=_planning_subjects(
+                (ResponseIssueSubjectKind.QUESTION, question.id)
+            ),
+        )
+    if len(question.product_definition_dimensions) > 1:
+        raise _planning_context_invariant(
+            "planning_product_question_atomic_dimension",
+            (
+                "one free-text Planning answer cannot authorize multiple "
+                "product-definition dimensions"
+            ),
+            paths=("/question/product_definition_dimensions",),
             subjects=_planning_subjects(
                 (ResponseIssueSubjectKind.QUESTION, question.id)
             ),

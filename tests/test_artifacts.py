@@ -217,7 +217,7 @@ def lifecycle_payload(
     *,
     exit_code: int | None = 0,
     signal: int | None = None,
-    schema_version: int = 2,
+    schema_version: int = 3,
 ) -> dict[str, object]:
     """Return minimal coherent lifecycle evidence for record binding tests."""
 
@@ -268,7 +268,7 @@ def lifecycle_payload(
             "cleanup_completed": True,
         },
     }
-    if schema_version == 2:
+    if schema_version >= 2:
         payload["response_finalization"] = {
             "mode": "not_observed",
             "policy_source": "test response-finalization policy",
@@ -372,7 +372,7 @@ def test_schema_six_execution_record_keeps_lifecycle_v2_canonical() -> None:
     payload["schema_version"] = 6
     payload["execution_status"] = "completed"
     payload["invocation_lifecycle"] = InvocationLifecycleEvidence.model_validate(
-        lifecycle_payload()
+        lifecycle_payload(schema_version=2)
     ).model_dump(mode="json")
 
     restored = AgentExecutionRecord.model_validate(payload)
@@ -383,6 +383,56 @@ def test_schema_six_execution_record_keeps_lifecycle_v2_canonical() -> None:
     assert restored.model_dump(mode="json") == payload
 
 
+def test_schema_eight_execution_record_keeps_lifecycle_v2_canonical() -> None:
+    payload = AgentExecutionRecord.model_validate(valid_execution_payload()).model_dump(
+        mode="json"
+    )
+    payload["schema_version"] = 8
+    payload["execution_status"] = "completed"
+    payload["invocation_lifecycle"] = InvocationLifecycleEvidence.model_validate(
+        lifecycle_payload(schema_version=2)
+    ).model_dump(mode="json")
+
+    restored = AgentExecutionRecord.model_validate(payload)
+
+    assert restored.schema_version == 8
+    assert restored.invocation_lifecycle is not None
+    assert restored.invocation_lifecycle.schema_version == 2
+    assert restored.model_dump(mode="json") == payload
+
+
+def test_current_lifecycle_records_the_pre_invocation_baseline() -> None:
+    payload = valid_execution_payload()
+    payload["execution_status"] = "completed"
+    lifecycle = lifecycle_payload()
+    assert isinstance(lifecycle["initialization"], dict)
+    lifecycle["initialization"].update(
+        {
+            "baseline_checkpoint": "current_turn",
+            "baseline_matching_turn_count": 1,
+        }
+    )
+    payload["invocation_lifecycle"] = lifecycle
+
+    restored = AgentExecutionRecord.model_validate(payload)
+
+    assert restored.schema_version == 9
+    assert restored.invocation_lifecycle is not None
+    assert restored.invocation_lifecycle.schema_version == 3
+    assert (
+        restored.invocation_lifecycle.initialization.baseline_matching_turn_count == 1
+    )
+
+    payload["schema_version"] = 8
+    with pytest.raises(ValidationError, match="does not match"):
+        AgentExecutionRecord.model_validate(payload)
+
+    legacy_lifecycle = deepcopy(lifecycle)
+    legacy_lifecycle["schema_version"] = 2
+    with pytest.raises(ValidationError, match="legacy lifecycle evidence"):
+        InvocationLifecycleEvidence.model_validate(legacy_lifecycle)
+
+
 def test_upstream_incomplete_outcome_requires_artifact_schema_seven() -> None:
     payload = valid_execution_payload()
     payload.update(
@@ -391,7 +441,9 @@ def test_upstream_incomplete_outcome_requires_artifact_schema_seven() -> None:
             "execution_status": "upstream_incomplete",
             "error": "upstream tool loop stopped before terminal submission",
             "response_artifact": None,
-            "invocation_lifecycle": lifecycle_payload("upstream_incomplete"),
+            "invocation_lifecycle": lifecycle_payload(
+                "upstream_incomplete", schema_version=2
+            ),
         }
     )
 
@@ -531,7 +583,7 @@ def test_deferred_tool_evidence_requires_artifact_schema_eight() -> None:
 
     current = AgentExecutionRecord.model_validate(payload)
 
-    assert current.schema_version == 8
+    assert current.schema_version == 9
     assert current.tool_calls[0].outcome is AgentToolCallOutcome.DEFERRED
 
     payload["schema_version"] = 7

@@ -29,8 +29,11 @@ Choose the next response by decision value:
   `releasable_small_product`. Target users, primary workflow, and maturity are
   user-owned whenever they materially distinguish the result: use one contiguous
   verbatim substring from the original request as `explicit_input`, or ask a
-  `product_requirement` question and list every dimension it resolves in
-  `product_definition_dimensions`. For `explicit_input`, put only that substring
+  `product_requirement` question whose `product_definition_dimensions` contains
+  exactly one dimension. A free-text answer or suggested option cannot authorize
+  multiple dimensions. If several dimensions are genuinely missing, ask separate
+  questions in material-consequence order and preserve dimensions already explicit
+  in the request. For `explicit_input`, put only that substring
   in both `source` and `statement`: do not add `exact quote:` or other labels,
   quote delimiters, stitched excerpts, ellipses, or commentary. Map an unambiguous
   natural-language maturity phrase such as `one-time throwaway` to the matching

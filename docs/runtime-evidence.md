@@ -481,22 +481,24 @@ workspaces/<run_id>/
 └── detached self-contained Git clone and generated result
 ```
 
-Artifact schema v8 adds the `deferred` tool-call outcome for a valid async
+Artifact schema v9 adds lifecycle-v3 evidence for the content-free
+pre-invocation initialization baseline. Artifact schema v8 added the `deferred` tool-call outcome for a valid async
 process start that has not reached a terminal result. Artifact schema v7 added
 the distinct `upstream_incomplete` execution outcome
 for an attributable invocation that ends on a paired tool result before its
 bound terminal submission. Artifact schema v6 added terminal-response/finalization
 status and lifecycle-v2 evidence. Artifact schema v5
 added the versioned, content-free invocation lifecycle to execution telemetry.
-Lifecycle schema v2 adds terminal-response handoff and renewable
-response-finalization evidence while retaining schema-v1 reads. It
+Lifecycle schema v3 adds the pre-invocation checkpoint and matching-turn-count
+baseline while retaining schema-v1 and schema-v2 reads. Lifecycle schema v2
+added terminal-response handoff and renewable response-finalization evidence. It
 records phase transitions, initialization liveness, provider terminal state,
 finalization progress or stall, the typed stop authority, signal or exit outcome,
 evidence collection, process-lease release, and cleanup completion. Schema v4 added the independent
 response-transport identity and bound submission evidence; schema v3 introduced
 typed response diagnostics, deterministic normalization, targeted-correction
-requests, and correction outcomes. SAT retains read support for schema v2
-through v7. Optional compatibility fields omit themselves when absent, so
+requests, and correction outcomes. SAT retains read support for Artifact schema
+v2 through v8. Optional compatibility fields omit themselves when absent, so
 loading and serializing historical evidence preserves its canonical bytes. All
 readable versions
 attribute handoffs, execution telemetry, and Agent-owned artifacts to run-scoped Agent IDs. The Agent namespace prevents two Agents with
@@ -1030,6 +1032,12 @@ when investigating it rather than editing artifacts in place.
   only monotonic, attributable checkpoints: process launch, session directory,
   session index, session binding, transcript header, and exact current-turn
   prompt digest; the private provider stream is an equivalent ready boundary.
+  Immediately before launch, SAT captures a content-free baseline containing
+  the furthest existing checkpoint, attributed session identity, and count of
+  matching current-turn occurrences. An observation advances the new invocation
+  only when it is beyond that baseline, belongs to a different attributed
+  session, or adds a new occurrence of the same prompt. Pre-existing runtime
+  files therefore cannot keep a hung invocation alive.
   This initialization monitor is the sole readiness authority: both the session
   activity observer and private-stream observer submit their trusted checkpoint
   through it before provider wait can begin. A faster observer therefore cannot

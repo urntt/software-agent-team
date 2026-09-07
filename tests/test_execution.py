@@ -1764,11 +1764,13 @@ def test_slow_initialization_reaches_current_turn_before_provider_lease(
     assert lifecycle is not None
     assert lifecycle.initialization.checkpoints == (
         InitializationCheckpoint.PROCESS_LAUNCHED,
-        InitializationCheckpoint.SESSION_DIRECTORY,
         InitializationCheckpoint.SESSION_INDEX,
         InitializationCheckpoint.SESSION_BOUND,
         InitializationCheckpoint.TRANSCRIPT_HEADER,
         InitializationCheckpoint.CURRENT_TURN,
+    )
+    assert lifecycle.initialization.baseline_checkpoint is (
+        InitializationCheckpoint.SESSION_DIRECTORY
     )
     assert result.telemetry.provider_liveness is not None
     assert result.telemetry.provider_liveness.lease_start_source == "current_turn"
@@ -1780,6 +1782,142 @@ def test_slow_initialization_reaches_current_turn_before_provider_lease(
         InvocationPhase.COLLECTING_EVIDENCE,
         InvocationPhase.STOPPED,
     ]
+
+
+def test_preexisting_current_turn_cannot_keep_a_new_invocation_alive(
+    tmp_path: Path,
+) -> None:
+    invocation = request(timeout_seconds=0, model="provider/model")
+    executor = live_liveness_executor(
+        tmp_path,
+        "import time\ntime.sleep(30)\n",
+        initialization_policy=InitializationLivenessPolicy(
+            no_progress_seconds=0.22,
+            stall_grace_seconds=0.08,
+            source="test initialization contract",
+        ),
+        process_grace_seconds=0.10,
+    )
+    sessions = tmp_path / "state" / "agents" / "planner" / "sessions"
+    sessions.mkdir(parents=True)
+    session_id = "reused-session"
+    (sessions / "sessions.json").write_text(
+        json.dumps({invocation.session_key: {"sessionId": session_id}}),
+        encoding="utf-8",
+    )
+    (sessions / f"{session_id}.jsonl").write_text(
+        "\n".join(
+            (
+                json.dumps({"type": "session", "id": session_id}),
+                json.dumps(
+                    {
+                        "type": "message",
+                        "message": {"role": "user", "content": invocation.prompt},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "message",
+                        "message": {
+                            "role": "assistant",
+                            "content": [{"type": "text", "text": "prior"}],
+                        },
+                    }
+                ),
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    result = executor.execute(invocation)
+
+    assert result.status is AgentExecutionStatus.INITIALIZATION_STALLED
+    lifecycle = result.telemetry.invocation_lifecycle
+    assert lifecycle is not None
+    assert lifecycle.initialization.baseline_checkpoint is (
+        InitializationCheckpoint.CURRENT_TURN
+    )
+    assert lifecycle.initialization.baseline_matching_turn_count == 1
+    assert lifecycle.initialization.checkpoints == (
+        InitializationCheckpoint.PROCESS_LAUNCHED,
+    )
+    assert result.telemetry.provider_liveness is not None
+    assert not result.telemetry.provider_liveness.lease_started
+
+
+def test_reused_session_waits_for_a_new_occurrence_of_the_same_prompt(
+    tmp_path: Path,
+) -> None:
+    invocation = request(timeout_seconds=0, model="provider/model")
+    sessions = tmp_path / "state" / "agents" / "planner" / "sessions"
+    session_id = "reused-session"
+    transcript = sessions / f"{session_id}.jsonl"
+    prior_records = [
+        {"type": "session", "id": session_id},
+        {
+            "type": "message",
+            "message": {"role": "user", "content": invocation.prompt},
+        },
+        {
+            "type": "message",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "prior"}],
+            },
+        },
+    ]
+    program = f"""
+import json
+import sys
+import time
+from pathlib import Path
+
+prompt_path = Path(sys.argv[sys.argv.index("--message-file") + 1])
+prompt = prompt_path.read_text(encoding="utf-8")
+transcript = Path({str(transcript)!r})
+lines = transcript.read_text(encoding="utf-8").splitlines()
+records = [json.loads(line) for line in lines]
+time.sleep(0.08)
+records.extend((
+    {{"type": "message", "message": {{"role": "user", "content": prompt}}}},
+    {{
+        "type": "message",
+        "message": {{
+            "role": "assistant",
+            "content": [{{"type": "text", "text": "new"}}],
+        }},
+    }},
+))
+payload = "\\n".join(json.dumps(item) for item in records) + "\\n"
+transcript.write_text(payload, encoding="utf-8")
+print({openclaw_result()!r})
+"""
+    executor = live_liveness_executor(tmp_path, program)
+    sessions.mkdir(parents=True)
+    transcript.write_text(
+        "\n".join(json.dumps(item) for item in prior_records) + "\n",
+        encoding="utf-8",
+    )
+    (sessions / "sessions.json").write_text(
+        json.dumps({invocation.session_key: {"sessionId": session_id}}),
+        encoding="utf-8",
+    )
+
+    result = executor.execute(invocation)
+
+    assert result.status is AgentExecutionStatus.COMPLETED
+    lifecycle = result.telemetry.invocation_lifecycle
+    assert lifecycle is not None
+    assert lifecycle.initialization.baseline_checkpoint is (
+        InitializationCheckpoint.CURRENT_TURN
+    )
+    assert lifecycle.initialization.baseline_matching_turn_count == 1
+    assert lifecycle.initialization.checkpoints == (
+        InitializationCheckpoint.PROCESS_LAUNCHED,
+        InitializationCheckpoint.CURRENT_TURN,
+    )
+    assert result.telemetry.provider_liveness is not None
+    assert result.telemetry.provider_liveness.lease_start_source == "current_turn"
 
 
 def test_initialization_no_progress_warns_stops_collects_and_reaps(
@@ -1929,7 +2067,7 @@ def test_initialization_observer_failure_stops_with_typed_process_evidence(
     assert lifecycle is not None
     assert lifecycle.initialization.mode == "degraded"
     assert lifecycle.initialization.degradation_reason == (
-        "OpenClaw initialization progress could not be attributed"
+        "OpenClaw initialization baseline could not be attributed"
     )
     assert lifecycle.shutdown.reason is InvocationStopReason.PROCESS_FAILURE
     assert lifecycle.shutdown.cleanup_completed

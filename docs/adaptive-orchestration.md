@@ -171,6 +171,13 @@ match the mapping. This is an admission boundary, not a claim that deterministic
 code can infer the semantic value of arbitrary prose; ambiguous real tasks
 remain the usability test for under- and over-questioning.
 
+A ProductDefinition question resolves exactly one ProductDefinition dimension.
+When several dimensions remain undecided, Planning asks separate questions in
+consequence order. This keeps each free-text answer bound to one declared
+authority slot: an answer about audience cannot silently erase an already
+explicit workflow, maturity, or delivery expectation. The controller enforces
+this atomic question boundary before showing the question to the user.
+
 A current proposal records one stable ID per requirement, explicit non-goals,
 and attributable decision records. Every current decision has typed provenance:
 an exact direct user-input substring, one resolved question ID, `planner`, or
@@ -204,8 +211,8 @@ statement preserve one contiguous verbatim user-input substring without citation
 labels, quote delimiters, stitched fragments, or commentary. An unambiguous phrase
 such as `one-time throwaway` may map to the matching delivery-maturity enum; the
 source remains the user's words rather than invented Controller vocabulary. A
-question declares the exact dimensions it
-resolves; each resolved statement must be an exact fragment of that answer, and
+question declares the exact dimension it resolves; each resolved statement must
+be an exact fragment of that answer, and
 the answer must reach one unchanged user-owned product decision. If an answer
 does not cover a declared dimension, Planning must ask again rather than infer it.
 Planning cannot silently recommend target users, primary workflow, or maturity.

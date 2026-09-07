@@ -24,6 +24,7 @@ from software_agent_team.invocation_lifecycle import InitializationCheckpoint
 from software_agent_team.openclaw_session_evidence import (
     OpenClawInvocationTerminalState,
     OpenClawSessionEvidenceError,
+    capture_openclaw_initialization_baseline,
     capture_openclaw_tool_evidence,
     inspect_openclaw_initialization,
     inspect_openclaw_session_activity,
@@ -585,6 +586,77 @@ def test_initialization_inspection_reports_only_finite_attributable_checkpoints(
     assert current is not None
     assert current.checkpoint is InitializationCheckpoint.CURRENT_TURN
     assert "INITIALIZATION_SECRET" not in repr(current)
+
+
+def test_initialization_baseline_requires_a_new_matching_turn_occurrence(
+    tmp_path: Path,
+) -> None:
+    invocation = request(prompt="Repeat this exact prompt safely.")
+    records = [
+        session_record(),
+        user_record(invocation.prompt),
+        assistant_record("prior response"),
+    ]
+    transcript = write_session_state(
+        tmp_path,
+        invocation=invocation,
+        records=records,
+    )
+    baseline = capture_openclaw_initialization_baseline(
+        state_dir=tmp_path,
+        agent_id=invocation.agent_id,
+        session_key=invocation.session_key,
+        prompt=invocation.prompt,
+    )
+
+    assert baseline.checkpoint is InitializationCheckpoint.CURRENT_TURN
+    assert baseline.session_id == SESSION_ID
+    assert baseline.matching_turn_count == 1
+    assert (
+        inspect_openclaw_initialization(
+            state_dir=tmp_path,
+            agent_id=invocation.agent_id,
+            session_key=invocation.session_key,
+            prompt=invocation.prompt,
+            baseline=baseline,
+        )
+        is None
+    )
+    assert (
+        inspect_openclaw_session_activity(
+            state_dir=tmp_path,
+            agent_id=invocation.agent_id,
+            session_key=invocation.session_key,
+            prompt=invocation.prompt,
+            baseline=baseline,
+        )
+        is None
+    )
+
+    records.extend((user_record(invocation.prompt), assistant_record("new response")))
+    transcript.write_text(
+        "\n".join(json.dumps(item) for item in records) + "\n",
+        encoding="utf-8",
+    )
+    current = inspect_openclaw_initialization(
+        state_dir=tmp_path,
+        agent_id=invocation.agent_id,
+        session_key=invocation.session_key,
+        prompt=invocation.prompt,
+        baseline=baseline,
+    )
+    activity = inspect_openclaw_session_activity(
+        state_dir=tmp_path,
+        agent_id=invocation.agent_id,
+        session_key=invocation.session_key,
+        prompt=invocation.prompt,
+        baseline=baseline,
+    )
+
+    assert current is not None
+    assert current.checkpoint is InitializationCheckpoint.CURRENT_TURN
+    assert activity is not None
+    assert activity.terminal_response_observed
 
 
 def test_initialization_index_publish_between_open_and_observation_is_missing_once(

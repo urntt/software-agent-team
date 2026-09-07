@@ -270,15 +270,17 @@ checkpoint progress, permanent startup hang, recovery inside the visible grace,
 missing or malformed state observation, exact user interrupt/cancel, user
 deadline, controlled-evaluation timeout, TERM exit, KILL escalation, evidence
 collection, coalesced tool start/completion snapshots, repeated active-tool
-snapshots, and absence of stale working heartbeats. Historical tool counters
+snapshots, absence of stale working heartbeats, inherited session state, and a
+reused prompt that requires a newly observed turn occurrence. Historical tool counters
 must still produce activity evidence, but only a change in the observed active
 tool state may produce a lifecycle phase transition. Apply an attributed session
 snapshot before publishing any tool-history delta from that observation. When a
 single poll coalesces a start and completion, both history events therefore carry
 the current inactive state and the current completed count; neither event may
 reconstruct a stale `tool_active` phase from its kind. `RunEvent` schema v4 must
-remain canonically readable from v2 through v3, Artifact schema v8 from v2
-through v7, and Planning schema v8 from v2 through v7. Tool-evidence regression
+remain canonically readable from v2 through v3, Artifact schema v9 from v2
+through v8, lifecycle schema v3 from v1 through v2, and Planning schema v8 from
+v2 through v7. Tool-evidence regression
 tests must preserve a valid async `exec` start as nonterminal `deferred`
 evidence, require a later terminal `process` result independently, and still
 require the invocation-bound terminal submission. Deferred evidence must never
@@ -304,6 +306,13 @@ validation. Do not reintroduce independently generated requirement arrays or
 offer either array alone as a relational correction target. A live-contract
 change updates its submission schema hash; bump the persisted Planning schema
 only when stored canonical structure changes.
+
+Apply the same authority atomicity to ProductDefinition questions. One focused
+question may resolve exactly one ProductDefinition dimension. Tests must reject
+a question that assigns one free-text answer to multiple dimensions and must
+prove that resolving one dimension leaves every explicit sibling dimension
+unchanged. Legacy persisted transcripts remain readable; current admission is
+where the narrower authority contract is enforced.
 
 Typed-submission tests must distinguish transport attempts from successful
 semantic submissions. OpenClaw may return a schema error to the model and let it

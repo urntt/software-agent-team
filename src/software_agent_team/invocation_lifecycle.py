@@ -129,6 +129,15 @@ class InitializationLivenessEvidence(BaseModel):
     policy_source: str = Field(min_length=1, max_length=300)
     no_progress_seconds: float = Field(gt=0)
     stall_grace_seconds: float = Field(gt=0)
+    baseline_checkpoint: InitializationCheckpoint | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    baseline_matching_turn_count: int = Field(
+        default=0,
+        ge=0,
+        exclude_if=lambda value: value == 0,
+    )
     checkpoints: tuple[InitializationCheckpoint, ...] = ()
     stall_suspected_count: int = Field(default=0, ge=0)
     stall_recovered_count: int = Field(default=0, ge=0)
@@ -146,6 +155,13 @@ class InitializationLivenessEvidence(BaseModel):
             )
         if self.stalled and self.mode != "enforced":
             raise ValueError("unobservable initialization cannot declare a stall")
+        if (
+            self.baseline_matching_turn_count
+            and self.baseline_checkpoint is not InitializationCheckpoint.CURRENT_TURN
+        ):
+            raise ValueError(
+                "matching-turn baseline requires a pre-existing current turn"
+            )
         order = [_INITIALIZATION_ORDER[item] for item in self.checkpoints]
         if order != sorted(set(order)):
             raise ValueError("initialization checkpoints must advance exactly once")
@@ -245,7 +261,7 @@ class InvocationLifecycleEvidence(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: int = Field(default=2, ge=1, le=2)
+    schema_version: int = Field(default=3, ge=1, le=3)
     transitions: tuple[InvocationLifecycleTransition, ...] = Field(min_length=2)
     initialization: InitializationLivenessEvidence
     response_finalization: ResponseFinalizationEvidence | None = Field(
@@ -258,7 +274,14 @@ class InvocationLifecycleEvidence(BaseModel):
     def validate_lifecycle(self) -> Self:
         if (self.schema_version == 1) != (self.response_finalization is None):
             raise ValueError(
-                "lifecycle schema v2 requires response-finalization evidence"
+                "lifecycle schema v2 and later require response-finalization evidence"
+            )
+        if self.schema_version < 3 and (
+            self.initialization.baseline_checkpoint is not None
+            or self.initialization.baseline_matching_turn_count
+        ):
+            raise ValueError(
+                "legacy lifecycle evidence cannot contain an invocation baseline"
             )
         if [item.sequence for item in self.transitions] != list(
             range(1, len(self.transitions) + 1)
@@ -311,7 +334,7 @@ class InvocationLifecycleEvidence(BaseModel):
             if item.phase is InvocationPhase.FINALIZING_RESPONSE
         )
         assert self.response_finalization is not None or self.schema_version == 1
-        if self.schema_version == 2:
+        if self.schema_version >= 2:
             observed = self.response_finalization is not None and (
                 self.response_finalization.terminal_response_observed
             )
