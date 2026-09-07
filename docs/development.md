@@ -22,6 +22,10 @@ boundaries, configuration contracts, formatting, lint, the complete test
 suite, and all offline workflow paths. It does not call a model or require
 provider credentials.
 
+The checkout must be an independent Git repository with a committed HEAD.
+Feature branches and detached release tags are supported; branch names do not
+establish repository identity. Release CI runs this same setup and full gate.
+
 `make check` is also the canonical diagnostic full gate. Its supervisor streams
 each stage's original output while atomically recording a report beneath the
 ignored `artifacts/generated/full-gate/` directory. The report binds the exact

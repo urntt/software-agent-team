@@ -6,7 +6,27 @@
     {
       "id": "initial-guided-builder",
       "impact": "minor",
-      "summary": "Initial guided multi-agent software builder and managed installation contract"
+      "summary": "Interactive requirements and approved dynamic agent plans, with explicit prototype and usable-product acceptance"
+    },
+    {
+      "id": "observable-controlled-execution",
+      "impact": "minor",
+      "summary": "Per-agent progress, user steering and lifecycle controls, model routing, USD budgets and activity-based liveness"
+    },
+    {
+      "id": "verified-delivery",
+      "impact": "minor",
+      "summary": "Controller-bound corrections, tool continuation, isolated validation, read-only review and auditable runnable delivery"
+    },
+    {
+      "id": "managed-lifecycle",
+      "impact": "minor",
+      "summary": "Pre-task self-check, isolated OpenClaw ownership, versioned stable/dev installation, updates, rollback, export and preservation-aware uninstall"
+    },
+    {
+      "id": "canonical-release-gate",
+      "impact": "minor",
+      "summary": "Supervised offline validation with resource and cleanup evidence, exact-tag release gating and immutable release identity"
     }
   ]
 }

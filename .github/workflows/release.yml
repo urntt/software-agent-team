@@ -30,16 +30,23 @@ jobs:
 
       - name: Install locked project environment
         run: |
-          uv python install 3.12
-          uv sync --locked
+          UV_BIN="$(command -v uv)" make setup
 
       - name: Run repository release gates
+        run: UV_BIN="$(command -v uv)" make check UV="$(command -v uv)"
+
+      - name: Retain canonical gate evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-gate-${{ github.sha }}
+          path: artifacts/generated/full-gate/
+          if-no-files-found: warn
+
+      - name: Build release identity manifest
         run: |
-          uv run ruff format --check .
-          uv run ruff check .
-          uv run pytest
           mkdir -p dist
-          uv run python scripts/release.py \
+          uv run --frozen python scripts/release.py \
             --tag "${GITHUB_REF_NAME}" \
             --output dist/sat-release.json
 

@@ -56,8 +56,8 @@ task_openclaw_version="$(
 cd "$task_root"
 [[ "$(git rev-parse --show-toplevel)" == "$task_root" ]] || \
   fail "this directory must be an independent Git repository"
-[[ "$(git branch --show-current)" == "main" ]] || \
-  fail "the development branch must be main"
+git rev-parse --verify 'HEAD^{commit}' >/dev/null 2>&1 || \
+  fail "the repository must have a committed HEAD"
 git check-ignore -q AGENTS.md || fail "AGENTS.md must be ignored"
 if git ls-files --error-unmatch AGENTS.md >/dev/null 2>&1; then
   fail "AGENTS.md must not be tracked"

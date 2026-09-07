@@ -159,10 +159,17 @@ sat update --check
 
 Verify the reported release, full revision, tag, artifact digest, schema ranges,
 and installed channel against the GitHub Release manifest. Then verify a stable
-update from the prior release, stable-to-dev and dev-to-stable switches,
+update from the prior release when one exists, stable-to-dev and dev-to-stable switches,
 automatic rollback after an injected activation failure, active-run refusal,
 and preservation-aware uninstall. Record immutable evidence before announcing
 the release as validated.
+
+For the first stable release, verify current-version/no-update behavior instead
+of inventing a prior stable tag. Stable-to-newer-stable upgrade acceptance remains
+pending until a second genuine release exists. Release CI installs the pinned
+development runtime, runs the canonical `make check` supervisor on the exact
+tag, and retains its reports even on failure. Only a successful gate can build
+the identity manifest and publish; uploading diagnostics cannot waive a failure.
 
 ## Channel Semantics
 

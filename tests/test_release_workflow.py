@@ -16,9 +16,18 @@ def test_release_workflow_gates_exact_tag_before_one_release_publication() -> No
     assert '"v*.*.*"' in workflow
     assert "fetch-depth: 0" in workflow
     assert "persist-credentials: false" in workflow
-    assert "ruff format --check" in workflow
-    assert "ruff check" in workflow
-    assert "uv run pytest" in workflow
+    assert 'UV_BIN="$(command -v uv)" make setup' in workflow
+    assert 'make check UV="$(command -v uv)"' in workflow
+    assert "uv run pytest" not in workflow
+    assert "ruff check" not in workflow
+    assert "if: always()" in workflow
+    assert "path: artifacts/generated/full-gate/" in workflow
+    assert "continue-on-error" not in workflow
+    assert workflow.index("make check") < workflow.index("Retain canonical")
+    assert workflow.index("Retain canonical") < workflow.index("scripts/release.py")
+    assert workflow.index("scripts/release.py") < workflow.index("gh release create")
+    manifest_step = workflow.split("- name: Build release identity manifest")[1]
+    assert "if: always()" not in manifest_step
     assert "scripts/release.py" in workflow
     assert '--tag "${GITHUB_REF_NAME}"' in workflow
     assert "gh release view" in workflow
