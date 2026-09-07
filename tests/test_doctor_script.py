@@ -25,7 +25,7 @@ def prepare(root: Path) -> dict[str, str]:
     prefix = root / ".sat/openclaw"
     for relative, output in (
         ("bin/openclaw", "OpenClaw 2026.7.1-2"),
-        ("tools/node-v24.15.0/bin/node", "v24.15.0"),
+        ("tools/node-v24.19.0/bin/node", "v24.19.0"),
     ):
         executable = prefix / relative
         executable.parent.mkdir(parents=True, exist_ok=True)

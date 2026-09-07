@@ -7,9 +7,6 @@ task_runtime_root="$task_root/.sat"
 task_openclaw_prefix="$task_runtime_root/openclaw"
 task_openclaw_bin="$task_openclaw_prefix/bin/openclaw"
 task_openclaw_marker="$task_openclaw_prefix/.sat-owned-runtime"
-task_openclaw_version="2026.7.1-2"
-task_node_version="24.15.0"
-task_node_bin="$task_openclaw_prefix/tools/node-v$task_node_version/bin/node"
 task_installer_home=""
 task_openclaw_environment="$task_root/scripts/openclaw-environment.sh"
 
@@ -17,6 +14,12 @@ fail() {
   echo "setup: $1" >&2
   exit 1
 }
+
+[[ -f "$task_root/configs/toolchain.sh" && ! -L "$task_root/configs/toolchain.sh" ]] || \
+  fail "the private toolchain manifest is missing"
+# shellcheck source=configs/toolchain.sh
+source "$task_root/configs/toolchain.sh"
+task_node_bin="$task_openclaw_prefix/tools/node-v$task_node_version/bin/node"
 
 [[ -f "$task_openclaw_environment" && ! -L "$task_openclaw_environment" ]] || \
   fail "the OpenClaw environment boundary is missing"
@@ -70,16 +73,11 @@ task_installed_node_version="$("$task_node_bin" --version 2>/dev/null || true)"
 if [[ ! -x "$task_openclaw_bin" ]] || \
   [[ "$task_installed_openclaw_version" != *"$task_openclaw_version"* ]] || \
   [[ "$task_installed_node_version" != "v$task_node_version" ]]; then
-  curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install-cli.sh | \
-    sat_run_openclaw_isolated \
+  sat_run_openclaw_isolated \
       "$task_installer_home" \
       "$task_installer_home/state" \
       "$task_installer_home/state/openclaw.json" \
-      bash -s -- \
-      --prefix "$task_openclaw_prefix" \
-      --version "$task_openclaw_version" \
-      --node-version "$task_node_version" \
-      --no-onboard
+      bash "$task_root/scripts/install-openclaw.sh" "$task_openclaw_prefix"
 fi
 
 [[ -x "$task_openclaw_bin" ]] || fail "SAT OpenClaw binary is missing after setup"

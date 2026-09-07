@@ -42,6 +42,11 @@
       "id": "safe-directory-wrapper-progress",
       "impact": "patch",
       "summary": "Classify literal directory-wrapper activity without exposing arguments or changing direct-executable evidence authority"
+    },
+    {
+      "id": "private-toolchain-install-authority",
+      "impact": "patch",
+      "summary": "Own checksum-verified private runtime setup with shared Node and OpenClaw pins, isolated npm configuration and no upstream Gateway lifecycle"
     }
   ]
 }

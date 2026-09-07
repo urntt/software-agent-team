@@ -160,7 +160,7 @@ task_docker_os="$(docker info --format '{{.OSType}}' 2>/dev/null || true)"
   fail "Docker must be running Linux containers"
 
 if ! "$task_root/scripts/setup.sh"; then
-  fail "pinned toolchain setup failed; check download connectivity and retry"
+  fail "pinned toolchain setup failed; resolve the setup diagnostic above before retrying"
 fi
 
 cd "$task_root"

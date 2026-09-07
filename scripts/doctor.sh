@@ -5,7 +5,6 @@ task_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 task_uv_bin="${UV_BIN:-$HOME/.local/bin/uv}"
 task_openclaw_prefix="$task_root/.sat/openclaw"
 task_openclaw_bin="$task_openclaw_prefix/bin/openclaw"
-task_node_bin="$task_openclaw_prefix/tools/node-v24.15.0/bin/node"
 task_openclaw_marker="$task_openclaw_prefix/.sat-owned-runtime"
 task_openclaw_probe_home=""
 task_openclaw_environment="$task_root/scripts/openclaw-environment.sh"
@@ -14,6 +13,13 @@ fail() {
   echo "doctor: $1" >&2
   exit 1
 }
+
+[[ -f "$task_root/configs/toolchain.sh" && ! -L "$task_root/configs/toolchain.sh" ]] || \
+  fail "the private toolchain manifest is missing"
+# shellcheck source=configs/toolchain.sh
+source "$task_root/configs/toolchain.sh"
+task_expected_openclaw_version="$task_openclaw_version"
+task_node_bin="$task_openclaw_prefix/tools/node-v$task_node_version/bin/node"
 
 [[ -f "$task_openclaw_environment" && ! -L "$task_openclaw_environment" ]] || \
   fail "the OpenClaw environment boundary is missing"
@@ -48,10 +54,10 @@ task_openclaw_version="$(
     "$task_openclaw_probe_home/state/openclaw.json" \
     "$task_openclaw_bin" --version
 )"
-[[ "$task_openclaw_version" == *"2026.7.1-2"* ]] || \
-  fail "OpenClaw must be version 2026.7.1-2"
-[[ "$("$task_node_bin" --version)" == "v24.15.0" ]] || \
-  fail "OpenClaw must use Node v24.15.0"
+[[ "$task_openclaw_version" == *"$task_expected_openclaw_version"* ]] || \
+  fail "OpenClaw must be version $task_expected_openclaw_version"
+[[ "$("$task_node_bin" --version)" == "v$task_node_version" ]] || \
+  fail "OpenClaw must use Node v$task_node_version"
 
 cd "$task_root"
 [[ "$(git rev-parse --show-toplevel)" == "$task_root" ]] || \

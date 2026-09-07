@@ -29,6 +29,8 @@ def prepare_checkout(tmp_path: Path) -> Path:
         "scripts/openclaw-environment.sh",
         "scripts/uninstall.sh",
         "scripts/setup.sh",
+        "scripts/install-openclaw.sh",
+        "configs/toolchain.sh",
         "configs/run-policy.json",
         "configs/product-policy.json",
         "profiles/python/quality.json",
@@ -84,7 +86,7 @@ echo 'OpenClaw existing-user-version'
 """,
     )
     (openclaw_prefix / "bin").mkdir(parents=True)
-    (openclaw_prefix / "tools/node-v24.15.0/bin").mkdir(parents=True)
+    (openclaw_prefix / "tools/node-v24.19.0/bin").mkdir(parents=True)
     (openclaw_prefix / ".sat-owned-runtime").write_text(
         f"software-agent-team-openclaw-runtime-v1\nroot={openclaw_prefix}\n",
         encoding="utf-8",
@@ -188,9 +190,9 @@ echo 'OpenClaw 2026.7.1-2 (test)'
 """,
     )
     write_executable(
-        openclaw_prefix / "tools/node-v24.15.0/bin/node",
+        openclaw_prefix / "tools/node-v24.19.0/bin/node",
         """#!/usr/bin/env bash
-echo 'v24.15.0'
+echo 'v24.19.0'
 """,
     )
 
@@ -423,25 +425,17 @@ def test_setup_bootstraps_openclaw_with_isolated_state_and_home(
     installer_log = tmp_path / "openclaw-installer-environment.log"
     environment["FAKE_OPENCLAW_INSTALL_LOG"] = str(installer_log)
     environment["OPENCLAW_SHOW_SECRETS"] = "1"
-    fake_curl = Path(environment["PATH"].split(":", maxsplit=1)[0]) / "curl"
+    environment["STATE_DIRECTORY"] = str(tmp_path / "foreign-service-state")
+    environment["NODE_OPTIONS"] = "--require=/foreign/preload.js"
+    environment["NODE_PATH"] = "/foreign/modules"
     write_executable(
-        fake_curl,
+        checkout / "scripts/install-openclaw.sh",
         """#!/usr/bin/env bash
-cat <<'INSTALLER'
-#!/usr/bin/env bash
 set -euo pipefail
-prefix=""
-version=""
-node_version=""
-while (($#)); do
-  case "$1" in
-    --prefix) prefix="$2"; shift 2 ;;
-    --version) version="$2"; shift 2 ;;
-    --node-version) node_version="$2"; shift 2 ;;
-    --no-onboard) shift ;;
-    *) exit 2 ;;
-  esac
-done
+prefix="$1"
+source "$(dirname "$0")/../configs/toolchain.sh"
+version="$task_openclaw_version"
+node_version="$task_node_version"
 {
   printf 'HOME=%s\n' "$HOME"
   printf 'STATE=%s\n' "$OPENCLAW_STATE_DIR"
@@ -452,6 +446,9 @@ done
   printf 'PROFILE=%s\n' "$OPENCLAW_PROFILE"
   printf 'AMBIENT_PREFIX=%s\n' "${OPENCLAW_PREFIX-unset}"
   printf 'AMBIENT_SHOW_SECRETS=%s\n' "${OPENCLAW_SHOW_SECRETS-unset}"
+  printf 'SERVICE_STATE=%s\n' "${STATE_DIRECTORY-unset}"
+  printf 'NODE_OPTIONS=%s\n' "${NODE_OPTIONS-unset}"
+  printf 'NODE_PATH=%s\n' "${NODE_PATH-unset}"
   printf 'PREFIX=%s\n' "$prefix"
 } > "$FAKE_OPENCLAW_INSTALL_LOG"
 mkdir -p "$prefix/bin" "$prefix/tools/node-v$node_version/bin"
@@ -463,7 +460,6 @@ printf '%s\n' \
 printf '%s\n' '#!/usr/bin/env bash' "echo 'v$node_version'" > \
   "$prefix/tools/node-v$node_version/bin/node"
 chmod 755 "$prefix/bin/openclaw" "$prefix/tools/node-v$node_version/bin/node"
-INSTALLER
 """,
     )
 
@@ -493,6 +489,9 @@ INSTALLER
     assert recorded["PROFILE"] == ""
     assert recorded["AMBIENT_PREFIX"] == "unset"
     assert recorded["AMBIENT_SHOW_SECRETS"] == "unset"
+    assert recorded["SERVICE_STATE"] == "unset"
+    assert recorded["NODE_OPTIONS"] == "unset"
+    assert recorded["NODE_PATH"] == "unset"
     assert recorded["PREFIX"] == str(private_runtime)
     assert not installer_home.exists()
     existing_config = Path(environment["HOME"]) / ".openclaw/openclaw.json"

@@ -22,6 +22,16 @@ boundaries, configuration contracts, formatting, lint, the complete test
 suite, and all offline workflow paths. It does not call a model or require
 provider credentials.
 
+`configs/toolchain.sh` is the shared setup/doctor authority for private Node and
+OpenClaw versions and download checksums. A runtime pin update must verify the
+official artifacts, package engine compatibility, linked SQLite safety, fresh
+installation, failure preservation, and the real OpenClaw loopback gate. The
+SAT-owned dependency installer must not delegate to a moving remote shell script
+or introduce Gateway/service discovery. Keep npm configuration and cache inside
+the ephemeral installer home; do not inherit another installation's npm prefix.
+Regressions must also cover `STATE_DIRECTORY`, `NODE_OPTIONS`, and `NODE_PATH`:
+isolating only `OPENCLAW_*` cannot isolate a package's postinstall cleanup roots.
+
 The checkout must be an independent Git repository with a committed HEAD.
 Feature branches and detached release tags are supported; branch names do not
 establish repository identity. Release CI runs this same setup and full gate.
@@ -466,6 +476,7 @@ src/software_agent_team/
   workflow.py                  Fixed-fixture compatibility orchestration
 scripts/
   bootstrap.sh                 Remote managed-install entry point
+  install-openclaw.sh          Checksum-verified private dependency installation
   install.sh                   Locked Linux/WSL application installation
   release.py                   Release manifest and candidate gate CLI
   openclaw-environment.sh      Private OpenClaw shell-process environment

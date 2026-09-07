@@ -9,6 +9,14 @@ supports that claim, and what remains unavailable. It does not redefine the
 product, architecture, experiment, or roadmap; those decisions belong to
 [`VISION.md`](VISION.md).
 
+Fresh installation exposed a mismatch between the pinned Node version and a
+moving upstream CLI installer. Setup now owns dependency-only installation from
+checksum-verified Node/OpenClaw artifacts, with one shared version manifest and
+no Gateway lifecycle delegation. The fixed OpenClaw version starts successfully
+with Node 24.19.0 in contributor setup. Focused installation regressions cover
+checksum failures, launcher preservation, private npm configuration, and ambient
+service-state/preload isolation; complete fresh managed validation remains pending.
+
 The implementation gate for `5acbae8` passed all 1,201 tests before commit,
 with no new OOM events or residual owned resources. Immutable installation
 placement now uses complete provenance while retaining compatible legacy paths;

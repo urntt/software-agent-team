@@ -1,0 +1,6 @@
+# Reviewed private runtime pins, shared by setup and doctor.
+task_openclaw_version="2026.7.1-2"
+task_openclaw_sha256="5bb525f36f471a41239615d321c441778c7e1c007018ed6d84b795be77803276"
+task_node_version="24.19.0"
+task_node_x64_sha256="f625d97cd707df4ff96254916fbc5ff014f09c09effe5a1e0ca8f6d41a8789d4"
+task_node_arm64_sha256="d28c8a5bf0a808f0ed434a1dce8c54ae98f0371c0bd86ac58abc613f73e6643f"

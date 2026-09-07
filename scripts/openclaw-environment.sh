@@ -17,6 +17,8 @@ sat_run_openclaw_isolated() {
   # Enumerate names in this shell. An asynchronous process substitution can
   # outlive a fast parent exit and leave an unreaped child at the caller boundary.
   task_openclaw_environment_names+=(PI_CODING_AGENT_DIR)
+  # Package lifecycle also treats systemd's STATE_DIRECTORY as cleanup authority.
+  task_openclaw_environment_names+=(STATE_DIRECTORY NODE_OPTIONS NODE_PATH)
   for task_environment_name in "${task_openclaw_environment_names[@]}"; do
     task_clean_environment+=(-u "$task_environment_name")
   done

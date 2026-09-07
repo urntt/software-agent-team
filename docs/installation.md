@@ -20,9 +20,20 @@ The installer does not install or start an OS-level Docker daemon. Install
 Docker first and make it available to the unprivileged Linux/WSL user. The
 installer and every `sat` launch then check that condition directly.
 
-SAT pins Python 3.12, OpenClaw 2026.7.1-2, OpenClaw's local Node.js 24.15.0
+SAT pins Python 3.12, OpenClaw 2026.7.1-2, OpenClaw's local Node.js 24.19.0
 runtime, Python dependencies through `uv.lock`, and the generated-code sandbox
 image through `configs/product-policy.json`.
+
+Private runtime setup uses SAT's own dependency-only installer, not a moving
+upstream installation script. `configs/toolchain.sh` binds both runtime versions
+and the platform-specific Node and OpenClaw package checksums. Downloads must
+match before extraction or installation; Node's linked SQLite is also checked.
+OpenClaw's transitive npm dependencies are resolved by its package metadata;
+this is not a claim of a fully locked transitive npm dependency tree.
+No Gateway discovery, refresh, restart, or onboarding runs during setup. The
+private launcher is published only after dependency version checks succeed.
+The installer also removes inherited system-service state roots and Node preload
+settings before dependency probes and package lifecycle execution.
 
 SAT never adopts an OpenClaw installation that predates SAT. Its pinned binary
 and Node.js runtime live under the marked application-private
@@ -72,7 +83,7 @@ The installation then:
 
 - Checks architecture, required commands, Docker access, and Linux-container
   mode;
-- Installs the pinned uv and Python toolchain plus a marked SAT-private
+- Bootstraps uv and prepares the Python toolchain plus a marked SAT-private
   OpenClaw runtime when needed;
 - Synchronizes the locked SAT environment;
 - Builds and resolves the pinned sandbox image, then starts a restricted probe,
