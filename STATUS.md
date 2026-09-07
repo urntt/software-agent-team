@@ -9,7 +9,15 @@ supports that claim, and what remains unavailable. It does not redefine the
 product, architecture, experiment, or roadmap; those decisions belong to
 [`VISION.md`](VISION.md).
 
-The latest implementation gate passed all 1,190 tests. Planning schema v9 now
+The implementation gate for `5acbae8` passed all 1,201 tests before commit,
+with no new OOM events or residual owned resources. Immutable installation
+placement now uses complete provenance while retaining compatible legacy paths;
+observer publication shares the lifecycle stop authority, so late session
+history cannot reopen working progress. The current activity projection also
+recognizes literal directory wrappers without changing direct-executable
+evidence. Final candidate and fresh-user validation remain outstanding.
+
+The preceding implementation gate passed all 1,190 tests. Planning schema v9 now
 requires a material, user-attributable primary workflow even for a throwaway
 prototype, without removing legacy schema readability or requiring a fixed
 questionnaire. The shared session reader also accepts complete leading shell
@@ -39,7 +47,7 @@ complete supervised gate passed all 997 tests with no residual stage
 process, process lease, sandbox container, or volume; it observed no new cgroup
 or kernel OOM event. The two historical incomplete suites still have an
 evidence-bounded unknown cause rather than a retroactively invented diagnosis.
-The latest clean batch gate at `65518d9` passed all 1,014 tests after a
+A historical clean batch gate at `65518d9` passed all 1,014 tests after a
 deadline-crossing cleanup race was reproduced, fixed, and regression-tested;
 it likewise recorded no new OOM evidence or residual owned resources.
 A later diagnostic gate over the ProductDefinition candidate passed all 1,030
@@ -53,7 +61,7 @@ supervisor. Its dirty-tree diagnostic report recorded a 224,661,504-byte
 aggregate peak RSS, no new cgroup or kernel OOM event, and zero residual stage
 processes, process leases, sandbox containers, or volumes. Repeated clean gates
 on the eventual frozen revision remain required.
-The latest dirty-tree diagnostic gate passed all **1,099 tests** in 326.84
+A historical dirty-tree diagnostic gate passed all **1,099 tests** in 326.84
 seconds. It recorded a 289,669,120-byte aggregate peak RSS, peak process/thread
 counts of 5/19, no new cgroup or kernel OOM event, and zero residual stage
 processes, process leases, sandbox containers, or volumes. It covers exact

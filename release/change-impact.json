@@ -37,6 +37,11 @@
       "id": "shutdown-observer-publication",
       "impact": "patch",
       "summary": "Serialize observer publication through the lifecycle stop authority so late session history cannot reopen working progress during shutdown"
+    },
+    {
+      "id": "safe-directory-wrapper-progress",
+      "impact": "patch",
+      "summary": "Classify literal directory-wrapper activity without exposing arguments or changing direct-executable evidence authority"
     }
   ]
 }

@@ -1058,6 +1058,12 @@ when investigating it rather than editing artifacts in place.
   activity counters but does not invent an unobserved `tool_active` interval or
   repeat `provider_wait`. Repeated active snapshots likewise retain one
   `tool_active` phase until the observed state actually changes.
+  Safe action classification can recognize a single literal
+  `cd <directory> && <command>` prefix and expose only the following allow-listed
+  executable basename. Quoted operator arguments, expansions, compound or
+  unsupported wrappers fall back to generic activity. Directory and command
+  arguments never enter progress, and captured direct-executable evidence
+  remains `cd`; the display projection cannot authorize Review grounding.
   All observer publication shares the lifecycle's serialized stop boundary.
   Once a stop is accepted, late initialization/provider/tool observations may
   still contribute retained session evidence and terminal counters, but cannot

@@ -465,6 +465,55 @@ def test_activity_inspection_tracks_current_tool_lifecycle_without_content(
     assert "SECRET_ACTIVITY_CONTENT" not in repr(terminal)
 
 
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        ("cd /workspace && git status --short", "git"),
+        ('cd "/private/SECRET/path with spaces" && pytest -q', "pytest"),
+        ("cd -- /workspace && uv run pytest", "uv"),
+        ("# leading comment\ncd /workspace && git status", "git"),
+        ("cd /workspace || git status", None),
+        ("cd /workspace '&&' git status", None),
+        ('cd /workspace "&&" git status', None),
+        ("cd /workspace; git status", None),
+        ("cd /workspace\n&& git status", None),
+        ("cd - && git status", None),
+        ("cd -P && git status", None),
+        ('cd "$SECRET_PATH" && git status', None),
+        ("cd $(printf /workspace) && git status", None),
+        ("cd /workspace && /tmp/SECRET_EXECUTABLE", None),
+        ("cd /workspace && $(printf git) status", None),
+        ("cd /workspace &&", None),
+        ("cd /workspace && cd child && git status", None),
+    ],
+)
+def test_directory_wrapper_activity_preserves_direct_evidence(
+    tmp_path: Path, command: str, expected: str | None
+) -> None:
+    invocation = request()
+    write_session_state(
+        tmp_path,
+        invocation=invocation,
+        records=[
+            session_record(),
+            user_record(invocation.prompt),
+            tool_call_record("wrapped-call", command=command),
+            tool_result_record("wrapped-call", output="SECRET_OUTPUT"),
+        ],
+    )
+    activity = inspect_openclaw_session_activity(
+        state_dir=tmp_path,
+        agent_id=invocation.agent_id,
+        session_key=invocation.session_key,
+        prompt=invocation.prompt,
+    )
+    assert activity is not None
+    assert activity.started_tools[0].executable == expected
+    assert activity.completed_tools[0].executable == expected
+    assert "SECRET" not in repr(activity)
+    assert capture(tmp_path, invocation).tool_calls[0].executable == "cd"
+
+
 def test_activity_identity_drops_unlisted_executable_content(tmp_path: Path) -> None:
     invocation = request(prompt="Inspect without exposing activity arguments.")
     write_session_state(

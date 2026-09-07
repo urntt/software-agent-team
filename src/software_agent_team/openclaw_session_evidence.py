@@ -104,11 +104,14 @@ _ACTIVITY_EXECUTABLES = {
 def _safe_activity_identity(
     tool_name: str,
     executable: str | None,
+    arguments: object = None,
 ) -> OpenClawToolActivity:
     """Reduce runtime-owned identities to a bounded progress allow-list."""
 
     safe_name = tool_name if tool_name in _ACTIVITY_TOOL_NAMES else "other"
     safe_executable = None
+    if tool_name == "exec" and executable == "cd":
+        executable = _directory_wrapped_activity_executable(arguments)
     if executable is not None:
         basename = executable.rsplit("/", maxsplit=1)[-1]
         if basename in _ACTIVITY_EXECUTABLES:
@@ -117,6 +120,42 @@ def _safe_activity_identity(
         tool_name=safe_name,
         executable=safe_executable,
     )
+
+
+def _directory_wrapped_activity_executable(arguments: object) -> str | None:
+    """Classify one literal directory wrapper without changing direct evidence."""
+
+    if not isinstance(arguments, dict) or not isinstance(arguments.get("command"), str):
+        return None
+    lexer = shlex.shlex(
+        _shell_command_prefix(arguments["command"]), posix=False, punctuation_chars=True
+    )
+    # Preserve quoting so an argument spelled '&&' cannot become shell control.
+    lexer.whitespace_split = True
+    lexer.whitespace = " \t"
+    lexer.commenters = ""
+    try:
+        if next(lexer) != "cd":
+            return None
+        directory = next(lexer)
+        if directory == "--":
+            directory = next(lexer)
+        # Expansion, redirection and compound shell syntax are not a literal
+        # directory wrapper. No path or argument ever leaves this projection.
+        if (
+            not directory
+            or directory.startswith("-")
+            or any(char in directory for char in "$`;&|()<>\n~*?[]{}")
+        ):
+            return None
+        if next(lexer) != "&&":
+            return None
+        executable = next(lexer)
+        if any(char in executable for char in "$`;&|()<>\n~*?[]{}"):
+            return None
+        return executable
+    except (StopIteration, ValueError):
+        return None
 
 
 @dataclass(frozen=True)
@@ -634,6 +673,7 @@ def inspect_openclaw_session_activity(
                 started[external_id] = _safe_activity_identity(
                     tool_name,
                     executable,
+                    item.get("arguments"),
                 )
         elif role == "toolResult":
             trusted_records += 1
@@ -689,6 +729,15 @@ def _canonical_arguments(arguments: object) -> bytes:
 _ENVIRONMENT_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 
 
+def _shell_command_prefix(command: str) -> str:
+    """Skip only complete leading comments, preserving literal hashes in words."""
+
+    prefix = command.lstrip(" \t\n")
+    while prefix.startswith("#"):
+        prefix = prefix.partition("\n")[2].lstrip(" \t\n")
+    return prefix
+
+
 def _exec_executable(tool_name: str, arguments: object) -> str | None:
     """Extract only a safe executable token, never the complete command argv."""
 
@@ -704,9 +753,7 @@ def _exec_executable(tool_name: str, arguments: object) -> str | None:
     # Shell comments before the command are not executable identity. Skip only
     # complete leading comment lines, not hashes inside words or quoted tokens;
     # shlex.commenters would incorrectly truncate those literal command names.
-    prefix = command.lstrip(" \t\n")
-    while prefix.startswith("#"):
-        prefix = prefix.partition("\n")[2].lstrip(" \t\n")
+    prefix = _shell_command_prefix(command)
     lexer = shlex.shlex(prefix, posix=True)
     lexer.whitespace_split = True
     lexer.commenters = ""
