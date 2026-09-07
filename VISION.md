@@ -162,6 +162,11 @@ when code, usability evidence, or controlled experiments justify a replacement.
   revision; source checkouts remain outside the managed updater. Install,
   update, and channel switch share one staged, compatibility-checked, atomic
   activation transaction and never change channel silently.
+  Immutable release placement binds the complete managed marker, not just a
+  numeric version or source prefix: channel and ref changes may describe the
+  same source bytes but must not relabel another installed identity. Compatible
+  historical paths remain usable in place until normal uninstallation removes
+  them; installed absolute entry points are never relocated.
 - SAT installs no update daemon, scheduler, or exit-time worker. Each bare
   `sat` entry that starts a new task checks update availability once in its
   foreground admission flow. Failure to reach the release endpoint cannot

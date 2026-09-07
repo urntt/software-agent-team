@@ -27,6 +27,16 @@
       "id": "canonical-release-gate",
       "impact": "minor",
       "summary": "Supervised offline validation with resource and cleanup evidence, exact-tag release gating and immutable release identity"
+    },
+    {
+      "id": "immutable-provenance-placement",
+      "impact": "patch",
+      "summary": "Same-source channel and ref switches preserve distinct immutable installation identities and reuse compatible historical paths without relocation"
+    },
+    {
+      "id": "shutdown-observer-publication",
+      "impact": "patch",
+      "summary": "Serialize observer publication through the lifecycle stop authority so late session history cannot reopen working progress during shutdown"
     }
   ]
 }

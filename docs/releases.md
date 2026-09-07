@@ -181,6 +181,13 @@ the identity manifest and publish; uploading diagnostics cannot waive a failure.
   dev ref can retarget an installation already on dev; omitting the ref on a
   same-channel switch remains a local no-op.
 - Install, update, and switch never change channels silently.
+- Managed version directories are private identity-addressed storage, not an
+  interface for deriving the active source revision. The full immutable marker
+  determines new placement, so stable/dev or explicit-ref changes at the same
+  source commit can coexist and switch back without rewriting prior provenance.
+  Existing source-prefix directories are reused only for an exact marker match
+  and remain in place; normal ownership-checked uninstallation eventually
+  removes them. Use `sat version --json` or channel status to inspect identity.
 - SAT has no updater daemon or scheduler. Update discovery runs only in a SAT
   foreground process. The ordinary product entry checks once per new task;
   local version/help/status commands remain offline, and `sat update --check`

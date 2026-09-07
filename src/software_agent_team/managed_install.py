@@ -20,6 +20,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
+from software_agent_team.integrity import canonical_model_sha256
 from software_agent_team.paths import user_state_root
 from software_agent_team.releases import (
     ResolvedReleaseTarget,
@@ -1043,8 +1044,21 @@ def _final_release_path(
     paths: ManagedInstallPaths,
     marker: ManagedApplicationMarker,
 ) -> Path:
-    label = f"{marker.release_version}-g{marker.source_revision[:12]}"
-    return paths.versions_root / label
+    # Existing source-only paths remain readable in place: installed console
+    # scripts contain absolute paths and must never be relocated or relabeled.
+    legacy = paths.versions_root / (
+        f"{marker.release_version}-g{marker.source_revision[:12]}"
+    )
+    if legacy.exists() or legacy.is_symlink():
+        if legacy.is_symlink() or not legacy.is_dir():
+            raise ManagedInstallError("managed release destination is not a directory")
+        if load_managed_marker(legacy / MANAGED_MARKER_NAME) == marker:
+            return legacy
+    # Placement and reuse consume exactly the same immutable identity, including
+    # channel, ref, repository, full revision, and archive digest.
+    return paths.versions_root / (
+        f"{marker.release_version}-p{canonical_model_sha256(marker)}"
+    )
 
 
 def _prepare_active_link(paths: ManagedInstallPaths) -> Path | None:

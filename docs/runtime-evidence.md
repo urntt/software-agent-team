@@ -1058,6 +1058,11 @@ when investigating it rather than editing artifacts in place.
   activity counters but does not invent an unobserved `tool_active` interval or
   repeat `provider_wait`. Repeated active snapshots likewise retain one
   `tool_active` phase until the observed state actually changes.
+  All observer publication shares the lifecycle's serialized stop boundary.
+  Once a stop is accepted, late initialization/provider/tool observations may
+  still contribute retained session evidence and terminal counters, but cannot
+  publish live-working progress or reopen an earlier phase. Shutdown events
+  remain visible through evidence collection and the exact terminal outcome.
   Prompt content is neither retained nor emitted. Ninety seconds without a new
   checkpoint enters a visible final 15-second grace, after which the exact
   process is stopped as `initialization_stall`. Observer absence or malformed

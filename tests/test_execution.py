@@ -379,6 +379,68 @@ def test_lifecycle_activity_kind_must_match_its_exact_phase() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "late_kind",
+    [
+        AgentExecutionActivityKind.TOOL_STARTED,
+        AgentExecutionActivityKind.TOOL_COMPLETED,
+        AgentExecutionActivityKind.PROVIDER_STREAM,
+        AgentExecutionActivityKind.STALL_RECOVERED,
+    ],
+)
+def test_shutdown_owns_late_provider_progress(
+    late_kind: AgentExecutionActivityKind,
+) -> None:
+    activities: list[AgentExecutionActivity] = []
+    invocation = request(model="provider/model")
+    lifecycle = execution._InvocationLifecycleRecorder(
+        request=invocation,
+        started_monotonic=0,
+        process_grace_seconds=35,
+        initialization_policy=InitializationLivenessPolicy(
+            no_progress_seconds=90, stall_grace_seconds=15, source="test"
+        ),
+        response_finalization_policy=ResponseFinalizationPolicy(
+            no_progress_seconds=60, stall_grace_seconds=10, source="test"
+        ),
+        activity_handler=activities.append,
+        monotonic=lambda: 0,
+    )
+    lifecycle.process_launched(now=0, process_group_targeted=True)
+    lifecycle.provider_ready(InitializationCheckpoint.CURRENT_TURN, now=1)
+    monitor = execution._ProviderLivenessMonitor(
+        request=invocation,
+        policy=ProviderLivenessPolicy(
+            model="provider/model",
+            silence_seconds=300,
+            stall_grace_seconds=30,
+            source="test",
+        ),
+        raw_stream_path=None,
+        state_dir=None,
+        started_monotonic=0,
+        activity_handler=activities.append,
+        initialization_monitor=None,
+        lifecycle=lifecycle,
+    )
+    lifecycle.request_stop(
+        InvocationStopReason.USER_CANCEL, now=2, action="User cancelled"
+    )
+    before = list(activities)
+    # The final session poll still contributes complete historical counters.
+    monitor.previous_tool_completed = 383
+    lifecycle.tool_state(0, 383, now=3)
+    monitor._emit(late_kind, 3)
+    assert activities == before
+    assert lifecycle.phase is InvocationPhase.STOPPING
+    assert lifecycle.completed_tool_count == 383
+    assert monitor.evidence().tool_completed_count == 383
+    # A delayed initialization observer must not reopen the lifecycle either.
+    lifecycle.initialization_progress(InitializationCheckpoint.CURRENT_TURN, now=4)
+    assert activities == before
+    assert lifecycle.phase is InvocationPhase.STOPPING
+
+
 def test_openclaw_adapter_captures_runtime_telemetry() -> None:
     def runner(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(

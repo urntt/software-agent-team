@@ -1144,6 +1144,12 @@ class _InvocationLifecycleRecorder:
     ) -> None:
         current = self.monotonic() if now is None else now
         with self._lock:
+            if self.stop_reason is not None and phase not in {
+                InvocationPhase.STOPPING,
+                InvocationPhase.COLLECTING_EVIDENCE,
+                InvocationPhase.STOPPED,
+            }:
+                return
             candidate = InvocationLifecycleTransition(
                 sequence=len(self.transitions) + 1,
                 phase=phase,
@@ -1164,7 +1170,7 @@ class _InvocationLifecycleRecorder:
                     return
             self.transitions.append(candidate)
             self.phase = phase
-        self._emit_phase(candidate)
+            self._emit_phase(candidate)
 
     def process_launched(self, *, now: float, process_group_targeted: bool) -> None:
         with self._lock:
@@ -1443,13 +1449,24 @@ class _InvocationLifecycleRecorder:
             )
         )
 
-    def _emit(self, activity: AgentExecutionActivity) -> None:
-        if self.activity_handler is None:
-            return
-        try:
-            self.activity_handler(activity)
-        except Exception:
-            return
+    def _emit(self, activity: AgentExecutionActivity) -> bool:
+        # All observers publish through the lifecycle's serialization boundary.
+        # Final session collection may still discover historical tools after a
+        # stop request; retain those records/counters, not live-working events.
+        with self._lock:
+            if self.stop_reason is not None and activity.invocation_phase not in {
+                InvocationPhase.STOPPING,
+                InvocationPhase.COLLECTING_EVIDENCE,
+                InvocationPhase.STOPPED,
+            }:
+                return True
+            if self.activity_handler is None:
+                return True
+            try:
+                self.activity_handler(activity)
+            except Exception:
+                return False
+            return True
 
 
 class _InitializationLivenessMonitor:
@@ -1911,9 +1928,7 @@ class _ProviderLivenessMonitor:
                 None if tool_classification is None else tool_classification[2]
             ),
         )
-        try:
-            self.activity_handler(activity)
-        except Exception:
+        if not self.lifecycle._emit(activity):
             self.degradation_reason = "provider liveness activity could not be reported"
 
     def evidence(self) -> ProviderLivenessEvidence:

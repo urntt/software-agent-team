@@ -13,14 +13,17 @@ import pytest
 
 import software_agent_team.managed_install as managed_install_module
 import software_agent_team.schema_compatibility as schema_compatibility_module
+from software_agent_team.integrity import canonical_model_sha256
 from software_agent_team.managed_install import (
     MANAGED_ROOT_MARKER_NAME,
+    ManagedApplicationMarker,
     ManagedInstallError,
     ManagedInstallPaths,
     ManagedRootMarker,
     ManagedTarget,
     activate_staged_application,
     install_managed_target,
+    load_managed_marker,
     managed_foreground_task_lease,
     resolve_dev_target,
     stage_managed_target,
@@ -350,6 +353,123 @@ def test_dev_resolution_accepts_one_advertised_ref_and_exact_revision(
         )
 
 
+@pytest.mark.parametrize("first_channel", ["dev", "stable", "dev-ref"])
+def test_same_source_provenance_switch_preserves_and_reuses_exact_targets(
+    tmp_path: Path, first_channel: str
+) -> None:
+    repository, revision = prepare_repository(tmp_path)
+    git(repository, "tag", "v0.1.0")
+    install_paths = paths(tmp_path)
+    dev = dev_target(repository, revision)
+    stable = ManagedTarget(
+        channel=ManagedChannel.STABLE,
+        release_version="0.1.0",
+        source_revision=revision,
+        source_ref="v0.1.0",
+        repository_url=str(repository),
+        artifact_digest=git_archive_digest(repository),
+        schema_support=supported_schemas(),
+    )
+    if first_channel == "dev-ref":
+        first, second = dev, dev.model_copy(update={"source_ref": revision})
+    elif first_channel == "dev":
+        first, second = dev, stable
+    else:
+        first, second = stable, dev
+    install_managed_target(first, install_paths)
+    original = install_paths.application_link.resolve(strict=True)
+    original_marker = (original / ".sat-managed-install").read_bytes()
+    install_paths.state_root.mkdir(parents=True, exist_ok=True)
+    sentinel = install_paths.state_root / "preserve.txt"
+    sentinel.write_text("user state must survive\n", encoding="utf-8")
+
+    changed = install_managed_target(second, install_paths)
+    second_path = install_paths.application_link.resolve(strict=True)
+    assert second_path != original
+    assert changed.channel == second.channel
+    assert changed.source_ref == second.source_ref
+    assert changed.source_revision == revision
+    assert (original / ".sat-managed-install").read_bytes() == original_marker
+    assert sentinel.read_text(encoding="utf-8") == "user state must survive\n"
+    staged_original = stage_managed_target(first, install_paths)
+    assert staged_original.path == original
+    assert staged_original.created_candidate is False
+    activate_staged_application(staged_original, install_paths)
+    assert install_paths.application_link.resolve(strict=True) == original
+    assert (original / ".sat-managed-install").read_bytes() == original_marker
+    assert len(tuple(install_paths.versions_root.iterdir())) == 2
+
+
+def test_legacy_source_only_path_is_reused_without_relocation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository, revision = prepare_repository(tmp_path)
+    install_paths = paths(tmp_path)
+    original_target = dev_target(repository, revision)
+    legacy = install_paths.versions_root / f"0.1.0-g{revision[:12]}"
+    with monkeypatch.context() as old_layout:
+        old_layout.setattr(
+            managed_install_module,
+            "_final_release_path",
+            lambda _paths, _marker: legacy,
+        )
+        install_managed_target(original_target, install_paths)
+    original_marker = (legacy / ".sat-managed-install").read_bytes()
+    original_launcher = (legacy / ".venv/bin/sat").read_bytes()
+    staged = stage_managed_target(original_target, install_paths)
+    assert staged.path == legacy
+    assert staged.created_candidate is False
+    activate_staged_application(staged, install_paths)
+    with managed_foreground_task_lease(legacy):
+        pass
+    install_managed_target(
+        original_target.model_copy(update={"source_ref": revision}), install_paths
+    )
+    assert install_paths.application_link.resolve(strict=True) != legacy
+    assert (legacy / ".sat-managed-install").read_bytes() == original_marker
+    assert (legacy / ".venv/bin/sat").read_bytes() == original_launcher
+    activate_staged_application(
+        stage_managed_target(original_target, install_paths), install_paths
+    )
+    assert install_paths.application_link.resolve(strict=True) == legacy
+
+
+@pytest.mark.parametrize("legacy_kind", ["symlink", "file", "missing-marker"])
+def test_unsafe_legacy_release_is_not_followed_or_overwritten(
+    tmp_path: Path, legacy_kind: str
+) -> None:
+    install_paths = paths(tmp_path)
+    marker = ManagedApplicationMarker(
+        application_link=str(install_paths.application_link),
+        channel=ManagedChannel.DEV,
+        release_version="0.1.0",
+        source_revision="a" * 40,
+        source_ref="main",
+        repository_url="https://example.invalid/sat.git",
+        artifact_digest="sha256:" + "b" * 64,
+    )
+    legacy = install_paths.versions_root / "0.1.0-gaaaaaaaaaaaa"
+    legacy.parent.mkdir(parents=True)
+    if legacy_kind == "symlink":
+        foreign = tmp_path / "foreign"
+        foreign.mkdir()
+        legacy.symlink_to(foreign, target_is_directory=True)
+    elif legacy_kind == "file":
+        legacy.write_text("not owned", encoding="utf-8")
+    else:
+        legacy.mkdir()
+    with pytest.raises(ManagedInstallError):
+        managed_install_module._final_release_path(install_paths, marker)
+    assert legacy.exists()
+    if legacy_kind == "symlink":
+        assert legacy.is_symlink()
+        assert tuple(foreign.iterdir()) == ()
+    elif legacy_kind == "file":
+        assert legacy.read_text(encoding="utf-8") == "not owned"
+    else:
+        assert tuple(legacy.iterdir()) == ()
+
+
 def test_initial_install_stages_verifies_and_activates_one_logical_link(
     tmp_path: Path,
 ) -> None:
@@ -364,7 +484,8 @@ def test_initial_install_stages_verifies_and_activates_one_logical_link(
     assert install_paths.application_link.is_symlink()
     active = install_paths.application_link.resolve(strict=True)
     assert active.parent == install_paths.versions_root
-    assert active.name == f"0.1.0-g{revision[:12]}"
+    marker = load_managed_marker(active / ".sat-managed-install")
+    assert active.name == f"0.1.0-p{canonical_model_sha256(marker)}"
     assert record.application_path == str(install_paths.application_link)
     assert load_installation_record(install_paths.installation_record) == record
     assert (install_paths.bin_directory / "sat").readlink() == (
@@ -486,7 +607,7 @@ def test_failed_final_launcher_probe_rolls_back_initial_activation(
     assert not install_paths.installation_record.exists()
     assert not (install_paths.bin_directory / "sat").exists()
     assert not (install_paths.bin_directory / "sat-uninstall").exists()
-    assert not tuple(install_paths.versions_root.glob("0.1.0-g*"))
+    assert not tuple(install_paths.versions_root.iterdir())
 
 
 def test_active_run_blocks_activation_before_the_link_changes(tmp_path: Path) -> None:
@@ -701,7 +822,7 @@ def test_invalid_candidate_compatibility_result_preserves_active_release(
 
     assert install_paths.application_link.resolve(strict=True) == first_release
     assert load_installation_record(install_paths.installation_record) == first_record
-    assert not (install_paths.versions_root / f"0.1.0-g{bad_revision[:12]}").exists()
+    assert tuple(install_paths.versions_root.iterdir()) == (first_release,)
 
 
 def test_foreground_task_lease_blocks_activation_until_task_exit(
