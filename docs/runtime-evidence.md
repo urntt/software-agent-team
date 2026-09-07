@@ -320,16 +320,18 @@ exact model-owned JSON-pointer paths. Human-readable error text explains the
 failure but never defines its identity. The controller retains the invalid
 semantic object,
 binds its canonical SHA-256 into persisted correction-request evidence, assigns
-the exact paths to ordered Controller-owned slots, and asks the model to submit
-only the corresponding `replacement_values`—never the digest, paths, or the
-complete object. Each model-visible slot includes a self-contained projection of
+each exact path a response-bound opaque handle, and asks the model to submit only
+order-independent `{slot_handle, replacement_value}` records—never the digest,
+private path authority, or the complete object. Each model-visible slot includes a self-contained projection of
 the target value's exact response schema plus the validator-owned error constraints.
-The correction submission schema itself uses those ordered slot schemas; it is
-not an untyped `JsonValue` list with stricter prose beside it. ProductDefinition validation reports
+The correction submission schema discriminates each record by its constant handle
+and exact value schema; it is not an untyped `JsonValue` list with stricter prose
+beside it. ProductDefinition validation reports
 independent invalid dimensions together, and each complete dimension is the atomic
 repair value so coupled disposition, source, statement, and downstream references
 cannot be repaired as a misleading sequence of isolated scalar edits. The exact
-semantic correction schema requires the slot count;
+semantic correction schema requires the slot count, and Controller validation
+requires every authorized handle exactly once before copying or mutation;
 dynamic Agents expose it directly inside the canonical `artifact` argument, while
 Adaptive Planning uses the same exact correction schema at its submission boundary.
 Only an initial Planning question or proposal uses the object-only capture schema

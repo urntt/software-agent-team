@@ -257,15 +257,35 @@ class ResponseValidationDiagnostic(BaseModel):
         return _json_sha256(payload)
 
 
-class SemanticCorrectionSubmission(BaseModel):
-    """The only model-owned values accepted during targeted correction."""
+class SemanticCorrectionReplacement(BaseModel):
+    """One value explicitly bound to a controller-issued correction slot."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    replacement_values: tuple[JsonValue, ...] = Field(
+    slot_handle: str = Field(pattern=r"^slot_[0-9a-f]{16}$")
+    replacement_value: JsonValue
+
+
+class SemanticCorrectionSubmission(BaseModel):
+    """The only model-owned, identity-bound values accepted during correction."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    replacements: tuple[SemanticCorrectionReplacement, ...] = Field(
         min_length=1,
         max_length=MAX_CORRECTION_FIELDS,
     )
+
+    @field_validator("replacements")
+    @classmethod
+    def require_unique_slot_handles(
+        cls,
+        values: tuple[SemanticCorrectionReplacement, ...],
+    ) -> tuple[SemanticCorrectionReplacement, ...]:
+        handles = tuple(item.slot_handle for item in values)
+        if len(handles) != len(set(handles)):
+            raise ValueError("semantic correction slot handles must be unique")
+        return values
 
 
 class SemanticCorrectionCandidate(BaseModel):
@@ -368,6 +388,43 @@ def semantic_payload_sha256(payload: dict[str, object]) -> str:
     """Return the canonical identity of one untrusted semantic payload."""
 
     return _json_sha256(payload)
+
+
+def semantic_correction_slot_handle(
+    base_response_sha256: str,
+    target_path: str,
+) -> str:
+    """Derive one opaque slot identity from controller-owned correction authority."""
+
+    if len(base_response_sha256) != 64 or any(
+        character not in "0123456789abcdef" for character in base_response_sha256
+    ):
+        raise ValueError("correction slot base response identity is invalid")
+    if target_path == "/" or not target_path.startswith("/"):
+        raise ValueError("correction slot target requires a JSON pointer")
+    _decode_pointer(target_path)
+    identity = _json_sha256(
+        {
+            "domain": "semantic-correction-slot-v1",
+            "base_response_sha256": base_response_sha256,
+            "target_path": target_path,
+        }
+    )
+    return f"slot_{identity[:16]}"
+
+
+def _semantic_correction_slot_bindings(
+    plan: SemanticCorrectionPlan,
+) -> dict[str, str]:
+    """Return a collision-free opaque-handle to private-path authority map."""
+
+    bindings = {
+        semantic_correction_slot_handle(plan.evidence.base_response_sha256, path): path
+        for path in plan.evidence.target_paths
+    }
+    if len(bindings) != len(plan.evidence.target_paths):
+        raise ValueError("semantic correction slot handle collision")
+    return bindings
 
 
 def _encode_pointer(parts: tuple[str | int, ...]) -> str:
@@ -705,32 +762,45 @@ def semantic_correction_schema(
     """Return the exact bounded schema for one controller-authorized correction."""
 
     schema = SemanticCorrectionSubmission.model_json_schema()
-    value_schema = schema["properties"]["replacement_values"]
     candidate_slots = {slot.target_path: slot for slot in plan.candidate_slots}
-    slot_schemas: list[JsonValue] = []
-    for path in plan.evidence.target_paths:
+    replacement_variants: list[JsonValue] = []
+    slot_bindings = _semantic_correction_slot_bindings(plan)
+    for handle, path in slot_bindings.items():
         candidate_slot = candidate_slots.get(path)
         if candidate_slot is not None:
-            slot_schemas.append(
-                {
-                    "type": "string",
-                    "enum": [item.handle for item in candidate_slot.candidates],
-                }
+            projected: JsonValue = {
+                "type": "string",
+                "enum": [item.handle for item in candidate_slot.candidates],
+            }
+        else:
+            projected = (
+                None
+                if response_schema is None
+                else correction_value_schema(response_schema, path)
             )
-            continue
-        projected = (
-            None
-            if response_schema is None
-            else correction_value_schema(response_schema, path)
+            if projected is None:
+                projected = {"$ref": "#/$defs/JsonValue"}
+        replacement_variants.append(
+            {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "slot_handle": {
+                        "type": "string",
+                        "const": handle,
+                    },
+                    "replacement_value": projected,
+                },
+                "required": ["slot_handle", "replacement_value"],
+            }
         )
-        slot_schemas.append(
-            {"$ref": "#/$defs/JsonValue"} if projected is None else projected
-        )
-    value_schema.pop("items", None)
-    value_schema["prefixItems"] = slot_schemas
-    value_schema["items"] = False
-    value_schema["minItems"] = len(plan.evidence.target_paths)
-    value_schema["maxItems"] = len(plan.evidence.target_paths)
+    schema["properties"]["replacements"] = {
+        "type": "array",
+        "title": "Replacements",
+        "items": {"oneOf": replacement_variants},
+        "minItems": len(plan.evidence.target_paths),
+        "maxItems": len(plan.evidence.target_paths),
+    }
     return schema
 
 
@@ -875,9 +945,11 @@ def correction_prompt(
 
     target_slots = []
     candidate_slots = {slot.target_path: slot for slot in plan.candidate_slots}
-    for index, path in enumerate(plan.evidence.target_paths):
+    slot_bindings = _semantic_correction_slot_bindings(plan)
+    handles_by_path = {path: handle for handle, path in slot_bindings.items()}
+    for path in plan.evidence.target_paths:
         slot: dict[str, object] = {
-            "slot": index,
+            "slot_handle": handles_by_path[path],
             "target_path": path,
             "errors": [
                 {
@@ -921,14 +993,15 @@ def correction_prompt(
         )
     )
     return (
-        "\n\nTARGETED_SEMANTIC_CORRECTION_VALUES_V1\n"
+        "\n\nTARGETED_SEMANTIC_CORRECTION_SLOTS_V2\n"
         "This correction contract supersedes the earlier FINAL_RESPONSE_CONTRACT "
         "for this invocation. "
         "The prior semantic JSON object was parsed and retained by the controller. "
         "Do not regenerate or repeat that object. Submit only an object matching "
-        "CORRECTION_SCHEMA_JSON. Provide one semantic value for each slot, "
-        "in exact slot order. Do not repeat or choose target paths; the controller "
-        "owns the response identity and those bindings. All other fields are "
+        "CORRECTION_SCHEMA_JSON. Provide one `slot_handle` and `replacement_value` "
+        "record for every authorized slot; record order has no meaning. Return only "
+        "the supplied opaque handles, not target paths. The controller owns the "
+        "response identity and path bindings. All other fields are "
         "immutable and will be preserved by the controller. When a slot includes "
         "value_schema, that schema is the exact type and shape contract for its "
         "replacement value; satisfy its listed error constraints as well. When a "
@@ -964,23 +1037,34 @@ def apply_semantic_correction_with_evidence(
 
     submission = SemanticCorrectionSubmission.model_validate(submission_payload)
     expected_count = len(plan.evidence.target_paths)
-    if len(submission.replacement_values) != expected_count:
+    if len(submission.replacements) != expected_count:
         raise ValueError(
             "semantic correction value count differs: "
-            f"expected {expected_count}, received {len(submission.replacement_values)}"
+            f"expected {expected_count}, received {len(submission.replacements)}"
+        )
+
+    expected_handles = _semantic_correction_slot_bindings(plan)
+    submitted_by_handle = {
+        item.slot_handle: item.replacement_value for item in submission.replacements
+    }
+    submitted_handles = set(submitted_by_handle)
+    missing_handles = set(expected_handles) - submitted_handles
+    unknown_handles = submitted_handles - set(expected_handles)
+    if missing_handles or unknown_handles:
+        raise ValueError(
+            "semantic correction slot coverage differs from controller authority"
         )
 
     candidate_slots = {slot.target_path: slot for slot in plan.candidate_slots}
-    resolved_values: list[JsonValue] = []
+    resolved_values: dict[str, JsonValue] = {}
     normalizations: list[str] = []
-    for path, submitted_value in zip(
-        plan.evidence.target_paths,
-        submission.replacement_values,
-        strict=True,
-    ):
+    handles_by_path = {path: handle for handle, path in expected_handles.items()}
+    for path in plan.evidence.target_paths:
+        handle = handles_by_path[path]
+        submitted_value = submitted_by_handle[handle]
         candidate_slot = candidate_slots.get(path)
         if candidate_slot is None:
-            resolved_values.append(submitted_value)
+            resolved_values[path] = submitted_value
             continue
         candidates = {item.handle: item for item in candidate_slot.candidates}
         if not isinstance(submitted_value, str) or submitted_value not in candidates:
@@ -988,17 +1072,14 @@ def apply_semantic_correction_with_evidence(
                 f"submitted value is not authorized for correction slot {path}"
             )
         selected = candidates[submitted_value]
-        resolved_values.append(selected.replacement_value)
+        resolved_values[path] = selected.replacement_value
         normalizations.append(
             f"bound controller evidence candidate {selected.handle} to {path}"
         )
 
     corrected: object = deepcopy(plan.base_payload)
-    for path, replacement_value in zip(
-        plan.evidence.target_paths,
-        resolved_values,
-        strict=True,
-    ):
+    for path in plan.evidence.target_paths:
+        replacement_value = resolved_values[path]
         parts = _decode_pointer(path)
         parent = corrected
         for part in parts[:-1]:

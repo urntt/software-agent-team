@@ -17,6 +17,7 @@ from software_agent_team.response_corrections import (
     SemanticCorrectionCandidate,
     SemanticCorrectionCandidateSlot,
     SemanticCorrectionOutcome,
+    SemanticCorrectionPlan,
     apply_semantic_correction,
     apply_semantic_correction_with_evidence,
     attach_semantic_correction_candidates,
@@ -28,6 +29,7 @@ from software_agent_team.response_corrections import (
     diagnostic_from_message,
     diagnostic_from_validation_error,
     semantic_correction_schema,
+    semantic_correction_slot_handle,
     semantic_payload_sha256,
 )
 
@@ -48,6 +50,26 @@ def diagnostic(payload: dict[str, object]):  # type: ignore[no-untyped-def]
     raise AssertionError("test payload unexpectedly validated")
 
 
+def correction_submission(
+    plan: SemanticCorrectionPlan,
+    replacements: dict[str, object],
+) -> dict[str, object]:
+    """Bind test values to the exact controller-issued correction slots."""
+
+    return {
+        "replacements": [
+            {
+                "slot_handle": semantic_correction_slot_handle(
+                    plan.evidence.base_response_sha256,
+                    path,
+                ),
+                "replacement_value": value,
+            }
+            for path, value in replacements.items()
+        ]
+    }
+
+
 def test_plan_targets_only_invalid_fields_and_preserves_other_content() -> None:
     payload: dict[str, object] = {
         "summary": "",
@@ -62,9 +84,7 @@ def test_plan_targets_only_invalid_fields_and_preserves_other_content() -> None:
     assert plan.evidence.preserved_top_level_paths == ("/preserved", "/tasks")
 
     corrected = apply_semantic_correction(
-        {
-            "replacement_values": ["valid summary"],
-        },
+        correction_submission(plan, {"/summary": "valid summary"}),
         plan,
     )
     assert corrected == {
@@ -85,15 +105,67 @@ def test_correction_rejects_a_value_count_that_cannot_bind_all_targets() -> None
 
     try:
         apply_semantic_correction(
-            {
-                "replacement_values": ["valid"],
-            },
+            correction_submission(plan, {"/summary": "valid"}),
             plan,
         )
     except ValueError as error:
         assert "value count differs: expected 2, received 1" in str(error)
     else:
         raise AssertionError("incomplete semantic correction was accepted")
+
+
+def test_correction_rejects_duplicate_unknown_cross_plan_and_positional_payloads() -> (
+    None
+):
+    payload: dict[str, object] = {
+        "summary": "",
+        "tasks": [],
+        "preserved": "keep",
+    }
+    plan = build_semantic_correction_plan(payload, diagnostic(payload))
+    assert plan is not None
+    valid = correction_submission(
+        plan,
+        {
+            "/summary": "valid",
+            "/tasks": ["TASK_ONE"],
+        },
+    )
+    records = valid["replacements"]
+    assert isinstance(records, list)
+
+    other_payload = {**payload, "preserved": "different base"}
+    other_plan = build_semantic_correction_plan(
+        other_payload,
+        diagnostic(other_payload),
+    )
+    assert other_plan is not None
+
+    invalid_payloads = (
+        {"replacements": [records[0], records[0]]},
+        {
+            "replacements": [
+                records[0],
+                {
+                    "slot_handle": "slot_ffffffffffffffff",
+                    "replacement_value": ["TASK_ONE"],
+                },
+            ]
+        },
+        correction_submission(
+            other_plan,
+            {
+                "/summary": "valid",
+                "/tasks": ["TASK_ONE"],
+            },
+        ),
+        {"replacement_values": ["valid", ["TASK_ONE"]]},
+    )
+
+    for invalid in invalid_payloads:
+        with pytest.raises((ValidationError, ValueError)):
+            apply_semantic_correction(invalid, plan)
+        assert plan.base_payload == payload
 
 
 def test_correction_prompt_keeps_path_authority_in_the_controller() -> None:
@@ -135,12 +207,14 @@ def test_correction_prompt_keeps_path_authority_in_the_controller() -> None:
     prompt = correction_prompt(plan)
     schema = prompt.split("CORRECTION_SCHEMA_JSON\n", maxsplit=1)[1]
 
-    assert "TARGETED_SEMANTIC_CORRECTION_VALUES_V1" in prompt
-    assert "Do not repeat or choose target paths" in prompt
+    assert "TARGETED_SEMANTIC_CORRECTION_SLOTS_V2" in prompt
+    assert "Return only the supplied opaque handles, not target paths" in prompt
     assert "derived parent error must not be requested" not in prompt
     assert '"target_path": "/items/0/id"' in prompt
     assert '"target_path": "/items/1/id"' in prompt
-    assert '"replacement_values"' in schema
+    assert '"replacements"' in schema
+    assert '"slot_handle"' in schema
+    assert '"replacement_value"' in schema
     assert '"minItems": 2' in schema
     assert '"maxItems": 2' in schema
     assert '"path"' not in schema
@@ -153,9 +227,13 @@ def test_correction_prompt_keeps_path_authority_in_the_controller() -> None:
     assert plan.evidence.base_response_sha256 not in tool_prompt
 
     corrected = apply_semantic_correction(
-        {
-            "replacement_values": ["FIRST", "SECOND"],
-        },
+        correction_submission(
+            plan,
+            {
+                "/items/1/id": "SECOND",
+                "/items/0/id": "FIRST",
+            },
+        ),
         plan,
     )
     assert corrected == {
@@ -168,7 +246,13 @@ def test_correction_prompt_keeps_path_authority_in_the_controller() -> None:
             {
                 "kind": "semantic_correction_v2",
                 "base_response_sha256": plan.evidence.base_response_sha256,
-                "replacement_values": ["FIRST", "SECOND"],
+                **correction_submission(
+                    plan,
+                    {
+                        "/items/0/id": "FIRST",
+                        "/items/1/id": "SECOND",
+                    },
+                ),
             },
             plan,
         )
@@ -224,10 +308,14 @@ def test_correction_prompt_projects_each_target_value_schema() -> None:
         maxsplit=1,
     )[0]
     slots = json.loads(target_json)
+    slot_handle = semantic_correction_slot_handle(
+        plan.evidence.base_response_sha256,
+        "/items/0/id",
+    )
 
     assert slots == [
         {
-            "slot": 0,
+            "slot_handle": slot_handle,
             "target_path": "/items/0/id",
             "errors": [
                 {
@@ -245,14 +333,23 @@ def test_correction_prompt_projects_each_target_value_schema() -> None:
     ]
 
     schema = semantic_correction_schema(plan, response_schema=response_schema)
-    replacement_schema = schema["properties"]["replacement_values"]
-    assert replacement_schema["prefixItems"] == [
+    replacement_schema = schema["properties"]["replacements"]
+    assert replacement_schema["items"]["oneOf"] == [
         {
-            "type": "string",
-            "pattern": "^[A-Z][A-Z0-9_]+$",
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "slot_handle": {"type": "string", "const": slot_handle},
+                "replacement_value": {
+                    "type": "string",
+                    "pattern": "^[A-Z][A-Z0-9_]+$",
+                },
+            },
+            "required": ["slot_handle", "replacement_value"],
         }
     ]
-    assert replacement_schema["items"] is False
+    assert replacement_schema["minItems"] == 1
+    assert replacement_schema["maxItems"] == 1
 
 
 def test_controller_candidate_handles_replace_exact_values_without_model_bytes() -> (
@@ -282,18 +379,33 @@ def test_controller_candidate_handles_replace_exact_values_without_model_bytes()
 
     prompt = correction_prompt(bound)
     schema = semantic_correction_schema(bound)
-    replacement_schema = schema["properties"]["replacement_values"]
+    replacement_schema = schema["properties"]["replacements"]
+    slot_handle = semantic_correction_slot_handle(
+        bound.evidence.base_response_sha256,
+        "/summary",
+    )
     assert "EVIDENCE_CANDIDATE_CATALOG" in prompt
     assert "exact\\ncontroller-owned output" in prompt
-    assert replacement_schema["prefixItems"] == [
+    assert replacement_schema["items"]["oneOf"] == [
         {
-            "type": "string",
-            "enum": ["evidence_0123456789abcdef"],
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "slot_handle": {"type": "string", "const": slot_handle},
+                "replacement_value": {
+                    "type": "string",
+                    "enum": ["evidence_0123456789abcdef"],
+                },
+            },
+            "required": ["slot_handle", "replacement_value"],
         }
     ]
 
     application = apply_semantic_correction_with_evidence(
-        {"replacement_values": ["evidence_0123456789abcdef"]},
+        correction_submission(
+            bound,
+            {"/summary": "evidence_0123456789abcdef"},
+        ),
         bound,
     )
     assert application.payload == {
@@ -307,7 +419,10 @@ def test_controller_candidate_handles_replace_exact_values_without_model_bytes()
 
     with pytest.raises(ValueError, match="not authorized for correction slot"):
         apply_semantic_correction(
-            {"replacement_values": ["evidence_ffffffffffffffff"]},
+            correction_submission(
+                bound,
+                {"/summary": "evidence_ffffffffffffffff"},
+            ),
             bound,
         )
 
@@ -345,18 +460,17 @@ def test_candidate_schema_does_not_invent_cross_slot_distinctness() -> None:
             for target_path in plan.evidence.target_paths
         ),
     )
-    values_schema = semantic_correction_schema(bound)["properties"][
-        "replacement_values"
-    ]
+    values_schema = semantic_correction_schema(bound)["properties"]["replacements"]
 
     assert "uniqueItems" not in values_schema
     assert apply_semantic_correction(
-        {
-            "replacement_values": [
-                "evidence_0123456789abcdef",
-                "evidence_0123456789abcdef",
-            ]
-        },
+        correction_submission(
+            bound,
+            {
+                "/summary": "evidence_0123456789abcdef",
+                "/preserved": "evidence_0123456789abcdef",
+            },
+        ),
         bound,
     ) == {
         "summary": "shared eligible observation",
@@ -503,9 +617,7 @@ def test_outcome_distinguishes_a_new_container_error_from_the_fixed_child() -> N
     plan = build_semantic_correction_plan(payload, first_diagnostic)
     assert plan is not None
     corrected = apply_semantic_correction(
-        {
-            "replacement_values": ["valid"],
-        },
+        correction_submission(plan, {"/summary": "valid"}),
         plan,
     )
     relational = diagnostic_from_message(

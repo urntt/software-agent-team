@@ -350,7 +350,7 @@ inside the envelope. Planning uses a permissive object-only inner transport
 schema for an initial question or proposal so every syntactically structured
 response reaches the Controller's exact semantic validator; the private envelope
 still binds the exact Planning semantic-schema digest. A targeted Planning
-correction instead exposes its exact ordered replacement-slot schema at both the
+correction instead exposes its exact opaque-handle replacement schema at both the
 submission and Controller boundaries. This allows deterministic forbidden-field
 normalization and targeted semantic correction to operate after transport without
 trusting invalid content. SAT gives every invocation a fresh controller binding, then
@@ -383,14 +383,18 @@ submitted values at the controller boundary.
 Transport failures and unlocated errors stop. A targetable model-owned failure
 produces a content-free diagnostic and a correction request whose persisted
 evidence is bound to the retained object's SHA-256. The Controller assigns an
-ordered slot to each exact validator-owned JSON-pointer path; the model submits
-only `replacement_values` through the same typed tool under a correction-only
-semantic schema. Every model-visible slot also includes the exact response-schema
+opaque handle to each exact validator-owned JSON-pointer path; the model submits
+order-independent `{slot_handle, replacement_value}` records through the same
+typed tool under a correction-only semantic schema. The Controller requires exact
+handle coverage before applying anything; missing, duplicate, unknown,
+cross-response, and legacy positional submissions fail closed. Every model-visible
+slot also includes the exact response-schema
 fragment for its replacement value and its validator-owned constraints. Independent
 ProductDefinition dimension defects are collected in one validation pass, and each
 dimension is an atomic replacement boundary because disposition, provenance,
-statement, and downstream references must remain coherent. It cannot repeat,
-replace, widen, or reorder the response identity or path authority. Derived parent
+statement, and downstream references must remain coherent. It cannot submit,
+replace, widen, or reorder the response identity or private path authority; record
+order has no semantic meaning. Derived parent
 errors are not copied into a child-field request. Every other value remains
 immutable. Product
 Planning continues only after every prior validator-owned invariant/subject

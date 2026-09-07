@@ -58,6 +58,10 @@ from software_agent_team.invocation_lifecycle import (
 from software_agent_team.model_metadata import ModelMetadataSource
 from software_agent_team.planning import AdaptiveImplementationPlan, ProposedTask
 from software_agent_team.progress import ProgressEvent, ProgressEventKind
+from software_agent_team.response_corrections import (
+    semantic_correction_slot_handle,
+    semantic_payload_sha256,
+)
 from software_agent_team.responses import (
     ReviewCriterionAssessmentResponse,
     ReviewReportResponse,
@@ -105,10 +109,19 @@ def semantic_correction_response(
 ) -> str:
     """Return the exact field-only correction contract used by SAT."""
 
-    del base_payload
+    base_sha256 = semantic_payload_sha256(base_payload)
     return json.dumps(
         {
-            "replacement_values": [replacements[path] for path in sorted(replacements)],
+            "replacements": [
+                {
+                    "slot_handle": semantic_correction_slot_handle(
+                        base_sha256,
+                        path,
+                    ),
+                    "replacement_value": replacements[path],
+                }
+                for path in replacements
+            ],
         }
     )
 
@@ -722,12 +735,24 @@ class DynamicExecutor:
                 else:
                     assert request.submission_contract is not None
                     correction_schema = request.submission_contract.parameters_schema()
-                    replacement_schema = correction_schema["properties"][
-                        "replacement_values"
+                    replacement_variant = correction_schema["properties"][
+                        "replacements"
+                    ]["items"]["oneOf"][0]
+                    slot_handle = replacement_variant["properties"]["slot_handle"][
+                        "const"
                     ]
-                    handles = replacement_schema["prefixItems"][0]["enum"]
-                    assert isinstance(handles, list) and handles
-                    submission_payload = {"replacement_values": [handles[0]]}
+                    evidence_handles = replacement_variant["properties"][
+                        "replacement_value"
+                    ]["enum"]
+                    assert isinstance(evidence_handles, list) and evidence_handles
+                    submission_payload = {
+                        "replacements": [
+                            {
+                                "slot_handle": slot_handle,
+                                "replacement_value": evidence_handles[0],
+                            }
+                        ]
+                    }
                     response_text = json.dumps(submission_payload)
         else:  # pragma: no cover - the fixture owns the complete team
             raise AssertionError(f"unexpected Agent: {request.agent_id}")
@@ -1313,7 +1338,7 @@ def test_dynamic_writer_targeted_correction_keeps_timeout_and_git_evidence(
     ]
     assert len(writer_requests) == 2
     assert [request.timeout_seconds for request in writer_requests] == [71, 71]
-    assert "TARGETED_SEMANTIC_CORRECTION_VALUES_V1" in writer_requests[1].prompt
+    assert "TARGETED_SEMANTIC_CORRECTION_SLOTS_V2" in writer_requests[1].prompt
     assert "Do not regenerate or repeat that object" in writer_requests[1].prompt
     assert len(runner.execution_records) == 4
     writer_references = [
@@ -1598,8 +1623,11 @@ def test_dynamic_reviewer_correction_uses_controller_evidence_handle(
     assert "EVIDENCE_CANDIDATE_CATALOG" in correction.prompt
     assert "fake-review-observation" in correction.prompt
     schema = correction.submission_contract.parameters_schema()
-    handle = schema["properties"]["replacement_values"]["prefixItems"][0]["enum"][0]
-    assert handle.startswith("evidence_")
+    variant = schema["properties"]["replacements"]["items"]["oneOf"][0]
+    slot_handle = variant["properties"]["slot_handle"]["const"]
+    evidence_handle = variant["properties"]["replacement_value"]["enum"][0]
+    assert slot_handle.startswith("slot_")
+    assert evidence_handle.startswith("evidence_")
     reviewer_records = [
         runner.artifact_store.load(reference)
         for reference in runner.execution_records
@@ -1611,7 +1639,7 @@ def test_dynamic_reviewer_correction_uses_controller_evidence_handle(
     assert corrected.semantic_correction_outcome == "accepted"
     assert corrected.response_normalizations == (
         "bound controller evidence candidate "
-        f"{handle} to /criterion_assessments/0/tool_evidence/0/observable",
+        f"{evidence_handle} to /criterion_assessments/0/tool_evidence/0/observable",
     )
     artifact = runner.artifact_store.load(runner.outputs["reviewer"])
     assert isinstance(artifact, ReviewReport)

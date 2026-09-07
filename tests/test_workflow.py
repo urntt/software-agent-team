@@ -47,6 +47,10 @@ from software_agent_team.quality_gates import (
     SandboxExecution,
     load_quality_gate_configuration,
 )
+from software_agent_team.response_corrections import (
+    semantic_correction_slot_handle,
+    semantic_payload_sha256,
+)
 from software_agent_team.responses import (
     ImplementationPlanResponse,
     ReviewReportResponse,
@@ -79,10 +83,19 @@ def semantic_correction_response(
 ) -> str:
     """Return a controller-bound field correction for an offline Agent."""
 
-    del base_payload
+    base_sha256 = semantic_payload_sha256(base_payload)
     return json.dumps(
         {
-            "replacement_values": [replacements[path] for path in sorted(replacements)],
+            "replacements": [
+                {
+                    "slot_handle": semantic_correction_slot_handle(
+                        base_sha256,
+                        path,
+                    ),
+                    "replacement_value": replacements[path],
+                }
+                for path in replacements
+            ],
         },
         ensure_ascii=False,
     )
@@ -944,7 +957,7 @@ def test_workflow_corrects_one_invalid_semantic_field(tmp_path: Path) -> None:
     ]
     assert len(plan_records) == 2
     repair_prompt = executor.requests[1].prompt
-    assert "TARGETED_SEMANTIC_CORRECTION_VALUES_V1" in repair_prompt
+    assert "TARGETED_SEMANTIC_CORRECTION_SLOTS_V2" in repair_prompt
     assert "Do not regenerate or repeat that object" in repair_prompt
     assert '"/objective"' in repair_prompt
     first = json.loads(

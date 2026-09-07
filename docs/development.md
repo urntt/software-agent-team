@@ -221,8 +221,9 @@ bootstrap named choice, the dynamic work-tool-to-submission sequence, canonical
 single `artifact` envelope, terminal one-request behavior, and exact sandbox cleanup.
 Do not treat a prompt instruction as evidence that the provider must call a tool.
 
-When changing targeted correction, test the exact per-slot submission schema as
-well as post-application validation. A different diagnostic fingerprint is not by
+When changing targeted correction, test the exact per-slot submission schema,
+order-independent opaque-handle binding, exact handle coverage, atomic rejection,
+and post-application validation. A different diagnostic fingerprint is not by
 itself improvement: regressions to a coarser type or shape in the same authority
 slot must stop. Review evidence-selector correction must use Controller-issued
 candidate handles and exact-byte binding; candidate generation and final

@@ -85,6 +85,8 @@ from software_agent_team.planning import (
 from software_agent_team.response_corrections import (
     ResponseFailureClass,
     ResponseIssueAuthority,
+    semantic_correction_slot_handle,
+    semantic_payload_sha256,
 )
 from software_agent_team.submissions import AgentSubmissionPurpose
 from software_agent_team.teams import (
@@ -544,10 +546,19 @@ def correction_response(
     base_payload: dict[str, object],
     replacements: dict[str, object],
 ) -> str:
-    del base_payload
+    base_sha256 = semantic_payload_sha256(base_payload)
     return json.dumps(
         {
-            "replacement_values": [replacements[path] for path in sorted(replacements)],
+            "replacements": [
+                {
+                    "slot_handle": semantic_correction_slot_handle(
+                        base_sha256,
+                        path,
+                    ),
+                    "replacement_value": replacements[path],
+                }
+                for path in replacements
+            ],
         }
     )
 
@@ -829,23 +840,62 @@ def test_planning_repairs_schema_then_all_invalid_product_dimensions_together(
     maturity = initial["proposal"]["product_definition"]["delivery_maturity"]
     maturity.pop("level")
     maturity["statement"] = "schema-forbidden presentation"
-    corrected_dimensions = [
-        valid_definition.delivery_maturity.model_dump(mode="json"),
-        valid_definition.operational_expectations.model_dump(mode="json"),
-        valid_definition.primary_workflow.model_dump(mode="json"),
-        valid_definition.target_users.model_dump(mode="json"),
-        valid_definition.usability_expectations.model_dump(mode="json"),
+    first_correction_base = json.loads(json.dumps(initial))
+    del first_correction_base["proposal"]["product_definition"]["delivery_maturity"][
+        "statement"
     ]
+    after_maturity = json.loads(json.dumps(first_correction_base))
+    after_maturity["proposal"]["product_definition"]["delivery_maturity"]["level"] = (
+        "usable_local_product"
+    )
     executor = ScriptedAgentExecutor(
         [
             ScriptedAgentResponse(text="ignored", submission_payload=initial),
             ScriptedAgentResponse(
                 text="ignored",
-                submission_payload={"replacement_values": ["usable_local_product"]},
+                submission_payload=json.loads(
+                    correction_response(
+                        first_correction_base,
+                        {
+                            "/proposal/product_definition/delivery_maturity/level": (
+                                "usable_local_product"
+                            )
+                        },
+                    )
+                ),
             ),
             ScriptedAgentResponse(
                 text="ignored",
-                submission_payload={"replacement_values": corrected_dimensions},
+                submission_payload=json.loads(
+                    correction_response(
+                        after_maturity,
+                        {
+                            "/proposal/product_definition/target_users": (
+                                valid_definition.target_users.model_dump(mode="json")
+                            ),
+                            "/proposal/product_definition/primary_workflow": (
+                                valid_definition.primary_workflow.model_dump(
+                                    mode="json"
+                                )
+                            ),
+                            "/proposal/product_definition/usability_expectations": (
+                                valid_definition.usability_expectations.model_dump(
+                                    mode="json"
+                                )
+                            ),
+                            "/proposal/product_definition/operational_expectations": (
+                                valid_definition.operational_expectations.model_dump(
+                                    mode="json"
+                                )
+                            ),
+                            "/proposal/product_definition/delivery_maturity": (
+                                valid_definition.delivery_maturity.model_dump(
+                                    mode="json"
+                                )
+                            ),
+                        },
+                    )
+                ),
             ),
         ]
     )
@@ -926,17 +976,33 @@ def test_planning_replays_legacy_direct_decisions_through_reachable_slots(
         }
     )
     definition["delivery_maturity"]["decision_ids"] = ["DECISION_DELIVERY"]
+    correction_base, _ = planning._normalize_planning_response_payload(
+        initial,
+        profile_criterion_ids=(
+            criterion.id for criterion in policy().profile_acceptance_criteria
+        ),
+        user_inputs=(request().source_request,),
+    )
     executor = ScriptedAgentExecutor(
         [
             ScriptedAgentResponse(text="ignored", submission_payload=initial),
             ScriptedAgentResponse(
                 text="ignored",
-                submission_payload={
-                    "replacement_values": [
-                        valid_definition.primary_workflow.model_dump(mode="json"),
-                        valid_definition.target_users.model_dump(mode="json"),
-                    ]
-                },
+                submission_payload=json.loads(
+                    correction_response(
+                        correction_base,
+                        {
+                            "/proposal/product_definition/target_users": (
+                                valid_definition.target_users.model_dump(mode="json")
+                            ),
+                            "/proposal/product_definition/primary_workflow": (
+                                valid_definition.primary_workflow.model_dump(
+                                    mode="json"
+                                )
+                            ),
+                        },
+                    )
+                ),
             ),
         ]
     )
@@ -4154,11 +4220,16 @@ def test_invalid_complete_proposal_is_repaired_before_it_is_shown(
     valid_payload = proposal_response().model_dump(mode="json")
     invalid_payload = proposal_response().model_dump(mode="json")
     invalid_payload["proposal"]["tasks"][0]["owner_agent_id"] = "absent_agent"
-    correction = {
-        "replacement_values": [
-            valid_payload["proposal"]["tasks"][0]["owner_agent_id"],
-        ],
-    }
+    correction = json.loads(
+        correction_response(
+            invalid_payload,
+            {
+                "/proposal/tasks/0/owner_agent_id": valid_payload["proposal"]["tasks"][
+                    0
+                ]["owner_agent_id"],
+            },
+        )
+    )
     executor = ScriptedAgentExecutor(
         [
             json.dumps(invalid_payload),
@@ -4205,17 +4276,21 @@ def test_invalid_complete_proposal_is_repaired_before_it_is_shown(
         is AgentSubmissionPurpose.SEMANTIC_CORRECTION
     )
     correction_schema = executor.requests[1].submission_contract.parameters_schema()
-    assert set(correction_schema["properties"]) == {"replacement_values"}
-    replacement_schema = correction_schema["properties"]["replacement_values"]
-    assert replacement_schema["prefixItems"][0]["type"] == "string"
-    assert replacement_schema["items"] is False
+    assert set(correction_schema["properties"]) == {"replacements"}
+    replacement_schema = correction_schema["properties"]["replacements"]
+    replacement_variant = replacement_schema["items"]["oneOf"][0]
+    assert replacement_variant["properties"]["slot_handle"]["const"].startswith("slot_")
+    assert replacement_variant["properties"]["replacement_value"]["type"] == ("string")
     assert (
         executor.requests[1].submission_contract.transport_payload_schema()
         == correction_schema
     )
-    assert "TARGETED_SEMANTIC_CORRECTION_VALUES_V1" in executor.requests[1].prompt
+    assert "TARGETED_SEMANTIC_CORRECTION_SLOTS_V2" in executor.requests[1].prompt
     assert "Do not regenerate or repeat that object" in executor.requests[1].prompt
-    assert "Do not repeat or choose target paths" in executor.requests[1].prompt
+    assert (
+        "Return only the supplied opaque handles, not target paths"
+        in executor.requests[1].prompt
+    )
     assert rejected.response_validation is not None
     assert rejected.response_validation.correction_paths == (
         "/proposal/tasks/0/owner_agent_id",
@@ -4529,7 +4604,7 @@ def test_product_planning_preserves_normalization_and_targets_new_root_cause(
     assert second.response_validation is not None
     assert second.response_validation.correction_paths == ("/proposal/requirements",)
     correction = executor.requests[2].prompt.rsplit(
-        "TARGETED_SEMANTIC_CORRECTION_VALUES_V1", 1
+        "TARGETED_SEMANTIC_CORRECTION_SLOTS_V2", 1
     )[1]
     assert '"$ref": "#/$defs/ProposedRequirement"' not in correction
     assert '"Stable requirement identity' in correction
@@ -4651,7 +4726,7 @@ def test_product_planning_repairs_assumption_relation_as_atomic_records(
     )
     assert first.response_validation.correction_paths == ("/proposal/assumptions",)
     correction = executor.requests[1].prompt.rsplit(
-        "TARGETED_SEMANTIC_CORRECTION_VALUES_V1", 1
+        "TARGETED_SEMANTIC_CORRECTION_SLOTS_V2", 1
     )[1]
     assert '"target_path": "/proposal/assumptions"' in correction
     assert '"$ref": "#/$defs/ProposedAssumption"' not in correction
@@ -4660,9 +4735,9 @@ def test_product_planning_repairs_assumption_relation_as_atomic_records(
         "\nCall `sat_submit_artifact`", 1
     )[0]
     correction_schema = json.loads(correction_schema_text)
-    assumption_array_schema = correction_schema["properties"]["replacement_values"][
-        "prefixItems"
-    ][0]
+    assumption_array_schema = correction_schema["properties"]["replacements"]["items"][
+        "oneOf"
+    ][0]["properties"]["replacement_value"]
     assert assumption_array_schema["items"]["properties"]["decision_id"]["enum"] == [
         "DECISION_SCAN_STRUCTURE"
     ]
@@ -5057,20 +5132,27 @@ def test_profile_collision_preserves_relation_before_writer_binding_correction(
     )
     corrected_tasks = json.loads(json.dumps(payload["proposal"]["tasks"]))
     corrected_tasks[0]["acceptance_criteria"].append("AC_TASK_DOCUMENTATION")
+    configured = policy(
+        response_repair_limit=None,
+        profile_acceptance_criteria=(profile_criterion,),
+    )
+    correction_base, _ = planning._normalize_planning_response_payload(
+        payload,
+        profile_criterion_ids=(
+            criterion.id for criterion in configured.profile_acceptance_criteria
+        ),
+        user_inputs=(request().source_request,),
+    )
     executor = ScriptedAgentExecutor(
         [
             json.dumps(payload),
             correction_response(
-                payload,
+                correction_base,
                 {"/proposal/tasks": corrected_tasks},
             ),
         ]
     )
     store = PlanningStore(tmp_path / "planning")
-    configured = policy(
-        response_repair_limit=None,
-        profile_acceptance_criteria=(profile_criterion,),
-    )
     coordinator = AdaptivePlanningCoordinator(
         executor=executor,
         store=store,

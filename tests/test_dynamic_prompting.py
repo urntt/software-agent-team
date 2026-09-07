@@ -38,6 +38,7 @@ from software_agent_team.response_corrections import (
     apply_semantic_correction_with_evidence,
     build_semantic_correction_plan,
     correction_prompt,
+    semantic_correction_slot_handle,
 )
 from software_agent_team.responses import (
     AgentArtifactResponseError,
@@ -754,7 +755,17 @@ def test_review_correction_selects_controller_catalog_instead_of_retyping_output
     )
 
     application = apply_semantic_correction_with_evidence(
-        {"replacement_values": [selected.handle]},
+        {
+            "replacements": [
+                {
+                    "slot_handle": semantic_correction_slot_handle(
+                        bound.evidence.base_response_sha256,
+                        bound.evidence.target_paths[0],
+                    ),
+                    "replacement_value": selected.handle,
+                }
+            ]
+        },
         bound,
     )
     corrected = application.payload["criterion_assessments"]
@@ -865,7 +876,17 @@ def test_review_correction_catalog_excludes_fragments_contaminated_by_failures()
         if candidate.replacement_value == "SAFE_RESULT"
     )
     corrected = apply_semantic_correction_with_evidence(
-        {"replacement_values": [selected.handle]},
+        {
+            "replacements": [
+                {
+                    "slot_handle": semantic_correction_slot_handle(
+                        bound.evidence.base_response_sha256,
+                        bound.evidence.target_paths[0],
+                    ),
+                    "replacement_value": selected.handle,
+                }
+            ]
+        },
         bound,
     ).payload
     corrected_request = request.model_copy(update={"submission_contract": None})

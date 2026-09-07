@@ -152,11 +152,13 @@ targetable model-owned failure creates a
 diagnostic-v2 invariant ID,
 structured affected-entity subjects, precise model-owned JSON-pointer authority,
 and SHA-bound correction-request evidence. The Controller binds those paths to
-ordered slots and the model submits only corresponding `replacement_values`, so
-it cannot repeat the response digest, select a parent container, or otherwise
-widen correction authority. The correction submission contract itself now
-projects the exact ordered value schema for every slot instead of accepting a
-generic `JsonValue` vector. Constraint convergence distinguishes genuine
+opaque response-bound handles and the model submits order-independent
+`{slot_handle, replacement_value}` records, so it cannot submit the response
+digest, select a parent container, or otherwise widen correction authority. The
+correction contract discriminates each record by its constant handle and exact
+value schema; Controller validation rejects missing, duplicate, unknown,
+cross-response, and legacy positional submissions before mutation. Constraint
+convergence distinguishes genuine
 refinement from regression: a more specific invariant exposed after a coarse
 schema failure may continue, while falling back to a coarser type/shape error in
 the same authority slot is not improvement merely because its fingerprint
