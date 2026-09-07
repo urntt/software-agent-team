@@ -701,7 +701,13 @@ def _exec_executable(tool_name: str, arguments: object) -> str | None:
         raise OpenClawSessionEvidenceError(
             "OpenClaw exec command is unavailable for attribution"
         )
-    lexer = shlex.shlex(command, posix=True)
+    # Shell comments before the command are not executable identity. Skip only
+    # complete leading comment lines, not hashes inside words or quoted tokens;
+    # shlex.commenters would incorrectly truncate those literal command names.
+    prefix = command.lstrip(" \t\n")
+    while prefix.startswith("#"):
+        prefix = prefix.partition("\n")[2].lstrip(" \t\n")
+    lexer = shlex.shlex(prefix, posix=True)
     lexer.whitespace_split = True
     lexer.commenters = ""
     try:

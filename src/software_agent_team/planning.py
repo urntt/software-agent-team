@@ -11,6 +11,7 @@ import time
 import unicodedata
 from collections.abc import Callable, Collection, Mapping
 from contextlib import suppress
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -118,7 +119,7 @@ from software_agent_team.teams import (
     permission_for_capability,
 )
 
-PLANNING_SCHEMA_VERSION = 8
+PLANNING_SCHEMA_VERSION = 9
 MINIMUM_READABLE_PLANNING_SCHEMA_VERSION = 2
 PLANNING_TEMPLATE = Path(__file__).with_name("prompt_templates") / "adaptive_planner.md"
 MAX_PLANNING_EVIDENCE_CHARACTERS = 1_000_000
@@ -988,6 +989,10 @@ def _normalize_planning_response_payload(
         product_definition if isinstance(product_definition, dict) else {}
     )
     for dimension in ProductDefinitionDimension:
+        if dimension is ProductDefinitionDimension.PRIMARY_WORKFLOW:
+            # Core workflow materiality is never normalized away. Preserve the
+            # proposed trace so current validation can request an atomic repair.
+            continue
         item = product_dimensions.get(dimension.value)
         if (
             not isinstance(item, dict)
@@ -1558,7 +1563,7 @@ class PlanningRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, 6, 7, PLANNING_SCHEMA_VERSION] = (
+    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, PLANNING_SCHEMA_VERSION] = (
         PLANNING_SCHEMA_VERSION
     )
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -2654,6 +2659,7 @@ def _product_definition_dimension_invariant(
     normalized_inputs: tuple[str, ...],
     question_contracts: Mapping[str, _PlanningQuestionContract] | None,
     allow_legacy_decision_links: bool,
+    allow_legacy_workflow_exemption: bool,
 ) -> _PlanningInvariant | None:
     """Return one atomic, coherently repairable issue for a product dimension."""
 
@@ -2670,6 +2676,18 @@ def _product_definition_dimension_invariant(
             message=message,
             paths=(path,),
             subjects=subjects,
+        )
+
+    if (
+        dimension is ProductDefinitionDimension.PRIMARY_WORKFLOW
+        and item.disposition is ProductDefinitionDisposition.NOT_MATERIAL
+        and not allow_legacy_workflow_exemption
+    ):
+        return issue(
+            "planning_product_workflow_required",
+            "primary workflow is always material, including a throwaway prototype; "
+            "preserve its explicit user input or ask a focused question, and link "
+            "the workflow to the requirements it drives",
         )
 
     if (
@@ -2888,6 +2906,7 @@ def _validate_product_definition(
     question_contracts: Mapping[str, _PlanningQuestionContract] | None,
     allowed_criterion_ids: Collection[str] = (),
     allow_legacy_decision_links: bool = False,
+    allow_legacy_workflow_exemption: bool = False,
 ) -> None:
     """Require attributable product depth with real downstream plan effects."""
 
@@ -2921,6 +2940,7 @@ def _validate_product_definition(
                 normalized_inputs=normalized_inputs,
                 question_contracts=question_contracts,
                 allow_legacy_decision_links=allow_legacy_decision_links,
+                allow_legacy_workflow_exemption=allow_legacy_workflow_exemption,
             )
         )
         is not None
@@ -2980,6 +3000,7 @@ def validate_planning_clarity(
     allowed_criterion_ids: Collection[str] = (),
     require_current_decision_provenance: bool = True,
     allow_legacy_product_decision_links: bool = False,
+    allow_legacy_workflow_exemption: bool = False,
 ) -> None:
     """Enforce the current decision and requirement-to-evidence contract."""
 
@@ -3073,6 +3094,7 @@ def validate_planning_clarity(
         question_contracts=question_contracts,
         allowed_criterion_ids=allowed_criterion_ids,
         allow_legacy_decision_links=allow_legacy_product_decision_links,
+        allow_legacy_workflow_exemption=allow_legacy_workflow_exemption,
     )
 
     required_recommendations = {
@@ -3608,6 +3630,28 @@ def _planning_response_schema() -> dict[str, object]:
             "Planning response schema has an invalid product_definition union"
         )
     proposal_properties["product_definition"] = product_non_null[0]
+    workflow_schema = deepcopy(definitions["ProductDefinitionStatement"])
+    workflow_schema["title"] = "PrimaryWorkflowStatement"
+    workflow_schema["description"] = (
+        "The product's core user workflow is always material, even for a "
+        "one-time prototype. Reuse explicit input without unnecessary questions; "
+        "ask only when the workflow is missing. Link it to its requirements."
+    )
+    workflow_properties = workflow_schema["properties"]
+    workflow_properties["disposition"] = {
+        "type": "string",
+        "enum": [
+            ProductDefinitionDisposition.EXPLICIT_INPUT.value,
+            ProductDefinitionDisposition.RESOLVED_QUESTION.value,
+        ],
+    }
+    workflow_properties["requirement_ids"].pop("default", None)
+    workflow_properties["requirement_ids"]["minItems"] = 1
+    workflow_schema["required"].append("requirement_ids")
+    definitions["PrimaryWorkflowStatement"] = workflow_schema
+    definitions["ProductDefinition"]["properties"]["primary_workflow"] = {
+        "$ref": "#/$defs/PrimaryWorkflowStatement"
+    }
     return schema
 
 
@@ -3755,7 +3799,7 @@ class AdaptiveImplementationPlan(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, 6, 7, PLANNING_SCHEMA_VERSION] = (
+    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, PLANNING_SCHEMA_VERSION] = (
         PLANNING_SCHEMA_VERSION
     )
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -3834,7 +3878,7 @@ class PlanningTurn(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, 6, 7, PLANNING_SCHEMA_VERSION] = (
+    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, PLANNING_SCHEMA_VERSION] = (
         PLANNING_SCHEMA_VERSION
     )
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -3990,7 +4034,7 @@ class PlanningProposal(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, 6, 7, PLANNING_SCHEMA_VERSION] = (
+    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, PLANNING_SCHEMA_VERSION] = (
         PLANNING_SCHEMA_VERSION
     )
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -4050,7 +4094,7 @@ class PlanningSession(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, 6, 7, PLANNING_SCHEMA_VERSION] = (
+    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, PLANNING_SCHEMA_VERSION] = (
         PLANNING_SCHEMA_VERSION
     )
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -4231,7 +4275,7 @@ class PlanningApproval(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, 6, 7, PLANNING_SCHEMA_VERSION] = (
+    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, PLANNING_SCHEMA_VERSION] = (
         PLANNING_SCHEMA_VERSION
     )
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -4473,6 +4517,7 @@ def preview_adaptive_proposal(
             ),
             require_current_decision_provenance=proposal.schema_version >= 8,
             allow_legacy_product_decision_links=proposal.schema_version < 8,
+            allow_legacy_workflow_exemption=proposal.schema_version < 9,
         )
     if policy.max_agents is not None and len(body.agents) > policy.max_agents:
         raise PlanningError(

@@ -404,9 +404,11 @@ independent evidence records. SAT hashes the external ID, canonical arguments,
 complete result, and transcript, and retains only a bounded output excerpt. For
 `exec`, it also records the direct executable token
 while discarding the full command and any leading environment-assignment
-values. Executable attribution lazily consumes only leading assignments and the
-first executable token; it does not require an unpersisted shell suffix to
-satisfy a second parser's complete-command grammar. The complete canonical
+values. Executable attribution skips complete leading shell-comment lines,
+then lazily consumes only leading assignments and the first executable token;
+hashes inside words or quoted tokens are not comment delimiters. It does not
+require an unpersisted shell suffix to satisfy a second parser's complete-command
+grammar. The complete canonical
 argument object is still hashed and the actual result remains authoritative. An
 unavailable, empty, NUL-containing, overlong, or unparseable executable prefix
 is invalid. Size and record-count limits apply before parsing.
@@ -536,7 +538,12 @@ seconds. Approval revalidates that authority against the TeamPlan at the
 execution boundary.
 The bootstrap Planner cannot create Agents or change lifecycle state.
 
-Planning schema v8 adds typed decision provenance, with exact direct-input or
+Planning schema v9 requires a material primary workflow in new proposals,
+including throwaway prototypes, while preserving schema-v2 through schema-v8
+serialization and historical preview behavior. Producer and targeted-correction
+schemas permit only user-input or answered-question provenance for the workflow
+and require its downstream requirement trace.
+Planning schema v8 added typed decision provenance, with exact direct-input or
 question sources, while the controller compiles category-owned authority.
 Schema-v2 through schema-v7 decisions remain readable and omit the new field
 when reserialized. Schema v7 added invocation-bound typed submission payload and

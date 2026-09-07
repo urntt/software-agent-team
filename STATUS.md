@@ -9,6 +9,16 @@ supports that claim, and what remains unavailable. It does not redefine the
 product, architecture, experiment, or roadmap; those decisions belong to
 [`VISION.md`](VISION.md).
 
+The latest implementation gate passed all 1,190 tests. Planning schema v9 now
+requires a material, user-attributable primary workflow even for a throwaway
+prototype, without removing legacy schema readability or requiring a fixed
+questionnaire. The shared session reader also accepts complete leading shell
+comments before an executable without mistaking literal hashes inside command
+names for comments. Captured-session replay retains all paired tool results and
+the terminal submission; this is offline extraction evidence, not a fresh
+successful delivery. Clean frozen gates and ordinary-user validation remain
+required before release.
+
 The canonical repository `make check` entry now runs doctor, formatting, lint,
 and pytest through one diagnostic supervisor. It streams original stage output
 and writes an atomic ignored report containing exact commands, Git and time

@@ -1847,11 +1847,9 @@ def test_explicit_throwaway_prototype_can_form_a_lean_plan_without_questions(
             ),
             "primary_workflow": definition.primary_workflow.model_copy(
                 update={
-                    "statement": "No repeated workflow is material.",
-                    "disposition": ProductDefinitionDisposition.NOT_MATERIAL,
-                    "source": "planner",
-                    "requirement_ids": (),
-                    "criterion_ids": (),
+                    "statement": "counts Markdown links for one experiment",
+                    "disposition": ProductDefinitionDisposition.EXPLICIT_INPUT,
+                    "source": "counts Markdown links for one experiment",
                     "decision_ids": (),
                 }
             ),
@@ -1882,7 +1880,110 @@ def test_explicit_throwaway_prototype_can_form_a_lean_plan_without_questions(
     assert created is not None
     assert created.body.product_definition == prototype
     assert not created.body.product_definition.target_users.requirement_ids
-    assert not created.body.product_definition.primary_workflow.requirement_ids
+    assert created.body.product_definition.primary_workflow.requirement_ids
+
+
+def test_throwaway_workflow_is_material_in_current_but_readable_in_v8() -> None:
+    source = "For developers, build a throwaway prototype that checks Markdown links."
+    payload = proposal().model_dump(mode="json")
+    definition = payload["body"]["product_definition"]
+    definition["delivery_maturity"].update(
+        level="throwaway_prototype", source="throwaway prototype"
+    )
+    definition["primary_workflow"].update(
+        statement="Check Markdown links once.",
+        disposition="not_material",
+        source="planner",
+        requirement_ids=[],
+        criterion_ids=[],
+        decision_ids=[],
+    )
+    current = PlanningProposal.model_validate(payload)
+    with pytest.raises(PlanningError, match="primary workflow is always material"):
+        preview_adaptive_proposal(
+            request(source_request=source), current, policy(), created_at=FIXED_TIME
+        )
+
+    payload["schema_version"] = 8
+    legacy = PlanningProposal.model_validate(payload)
+    assert legacy.model_dump(mode="json") == payload
+    preview_adaptive_proposal(
+        request(source_request=source), legacy, policy(), created_at=FIXED_TIME
+    )
+
+
+def test_current_workflow_schema_excludes_immaterial_or_planner_owned_choices() -> None:
+    schema = planning._planning_response_schema()
+    definitions = schema["$defs"]
+    reference = definitions["ProductDefinition"]["properties"]["primary_workflow"][
+        "$ref"
+    ]
+    workflow = definitions[reference.rsplit("/", 1)[1]]
+    assert workflow["properties"]["disposition"]["enum"] == [
+        "explicit_input",
+        "resolved_question",
+    ]
+    assert workflow["properties"]["requirement_ids"]["minItems"] == 1
+    assert "requirement_ids" in workflow["required"]
+
+
+def test_workflow_materiality_repairs_one_atomic_slot_without_erasing_trace(
+    tmp_path: Path,
+) -> None:
+    valid = proposal_response().model_dump(mode="json")
+    invalid = json.loads(json.dumps(valid))
+    workflow = invalid["proposal"]["product_definition"]["primary_workflow"]
+    workflow.update(disposition="not_material", source="planner")
+    normalized, changes = planning._normalize_planning_response_payload(invalid)
+    assert normalized["proposal"]["product_definition"]["primary_workflow"] == workflow
+    assert not any("primary_workflow" in change for change in changes)
+    path = "/proposal/product_definition/primary_workflow"
+    executor = ScriptedAgentExecutor(
+        [
+            json.dumps(invalid),
+            correction_response(
+                invalid,
+                {path: valid["proposal"]["product_definition"]["primary_workflow"]},
+            ),
+        ]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(response_repair_limit=None),
+        clock=AdvancingClock(),
+    )
+    created = coordinator.start(
+        request(),
+        answer_question=lambda _: pytest.fail("explicit workflow needs no question"),
+    )
+    assert created is not None
+    assert created.body == proposal_body()
+    first = store.load_turn(request().run_id, 1)
+    assert first.response_validation is not None
+    assert first.response_validation.correction_paths == (path,)
+    assert (
+        first.response_validation.issues[0].invariant_id
+        == "planning_product_workflow_required"
+    )
+    assert (
+        store.load_turn(request().run_id, 2).semantic_correction_outcome == "accepted"
+    )
+    correction = executor.requests[1].prompt.rsplit(
+        "TARGETED_SEMANTIC_CORRECTION_SLOTS_V2", 1
+    )[1]
+    schema_text = correction.split("CORRECTION_SCHEMA_JSON\n", 1)[1].split(
+        "\nCall `sat_submit_artifact`", 1
+    )[0]
+    replacement = json.loads(schema_text)["properties"]["replacements"]["items"][
+        "oneOf"
+    ][0]["properties"]["replacement_value"]
+    assert replacement["properties"]["disposition"]["enum"] == [
+        "explicit_input",
+        "resolved_question",
+    ]
+    assert replacement["properties"]["requirement_ids"]["minItems"] == 1
 
 
 def test_material_product_dimension_requires_a_downstream_effect() -> None:

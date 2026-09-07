@@ -317,8 +317,10 @@ single poll coalesces a start and completion, both history events therefore carr
 the current inactive state and the current completed count; neither event may
 reconstruct a stale `tool_active` phase from its kind. `RunEvent` schema v4 must
 remain canonically readable from v2 through v3, Artifact schema v9 from v2
-through v8, lifecycle schema v3 from v1 through v2, and Planning schema v8 from
-v2 through v7. Tool-evidence regression
+through v8, lifecycle schema v3 from v1 through v2, and Planning schema v9 from
+v2 through v8. New plans always bind a material primary workflow to user input
+or clarification and downstream requirements, even for a throwaway prototype;
+historical preview alone retains the old exemption. Tool-evidence regression
 tests must preserve a valid async `exec` start as nonterminal `deferred`
 evidence, require a later terminal `process` result independently, and still
 require the invocation-bound terminal submission. Deferred evidence must never

@@ -225,8 +225,12 @@ An exact substring establishes provenance but does not establish semantic
 relevance: target users must name an actor that uses or receives the result, and
 the primary workflow must describe that actor's activity with the result rather
 than a build instruction or delivery qualifier.
-Target users or workflow may be `not_material` only for an explicitly approved
-throwaway prototype. Usability, operations, and delivery may be reasoned
+Target users may be `not_material` for an explicitly approved throwaway prototype.
+The primary workflow is always material, even when it will run only once. Current
+Planning accepts only explicit user input or an answered question for that
+dimension and requires a downstream requirement reference. Already explicit
+activity does not require another question; missing activity requires focused
+clarification, not an immaterial disposition. Usability, operations, and delivery may be reasoned
 Planner recommendations that become user-approved with the overview.
 
 The source carried by an `explicit_input` or `not_material` dimension is its
@@ -281,8 +285,10 @@ may perform only these bounded, semantics-preserving normalizations:
 - Remove decision references from `explicit_input` ProductDefinition dimensions
   when a requirement or criterion trace remains, because their own typed source
   is authoritative;
-- Remove every downstream reference from a `not_material` ProductDefinition
-  dimension, because retaining one would contradict the approved disposition;
+- Remove every downstream reference from an eligible `not_material`
+  ProductDefinition dimension, because retaining one would contradict the
+  approved disposition. The primary workflow is never eligible: preserve its
+  submitted trace and request an atomic materiality correction instead;
 - Compile each current model-facing atomic requirement `{id, description}` into
   the canonical backward-readable description and stable-ID index, and remove
   one or more repeated copies of that exact ID from its description because the
@@ -1002,7 +1008,11 @@ deterministically deconflicts an echo whose model-owned relationship is still
 needed. The canonical profile text remains controller-owned, both task bindings
 are retained, and the raw response plus every normalization remain recorded in
 the Planning turn.
-Planning schema v8 adds typed decision provenance and moves redundant question
+Planning schema v9 makes primary-workflow materiality mandatory for new
+proposals and their correction slots. Schema-v2 through schema-v8 records retain
+their original validation and canonical bytes; only historical preview may use
+the old throwaway-workflow exemption. New model responses never use that exemption.
+Planning schema v8 added typed decision provenance and moved redundant question
 and decision category-to-authority fields out of the model-facing response
 contract. It keeps
 schema-v2 through schema-v7 records readable without adding fields or changing

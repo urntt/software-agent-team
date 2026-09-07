@@ -809,6 +809,50 @@ def test_capture_stops_after_an_attributable_exec_prefix(tmp_path: Path) -> None
     assert len(call.arguments_sha256) == 64
 
 
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        (
+            "\n  # explain a quote: ' and a token sat-probe-run\n# second\nprintf ok",
+            "printf",
+        ),
+        (
+            "# preceding comment\nMODE=local sat-probe-run /tmp/probe.py",
+            "sat-probe-run",
+        ),
+        ("sat-probe-run#not-a-comment /tmp/probe.py", "sat-probe-run#not-a-comment"),
+        ('"sat-probe-run#quoted" /tmp/probe.py', "sat-probe-run#quoted"),
+    ],
+)
+def test_leading_shell_comments_preserve_capture_and_activity(
+    tmp_path: Path, command: str, expected: str
+) -> None:
+    invocation = request()
+    write_session_state(
+        tmp_path,
+        invocation=invocation,
+        records=[
+            session_record(),
+            user_record(invocation.prompt),
+            tool_call_record("commented-call", command=command),
+            tool_result_record("commented-call", output="ok"),
+            assistant_record(),
+        ],
+    )
+    captured = capture(tmp_path, invocation)
+    assert captured.tool_calls[0].executable == expected
+    activity = inspect_openclaw_session_activity(
+        state_dir=tmp_path,
+        agent_id=invocation.agent_id,
+        session_key=invocation.session_key,
+        prompt=invocation.prompt,
+    )
+    assert activity is not None
+    assert activity.tool_started_count == activity.tool_completed_count == 1
+    assert activity.terminal_response_observed
+    assert "explain a quote" not in captured.tool_calls[0].model_dump_json()
+
+
 def test_capture_rejects_an_unparseable_exec_prefix(tmp_path: Path) -> None:
     invocation = request()
     write_session_state(

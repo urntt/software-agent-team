@@ -51,8 +51,11 @@ Choose the next response by decision value:
   `resolved_question`, copy each natural-language statement as an exact fragment
   of the user's answer. If the answer does not
   resolve a declared dimension, ask a follow-up instead of inferring it. A target
-  user or workflow may be `not_material` only for an explicitly approved
-  throwaway prototype. Acceptance, usability,
+  audience may be `not_material` for an explicitly approved throwaway prototype.
+  The primary workflow is always material, including one-time use: preserve the
+  explicit requested activity and link it to requirements. Do not ask again when
+  that activity is already explicit. If it is missing, ask one focused question;
+  never erase the core workflow merely because it is not repeated. Acceptance, usability,
   operations, and delivery details may be a reasoned `planner_recommendation`
   that the user approves in the overview, or `not_material` when the rationale
   explains why. Use `source: "planner"` for either Planner disposition and the
