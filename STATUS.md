@@ -16,7 +16,16 @@ identity, per-stage terminal state, current/last pytest node, aggregate process
 and memory observations, typed cgroup/kernel availability, and post-run
 SAT-owned resource inventories. Signal, hang, detached-child, unavailable
 observer, and abandoned-started-record paths have regression coverage. The
-first complete supervised gate passed all 997 tests with no residual stage
+schema-v4 candidate also assigns pytest a short exact-owned temporary leaf,
+passes an explicit basetemp, and records its base/filesystem identity and
+cleanup on success, nonzero exit, timeout, signal, or abandoned-report
+recovery. Recovery defers while the exact
+stage owner is live and refuses unowned paths; focused regression covers
+foreign-directory preservation and cleanup failure as a gate failure. One
+complete diagnostic gate on the exact candidate content passed all 1,176 tests
+without changing shared `/tmp` capacity and with no private temporary residual;
+this is dirty-tree evidence rather than a clean-revision triple gate. The first
+complete supervised gate passed all 997 tests with no residual stage
 process, process lease, sandbox container, or volume; it observed no new cgroup
 or kernel OOM event. The two historical incomplete suites still have an
 evidence-bounded unknown cause rather than a retroactively invented diagnosis.

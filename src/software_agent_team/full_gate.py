@@ -7,9 +7,11 @@ import ctypes
 import hashlib
 import json
 import os
+import re
 import selectors
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -28,13 +30,15 @@ from software_agent_team.process_lifecycle import (
     read_linux_process_identity,
 )
 
-FULL_GATE_SCHEMA_VERSION = 3
+FULL_GATE_SCHEMA_VERSION = 4
 DEFAULT_STAGE_TIMEOUT_SECONDS = 1_800.0
 DEFAULT_TERMINATION_GRACE_SECONDS = 5.0
 DEFAULT_SAMPLE_INTERVAL_SECONDS = 0.10
+DEFAULT_PRIVATE_TEMPORARY_BASE = Path("/var/tmp")
 REPORT_FILENAME = "report.json"
 PYTEST_STATE_FILENAME = "pytest-state.json"
 _STAGE_IDENTITY_ENV = "SAT_FULL_GATE_STAGE_ID"
+_PRIVATE_TEMPORARY_NAME = re.compile(r"^sat-fg-[0-9a-f]{32}$")
 _PR_SET_CHILD_SUBREAPER = 36
 _PR_GET_CHILD_SUBREAPER = 37
 
@@ -68,6 +72,12 @@ class GateStage:
     name: str
     argv: tuple[str, ...]
     environment: dict[str, str] | None = None
+    private_temporary: bool = False
+    temporary_path_argument: str | None = None
+
+
+class _UnsafePrivateTemporaryPath(ValueError):
+    """Raised when persisted cleanup authority does not identify an owned path."""
 
 
 @dataclass(frozen=True)
@@ -201,6 +211,98 @@ def _has_stage_identity(pid: int, stage_identity: str) -> bool:
     except (FileNotFoundError, ProcessLookupError, PermissionError, OSError):
         return False
     return expected in environment.split(b"\0")
+
+
+def _private_temporary_path(temporary_base: Path, relative_path: str) -> Path:
+    """Resolve only one exact full-gate temporary leaf."""
+
+    relative = Path(relative_path)
+    if (
+        relative.is_absolute()
+        or len(relative.parts) != 1
+        or _PRIVATE_TEMPORARY_NAME.fullmatch(relative.parts[0]) is None
+    ):
+        raise _UnsafePrivateTemporaryPath("unsafe_private_temporary_path")
+    return temporary_base / relative
+
+
+def _require_owned_real_directory(path: Path) -> None:
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError as error:
+        raise _UnsafePrivateTemporaryPath("private_temporary_owner_missing") from error
+    if not stat.S_ISDIR(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+        raise _UnsafePrivateTemporaryPath("private_temporary_owner_not_directory")
+    if metadata.st_uid != os.getuid():
+        raise _UnsafePrivateTemporaryPath("private_temporary_owner_mismatch")
+
+
+def _require_usable_temporary_base(path: Path) -> None:
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError as error:
+        raise _UnsafePrivateTemporaryPath("private_temporary_base_missing") from error
+    if not stat.S_ISDIR(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+        raise _UnsafePrivateTemporaryPath("private_temporary_base_not_directory")
+    if not os.access(path, os.W_OK | os.X_OK):
+        raise _UnsafePrivateTemporaryPath("private_temporary_base_not_writable")
+
+
+def _create_private_temporary_tree(temporary_base: Path, relative_path: str) -> Path:
+    target = _private_temporary_path(temporary_base, relative_path)
+    _require_usable_temporary_base(temporary_base)
+    try:
+        target.mkdir(mode=0o700)
+    except FileExistsError as error:
+        raise _UnsafePrivateTemporaryPath(
+            "private_temporary_target_already_exists"
+        ) from error
+    _require_owned_real_directory(target)
+    return target
+
+
+def _delete_private_temporary_tree(temporary_base: Path, relative_path: str) -> None:
+    """Delete one validated tree without following sibling or nested symlinks."""
+
+    target = _private_temporary_path(temporary_base, relative_path)
+    _require_usable_temporary_base(temporary_base)
+    if os.path.lexists(target):
+        _require_owned_real_directory(target)
+        shutil.rmtree(target)
+    if os.path.lexists(target):
+        raise OSError("private temporary directory remains after cleanup")
+
+
+def _private_temporary_residual(
+    temporary_base: Path, relative_path: str
+) -> bool | None:
+    try:
+        target = _private_temporary_path(temporary_base, relative_path)
+    except _UnsafePrivateTemporaryPath:
+        return None
+    return os.path.lexists(target)
+
+
+def _live_stage_identity_processes(stage_identity: str) -> tuple[int, ...]:
+    if not stage_identity or len(stage_identity) > 128:
+        return ()
+    return tuple(
+        pid
+        for pid in sorted(_all_processes())
+        if _has_stage_identity(pid, stage_identity)
+    )
+
+
+def _persisted_process_is_alive(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    try:
+        current = read_linux_process_identity(int(payload["pid"]))
+        return current is not None and current.start_time_ticks == int(
+            payload["start_time_ticks"]
+        )
+    except (KeyError, TypeError, ValueError):
+        return False
 
 
 @dataclass(frozen=True)
@@ -688,6 +790,7 @@ class FullGateSupervisor:
         repository_root: Path,
         evidence_root: Path,
         stages: tuple[GateStage, ...],
+        private_temporary_base: Path = DEFAULT_PRIVATE_TEMPORARY_BASE,
         stage_timeout_seconds: float = DEFAULT_STAGE_TIMEOUT_SECONDS,
         termination_grace_seconds: float = DEFAULT_TERMINATION_GRACE_SECONDS,
         sample_interval_seconds: float = DEFAULT_SAMPLE_INTERVAL_SECONDS,
@@ -697,8 +800,17 @@ class FullGateSupervisor:
             raise ValueError("repository root must be an existing absolute directory")
         if not evidence_root.is_absolute():
             raise ValueError("evidence root must be absolute")
+        if not private_temporary_base.is_absolute():
+            raise ValueError("private temporary base must be absolute")
         if not stages or len({stage.name for stage in stages}) != len(stages):
             raise ValueError("gate stages must be non-empty and uniquely named")
+        if any(
+            stage.temporary_path_argument is not None and not stage.private_temporary
+            for stage in stages
+        ):
+            raise ValueError(
+                "temporary path arguments require a private temporary directory"
+            )
         if stage_timeout_seconds <= 0 or termination_grace_seconds <= 0:
             raise ValueError("gate timeouts must be positive")
         if sample_interval_seconds <= 0:
@@ -706,6 +818,7 @@ class FullGateSupervisor:
         self.repository_root = repository_root
         self.evidence_root = evidence_root
         self.stages = stages
+        self.private_temporary_base = private_temporary_base
         self.stage_timeout_seconds = stage_timeout_seconds
         self.termination_grace_seconds = termination_grace_seconds
         self.sample_interval_seconds = sample_interval_seconds
@@ -757,6 +870,7 @@ class FullGateSupervisor:
                     "exit_code": None,
                     "signal": None,
                     "log_path": f"{stage.name}.log",
+                    "temporary_directory": None,
                     "resource_observation": {
                         "status": "not_started",
                         "sample_attempts": 0,
@@ -857,30 +971,135 @@ class FullGateSupervisor:
         directory.mkdir(mode=0o700)
         return directory
 
+    def _cleanup_private_temporary(
+        self,
+        stage_record: dict[str, Any],
+        *,
+        recovered: bool,
+    ) -> bool:
+        temporary = stage_record.get("temporary_directory")
+        if not isinstance(temporary, dict):
+            return True
+        relative_path = temporary.get("relative_path")
+        attempted_at = _utc_now()
+        base_matches = temporary.get("base_path") == str(self.private_temporary_base)
+        try:
+            if not base_matches or not isinstance(relative_path, str):
+                raise _UnsafePrivateTemporaryPath("unsafe_private_temporary_path")
+            _delete_private_temporary_tree(self.private_temporary_base, relative_path)
+        except _UnsafePrivateTemporaryPath as error:
+            cleanup = {
+                "status": "refused",
+                "attempted_at": attempted_at,
+                "error": str(error),
+                "residual": (
+                    _private_temporary_residual(
+                        self.private_temporary_base, relative_path or ""
+                    )
+                    if base_matches
+                    else None
+                ),
+            }
+        except OSError as error:
+            cleanup = {
+                "status": "failed",
+                "attempted_at": attempted_at,
+                "error": type(error).__name__,
+                "residual": _private_temporary_residual(
+                    self.private_temporary_base, relative_path or ""
+                ),
+            }
+        else:
+            cleanup = {
+                "status": "completed",
+                "attempted_at": attempted_at,
+                "error": None,
+                "residual": False,
+            }
+            ownership = stage_record.get("process_ownership")
+            if isinstance(ownership, dict):
+                ownership.pop("recovery_token", None)
+        if recovered:
+            cleanup["recovered"] = True
+        temporary["cleanup"] = cleanup
+        return cleanup["status"] == "completed"
+
+    @staticmethod
+    def _pending_private_temporary(stage_record: Any) -> bool:
+        if not isinstance(stage_record, dict):
+            return False
+        temporary = stage_record.get("temporary_directory")
+        if not isinstance(temporary, dict):
+            return False
+        cleanup = temporary.get("cleanup")
+        return not isinstance(cleanup, dict) or cleanup.get("status") in {
+            "pending",
+            "failed",
+            "deferred_live_process",
+            "deferred_unknown_process_identity",
+        }
+
     def _recover_incomplete_reports(self) -> None:
         for path in sorted(self.evidence_root.glob(f"*/{REPORT_FILENAME}")):
             report = _read_json_object(path)
-            if report is None or report.get("status") != FullGateStatus.RUNNING.value:
+            if report is None:
+                continue
+            stages = report.get("stages")
+            stage_records = stages if isinstance(stages, list) else []
+            running = report.get("status") == FullGateStatus.RUNNING.value
+            pending_temporary = any(
+                self._pending_private_temporary(stage) for stage in stage_records
+            )
+            if not running and not pending_temporary:
                 continue
             process = report.get("supervisor_process")
-            if not isinstance(process, dict):
-                alive = False
-            else:
-                try:
-                    current = read_linux_process_identity(int(process["pid"]))
-                    alive = current is not None and current.start_time_ticks == int(
-                        process["start_time_ticks"]
-                    )
-                except (KeyError, TypeError, ValueError):
-                    alive = False
-            if alive:
+            if _persisted_process_is_alive(process):
                 continue
-            report["status"] = FullGateStatus.INCOMPLETE_OBSERVED_ON_RECOVERY.value
-            report["ended_at"] = None
-            report["recovered_at"] = _utc_now()
-            report["incomplete_reason"] = (
-                "supervisor_disappeared_without_terminal_record"
-            )
+            if running:
+                report["status"] = FullGateStatus.INCOMPLETE_OBSERVED_ON_RECOVERY.value
+                report["ended_at"] = None
+                report["recovered_at"] = _utc_now()
+                report["incomplete_reason"] = (
+                    "supervisor_disappeared_without_terminal_record"
+                )
+            for stage_record in stage_records:
+                if not self._pending_private_temporary(stage_record):
+                    continue
+                ownership = stage_record.get("process_ownership")
+                ownership = ownership if isinstance(ownership, dict) else {}
+                token = ownership.get("recovery_token")
+                live_pids = (
+                    _live_stage_identity_processes(token)
+                    if isinstance(token, str)
+                    else ()
+                )
+                root_process = ownership.get("root_process")
+                if live_pids or _persisted_process_is_alive(root_process):
+                    temporary = stage_record["temporary_directory"]
+                    temporary["cleanup"] = {
+                        "status": "deferred_live_process",
+                        "attempted_at": _utc_now(),
+                        "error": None,
+                        "residual": True,
+                        "live_process_count": len(live_pids)
+                        or int(_persisted_process_is_alive(root_process)),
+                        "recovered": True,
+                    }
+                    continue
+                if token is None and not isinstance(root_process, dict):
+                    temporary = stage_record["temporary_directory"]
+                    temporary["cleanup"] = {
+                        "status": "deferred_unknown_process_identity",
+                        "attempted_at": _utc_now(),
+                        "error": "missing_recovery_identity",
+                        "residual": True,
+                        "recovered": True,
+                    }
+                    continue
+                self._cleanup_private_temporary(
+                    stage_record,
+                    recovered=True,
+                )
             _atomic_write_json(path, report)
 
     def _install_signal_handlers(self) -> dict[int, Any]:
@@ -917,9 +1136,6 @@ class FullGateSupervisor:
     ) -> int:
         stage_record["status"] = StageStatus.RUNNING.value
         stage_record["started_at"] = _utc_now()
-        _atomic_write_json(report_path, report)
-        self.output.write(f"full-gate: stage={stage.name}\n".encode())
-        self.output.flush()
         environment = os.environ.copy()
         if stage.environment:
             environment.update(stage.environment)
@@ -929,6 +1145,68 @@ class FullGateSupervisor:
             "mechanism": "inherited_stage_identity",
             "identity_sha256": hashlib.sha256(stage_identity.encode()).hexdigest(),
         }
+        launch_argv = list(stage.argv)
+        private_root: Path | None = None
+        if stage.private_temporary:
+            relative_path = f"sat-fg-{uuid4().hex}"
+            stage_record["process_ownership"]["recovery_token"] = stage_identity
+            stage_record["temporary_directory"] = {
+                "authority": "full_gate_supervisor",
+                "base_path": str(self.private_temporary_base),
+                "relative_path": relative_path,
+                "environment_variables": ["PYTEST_DEBUG_TEMPROOT", "TMPDIR"],
+                "path_argument": stage.temporary_path_argument,
+                "created_at": None,
+                "cleanup": {
+                    "status": "pending",
+                    "attempted_at": None,
+                    "error": None,
+                    "residual": False,
+                },
+            }
+        _atomic_write_json(report_path, report)
+        self.output.write(f"full-gate: stage={stage.name}\n".encode())
+        self.output.flush()
+        if stage.private_temporary:
+            temporary = stage_record["temporary_directory"]
+            try:
+                private_root = _create_private_temporary_tree(
+                    self.private_temporary_base, temporary["relative_path"]
+                )
+            except (OSError, _UnsafePrivateTemporaryPath) as error:
+                temporary["setup_error"] = {
+                    "type": type(error).__name__,
+                    "reason": str(error),
+                }
+                temporary["cleanup"]["residual"] = _private_temporary_residual(
+                    self.private_temporary_base, temporary["relative_path"]
+                )
+                self._cleanup_private_temporary(
+                    stage_record,
+                    recovered=False,
+                )
+                stage_record["status"] = StageStatus.FAILED.value
+                stage_record["ended_at"] = _utc_now()
+                _atomic_write_json(report_path, report)
+                return 1
+            temporary["created_at"] = _utc_now()
+            temporary_metadata = private_root.stat()
+            temporary["filesystem_device"] = temporary_metadata.st_dev
+            temporary["owner_uid"] = temporary_metadata.st_uid
+            temporary["mode"] = stat.S_IMODE(temporary_metadata.st_mode)
+            temporary["cleanup"]["residual"] = True
+            environment["TMPDIR"] = str(private_root)
+            environment["PYTEST_DEBUG_TEMPROOT"] = str(private_root)
+            if stage.temporary_path_argument is not None:
+                stage_record["configured_argv"] = list(stage.argv)
+                launch_argv.extend(
+                    (
+                        stage.temporary_path_argument,
+                        str(private_root / "basetemp"),
+                    )
+                )
+                stage_record["argv"] = launch_argv
+            _atomic_write_json(report_path, report)
         if stage.name == "test":
             environment["SAT_FULL_GATE_PYTEST_STATE"] = str(
                 report_directory / PYTEST_STATE_FILENAME
@@ -938,7 +1216,7 @@ class FullGateSupervisor:
         with log_path.open("wb") as log:
             try:
                 process = subprocess.Popen(
-                    stage.argv,
+                    launch_argv,
                     cwd=self.repository_root,
                     env=environment,
                     stdout=subprocess.PIPE,
@@ -949,9 +1227,24 @@ class FullGateSupervisor:
                 stage_record["status"] = StageStatus.FAILED.value
                 stage_record["ended_at"] = _utc_now()
                 stage_record["launch_error"] = type(error).__name__
+                self._cleanup_private_temporary(
+                    stage_record,
+                    recovered=False,
+                )
                 _atomic_write_json(report_path, report)
                 return 1
             self._active_process = process
+            root_process = read_linux_process_identity(process.pid)
+            stage_record["process_ownership"]["root_process"] = (
+                {"status": "unavailable"}
+                if root_process is None
+                else {
+                    "pid": root_process.pid,
+                    "process_group_id": root_process.process_group_id,
+                    "start_time_ticks": root_process.start_time_ticks,
+                }
+            )
+            _atomic_write_json(report_path, report)
             assert process.stdout is not None
             selector = selectors.DefaultSelector()
             selector.register(process.stdout, selectors.EVENT_READ)
@@ -1055,12 +1348,28 @@ class FullGateSupervisor:
             "cleanup": residual_cleanup,
             "residual_after_cleanup": [item.as_json() for item in residual_after],
         }
+        temporary_cleanup_ok = True
+        if stage.private_temporary:
+            if residual_after:
+                stage_record["temporary_directory"]["cleanup"] = {
+                    "status": "deferred_live_process",
+                    "attempted_at": _utc_now(),
+                    "error": None,
+                    "residual": True,
+                    "live_process_count": len(residual_after),
+                }
+                temporary_cleanup_ok = False
+            else:
+                temporary_cleanup_ok = self._cleanup_private_temporary(
+                    stage_record,
+                    recovered=False,
+                )
         self._finalize_process_observation(stage_record["resource_observation"])
         if self._requested_signal is not None:
             stage_record["status"] = StageStatus.INTERRUPTED.value
         elif stage_record["status"] == StageStatus.TIMED_OUT.value:
             pass
-        elif return_code == 0 and not residual_before:
+        elif return_code == 0 and not residual_before and temporary_cleanup_ok:
             stage_record["status"] = StageStatus.COMPLETED.value
         else:
             stage_record["status"] = StageStatus.FAILED.value
@@ -1071,6 +1380,8 @@ class FullGateSupervisor:
             return 128 + self._requested_signal
         if stage_record["status"] == StageStatus.TIMED_OUT.value:
             return 124
+        if return_code == 0 and not temporary_cleanup_ok:
+            return 1
         return return_code if return_code > 0 else 1
 
     @staticmethod
@@ -1149,6 +1460,14 @@ class FullGateSupervisor:
                 }
                 for item in stages
             ],
+            "stage_temporary_directories": [
+                {
+                    "stage": item["name"],
+                    "temporary_directory": item.get("temporary_directory"),
+                }
+                for item in stages
+                if item.get("temporary_directory") is not None
+            ],
             "docker": _docker_inventory(self.repository_root),
         }
 
@@ -1177,6 +1496,8 @@ def canonical_stages(repository_root: Path, uv_binary: Path) -> tuple[GateStage,
                 "-p",
                 "software_agent_team.full_gate_pytest_plugin",
             ),
+            private_temporary=True,
+            temporary_path_argument="--basetemp",
         ),
     )
 

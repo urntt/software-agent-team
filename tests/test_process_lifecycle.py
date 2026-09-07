@@ -218,9 +218,9 @@ def test_new_process_recovers_lease_after_controller_is_killed(
     tmp_path: Path,
 ) -> None:
     root = tmp_path / "leases"
-    ready_socket_path = tmp_path / "ready.sock"
-    ready_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    ready_socket.bind(str(ready_socket_path))
+    ready_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    ready_socket.bind(("127.0.0.1", 0))
+    ready_host, ready_port = ready_socket.getsockname()
     ready_socket.listen(1)
     ready_socket.settimeout(15)
     controller_code = "\n".join(
@@ -228,14 +228,14 @@ def test_new_process_recovers_lease_after_controller_is_killed(
             "import socket, subprocess, sys, time",
             "from pathlib import Path",
             "from software_agent_team.process_lifecycle import ProcessLeaseStore",
-            "root, ready_path = Path(sys.argv[1]), sys.argv[2]",
+            "root, ready_host = Path(sys.argv[1]), sys.argv[2]",
+            "ready_port = int(sys.argv[3])",
             "child = subprocess.Popen(['sleep', '30'], start_new_session=True)",
             "store = ProcessLeaseStore(root)",
             "store.acquire(run_id='sat-crash', agent_id='builder', "
             "session_key='agent:builder:sat-crash-i1-work-result', "
             "child_pid=child.pid, command=('sleep', '30'))",
-            "ready = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)",
-            "ready.connect(ready_path)",
+            "ready = socket.create_connection((ready_host, ready_port), 5)",
             "ready.sendall((str(child.pid) + '\\n').encode('ascii'))",
             "ready.close()",
             "time.sleep(30)",
@@ -243,7 +243,14 @@ def test_new_process_recovers_lease_after_controller_is_killed(
     )
     with local_child_subreaper():
         controller = subprocess.Popen(
-            [sys.executable, "-c", controller_code, str(root), str(ready_socket_path)],
+            [
+                sys.executable,
+                "-c",
+                controller_code,
+                str(root),
+                ready_host,
+                str(ready_port),
+            ],
             text=True,
         )
         child_pid: int | None = None

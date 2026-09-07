@@ -2241,9 +2241,9 @@ def test_default_openclaw_process_can_be_interrupted_by_agent_identity(
 def test_interrupt_escalates_when_the_process_ignores_termination(
     tmp_path: Path,
 ) -> None:
-    ready_socket_path = tmp_path / "ready.sock"
-    ready_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    ready_socket.bind(str(ready_socket_path))
+    ready_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    ready_socket.bind(("127.0.0.1", 0))
+    ready_host, ready_port = ready_socket.getsockname()
     ready_socket.listen(1)
     ready_socket.settimeout(15)
     binary = tmp_path / "stubborn-openclaw"
@@ -2253,8 +2253,7 @@ def test_interrupt_escalates_when_the_process_ignores_termination(
         "import socket\n"
         "import time\n"
         "signal.signal(signal.SIGTERM, lambda *_: None)\n"
-        "ready = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)\n"
-        f"ready.connect({str(ready_socket_path)!r})\n"
+        f"ready = socket.create_connection(({ready_host!r}, {ready_port}), 5)\n"
         "ready.sendall(b'ready')\n"
         "ready.close()\n"
         "time.sleep(30)\n",

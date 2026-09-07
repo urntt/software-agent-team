@@ -129,27 +129,29 @@ def test_runner_refuses_noncanonical_targets(target: str) -> None:
 
 
 def test_runner_refuses_symlinks_hardlinks_and_non_owner_only_mode(
-    tmp_path: Path,
     probe_target: Path,
 ) -> None:
     helper = load_helper()
-    referent = tmp_path / "referent.py"
-    write_probe(referent, "pass\n")
+    referent = Path("/tmp") / f"sat-review-probe-referent-{uuid.uuid4().hex}.py"
+    try:
+        write_probe(referent, "pass\n")
 
-    probe_target.symlink_to(referent)
-    with pytest.raises(helper.ProbeRunFailure, match="open probe safely"):
-        helper._open_probe(str(probe_target))
-    probe_target.unlink()
+        probe_target.symlink_to(referent)
+        with pytest.raises(helper.ProbeRunFailure, match="open probe safely"):
+            helper._open_probe(str(probe_target))
+        probe_target.unlink()
 
-    os.link(referent, probe_target)
-    with pytest.raises(helper.ProbeRunRefused, match="exactly one"):
-        helper._open_probe(str(probe_target))
-    probe_target.unlink()
+        os.link(referent, probe_target)
+        with pytest.raises(helper.ProbeRunRefused, match="exactly one"):
+            helper._open_probe(str(probe_target))
+        probe_target.unlink()
 
-    write_probe(probe_target, "pass\n")
-    probe_target.chmod(0o644)
-    with pytest.raises(helper.ProbeRunRefused, match="0600"):
-        helper._open_probe(str(probe_target))
+        write_probe(probe_target, "pass\n")
+        probe_target.chmod(0o644)
+        with pytest.raises(helper.ProbeRunRefused, match="0600"):
+            helper._open_probe(str(probe_target))
+    finally:
+        referent.unlink(missing_ok=True)
 
 
 def test_runner_self_test_has_no_project_or_probe_dependency(

@@ -34,6 +34,18 @@ writing a terminal outcome, the next invocation marks that started report
 `incomplete_observed_on_recovery`; it does not infer a cause from a later
 successful run.
 
+Diagnostic report schema v4 gives the canonical pytest stage an exact, short
+private temporary leaf under `/var/tmp`. The supervisor overrides `TMPDIR` and
+`PYTEST_DEBUG_TEMPROOT`, passes an explicit `--basetemp`, and records the exact
+base, leaf, filesystem device, owner UID, and mode before launch. It removes
+only that validated tree after all attributable stage processes stop on success, test failure, timeout,
+or signal; a cleanup failure fails the gate. Recovery removes an abandoned
+tree only after its persisted stage marker and PID/start-time identity show no
+live owner. It defers cleanup while an exact process is live and refuses paths,
+symlinks, ownership, base identity, or leaf shapes outside the gate-private
+namespace.
+Foreign shared pytest state is neither read as authority nor deleted.
+
 Diagnostic report schema v3 distinguishes an attributable process-resource
 sample from a process that exits before `/proc` can be observed. It samples
 immediately after launch and reports typed `unavailable` plus `null` peaks when
@@ -49,8 +61,11 @@ new session is adopted by the supervisor when its parent exits, matched against
 the inherited identity, terminated by exact identity, and reaped. It therefore
 cannot disappear between topology samples or turn a leaking stage into a false
 success. If the kernel boundary is unavailable, the report says so and falls
-back to marker attribution. Reports retain only a SHA-256 digest of the
-identity; they never capture a process environment.
+back to marker attribution. Terminal reports retain only a SHA-256 digest of
+the identity and never capture a process environment. While a private
+temporary tree is nonterminal, its mode-0700 report temporarily retains the
+opaque stage marker needed to avoid deleting storage from an active orphan;
+normal or recovered cleanup removes that marker.
 
 Each stage has a 30-minute developer-gate infrastructure ceiling so an
 unattended repository check cannot remain stuck forever. That ceiling is not a
