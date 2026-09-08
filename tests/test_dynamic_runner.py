@@ -1623,6 +1623,84 @@ def test_dynamic_reviewer_does_not_retry_when_no_evidence_candidate_exists(
     ]
 
 
+@pytest.mark.parametrize("invalid_handle", [False, True])
+def test_reviewer_correction_capture_reaches_controller_and_settlement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    invalid_handle: bool,
+) -> None:
+    from test_submission_bridge import capture_controller_correction
+
+    runner, team_plan, executor, _, _ = runtime(
+        tmp_path,
+        executor_options={"invalid_review_selector_once": True},
+    )
+    original_result = executor._result
+    captures = []
+
+    def bridge_result(request, response_text, submission_payload):
+        original = original_result(request, response_text, submission_payload)
+        if request.agent_id != "reviewer" or "replacements" not in (
+            submission_payload or {}
+        ):
+            return original
+        if invalid_handle:
+            for item in submission_payload["replacements"]:
+                item["replacement_value"] = "evidence_ffffffffffffffff"
+        captured, status, evidence = capture_controller_correction(
+            tmp_path / "actual-correction",
+            request,
+            submission_payload,
+        )
+        captures.append(evidence)
+        # No fake semantic acceptance or fake current-turn work evidence passes
+        # this boundary. Only the preceding model/work fixtures remain simulated.
+        return AgentExecutionResult(
+            status=AgentExecutionStatus.COMPLETED,
+            telemetry=original.telemetry.model_copy(
+                update={
+                    "tool_calls": evidence.tool_calls,
+                    "session_transcript_sha256": evidence.transcript_sha256,
+                    "session_record_count": evidence.record_count,
+                    "session_id": "controller-bridge",
+                }
+            ),
+            semantic_submission=captured,
+            submission_evidence=status,
+        )
+
+    monkeypatch.setattr(executor, "_result", bridge_result)
+    result = DagScheduler().execute(team_plan, runner)
+    assert len(captures) == 1
+    assert len(captures[0].tool_calls) == 1  # Correction does not rerun prior work.
+    usage = runner.budget_ledger.snapshot()
+    assert usage.calls_started == usage.calls_completed
+    assert usage.active_calls == 0
+    records = [
+        runner.artifact_store.load(ref)
+        for ref in runner.execution_records
+        if "/verify/reviewer-" in ref.path
+    ]
+    assert len(records) == 2
+    assert records[-1].session_transcript_sha256 == captures[0].transcript_sha256
+    if invalid_handle:
+        assert result.status is ScheduleStatus.FAILED
+        assert (
+            runner.termination_reasons["reviewer"] is TerminationReason.ARTIFACT_INVALID
+        )
+        assert "reviewer" not in runner.outputs
+        assert records[-1].semantic_correction_outcome == "invalid_submission"
+    else:
+        assert result.status is ScheduleStatus.COMPLETED
+        assert records[-1].semantic_correction_outcome == "accepted"
+        artifact = runner.artifact_store.load(runner.outputs["reviewer"])
+        assert isinstance(artifact, ReviewReport)
+        assert (
+            artifact.criterion_assessments[0].tool_evidence[0].observable
+            == "fake-review-observation"
+        )
+
+
 def test_dynamic_reviewer_correction_uses_controller_evidence_handle(
     tmp_path: Path,
 ) -> None:

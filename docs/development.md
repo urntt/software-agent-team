@@ -153,6 +153,13 @@ external requests, including preceding deferred work and runtime rejections.
 Its simulated host session IO does not replace the separate
 real OpenClaw loopback gate or provider-backed product acceptance.
 
+The dynamic Reviewer correction integration also passes an actual plugin capture
+into the production runner. It checks successful catalog binding and rejected
+handles through final grounding, artifact persistence, and call settlement,
+without inventing current-turn work tools for a terminal-only correction.
+Earlier work, provider usage, and quality commands remain explicit fixtures;
+this narrow integration is not a full sandbox or provider journey.
+
 Planning criterion checks collect independent sibling failures in one diagnostic
 pass after proposal prerequisites are valid. Preserve prerequisite ordering
 within each criterion and defer global coverage checks until those failures are

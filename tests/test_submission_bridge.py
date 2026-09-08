@@ -35,6 +35,79 @@ from software_agent_team.submissions import (
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def capture_controller_correction(tmp_path: Path, request, payload):
+    """Capture a real terminal plugin result; prior work remains caller-owned."""
+    pins = (ROOT / "configs/toolchain.sh").read_text()
+    match = re.search(r'^task_node_version="([^"]+)"$', pins, re.MULTILINE)
+    assert match is not None
+    node = ROOT / ".sat/openclaw/tools" / f"node-v{match[1]}/bin/node"
+    contract = request.submission_contract
+    assert contract is not None
+    tmp_path.mkdir()
+    schema = tmp_path / "parameters.json"
+    schema.write_bytes(canonical_json_bytes(contract.transport_schema()))
+    output = tmp_path / "submission.json"
+    binding = "b" * 64
+    completed = subprocess.run(
+        [
+            str(node),
+            str(ROOT / "tests/fixtures/submission_bridge.mjs"),
+            str(
+                ROOT
+                / "src/software_agent_team/openclaw_plugins"
+                / "artifact_submission/index.js"
+            ),
+        ],
+        input=json.dumps([{"artifact": payload}]),
+        text=True,
+        capture_output=True,
+        check=True,
+        timeout=30,
+        env={
+            "HOME": str(tmp_path),
+            "SAT_ARTIFACT_SUBMISSION_SCHEMA_PATH": str(schema),
+            "SAT_ARTIFACT_SUBMISSION_OUTPUT_PATH": str(output),
+            "SAT_ARTIFACT_SUBMISSION_SCHEMA_SHA256": contract.schema_sha256,
+            "SAT_ARTIFACT_SUBMISSION_PARAMETERS_SHA256": (
+                contract.transport_schema_sha256
+            ),
+            "SAT_ARTIFACT_SUBMISSION_BINDING_SHA256": binding,
+        },
+    )
+    observed = json.loads(completed.stdout)
+    session_id = "controller-bridge"
+    sessions = tmp_path / "state/agents" / request.agent_id / "sessions"
+    sessions.mkdir(parents=True)
+    (sessions / "sessions.json").write_text(
+        json.dumps({request.session_key: {"sessionId": session_id}})
+    )
+    records = [
+        {"type": "session", "id": session_id},
+        {"type": "message", "message": {"role": "user", "content": request.prompt}},
+        *observed["records"],
+    ]
+    (sessions / f"{session_id}.jsonl").write_text(
+        "".join(json.dumps(record) + "\n" for record in records)
+    )
+    evidence = capture_openclaw_tool_evidence(
+        state_dir=tmp_path / "state",
+        agent_id=request.agent_id,
+        session_key=request.session_key,
+        session_id=session_id,
+        prompt=request.prompt,
+    )
+    captured, status = validate_submission_capture(
+        contract,
+        binding_sha256=binding,
+        capture=capture_submission_file(output),
+        tool_calls=evidence.tool_calls,
+        tool_evidence_error=None,
+    )
+    assert captured is not None
+    assert status.status is AgentSubmissionStatus.ACCEPTED
+    return captured, status, evidence
+
+
 class CorrectedBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
