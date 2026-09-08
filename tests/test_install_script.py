@@ -193,7 +193,11 @@ echo 'OpenClaw 2026.7.1-2 (test)'
         openclaw_prefix / "tools/node-v24.19.0/bin/node",
         """#!/usr/bin/env bash
 [[ -z "${STATE_DIRECTORY-}${NODE_OPTIONS-}${NODE_PATH-}" ]] || exit 9
-echo 'v24.19.0'
+if [[ "${1:-}" == */entry.js ]]; then
+  echo 'OpenClaw 2026.7.1-2 (test)'
+else
+  echo 'v24.19.0'
+fi
 """,
     )
 
@@ -425,6 +429,8 @@ def test_setup_reuses_owned_runtime_despite_foreign_node_selectors(
         STATE_DIRECTORY="/foreign/state",
         NODE_OPTIONS="--require=/foreign/preload.js",
         NODE_PATH="/foreign/modules",
+        NODE_COMPILE_CACHE="/foreign/cache",
+        NODE_DISABLE_COMPILE_CACHE="1",
     )
     write_executable(
         checkout / "scripts/install-openclaw.sh",
@@ -440,6 +446,9 @@ def test_setup_reuses_owned_runtime_despite_foreign_node_selectors(
     )
     assert result.returncode == 0, result.stderr
     assert "unexpected-reinstall" not in result.stderr
+    launcher = checkout / ".sat/openclaw/bin/openclaw"
+    assert "sat_prepare_openclaw_compile_cache" in launcher.read_text()
+    assert (checkout / ".sat/openclaw/compile-cache").is_dir()
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="setup supports Linux/WSL")
@@ -485,7 +494,9 @@ printf '%s\n' \
   '[[ "${OPENCLAW_STATE_DIR:-}" == "$HOME/state" ]] || exit 4' \
   '[[ "${OPENCLAW_CONFIG_PATH:-}" == "$HOME/state/openclaw.json" ]] || exit 5' \
   "echo 'OpenClaw $version (test)'" > "$prefix/bin/openclaw"
-printf '%s\n' '#!/usr/bin/env bash' "echo 'v$node_version'" > \
+printf '%s\n' '#!/usr/bin/env bash' \
+  'if [[ "${1:-}" == */entry.js ]]; then' \
+  "echo 'OpenClaw $version (test)'" 'else' "echo 'v$node_version'" 'fi' > \
   "$prefix/tools/node-v$node_version/bin/node"
 chmod 755 "$prefix/bin/openclaw" "$prefix/tools/node-v$node_version/bin/node"
 """,

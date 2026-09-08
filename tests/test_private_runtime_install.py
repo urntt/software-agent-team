@@ -22,7 +22,11 @@ def executable(path: Path, text: str) -> None:
 
 def fixture(tmp_path: Path) -> tuple[Path, Path, dict[str, str]]:
     root = tmp_path / "checkout with spaces"
-    for name in ("scripts/install-openclaw.sh", "configs/toolchain.sh"):
+    for name in (
+        "scripts/install-openclaw.sh",
+        "scripts/openclaw-environment.sh",
+        "configs/toolchain.sh",
+    ):
         target = root / name
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / name, target)
@@ -39,6 +43,10 @@ def fixture(tmp_path: Path) -> tuple[Path, Path, dict[str, str]]:
         """#!/bin/bash
 set -euo pipefail
 [[ -z "${STATE_DIRECTORY:-}${NODE_OPTIONS:-}${NODE_PATH:-}" ]] || exit 13
+if [[ -n "${EXPECTED_CACHE:-}" ]]; then
+  [[ "${NODE_COMPILE_CACHE:-}" == "$EXPECTED_CACHE" ]] || exit 14
+  [[ ! -v NODE_DISABLE_COMPILE_CACHE ]] || exit 15
+fi
 printf '%s\\n' "$*" >> "$CALL_LOG"
 case "$1" in
   --version) echo v24.19.0 ;;
@@ -198,3 +206,115 @@ def test_private_install_drops_ambient_runtime_state_and_preloads(
     result = run(root, prefix, environment)
     assert result.returncode == 0, result.stderr
     assert not (tmp_path / "foreign-state").exists()
+
+
+def test_private_runtime_owns_cache_before_node_and_on_direct_launch(
+    tmp_path: Path,
+) -> None:
+    root, prefix, environment = fixture(tmp_path)
+    foreign = tmp_path / "foreign-cache"
+    foreign.mkdir(mode=0o700)
+    sentinel = foreign / "keep"
+    sentinel.write_text("foreign cache must stay untouched")
+    foreign.chmod(0o500)
+    environment.update(
+        NODE_COMPILE_CACHE=str(foreign),
+        NODE_DISABLE_COMPILE_CACHE="1",
+        EXPECTED_CACHE=str(prefix / "compile-cache"),
+    )
+    result = run(root, prefix, environment)
+    assert result.returncode == 0, result.stderr
+    cache = prefix / "compile-cache"
+    assert cache.is_dir() and cache.stat().st_mode & 0o777 == 0o700
+    probe = subprocess.run(
+        [str(prefix / "bin/openclaw"), "--version"],
+        env=environment,
+        capture_output=True,
+        text=True,
+    )
+    assert probe.returncode == 0, probe.stderr
+    assert sentinel.read_text() == "foreign cache must stay untouched"
+    assert list(foreign.iterdir()) == [sentinel]
+
+
+def test_private_runtime_refuses_redirected_cache_before_node(tmp_path: Path) -> None:
+    root, prefix, environment = fixture(tmp_path)
+    foreign = tmp_path / "foreign-cache"
+    foreign.mkdir()
+    (prefix / "compile-cache").symlink_to(foreign, target_is_directory=True)
+    executable(prefix / "bin/openclaw", "#!/bin/sh\necho old\n")
+    before = (prefix / "bin/openclaw").read_bytes()
+    result = run(root, prefix, environment)
+    assert result.returncode != 0
+    assert "compile cache" in result.stderr
+    assert (prefix / "bin/openclaw").read_bytes() == before
+    assert not Path(environment["CALL_LOG"]).exists()
+    assert not list(foreign.iterdir())
+
+
+@pytest.mark.parametrize("mode", [0o500, 0o755, 0o770])
+def test_private_runtime_preserves_invalid_cache_permissions(
+    tmp_path: Path, mode: int
+) -> None:
+    root, prefix, environment = fixture(tmp_path)
+    cache = prefix / "compile-cache"
+    cache.mkdir(mode=mode)
+    cache.chmod(mode)
+    result = run(root, prefix, environment)
+    assert result.returncode != 0
+    assert "compile cache" in result.stderr
+    assert cache.stat().st_mode & 0o777 == mode
+    assert not Path(environment["CALL_LOG"]).exists()
+
+
+def test_private_launcher_revalidates_cache_without_touching_redirect(
+    tmp_path: Path,
+) -> None:
+    root, prefix, environment = fixture(tmp_path)
+    assert run(root, prefix, environment).returncode == 0
+    cache = prefix / "compile-cache"
+    cache.rename(prefix / "preserved-cache")
+    foreign = tmp_path / "foreign-cache"
+    foreign.mkdir()
+    cache.symlink_to(foreign, target_is_directory=True)
+    calls = Path(environment["CALL_LOG"]).read_bytes()
+    probe = subprocess.run(
+        [str(prefix / "bin/openclaw"), "--version"],
+        env=environment,
+        capture_output=True,
+        text=True,
+    )
+    assert probe.returncode != 0
+    assert "compile cache" in probe.stderr
+    assert Path(environment["CALL_LOG"]).read_bytes() == calls
+    assert not list(foreign.iterdir())
+
+
+def test_private_installations_use_distinct_reusable_caches(tmp_path: Path) -> None:
+    caches = []
+    for name in ("first", "second"):
+        root, prefix, environment = fixture(tmp_path / name)
+        environment["EXPECTED_CACHE"] = str(prefix / "compile-cache")
+        assert run(root, prefix, environment).returncode == 0
+        cache = prefix / "compile-cache"
+        sentinel = cache / "retained"
+        sentinel.write_text(name)
+        before = cache.stat().st_ino
+        assert run(root, prefix, environment).returncode == 0
+        assert cache.stat().st_ino == before
+        assert sentinel.read_text() == name
+        caches.append(cache.resolve())
+    assert caches[0] != caches[1]
+
+
+@pytest.mark.skipif(os.getuid() != 0, reason="cross-UID fixture requires root")
+def test_private_runtime_refuses_another_users_cache(tmp_path: Path) -> None:
+    root, prefix, environment = fixture(tmp_path)
+    cache = prefix / "compile-cache"
+    cache.mkdir(mode=0o700)
+    os.chown(cache, 65534, 65534)
+    result = run(root, prefix, environment)
+    assert result.returncode != 0
+    assert "compile cache" in result.stderr
+    assert cache.stat().st_uid == 65534
+    assert not Path(environment["CALL_LOG"]).exists()

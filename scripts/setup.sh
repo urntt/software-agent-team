@@ -86,6 +86,10 @@ if [[ ! -x "$task_openclaw_bin" ]] || \
       bash "$task_root/scripts/install-openclaw.sh" "$task_openclaw_prefix"
 fi
 
+sat_publish_openclaw_launcher "$task_openclaw_prefix" "$task_node_bin" \
+  "$task_openclaw_prefix/tools/node-v$task_node_version/lib/node_modules/openclaw/dist/entry.js" \
+  "$task_openclaw_environment" || fail "private launcher/cache refresh failed"
+
 [[ -x "$task_openclaw_bin" ]] || fail "SAT OpenClaw binary is missing after setup"
 [[ "$(sat_run_openclaw_isolated \
   "$task_installer_home" \

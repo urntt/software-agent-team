@@ -4,6 +4,11 @@
   "target_version": "0.1.0",
   "changes": [
     {
+      "id": "private-node-compile-cache-ownership",
+      "impact": "patch",
+      "summary": "Own and revalidate the private runtime compile cache, neutralize ambient cache selectors, and refresh legacy launchers without adopting shared Node cache state"
+    },
+    {
       "id": "controller-owned-correction-and-interrupt-settlement",
       "impact": "patch",
       "summary": "Return planning and targeted correction values to controller validation once, and persist interrupted or failed planning invocations with exact settlement and backward-readable lifecycle evidence"

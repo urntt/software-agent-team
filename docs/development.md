@@ -31,6 +31,13 @@ or introduce Gateway/service discovery. Keep npm configuration and cache inside
 the ephemeral installer home; do not inherit another installation's npm prefix.
 Regressions must also cover `STATE_DIRECTORY`, `NODE_OPTIONS`, and `NODE_PATH`:
 isolating only `OPENCLAW_*` cannot isolate a package's postinstall cleanup roots.
+The shared shell launcher authority owns Node's private compile-cache path and
+validates it on every launch. Shell and Python subprocess isolation neutralize
+ambient cache selectors; only that launcher enables the installation-owned
+cache. Cover fresh installation, legacy launcher refresh without reinstall,
+cache reuse, independent installations, redirected or foreign-owned cache
+refusal, and unchanged external cache sentinels. A faster warm help command
+does not by itself prove that a full Agent initialization stall is fixed.
 
 The checkout must be an independent Git repository with a committed HEAD.
 Feature branches and detached release tags are supported; branch names do not

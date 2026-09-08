@@ -33,12 +33,23 @@ this is not a claim of a fully locked transitive npm dependency tree.
 No Gateway discovery, refresh, restart, or onboarding runs during setup. The
 private launcher is published only after dependency version checks succeed.
 The installer also removes inherited system-service state roots and Node preload
-settings before dependency probes and package lifecycle execution.
+settings before dependency probes and package lifecycle execution. Node's
+compile cache lives at `.sat/openclaw/compile-cache/`, owned by the installing
+user with mode `0700`. Setup refreshes an existing private launcher without
+reinstalling matching dependencies. Each launch validates this cache before
+executing Node; a symlink, foreign owner, or unsafe permissions fails safely
+without changing the suspect path. SAT ignores ambient `NODE_COMPILE_CACHE`
+and `NODE_DISABLE_COMPILE_CACHE` settings and never adopts the shared temporary
+Node cache. Raw dependency probes and custom evaluation executables run with
+caching disabled unless SAT's private launcher enables its owned cache.
 
 SAT never adopts an OpenClaw installation that predates SAT. Its pinned binary
 and Node.js runtime live under the marked application-private
 `.sat/openclaw/` directory. Provider configuration, credentials, sessions, and
-caches live under SAT's separately owned user-state root. An OpenClaw binary,
+session caches live under SAT's separately owned user-state root. The disposable
+Node compile cache belongs to the private installation instead: removing that
+installation removes its compile cache, not another runtime's cache. It is not
+part of a configuration or run-data export. An OpenClaw binary,
 Gateway, config, credential store, profile, or state directory anywhere else
 is neither probed nor modified, even when it is compatible and already
 configured. SAT runs role calls in OpenClaw local mode, so it does not attach

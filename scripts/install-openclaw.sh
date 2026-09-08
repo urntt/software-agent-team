@@ -4,6 +4,7 @@ set -euo pipefail
 # Dependency installation only: no remote installer, onboarding, or services.
 task_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 source "$task_root/configs/toolchain.sh"
+source "$task_root/scripts/openclaw-environment.sh"
 task_prefix="${1:?private runtime prefix is required}"
 task_marker="$task_prefix/.sat-owned-runtime"
 fail() { echo "setup runtime: $1" >&2; exit 1; }
@@ -16,6 +17,7 @@ unset NODE_OPTIONS NODE_PATH STATE_DIRECTORY
    "$(sed -n '1p' "$task_marker")" == software-agent-team-openclaw-runtime-v1 && \
    "$(sed -n '2p' "$task_marker")" == "root=$task_prefix" ]] || \
   fail "private runtime ownership is invalid"
+sat_prepare_openclaw_compile_cache "$task_prefix" || exit 1
 for task_command in curl tar sha256sum git; do
   command -v "$task_command" >/dev/null || fail "$task_command is required"
 done
@@ -70,11 +72,6 @@ done
 task_entry="$task_node_root/lib/node_modules/openclaw/dist/entry.js"
 [[ "$("$task_node" "$task_entry" --version)" == *"$task_openclaw_version"* ]] || \
   fail "installed OpenClaw version mismatch"
-[[ ! -L "$task_prefix/bin" ]] || fail "private launcher directory must not be a symlink"
-mkdir -p "$task_prefix/bin"
-# Quote absolute paths for Bash; publish only after both version probes pass.
-printf '#!/usr/bin/env bash\nset -euo pipefail\nexec %q %q "$@"\n' \
-  "$task_node" "$task_entry" > "$task_stage/openclaw"
-chmod 700 "$task_stage/openclaw"
-mv -T "$task_stage/openclaw" "$task_prefix/bin/openclaw"
+sat_publish_openclaw_launcher "$task_prefix" "$task_node" "$task_entry" \
+  "$task_root/scripts/openclaw-environment.sh" || fail "private launcher publication failed"
 echo "setup runtime: private OpenClaw is ready"

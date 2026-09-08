@@ -12,11 +12,19 @@ from software_agent_team.openclaw_runtime import isolated_openclaw_environment
 
 
 def test_shell_and_runtime_neutralize_shared_foreign_selectors(tmp_path: Path) -> None:
-    selectors = ("STATE_DIRECTORY", "NODE_OPTIONS", "NODE_PATH", "PI_CODING_AGENT_DIR")
+    selectors = (
+        "STATE_DIRECTORY",
+        "NODE_OPTIONS",
+        "NODE_PATH",
+        "PI_CODING_AGENT_DIR",
+        "NODE_COMPILE_CACHE",
+    )
     ambient = {"PATH": os.defpath}
     ambient.update({name: "/foreign/runtime" for name in selectors})
     ambient.update(
-        OPENAI_API_KEY="test-provider-value", HTTPS_PROXY="http://127.0.0.1:9"
+        OPENAI_API_KEY="test-provider-value",
+        HTTPS_PROXY="http://127.0.0.1:9",
+        NODE_DISABLE_COMPILE_CACHE="foreign-disable-value",
     )
     state = tmp_path / "state"
     config = state / "openclaw.json"
@@ -28,11 +36,14 @@ def test_shell_and_runtime_neutralize_shared_foreign_selectors(tmp_path: Path) -
         assert not effective.get(name), name
     assert effective["OPENAI_API_KEY"] == ambient["OPENAI_API_KEY"]
     assert effective["HTTPS_PROXY"] == ambient["HTTPS_PROXY"]
+    assert effective["NODE_DISABLE_COMPILE_CACHE"] == "1"
 
     helper = Path(__file__).parents[1] / "scripts/openclaw-environment.sh"
     probe = (
         "import json, os; print(json.dumps({k: os.environ.get(k) for k in "
-        + repr((*selectors, "OPENAI_API_KEY", "HTTPS_PROXY"))
+        + repr(
+            (*selectors, "OPENAI_API_KEY", "HTTPS_PROXY", "NODE_DISABLE_COMPILE_CACHE")
+        )
         + "}))"
     )
     result = subprocess.run(
@@ -59,6 +70,7 @@ def test_shell_and_runtime_neutralize_shared_foreign_selectors(tmp_path: Path) -
         assert not observed[name], name
     assert observed["OPENAI_API_KEY"] == effective["OPENAI_API_KEY"]
     assert observed["HTTPS_PROXY"] == effective["HTTPS_PROXY"]
+    assert observed["NODE_DISABLE_COMPILE_CACHE"] == "1"
 
 
 def test_openclaw_environment_neutralizes_ambient_path_selectors(
@@ -90,6 +102,8 @@ def test_openclaw_environment_neutralizes_ambient_path_selectors(
         "STATE_DIRECTORY": "",
         "NODE_OPTIONS": "",
         "NODE_PATH": "",
+        "NODE_COMPILE_CACHE": "",
+        "NODE_DISABLE_COMPILE_CACHE": "1",
         "OPENCLAW_AUTH_PROFILE_SECRET_DIR": str(state / "credentials"),
         "OPENCLAW_CONFIG_DIR": str(state),
         "OPENCLAW_CONFIG_PATH": str(config),

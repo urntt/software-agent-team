@@ -24,6 +24,7 @@ _ALWAYS_NEUTRALIZED = (
     "STATE_DIRECTORY",
     "NODE_OPTIONS",
     "NODE_PATH",
+    "NODE_COMPILE_CACHE",
 )
 
 
@@ -55,6 +56,9 @@ def isolated_openclaw_environment(
     }
     environment.update(
         {
+            # A marked private launcher enables its own cache. Other/custom
+            # executables cannot inherit or silently adopt a shared cache.
+            "NODE_DISABLE_COMPILE_CACHE": "1",
             "OPENCLAW_AUTH_PROFILE_SECRET_DIR": str(resolved_state / "credentials"),
             "OPENCLAW_CONFIG_DIR": str(resolved_state),
             "OPENCLAW_CONFIG_PATH": str(resolved_config),
