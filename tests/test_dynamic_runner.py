@@ -1560,7 +1560,9 @@ def test_dynamic_writer_pending_user_cancellation_prevents_a_continuation_call(
         tmp_path,
         executor_options={"upstream_writer_mode": "complete_after_one"},
     )
-    runner.continuation_stop_provider = lambda _: TerminationReason.USER_CANCELLED
+    runner.invocation_stop_provider = lambda _: (
+        TerminationReason.USER_CANCELLED if executor.requests else None
+    )
 
     result = DagScheduler().execute(team_plan, runner)
 
@@ -1663,6 +1665,162 @@ def test_dynamic_reviewer_correction_uses_controller_evidence_handle(
     assert artifact.criterion_assessments[0].tool_evidence[0].observable == (
         "fake-review-observation"
     )
+
+
+@pytest.mark.parametrize("unknown_usage", [False, True])
+def test_invalid_candidate_selection_is_artifact_failure_not_controller_fault(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, unknown_usage: bool
+) -> None:
+    runner, team_plan, executor, _, _ = runtime(
+        tmp_path, executor_options={"invalid_review_selector_once": True}
+    )
+    original_result = executor._result
+
+    def invalid_selection(
+        request: AgentExecutionRequest,
+        response_text: str,
+        submission_payload: dict[str, object] | None,
+    ) -> AgentExecutionResult:
+        if (
+            request.agent_id == "reviewer"
+            and submission_payload is not None
+            and "replacements" in submission_payload
+        ):
+            for item in submission_payload["replacements"]:
+                item["replacement_value"] = "evidence_ffffffffffffffff"
+            response_text = json.dumps(submission_payload)
+            if unknown_usage:
+                executor.omit_usage_for = "reviewer"
+        return original_result(request, response_text, submission_payload)
+
+    monkeypatch.setattr(executor, "_result", invalid_selection)
+    result = DagScheduler().execute(team_plan, runner)
+    assert result.status is ScheduleStatus.FAILED
+    assert runner.termination_reasons["reviewer"] is (
+        TerminationReason.DEPENDENCY_UNAVAILABLE
+        if unknown_usage
+        else TerminationReason.ARTIFACT_INVALID
+    )
+    assert "reviewer" not in runner.outputs
+    requests = [
+        request for request in executor.requests if request.agent_id == "reviewer"
+    ]
+    assert len(requests) == 2
+    records = [
+        runner.artifact_store.load(ref)
+        for ref in runner.execution_records
+        if "/verify/reviewer-" in ref.path
+    ]
+    if unknown_usage:
+        assert records[-1].response_validation is None
+    else:
+        assert records[-1].semantic_correction_outcome == "invalid_submission"
+        assert records[-1].response_validation.issues[0].authority == "model"
+    assert records[-1].response_artifact is None
+    assert runner.budget_ledger.snapshot().active_calls == 0
+
+
+@pytest.mark.parametrize(
+    "reason", [TerminationReason.USER_CANCELLED, TerminationReason.USER_INTERRUPTED]
+)
+def test_pending_stop_prevents_semantic_correction_invocation(
+    tmp_path: Path, reason: TerminationReason
+) -> None:
+    runner, team_plan, executor, _, _ = runtime(
+        tmp_path, executor_options={"invalid_review_selector_once": True}
+    )
+    runner.invocation_stop_provider = lambda agent_id: (
+        reason
+        if agent_id == "reviewer"
+        and any(request.agent_id == "reviewer" for request in executor.requests)
+        else None
+    )
+    result = DagScheduler().execute(team_plan, runner)
+    assert result.status is ScheduleStatus.FAILED
+    assert (
+        len(
+            [request for request in executor.requests if request.agent_id == "reviewer"]
+        )
+        == 1
+    )
+    assert runner.termination_reasons["reviewer"] is reason
+    assert runner.budget_ledger.snapshot().active_calls == 0
+
+
+@pytest.mark.parametrize("repair_limit", [None, 1])
+def test_mixed_reviewer_selectors_recover_only_remaining_slot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repair_limit: int | None
+) -> None:
+    runner, team_plan, executor, _, _ = runtime(
+        tmp_path, executor_options={"invalid_review_selector_once": True}
+    )
+    runner.artifact_repair_limit = repair_limit
+    original_result = executor._result
+    selection_calls = 0
+
+    def mixed_selection(
+        request: AgentExecutionRequest,
+        response_text: str,
+        submission_payload: dict[str, object] | None,
+    ) -> AgentExecutionResult:
+        nonlocal selection_calls
+        if request.agent_id == "reviewer" and submission_payload is not None:
+            if "criterion_assessments" in submission_payload:
+                submission_payload["criterion_assessments"][0]["tool_evidence"] = [
+                    {"observable": "invented first marker"},
+                    {"observable": "invented second marker"},
+                ]
+            elif "replacements" in submission_payload:
+                selection_calls += 1
+                variants = request.submission_contract.parameters_schema()[
+                    "properties"
+                ]["replacements"]["items"]["oneOf"]
+                submission_payload = {
+                    "replacements": [
+                        {
+                            "slot_handle": variant["properties"]["slot_handle"][
+                                "const"
+                            ],
+                            "replacement_value": (
+                                "evidence_ffffffffffffffff"
+                                if selection_calls == 1 and index == 1
+                                else variant["properties"]["replacement_value"]["enum"][
+                                    0
+                                ]
+                            ),
+                        }
+                        for index, variant in enumerate(variants)
+                    ]
+                }
+            response_text = json.dumps(submission_payload)
+        return original_result(request, response_text, submission_payload)
+
+    monkeypatch.setattr(executor, "_result", mixed_selection)
+    result = DagScheduler().execute(team_plan, runner)
+    assert result.status is (
+        ScheduleStatus.COMPLETED if repair_limit is None else ScheduleStatus.FAILED
+    )
+    assert selection_calls == (2 if repair_limit is None else 1)
+    records = [
+        runner.artifact_store.load(ref)
+        for ref in runner.execution_records
+        if "/verify/reviewer-" in ref.path
+    ]
+    assert len(records) == (3 if repair_limit is None else 2)
+    assert records[1].semantic_correction_outcome == "improved"
+    assert records[1].response_artifact is None
+    assert len(records[1].response_normalizations) == 1
+    if repair_limit is None:
+        assert records[2].semantic_correction_request.target_paths == (
+            "/criterion_assessments/0/tool_evidence/1/observable",
+        )
+        assert records[2].semantic_correction_outcome == "accepted"
+    else:
+        assert "reviewer" not in runner.outputs
+        assert (
+            runner.termination_reasons["reviewer"] is TerminationReason.ARTIFACT_INVALID
+        )
+    assert runner.budget_ledger.snapshot().active_calls == 0
 
 
 def test_dynamic_reviewer_repair_reuses_prior_attempt_tool_evidence(
@@ -1847,6 +2005,30 @@ def test_dynamic_runner_switches_only_after_approved_provider_failure(
         "default",
         "fallback",
     )
+
+
+@pytest.mark.parametrize(
+    "reason", [TerminationReason.USER_CANCELLED, TerminationReason.USER_INTERRUPTED]
+)
+@pytest.mark.parametrize("after_first_call", [False, True])
+def test_durable_user_stop_precedes_initial_and_fallback_admission(
+    tmp_path: Path, reason: TerminationReason, after_first_call: bool
+) -> None:
+    runner, team_plan, executor, _, _ = runtime(
+        tmp_path,
+        model_switching=True,
+        executor_options={"provider_fail_once_for": "builder"},
+    )
+    runner.invocation_stop_provider = lambda _: (
+        reason if not after_first_call or executor.requests else None
+    )
+    result = DagScheduler().execute(team_plan, runner)
+    assert result.status is ScheduleStatus.FAILED
+    assert runner.termination_reasons["builder"] is reason
+    assert len(executor.requests) == int(after_first_call)
+    assert all(request.model == MODEL for request in executor.requests)
+    assert runner.budget_ledger.snapshot().calls_started == int(after_first_call)
+    assert runner.budget_ledger.snapshot().active_calls == 0
 
 
 def test_dynamic_runner_can_use_approved_fallback_after_provider_stall(

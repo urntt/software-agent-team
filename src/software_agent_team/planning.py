@@ -89,6 +89,7 @@ from software_agent_team.response_corrections import (
     SemanticCorrectionOutcome,
     SemanticCorrectionPlan,
     SemanticCorrectionRequestEvidence,
+    SemanticCorrectionSubmissionError,
     apply_semantic_correction_with_evidence,
     build_semantic_correction_plan,
     correction_outcome,
@@ -6399,6 +6400,17 @@ class AdaptivePlanningCoordinator:
                         current_correction_outcome = (
                             SemanticCorrectionOutcome.INVALID_SUBMISSION
                         )
+                    parsed = None
+                except SemanticCorrectionSubmissionError as error:
+                    validation_error = _safe_validation_detail(error)
+                    response_validation = error.diagnostic
+                    response_normalizations = error.normalizations
+                    next_correction_plan = error.recovery_plan
+                    current_correction_outcome = (
+                        SemanticCorrectionOutcome.IMPROVED
+                        if next_correction_plan is not None
+                        else SemanticCorrectionOutcome.INVALID_SUBMISSION
+                    )
                     parsed = None
                 except (PlanningError, ValueError) as error:
                     validation_error = _safe_validation_detail(error)

@@ -136,11 +136,11 @@ class RuntimeControlChannel:
             self._guidance[agent_id].clear()
             return values
 
-    def continuation_stop_reason(self, agent_id: str) -> TerminationReason | None:
-        """Return a user stop that must prevent a same-task continuation call."""
+    def invocation_stop_reason(self, agent_id: str) -> TerminationReason | None:
+        """Return a durable user stop before any new Agent invocation."""
 
         if agent_id not in {agent.id for agent in self.team_plan.agents}:
-            raise ValueError(f"unknown Agent for continuation: {agent_id}")
+            raise ValueError(f"unknown Agent for invocation admission: {agent_id}")
         with self._lock:
             if self._cancel_request is not None:
                 return TerminationReason.USER_CANCELLED

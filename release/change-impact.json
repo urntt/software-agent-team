@@ -4,6 +4,16 @@
   "target_version": "0.1.0",
   "changes": [
     {
+      "id": "durable-stop-before-every-invocation",
+      "impact": "patch",
+      "summary": "Check durable cancellation and interruption before initial, correction, fallback and continuation calls instead of relying only on currently live subprocesses"
+    },
+    {
+      "id": "typed-monotonic-evidence-selection",
+      "impact": "patch",
+      "summary": "Classify invalid correction submissions as model errors and retain verified catalog bindings only through a strictly shrinking unpublished selection state before full grounding"
+    },
+    {
       "id": "private-node-compile-cache-ownership",
       "impact": "patch",
       "summary": "Own and revalidate the private runtime compile cache, neutralize ambient cache selectors, and refresh legacy launchers without adopting shared Node cache state"

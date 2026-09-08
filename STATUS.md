@@ -9,6 +9,19 @@ supports that claim, and what remains unavailable. It does not redefine the
 product, architecture, experiment, or roadmap; those decisions belong to
 [`VISION.md`](VISION.md).
 
+Review candidate selection now distinguishes invalid model submissions from
+Controller faults. Mixed catalog-backed selections can retain verified bindings
+on an unpublished copy and request only a strictly smaller pending set; no
+progress or invalid identity stops without guessing. Full grounding still gates
+artifact publication. Focused regressions and a read-only replay of an actual
+four-slot failure cover this behavior; clean-candidate and fresh delivery
+validation remain outstanding.
+
+The durable user-stop check now covers every dynamic invocation admission,
+including semantic correction and provider fallback, rather than only upstream
+continuation. Deterministic between-call cancel/interrupt regressions cover the
+gap where there is no live process for the executor to interrupt.
+
 Invocation-state persistence, detailed labels, and heartbeats now use the current
 Controller checkpoint instead of reconstructing activity from historical event
 kinds. Completed-tool counts are displayed from the numeric observation, separately

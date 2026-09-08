@@ -297,6 +297,16 @@ appears in both a successful result and an otherwise failed result, and prove it
 is absent from the correction catalog while an uncontaminated candidate still
 passes post-application grounding.
 
+Candidate-selection regressions must distinguish model-submission errors from
+Controller plan faults. Cover mixed valid/invalid choices, wrong-slot handles,
+duplicate or missing identity, all-invalid/no-progress termination, and immutable
+staging with a strictly smaller pending set. Exercise the dynamic runner's final
+grounding and ledger, not only the application helper. Partial bindings never
+publish an artifact; free-form siblings must not be retained without validation.
+Test cancel and interrupt recorded between calls: the shared invocation-admission
+check must prevent initial work, correction, fallback, and continuation alike,
+without creating another reservation or losing the previous invocation's evidence.
+
 Writer instructions must name the exact invocation input commit as the immutable
 revision base. Detached HEAD is expected; a branch can still name the starter
 and is not authority to reset or rebuild history. Keep the independent ancestry

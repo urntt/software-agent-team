@@ -374,6 +374,37 @@ class SemanticCorrectionApplication:
     normalizations: tuple[str, ...] = ()
 
 
+class SemanticCorrectionSubmissionError(ValueError):
+    """Rejected model input, distinct from an invalid Controller-owned plan.
+
+    A recovery plan is a private, unpublished staging copy. It exists only when
+    exact candidate binding strictly reduced the remaining selection slots.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        plan: SemanticCorrectionPlan,
+        paths: tuple[str, ...] | None = None,
+        recovery_plan: SemanticCorrectionPlan | None = None,
+        normalizations: tuple[str, ...] = (),
+    ) -> None:
+        super().__init__(message)
+        self.diagnostic = diagnostic_from_invariant(
+            plan.base_payload,
+            failure_class=ResponseFailureClass.SEMANTIC_SCHEMA,
+            authority=ResponseIssueAuthority.MODEL,
+            code="correction_submission_invalid",
+            invariant_id="correction_submission_authority",
+            subjects=(),
+            message=message,
+            paths=plan.evidence.target_paths if paths is None else paths,
+        )
+        self.recovery_plan = recovery_plan
+        self.normalizations = normalizations
+
+
 def _json_sha256(value: object) -> str:
     encoded = json.dumps(
         value,
@@ -1035,12 +1066,19 @@ def apply_semantic_correction_with_evidence(
 ) -> SemanticCorrectionApplication:
     """Apply replacements and record every controller-owned candidate binding."""
 
-    submission = SemanticCorrectionSubmission.model_validate(submission_payload)
+    try:
+        submission = SemanticCorrectionSubmission.model_validate(submission_payload)
+    except ValidationError as error:
+        raise SemanticCorrectionSubmissionError(
+            "semantic correction requires unique typed slot/value records",
+            plan=plan,
+        ) from error
     expected_count = len(plan.evidence.target_paths)
     if len(submission.replacements) != expected_count:
-        raise ValueError(
+        raise SemanticCorrectionSubmissionError(
             "semantic correction value count differs: "
-            f"expected {expected_count}, received {len(submission.replacements)}"
+            f"expected {expected_count}, received {len(submission.replacements)}",
+            plan=plan,
         )
 
     expected_handles = _semantic_correction_slot_bindings(plan)
@@ -1051,13 +1089,15 @@ def apply_semantic_correction_with_evidence(
     missing_handles = set(expected_handles) - submitted_handles
     unknown_handles = submitted_handles - set(expected_handles)
     if missing_handles or unknown_handles:
-        raise ValueError(
-            "semantic correction slot coverage differs from controller authority"
+        raise SemanticCorrectionSubmissionError(
+            "semantic correction slot coverage differs from controller authority",
+            plan=plan,
         )
 
     candidate_slots = {slot.target_path: slot for slot in plan.candidate_slots}
     resolved_values: dict[str, JsonValue] = {}
     normalizations: list[str] = []
+    invalid_paths: list[str] = []
     handles_by_path = {path: handle for handle, path in expected_handles.items()}
     for path in plan.evidence.target_paths:
         handle = handles_by_path[path]
@@ -1068,18 +1108,59 @@ def apply_semantic_correction_with_evidence(
             continue
         candidates = {item.handle: item for item in candidate_slot.candidates}
         if not isinstance(submitted_value, str) or submitted_value not in candidates:
-            raise ValueError(
-                f"submitted value is not authorized for correction slot {path}"
-            )
+            invalid_paths.append(path)
+            continue
         selected = candidates[submitted_value]
         resolved_values[path] = selected.replacement_value
         normalizations.append(
             f"bound controller evidence candidate {selected.handle} to {path}"
         )
 
-    corrected: object = deepcopy(plan.base_payload)
-    for path in plan.evidence.target_paths:
-        replacement_value = resolved_values[path]
+    if invalid_paths and len(candidate_slots) != expected_count:
+        # Unvalidated free-form siblings cannot establish selection progress.
+        resolved_values = {}
+        normalizations = []
+    corrected = _apply_resolved_correction_values(plan.base_payload, resolved_values)
+    if invalid_paths:
+        recovery = None
+        if resolved_values:
+            diagnostic = diagnostic_from_invariant(
+                corrected,
+                failure_class=ResponseFailureClass.SEMANTIC_SCHEMA,
+                authority=ResponseIssueAuthority.MODEL,
+                code="correction_candidate_invalid",
+                invariant_id="correction_candidate_membership",
+                subjects=(),
+                message="Select an exact candidate handle from this slot's catalog.",
+                paths=tuple(invalid_paths),
+            )
+            pending = build_semantic_correction_plan(corrected, diagnostic)
+            assert pending is not None
+            recovery = attach_semantic_correction_candidates(
+                pending,
+                tuple(candidate_slots[path] for path in pending.evidence.target_paths),
+            )
+        raise SemanticCorrectionSubmissionError(
+            "submitted value is not authorized for correction slot "
+            + ", ".join(invalid_paths),
+            plan=plan,
+            paths=tuple(invalid_paths),
+            recovery_plan=recovery,
+            normalizations=tuple(normalizations),
+        )
+    return SemanticCorrectionApplication(
+        payload=corrected,
+        normalizations=tuple(normalizations),
+    )
+
+
+def _apply_resolved_correction_values(
+    base_payload: dict[str, object], resolved_values: dict[str, JsonValue]
+) -> dict[str, object]:
+    """Stage verified bindings; unreachable Controller pointers remain faults."""
+
+    corrected: object = deepcopy(base_payload)
+    for path, replacement_value in resolved_values.items():
         parts = _decode_pointer(path)
         parent = corrected
         for part in parts[:-1]:
@@ -1105,10 +1186,7 @@ def apply_semantic_correction_with_evidence(
         else:
             raise ValueError(f"semantic correction target is not a container: {path}")
     assert isinstance(corrected, dict)
-    return SemanticCorrectionApplication(
-        payload=corrected,
-        normalizations=tuple(normalizations),
-    )
+    return corrected
 
 
 def correction_outcome(

@@ -344,7 +344,7 @@ Controller applies each value to its pre-authorized path on a copy, preserves
 every unrelated field, and revalidates the compiled result. A writer's verified commit and snapshot
 are frozen before correction and must remain unchanged. A missing user-owned
 decision returns through the typed Planning-question path and never enters this
-protocol. Transport failures, unlocated errors, invalid submissions, repeated
+protocol. Transport failures, unlocated errors, invalid slot identity or coverage, repeated
 invariant/subject fingerprints, and corrections that leave the same typed defect in place
 stop rather than consuming a random full-response retry. JSON-pointer ancestry
 alone does not identify the same defect: a newly exposed container relation may
@@ -384,6 +384,26 @@ semantic evidence; the Controller replaces the handle with exact bytes and recor
 the binding as a normalization. No eligible candidate means no evidence-selector
 correction call. SAT does not ask the model to regenerate the assessment array and
 does not infer a replacement fragment from explanatory prose.
+
+An invalid candidate choice is a typed model-submission failure, not a
+Controller exception. If an entirely catalog-backed submission has valid slot
+identity/coverage and some valid candidate choices, the Controller stages those
+exact bindings on a private copy and requests only the remaining invalid slots.
+The pending slot set must strictly shrink; all-invalid selections, invalid
+identity/coverage, or unvalidated free-form siblings cannot authorize another
+call. Already bound slots are no longer model-editable. Staging does not publish
+an artifact: the completed object must still pass full semantic and evidence
+grounding checks before acceptance. Each invocation retains its submitted payload,
+diagnostic, exact binding normalizations, cost, and next request's base digest.
+The same correction authority serves Planning and runtime Agents; user stops,
+USD/deadline authorization, and controlled-evaluation limits still take precedence.
+Dynamic invocation admission checks the same durable user-stop authority before
+every initial call, semantic correction, provider fallback, or upstream
+continuation, before reserving another call. Stopping only the subprocesses that
+happen to be alive cannot replace that admission check. Already admitted calls
+remain best-effort interruptible and may be billable.
+An unreachable Controller-owned pointer remains an internal fault rather than
+being relabeled as model input.
 
 If a model returns controller-owned fields, they are ignored and recorded in
 the execution record. Missing or incorrect echoes such as `kind`, commit

@@ -5264,6 +5264,44 @@ def test_product_planning_stops_after_a_non_improving_correction(
     )
 
 
+def test_invalid_correction_slot_identity_is_typed_model_input(tmp_path: Path) -> None:
+    invalid_payload = proposal_response().model_dump(mode="json")
+    invalid_payload["proposal"]["tasks"][0]["owner_agent_id"] = "absent_agent"
+    invalid_correction = {
+        "replacements": [
+            {
+                "slot_handle": "slot_ffffffffffffffff",
+                "replacement_value": "builder",
+            }
+        ]
+    }
+    executor = ScriptedAgentExecutor(
+        [
+            json.dumps(invalid_payload),
+            ScriptedAgentResponse(
+                text=json.dumps(invalid_correction),
+                submission_payload=invalid_correction,
+            ),
+        ]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(response_repair_limit=None),
+        clock=AdvancingClock(),
+    )
+    with pytest.raises(PlanningError, match="slot coverage differs"):
+        coordinator.start(
+            request(), answer_question=lambda _: pytest.fail("unexpected question")
+        )
+    assert len(executor.requests) == 2
+    turn = store.load_turn(request().run_id, 2)
+    assert turn.semantic_correction_outcome == "invalid_submission"
+    assert turn.parsed_response is None
+    assert all(issue.authority == "model" for issue in turn.response_validation.issues)
+
+
 def test_correction_value_shape_error_returns_to_controller_without_tool_retry(
     tmp_path: Path,
 ) -> None:

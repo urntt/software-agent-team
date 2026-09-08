@@ -505,6 +505,7 @@ change in the same controlled trial.
 
 | Decision | Reason |
 | --- | --- |
+| Recover evidence selection only through verified, shrinking authority | Invalid model choices are not Controller faults. Exact catalog membership can retain valid bindings on an unpublished copy and strictly reduce the pending slots; it cannot infer a replacement, reopen bound slots, retain unvalidated free-form siblings, or bypass final semantic grounding. No progress stops. See the correction contract in the runtime evidence guide. |
 | Use a local-first CLI instead of a Web service | The first users can inspect Git and terminal evidence, while local execution keeps credentials, workspaces, and experimental state under their control. |
 | Keep the Python controller authoritative | Lifecycle, budgets, evidence checks, and termination must be deterministic rather than dependent on an Agent's self-report. |
 | Derive execution roles from the task, then let the controller create them | A fixed bootstrap Planning capability can propose a TeamPlan after dialogue, but it cannot spawn Agents. User approval plus deterministic validation preserves authority, budget, permission, and audit boundaries while avoiding one permanent product role list. |

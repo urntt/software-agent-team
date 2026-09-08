@@ -18,6 +18,7 @@ from software_agent_team.response_corrections import (
     SemanticCorrectionCandidateSlot,
     SemanticCorrectionOutcome,
     SemanticCorrectionPlan,
+    SemanticCorrectionSubmissionError,
     apply_semantic_correction,
     apply_semantic_correction_with_evidence,
     attach_semantic_correction_candidates,
@@ -241,7 +242,9 @@ def test_correction_prompt_keeps_path_authority_in_the_controller() -> None:
         "preserved": "keep",
     }
 
-    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+    with pytest.raises(
+        SemanticCorrectionSubmissionError, match="unique typed slot/value"
+    ):
         apply_semantic_correction(
             {
                 "kind": "semantic_correction_v2",
@@ -425,6 +428,164 @@ def test_controller_candidate_handles_replace_exact_values_without_model_bytes()
             ),
             bound,
         )
+
+
+def selection_plan() -> SemanticCorrectionPlan:
+    payload: dict[str, object] = {"first": "bad", "second": "bad", "keep": [1, 2]}
+    diagnostic = diagnostic_from_invariant(
+        payload,
+        failure_class=ResponseFailureClass.EVIDENCE_GROUNDING,
+        authority=ResponseIssueAuthority.MODEL,
+        code="review_evidence_grounding",
+        invariant_id="review_evidence_fragment_unmatched",
+        subjects=(),
+        message="Select evidence for each claim.",
+        paths=("/first", "/second"),
+    )
+    plan = build_semantic_correction_plan(payload, diagnostic)
+    assert plan is not None
+    return attach_semantic_correction_candidates(
+        plan,
+        tuple(
+            SemanticCorrectionCandidateSlot(
+                target_path=path,
+                candidates=(
+                    SemanticCorrectionCandidate(
+                        handle=f"evidence_{index:016x}",
+                        replacement_value=f"exact evidence {index}",
+                        source=f"tool-{index:03d}",
+                    ),
+                ),
+            )
+            for index, path in enumerate(plan.evidence.target_paths, 1)
+        ),
+    )
+
+
+def test_mixed_candidate_selection_stages_only_verified_bindings() -> None:
+    plan = selection_plan()
+    original = json.dumps(plan.base_payload, sort_keys=True)
+    with pytest.raises(SemanticCorrectionSubmissionError) as caught:
+        apply_semantic_correction(
+            correction_submission(
+                plan,
+                {
+                    "/second": "evidence_0000000000000001",
+                    "/first": "evidence_0000000000000001",
+                },
+            ),
+            plan,
+        )
+    pending = caught.value.recovery_plan
+    assert pending is not None
+    assert pending.evidence.target_paths == ("/second",)
+    assert pending.base_payload == {
+        "first": "exact evidence 1",
+        "second": "bad",
+        "keep": [1, 2],
+    }
+    assert pending.candidate_slots == (plan.candidate_slots[1],)
+    assert len(caught.value.normalizations) == 1
+    assert all(
+        issue.authority is ResponseIssueAuthority.MODEL
+        for issue in caught.value.diagnostic.issues
+    )
+    # Repeating a wrong selection cannot buy another call or erase staged work.
+    with pytest.raises(SemanticCorrectionSubmissionError) as repeated:
+        apply_semantic_correction(
+            correction_submission(pending, {"/second": "evidence_ffffffffffffffff"}),
+            pending,
+        )
+    assert repeated.value.recovery_plan is None
+    assert repeated.value.normalizations == ()
+    corrected = apply_semantic_correction(
+        correction_submission(pending, {"/second": "evidence_0000000000000002"}),
+        pending,
+    )
+    assert corrected == {
+        "first": "exact evidence 1",
+        "second": "exact evidence 2",
+        "keep": [1, 2],
+    }
+    assert json.dumps(plan.base_payload, sort_keys=True) == original
+
+
+@pytest.mark.parametrize(
+    "defect",
+    [
+        "unknown_values",
+        "wrong_slots",
+        "duplicate_slot",
+        "unknown_slot",
+        "missing_slot",
+        "shape",
+    ],
+)
+def test_invalid_candidate_submission_fails_typed_without_guess_or_retry(
+    defect: str,
+) -> None:
+    plan = selection_plan()
+    payload = correction_submission(
+        plan,
+        {"/first": "evidence_0000000000000001", "/second": "evidence_0000000000000002"},
+    )
+    replacements = payload["replacements"]
+    if defect == "unknown_values":
+        for item in replacements:
+            item["replacement_value"] = "evidence_ffffffffffffffff"
+    elif defect == "wrong_slots":
+        replacements[0]["replacement_value"], replacements[1]["replacement_value"] = (
+            replacements[1]["replacement_value"],
+            replacements[0]["replacement_value"],
+        )
+    elif defect == "duplicate_slot":
+        replacements[1]["slot_handle"] = replacements[0]["slot_handle"]
+    elif defect == "unknown_slot":
+        replacements[1]["slot_handle"] = "slot_ffffffffffffffff"
+    elif defect == "missing_slot":
+        replacements.pop()
+    else:
+        payload = {"replacements": "not an array"}
+    with pytest.raises(SemanticCorrectionSubmissionError) as caught:
+        apply_semantic_correction(payload, plan)
+    assert caught.value.recovery_plan is None
+    assert caught.value.normalizations == ()
+    assert caught.value.diagnostic.failure_class is ResponseFailureClass.SEMANTIC_SCHEMA
+    assert plan.base_payload == {"first": "bad", "second": "bad", "keep": [1, 2]}
+
+
+def test_unvalidated_free_form_sibling_cannot_authorize_selection_recovery() -> None:
+    original = selection_plan()
+    plan = SemanticCorrectionPlan(
+        base_payload=original.base_payload,
+        diagnostic=original.diagnostic,
+        evidence=original.evidence,
+        candidate_slots=(original.candidate_slots[0],),
+    )
+    with pytest.raises(SemanticCorrectionSubmissionError) as caught:
+        apply_semantic_correction(
+            correction_submission(
+                plan, {"/first": "unknown", "/second": {"arbitrary": "unvalidated"}}
+            ),
+            plan,
+        )
+    assert caught.value.recovery_plan is None
+    assert caught.value.normalizations == ()
+    assert plan.base_payload["second"] == "bad"
+
+
+def test_unreachable_controller_pointer_is_not_a_model_submission_error() -> None:
+    original = selection_plan()
+    plan = SemanticCorrectionPlan(
+        base_payload={"first": []},
+        diagnostic=original.diagnostic,
+        evidence=original.evidence.model_copy(update={"target_paths": ("/first/9",)}),
+    )
+    with pytest.raises(ValueError, match="index is invalid") as caught:
+        apply_semantic_correction(
+            correction_submission(plan, {"/first/9": "value"}), plan
+        )
+    assert not isinstance(caught.value, SemanticCorrectionSubmissionError)
 
 
 def test_candidate_schema_does_not_invent_cross_slot_distinctness() -> None:

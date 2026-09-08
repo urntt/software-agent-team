@@ -89,6 +89,7 @@ from software_agent_team.response_corrections import (
     ResponseValidationDiagnostic,
     SemanticCorrectionOutcome,
     SemanticCorrectionPlan,
+    SemanticCorrectionSubmissionError,
     apply_semantic_correction_with_evidence,
     build_semantic_correction_plan,
     correction_outcome,
@@ -165,7 +166,7 @@ def _bounded_artifact_summary(value: str, *, limit: int) -> str:
 
 
 type GuidanceProvider = Callable[[str], tuple[DynamicUserGuidance, ...]]
-type ContinuationStopProvider = Callable[[str], TerminationReason | None]
+type InvocationStopProvider = Callable[[str], TerminationReason | None]
 
 
 def _system_clock() -> datetime:
@@ -210,7 +211,7 @@ class DynamicAgentRunner:
         artifact_repair_limit: int | None = None,
         revision_feedback: DynamicRevisionFeedback | None = None,
         guidance_provider: GuidanceProvider | None = None,
-        continuation_stop_provider: ContinuationStopProvider | None = None,
+        invocation_stop_provider: InvocationStopProvider | None = None,
         activity_handler: ProgressDraftHandler | None = None,
         clock: Callable[[], datetime] = _system_clock,
     ) -> None:
@@ -310,7 +311,7 @@ class DynamicAgentRunner:
         self.artifact_repair_limit = artifact_repair_limit
         self.revision_feedback = revision_feedback
         self.guidance_provider = guidance_provider
-        self.continuation_stop_provider = continuation_stop_provider
+        self.invocation_stop_provider = invocation_stop_provider
         self.activity_handler = activity_handler
         self.clock = clock
 
@@ -552,24 +553,21 @@ class DynamicAgentRunner:
             base_request = build_dynamic_agent_execution_request(prompt_inputs)
             current_continuation = continuation
             continuation = None
-            if (
-                current_continuation is not None
-                and self.continuation_stop_provider is not None
-            ):
-                continuation_stop = self.continuation_stop_provider(agent.id)
-                if continuation_stop is not None:
-                    if continuation_stop not in {
+            if self.invocation_stop_provider is not None:
+                invocation_stop = self.invocation_stop_provider(agent.id)
+                if invocation_stop is not None:
+                    if invocation_stop not in {
                         TerminationReason.USER_INTERRUPTED,
                         TerminationReason.USER_CANCELLED,
                     }:
                         raise DynamicAgentRunnerError(
-                            "continuation stop provider returned an invalid reason",
+                            "invocation stop provider returned an invalid reason",
                             TerminationReason.CONTROLLER_ERROR,
                         )
                     raise DynamicAgentRunnerError(
-                        "Controlled continuation was not started because the user "
+                        "Agent invocation was not started because the user "
                         "stopped this work.",
-                        continuation_stop,
+                        invocation_stop,
                     )
             if current_continuation is not None and correction_plan is not None:
                 raise DynamicAgentRunnerError(
@@ -779,6 +777,17 @@ class DynamicAgentRunner:
                             review_command_evidence=commands,
                             controller_semantic_payload=controller_semantic_payload,
                         )
+                    except SemanticCorrectionSubmissionError as error:
+                        record_error = self._error_detail(error)
+                        response_validation = error.diagnostic
+                        response_normalizations = error.normalizations
+                        next_correction_plan = error.recovery_plan
+                        current_correction_outcome = (
+                            SemanticCorrectionOutcome.IMPROVED
+                            if next_correction_plan is not None
+                            else SemanticCorrectionOutcome.INVALID_SUBMISSION
+                        )
+                        failure = error
                     except AgentArtifactResponseError as error:
                         record_error = self._error_detail(error)
                         response_normalizations = tuple(

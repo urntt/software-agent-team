@@ -306,10 +306,10 @@ def test_pending_user_stop_blocks_only_the_matching_continuation(
         command_id="ctl-stop-before-continuation",
     )
 
-    assert channel.continuation_stop_reason("feature_builder") is (
+    assert channel.invocation_stop_reason("feature_builder") is (
         TerminationReason.USER_INTERRUPTED
     )
-    assert channel.continuation_stop_reason("quality_auditor") is None
+    assert channel.invocation_stop_reason("quality_auditor") is None
 
 
 def test_correction_stops_launches_then_resolves_at_a_safe_checkpoint(
@@ -369,7 +369,7 @@ def test_cancel_is_terminal_and_interrupts_only_active_owned_calls(
     assert resolved.status is ControlCommandStatus.APPLIED
     assert resolved.provider_cost_caveat is not None
     assert calls
-    assert channel.continuation_stop_reason("feature_builder") is (
+    assert channel.invocation_stop_reason("feature_builder") is (
         TerminationReason.USER_CANCELLED
     )
 
