@@ -157,6 +157,10 @@ The dynamic Reviewer correction integration also passes an actual plugin capture
 into the production runner. It checks successful catalog binding and rejected
 handles through final grounding, artifact persistence, and call settlement,
 without inventing current-turn work tools for a terminal-only correction.
+The mixed-slot case captures each correction through that same plugin boundary:
+one valid choice is staged without publishing an artifact, only the remaining
+slot is requested, and a later valid choice completes grounding. An explicit
+evaluation repair limit still stops without publishing the partial result.
 Earlier work, provider usage, and quality commands remain explicit fixtures;
 this narrow integration is not a full sandbox or provider journey.
 

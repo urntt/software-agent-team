@@ -1829,12 +1829,15 @@ def test_pending_stop_prevents_semantic_correction_invocation(
 def test_mixed_reviewer_selectors_recover_only_remaining_slot(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repair_limit: int | None
 ) -> None:
+    from test_submission_bridge import capture_controller_correction
+
     runner, team_plan, executor, _, _ = runtime(
         tmp_path, executor_options={"invalid_review_selector_once": True}
     )
     runner.artifact_repair_limit = repair_limit
     original_result = executor._result
     selection_calls = 0
+    captures = []
 
     def mixed_selection(
         request: AgentExecutionRequest,
@@ -1871,7 +1874,30 @@ def test_mixed_reviewer_selectors_recover_only_remaining_slot(
                     ]
                 }
             response_text = json.dumps(submission_payload)
-        return original_result(request, response_text, submission_payload)
+        original = original_result(request, response_text, submission_payload)
+        if request.agent_id != "reviewer" or "replacements" not in (
+            submission_payload or {}
+        ):
+            return original
+        captured, status, evidence = capture_controller_correction(
+            tmp_path / f"mixed-correction-{selection_calls}",
+            request,
+            submission_payload,
+        )
+        captures.append(evidence)
+        return AgentExecutionResult(
+            status=AgentExecutionStatus.COMPLETED,
+            telemetry=original.telemetry.model_copy(
+                update={
+                    "tool_calls": evidence.tool_calls,
+                    "session_transcript_sha256": evidence.transcript_sha256,
+                    "session_record_count": evidence.record_count,
+                    "session_id": "controller-bridge",
+                }
+            ),
+            semantic_submission=captured,
+            submission_evidence=status,
+        )
 
     monkeypatch.setattr(executor, "_result", mixed_selection)
     result = DagScheduler().execute(team_plan, runner)
@@ -1885,6 +1911,10 @@ def test_mixed_reviewer_selectors_recover_only_remaining_slot(
         if "/verify/reviewer-" in ref.path
     ]
     assert len(records) == (3 if repair_limit is None else 2)
+    assert len(captures) == selection_calls
+    for record, capture in zip(records[1:], captures, strict=True):
+        assert record.session_transcript_sha256 == capture.transcript_sha256
+        assert len(capture.tool_calls) == 1
     assert records[1].semantic_correction_outcome == "improved"
     assert records[1].response_artifact is None
     assert len(records[1].response_normalizations) == 1
