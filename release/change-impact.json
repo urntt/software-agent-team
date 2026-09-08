@@ -4,6 +4,11 @@
   "target_version": "0.1.0",
   "changes": [
     {
+      "id": "aggregate-independent-criterion-corrections",
+      "impact": "patch",
+      "summary": "Collect independent criterion relation failures into one identity-bound correction while preserving prerequisite ordering and strict revalidation"
+    },
+    {
       "id": "durable-stop-before-every-invocation",
       "impact": "patch",
       "summary": "Check durable cancellation and interruption before initial, correction, fallback and continuation calls instead of relying only on currently live subprocesses"

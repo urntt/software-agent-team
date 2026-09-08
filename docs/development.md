@@ -149,7 +149,8 @@ according to the [validation policy](#validation-policy), not commit count.
 the pinned Node runtime, passes its actual output through session extraction and
 bound capture, and applies the resulting semantic correction. It covers envelope,
 slot identity, binding, failed-attempt, and terminal-order boundaries without
-external requests. Its simulated host session IO does not replace the separate
+external requests, including preceding deferred work and runtime rejections.
+Its simulated host session IO does not replace the separate
 real OpenClaw loopback gate or provider-backed product acceptance.
 
 Planning criterion checks collect independent sibling failures in one diagnostic

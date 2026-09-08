@@ -53,6 +53,8 @@ class CorrectedBody(BaseModel):
         "rejected_then_valid",
         "action_after_success",
         "wrong_binding",
+        "runtime_rejection_then_valid",
+        "deferred_work_then_valid",
     ],
 )
 def test_production_submission_correction_bridge(tmp_path: Path, case: str) -> None:
@@ -138,9 +140,88 @@ def test_production_submission_correction_bridge(tmp_path: Path, case: str) -> N
     (sessions / "sessions.json").write_text(
         json.dumps({session_key: {"sessionId": session_id}})
     )
+    prior_records = []
+    if case == "runtime_rejection_then_valid":
+        prior_records.append(
+            {
+                "type": "message",
+                "message": {
+                    "role": "toolResult",
+                    "toolCallId": "unavailable-call",
+                    "toolName": "missing_tool",
+                    "isError": True,
+                    "content": [
+                        {"type": "text", "text": "Tool missing_tool not found"}
+                    ],
+                    "details": {},
+                },
+            }
+        )
+    if case == "deferred_work_then_valid":
+        # Captured host shapes: async start is not successful work evidence.
+        for call_id, name, arguments, details in (
+            (
+                "work-start",
+                "exec",
+                {"command": "pytest"},
+                {
+                    "status": "running",
+                    "sessionId": "test-job",
+                    "pid": 123,
+                    "startedAt": 1788749665172,
+                    "cwd": "/workspace",
+                    "tail": "",
+                },
+            ),
+            (
+                "work-poll",
+                "process",
+                {"action": "poll", "sessionId": "test-job"},
+                {
+                    "status": "completed",
+                    "sessionId": "test-job",
+                    "exitCode": 0,
+                    "exitReason": "exit",
+                    "aggregated": "tests passed",
+                    "name": "pytest",
+                },
+            ),
+        ):
+            prior_records.extend(
+                [
+                    {
+                        "type": "message",
+                        "message": {
+                            "role": "assistant",
+                            "content": [
+                                {
+                                    "type": "toolCall",
+                                    "id": call_id,
+                                    "name": name,
+                                    "arguments": arguments,
+                                }
+                            ],
+                        },
+                    },
+                    {
+                        "type": "message",
+                        "message": {
+                            "role": "toolResult",
+                            "toolCallId": call_id,
+                            "toolName": name,
+                            "isError": False,
+                            "content": [
+                                {"type": "text", "text": "fixture work observation"}
+                            ],
+                            "details": details,
+                        },
+                    },
+                ]
+            )
     records = [
         {"type": "session", "id": session_id},
         {"type": "message", "message": {"role": "user", "content": prompt}},
+        *prior_records,
         *observed["records"],
     ]
     (sessions / f"{session_id}.jsonl").write_text(
@@ -153,6 +234,15 @@ def test_production_submission_correction_bridge(tmp_path: Path, case: str) -> N
         session_id=session_id,
         prompt=prompt,
     )
+    if case == "runtime_rejection_then_valid":
+        assert len(evidence.runtime_rejections) == 1
+        assert len(evidence.tool_calls) == 1
+    if case == "deferred_work_then_valid":
+        assert [call.outcome.value for call in evidence.tool_calls] == [
+            "deferred",
+            "succeeded",
+            "succeeded",
+        ]
     captured, status = validate_submission_capture(
         contract,
         binding_sha256="c" * 64 if case == "wrong_binding" else binding,
