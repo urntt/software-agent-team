@@ -140,8 +140,43 @@ uv run --frozen python -m software_agent_team.loopback_validation \
   --output /absolute/private/evidence/loopback.json
 ```
 
-Use `make format` when source formatting changes are required. Always run
-`make check` before committing.
+Use `make format` when source formatting changes are required. Select checks
+according to the [validation policy](#validation-policy), not commit count.
+
+## Validation Policy
+
+Group related defects by their shared contract or state owner. Reproduce failures
+with captured, sanitized inputs and integrated production paths before repairing
+individual symptoms. Mock the external boundary where needed, not the accepted
+submission or state transition that the test is supposed to establish.
+
+- During implementation, run affected unit and integration tests. Work-in-progress
+  commits must record the checks performed and remaining validation; they do not
+  claim batch acceptance. Documentation-only changes require content, link, and
+  diff checks, not the full product suite.
+- Run canonical `make check` on the completed implementation batch before
+  integration or release. Repeat for relevant changes, diagnosed instability, or
+  an explicit acceptance requirement, not automatically three times per revision.
+- Exercise the real pinned runtime with a local endpoint when changing transport,
+  plugin, tool-loop, or runtime compatibility boundaries. A mocked executor result
+  cannot prove those interfaces work together.
+- Test fresh installation when validating first use or changing installer,
+  packaging, toolchain, ownership, or migration boundaries. Reuse an isolated
+  installation for unrelated functional checks; distinguish upgrade and reused
+  installation evidence from fresh-install evidence.
+- Use provider-backed user journeys for shared batch acceptance after known
+  offline-reproducible blockers are addressed. A new failure should lead to a
+  focused reproduction and owner-level fix, not an automatic reinstall and full
+  journey for each patch. Preserve original failed evidence.
+- Bind every result to its revision, configuration, and tested assertions.
+  Earlier results can support unchanged components with a documented impact
+  assessment; they are not fresh whole-candidate acceptance. Release gates and
+  safety checks remain mandatory.
+
+Commit, push, installation, and evidence export are separate actions; completing
+one does not require repeating all the others. Test fixtures should clean up
+their exact owned resources and preserve failure diagnostics without touching
+unrelated state or credentials.
 
 The additional `--scenario tool-rejection` loopback case exercises the pinned
 runtime's unsupported tool response, a subsequent independent fixture read,
@@ -580,7 +615,8 @@ to its authoritative owner.
 3. Keep every experimental variable and budget explicit.
 4. Add or update tests with behavior changes.
 5. Update public documentation in the same change.
-6. Run `make check`.
+6. Apply the [validation policy](#validation-policy); record scoped checks for
+   work-in-progress commits and run `make check` before batch integration/release.
 7. Review the staged diff and commit with a Conventional Commit message.
 
 Use this message form:

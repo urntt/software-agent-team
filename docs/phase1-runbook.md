@@ -117,6 +117,11 @@ into the trial notes.
 
 ## 1. Verify the Checkout
 
+Verify the completed batch candidate once before its controlled trials. Reuse
+that exact candidate's gate report across trials unless relevant inputs change;
+do not rerun the full suite for each trial or local patch. Development checks
+follow the [validation policy](development.md#validation-policy).
+
 From the repository root:
 
 ```bash
