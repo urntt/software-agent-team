@@ -1709,6 +1709,39 @@ def test_direct_user_decision_rejects_unattributable_input_with_zero_repair_budg
 def test_direct_decision_quote_correction_preserves_user_authority(
     tmp_path: Path, correct_quote: bool
 ) -> None:
+    from test_submission_bridge import capture_controller_correction
+
+    captures = []
+    captured_submissions = []
+
+    class CapturedExecutor(ScriptedAgentExecutor):
+        def execute(self, execution_request, *, activity_handler=None):
+            result = super().execute(
+                execution_request, activity_handler=activity_handler
+            )
+            assert result.semantic_submission is not None
+            captured, status, evidence = capture_controller_correction(
+                tmp_path / f"planning-capture-{len(captures)}",
+                execution_request,
+                result.semantic_submission.payload,
+            )
+            captures.append(evidence)
+            captured_submissions.append(status)
+            return result.model_copy(
+                update={
+                    "semantic_submission": captured,
+                    "submission_evidence": status,
+                    "telemetry": result.telemetry.model_copy(
+                        update={
+                            "tool_calls": evidence.tool_calls,
+                            "session_transcript_sha256": evidence.transcript_sha256,
+                            "session_record_count": evidence.record_count,
+                            "session_id": "controller-bridge",
+                        }
+                    ),
+                }
+            )
+
     payload = proposal_response().model_dump(mode="json")
     index = len(payload["proposal"]["decisions"])
     payload["proposal"]["decisions"].append(
@@ -1723,7 +1756,7 @@ def test_direct_decision_quote_correction_preserves_user_authority(
     )
     path = f"/proposal/decisions/{index}/provenance/source"
     replacement = "without fetching remote URLs" if correct_quote else "scope"
-    executor = ScriptedAgentExecutor(
+    executor = CapturedExecutor(
         [
             ScriptedAgentResponse(text="ignored", submission_payload=payload),
             ScriptedAgentResponse(
@@ -1750,6 +1783,12 @@ def test_direct_decision_quote_correction_preserves_user_authority(
             )
     assert len(executor.requests) == 2
     first, second = (store.load_turn(request().run_id, n) for n in (1, 2))
+    assert len(captures) == 2
+    for turn, capture, submission in zip(
+        (first, second), captures, captured_submissions, strict=True
+    ):
+        assert turn.submission_evidence == submission
+        assert len(capture.tool_calls) == 1
     assert first.submission_payload == payload
     assert first.response_validation.correction_paths == (path,)
     assert second.semantic_correction_request.target_paths == (path,)

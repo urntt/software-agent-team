@@ -164,6 +164,12 @@ evaluation repair limit still stops without publishing the partial result.
 Earlier work, provider usage, and quality commands remain explicit fixtures;
 this narrow integration is not a full sandbox or provider journey.
 
+Planning source-quotation integration routes both the initial proposal and its
+correction through the real plugin and bound capture before the coordinator.
+Assert the persisted submission evidence, precise source-only correction, and
+rejection of unchanged invalid quotes; genuinely missing user authority must
+remain a user decision. The provider content and lifecycle remain simulated.
+
 Planning criterion checks collect independent sibling failures in one diagnostic
 pass after proposal prerequisites are valid. Preserve prerequisite ordering
 within each criterion and defer global coverage checks until those failures are
