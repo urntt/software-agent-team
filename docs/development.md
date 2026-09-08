@@ -371,6 +371,14 @@ gate strict. Prompt guidance explains the contract but is not a capability-level
 guarantee that an Agent cannot rewrite its writable Git metadata; a violation
 must still fail closed without delivery.
 
+Revision integration tests must exercise real temporary Git history through the
+workflow, not only the snapshot helper. Pair a valid descendant with a writer
+soft-resetting to the starter before its second commit. Verify that the latter
+cannot reach another quality/Review stage or delivery, the report does not claim
+the rejected commit, all calls settle once, and the source repository is unchanged.
+Mocked model submissions and quality commands in this test do not establish
+provider-backed revision acceptance.
+
 When changing live progress, derive labels only from allow-listed tool identity.
 Tests must prove that unknown executable names, command arguments, output, paths,
 and secrets do not enter activity records or rendered summaries, and that

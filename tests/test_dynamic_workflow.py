@@ -962,6 +962,68 @@ def test_dynamic_workflow_revises_from_commit_bound_feedback_then_accepts(
     assert '"id": "FINDING_DOCS"' in second_builder.prompt
 
 
+@pytest.mark.parametrize("rewrite_from_seed", [False, True])
+def test_revision_ancestry_controls_gates_report_and_settlement(
+    tmp_path: Path, rewrite_from_seed: bool
+) -> None:
+    approved = approved_inputs(run_id="adaptive-revision-ancestry", iteration_limit=2)
+    source = initialize_source(tmp_path)
+    seed = git(source, "rev-parse", "HEAD").stdout.strip()
+    workspace = tmp_path / "workspaces" / approved.task_brief.run_id
+    revision_inputs: list[str] = []
+
+    class RevisionExecutor(AdaptiveExecutor):
+        def execute(self, request, *, activity_handler=None):
+            if request.agent_id == "builder":
+                revision_inputs.append(
+                    git(self.workspace, "rev-parse", "HEAD").stdout.strip()
+                )
+                if rewrite_from_seed and len(revision_inputs) == 2:
+                    # Reproduce a writer rebuilding on the starter, not its input.
+                    git(self.workspace, "reset", "--soft", seed)
+            return super().execute(request, activity_handler=activity_handler)
+
+    executor = RevisionExecutor(workspace, revise_first=True)
+    gates = RecordingQualityGateFactory()
+    ledger = AgentBudgetLedger(approved.team_plan.budget)
+    outcome = coordinator(
+        tmp_path, approved, executor, gates, budget_ledger=ledger
+    ).execute(approved, source_repository=source)
+    _, report = load_report(tmp_path, outcome, approved)
+    head = git(workspace, "rev-parse", "HEAD").stdout.strip()
+    parent = git(workspace, "rev-parse", "HEAD^").stdout.strip()
+    assert len(revision_inputs) == 2
+    assert revision_inputs[0] == seed
+    assert revision_inputs[1] != seed
+    usage = ledger.snapshot()
+    assert usage.calls_started == usage.calls_completed == len(executor.requests)
+    assert usage.active_calls == 0
+    assert git(source, "rev-parse", "HEAD").stdout.strip() == seed
+
+    if rewrite_from_seed:
+        assert parent == seed
+        assert outcome.record.phase is RunPhase.FAILED
+        assert (
+            outcome.record.termination_reason
+            is TerminationReason.SAFETY_BOUNDARY_CROSSED
+        )
+        assert report.status is FinalStatus.FAILED
+        assert report.final_commit != head
+        assert gates.calls == [1]
+        assert executor.counts["reviewer"] == 1
+        assert any(
+            "not a descendant" in finding for finding in report.unresolved_findings
+        )
+        assert all(event.phase is not RunPhase.DELIVERING for event in outcome.events)
+    else:
+        assert parent == revision_inputs[1]
+        assert outcome.record.phase is RunPhase.COMPLETED
+        assert report.status is FinalStatus.COMPLETED
+        assert report.final_commit == head
+        assert gates.calls == [1, 2]
+        assert executor.counts["reviewer"] == 2
+
+
 def test_failed_reverification_distinguishes_prior_finding_from_current_commit(
     tmp_path: Path,
 ) -> None:
