@@ -9,6 +9,14 @@ supports that claim, and what remains unavailable. It does not redefine the
 product, architecture, experiment, or roadmap; those decisions belong to
 [`VISION.md`](VISION.md).
 
+Invocation-state persistence, detailed labels, and heartbeats now use the current
+Controller checkpoint instead of reconstructing activity from historical event
+kinds. Completed-tool counts are displayed from the numeric observation, separately
+from the last verified action. RunEvent v5 retains canonical v2–v4 readers;
+scheduler decisions remain distinct from invocation state. Focused regression and
+read-only historical replay cover this correction. Final clean-candidate and fresh
+user validation remain outstanding.
+
 Cost accounting now includes separate cache-read and cache-write usage and
 frozen prices across Planning, execution, correction, progress, and reports.
 Missing prices require confirmation before a task; missing usage remains

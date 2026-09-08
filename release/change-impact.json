@@ -4,6 +4,11 @@
   "target_version": "0.1.0",
   "changes": [
     {
+      "id": "checkpoint-state-and-heartbeat-authority",
+      "impact": "patch",
+      "summary": "Project persisted invocation state, detailed labels and visibility-aware heartbeats from the current checkpoint while retaining canonical historical events and distinct scheduler decisions"
+    },
+    {
       "id": "runtime-rejection-evidence-classification",
       "impact": "patch",
       "summary": "Preserve pinned-runtime unknown-tool rejections as provenance-bound negative diagnostics without inventing execution evidence or invalidating independent paired tool work"

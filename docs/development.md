@@ -339,8 +339,14 @@ tool state may produce a lifecycle phase transition. Apply an attributed session
 snapshot before publishing any tool-history delta from that observation. When a
 single poll coalesces a start and completion, both history events therefore carry
 the current inactive state and the current completed count; neither event may
-reconstruct a stale `tool_active` phase from its kind. `RunEvent` schema v4 must
-remain canonically readable from v2 through v3, Artifact schema v10 from v2
+reconstruct a stale `tool_active` phase from its kind. Persisted invocation state,
+detailed footers, and heartbeat updates must all consume that checkpoint, including
+hidden events and visibility changes. Test stream-during-tool, coalesced history,
+late history during shutdown, same-phase clock preservation, and distinct scheduler
+decisions. Include phase publication before the corresponding history delta:
+the displayed completed-tool count must come from the current numeric snapshot,
+not a cached prose total in the previous action description. `RunEvent` schema v5 must
+remain canonically readable from v2 through v4, Artifact schema v10 from v2
 through v9, lifecycle schema v3 from v1 through v2, and Planning schema v12 from
 v2 through v11. Accounted Planning turns retain the exact shared-ledger call
 record, including invalid responses before runtime creation; their exports must

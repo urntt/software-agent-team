@@ -1391,8 +1391,7 @@ class DynamicAgentRunner:
             last_checkpoint = "Observed attributable provider stream activity"
         elif activity.kind is AgentExecutionActivityKind.TOOL_COMPLETED:
             last_checkpoint = (
-                f"Completed {activity.completed_tool_count} attributable tool "
-                f"operation(s); latest action {tool_action} {tool_target}{tool_detail}"
+                f"Verified tool completion: {tool_action} {tool_target}{tool_detail}"
             )
         elif activity.kind in {
             AgentExecutionActivityKind.INVOCATION_FINALIZING_RESPONSE,

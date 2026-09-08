@@ -7,6 +7,7 @@ import json
 import subprocess
 import threading
 from datetime import UTC, datetime
+from io import StringIO
 from pathlib import Path
 
 import pytest
@@ -58,7 +59,12 @@ from software_agent_team.invocation_lifecycle import (
 from software_agent_team.model_costs import CachePricing
 from software_agent_team.model_metadata import ModelMetadataSource
 from software_agent_team.planning import AdaptiveImplementationPlan, ProposedTask
-from software_agent_team.progress import ProgressEvent, ProgressEventKind
+from software_agent_team.progress import (
+    ProgressEvent,
+    ProgressEventKind,
+    RunEventJournal,
+    TerminalProgressRenderer,
+)
 from software_agent_team.response_corrections import (
     semantic_correction_slot_handle,
     semantic_payload_sha256,
@@ -72,7 +78,7 @@ from software_agent_team.responses import (
 from software_agent_team.responses import (
     TestReportResponse as SemanticTestReportResponse,
 )
-from software_agent_team.run_control import TerminationReason
+from software_agent_team.run_control import RunPhase, TerminationReason
 from software_agent_team.scheduling import (
     DagScheduler,
     ScheduledAgentState,
@@ -1998,6 +2004,69 @@ def test_dynamic_runner_projects_tool_history_from_current_snapshot(
     )
     assert events[0].message == "Builder started testing quality checks (pytest)"
     assert events[1].message == "Builder completed testing quality checks (pytest)"
+
+
+def test_phase_snapshot_displays_current_count_before_tool_history_delta(
+    tmp_path: Path,
+) -> None:
+    runner, team_plan, _, _, _ = runtime(tmp_path)
+    output = StringIO()
+    renderer = TerminalProgressRenderer(output=output)
+    (tmp_path / "progress").mkdir()
+    events = RunEventJournal(
+        tmp_path / "progress", run_id="counter-observation", handler=renderer
+    )
+    runner.activity_handler = lambda event: events.append(
+        event, lifecycle_revision=3, phase=RunPhase.IMPLEMENTING
+    )
+    agent = next(item for item in team_plan.agents if item.id == "builder")
+    try:
+        for kind, count, phase in (
+            (AgentExecutionActivityKind.TOOL_COMPLETED, 44, None),
+            (
+                AgentExecutionActivityKind.INVOCATION_PROVIDER_WAIT,
+                45,
+                InvocationPhase.PROVIDER_WAIT,
+            ),
+        ):
+            runner._observe_execution_activity(
+                agent,
+                attempt=1,
+                activity=AgentExecutionActivity(
+                    kind=kind,
+                    agent_id=agent.id,
+                    session_key="agent:builder:current-count",
+                    model=MODEL,
+                    elapsed_ms=100,
+                    invocation_phase=phase,
+                    completed_tool_count=count,
+                    silence_seconds=120,
+                    stall_grace_seconds=30,
+                    policy_source="test provider contract",
+                    **(
+                        {
+                            "tool_action_class": AgentToolActionClass.TESTING,
+                            "tool_target_class": AgentToolTargetClass.QUALITY_CHECKS,
+                            "tool_detail": "pytest",
+                        }
+                        if kind is AgentExecutionActivityKind.TOOL_COMPLETED
+                        else {}
+                    ),
+                ),
+            )
+        phase_event = events.load()[-1]
+        assert phase_event.checkpoint is not None
+        assert phase_event.checkpoint.completed_tool_operations == 45
+        assert phase_event.checkpoint.last_verified_checkpoint == (
+            "Verified tool completion: testing quality checks (pytest)"
+        )
+        rendered = output.getvalue()
+        assert "completed_tools=44" in rendered
+        assert "completed_tools=45" in rendered
+        assert "Completed 44" not in rendered
+        assert not events.render_errors
+    finally:
+        renderer.close()
 
 
 def test_dynamic_runner_refuses_unapproved_provider_fallback(

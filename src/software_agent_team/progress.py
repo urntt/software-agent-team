@@ -25,7 +25,7 @@ from software_agent_team.integrity import canonical_model_sha256
 from software_agent_team.invocation_lifecycle import InvocationPhase
 from software_agent_team.run_control import RunPhase
 
-RUN_EVENT_SCHEMA_VERSION = 4
+RUN_EVENT_SCHEMA_VERSION = 5
 MINIMUM_READABLE_RUN_EVENT_SCHEMA_VERSION = 2
 EVENTS_DIRECTORY = "events"
 EVENT_FILENAME_PATTERN = re.compile(r"^(?P<sequence>[0-9]{6})\.json$")
@@ -555,12 +555,40 @@ class ProgressCheckpointSnapshot(BaseModel):
         return self
 
 
+# Scheduler decisions describe the Agent, not its most recent invocation.
+_INVOCATION_EVENT_KINDS = _ATTEMPT_EVENT_KINDS - {
+    ProgressEventKind.AGENT_STARTED,
+    ProgressEventKind.AGENT_COMPLETED,
+    ProgressEventKind.AGENT_RETRY,
+    ProgressEventKind.AGENT_FAILED,
+    ProgressEventKind.AGENT_INTERRUPTED,
+    ProgressEventKind.MODEL_ROUTE_SWITCHED,
+}
+
+
+def _current_agent_state(
+    kind: ProgressEventKind, checkpoint: ProgressCheckpointSnapshot | None
+) -> AgentRunState | None:
+    """Project invocation state from its observation, never its history delta."""
+
+    if checkpoint is not None and kind in _INVOCATION_EVENT_KINDS:
+        phase = checkpoint.invocation_phase
+        return (
+            AgentRunState.WAITING_PROVIDER
+            if phase is InvocationPhase.PROVIDER_WAIT
+            else AgentRunState(phase.value)
+        )
+    return _EVENT_METADATA[kind][2]
+
+
 class RunEvent(BaseModel):
     """One immutable, attributable, user-safe controller event."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, RUN_EVENT_SCHEMA_VERSION] = RUN_EVENT_SCHEMA_VERSION
+    schema_version: Literal[2, 3, 4, RUN_EVENT_SCHEMA_VERSION] = (
+        RUN_EVENT_SCHEMA_VERSION
+    )
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     sequence: int = Field(ge=1)
     occurred_at: datetime
@@ -667,12 +695,14 @@ class RunEvent(BaseModel):
                 "legacy RunEvents cannot contain response-finalization state"
             )
         category, visibility, agent_state = _EVENT_METADATA[self.kind]
+        if self.schema_version >= 5:
+            agent_state = _current_agent_state(self.kind, self.checkpoint)
         if self.category is not category:
             raise ValueError("RunEvent category does not match its kind")
         if self.minimum_visibility is not visibility:
             raise ValueError("RunEvent visibility does not match its kind")
         if self.agent_state is not agent_state:
-            raise ValueError("RunEvent Agent state does not match its kind")
+            raise ValueError("RunEvent Agent state does not match its authority")
         if agent_state is not None:
             if self.agent_id is None:
                 raise ValueError("Agent events require an Agent ID")
@@ -844,7 +874,7 @@ class RunEventJournal:
             occurred_at = _require_utc(self.clock())
             if previous is not None and occurred_at < previous.occurred_at:
                 raise ValueError("RunEvent timestamps must be monotonic")
-            category, visibility, agent_state = _EVENT_METADATA[draft.kind]
+            category, visibility, _ = _EVENT_METADATA[draft.kind]
             event = RunEvent(
                 run_id=self.run_id,
                 sequence=len(existing) + 1,
@@ -857,7 +887,7 @@ class RunEventJournal:
                 summary=draft.message,
                 phase=draft.phase or phase,
                 agent_id=draft.agent_id,
-                agent_state=agent_state,
+                agent_state=_current_agent_state(draft.kind, draft.checkpoint),
                 iteration=draft.iteration,
                 attempt=draft.attempt,
                 duration_ms=draft.duration_ms,
@@ -968,6 +998,16 @@ _VISIBILITY_RANK = {
 }
 
 
+@dataclass
+class _HeartbeatObservation:
+    """Latest rendered observation and its phase clock; not lifecycle authority."""
+
+    event: RunEvent
+    started: float
+    stop: threading.Event
+    thread: threading.Thread | None = None
+
+
 class TerminalProgressRenderer:
     """Render persisted safe summaries and elapsed waiting time."""
 
@@ -986,9 +1026,7 @@ class TerminalProgressRenderer:
         self.heartbeat_seconds = heartbeat_seconds
         self.monotonic = monotonic
         self._lock = threading.Lock()
-        self._waiting: dict[
-            tuple[str, int, int], tuple[threading.Event, threading.Thread]
-        ] = {}
+        self._waiting: dict[tuple[str, int, int], _HeartbeatObservation] = {}
         self._rendered_checkpoint_digests: dict[tuple[str, int, int], str] = {}
 
     def __call__(self, event: RunEvent) -> None:
@@ -1024,9 +1062,16 @@ class TerminalProgressRenderer:
         }:
             self._stop_waiting(event)
 
-        if not visible:
-            return
-        if event.kind in {
+        elif event.checkpoint is not None and event.kind in _INVOCATION_EVENT_KINDS:
+            if event.checkpoint.invocation_phase in {
+                InvocationPhase.STOPPING,
+                InvocationPhase.COLLECTING_EVIDENCE,
+                InvocationPhase.STOPPED,
+            }:
+                self._stop_waiting(event)
+            else:
+                self._start_waiting(event)
+        elif event.kind in {
             ProgressEventKind.AGENT_STARTED,
             ProgressEventKind.AGENT_INITIALIZING,
             ProgressEventKind.AGENT_WAITING_PROVIDER,
@@ -1034,14 +1079,18 @@ class TerminalProgressRenderer:
             ProgressEventKind.AGENT_TOOL_STARTED,
             ProgressEventKind.AGENT_FINALIZING_RESPONSE,
         }:
+            # Checkpoint-free legacy/fixed-workflow events retain their fallback.
             self._start_waiting(event)
-            self._print_details(event)
+
+        if not visible:
             return
         symbol = {
             ProgressEventKind.RUN_STARTED: "●",
             ProgressEventKind.WORKSPACE_READY: "✓",
             ProgressEventKind.AGENT_QUEUED: "○",
             ProgressEventKind.AGENT_READY: "→",
+            ProgressEventKind.AGENT_STARTED: "●",
+            ProgressEventKind.AGENT_WAITING_PROVIDER: "●",
             ProgressEventKind.AGENT_INVOCATION_LAUNCHED: "●",
             ProgressEventKind.AGENT_INITIALIZING: "●",
             ProgressEventKind.AGENT_INITIALIZATION_PROGRESS: "·",
@@ -1103,9 +1152,8 @@ class TerminalProgressRenderer:
         with self._lock:
             waiting = tuple(self._waiting.values())
             self._waiting.clear()
-        for stop, thread in waiting:
-            stop.set()
-            thread.join(timeout=min(self.heartbeat_seconds, 0.2))
+        for observation in waiting:
+            self._join_waiting(observation)
 
     def set_visibility(self, visibility: RunEventVisibility | str) -> None:
         """Change rendering detail without changing controller execution."""
@@ -1113,6 +1161,7 @@ class TerminalProgressRenderer:
         resolved = RunEventVisibility(visibility)
         with self._lock:
             self.visibility = resolved
+            self._rendered_checkpoint_digests.clear()
 
     def write_notice(self, value: str) -> None:
         """Print an interaction notice without racing a progress heartbeat."""
@@ -1129,23 +1178,27 @@ class TerminalProgressRenderer:
     def _start_waiting(self, event: RunEvent) -> None:
         key = self._key(event)
         if key is None:
-            self._print(f"● {event.summary}")
             return
-        self._print(f"● {event.summary}")
-        stop = threading.Event()
-        started = self.monotonic()
-        thread = threading.Thread(
-            target=self._heartbeat,
-            args=(stop, started, self._heartbeat_summary(event)),
-            name=f"sat-progress-{event.agent_id}",
-            daemon=True,
-        )
         with self._lock:
-            previous = self._waiting.pop(key, None)
-            self._waiting[key] = (stop, thread)
-        if previous is not None:
-            previous[0].set()
-        thread.start()
+            previous = self._waiting.get(key)
+            if previous is not None:
+                if self._heartbeat_summary(previous.event) != self._heartbeat_summary(
+                    event
+                ):
+                    previous.started = self.monotonic()
+                previous.event = event
+                return
+            observation = _HeartbeatObservation(
+                event=event, started=self.monotonic(), stop=threading.Event()
+            )
+            observation.thread = threading.Thread(
+                target=self._heartbeat,
+                args=(key, observation.stop),
+                name=f"sat-progress-{event.agent_id}",
+                daemon=True,
+            )
+            self._waiting[key] = observation
+            observation.thread.start()
 
     def _stop_waiting(self, event: RunEvent) -> None:
         key = self._key(event)
@@ -1155,8 +1208,7 @@ class TerminalProgressRenderer:
             waiting = self._waiting.pop(key, None)
             self._rendered_checkpoint_digests.pop(key, None)
         if waiting is not None:
-            waiting[0].set()
-            waiting[1].join(timeout=min(self.heartbeat_seconds, 0.2))
+            self._join_waiting(waiting)
 
     def _stop_agent_waiting(self, event: RunEvent) -> None:
         if event.agent_id is None or event.iteration is None:
@@ -1170,35 +1222,48 @@ class TerminalProgressRenderer:
             waiting = tuple(self._waiting.pop(key) for key in keys)
             for key in keys:
                 self._rendered_checkpoint_digests.pop(key, None)
-        for stop, thread in waiting:
-            stop.set()
-            thread.join(timeout=min(self.heartbeat_seconds, 0.2))
+        for observation in waiting:
+            self._join_waiting(observation)
+
+    def _join_waiting(self, observation: _HeartbeatObservation) -> None:
+        observation.stop.set()
+        assert observation.thread is not None
+        observation.thread.join(timeout=min(self.heartbeat_seconds, 0.2))
 
     @staticmethod
     def _heartbeat_summary(event: RunEvent) -> str:
         assert event.agent_id is not None
-        if event.kind is ProgressEventKind.AGENT_INITIALIZING:
+        state = _current_agent_state(event.kind, event.checkpoint)
+        if state in {AgentRunState.LAUNCHED, AgentRunState.INITIALIZING}:
             return f"{event.agent_id} is initializing its invocation"
-        if event.kind is ProgressEventKind.AGENT_WAITING_PROVIDER:
+        if state is AgentRunState.WAITING_PROVIDER:
             return f"{event.agent_id} is waiting for the model"
-        if event.kind is ProgressEventKind.AGENT_TOOL_STARTED:
-            return f"{event.agent_id} has an attributable tool operation active"
-        if event.kind is ProgressEventKind.AGENT_TOOL_ACTIVE:
+        if state is AgentRunState.TOOL_ACTIVE:
             return f"{event.agent_id} has attributable tool operations active"
-        if event.kind is ProgressEventKind.AGENT_FINALIZING_RESPONSE:
+        if state is AgentRunState.FINALIZING_RESPONSE:
             return f"{event.agent_id} is finalizing the OpenClaw result"
         return f"{event.agent_id} is working"
 
     def _heartbeat(
         self,
+        key: tuple[str, int, int],
         stop: threading.Event,
-        started: float,
-        message: str,
     ) -> None:
         while not stop.wait(self.heartbeat_seconds):
-            elapsed = max(0, int(self.monotonic() - started))
-            minutes, seconds = divmod(elapsed, 60)
-            self._print(f"  {message} {minutes:02d}:{seconds:02d} elapsed")
+            with self._lock:
+                observation = self._waiting.get(key)
+                if observation is None or observation.stop is not stop:
+                    return
+                if self.visibility is RunEventVisibility.COMPACT:
+                    continue
+                elapsed = max(0, int(self.monotonic() - observation.started))
+                minutes, seconds = divmod(elapsed, 60)
+                message = self._heartbeat_summary(observation.event)
+                print(
+                    f"  {message} {minutes:02d}:{seconds:02d} elapsed",
+                    file=self.output,
+                    flush=True,
+                )
 
     def _print_details(self, event: RunEvent) -> None:
         if (
@@ -1211,6 +1276,7 @@ class TerminalProgressRenderer:
             self._print(
                 "  progress "
                 f"phase={checkpoint.invocation_phase.value} tasks={task_ids} "
+                f"completed_tools={checkpoint.completed_tool_operations} "
                 f"completed={checkpoint.last_verified_checkpoint}; "
                 f"next={checkpoint.next_controller_checkpoint}"
             )
@@ -1224,8 +1290,9 @@ class TerminalProgressRenderer:
             return
         if event.agent_id is not None:
             fields = [f"agent={event.agent_id}"]
-            if event.agent_state is not None:
-                fields.append(f"state={event.agent_state.value}")
+            state = _current_agent_state(event.kind, event.checkpoint)
+            if state is not None:
+                fields.append(f"state={state.value}")
             if event.capability is not None:
                 fields.append(f"capability={event.capability}")
             if event.stage_id is not None:

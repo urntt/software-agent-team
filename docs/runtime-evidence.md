@@ -766,8 +766,12 @@ reports without software identity remain readable and keep their original
 canonical serialization.
 
 Every compatibility-workflow status update is first enriched into a versioned
-`RunEvent`. Schema v4 adds response-finalization states and retains canonical
-read support for schema-v2 and schema-v3 events. Schema v3 added an optional
+`RunEvent`. Schema v5 derives invocation `agent_state` from the current checkpoint,
+not the kind of a historical activity delta. Scheduler decisions retain their
+separate Agent-level meaning. Schema v2 through v4 events remain canonically
+readable without rewriting their historical state fields or predecessor hashes;
+rendering uses an available checkpoint without mutating the stored record.
+Schema v4 added response-finalization states. Schema v3 added an optional
 Controller-owned checkpoint snapshot. It stores its run ID,
 contiguous sequence, UTC timestamp, lifecycle revision, category, minimum
 visibility, phase, and attributable Agent attempt when applicable. Dynamic
@@ -778,8 +782,16 @@ reference, and aggregate budget snapshot. The checkpoint projection binds the
 approved task, invocation phase, last verified and next controller-known
 checkpoints, completed tool operations, Git/gate/Review state, and known,
 authorized, and remaining USD amounts without embedding model or tool content.
-Heartbeat lifecycle follows controller state even when the ending event is
-hidden by the selected visibility: an invocation-completed checkpoint stops
+The current completed-tool count is rendered directly from its numeric snapshot.
+The last verified action describes historical work without embedding another
+cumulative count that would become stale before the next history delta.
+Heartbeat lifecycle follows the current checkpoint even when an activity event is
+hidden by the selected visibility. Coalesced tool history cannot resurrect tool
+work after completion or shutdown; provider activity during active tool work does
+not change the current phase. Same-phase observations preserve the elapsed clock
+and heartbeat thread. Compact mode suppresses per-Agent heartbeats immediately;
+returning to standard or detailed mode uses the latest observation without waiting
+for another model event. An invocation-completed checkpoint stops
 provider waiting, and a terminal Agent event closes every semantic-repair
 attempt for that Agent. Quality-gate events encode passed versus failed
 completion so terminal renderers do not use a success mark merely because a

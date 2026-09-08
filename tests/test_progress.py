@@ -30,6 +30,196 @@ from software_agent_team.run_control import RunPhase
 FIXED_TIME = datetime(2026, 8, 26, 12, 0, tzinfo=UTC)
 
 
+def checkpoint(phase: InvocationPhase) -> ProgressCheckpointSnapshot:
+    """Provide an observation independent from the historical event kind."""
+
+    return ProgressCheckpointSnapshot(
+        approved_task_ids=("TASK_BUILD",),
+        invocation_phase=phase,
+        last_verified_checkpoint="Completed 2 attributable tool operations",
+        next_controller_checkpoint="Observe the next lifecycle checkpoint",
+        completed_tool_operations=2,
+        git_state="working",
+        gate_state="not_started",
+        review_state="not_applicable",
+        known_estimated_cost_usd="0.125",
+        authorized_cost_usd="1.00",
+        remaining_estimated_cost_usd="0.875",
+    )
+
+
+@pytest.mark.parametrize("phase", tuple(InvocationPhase))
+@pytest.mark.parametrize(
+    "kind",
+    (
+        ProgressEventKind.AGENT_PROVIDER_ACTIVITY,
+        ProgressEventKind.AGENT_TOOL_STARTED,
+        ProgressEventKind.AGENT_TOOL_COMPLETED,
+    ),
+)
+def test_event_state_projects_current_checkpoint_not_history_kind(
+    tmp_path: Path, phase: InvocationPhase, kind: ProgressEventKind
+) -> None:
+    output = StringIO()
+    renderer = TerminalProgressRenderer(
+        output=output, visibility=RunEventVisibility.DETAILED
+    )
+    events = journal(tmp_path, handler=renderer)
+    try:
+        event = events.append(
+            ProgressEvent(
+                kind=kind,
+                message="Attributable activity observed",
+                agent_id="builder",
+                iteration=1,
+                attempt=1,
+                checkpoint=checkpoint(phase),
+            ),
+            lifecycle_revision=3,
+            phase=RunPhase.IMPLEMENTING,
+        )
+        expected = (
+            AgentRunState.WAITING_PROVIDER
+            if phase is InvocationPhase.PROVIDER_WAIT
+            else AgentRunState(phase.value)
+        )
+        assert event.schema_version == 5
+        assert event.agent_state is expected
+        assert events.load() == (event,)
+        assert f"state={expected.value}" in output.getvalue()
+        assert not events.render_errors
+        if phase in {
+            InvocationPhase.STOPPING,
+            InvocationPhase.COLLECTING_EVIDENCE,
+            InvocationPhase.STOPPED,
+        }:
+            assert not renderer._waiting
+        else:
+            assert len(renderer._waiting) == 1
+    finally:
+        renderer.close()
+
+
+@pytest.mark.parametrize("version", (3, 4))
+def test_legacy_kind_state_remains_canonical_but_display_uses_checkpoint(
+    tmp_path: Path, version: int
+) -> None:
+    current = journal(tmp_path).append(
+        ProgressEvent(
+            kind=ProgressEventKind.AGENT_PROVIDER_ACTIVITY,
+            message="Provider activity observed during tool work",
+            agent_id="builder",
+            iteration=1,
+            attempt=1,
+            checkpoint=checkpoint(InvocationPhase.TOOL_ACTIVE),
+        ),
+        lifecycle_revision=3,
+        phase=RunPhase.IMPLEMENTING,
+    )
+    payload = current.model_dump(mode="json")
+    payload["agent_state"] = "waiting_provider"
+    with pytest.raises(ValidationError, match="Agent state"):
+        RunEvent.model_validate(payload)
+    payload["schema_version"] = version
+    legacy = RunEvent.model_validate(payload)
+    digest = canonical_model_sha256(legacy)
+    output = StringIO()
+    renderer = TerminalProgressRenderer(
+        output=output, visibility=RunEventVisibility.DETAILED
+    )
+    try:
+        renderer(legacy)
+        assert "state=tool_active" in output.getvalue()
+        assert "state=waiting_provider" not in output.getvalue()
+        assert "tool operations active" in renderer._heartbeat_summary(legacy)
+    finally:
+        renderer.close()
+    assert legacy.model_dump(mode="json") == payload
+    assert canonical_model_sha256(legacy) == digest
+
+
+@pytest.mark.parametrize(
+    ("kind", "state"),
+    (
+        (ProgressEventKind.AGENT_RETRY, AgentRunState.WAITING_REPAIR),
+        (ProgressEventKind.AGENT_COMPLETED, AgentRunState.COMPLETED),
+        (ProgressEventKind.AGENT_FAILED, AgentRunState.FAILED),
+    ),
+)
+def test_scheduler_decision_is_not_replaced_by_last_invocation_checkpoint(
+    tmp_path: Path, kind: ProgressEventKind, state: AgentRunState
+) -> None:
+    event = journal(tmp_path).append(
+        ProgressEvent(
+            kind=kind,
+            message="Scheduler decision recorded",
+            agent_id="builder",
+            iteration=1,
+            attempt=2,
+            checkpoint=checkpoint(InvocationPhase.STOPPED),
+        ),
+        lifecycle_revision=3,
+        phase=RunPhase.IMPLEMENTING,
+    )
+    assert event.agent_state is state
+
+
+def test_heartbeat_consumes_hidden_current_observation_and_visibility_changes(
+    tmp_path: Path,
+) -> None:
+    output = StringIO()
+    renderer = TerminalProgressRenderer(output=output, heartbeat_seconds=0.01)
+    events = journal(tmp_path, handler=renderer)
+
+    def emit(kind: ProgressEventKind, phase: InvocationPhase) -> RunEvent:
+        return events.append(
+            ProgressEvent(
+                kind=kind,
+                message="Historical activity observed",
+                agent_id="builder",
+                iteration=1,
+                attempt=1,
+                checkpoint=checkpoint(phase),
+            ),
+            lifecycle_revision=3,
+            phase=RunPhase.IMPLEMENTING,
+        )
+
+    try:
+        emit(ProgressEventKind.AGENT_TOOL_ACTIVE, InvocationPhase.TOOL_ACTIVE)
+        observation = renderer._waiting[("builder", 1, 1)]
+        thread = observation.thread
+        started = observation.started
+        emit(ProgressEventKind.AGENT_PROVIDER_ACTIVITY, InvocationPhase.TOOL_ACTIVE)
+        assert observation.started == started
+        assert observation.thread is thread
+        renderer.set_visibility(RunEventVisibility.COMPACT)
+        hidden = emit(
+            ProgressEventKind.AGENT_PROVIDER_ACTIVITY, InvocationPhase.PROVIDER_WAIT
+        )
+        before = output.getvalue()
+        time.sleep(0.03)
+        assert output.getvalue() == before
+        assert observation.event == hidden
+        renderer.set_visibility(RunEventVisibility.DETAILED)
+        deadline = time.monotonic() + 2
+        while "waiting for the model" not in output.getvalue()[len(before) :]:
+            assert time.monotonic() < deadline, "current heartbeat was not displayed"
+            time.sleep(0.01)
+        assert "tool operations active" not in output.getvalue()[len(before) :]
+        # A coalesced historical start cannot restore an already completed tool.
+        emit(ProgressEventKind.AGENT_TOOL_STARTED, InvocationPhase.PROVIDER_WAIT)
+        assert "waiting for the model" in renderer._heartbeat_summary(observation.event)
+        assert observation.thread is thread
+        emit(ProgressEventKind.AGENT_STOPPING, InvocationPhase.STOPPING)
+        emit(ProgressEventKind.AGENT_TOOL_STARTED, InvocationPhase.STOPPING)
+        assert not renderer._waiting
+        assert thread is not None and not thread.is_alive()
+        assert not events.render_errors
+    finally:
+        renderer.close()
+
+
 def journal(
     tmp_path: Path,
     *,
@@ -433,6 +623,7 @@ def test_checkpoint_projection_is_hidden_in_compact_and_explained_in_standard(
     assert "progress phase=" not in compact_output.getvalue()
     rendered = standard_output.getvalue()
     assert "phase=tool_active tasks=TASK_BUILD" in rendered
+    assert "completed_tools=2" in rendered
     assert "Completed 2 attributable tool operations" in rendered
     assert "next=Observe completion of the active operation" in rendered
     assert "$0.125000 estimated / $1.00 authorized" in rendered

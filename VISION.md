@@ -202,7 +202,12 @@ when code, usability evidence, or controlled experiments justify a replacement.
   change only when the currently observed state changes. The Controller applies
   an attributed session snapshot before publishing its historical deltas, so a
   coalesced start/completion observation cannot expose stale counts or recreate
-  a `tool_active` phase that is no longer current. A final assistant
+  a `tool_active` phase that is no longer current. Persisted invocation-state
+  labels and terminal heartbeats project that same current checkpoint, including
+  events hidden by the selected visibility; historical event names cannot
+  recreate current activity. Scheduler decisions retain their separate Agent-level
+  meaning. Historical records remain immutable when rendered by newer software.
+  A final assistant
   record ends provider-generation authority and
   starts a distinct renewable result-finalization guard; runtime serialization
   and teardown therefore cannot consume the provider-silence lease. These
