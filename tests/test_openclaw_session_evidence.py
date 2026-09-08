@@ -162,6 +162,209 @@ def capture(root: Path, invocation: AgentExecutionRequest):
     )
 
 
+def rejected_tool_record(external_id: str = "rejected-call") -> dict[str, object]:
+    return {
+        "type": "message",
+        "id": "runtime-rejection",
+        "message": {
+            "role": "toolResult",
+            "toolCallId": external_id,
+            "toolName": "missing_tool",
+            "isError": True,
+            "content": [{"type": "text", "text": "Tool missing_tool not found"}],
+            "details": {},
+        },
+    }
+
+
+def test_runtime_rejection_is_diagnostic_not_execution_or_progress(tmp_path: Path):
+    invocation = request()
+    records = [session_record(), user_record(invocation.prompt)]
+    write_session_state(tmp_path, invocation=invocation, records=records)
+    before = inspect_openclaw_session_activity(
+        state_dir=tmp_path,
+        agent_id=invocation.agent_id,
+        session_key=invocation.session_key,
+        prompt=invocation.prompt,
+    )
+    records.append(rejected_tool_record())
+    write_session_state(tmp_path, invocation=invocation, records=records)
+    after = inspect_openclaw_session_activity(
+        state_dir=tmp_path,
+        agent_id=invocation.agent_id,
+        session_key=invocation.session_key,
+        prompt=invocation.prompt,
+    )
+    assert after == before
+    records.extend(
+        [
+            tool_call_record("work", command="pytest"),
+            tool_result_record("work", output="1 passed"),
+            assistant_record(),
+        ]
+    )
+    write_session_state(tmp_path, invocation=invocation, records=records)
+    captured = capture(tmp_path, invocation)
+    assert len(captured.tool_calls) == 1
+    assert captured.tool_calls[0].id == "tool-001"
+    assert len(captured.runtime_rejections) == 1
+    rejection = captured.runtime_rejections[0]
+    assert rejection.reason == "unknown_tool"
+    assert rejection.tool_name == "missing_tool"
+    assert rejection.record_index == 1
+    assert not hasattr(rejection, "arguments_sha256")
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        {"isError": False},
+        {"details": {"status": "completed"}},
+        {"content": [{"type": "text", "text": "Tool another_tool not found"}]},
+        {"toolCallId": ""},
+        {"toolName": "unsafe name"},
+        {"content": [{"type": "text", "text": "permission denied"}]},
+    ],
+)
+def test_unknown_orphan_shapes_still_fail_closed(tmp_path: Path, mutation):
+    invocation = request()
+    rejected = rejected_tool_record()
+    rejected["message"].update(mutation)
+    write_session_state(
+        tmp_path,
+        invocation=invocation,
+        records=[
+            session_record(),
+            user_record(invocation.prompt),
+            rejected,
+            assistant_record(),
+        ],
+    )
+    with pytest.raises(OpenClawSessionEvidenceError):
+        capture(tmp_path, invocation)
+    with pytest.raises(OpenClawSessionEvidenceError):
+        inspect_openclaw_session_activity(
+            state_dir=tmp_path,
+            agent_id=invocation.agent_id,
+            session_key=invocation.session_key,
+            prompt=invocation.prompt,
+        )
+
+
+@pytest.mark.parametrize("extra", ["repeat", "later_call"])
+def test_rejection_identity_cannot_be_reused(tmp_path: Path, extra: str):
+    invocation = request()
+    records = [session_record(), user_record(invocation.prompt), rejected_tool_record()]
+    records.append(
+        rejected_tool_record()
+        if extra == "repeat"
+        else tool_call_record("rejected-call", command="pytest")
+    )
+    write_session_state(tmp_path, invocation=invocation, records=records)
+    with pytest.raises(OpenClawSessionEvidenceError):
+        capture(tmp_path, invocation)
+    with pytest.raises(OpenClawSessionEvidenceError):
+        inspect_openclaw_session_activity(
+            state_dir=tmp_path,
+            agent_id=invocation.agent_id,
+            session_key=invocation.session_key,
+            prompt=invocation.prompt,
+        )
+
+
+def test_rejection_only_terminal_is_not_paired_tool_continuation(tmp_path: Path):
+    invocation = request()
+    write_session_state(
+        tmp_path,
+        invocation=invocation,
+        records=[
+            session_record(),
+            user_record(invocation.prompt),
+            assistant_record(),
+            rejected_tool_record(),
+        ],
+    )
+    captured = capture(tmp_path, invocation)
+    assert captured.tool_calls == ()
+    assert captured.terminal_state is OpenClawInvocationTerminalState.RUNTIME_REJECTION
+    activity = inspect_openclaw_session_activity(
+        state_dir=tmp_path,
+        agent_id=invocation.agent_id,
+        session_key=invocation.session_key,
+        prompt=invocation.prompt,
+    )
+    assert not activity.terminal_response_observed
+    assert activity.tool_completed_count == 0
+
+
+def test_sanitized_tool_use_text_is_not_a_final_response(tmp_path: Path):
+    invocation = request()
+    pending = assistant_record("Attempting a tool")
+    pending["message"]["stopReason"] = "toolUse"
+    write_session_state(
+        tmp_path,
+        invocation=invocation,
+        records=[
+            session_record(),
+            user_record(invocation.prompt),
+            pending,
+        ],
+    )
+    activity = inspect_openclaw_session_activity(
+        state_dir=tmp_path,
+        agent_id=invocation.agent_id,
+        session_key=invocation.session_key,
+        prompt=invocation.prompt,
+    )
+    assert not activity.terminal_response_observed
+    with pytest.raises(OpenClawSessionEvidenceError, match="incomplete tool call"):
+        capture(tmp_path, invocation)
+
+
+def test_paired_not_found_remains_failed_tool_evidence(tmp_path: Path):
+    invocation = request()
+    call = tool_call_record("rejected-call", command="pytest")
+    call["message"]["content"][0]["name"] = "missing_tool"
+    write_session_state(
+        tmp_path,
+        invocation=invocation,
+        records=[
+            session_record(),
+            user_record(invocation.prompt),
+            call,
+            rejected_tool_record(),
+            assistant_record(),
+        ],
+    )
+    captured = capture(tmp_path, invocation)
+    assert captured.runtime_rejections == ()
+    assert captured.tool_calls[0].outcome is AgentToolCallOutcome.FAILED
+
+
+def test_rejection_cannot_follow_a_terminal_submission(tmp_path: Path):
+    invocation = request()
+    call = tool_call_record("submission", command="pytest")
+    call["message"]["content"][0]["name"] = "sat_submit_artifact"
+    result = tool_result_record("submission", output="accepted")
+    result["message"]["toolName"] = "sat_submit_artifact"
+    write_session_state(
+        tmp_path,
+        invocation=invocation,
+        records=[
+            session_record(),
+            user_record(invocation.prompt),
+            call,
+            result,
+            rejected_tool_record(),
+            assistant_record(),
+        ],
+    )
+    with pytest.raises(
+        OpenClawSessionEvidenceError, match="follows terminal submission"
+    ):
+        capture(tmp_path, invocation)
+
+
 def test_capture_excludes_prior_turns_and_pairs_current_tool_results(
     tmp_path: Path,
 ) -> None:

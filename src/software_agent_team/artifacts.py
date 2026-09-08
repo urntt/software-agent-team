@@ -36,7 +36,7 @@ from software_agent_team.submissions import (
 )
 from software_agent_team.versioning import SoftwareVersionReport
 
-ARTIFACT_SCHEMA_VERSION = 9
+ARTIFACT_SCHEMA_VERSION = 10
 MINIMUM_READABLE_ARTIFACT_SCHEMA_VERSION = 2
 COMMIT_PATTERN = r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
 AGENT_ID_PATTERN = r"^[a-z][a-z0-9_]*$"
@@ -574,7 +574,7 @@ class HandoffEnvelope(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, ARTIFACT_SCHEMA_VERSION] = (
+    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, 9, ARTIFACT_SCHEMA_VERSION] = (
         ARTIFACT_SCHEMA_VERSION
     )
     kind: Literal[ArtifactKind.HANDOFF_ENVELOPE] = ArtifactKind.HANDOFF_ENVELOPE
@@ -639,7 +639,7 @@ class PhaseArtifact(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, ARTIFACT_SCHEMA_VERSION] = (
+    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, 9, ARTIFACT_SCHEMA_VERSION] = (
         ARTIFACT_SCHEMA_VERSION
     )
     kind: ArtifactKind
@@ -749,6 +749,18 @@ class AgentToolCallEvidence(BaseModel):
         return self
 
 
+class RuntimeToolRejection(BaseModel):
+    """Pinned-runtime negative diagnostic, never evidence of tool execution."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    reason: Literal["unknown_tool"] = "unknown_tool"
+    record_index: int = Field(ge=1, le=4096)
+    tool_name: str = Field(pattern=r"^[A-Za-z0-9_:.-]{1,64}$")
+    external_call_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    record_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 class ReviewToolEvidenceReference(BaseModel):
     """Reviewer citation bound to one controller-recorded tool result."""
 
@@ -791,6 +803,7 @@ def validate_tool_evidence_collection(
     record_count: int | None,
     tool_calls: tuple[AgentToolCallEvidence, ...],
     error: str | None,
+    runtime_rejections: tuple[RuntimeToolRejection, ...] = (),
 ) -> None:
     """Validate one complete, absent, or rejected tool-evidence collection."""
 
@@ -798,6 +811,23 @@ def validate_tool_evidence_collection(
     expected = [f"tool-{index:03d}" for index in range(1, len(tool_calls) + 1)]
     if identifiers != expected:
         raise ValueError("tool evidence IDs must be contiguous and ordered")
+    if runtime_rejections:
+        if status is not AgentToolEvidenceStatus.CAPTURED:
+            raise ValueError("runtime rejections require captured session provenance")
+        identities = [item.external_call_sha256 for item in runtime_rejections]
+        positions = [item.record_index for item in runtime_rejections]
+        if (
+            len(set(identities)) != len(identities)
+            or positions != sorted(set(positions))
+            or record_count is None
+            or any(position >= record_count for position in positions)
+            or set(identities).intersection(
+                call.external_call_sha256 for call in tool_calls
+            )
+        ):
+            raise ValueError(
+                "runtime rejection identities must be distinct and ordered"
+            )
     if status is AgentToolEvidenceStatus.NOT_CAPTURED:
         if transcript_sha256 is not None or record_count is not None or tool_calls:
             raise ValueError("uncaptured tool evidence cannot contain session records")
@@ -815,12 +845,34 @@ def validate_tool_evidence_collection(
             raise ValueError("invalid tool evidence cannot expose partial tool calls")
 
 
+class RuntimeRejectionEvidence(BaseModel):
+    """Session-bound negative diagnostics for consumers without tool claims."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    transcript_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    record_count: int = Field(ge=1, le=4096)
+    rejections: tuple[RuntimeToolRejection, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def require_bound_diagnostics(self) -> Self:
+        validate_tool_evidence_collection(
+            status=AgentToolEvidenceStatus.CAPTURED,
+            transcript_sha256=self.transcript_sha256,
+            record_count=self.record_count,
+            tool_calls=(),
+            error=None,
+            runtime_rejections=self.rejections,
+        )
+        return self
+
+
 class AgentExecutionRecord(BaseModel):
     """Controller-recorded telemetry for one Agent invocation."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, ARTIFACT_SCHEMA_VERSION] = (
+    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, 9, ARTIFACT_SCHEMA_VERSION] = (
         ARTIFACT_SCHEMA_VERSION
     )
     kind: Literal[ArtifactKind.AGENT_EXECUTION_RECORD] = (
@@ -903,6 +955,10 @@ class AgentExecutionRecord(BaseModel):
     )
     session_record_count: int | None = Field(default=None, ge=1, le=4096)
     tool_calls: tuple[AgentToolCallEvidence, ...] = ()
+    runtime_rejections: tuple[RuntimeToolRejection, ...] = Field(
+        default=(),
+        exclude_if=lambda value: not value,
+    )
     tool_evidence_error: str | None = Field(default=None, min_length=1, max_length=2000)
     # Zero records that product execution did not impose a per-Agent wall-clock
     # limit. Positive values remain exact controlled-evaluation evidence.
@@ -1064,6 +1120,7 @@ class AgentExecutionRecord(BaseModel):
             transcript_sha256=self.session_transcript_sha256,
             record_count=self.session_record_count,
             tool_calls=self.tool_calls,
+            runtime_rejections=self.runtime_rejections,
             error=self.tool_evidence_error,
         )
         if self.timed_out:
@@ -1182,6 +1239,10 @@ class AgentExecutionRecord(BaseModel):
         ):
             raise ValueError(
                 "legacy execution records cannot contain deferred tool evidence"
+            )
+        if self.schema_version < 10 and "runtime_rejections" in self.model_fields_set:
+            raise ValueError(
+                "legacy execution records cannot contain runtime rejections"
             )
         return self
 

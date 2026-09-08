@@ -416,7 +416,7 @@ def test_current_lifecycle_records_the_pre_invocation_baseline() -> None:
 
     restored = AgentExecutionRecord.model_validate(payload)
 
-    assert restored.schema_version == 9
+    assert restored.schema_version == 10
     assert restored.invocation_lifecycle is not None
     assert restored.invocation_lifecycle.schema_version == 3
     assert (
@@ -555,6 +555,44 @@ def test_execution_record_preserves_sanitized_tool_session_evidence() -> None:
     assert record.tool_calls[0].output_excerpt == "BOUNDARY_OK"
 
 
+def test_runtime_rejections_require_new_schema_and_captured_provenance() -> None:
+    payload = valid_execution_payload()
+    payload.update(
+        {
+            "tool_evidence_status": "captured",
+            "session_transcript_sha256": "a" * 64,
+            "session_record_count": 3,
+            "runtime_rejections": [
+                {
+                    "reason": "unknown_tool",
+                    "record_index": 1,
+                    "tool_name": "missing_tool",
+                    "external_call_sha256": "b" * 64,
+                    "record_sha256": "c" * 64,
+                }
+            ],
+        }
+    )
+    record = AgentExecutionRecord.model_validate(payload)
+    assert record.schema_version == 10
+    assert record.tool_calls == ()
+    assert len(record.runtime_rejections) == 1
+    for version in range(2, 10):
+        with pytest.raises(ValidationError, match="legacy execution records"):
+            AgentExecutionRecord.model_validate({**payload, "schema_version": version})
+    with pytest.raises(ValidationError, match="captured session provenance"):
+        AgentExecutionRecord.model_validate(
+            {**payload, "tool_evidence_status": "not_captured"}
+        )
+    duplicate = {**payload, "runtime_rejections": payload["runtime_rejections"] * 2}
+    with pytest.raises(ValidationError, match="distinct and ordered"):
+        AgentExecutionRecord.model_validate(duplicate)
+    del payload["runtime_rejections"]
+    legacy = AgentExecutionRecord.model_validate({**payload, "schema_version": 9})
+    assert "runtime_rejections" not in legacy.model_dump(mode="json")
+    assert AgentExecutionRecord.model_validate_json(legacy.model_dump_json()) == legacy
+
+
 def test_deferred_tool_evidence_requires_artifact_schema_eight() -> None:
     payload = valid_execution_payload()
     payload.update(
@@ -583,7 +621,7 @@ def test_deferred_tool_evidence_requires_artifact_schema_eight() -> None:
 
     current = AgentExecutionRecord.model_validate(payload)
 
-    assert current.schema_version == 9
+    assert current.schema_version == 10
     assert current.tool_calls[0].outcome is AgentToolCallOutcome.DEFERRED
 
     payload["schema_version"] = 7

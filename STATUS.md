@@ -118,9 +118,11 @@ lifecycle without persisting their content, visibly separates suspected stall,
 grace, recovery, degraded observation, and terminal stall, and does not publish
 terminal failure before process reaping and evidence collection. RunEvent v4
 adds a Controller-owned approved-task/checkpoint/Git/gate/Review/cost snapshot
-while preserving canonical v2-v3 reads; Artifact schema v9 and lifecycle schema
-v3 record a content-free pre-invocation initialization baseline while retaining
-Artifact v2-v8 and lifecycle v1-v2 reads. Artifact schema v8 added a distinct
+while preserving canonical v2-v3 reads. Artifact schema v10 and Planning schema
+v12 preserve pinned-runtime rejection diagnostics independently of paired tool
+execution, retaining Artifact v2-v9 and Planning v2-v11 reads. Lifecycle schema
+v3 records a content-free pre-invocation initialization baseline while retaining
+lifecycle v1-v2 reads. Artifact schema v8 added a distinct
 nonterminal `deferred` outcome for validated async `exec`/`process` starts.
 Deferred calls remain visible in the audit chain but cannot
 prove a satisfied Review claim or replace a later terminal process result or

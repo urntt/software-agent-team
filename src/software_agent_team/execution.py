@@ -32,6 +32,7 @@ from software_agent_team.artifacts import (
     ArtifactKind,
     PhaseArtifact,
     ProviderLivenessEvidence,
+    RuntimeToolRejection,
     validate_tool_evidence_collection,
 )
 from software_agent_team.invocation_lifecycle import (
@@ -708,6 +709,10 @@ class AgentExecutionTelemetry(BaseModel):
     )
     session_record_count: int | None = Field(default=None, ge=1, le=4096)
     tool_calls: tuple[AgentToolCallEvidence, ...] = ()
+    runtime_rejections: tuple[RuntimeToolRejection, ...] = Field(
+        default=(),
+        exclude_if=lambda value: not value,
+    )
     tool_evidence_error: str | None = Field(default=None, min_length=1, max_length=2000)
 
     @model_validator(mode="before")
@@ -780,6 +785,7 @@ class AgentExecutionTelemetry(BaseModel):
             transcript_sha256=self.session_transcript_sha256,
             record_count=self.session_record_count,
             tool_calls=self.tool_calls,
+            runtime_rejections=self.runtime_rejections,
             error=self.tool_evidence_error,
         )
         return self
@@ -1776,8 +1782,12 @@ class _ProviderLivenessMonitor:
                 prompt=self.request.prompt,
                 baseline=self.initialization_monitor.baseline,
             )
-        except OpenClawSessionEvidenceError:
-            self._degrade("OpenClaw session activity could not be attributed", now)
+        except OpenClawSessionEvidenceError as error:
+            # This adapter's errors contain only controller-owned labels, never
+            # session content, tool arguments, or arbitrary executable names.
+            self._degrade(
+                f"OpenClaw session activity could not be attributed: {error}", now
+            )
             session = None
         if session is not None:
             first_session_observation = not self.session_observed
@@ -2600,6 +2610,7 @@ class OpenClawSubprocessExecutor:
                 if (
                     submission_evidence.diagnostic_code == "submission_missing"
                     and captured_tools is not None
+                    and captured_tools.tool_calls
                     and captured_tools.terminal_state
                     is OpenClawInvocationTerminalState.TOOL_RESULT
                 ):
@@ -3299,6 +3310,9 @@ class OpenClawSubprocessExecutor:
                 None if captured_tools is None else captured_tools.record_count
             ),
             tool_calls=(() if captured_tools is None else captured_tools.tool_calls),
+            runtime_rejections=(
+                () if captured_tools is None else captured_tools.runtime_rejections
+            ),
             tool_evidence_error=tool_evidence_error,
         )
 

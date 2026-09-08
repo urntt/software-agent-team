@@ -17,6 +17,7 @@ from pydantic import ValidationError
 from software_agent_team.artifacts import (
     AgentToolCallEvidence,
     AgentToolCallOutcome,
+    RuntimeToolRejection,
 )
 from software_agent_team.invocation_lifecycle import InitializationCheckpoint
 
@@ -43,6 +44,7 @@ class OpenClawInvocationTerminalState(StrEnum):
 
     ASSISTANT_RESPONSE = "assistant_response"
     TOOL_RESULT = "tool_result"
+    RUNTIME_REJECTION = "runtime_rejection"
 
 
 @dataclass(frozen=True)
@@ -53,6 +55,7 @@ class CapturedOpenClawToolEvidence:
     record_count: int
     tool_calls: tuple[AgentToolCallEvidence, ...]
     terminal_state: OpenClawInvocationTerminalState
+    runtime_rejections: tuple[RuntimeToolRejection, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -367,6 +370,10 @@ def _invocation_terminal_state(
         if role == "toolResult":
             return OpenClawInvocationTerminalState.TOOL_RESULT
         if role == "assistant":
+            if message.get("stopReason") == "toolUse":
+                raise OpenClawSessionEvidenceError(
+                    "OpenClaw invocation ends with an incomplete tool call"
+                )
             content = message.get("content")
             if isinstance(content, str):
                 return OpenClawInvocationTerminalState.ASSISTANT_RESPONSE
@@ -621,7 +628,7 @@ def inspect_openclaw_session_activity(
         or snapshot.invocation_records is None
     ):
         return None
-    invocation = snapshot.invocation_records
+    invocation, _ = _classify_runtime_rejections(snapshot.invocation_records)
 
     started: dict[str, OpenClawToolActivity] = {}
     started_names: dict[str, str] = {}
@@ -641,7 +648,10 @@ def inspect_openclaw_session_activity(
         if role == "assistant":
             trusted_records += 1
             content = message.get("content")
-            last_assistant_has_tool_call = False
+            # Sanitization can remove an unsupported call while retaining the
+            # assistant's text. Its pinned stop reason still denotes tool use,
+            # not a provider-final response.
+            last_assistant_has_tool_call = message.get("stopReason") == "toolUse"
             if isinstance(content, str):
                 continue
             if not isinstance(content, list):
@@ -694,6 +704,14 @@ def inspect_openclaw_session_activity(
             completed.add(external_id)
             completed_tools.append(activity)
 
+    # Filtering a diagnostic must not make an earlier assistant message look
+    # like the terminal response after a later runtime rejection.
+    for raw_record in reversed(snapshot.invocation_records[1:]):
+        if raw_record.get("type") == "message":
+            raw_message = raw_record.get("message")
+            if isinstance(raw_message, dict):
+                last_message_role = raw_message.get("role")
+            break
     return OpenClawSessionActivity(
         trusted_record_count=trusted_records,
         tool_started_count=len(started),
@@ -899,6 +917,79 @@ def _output_excerpt(output: str) -> str:
     head = remaining // 2
     tail = remaining - head
     return f"{safe[:head]}{_TRUNCATION_MARKER}{safe[-tail:]}"
+
+
+def _classify_runtime_rejections(
+    records: tuple[dict[str, object], ...],
+) -> tuple[tuple[dict[str, object], ...], tuple[RuntimeToolRejection, ...]]:
+    """Separate the pinned runtime's orphaned not-found response from work.
+
+    OpenClaw sanitizes unsupported assistant calls before persistence, but still
+    persists its canned negative result. No arguments, execution, successful
+    claim, or liveness authority can be reconstructed from that record. Keep a
+    provenance-bound diagnostic instead; every other orphan remains invalid in
+    the normal pairing validator. Both live and terminal readers use this owner.
+    """
+
+    calls: set[str] = set()
+    rejected: set[str] = set()
+    terminal_submission_seen = False
+    filtered: list[dict[str, object]] = []
+    diagnostics: list[RuntimeToolRejection] = []
+    for index, record in enumerate(records):
+        message = record.get("message") if record.get("type") == "message" else None
+        if isinstance(message, dict):
+            if message.get("role") == "assistant":
+                content = message.get("content")
+                for item in content if isinstance(content, list) else []:
+                    if not isinstance(item, dict) or item.get("type") != "toolCall":
+                        continue
+                    identity = item.get("id")
+                    if isinstance(identity, str):
+                        if identity in rejected:
+                            raise OpenClawSessionEvidenceError(
+                                "OpenClaw call reuses a runtime rejection identity"
+                            )
+                        calls.add(identity)
+                        if item.get("name") == "sat_submit_artifact":
+                            terminal_submission_seen = True
+            elif message.get("role") == "toolResult":
+                identity = message.get("toolCallId")
+                if isinstance(identity, str) and identity in rejected:
+                    raise OpenClawSessionEvidenceError(
+                        "OpenClaw session repeats a runtime rejection identity"
+                    )
+                name = message.get("toolName")
+                if (
+                    isinstance(identity, str)
+                    and identity
+                    and identity.strip() == identity
+                    and len(identity) <= 512
+                    and "\x00" not in identity
+                    and identity not in calls
+                    and isinstance(name, str)
+                    and re.fullmatch(r"[A-Za-z0-9_:.-]{1,64}", name)
+                    and message.get("isError") is True
+                    and message.get("details") == {}
+                    and message.get("content")
+                    == [{"type": "text", "text": f"Tool {name} not found"}]
+                ):
+                    if terminal_submission_seen:
+                        raise OpenClawSessionEvidenceError(
+                            "OpenClaw runtime rejection follows terminal submission"
+                        )
+                    rejected.add(identity)
+                    diagnostics.append(
+                        RuntimeToolRejection(
+                            record_index=index,
+                            tool_name=name,
+                            external_call_sha256=_sha256(identity.encode("utf-8")),
+                            record_sha256=_sha256(_canonical_arguments(record)),
+                        )
+                    )
+                    continue
+        filtered.append(record)
+    return tuple(filtered), tuple(diagnostics)
 
 
 def _extract_tool_calls(
@@ -1127,9 +1218,19 @@ def capture_openclaw_tool_evidence(
             "OpenClaw transcript identity differs from the invocation session"
         )
     invocation = _current_invocation_records(records, prompt=prompt)
+    execution_records, runtime_rejections = _classify_runtime_rejections(invocation)
+    terminal_state = _invocation_terminal_state(invocation)
+    last_message_index = max(
+        index
+        for index, record in enumerate(invocation)
+        if record.get("type") == "message"
+    )
+    if any(item.record_index == last_message_index for item in runtime_rejections):
+        terminal_state = OpenClawInvocationTerminalState.RUNTIME_REJECTION
     return CapturedOpenClawToolEvidence(
         transcript_sha256=_sha256(transcript),
         record_count=len(invocation),
-        tool_calls=_extract_tool_calls(invocation),
-        terminal_state=_invocation_terminal_state(invocation),
+        tool_calls=_extract_tool_calls(execution_records),
+        terminal_state=terminal_state,
+        runtime_rejections=runtime_rejections,
     )

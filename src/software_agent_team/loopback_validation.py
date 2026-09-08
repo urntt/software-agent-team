@@ -33,11 +33,13 @@ from software_agent_team.teams import AgentCapability, load_team_manifest
 
 MODEL = "deepseek/deepseek-v4-flash-vision-exp"
 SCENARIOS = ("stream", "recovery", "disconnect", "hang")
+OPTIONAL_SCENARIOS = ("tool-rejection",)
 _EXPECTED_TERMINAL = {
     "stream": ("completed", "completed"),
     "recovery": ("completed", "completed"),
     "disconnect": ("process_failed", "process_failure"),
     "hang": ("provider_stalled", "provider_stall"),
+    "tool-rejection": ("completed", "completed"),
 }
 _TERMINAL_PHASES = ("stopping", "collecting_evidence", "stopped")
 _EXPECTED_RESPONSE = '{"status":"ok"}'
@@ -173,6 +175,26 @@ def validate_scenario_outcome(outcome: Mapping[str, object]) -> ScenarioValidati
             mismatches.append("permanent silence did not enter stall grace")
         if recovered != 0:
             mismatches.append("permanent silence recorded a false recovery")
+    elif scenario == "tool-rejection":
+        if liveness.get("degradation_reason") is not None:
+            mismatches.append("runtime rejection degraded session attribution")
+        if outcome.get("tool_evidence_status") != "captured":
+            mismatches.append("paired tool evidence was not captured")
+        rejections = _sequence(outcome.get("runtime_rejections"))
+        calls = _sequence(outcome.get("tool_calls"))
+        if (
+            len(rejections) != 1
+            or _mapping(rejections[0]).get("reason") != "unknown_tool"
+        ):
+            mismatches.append("expected one unknown-tool runtime diagnostic")
+        if len(calls) != 1 or (
+            _mapping(calls[0]).get("tool_name") != "read"
+            or _mapping(calls[0]).get("outcome") != "succeeded"
+            or "LOOPBACK_READ_OK" not in str(_mapping(calls[0]).get("output_excerpt"))
+        ):
+            mismatches.append("expected independent successful fixture read evidence")
+        if requests_seen != 3:
+            mismatches.append("expected rejection, read, and final response requests")
 
     return ScenarioValidation(
         scenario=scenario,
@@ -385,6 +407,17 @@ class ScenarioHandler(BaseHTTPRequestHandler):
         self.wfile.flush()
         server.record("headers_flushed")
 
+        if server.scenario == "tool-rejection" and server.requests_seen <= 2:
+            name, arguments = (
+                ("sat_nonexistent_fixture_tool", {})
+                if server.requests_seen == 1
+                # The static read-only profile mounts the source at /agent;
+                # /workspace is the separate sandbox working directory.
+                else ("read", {"path": "/agent/fixture.txt"})
+            )
+            self._send_tool_call(name, arguments)
+            return
+
         if server.scenario == "hang":
             self._send_chunk('{"status":')
             server.record("hang_started")
@@ -424,6 +457,46 @@ class ScenarioHandler(BaseHTTPRequestHandler):
             ],
         }
         self.wfile.write(f"data: {json.dumps(payload)}\n\n".encode())
+        self.wfile.flush()
+
+    def _send_tool_call(self, name: str, arguments: dict[str, object]) -> None:
+        """Exercise real runtime rejection/pairing with fixed local-only inputs."""
+
+        payload = {
+            "id": "loopback-tool-validation",
+            "object": "chat.completion.chunk",
+            "created": 0,
+            "model": MODEL.split("/", 1)[1],
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "role": "assistant",
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": f"fixture-{name}",
+                                "type": "function",
+                                "function": {
+                                    "name": name,
+                                    "arguments": json.dumps(arguments),
+                                },
+                            }
+                        ],
+                    },
+                    "finish_reason": None,
+                }
+            ],
+        }
+        self.wfile.write(f"data: {json.dumps(payload)}\n\n".encode())
+        payload["choices"] = [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]
+        payload["usage"] = {
+            "prompt_tokens": 12,
+            "completion_tokens": 5,
+            "total_tokens": 17,
+        }
+        self.wfile.write(f"data: {json.dumps(payload)}\n\n".encode())
+        self.wfile.write(b"data: [DONE]\n\n")
         self.wfile.flush()
 
     def _send_terminal(self) -> None:
@@ -476,6 +549,8 @@ def execute_scenario(
     workspace = scenario_root / "workspace"
     state.mkdir(parents=True)
     workspace.mkdir()
+    if scenario == "tool-rejection":
+        (workspace / "fixture.txt").write_text("LOOPBACK_READ_OK\n", encoding="utf-8")
     config = scenario_root / "openclaw.json"
     materialize_run_configuration(
         repository / "configs/openclaw.example.json5",
@@ -485,7 +560,9 @@ def execute_scenario(
         sandbox_image=sandbox_image,
         sandbox_user=sandbox_user,
         model=MODEL,
-        bootstrap_capability=AgentCapability.PLANNING,
+        bootstrap_capability=(
+            None if scenario == "tool-rejection" else AgentCapability.PLANNING
+        ),
     )
 
     with running_server(scenario) as server:
@@ -601,6 +678,13 @@ def execute_scenario(
         "usage": None
         if result.telemetry.usage is None
         else result.telemetry.usage.model_dump(mode="json"),
+        "tool_evidence_status": result.telemetry.tool_evidence_status.value,
+        "tool_calls": [
+            item.model_dump(mode="json") for item in result.telemetry.tool_calls
+        ],
+        "runtime_rejections": [
+            item.model_dump(mode="json") for item in result.telemetry.runtime_rejections
+        ],
         "liveness": None
         if provider_liveness is None
         else provider_liveness.model_dump(mode="json"),
@@ -696,7 +780,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--openclaw", type=Path, required=True)
     parser.add_argument("--docker", default="docker")
     parser.add_argument("--sandbox-user", default="1000:1000")
-    parser.add_argument("--scenario", choices=SCENARIOS, action="append")
+    parser.add_argument(
+        "--scenario", choices=(*SCENARIOS, *OPTIONAL_SCENARIOS), action="append"
+    )
     parser.add_argument("--work-root", type=Path)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)

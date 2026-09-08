@@ -42,6 +42,7 @@ from software_agent_team.artifacts import (
     ProductDefinitionDisposition,
     ProviderLivenessEvidence,
     ReviewBoundaryKind,
+    RuntimeRejectionEvidence,
     TaskBrief,
     review_boundary_definition_map,
 )
@@ -121,7 +122,7 @@ from software_agent_team.teams import (
     permission_for_capability,
 )
 
-PLANNING_SCHEMA_VERSION = 11
+PLANNING_SCHEMA_VERSION = 12
 MINIMUM_READABLE_PLANNING_SCHEMA_VERSION = 2
 PLANNING_TEMPLATE = Path(__file__).with_name("prompt_templates") / "adaptive_planner.md"
 MAX_PLANNING_EVIDENCE_CHARACTERS = 1_000_000
@@ -1565,7 +1566,7 @@ class PlanningRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, 9, 10, PLANNING_SCHEMA_VERSION] = (
+    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, 9, 10, 11, PLANNING_SCHEMA_VERSION] = (
         PLANNING_SCHEMA_VERSION
     )
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -3813,7 +3814,7 @@ class AdaptiveImplementationPlan(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, 9, 10, PLANNING_SCHEMA_VERSION] = (
+    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, 9, 10, 11, PLANNING_SCHEMA_VERSION] = (
         PLANNING_SCHEMA_VERSION
     )
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -3883,6 +3884,9 @@ class PlanningExecutionEvidence(BaseModel):
     cost_record: ModelCallCostRecord | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    runtime_rejection_evidence: RuntimeRejectionEvidence | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @model_validator(mode="after")
     def require_consistent_cost_record(self) -> Self:
@@ -3908,7 +3912,7 @@ class PlanningTurn(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, 9, 10, PLANNING_SCHEMA_VERSION] = (
+    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, 9, 10, 11, PLANNING_SCHEMA_VERSION] = (
         PLANNING_SCHEMA_VERSION
     )
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -3961,6 +3965,10 @@ class PlanningTurn(BaseModel):
 
     @model_validator(mode="after")
     def validate_evidence(self) -> Self:
+        if self.schema_version < 12 and (
+            "runtime_rejection_evidence" in self.execution.model_fields_set
+        ):
+            raise ValueError("legacy Planning turns cannot contain runtime rejections")
         cost_record = self.execution.cost_record
         if self.schema_version < 11 and cost_record is not None:
             raise ValueError("legacy Planning turns cannot contain a cost record")
@@ -4076,7 +4084,7 @@ class PlanningProposal(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, 9, 10, PLANNING_SCHEMA_VERSION] = (
+    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, 9, 10, 11, PLANNING_SCHEMA_VERSION] = (
         PLANNING_SCHEMA_VERSION
     )
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -4136,7 +4144,7 @@ class PlanningSession(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, 9, 10, PLANNING_SCHEMA_VERSION] = (
+    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, 9, 10, 11, PLANNING_SCHEMA_VERSION] = (
         PLANNING_SCHEMA_VERSION
     )
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -4317,7 +4325,7 @@ class PlanningApproval(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, 9, 10, PLANNING_SCHEMA_VERSION] = (
+    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, 9, 10, 11, PLANNING_SCHEMA_VERSION] = (
         PLANNING_SCHEMA_VERSION
     )
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -5588,6 +5596,15 @@ class PlanningStore:
                 budget_error=budget_error,
                 cost_record=cost_record,
                 provider_liveness=result.telemetry.provider_liveness,
+                runtime_rejection_evidence=(
+                    RuntimeRejectionEvidence(
+                        transcript_sha256=result.telemetry.session_transcript_sha256,
+                        record_count=result.telemetry.session_record_count,
+                        rejections=result.telemetry.runtime_rejections,
+                    )
+                    if result.telemetry.runtime_rejections
+                    else None
+                ),
                 error=result.error,
             ),
         )

@@ -156,6 +156,7 @@ def persist_agent_invocation(
         session_transcript_sha256=telemetry.session_transcript_sha256,
         session_record_count=telemetry.session_record_count,
         tool_calls=telemetry.tool_calls,
+        runtime_rejections=telemetry.runtime_rejections,
         tool_evidence_error=telemetry.tool_evidence_error,
         stage_timeout_seconds=stage_timeout_seconds,
         remaining_timeout_seconds=remaining_timeout_seconds,

@@ -207,6 +207,11 @@ when code, usability evidence, or controlled experiments justify a replacement.
   starts a distinct renewable result-finalization guard; runtime serialization
   and teardown therefore cannot consume the provider-silence lease. These
   guards never become a productive-work deadline.
+- Runtime rejection diagnostics and paired execution evidence have distinct
+  authority. A pinned-runtime refusal can be preserved without reconstructing
+  missing call arguments, granting positive Review evidence, or renewing a
+  tool-progress lease. Live and terminal classification share one adapter;
+  malformed or unrecognized orphan results still fail closed.
 - Initialization file readiness is classified by the guarded open operation
   itself. An exact open-time missing result means the next checkpoint is not
   published yet; symlinks, unsafe file types, malformed content, invalid

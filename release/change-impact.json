@@ -4,6 +4,11 @@
   "target_version": "0.1.0",
   "changes": [
     {
+      "id": "runtime-rejection-evidence-classification",
+      "impact": "patch",
+      "summary": "Preserve pinned-runtime unknown-tool rejections as provenance-bound negative diagnostics without inventing execution evidence or invalidating independent paired tool work"
+    },
+    {
       "id": "durable-planning-call-accounting",
       "impact": "patch",
       "summary": "Persist settled shared-ledger records in versioned planning turns so pre-runtime failures retain independently auditable cache usage and frozen prices"

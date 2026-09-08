@@ -136,6 +136,13 @@ uv run --frozen python -m software_agent_team.loopback_validation \
 Use `make format` when source formatting changes are required. Always run
 `make check` before committing.
 
+The additional `--scenario tool-rejection` loopback case exercises the pinned
+runtime's unsupported tool response, a subsequent independent fixture read,
+and a final response. Its oracle requires separately captured negative
+diagnostics and successful paired work without session-attribution degradation.
+It uses no external provider or real credential and is separate from the four
+default transport/liveness scenarios.
+
 ## Checkout Installation
 
 Contributors who need checkout-bound `sat` and `sat-uninstall` launchers may
@@ -333,9 +340,9 @@ snapshot before publishing any tool-history delta from that observation. When a
 single poll coalesces a start and completion, both history events therefore carry
 the current inactive state and the current completed count; neither event may
 reconstruct a stale `tool_active` phase from its kind. `RunEvent` schema v4 must
-remain canonically readable from v2 through v3, Artifact schema v9 from v2
-through v8, lifecycle schema v3 from v1 through v2, and Planning schema v11 from
-v2 through v10. Accounted Planning turns retain the exact shared-ledger call
+remain canonically readable from v2 through v3, Artifact schema v10 from v2
+through v9, lifecycle schema v3 from v1 through v2, and Planning schema v12 from
+v2 through v11. Accounted Planning turns retain the exact shared-ledger call
 record, including invalid responses before runtime creation; their exports must
 remain independently cost-auditable without provider session stores. New plans always bind a material primary workflow to user input
 or clarification and downstream requirements, even for a throwaway prototype;

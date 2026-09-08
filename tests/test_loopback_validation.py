@@ -73,6 +73,36 @@ def test_complete_loopback_oracle_accepts_every_expected_scenario() -> None:
     assert all(item["passed"] is True for item in validation["scenarios"])
 
 
+def test_tool_rejection_oracle_requires_diagnostic_and_independent_work() -> None:
+    sample = outcome("stream")
+    sample.update(
+        {
+            "scenario": "tool-rejection",
+            "requests_seen": 3,
+            "tool_evidence_status": "captured",
+            "runtime_rejections": [{"reason": "unknown_tool"}],
+            "tool_calls": [
+                {
+                    "tool_name": "read",
+                    "outcome": "succeeded",
+                    "output_excerpt": "LOOPBACK_READ_OK",
+                }
+            ],
+        }
+    )
+    assert validate_matrix([sample], expected_scenarios=("tool-rejection",))["passed"]
+    for field, bad_value in (
+        ("runtime_rejections", []),
+        ("tool_calls", []),
+        ("tool_evidence_status", "invalid"),
+        ("requests_seen", 1),
+    ):
+        invalid = {**sample, field: bad_value}
+        result = validate_matrix([invalid], expected_scenarios=("tool-rejection",))
+        assert not result["passed"]
+        assert validation_exit_code(result) == 2
+
+
 def test_cleanup_success_cannot_hide_a_failed_recovery_outcome() -> None:
     outcomes = valid_outcomes()
     recovery = outcomes[1]

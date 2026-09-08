@@ -483,7 +483,21 @@ workspaces/<run_id>/
 └── detached self-contained Git clone and generated result
 ```
 
-Artifact schema v9 adds lifecycle-v3 evidence for the content-free
+Artifact schema v10 adds `runtime_rejections`: provenance-bound negative
+diagnostics for the pinned OpenClaw runtime's exact unknown-tool error shape.
+OpenClaw can sanitize an unsupported assistant call out of its session while
+persisting the canned rejection result. SAT preserves its record position,
+record digest, external-call digest, and bounded tool name separately from
+paired tool execution. It never reconstructs missing arguments, assigns a
+`tool-NNN` evidence handle, counts the rejection as productive tool activity,
+or accepts it as a terminal submission or a positive Review claim. Live and
+terminal readers share the same classification boundary. Other orphaned
+results, reused identities, altered error shapes, and rejections after a
+terminal submission remain invalid; an invocation ending at a rejection does
+not qualify for paired-tool continuation. Historical records omit this new
+field and retain their canonical bytes.
+
+Artifact schema v9 added lifecycle-v3 evidence for the content-free
 pre-invocation initialization baseline. Artifact schema v8 added the `deferred` tool-call outcome for a valid async
 process start that has not reached a terminal result. Artifact schema v7 added
 the distinct `upstream_incomplete` execution outcome
@@ -500,7 +514,7 @@ evidence collection, process-lease release, and cleanup completion. Schema v4 ad
 response-transport identity and bound submission evidence; schema v3 introduced
 typed response diagnostics, deterministic normalization, targeted-correction
 requests, and correction outcomes. SAT retains read support for Artifact schema
-v2 through v8. Optional compatibility fields omit themselves when absent, so
+v2 through v9. Optional compatibility fields omit themselves when absent, so
 loading and serializing historical evidence preserves its canonical bytes. All
 readable versions
 attribute handoffs, execution telemetry, and Agent-owned artifacts to run-scoped Agent IDs. The Agent namespace prevents two Agents with
@@ -537,6 +551,11 @@ evaluation may instead record an allowed timeout envelope and exact resolved
 seconds. Approval revalidates that authority against the TeamPlan at the
 execution boundary.
 The bootstrap Planner cannot create Agents or change lifecycle state.
+
+Planning schema v12 preserves runtime rejection diagnostics with their session
+digest and record count, using the same negative-only evidence contract as
+execution. Planning v2 through v11 remain readable without adding fields or
+changing historical hashes.
 
 Planning schema v11 retains each settled shared-ledger call record inside its
 immutable turn, including invalid responses and budget stops before runtime

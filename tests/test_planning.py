@@ -35,6 +35,7 @@ from software_agent_team.budgets import (
 from software_agent_team.execution import (
     AgentExecutionActivity,
     AgentExecutionActivityKind,
+    AgentExecutionTelemetry,
     AgentTokenUsage,
     AgentToolActionClass,
     AgentToolTargetClass,
@@ -4193,6 +4194,54 @@ def test_current_planning_turn_rejects_tampered_submission_payload(
 
     with pytest.raises(ValidationError, match="matching accepted evidence"):
         PlanningTurn.model_validate(payload)
+
+
+def test_planning_persists_runtime_rejections_without_legacy_reinterpretation(
+    tmp_path: Path,
+) -> None:
+    class ExecutorWithRejection(ScriptedAgentExecutor):
+        def execute(self, *args, **kwargs):
+            result = super().execute(*args, **kwargs)
+            payload = result.telemetry.model_dump(mode="json")
+            payload["runtime_rejections"] = [
+                {
+                    "reason": "unknown_tool",
+                    "record_index": 1,
+                    "tool_name": "missing_tool",
+                    "external_call_sha256": "b" * 64,
+                    "record_sha256": "c" * 64,
+                }
+            ]
+            telemetry = AgentExecutionTelemetry.model_validate(payload)
+            return result.model_copy(update={"telemetry": telemetry})
+
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=ExecutorWithRejection(
+            [
+                ScriptedAgentResponse(
+                    text=proposal_response().model_dump_json(),
+                )
+            ]
+        ),
+        store=store,
+        policy=policy(),
+        clock=AdvancingClock(),
+    )
+    coordinator.start(
+        request(), answer_question=lambda _: pytest.fail("unexpected question")
+    )
+    turn = store.load_turn(request().run_id, 1)
+    assert turn.schema_version == 12
+    evidence = turn.execution.runtime_rejection_evidence
+    assert evidence is not None
+    assert evidence.rejections[0].tool_name == "missing_tool"
+    payload = turn.model_dump(mode="json")
+    payload["schema_version"] = 11
+    with pytest.raises(ValidationError, match="legacy Planning turns"):
+        PlanningTurn.model_validate(payload)
+    del payload["execution"]["runtime_rejection_evidence"]
+    assert PlanningTurn.model_validate(payload).model_dump(mode="json") == payload
 
 
 def test_planning_store_accepts_evidence_indexes_beyond_three_digits(
