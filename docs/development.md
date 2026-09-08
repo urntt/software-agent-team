@@ -145,6 +145,13 @@ according to the [validation policy](#validation-policy), not commit count.
 
 ## Validation Policy
 
+Planning criterion checks collect independent sibling failures in one diagnostic
+pass after proposal prerequisites are valid. Preserve prerequisite ordering
+within each criterion and defer global coverage checks until those failures are
+resolved. Regression tests must exercise the resulting correction through the
+coordinator, including reordered keyed replacements and unchanged valid siblings;
+checking the diagnostic message alone is insufficient.
+
 Group related defects by their shared contract or state owner. Reproduce failures
 with captured, sanitized inputs and integrated production paths before repairing
 individual symptoms. Mock the external boundary where needed, not the accepted

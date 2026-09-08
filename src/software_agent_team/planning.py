@@ -3196,7 +3196,10 @@ def validate_planning_clarity(
         return False
 
     agent_indexes = {agent.id: index for index, agent in enumerate(body.agents)}
-    for criterion_index, criterion in enumerate(body.acceptance_criteria):
+
+    def validate_criterion(criterion_index: int, criterion: ProposedCriterion) -> None:
+        # Keep prerequisite order within a criterion, but do not hide errors in
+        # independent siblings behind another model round trip.
         unknown_requirements = set(criterion.requirement_ids) - requirement_ids
         if unknown_requirements:
             message = (
@@ -3319,6 +3322,15 @@ def validate_planning_clarity(
                         ),
                     ),
                 )
+
+    criterion_invariants = []
+    for criterion_index, criterion in enumerate(body.acceptance_criteria):
+        try:
+            validate_criterion(criterion_index, criterion)
+        except _PlanningContextInvariantError as error:
+            criterion_invariants.append(error.invariant)
+    if criterion_invariants:
+        raise _PlanningContextInvariantsError(tuple(criterion_invariants))
 
     missing_requirement_coverage = requirement_ids - covered_requirements
     if missing_requirement_coverage:

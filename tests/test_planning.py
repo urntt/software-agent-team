@@ -5024,6 +5024,73 @@ def test_product_planning_distinguishes_new_relational_invariant_and_continues(
     )
 
 
+@pytest.mark.parametrize(
+    ("field", "invalid_value"),
+    [
+        ("verification_agent_ids", "cli_developer"),
+        ("verification_agent_ids", "missing_verifier"),
+        ("requirement_ids", "MISSING_REQUIREMENT"),
+    ],
+)
+@pytest.mark.parametrize("invalid_count", [1, 2])
+def test_planning_corrects_independent_criterion_failures_in_one_turn(
+    tmp_path: Path, field: str, invalid_value: str, invalid_count: int
+) -> None:
+    valid_payload = proposal_response().model_dump(mode="json")
+    invalid_payload = json.loads(json.dumps(valid_payload))
+    criteria = invalid_payload["proposal"]["acceptance_criteria"]
+    replacements = {}
+    for index, criterion in enumerate(criteria[:invalid_count]):
+        replacements[f"/proposal/acceptance_criteria/{index}/{field}"] = valid_payload[
+            "proposal"
+        ]["acceptance_criteria"][index][field]
+        criterion[field] = [invalid_value]
+    original = json.dumps(invalid_payload, sort_keys=True)
+    executor = ScriptedAgentExecutor(
+        [
+            json.dumps(invalid_payload),
+            correction_response(invalid_payload, dict(reversed(replacements.items()))),
+        ]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(response_repair_limit=None),
+        clock=AdvancingClock(),
+    )
+
+    created = coordinator.start(
+        request(),
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+
+    assert created is not None
+    assert len(executor.requests) == 2
+    first = store.load_turn(request().run_id, 1)
+    assert first.response_validation is not None
+    assert first.response_validation.correction_paths == tuple(sorted(replacements))
+    if field == "verification_agent_ids":
+        assert len(first.response_validation.issues) == invalid_count
+        assert {
+            subject.identifier
+            for issue in first.response_validation.issues
+            for subject in issue.subjects
+            if subject.kind.value == "criterion"
+        } == {criterion["id"] for criterion in criteria[:invalid_count]}
+    else:
+        # Requirement normalization/schema checks already aggregate these
+        # failures before the semantic relation validator is reached.
+        assert first.response_validation.failure_class is (
+            ResponseFailureClass.SEMANTIC_SCHEMA
+        )
+    final = store.load_turn(request().run_id, 2)
+    assert final.semantic_correction_outcome == "accepted"
+    assert final.parsed_response is not None
+    assert final.parsed_response.proposal == proposal_response().proposal
+    assert json.dumps(invalid_payload, sort_keys=True) == original
+
+
 def test_product_planning_preserves_normalization_and_targets_new_root_cause(
     tmp_path: Path,
 ) -> None:
