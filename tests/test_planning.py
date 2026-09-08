@@ -5932,8 +5932,24 @@ executor = OpenClawSubprocessExecutor(
     liveness_poll_seconds=5,
     process_lease_store=ProcessLeaseStore(Path({str(tmp_path / "leases")!r})),
 )
+budget = fixtures['AgentBudget'](
+    authority=fixtures['BudgetAuthority'].USER_TASK,
+    max_estimated_cost_usd='2',
+)
 coordinator = fixtures['AdaptivePlanningCoordinator'](
-    executor=executor, store=store, policy=fixtures['policy'](),
+    executor=executor, store=store, policy=fixtures['policy'](budget=budget),
+    route_id='default',
+    budget_ledger=fixtures['AgentBudgetLedger'](budget),
+    pricing=fixtures['ModelPricing'](
+        model='provider/model', input_cost_per_million_usd='1',
+        output_cost_per_million_usd='2',
+        pricing_source=fixtures['ModelMetadataSource'].USER_SUPPLIED,
+        cache_pricing=fixtures['CachePricing'](
+            read_cost_per_million_usd='0.1', write_cost_per_million_usd='0',
+            source=fixtures['ModelMetadataSource'].USER_SUPPLIED,
+            observed_at=fixtures['FIXED_TIME'],
+        ),
+    ),
 )
 cli._run_product = lambda: coordinator.start(
     fixtures['request'](), answer_question=lambda question: None,
@@ -5948,7 +5964,14 @@ raise SystemExit(cli.main([]))
         start_new_session=True,
     )
     try:
-        with listener, listener.accept()[0] as connection:
+        try:
+            connection, _ = listener.accept()
+        except TimeoutError:
+            if process.poll() is not None:
+                stdout, stderr = process.communicate()
+                pytest.fail(f"CLI exited before child readiness: {stdout}\n{stderr}")
+            raise
+        with listener, connection:
             assert connection.recv(5) == b"ready"
         os.kill(process.pid, signal.SIGINT)
         stdout, stderr = process.communicate(timeout=20)
@@ -5965,6 +5988,20 @@ raise SystemExit(cli.main([]))
         assert lifecycle is not None
         assert lifecycle.shutdown.reason.value == "user_interrupt"
         assert lifecycle.shutdown.cleanup_completed
+        # Reloaded durable evidence must preserve accounting uncertainty without
+        # replacing the actual interruption or requiring the exited CLI's memory.
+        usage = turn.execution.budget_usage
+        assert usage is not None
+        assert usage.calls_started == usage.calls_completed == 1
+        assert usage.active_calls == 0
+        assert usage.unreported_token_calls == usage.unpriced_calls == 1
+        assert turn.execution.budget_error is not None
+        assert turn.execution.estimated_cost_usd is None
+        record = turn.execution.cost_record
+        assert record is not None
+        assert record.input_tokens is record.output_tokens is None
+        assert record.cost_usd is None
+        assert session.turn_head_sha256 == canonical_model_sha256(turn)
         from software_agent_team.process_lifecycle import ProcessLeaseStore
 
         assert not ProcessLeaseStore(tmp_path / "leases").inspect().processes

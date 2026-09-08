@@ -418,6 +418,10 @@ remain canonically readable from v2 through v4, Artifact schema v10 from v2
 through v9, lifecycle schema v3 from v1 through v2, and Planning schema v13 from
 v2 through v12. Main-thread and repeated SIGINT tests must prove exact child
 cleanup before lease release, CLI exit 130, and a terminal Planning turn/session.
+Run the CLI interrupt path with the real task ledger as well: after that process
+exits, reload the turn and verify its unique settlement, unknown cost, separate
+accounting error, and terminal session hash. Separate mocked-exception and
+unaccounted subprocess tests do not establish that composed boundary.
 Adapter exceptions must retain unknown process/provider evidence and settle once;
 accounting failures must not replace the original interruption or execution error.
 Accounted Planning turns retain the exact shared-ledger call
