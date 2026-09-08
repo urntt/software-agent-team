@@ -282,6 +282,13 @@ appears in both a successful result and an otherwise failed result, and prove it
 is absent from the correction catalog while an uncontaminated candidate still
 passes post-application grounding.
 
+Writer instructions must name the exact invocation input commit as the immutable
+revision base. Detached HEAD is expected; a branch can still name the starter
+and is not authority to reset or rebuild history. Keep the independent ancestry
+gate strict. Prompt guidance explains the contract but is not a capability-level
+guarantee that an Agent cannot rewrite its writable Git metadata; a violation
+must still fail closed without delivery.
+
 When changing live progress, derive labels only from allow-listed tool identity.
 Tests must prove that unknown executable names, command arguments, output, paths,
 and secrets do not enter activity records or rendered summaries, and that
@@ -327,8 +334,8 @@ single poll coalesces a start and completion, both history events therefore carr
 the current inactive state and the current completed count; neither event may
 reconstruct a stale `tool_active` phase from its kind. `RunEvent` schema v4 must
 remain canonically readable from v2 through v3, Artifact schema v9 from v2
-through v8, lifecycle schema v3 from v1 through v2, and Planning schema v9 from
-v2 through v8. New plans always bind a material primary workflow to user input
+through v8, lifecycle schema v3 from v1 through v2, and Planning schema v10 from
+v2 through v9. New plans always bind a material primary workflow to user input
 or clarification and downstream requirements, even for a throwaway prototype;
 historical preview alone retains the old exemption. Tool-evidence regression
 tests must preserve a valid async `exec` start as nonterminal `deferred`

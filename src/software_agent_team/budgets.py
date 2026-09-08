@@ -16,9 +16,15 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from software_agent_team.model_costs import (
+    CacheAccountingSupport,
+    CachePriceSupport,
+    CacheTokenUsage,
+    estimate_model_cost,
+)
 from software_agent_team.model_metadata import ModelMetadataSource
 
-BUDGET_SCHEMA_VERSION = 1
+BUDGET_SCHEMA_VERSION = 2
 BUDGET_LEDGER_FILENAME = "budget-ledger.json"
 
 
@@ -45,7 +51,7 @@ class AgentBudgetExceeded(RuntimeError):
         self.usage = usage
 
 
-class AgentCallReservation(BaseModel):
+class AgentCallReservation(CachePriceSupport):
     """Controller-issued identity for one atomically reserved Agent invocation."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -93,20 +99,18 @@ class AgentCallReservation(BaseModel):
         *,
         input_tokens: int | None,
         output_tokens: int | None,
+        cache_usage: CacheTokenUsage | None = None,
     ) -> Decimal | None:
         """Calculate cost only from this call's frozen prices and usage."""
 
-        if (
-            input_tokens is None
-            or output_tokens is None
-            or self.input_cost_per_million_usd is None
-            or self.output_cost_per_million_usd is None
-        ):
-            return None
-        return (
-            Decimal(input_tokens) * self.input_cost_per_million_usd
-            + Decimal(output_tokens) * self.output_cost_per_million_usd
-        ) / Decimal(1_000_000)
+        return estimate_model_cost(
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            input_price=self.input_cost_per_million_usd,
+            output_price=self.output_cost_per_million_usd,
+            cache_usage=cache_usage,
+            cache_pricing=self.cache_pricing,
+        )
 
 
 class AgentBudgetUsage(BaseModel):
@@ -155,7 +159,7 @@ class AgentBudget(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[BUDGET_SCHEMA_VERSION] = BUDGET_SCHEMA_VERSION
+    schema_version: Literal[1, BUDGET_SCHEMA_VERSION] = BUDGET_SCHEMA_VERSION
     authority: BudgetAuthority = BudgetAuthority.CONTROLLED_EVALUATION
     max_calls: int | None = Field(default=None, ge=1, le=1_000_000)
     max_input_tokens: int | None = Field(default=None, ge=1, le=1_000_000_000)
@@ -192,7 +196,7 @@ class AgentBudget(BaseModel):
         return self
 
 
-class ModelCallCostRecord(BaseModel):
+class ModelCallCostRecord(CacheAccountingSupport):
     """One immutable, attributable model-call accounting entry."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -226,8 +230,6 @@ class ModelCallCostRecord(BaseModel):
             raise ValueError("known call cost prices require a source")
         if prices_known and self.model is None:
             raise ValueError("known call cost prices require a model")
-        if (self.input_tokens is None) != (self.output_tokens is None):
-            raise ValueError("call token usage must be reported together")
         if self.cost_source is ModelCostSource.UNKNOWN:
             if self.cost_usd is not None:
                 raise ValueError("unknown call cost cannot contain a USD amount")
@@ -236,10 +238,14 @@ class ModelCallCostRecord(BaseModel):
         if self.cost_source is ModelCostSource.ESTIMATED:
             if not prices_known or self.input_tokens is None:
                 raise ValueError("estimated call cost requires prices and token usage")
-            expected = (
-                Decimal(self.input_tokens) * self.input_cost_per_million_usd
-                + Decimal(self.output_tokens or 0) * self.output_cost_per_million_usd
-            ) / Decimal(1_000_000)
+            expected = estimate_model_cost(
+                input_tokens=self.input_tokens,
+                output_tokens=self.output_tokens,
+                input_price=self.input_cost_per_million_usd,
+                output_price=self.output_cost_per_million_usd,
+                cache_usage=self.cache_usage,
+                cache_pricing=self.cache_pricing,
+            )
             if self.cost_usd != expected:
                 raise ValueError("estimated call cost differs from frozen pricing")
         return self
@@ -262,7 +268,7 @@ class BudgetLedgerRecord(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[BUDGET_SCHEMA_VERSION] = BUDGET_SCHEMA_VERSION
+    schema_version: Literal[1, BUDGET_SCHEMA_VERSION] = BUDGET_SCHEMA_VERSION
     budget: AgentBudget
     usage: AgentBudgetUsage
     calls: tuple[ModelCallCostRecord, ...]
@@ -287,11 +293,7 @@ class BudgetLedgerRecord(BaseModel):
             for call in self.calls
         ):
             raise ValueError("user-task ledger calls require complete attribution")
-        reported = tuple(
-            call
-            for call in self.calls
-            if call.input_tokens is not None and call.output_tokens is not None
-        )
+        reported = self.calls
         if sum(call.input_tokens or 0 for call in reported) != self.usage.input_tokens:
             raise ValueError("budget ledger input-token total is inconsistent")
         if (
@@ -312,7 +314,10 @@ class BudgetLedgerRecord(BaseModel):
         )
         if unknown != self.usage.unpriced_calls:
             raise ValueError("budget ledger unknown-cost total is inconsistent")
-        unreported = sum(call.input_tokens is None for call in self.calls)
+        unreported = sum(
+            call.input_tokens is None or call.output_tokens is None
+            for call in self.calls
+        )
         if unreported != self.usage.unreported_token_calls:
             raise ValueError("budget ledger unreported-token total is inconsistent")
         return self
@@ -373,7 +378,11 @@ class AgentBudgetLedger:
                     raise ValueError(
                         "Task model-call attribution is incomplete before launch"
                     )
-                if pricing is None or pricing.pricing_source is None:
+                if (
+                    pricing is None
+                    or pricing.pricing_source is None
+                    or pricing.cache_pricing is None
+                ):
                     raise AgentBudgetExceeded(
                         "Task model pricing is unknown before launch",
                         usage,
@@ -386,6 +395,8 @@ class AgentBudgetLedger:
                 non_zero_price = bool(
                     pricing.input_cost_per_million_usd
                     or pricing.output_cost_per_million_usd
+                    or pricing.cache_pricing.read_cost_per_million_usd
+                    or pricing.cache_pricing.write_cost_per_million_usd
                 )
                 if (
                     non_zero_price
@@ -416,6 +427,7 @@ class AgentBudgetLedger:
                 pricing_observed_at=(
                     None if pricing is None else pricing.pricing_observed_at
                 ),
+                cache_pricing=None if pricing is None else pricing.cache_pricing,
             )
             self._active[sequence] = reservation
             return reservation
@@ -427,6 +439,7 @@ class AgentBudgetLedger:
         input_tokens: int | None,
         output_tokens: int | None,
         duration_ms: int,
+        cache_usage: CacheTokenUsage | None = None,
     ) -> AgentBudgetUsage:
         """Price and record one terminal invocation, then enforce its authority."""
 
@@ -444,45 +457,46 @@ class AgentBudgetLedger:
             estimated_cost_usd = reservation.estimate_cost(
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
+                cache_usage=cache_usage,
             )
+            call_record = ModelCallCostRecord(
+                sequence=reservation.sequence,
+                agent_id=reservation.agent_id,
+                run_id=reservation.run_id,
+                stage=reservation.stage,
+                attempt=reservation.attempt,
+                route_id=reservation.route_id,
+                model=reservation.model,
+                pricing_source=reservation.pricing_source,
+                pricing_observed_at=reservation.pricing_observed_at,
+                input_cost_per_million_usd=(reservation.input_cost_per_million_usd),
+                output_cost_per_million_usd=(reservation.output_cost_per_million_usd),
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                duration_ms=duration_ms,
+                cache_usage=cache_usage,
+                cache_pricing=reservation.cache_pricing,
+                cost_source=(
+                    ModelCostSource.UNKNOWN
+                    if estimated_cost_usd is None
+                    else ModelCostSource.ESTIMATED
+                ),
+                cost_usd=estimated_cost_usd,
+            )
+
+            # Validate first: malformed evidence must not partially settle a call.
             del self._active[reservation.sequence]
             self._calls_completed += 1
             if input_tokens is None or output_tokens is None:
                 self._unreported_token_calls += 1
-            else:
-                self._input_tokens += input_tokens
-                self._output_tokens += output_tokens
+            self._input_tokens += input_tokens or 0
+            self._output_tokens += output_tokens or 0
             self._agent_duration_ms += duration_ms
             if estimated_cost_usd is None:
                 self._unpriced_calls += 1
             else:
                 self._known_estimated_cost_usd += estimated_cost_usd
-            self._call_records.append(
-                ModelCallCostRecord(
-                    sequence=reservation.sequence,
-                    agent_id=reservation.agent_id,
-                    run_id=reservation.run_id,
-                    stage=reservation.stage,
-                    attempt=reservation.attempt,
-                    route_id=reservation.route_id,
-                    model=reservation.model,
-                    pricing_source=reservation.pricing_source,
-                    pricing_observed_at=reservation.pricing_observed_at,
-                    input_cost_per_million_usd=(reservation.input_cost_per_million_usd),
-                    output_cost_per_million_usd=(
-                        reservation.output_cost_per_million_usd
-                    ),
-                    input_tokens=input_tokens,
-                    output_tokens=output_tokens,
-                    duration_ms=duration_ms,
-                    cost_source=(
-                        ModelCostSource.UNKNOWN
-                        if estimated_cost_usd is None
-                        else ModelCostSource.ESTIMATED
-                    ),
-                    cost_usd=estimated_cost_usd,
-                )
-            )
+            self._call_records.append(call_record)
 
             usage = self._snapshot_locked()
             detail = self._exceeded_detail(usage)
@@ -550,7 +564,7 @@ class AgentBudgetLedger:
         return None
 
 
-class ModelPricing(BaseModel):
+class ModelPricing(CachePriceSupport):
     """Frozen model identity and optional per-million-token prices for one run."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -628,20 +642,18 @@ class ModelPricing(BaseModel):
         *,
         input_tokens: int,
         output_tokens: int,
+        cache_usage: CacheTokenUsage | None = None,
     ) -> Decimal | None:
         """Estimate one invocation when a frozen price table is available."""
 
-        if (
-            self.input_cost_per_million_usd is None
-            or self.output_cost_per_million_usd is None
-        ):
-            return None
-
-        million = Decimal(1_000_000)
-        return (
-            Decimal(input_tokens) * self.input_cost_per_million_usd
-            + Decimal(output_tokens) * self.output_cost_per_million_usd
-        ) / million
+        return estimate_model_cost(
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            input_price=self.input_cost_per_million_usd,
+            output_price=self.output_cost_per_million_usd,
+            cache_usage=cache_usage,
+            cache_pricing=self.cache_pricing,
+        )
 
 
 def persist_budget_ledger(

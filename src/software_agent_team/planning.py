@@ -69,6 +69,7 @@ from software_agent_team.invocation_lifecycle import (
     InvocationPhase,
     InvocationStopReason,
 )
+from software_agent_team.model_costs import CacheTokenUsage
 from software_agent_team.model_metadata import ModelMetadataSource
 from software_agent_team.model_routing import (
     ModelProfile,
@@ -119,7 +120,7 @@ from software_agent_team.teams import (
     permission_for_capability,
 )
 
-PLANNING_SCHEMA_VERSION = 9
+PLANNING_SCHEMA_VERSION = 10
 MINIMUM_READABLE_PLANNING_SCHEMA_VERSION = 2
 PLANNING_TEMPLATE = Path(__file__).with_name("prompt_templates") / "adaptive_planner.md"
 MAX_PLANNING_EVIDENCE_CHARACTERS = 1_000_000
@@ -1563,7 +1564,7 @@ class PlanningRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, PLANNING_SCHEMA_VERSION] = (
+    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, 9, PLANNING_SCHEMA_VERSION] = (
         PLANNING_SCHEMA_VERSION
     )
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -3799,7 +3800,7 @@ class AdaptiveImplementationPlan(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, PLANNING_SCHEMA_VERSION] = (
+    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, 9, PLANNING_SCHEMA_VERSION] = (
         PLANNING_SCHEMA_VERSION
     )
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -3878,7 +3879,7 @@ class PlanningTurn(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, PLANNING_SCHEMA_VERSION] = (
+    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, 9, PLANNING_SCHEMA_VERSION] = (
         PLANNING_SCHEMA_VERSION
     )
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -4034,7 +4035,7 @@ class PlanningProposal(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, PLANNING_SCHEMA_VERSION] = (
+    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, 9, PLANNING_SCHEMA_VERSION] = (
         PLANNING_SCHEMA_VERSION
     )
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -4094,7 +4095,7 @@ class PlanningSession(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, PLANNING_SCHEMA_VERSION] = (
+    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, 9, PLANNING_SCHEMA_VERSION] = (
         PLANNING_SCHEMA_VERSION
     )
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -4275,7 +4276,7 @@ class PlanningApproval(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, PLANNING_SCHEMA_VERSION] = (
+    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, 9, PLANNING_SCHEMA_VERSION] = (
         PLANNING_SCHEMA_VERSION
     )
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -4869,6 +4870,13 @@ def _render_model_pricing(route: ModelRoute) -> str:
     return (
         f"${route.input_cost_per_million_usd} input / "
         f"${route.output_cost_per_million_usd} output per million tokens"
+        + (
+            "; cache pricing unknown"
+            if route.cache_pricing is None
+            else f"; cache ${route.cache_pricing.read_cost_per_million_usd} read / "
+            f"${route.cache_pricing.write_cost_per_million_usd} write per million "
+            f"({route.cache_pricing.source.value})"
+        )
     )
 
 
@@ -6108,6 +6116,7 @@ class AdaptivePlanningCoordinator:
                     estimated_cost = reservation.estimate_cost(
                         input_tokens=usage.input_tokens,
                         output_tokens=usage.output_tokens,
+                        cache_usage=usage.cache_usage,
                     )
                 try:
                     budget_usage = self.budget_ledger.complete_call(
@@ -6115,6 +6124,9 @@ class AdaptivePlanningCoordinator:
                         input_tokens=None if usage is None else usage.input_tokens,
                         output_tokens=None if usage is None else usage.output_tokens,
                         duration_ms=result.telemetry.duration_ms,
+                        cache_usage=CacheTokenUsage()
+                        if usage is None
+                        else usage.cache_usage,
                     )
                 except AgentBudgetExceeded as error:
                     budget_usage = error.usage

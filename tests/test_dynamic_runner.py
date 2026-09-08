@@ -55,6 +55,7 @@ from software_agent_team.invocation_lifecycle import (
     InvocationPhase,
     InvocationStopReason,
 )
+from software_agent_team.model_costs import CachePricing
 from software_agent_team.model_metadata import ModelMetadataSource
 from software_agent_team.planning import AdaptiveImplementationPlan, ProposedTask
 from software_agent_team.progress import ProgressEvent, ProgressEventKind
@@ -955,6 +956,8 @@ class DynamicExecutor:
                 else AgentTokenUsage(
                     input_tokens=10,
                     output_tokens=5,
+                    cache_read_tokens=0,
+                    cache_write_tokens=0,
                     total_tokens=15,
                 )
             ),
@@ -1057,6 +1060,8 @@ class DynamicExecutor:
                 usage=AgentTokenUsage(
                     input_tokens=10,
                     output_tokens=5,
+                    cache_read_tokens=0,
+                    cache_write_tokens=0,
                     total_tokens=15,
                 ),
                 tool_evidence_status=AgentToolEvidenceStatus.CAPTURED,
@@ -1155,6 +1160,12 @@ def runtime(
                     output_cost_per_million_usd="2",
                     pricing_source=ModelMetadataSource.USER_SUPPLIED,
                     pricing_observed_at=FIXED_TIME,
+                    cache_pricing=CachePricing(
+                        read_cost_per_million_usd="0",
+                        write_cost_per_million_usd="0",
+                        source=ModelMetadataSource.CONFIRMED_ZERO,
+                        observed_at=FIXED_TIME,
+                    ),
                 )
                 if team_plan.budget.authority is BudgetAuthority.USER_TASK
                 else ModelPricing(model=route.model)

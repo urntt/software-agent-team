@@ -2,12 +2,23 @@
 
 **Current milestone:** Phase 3E implemented; invocation lifecycle, classified checkpoint progress, ProductDefinition, typed submission, exact-slot correction, and Controller-bound Review evidence selection are offline-verified; final fresh-run and release validation remain in progress
 
-**Last updated:** September 7, 2026
+**Last updated:** September 8, 2026
 
 This document records what the repository implements now, what evidence
 supports that claim, and what remains unavailable. It does not redefine the
 product, architecture, experiment, or roadmap; those decisions belong to
 [`VISION.md`](VISION.md).
+
+Cost accounting now includes separate cache-read and cache-write usage and
+frozen prices across Planning, execution, correction, progress, and reports.
+Missing prices require confirmation before a task; missing usage remains
+unknown. Partial usage preserves known buckets and settles atomically, and an
+explicit model override cannot inherit another model's prices. Configuration v9
+and Planning v10 retain historical readers without rewriting old evidence.
+Writer instructions also identify the exact input commit as the revision base;
+the independent ancestry rejection remains unchanged. The implementation gate
+passed 1,252 tests with no owned residuals or new OOM events. Clean-candidate,
+fresh delivery, and release validation of this combined change remain pending.
 
 Fresh installation exposed a mismatch between the pinned Node version and a
 moving upstream CLI installer. Setup now owns dependency-only installation from

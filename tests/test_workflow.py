@@ -440,6 +440,8 @@ class DynamicWorkflowExecutor:
                     AgentTokenUsage(
                         input_tokens=10,
                         output_tokens=5,
+                        cache_read_tokens=0,
+                        cache_write_tokens=0,
                         total_tokens=15,
                     )
                     if self.report_usage

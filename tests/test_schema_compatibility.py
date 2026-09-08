@@ -67,6 +67,14 @@ def test_registry_declares_only_intentional_historical_read_support() -> None:
 
     for family, item in support.items():
         if family in {
+            SchemaFamily.BUDGET,
+            SchemaFamily.TEAM_PLAN,
+            SchemaFamily.SELF_CHECK,
+        }:
+            assert item.minimum_readable == 1
+            assert item.current == item.maximum_readable == 2
+            continue
+        if family in {
             SchemaFamily.USER_CONFIGURATION,
             SchemaFamily.PLANNING,
             SchemaFamily.ARTIFACT,

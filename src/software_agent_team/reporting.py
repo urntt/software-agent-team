@@ -21,7 +21,21 @@ from software_agent_team.run_control import RunRecord
 
 
 def _pricing_source(call: ModelCallCostRecord) -> str:
-    return "unknown" if call.pricing_source is None else call.pricing_source.value
+    primary = "unknown" if call.pricing_source is None else call.pricing_source.value
+    if call.cache_pricing is None:
+        return primary
+    return f"{primary}; cache: {call.cache_pricing.source.value}"
+
+
+def _cache_tokens(call: ModelCallCostRecord) -> str:
+    if call.cache_usage is None:
+        return "; cache not recorded (legacy)"
+    read = call.cache_usage.read_tokens
+    write = call.cache_usage.write_tokens
+    return (
+        f"; {read if read is not None else 'unknown'} cache read / "
+        f"{write if write is not None else 'unknown'} cache write"
+    )
 
 
 def _software_identity_lines(report: FinalReport) -> tuple[str, ...]:
@@ -162,6 +176,7 @@ def render_run_report(
                         and call.output_tokens is not None
                         else "not reported"
                     )
+                    + _cache_tokens(call)
                     + f" | `{call.cost_source.value}` | "
                     + (
                         f"${call.cost_usd:.6f}"

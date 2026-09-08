@@ -449,6 +449,7 @@ def build_task_admission_report(
             profile.input_cost_per_million_usd is not None
             and profile.output_cost_per_million_usd is not None
             and profile.pricing_source is not None
+            and profile.cache_pricing is not None
         )
         checks.append(
             _result(
@@ -469,6 +470,9 @@ def build_task_admission_report(
                 input_value={
                     "input": str(profile.input_cost_per_million_usd),
                     "output": str(profile.output_cost_per_million_usd),
+                    "cache_pricing": None
+                    if profile.cache_pricing is None
+                    else profile.cache_pricing.model_dump(mode="json"),
                     "source": (
                         None
                         if profile.pricing_source is None
@@ -805,6 +809,7 @@ def build_plan_execution_report(
             route.input_cost_per_million_usd is not None
             and route.output_cost_per_million_usd is not None
             and route.pricing_source is not None
+            and route.cache_pricing is not None
             and route.context_window_tokens is not None
             and route.context_source is not None
         )

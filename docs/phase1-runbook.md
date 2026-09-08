@@ -104,7 +104,8 @@ sat configure --non-interactive \
   --model provider/model \
   --input-cost-per-million-usd 0.00 \
   --output-cost-per-million-usd 0.00 \
-  --verification-concurrency 1
+  --profile-cache-pricing default=0.00,0.00 \
+  --max-concurrency 1
 sat configure --show
 ```
 
@@ -201,7 +202,9 @@ uv run sat run \
   --workspaces-root ./workspaces \
   --model provider/model \
   --input-cost-per-million-usd 0.00 \
-  --output-cost-per-million-usd 0.00
+  --output-cost-per-million-usd 0.00 \
+  --cache-read-cost-per-million-usd 0.00 \
+  --cache-write-cost-per-million-usd 0.00
 ```
 
 For a provider with one generation slot, append

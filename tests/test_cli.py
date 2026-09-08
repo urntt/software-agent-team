@@ -18,6 +18,7 @@ from software_agent_team.managed_install import (
     ManagedInstallPaths,
     ManagedTarget,
 )
+from software_agent_team.model_costs import CachePricing
 from software_agent_team.model_metadata import ModelMetadataSource
 from software_agent_team.model_routing import ModelProfile
 from software_agent_team.product import (
@@ -74,6 +75,12 @@ def ready_user_configuration(
                 output_cost_per_million_usd="2.00",
                 pricing_source=ModelMetadataSource.RUNTIME_CATALOG,
                 pricing_observed_at=observed_at,
+                cache_pricing=CachePricing(
+                    read_cost_per_million_usd=0,
+                    write_cost_per_million_usd=0,
+                    source=ModelMetadataSource.CONFIRMED_ZERO,
+                    observed_at=observed_at,
+                ),
                 context_window_tokens=120_000,
                 context_source=ModelMetadataSource.RUNTIME_CATALOG,
                 context_observed_at=observed_at,
@@ -106,6 +113,7 @@ def task_resource_authorization(
                 context_window_tokens=profile.context_window_tokens,
                 context_source=profile.context_source,
                 observed_at=observed_at,
+                cache_pricing=profile.cache_pricing,
             )
             for profile in configuration.model_profiles
         ),
@@ -1292,6 +1300,7 @@ def test_dynamic_product_launch_uses_approved_agents_and_manual_scope(
         output_cost_per_million_usd=None,
         pricing_source=None,
         pricing_observed_at=None,
+        cache_pricing=None,
     )
     agents = (SimpleNamespace(id="builder"), SimpleNamespace(id="reviewer"))
     team_plan = SimpleNamespace(
@@ -1674,7 +1683,7 @@ def test_cli_interactive_configuration_prompts_for_first_run_defaults(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     path = tmp_path / "config.json"
-    answers = iter(("no", "provider/model", ""))
+    answers = iter(("no", "provider/model", "", "0.1", "0"))
     monkeypatch.setenv("SAT_CONFIG_PATH", str(path))
     monkeypatch.setenv("SAT_STATE_ROOT", str(tmp_path / "state"))
     monkeypatch.setattr(cli.sys, "stdin", SimpleNamespace(isatty=lambda: True))
@@ -1729,13 +1738,33 @@ def test_cli_requires_a_complete_price_pair(
     assert "price flags must be supplied together" in capsys.readouterr().out
 
 
+def test_controlled_model_override_does_not_inherit_another_models_prices(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("SAT_STATE_ROOT", str(tmp_path / "state"))
+    monkeypatch.setattr(cli, "_load_user_configuration", ready_user_configuration)
+    monkeypatch.setattr(
+        cli,
+        "_execute_workflow",
+        lambda *_args, **_kwargs: pytest.fail("must not launch"),
+    )
+    assert (
+        main(["run", "missing-brief.json", "missing-source", "--model", "other/model"])
+        == 1
+    )
+    assert (
+        "run defaults are not configured for input token price, output token price"
+        in capsys.readouterr().out
+    )
+
+
 def test_first_run_setup_keeps_credentials_outside_sat_and_saves_model_metadata(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     path = tmp_path / "config.json"
-    answers = iter(("no", "provider/model", "", "no"))
+    answers = iter(("no", "provider/model", "", "0.1", "0", "no"))
     monkeypatch.setenv("SAT_CONFIG_PATH", str(path))
     monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
     monkeypatch.setattr(
@@ -1893,7 +1922,7 @@ def test_saved_model_repair_prefers_it_over_an_unrelated_discovered_default(
     state_paths = cli.ProductStatePaths.below(tmp_path / "state")
     cli.ensure_product_state(state_paths)
     prompts: list[str] = []
-    answers = iter(("no", "", "no", "no"))
+    answers = iter(("no", "", "no", "no", "no"))
 
     def answer(prompt: str) -> str:
         prompts.append(prompt)
@@ -1960,7 +1989,7 @@ def test_interactive_reconfigure_keeps_saved_model_over_discovered_default(
     save_user_configuration(configured, configuration_path)
     monkeypatch.setattr(cli.sys, "stdin", SimpleNamespace(isatty=lambda: True))
     prompts: list[str] = []
-    answers = iter(("no", "", "no"))
+    answers = iter(("no", "", "no", "no"))
 
     def answer(prompt: str) -> str:
         prompts.append(prompt)
@@ -2031,6 +2060,7 @@ def test_unavailable_optional_model_profile_warns_without_resetting_configuratio
                 id="default",
                 model="provider/default",
                 capabilities=capabilities,
+                cache_pricing=ready_user_configuration().default_model_profile.cache_pricing,
                 input_cost_per_million_usd="1.00",
                 output_cost_per_million_usd="2.00",
                 pricing_source=ModelMetadataSource.USER_SUPPLIED,
@@ -2041,6 +2071,7 @@ def test_unavailable_optional_model_profile_warns_without_resetting_configuratio
                 id="optional",
                 model="provider/optional",
                 capabilities=(AgentCapability.TESTING,),
+                cache_pricing=ready_user_configuration().default_model_profile.cache_pricing,
                 input_cost_per_million_usd="1.00",
                 output_cost_per_million_usd="2.00",
                 pricing_source=ModelMetadataSource.USER_SUPPLIED,

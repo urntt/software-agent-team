@@ -176,7 +176,16 @@ def supported_schemas() -> tuple[SchemaSupport, ...]:
         SchemaSupport(
             family=family,
             current=version,
-            minimum_readable=version,
+            minimum_readable=(
+                1
+                if family
+                in {
+                    SchemaFamily.BUDGET,
+                    SchemaFamily.TEAM_PLAN,
+                    SchemaFamily.SELF_CHECK,
+                }
+                else version
+            ),
             maximum_readable=version,
         )
         for family, version in exact

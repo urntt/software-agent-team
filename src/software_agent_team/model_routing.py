@@ -10,6 +10,7 @@ from typing import Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from software_agent_team.model_costs import CachePriceSupport
 from software_agent_team.model_metadata import ModelMetadataSource
 from software_agent_team.teams import (
     AgentCapability,
@@ -26,7 +27,7 @@ class ModelRoutingError(ValueError):
     """Raised when authorized profiles cannot satisfy an approved Agent plan."""
 
 
-class ModelProfile(BaseModel):
+class ModelProfile(CachePriceSupport):
     """One secret-free provider/model option approved for specific capabilities."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -342,6 +343,7 @@ def resolve_model_route_plan(
             output_cost_per_million_usd=profile.output_cost_per_million_usd,
             pricing_source=profile.pricing_source,
             pricing_observed_at=profile.pricing_observed_at,
+            cache_pricing=profile.cache_pricing,
             context_window_tokens=profile.context_window_tokens,
             context_source=profile.context_source,
             context_observed_at=profile.context_observed_at,

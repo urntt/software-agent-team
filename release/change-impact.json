@@ -4,6 +4,16 @@
   "target_version": "0.1.0",
   "changes": [
     {
+      "id": "complete-cache-token-accounting",
+      "impact": "patch",
+      "summary": "Freeze cache read/write rates and account disjoint usage across planning, execution, budgets and reports while preserving historical records"
+    },
+    {
+      "id": "explicit-revision-base-authority",
+      "impact": "patch",
+      "summary": "Explain intentional detached HEAD and immutable input ancestry to revision writers without weakening the independent safety gate"
+    },
+    {
       "id": "initial-guided-builder",
       "impact": "minor",
       "summary": "Interactive requirements and approved dynamic agent plans, with explicit prototype and usable-product acceptance"

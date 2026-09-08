@@ -17,9 +17,10 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from software_agent_team.integrity import canonical_model_sha256
+from software_agent_team.model_costs import CachePriceSupport
 from software_agent_team.model_metadata import ModelMetadataSource
 
-SELF_CHECK_SCHEMA_VERSION = 1
+SELF_CHECK_SCHEMA_VERSION = 2
 _CHECK_ID_PATTERN = r"^[a-z][a-z0-9_.:-]{2,127}$"
 _RUN_ID_PATTERN = r"^[a-z0-9][a-z0-9_-]*$"
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
@@ -112,7 +113,7 @@ class SelfCheckEvidence(BaseModel):
         return value
 
 
-class TaskModelMetadata(BaseModel):
+class TaskModelMetadata(CachePriceSupport):
     """Run-scoped price and context facts frozen before the first model call."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -271,7 +272,7 @@ class TaskSelfCheckReport(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[SELF_CHECK_SCHEMA_VERSION] = SELF_CHECK_SCHEMA_VERSION
+    schema_version: Literal[1, SELF_CHECK_SCHEMA_VERSION] = SELF_CHECK_SCHEMA_VERSION
     run_id: str = Field(pattern=_RUN_ID_PATTERN)
     checkpoint: SelfCheckCheckpoint
     revision: int = Field(ge=1)

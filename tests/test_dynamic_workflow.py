@@ -6,6 +6,7 @@ import hashlib
 import json
 import subprocess
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -63,6 +64,7 @@ from software_agent_team.invocation_lifecycle import (
     InvocationPhase,
     InvocationStopReason,
 )
+from software_agent_team.model_costs import CachePricing
 from software_agent_team.model_metadata import ModelMetadataSource
 from software_agent_team.planning import (
     AdaptiveImplementationPlan,
@@ -587,6 +589,8 @@ class AdaptiveExecutor:
                 usage=AgentTokenUsage(
                     input_tokens=10,
                     output_tokens=5,
+                    cache_read_tokens=0,
+                    cache_write_tokens=0,
                     total_tokens=15,
                 ),
                 tool_evidence_status=AgentToolEvidenceStatus.CAPTURED,
@@ -685,6 +689,7 @@ def coordinator(
     *,
     control_store_handler=None,
     budget_ledger: AgentBudgetLedger | None = None,
+    cache_read_rate: str = "0",
 ) -> DynamicWorkflowCoordinator:
     """Build the dynamic coordinator from test-owned boundaries."""
 
@@ -709,6 +714,12 @@ def coordinator(
                     output_cost_per_million_usd="2",
                     pricing_source=ModelMetadataSource.USER_SUPPLIED,
                     pricing_observed_at=FIXED_TIME,
+                    cache_pricing=CachePricing(
+                        read_cost_per_million_usd=cache_read_rate,
+                        write_cost_per_million_usd=0,
+                        source=ModelMetadataSource.USER_SUPPLIED,
+                        observed_at=FIXED_TIME,
+                    ),
                 )
                 if approved.team_plan.budget.authority is BudgetAuthority.USER_TASK
                 else ModelPricing(model=MODEL)
@@ -817,6 +828,64 @@ def test_dynamic_workflow_accepts_one_iteration_with_live_lifecycle_order(
     )
     assert invocation_event.budget_usage is not None
     assert invocation_event.model == MODEL
+
+
+def test_dynamic_workflow_prices_cache_in_records_progress_and_report(
+    tmp_path: Path,
+) -> None:
+    approved = approved_inputs(
+        run_id="adaptive-cache-cost",
+        run_budget=AgentBudget(
+            authority=BudgetAuthority.USER_TASK, max_estimated_cost_usd="5"
+        ),
+    )
+    source = initialize_source(tmp_path)
+
+    class CachedExecutor(AdaptiveExecutor):
+        def execute(self, request, *, activity_handler=None):
+            result = super().execute(request, activity_handler=activity_handler)
+            assert result.telemetry.usage is not None
+            usage = result.telemetry.usage.model_copy(
+                update={"cache_read_tokens": 1_000_000}
+            )
+            return result.model_copy(
+                update={
+                    "telemetry": result.telemetry.model_copy(update={"usage": usage})
+                }
+            )
+
+    ledger = AgentBudgetLedger(approved.team_plan.budget)
+    executor = CachedExecutor(tmp_path / "workspaces" / approved.task_brief.run_id)
+    outcome = coordinator(
+        tmp_path,
+        approved,
+        executor,
+        RecordingQualityGateFactory(),
+        budget_ledger=ledger,
+        cache_read_rate="0.014",
+    ).execute(approved, source_repository=source)
+    assert outcome.record.phase is RunPhase.COMPLETED
+    expected_call = Decimal("0.014020")
+    assert ledger.snapshot().known_estimated_cost_usd == expected_call * len(
+        approved.team_plan.agents
+    )
+    store, _ = load_report(tmp_path, outcome, approved)
+    assert all(
+        store.load(reference).estimated_cost_usd == expected_call
+        for reference in outcome.execution_records
+    )
+    assert all(
+        call.cache_usage.read_tokens == 1_000_000 for call in ledger.call_records()
+    )
+    final_event_usage = [
+        event.budget_usage for event in outcome.events if event.budget_usage is not None
+    ][-1]
+    assert final_event_usage == ledger.snapshot()
+    report = (
+        tmp_path / "runs" / approved.task_brief.run_id / "final-report.md"
+    ).read_text()
+    assert "1000000 cache read / 0 cache write" in report
+    assert "$0.014020" in report
 
 
 def test_dynamic_workflow_continues_one_shared_planning_budget_ledger(

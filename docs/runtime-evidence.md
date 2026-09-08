@@ -538,7 +538,21 @@ seconds. Approval revalidates that authority against the TeamPlan at the
 execution boundary.
 The bootstrap Planner cannot create Agents or change lifecycle state.
 
-Planning schema v9 requires a material primary workflow in new proposals,
+Planning schema v10 carries separately sourced cache pricing in task metadata
+and model routes. Budget, TeamPlan, and self-check schema v2 preserve their v1
+readers; absent cache extensions omit themselves when reading historical data,
+so old canonical identities do not change. Each new invocation records cache
+read/write usage in its shared cost ledger alongside frozen prices. Input,
+cache read, cache write, and output are disjoint billable buckets; context-sized
+totals and reasoning subsets are not added again. Missing usage produces unknown
+cost and prevents another ordinary-task call, without replacing an earlier
+runtime failure. Historical two-bucket costs remain historical estimates with
+unrecorded cache coverage, never retroactively reclassified as full bills.
+Partial usage preserves each known token bucket while leaving cost unknown.
+Settlement validates the complete record before changing reservation or aggregate
+state, so incomplete provider telemetry cannot create an unrecorded completed call.
+
+Planning schema v9 introduced a material primary workflow in new proposals,
 including throwaway prototypes, while preserving schema-v2 through schema-v8
 serialization and historical preview behavior. Producer and targeted-correction
 schemas permit only user-input or answered-question provenance for the workflow

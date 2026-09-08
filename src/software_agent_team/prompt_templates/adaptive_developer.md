@@ -49,7 +49,15 @@ Usage, and Testing headings are acceptable.
 
 Use the repository's own configuration when running checks. Commit all relevant
 changes, leave the workspace clean, and report only assigned task IDs that are
-present in the resulting commit. The controller independently verifies the
+present in the resulting commit. The exact `run.input_commit` is the immutable
+base of this invocation, including a revision. A detached HEAD is intentional;
+do not reset it to `main`, another branch, or the starter commit. Branch names
+are not input authority and can still point to the original starter. Create new
+commits on top of the supplied input; do not amend, rebase, or replace its
+history. Before submission, verify that `run.input_commit` is an ancestor of
+HEAD with `git merge-base --is-ancestor <input_commit> HEAD`. If ancestry has
+been lost, report the blocker rather than claiming completion or rewriting
+history again. The controller independently verifies the
 input commit, output commit, changed paths, workspace scope, and handoffs. Do
 not invent or echo those facts. Complete implementation, checks, commit, and the
 final response within this one controller-bounded invocation.

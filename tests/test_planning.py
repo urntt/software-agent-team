@@ -43,6 +43,7 @@ from software_agent_team.execution import (
 )
 from software_agent_team.integrity import canonical_model_sha256
 from software_agent_team.invocation_lifecycle import InvocationPhase
+from software_agent_team.model_costs import CachePricing
 from software_agent_team.model_metadata import ModelMetadataSource
 from software_agent_team.model_routing import ModelProfile, ModelRoutingPolicy
 from software_agent_team.planning import (
@@ -3100,7 +3101,8 @@ def test_controller_resolves_visible_per_agent_model_routes_before_approval() ->
     assert "$0.50 input / $1.50 output per million tokens" in overview
     assert (
         "authorized fallback profiles: default: provider/model "
-        "(pricing: $0.50 input / $1.50 output per million tokens)"
+        "(pricing: $0.50 input / $1.50 output per million tokens; "
+        "cache pricing unknown)"
     ) in overview
     assert "model routing: policy" in overview
 
@@ -4090,8 +4092,10 @@ def test_planning_store_accepts_evidence_indexes_beyond_three_digits(
     assert PlanningStore._indexed_files(evidence) == {999, 1000}
 
 
+@pytest.mark.parametrize("cache_read_tokens", [0, 1_000_000])
 def test_planning_uses_the_shared_task_cost_ledger_and_persists_source(
     tmp_path: Path,
+    cache_read_tokens: int,
 ) -> None:
     task_budget = AgentBudget(
         authority=BudgetAuthority.USER_TASK,
@@ -4105,7 +4109,12 @@ def test_planning_uses_the_shared_task_cost_ledger_and_persists_source(
                 text=response(proposal_response()),
                 model="provider/model",
                 provider="provider",
-                usage=AgentTokenUsage(input_tokens=100_000, output_tokens=20_000),
+                usage=AgentTokenUsage(
+                    input_tokens=100_000,
+                    output_tokens=20_000,
+                    cache_read_tokens=cache_read_tokens,
+                    cache_write_tokens=0,
+                ),
                 duration_ms=125,
             )
         ]
@@ -4121,6 +4130,12 @@ def test_planning_uses_the_shared_task_cost_ledger_and_persists_source(
             output_cost_per_million_usd="10.00",
             pricing_source=ModelMetadataSource.RUNTIME_CATALOG,
             pricing_observed_at=FIXED_TIME,
+            cache_pricing=CachePricing(
+                read_cost_per_million_usd="0.014",
+                write_cost_per_million_usd=0,
+                source=ModelMetadataSource.USER_SUPPLIED,
+                observed_at=FIXED_TIME,
+            ),
         ),
         route_id="default",
         clock=AdvancingClock(),
@@ -4137,9 +4152,13 @@ def test_planning_uses_the_shared_task_cost_ledger_and_persists_source(
     usage = ledger.snapshot()
     assert usage.calls_started == 1
     assert usage.calls_completed == 1
-    assert usage.known_estimated_cost_usd == Decimal("0.45")
+    expected = (
+        Decimal("0.45") + Decimal(cache_read_tokens) * Decimal("0.014") / 1_000_000
+    )
+    assert usage.known_estimated_cost_usd == expected
     execution = store.load_turn(request().run_id, 1).execution
-    assert execution.estimated_cost_usd == Decimal("0.45")
+    assert execution.estimated_cost_usd == expected
+    assert ledger.call_records()[0].cache_usage.read_tokens == cache_read_tokens
     assert execution.pricing_source is ModelMetadataSource.RUNTIME_CATALOG
     assert execution.budget_usage == usage
     assert execution.budget_error is None

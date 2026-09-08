@@ -17,6 +17,7 @@ from software_agent_team.budgets import (
     ModelPricing,
 )
 from software_agent_team.execution import AgentExecutionRequest, AgentExecutionResult
+from software_agent_team.model_costs import CacheTokenUsage
 from software_agent_team.response_corrections import (
     ResponseValidationDiagnostic,
     SemanticCorrectionOutcome,
@@ -69,9 +70,11 @@ def persist_agent_invocation(
         remaining_timeout_seconds = request.timeout_seconds
     telemetry = result.telemetry
     usage = telemetry.usage
+    cache_usage = CacheTokenUsage() if usage is None else usage.cache_usage
     estimated_cost = reservation.estimate_cost(
         input_tokens=None if usage is None else usage.input_tokens,
         output_tokens=None if usage is None else usage.output_tokens,
+        cache_usage=cache_usage,
     )
 
     budget_error: str | None = None
@@ -81,6 +84,7 @@ def persist_agent_invocation(
             input_tokens=None if usage is None else usage.input_tokens,
             output_tokens=None if usage is None else usage.output_tokens,
             duration_ms=telemetry.duration_ms,
+            cache_usage=cache_usage,
         )
     except AgentBudgetExceeded as budget_exception:
         budget_error = str(budget_exception)

@@ -2523,6 +2523,11 @@ def test_dynamic_revision_requires_commit_bound_blocking_feedback() -> None:
     assert '"previous_iteration": 1' in rendered
     assert '"id": "FINDING_DOCS"' in rendered
     assert "correct every attributable blocker" in rendered
+    assert "A detached HEAD is intentional" in rendered
+    assert "do not reset it to `main`" in rendered
+    assert "Branch names\nare not input authority" in rendered
+    assert "git merge-base --is-ancestor <input_commit> HEAD" in rendered
+    assert f'"input_commit": "{OUTPUT_COMMIT}"' in rendered
 
     payload = inputs.model_dump(mode="json")
     payload["revision_feedback"] = None

@@ -20,7 +20,7 @@ from software_agent_team.teams import (
     ModelSwitchCondition,
 )
 
-USER_CONFIGURATION_SCHEMA_VERSION = 8
+USER_CONFIGURATION_SCHEMA_VERSION = 9
 USER_CONFIGURATION_ENVIRONMENT_VARIABLE = "SAT_CONFIG_PATH"
 
 
@@ -456,6 +456,16 @@ def load_user_configuration(
                 "schema_version": USER_CONFIGURATION_SCHEMA_VERSION,
             }
         )
+    if payload.get("schema_version") == 8:
+        payload = {**payload, "schema_version": USER_CONFIGURATION_SCHEMA_VERSION}
+        notice = (
+            "configuration schema v8 prices were preserved; missing cache rates "
+            "must be confirmed before a new task"
+        )
+        if on_migration is None:
+            warnings.warn(notice, UserWarning, stacklevel=2)
+        else:
+            on_migration(notice)
     return UserConfiguration.model_validate(payload)
 
 

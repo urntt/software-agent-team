@@ -277,22 +277,36 @@ SAT configuration is stored atomically with mode `0600` at:
 ${XDG_CONFIG_HOME:-$HOME/.config}/software-agent-team/config.json
 ```
 
-Schema version 8 stores one or more secret-free model profiles, the default
+Schema version 9 stores one or more secret-free model profiles, the default
 bootstrap profile, strict or policy routing, optional capability and stage
 overrides, and the only currently supported runtime switch condition:
 `provider_failure`. A profile contains a canonical OpenClaw `provider/model`,
 its authorized SAT Agent capabilities, deterministic integer priority, paired
-input/output prices with their source and observation time, and context-window
+input/output prices with their source and observation time, separate cache
+read/write prices with their own source and observation time, and context-window
 capacity with its source and observation time. Setup discovers these facts from
 the isolated runtime when possible, displays them, and lets the user correct
 prices. It asks for context only when discovery fails and never treats an
-unknown price as zero. It never contains a credential.
+unknown price as zero. Ordinary input excludes cached input; output already
+includes billable reasoning. If the catalog omits cache prices, SAT asks for
+both rates before the first task call. Enter zero for cache writes only when
+that route does not bill that bucket separately. The explicit zero confirmation
+is not a substitute for missing usage evidence. It never contains a credential.
 
-The same configuration may contain an adaptive `max_concurrency` from 1
-through 16 and `compact`, `standard`, or `detailed` progress visibility. The
+Advanced configuration can set cache rates without a dialogue:
+
+```bash
+sat configure --non-interactive --profile-cache-pricing default=0.10,0
+```
+
+The example rates are illustrative, not provider pricing advice.
+
+The same configuration may contain a positive adaptive `max_concurrency`
+and `compact`, `standard`, or `detailed` progress visibility. The
 guided first-use flow writes one strict default profile and uses controller
-defaults for other fields. Existing schema-v1 through schema-v7 values migrate
-one way into schema 8;
+defaults for other fields. Existing schema-v1 through schema-v8 values migrate
+one way into schema 9; old price pairs are preserved and missing cache prices
+must be completed before another task, not silently set to zero;
 the former scalar model and price fields become the default profile rather
 than a second source of truth.
 

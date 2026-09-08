@@ -44,6 +44,7 @@ from software_agent_team.invocation_lifecycle import (
     InvocationStopReason,
     ResponseFinalizationEvidence,
 )
+from software_agent_team.model_costs import CacheTokenUsage
 from software_agent_team.openclaw_session_evidence import (
     CapturedOpenClawToolEvidence,
     OpenClawInitializationBaseline,
@@ -665,6 +666,14 @@ class AgentTokenUsage(BaseModel):
     reasoning_tokens: int | None = Field(default=None, ge=0)
     total_tokens: int | None = Field(default=None, ge=0)
 
+    @property
+    def cache_usage(self) -> CacheTokenUsage:
+        """Preserve unknown cache counters instead of silently dropping them."""
+        return CacheTokenUsage(
+            read_tokens=self.cache_read_tokens,
+            write_tokens=self.cache_write_tokens,
+        )
+
 
 class AgentExecutionTelemetry(BaseModel):
     """Raw, attributable evidence for one Agent process invocation."""
@@ -923,6 +932,19 @@ def _parse_usage(value: object) -> AgentTokenUsage | None:
     }
     if all(item is None for item in fields.values()):
         return None
+    # Pinned OpenClaw's normalized accumulator elides zero-valued buckets.
+    # Only absent fields in a split-usage envelope have this meaning; explicit
+    # null/malformed values and total-only envelopes are still unknown.
+    buckets = (
+        ("input", "input_tokens"),
+        ("output", "output_tokens"),
+        ("cacheRead", "cache_read_tokens"),
+        ("cacheWrite", "cache_write_tokens"),
+    )
+    if any(fields[normalized] is not None for _, normalized in buckets):
+        for raw, normalized in buckets:
+            if raw not in value:
+                fields[normalized] = 0
     return AgentTokenUsage(**fields)
 
 

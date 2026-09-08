@@ -9,6 +9,7 @@ import subprocess
 import time
 from collections.abc import Mapping
 from contextlib import suppress
+from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Literal
@@ -17,6 +18,8 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from software_agent_team.configuration import load_openclaw_template
+from software_agent_team.model_costs import CachePriceSupport, CachePricing
+from software_agent_team.model_metadata import ModelMetadataSource
 from software_agent_team.openclaw_runtime import isolated_openclaw_environment
 from software_agent_team.submissions import (
     ARTIFACT_SUBMISSION_PLUGIN_ID,
@@ -91,7 +94,7 @@ _CAPABILITY_TEMPLATE_ROLES = {
 }
 
 
-class OpenClawModelInspection(BaseModel):
+class OpenClawModelInspection(CachePriceSupport):
     """Offline catalog and credential readiness for one exact model ref."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -630,6 +633,18 @@ def inspect_openclaw_model(
         ):
             provider_timeout = raw_timeout
     raw_local = matched.get("local")
+    cache_pricing = None
+    # Do not infer a cache rate from the ordinary-input rate or a model name.
+    # Some catalog surfaces omit prices entirely; admission then asks the user.
+    raw_cost = matched.get("cost")
+    if isinstance(raw_cost, dict):
+        with suppress(ValueError, InvalidOperation):
+            cache_pricing = CachePricing(
+                read_cost_per_million_usd=raw_cost.get("cacheRead"),
+                write_cost_per_million_usd=raw_cost.get("cacheWrite"),
+                source=ModelMetadataSource.RUNTIME_CATALOG,
+                observed_at=datetime.now(UTC),
+            )
     return OpenClawModelInspection(
         model=normalized,
         available=True,
@@ -639,6 +654,7 @@ def inspect_openclaw_model(
         input_modalities=tuple(dict.fromkeys(input_modalities)),
         input_cost_per_million_usd=discovered_prices[0],
         output_cost_per_million_usd=discovered_prices[1],
+        cache_pricing=cache_pricing,
     )
 
 

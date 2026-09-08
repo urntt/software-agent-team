@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from software_agent_team.budgets import AgentBudget, BudgetAuthority
+from software_agent_team.model_costs import CachePricing
 from software_agent_team.model_metadata import ModelMetadataSource
 from software_agent_team.model_routing import ModelProfile
 from software_agent_team.product import (
@@ -55,6 +56,12 @@ from software_agent_team.versioning import (
 NOW = datetime(2026, 9, 5, 12, 0, tzinfo=UTC)
 RUN_ID = "sat-20260905-self-check"
 MODEL = "provider/model"
+CACHE_PRICING = CachePricing(
+    read_cost_per_million_usd=0,
+    write_cost_per_million_usd=0,
+    source=ModelMetadataSource.CONFIRMED_ZERO,
+    observed_at=NOW,
+)
 
 
 def ready_diagnostics(tmp_path: Path) -> StartupDiagnostics:
@@ -107,6 +114,7 @@ def ready_configuration() -> UserConfiguration:
                 output_cost_per_million_usd="2.00",
                 pricing_source=ModelMetadataSource.USER_SUPPLIED,
                 pricing_observed_at=NOW,
+                cache_pricing=CACHE_PRICING,
                 context_window_tokens=120_000,
                 context_source=ModelMetadataSource.USER_SUPPLIED,
                 context_observed_at=NOW,
@@ -128,6 +136,7 @@ def resource_authorization() -> TaskResourceAuthorization:
                 context_window_tokens=120_000,
                 context_source=ModelMetadataSource.USER_SUPPLIED,
                 observed_at=NOW,
+                cache_pricing=CACHE_PRICING,
             ),
         ),
         authorized_at=NOW,
@@ -203,6 +212,7 @@ def team_plan() -> TeamPlan:
         output_cost_per_million_usd="2.00",
         pricing_source=ModelMetadataSource.USER_SUPPLIED,
         pricing_observed_at=NOW,
+        cache_pricing=CACHE_PRICING,
         context_window_tokens=120_000,
         context_source=ModelMetadataSource.USER_SUPPLIED,
         context_observed_at=NOW,

@@ -13,9 +13,10 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from software_agent_team.artifacts import AgentRole, ArtifactKind
 from software_agent_team.budgets import AgentBudget
 from software_agent_team.integrity import canonical_model_sha256
+from software_agent_team.model_costs import CachePriceSupport
 from software_agent_team.model_metadata import ModelMetadataSource
 
-TEAM_PLAN_SCHEMA_VERSION = 1
+TEAM_PLAN_SCHEMA_VERSION = 2
 
 
 class TeamKind(StrEnum):
@@ -133,7 +134,7 @@ def _require_utc(value: datetime) -> datetime:
     return value.astimezone(UTC)
 
 
-class ModelRoute(BaseModel):
+class ModelRoute(CachePriceSupport):
     """One explicitly authorized provider/model route."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -429,7 +430,7 @@ class TeamPlan(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[TEAM_PLAN_SCHEMA_VERSION] = TEAM_PLAN_SCHEMA_VERSION
+    schema_version: Literal[1, TEAM_PLAN_SCHEMA_VERSION] = TEAM_PLAN_SCHEMA_VERSION
     plan_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     revision: int = Field(ge=1)
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")

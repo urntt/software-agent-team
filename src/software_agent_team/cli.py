@@ -11,7 +11,7 @@ import sys
 import tempfile
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -51,6 +51,7 @@ from software_agent_team.managed_install import (
     resolve_dev_target,
     target_from_stable_release,
 )
+from software_agent_team.model_costs import CachePricing
 from software_agent_team.model_metadata import ModelMetadataSource
 from software_agent_team.model_routing import ModelProfile
 from software_agent_team.openclaw_runtime import isolated_openclaw_environment
@@ -204,6 +205,7 @@ class _RuntimeLaunchOptions:
     model: str
     input_cost_per_million_usd: Decimal | None
     output_cost_per_million_usd: Decimal | None
+    cache_pricing: CachePricing | None = field(default=None, kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -246,6 +248,10 @@ def _print_configuration(configuration: UserConfiguration, path: Path) -> None:
     print(f"model routing: {configuration.routing_mode.value}")
     print(f"default model profile: {configuration.default_model_profile_id}")
     print("model profiles:")
+    print(
+        "Input rates apply to uncached input; "
+        "cache reads and writes are priced separately."
+    )
     for profile in configuration.model_profiles:
         capabilities = ", ".join(item.value for item in profile.capabilities)
         pricing = (
@@ -264,6 +270,14 @@ def _print_configuration(configuration: UserConfiguration, path: Path) -> None:
                 f"{profile.context_window_tokens} context tokens "
                 f"({profile.context_source.value})"
             )
+        )
+        cache = profile.cache_pricing
+        pricing += (
+            "; cache pricing unknown"
+            if cache is None
+            else f"; cache ${cache.read_cost_per_million_usd} read / "
+            f"${cache.write_cost_per_million_usd} write per million "
+            f"({cache.source.value})"
         )
         default = (
             " [default]" if profile.id == configuration.default_model_profile_id else ""
@@ -423,6 +437,7 @@ def _collect_task_resource_authorization(
             profile.input_cost_per_million_usd is None
             or profile.output_cost_per_million_usd is None
             or profile.pricing_source is None
+            or profile.cache_pricing is None
             or profile.context_window_tokens is None
             or profile.context_source is None
         ):
@@ -448,6 +463,7 @@ def _collect_task_resource_authorization(
                 context_window_tokens=profile.context_window_tokens,
                 context_source=profile.context_source,
                 observed_at=when,
+                cache_pricing=profile.cache_pricing,
             )
         )
     maximum_cost = _prompt_task_cost_ceiling()
@@ -546,7 +562,12 @@ def _complete_model_metadata(
             profile.input_cost_per_million_usd,
             profile.output_cost_per_million_usd,
         )
-        use_discovered = all(value is not None for value in discovered_prices)
+        use_discovered = all(
+            value is not None for value in discovered_prices
+        ) and profile.pricing_source not in {
+            ModelMetadataSource.USER_SUPPLIED,
+            ModelMetadataSource.CONFIRMED_ZERO,
+        }
         if use_discovered:
             input_price, output_price = discovered_prices
             assert input_price is not None and output_price is not None
@@ -619,10 +640,67 @@ def _complete_model_metadata(
             ModelProfile.model_validate({**profile.model_dump(mode="json"), **updates})
         )
 
+    complete_profiles = []
+    for profile in profiles:
+        discovered = by_model[profile.model].cache_pricing
+        cache_prices = (
+            profile.cache_pricing
+            if profile.cache_pricing is not None
+            and profile.cache_pricing.source
+            in {
+                ModelMetadataSource.USER_SUPPLIED,
+                ModelMetadataSource.CONFIRMED_ZERO,
+            }
+            else discovered or profile.cache_pricing
+        )
+        if cache_prices is not None:
+            print(
+                f"  {profile.model} cache price: "
+                f"${cache_prices.read_cost_per_million_usd} read / "
+                f"${cache_prices.write_cost_per_million_usd} write per million tokens "
+                f"({cache_prices.source.value})"
+            )
+            change = offer_price_change and _prompt_yes_no(
+                "Change these cache prices?",
+                default=False,
+            )
+        else:
+            print(
+                f"  {profile.model}: cache prices are unknown; "
+                "they are not assumed free."
+            )
+            change = True
+        if change:
+            read_price = _prompt_nonnegative_decimal(
+                "Cache read input price per million tokens (USD)"
+            )
+            write_price = _prompt_nonnegative_decimal(
+                "Cache write input price per million tokens "
+                "(USD; 0 if not separately billed)"
+            )
+            source = ModelMetadataSource.USER_SUPPLIED
+            if read_price == 0 and write_price == 0:
+                if not _prompt_yes_no(
+                    "Confirm that both cache input buckets cost $0?", default=False
+                ):
+                    raise RuntimeConfigurationError(
+                        "zero-cache-price confirmation was declined"
+                    )
+                source = ModelMetadataSource.CONFIRMED_ZERO
+            cache_prices = CachePricing(
+                read_cost_per_million_usd=read_price,
+                write_cost_per_million_usd=write_price,
+                source=source,
+                observed_at=when,
+            )
+        complete_profiles.append(
+            profile.model_copy(update={"cache_pricing": cache_prices})
+        )
+
     return UserConfiguration.model_validate(
         {
             **configuration.model_dump(mode="json"),
-            "model_profiles": tuple(profiles),
+            "model_profiles": tuple(complete_profiles),
         }
     )
 
@@ -815,6 +893,32 @@ def _configured_model_fields(
             pricing_observed_at=datetime.now(UTC),
         )
 
+    for value in args.profile_cache_pricing:
+        profile_id, raw_prices = _split_configuration_assignment(
+            value,
+            label="--profile-cache-pricing",
+        )
+        parts = raw_prices.split(",")
+        if len(parts) != 2:
+            raise ValueError("--profile-cache-pricing requires READ,WRITE")
+        try:
+            read_price, write_price = (Decimal(part.strip()) for part in parts)
+            cache = CachePricing(
+                read_cost_per_million_usd=read_price,
+                write_cost_per_million_usd=write_price,
+                source=(
+                    ModelMetadataSource.CONFIRMED_ZERO
+                    if read_price == write_price == 0
+                    else ModelMetadataSource.USER_SUPPLIED
+                ),
+                observed_at=datetime.now(UTC),
+            )
+        except (ValueError, ArithmeticError) as error:
+            raise ValueError(
+                "--profile-cache-pricing requires finite non-negative rates"
+            ) from error
+        _replace_profile(profiles, profile_id, cache_pricing=cache)
+
     if args.default_model_profile is not None:
         default_profile_id = args.default_model_profile
     if args.routing_mode is not None:
@@ -875,6 +979,7 @@ def _configure(args: argparse.Namespace) -> int:
                 args.profile_capabilities,
                 args.profile_priority,
                 args.profile_pricing,
+                args.profile_cache_pricing,
                 args.route_capability,
                 args.clear_capability_route,
                 args.route_stage,
@@ -1743,6 +1848,7 @@ def _execute_workflow(
             model=options.model,
             input_cost_per_million_usd=options.input_cost_per_million_usd,
             output_cost_per_million_usd=options.output_cost_per_million_usd,
+            cache_pricing=options.cache_pricing,
         ),
         software_version=software_version,
         runtime_setup=boundary.runtime_setup,
@@ -1819,6 +1925,7 @@ def _execute_dynamic_workflow(
             output_cost_per_million_usd=route.output_cost_per_million_usd,
             pricing_source=route.pricing_source,
             pricing_observed_at=route.pricing_observed_at,
+            cache_pricing=route.cache_pricing,
         )
         for route in team_plan.model_routes.routes
     }
@@ -1902,16 +2009,36 @@ def _run_workflow(args: argparse.Namespace) -> int:
         args.input_cost_per_million_usd
         if args.input_cost_per_million_usd is not None
         else user_configuration.input_cost_per_million_usd
-        if user_configuration is not None
+        if user_configuration is not None and user_configuration.model == model
         else None
     )
     output_cost = (
         args.output_cost_per_million_usd
         if args.output_cost_per_million_usd is not None
         else user_configuration.output_cost_per_million_usd
-        if user_configuration is not None
+        if user_configuration is not None and user_configuration.model == model
         else None
     )
+    cache_pricing = (
+        user_configuration.default_model_profile.cache_pricing
+        if user_configuration is not None and user_configuration.model == model
+        else None
+    )
+    cache_read = args.cache_read_cost_per_million_usd
+    cache_write = args.cache_write_cost_per_million_usd
+    if (cache_read is None) != (cache_write is None):
+        raise ValueError("cache read and write prices must be configured together")
+    if cache_read is not None:
+        cache_pricing = CachePricing(
+            read_cost_per_million_usd=cache_read,
+            write_cost_per_million_usd=cache_write,
+            source=(
+                ModelMetadataSource.CONFIRMED_ZERO
+                if cache_read == cache_write == 0
+                else ModelMetadataSource.USER_SUPPLIED
+            ),
+            observed_at=datetime.now(UTC),
+        )
     timeout = supplied_timeout if timeout_supplied else None
     concurrency = (
         args.verification_concurrency
@@ -1964,6 +2091,7 @@ def _run_workflow(args: argparse.Namespace) -> int:
             input_cost_per_million_usd=input_cost,
             output_cost_per_million_usd=output_cost,
             stage_timeout_seconds=timeout,
+            cache_pricing=cache_pricing,
             artifact_repair_limit=args.artifact_repair_limit,
             iteration_limit=EVALUATION_ITERATION_LIMIT,
             verification_concurrency=concurrency,
@@ -2596,6 +2724,7 @@ def _run_product_planning(
                 ),
                 pricing_source=planning_metadata.pricing_source,
                 pricing_observed_at=planning_metadata.observed_at,
+                cache_pricing=planning_metadata.cache_pricing,
             ),
             route_id=planning_metadata.profile_id,
         )
@@ -3327,6 +3456,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Set optional USD prices per million tokens for one profile.",
     )
     configure.add_argument(
+        "--profile-cache-pricing",
+        action="append",
+        default=[],
+        metavar="ID=READ,WRITE",
+        help="Set explicit USD cache read/write rates per million input tokens.",
+    )
+    configure.add_argument(
         "--default-model-profile",
         metavar="ID",
         help="Select the profile used for bootstrap Planning and default routing.",
@@ -3497,6 +3633,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--input-cost-per-million-usd",
         type=Decimal,
         help="Exact input price; defaults to 'sat configure' value.",
+    )
+    run.add_argument(
+        "--cache-read-cost-per-million-usd",
+        type=Decimal,
+        help="Explicit cache read rate; paired with the cache write rate.",
+    )
+    run.add_argument(
+        "--cache-write-cost-per-million-usd",
+        type=Decimal,
+        help="Explicit cache write rate; defaults to the matching saved profile pair.",
     )
     run.add_argument(
         "--output-cost-per-million-usd",

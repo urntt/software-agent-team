@@ -19,6 +19,7 @@ from software_agent_team.budgets import (
     load_budget_ledger,
     persist_budget_ledger,
 )
+from software_agent_team.model_costs import CachePricing, CacheTokenUsage
 from software_agent_team.model_metadata import ModelMetadataSource
 
 
@@ -234,6 +235,12 @@ def priced_model(
         output_cost_per_million_usd=output_price,
         pricing_source=ModelMetadataSource.RUNTIME_CATALOG,
         pricing_observed_at=datetime(2026, 9, 4, 12, 0, tzinfo=UTC),
+        cache_pricing=CachePricing(
+            read_cost_per_million_usd=0,
+            write_cost_per_million_usd=0,
+            source=ModelMetadataSource.CONFIRMED_ZERO,
+            observed_at=datetime(2026, 9, 4, 12, 0, tzinfo=UTC),
+        ),
     )
 
 
@@ -285,6 +292,7 @@ def test_user_task_rejects_next_paid_call_after_recorded_ceiling() -> None:
         input_tokens=100_000,
         output_tokens=20_000,
         duration_ms=125,
+        cache_usage=CacheTokenUsage(read_tokens=0, write_tokens=0),
     )
 
     assert usage.remaining_estimated_cost_usd(ledger.budget) == 0
@@ -306,6 +314,7 @@ def test_zero_price_task_can_run_at_zero_authorized_spend() -> None:
             input_tokens=50,
             output_tokens=10,
             duration_ms=5,
+            cache_usage=CacheTokenUsage(read_tokens=0, write_tokens=0),
         )
 
     assert ledger.snapshot().known_estimated_cost_usd == 0
@@ -337,6 +346,7 @@ def test_terminal_budget_ledger_persists_attributable_cost_evidence(
         input_tokens=100_000,
         output_tokens=20_000,
         duration_ms=125,
+        cache_usage=CacheTokenUsage(read_tokens=0, write_tokens=0),
     )
     runtime = reserve_user_call(ledger, attempt=2)
     ledger.complete_call(
@@ -344,6 +354,7 @@ def test_terminal_budget_ledger_persists_attributable_cost_evidence(
         input_tokens=10_000,
         output_tokens=5_000,
         duration_ms=250,
+        cache_usage=CacheTokenUsage(read_tokens=0, write_tokens=0),
     )
 
     record, digest = persist_budget_ledger(tmp_path, ledger)
@@ -368,3 +379,80 @@ def test_terminal_budget_ledger_rejects_an_active_call() -> None:
 
     with pytest.raises(ValueError, match="active calls"):
         ledger.terminal_record()
+
+
+def test_missing_cache_prices_block_user_call_before_reservation() -> None:
+    ledger = AgentBudgetLedger(user_task_budget())
+    model = priced_model().model_copy(update={"cache_pricing": None})
+    with pytest.raises(AgentBudgetExceeded, match="pricing is unknown"):
+        reserve_user_call(ledger, pricing=model)
+    assert ledger.snapshot().calls_started == 0
+
+
+def test_cached_input_alone_exhausts_recorded_task_authorization() -> None:
+    ledger = AgentBudgetLedger(user_task_budget("0.014"))
+    model = priced_model(input_price="0", output_price="0")
+    assert model.cache_pricing is not None
+    model = model.model_copy(
+        update={
+            "cache_pricing": model.cache_pricing.model_copy(
+                update={
+                    "read_cost_per_million_usd": Decimal("0.014"),
+                    "source": ModelMetadataSource.USER_SUPPLIED,
+                }
+            )
+        }
+    )
+    reservation = reserve_user_call(ledger, pricing=model)
+    ledger.complete_call(
+        reservation,
+        input_tokens=0,
+        output_tokens=0,
+        duration_ms=1,
+        cache_usage=CacheTokenUsage(read_tokens=1_000_000, write_tokens=0),
+    )
+    with pytest.raises(AgentBudgetExceeded, match="exhausted"):
+        reserve_user_call(ledger, attempt=2, pricing=model)
+    record = ledger.terminal_record()
+    assert record.usage.known_estimated_cost_usd == Decimal("0.014")
+    assert record.calls[0].cache_usage.read_tokens == 1_000_000
+
+
+def test_known_prices_do_not_turn_missing_cache_usage_into_free_tokens() -> None:
+    ledger = AgentBudgetLedger(user_task_budget())
+    reservation = reserve_user_call(ledger)
+    with pytest.raises(AgentBudgetExceeded, match="could not be accounted"):
+        ledger.complete_call(
+            reservation, input_tokens=1, output_tokens=2, duration_ms=1
+        )
+    assert ledger.snapshot().active_calls == 0
+    assert ledger.call_records()[0].cost_usd is None
+
+
+@pytest.mark.parametrize("input_tokens,output_tokens", [(7, None), (None, 9)])
+def test_partial_usage_settles_once_preserving_known_buckets(
+    tmp_path: Path, input_tokens: int | None, output_tokens: int | None
+) -> None:
+    ledger = AgentBudgetLedger(user_task_budget())
+    reservation = reserve_user_call(ledger)
+    with pytest.raises(AgentBudgetExceeded, match="could not be accounted"):
+        ledger.complete_call(
+            reservation,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            duration_ms=1,
+            cache_usage=CacheTokenUsage(read_tokens=11, write_tokens=0),
+        )
+    record, _ = persist_budget_ledger(tmp_path, ledger)
+    assert load_budget_ledger(tmp_path / "budget-ledger.json") == record
+    assert record.usage.active_calls == 0
+    assert record.usage.calls_completed == 1
+    assert record.usage.unreported_token_calls == 1
+    assert record.usage.input_tokens == (input_tokens or 0)
+    assert record.usage.output_tokens == (output_tokens or 0)
+    assert record.calls[0].cache_usage.read_tokens == 11
+    assert record.calls[0].cost_usd is None
+    with pytest.raises(ValueError, match="not active"):
+        ledger.complete_call(
+            reservation, input_tokens=7, output_tokens=9, duration_ms=1
+        )
