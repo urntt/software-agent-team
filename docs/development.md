@@ -145,6 +145,13 @@ according to the [validation policy](#validation-policy), not commit count.
 
 ## Validation Policy
 
+`tests/test_submission_bridge.py` executes the production submission plugin with
+the pinned Node runtime, passes its actual output through session extraction and
+bound capture, and applies the resulting semantic correction. It covers envelope,
+slot identity, binding, failed-attempt, and terminal-order boundaries without
+external requests. Its simulated host session IO does not replace the separate
+real OpenClaw loopback gate or provider-backed product acceptance.
+
 Planning criterion checks collect independent sibling failures in one diagnostic
 pass after proposal prerequisites are valid. Preserve prerequisite ordering
 within each criterion and defer global coverage checks until those failures are
