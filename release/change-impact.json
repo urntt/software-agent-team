@@ -4,6 +4,11 @@
   "target_version": "0.1.0",
   "changes": [
     {
+      "id": "controller-owned-correction-and-interrupt-settlement",
+      "impact": "patch",
+      "summary": "Return planning and targeted correction values to controller validation once, and persist interrupted or failed planning invocations with exact settlement and backward-readable lifecycle evidence"
+    },
+    {
       "id": "checkpoint-state-and-heartbeat-authority",
       "impact": "patch",
       "summary": "Project persisted invocation state, detailed labels and visibility-aware heartbeats from the current checkpoint while retaining canonical historical events and distinct scheduler decisions"

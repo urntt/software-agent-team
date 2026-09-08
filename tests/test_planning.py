@@ -4,6 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import signal
+import socket
+import subprocess
+import sys
 import time
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -4059,6 +4064,7 @@ def test_schema_three_turn_remains_readable_without_correction_evidence(
     )
     payload = store.load_turn(request().run_id, 1).model_dump(mode="json")
     payload["schema_version"] = 3
+    payload["execution"].pop("invocation_lifecycle", None)
     parsed_body = payload["parsed_response"]["proposal"]
     assert isinstance(parsed_body, dict)
     strip_v8_decision_fields(parsed_body)
@@ -4103,6 +4109,7 @@ def test_schema_six_turn_remains_canonical_without_typed_submission(
     )
     payload = store.load_turn(request().run_id, 1).model_dump(mode="json")
     payload["schema_version"] = 6
+    payload["execution"].pop("invocation_lifecycle", None)
     parsed_body = payload["parsed_response"]["proposal"]
     assert isinstance(parsed_body, dict)
     strip_v8_decision_fields(parsed_body)
@@ -4149,6 +4156,7 @@ def test_schema_seven_turn_remains_canonical_without_decision_provenance(
     )
     payload = store.load_turn(request().run_id, 1).model_dump(mode="json")
     payload["schema_version"] = 7
+    payload["execution"].pop("invocation_lifecycle", None)
     submission_body = payload["submission_payload"]["proposal"]
     parsed_body = payload["parsed_response"]["proposal"]
     assert isinstance(submission_body, dict)
@@ -4232,12 +4240,13 @@ def test_planning_persists_runtime_rejections_without_legacy_reinterpretation(
         request(), answer_question=lambda _: pytest.fail("unexpected question")
     )
     turn = store.load_turn(request().run_id, 1)
-    assert turn.schema_version == 12
+    assert turn.schema_version == planning.PLANNING_SCHEMA_VERSION
     evidence = turn.execution.runtime_rejection_evidence
     assert evidence is not None
     assert evidence.rejections[0].tool_name == "missing_tool"
     payload = turn.model_dump(mode="json")
     payload["schema_version"] = 11
+    payload["execution"].pop("invocation_lifecycle", None)
     with pytest.raises(ValidationError, match="legacy Planning turns"):
         PlanningTurn.model_validate(payload)
     del payload["execution"]["runtime_rejection_evidence"]
@@ -4350,6 +4359,7 @@ def test_planning_uses_the_shared_task_cost_ledger_and_persists_source(
     with pytest.raises(ValidationError, match="legacy Planning turns"):
         PlanningTurn.model_validate(legacy)
     del legacy["execution"]["cost_record"]
+    legacy["execution"].pop("invocation_lifecycle", None)
     assert PlanningTurn.model_validate(legacy).model_dump(mode="json") == legacy
     missing = json.loads(json.dumps(serialized))
     del missing["execution"]["cost_record"]
@@ -4752,10 +4762,10 @@ def test_invalid_complete_proposal_is_repaired_before_it_is_shown(
     replacement_variant = replacement_schema["items"]["oneOf"][0]
     assert replacement_variant["properties"]["slot_handle"]["const"].startswith("slot_")
     assert replacement_variant["properties"]["replacement_value"]["type"] == ("string")
-    assert (
-        executor.requests[1].submission_contract.transport_payload_schema()
-        == correction_schema
-    )
+    assert executor.requests[1].submission_contract.transport_payload_schema() == {
+        "type": "object",
+        "additionalProperties": True,
+    }
     assert "TARGETED_SEMANTIC_CORRECTION_SLOTS_V2" in executor.requests[1].prompt
     assert "Do not regenerate or repeat that object" in executor.requests[1].prompt
     assert (
@@ -5254,6 +5264,44 @@ def test_product_planning_stops_after_a_non_improving_correction(
     )
 
 
+def test_correction_value_shape_error_returns_to_controller_without_tool_retry(
+    tmp_path: Path,
+) -> None:
+    payload = proposal_response().model_dump(mode="json")
+    payload["proposal"]["tasks"][0]["owner_agent_id"] = "absent_agent"
+    executor = ScriptedAgentExecutor(
+        [
+            json.dumps(payload),
+            correction_response(payload, {"/proposal/tasks/0/owner_agent_id": []}),
+        ]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(response_repair_limit=None),
+        clock=AdvancingClock(),
+    )
+    with pytest.raises(PlanningError, match="remained invalid"):
+        coordinator.start(request(), answer_question=lambda _: pytest.fail("question"))
+    assert len(executor.requests) == 2
+    contract = executor.requests[1].submission_contract
+    assert contract is not None
+    assert contract.transport_payload_schema() == {
+        "type": "object",
+        "additionalProperties": True,
+    }
+    turn = store.load_turn(request().run_id, 2)
+    assert turn.parsed_response is None
+    assert turn.submission_payload["replacements"][0]["replacement_value"] == []
+    assert turn.response_validation is not None
+    assert turn.response_validation.correction_paths == (
+        "/proposal/tasks/0/owner_agent_id",
+    )
+    assert turn.response_validation.issues[0].code == "string_type"
+    assert turn.semantic_correction_outcome != "accepted"
+
+
 def test_terminal_planning_progress_shows_heartbeat_and_stops_cleanly() -> None:
     output: list[str] = []
     progress = TerminalPlanningProgress(
@@ -5660,6 +5708,178 @@ def test_profile_collision_preserves_relation_before_writer_binding_correction(
         "AC_TASK_DOCUMENTATION",
     }
     assert created.body.tasks[0].acceptance_criteria[-1] == ("AC_TASK_DOCUMENTATION")
+
+
+@pytest.mark.parametrize("failure", [KeyboardInterrupt, RuntimeError])
+@pytest.mark.parametrize("returned", [False, True])
+@pytest.mark.parametrize(
+    "detail",
+    ["original failure", "original failure" + "x" * 5000],
+    ids=["short", "long"],
+)
+def test_planning_interruption_and_exception_settle_and_persist_before_propagation(
+    tmp_path: Path,
+    failure: type[BaseException],
+    returned: bool,
+    detail: str,
+) -> None:
+    from software_agent_team.execution import execution_exception_result
+
+    class FailingExecutor:
+        def execute(self, execution_request, **kwargs):
+            error = failure(detail)
+            if not returned:
+                raise error
+            return execution_exception_result(
+                execution_request,
+                error,
+                started_at=FIXED_TIME,
+                finished_at=FIXED_TIME + timedelta(seconds=2),
+            )
+
+    budget = AgentBudget(
+        authority=BudgetAuthority.USER_TASK,
+        max_estimated_cost_usd="2",
+    )
+    ledger = AgentBudgetLedger(budget)
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=FailingExecutor(),
+        store=store,
+        route_id="default",
+        policy=policy(budget=budget),
+        budget_ledger=ledger,
+        pricing=ModelPricing(
+            model="provider/model",
+            input_cost_per_million_usd="1",
+            output_cost_per_million_usd="2",
+            pricing_source=ModelMetadataSource.USER_SUPPLIED,
+            cache_pricing=CachePricing(
+                read_cost_per_million_usd="0.1",
+                write_cost_per_million_usd="0",
+                source=ModelMetadataSource.USER_SUPPLIED,
+                observed_at=FIXED_TIME,
+            ),
+        ),
+        clock=AdvancingClock(),
+    )
+    expected = PlanningError if returned and failure is RuntimeError else failure
+    with pytest.raises(expected) as caught:
+        coordinator.start(request(), answer_question=lambda _: pytest.fail("question"))
+    if expected is not KeyboardInterrupt or not returned:
+        assert "original failure" in str(caught.value)
+    session = store.load_session(request().run_id)
+    assert session.status is (
+        PlanningSessionStatus.CANCELLED
+        if failure is KeyboardInterrupt
+        else PlanningSessionStatus.FAILED
+    )
+    assert session.turn_count == 1
+    turn = store.load_turn(request().run_id, 1)
+    assert turn.execution.error.endswith(detail)
+    assert len(turn.validation_error) <= 2000
+    assert turn.execution.duration_ms > 0
+    assert turn.execution.invocation_lifecycle is None  # Unknown, not fabricated.
+    assert turn.execution.input_tokens is None
+    assert turn.execution.estimated_cost_usd is None
+    usage = ledger.snapshot()
+    assert usage.calls_started == usage.calls_completed == 1
+    assert usage.active_calls == 0
+    assert usage.unreported_token_calls == 1
+    assert turn.execution.cost_record == ledger.call_records()[0]
+    assert session.turn_head_sha256 == canonical_model_sha256(turn)
+    assert turn.parsed_response is None
+    if failure is RuntimeError:
+        legacy = session.model_dump(mode="json")
+        legacy["schema_version"] = 12
+        with pytest.raises(ValidationError, match="legacy Planning sessions"):
+            planning.PlanningSession.model_validate(legacy)
+
+
+def test_real_cli_sigint_persists_planning_lifecycle_before_exit_130(
+    tmp_path: Path,
+) -> None:
+    """Exercise CLI signal handling with an owned child, without a provider call."""
+
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    listener.settimeout(20)
+    address = listener.getsockname()
+    binary = tmp_path / "openclaw"
+    binary.write_text(
+        f"#!{sys.executable}\nimport socket, time\n"
+        f"with socket.create_connection({address!r}, 10) as connection:\n"
+        "    connection.sendall(b'ready')\n"
+        "time.sleep(60)\n",
+    )
+    binary.chmod(0o700)
+    script = f"""
+import runpy
+from pathlib import Path
+from software_agent_team import cli
+from software_agent_team.execution import OpenClawSubprocessExecutor
+from software_agent_team.process_lifecycle import ProcessLeaseStore
+fixtures = runpy.run_path({str(Path(__file__).resolve())!r})
+store = fixtures['PlanningStore'](Path({str(tmp_path / "planning")!r}))
+executor = OpenClawSubprocessExecutor(
+    openclaw_binary=Path({str(binary)!r}), process_grace_seconds=1,
+    liveness_poll_seconds=5,
+    process_lease_store=ProcessLeaseStore(Path({str(tmp_path / "leases")!r})),
+)
+coordinator = fixtures['AdaptivePlanningCoordinator'](
+    executor=executor, store=store, policy=fixtures['policy'](),
+)
+cli._run_product = lambda: coordinator.start(
+    fixtures['request'](), answer_question=lambda question: None,
+)
+raise SystemExit(cli.main([]))
+"""
+    process = subprocess.Popen(
+        [sys.executable, "-c", script],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        with listener, listener.accept()[0] as connection:
+            assert connection.recv(5) == b"ready"
+        os.kill(process.pid, signal.SIGINT)
+        stdout, stderr = process.communicate(timeout=20)
+        assert process.returncode == 130, (stdout, stderr)
+        assert "Build interrupted" in stdout
+        assert "Traceback" not in stderr
+        store = PlanningStore(tmp_path / "planning")
+        session = store.load_session(request().run_id)
+        assert session.status is PlanningSessionStatus.CANCELLED
+        assert session.turn_count == 1
+        turn = store.load_turn(request().run_id, 1)
+        assert turn.execution.status.value == "interrupted"
+        lifecycle = turn.execution.invocation_lifecycle
+        assert lifecycle is not None
+        assert lifecycle.shutdown.reason.value == "user_interrupt"
+        assert lifecycle.shutdown.cleanup_completed
+        from software_agent_team.process_lifecycle import ProcessLeaseStore
+
+        assert not ProcessLeaseStore(tmp_path / "leases").inspect().processes
+        legacy = turn.model_dump(mode="json")
+        legacy["schema_version"] = 12
+        with pytest.raises(ValidationError, match="legacy Planning turns"):
+            PlanningTurn.model_validate(legacy)
+        del legacy["execution"]["invocation_lifecycle"]
+        assert PlanningTurn.model_validate(legacy).model_dump(mode="json") == legacy
+    finally:
+        listener.close()
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+        process.communicate()
+        # Exact leases also identify the separate OpenClaw process group if the
+        # intentionally failing old implementation escaped CLI cleanup.
+        from software_agent_team.process_lifecycle import ProcessLeaseStore
+
+        leases = ProcessLeaseStore(tmp_path / "leases")
+        leases.reclaim_orphans(grace_seconds=1)
 
 
 def test_cancellation_stops_before_a_proposal_or_approval(tmp_path: Path) -> None:

@@ -17,6 +17,18 @@ scheduler decisions remain distinct from invocation state. Focused regression an
 read-only historical replay cover this correction. Final clean-candidate and fresh
 user validation remain outstanding.
 
+Planning and targeted correction now share object-only transport capture before
+Controller semantic validation. Exact slot binding and the no-improvement gate
+remain enforced; invalid values no longer depend on an upstream schema retry
+loop. Planning v13 also retains terminal invocation lifecycle evidence and a
+failed session state while reading v2–v12 without rewriting historical records.
+Main-thread interruption and adapter exceptions settle and persist before CLI
+propagation; unknown usage remains unknown. Focused regressions cover real CLI
+SIGINT, repeated interrupts, unknown settlement, and historical canonical identity.
+An intermediate combined gate passed 1,316 tests. Subsequent regressions also
+cover long error summaries without dropping the original execution error.
+Clean-candidate, pinned transport, and installed-user acceptance remain pending.
+
 Cost accounting now includes separate cache-read and cache-write usage and
 frozen prices across Planning, execution, correction, progress, and reports.
 Missing prices require confirmation before a task; missing usage remains

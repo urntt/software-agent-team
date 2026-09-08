@@ -276,7 +276,8 @@ bootstrap named choice, the dynamic work-tool-to-submission sequence, canonical
 single `artifact` envelope, terminal one-request behavior, and exact sandbox cleanup.
 Do not treat a prompt instruction as evidence that the provider must call a tool.
 
-When changing targeted correction, test the exact per-slot submission schema,
+When changing targeted correction, test object-only capture followed by the exact
+Controller-owned per-slot semantic schema,
 order-independent opaque-handle binding, exact handle coverage, atomic rejection,
 and post-application validation. A different diagnostic fingerprint is not by
 itself improvement: regressions to a coarser type or shape in the same authority
@@ -347,8 +348,12 @@ decisions. Include phase publication before the corresponding history delta:
 the displayed completed-tool count must come from the current numeric snapshot,
 not a cached prose total in the previous action description. `RunEvent` schema v5 must
 remain canonically readable from v2 through v4, Artifact schema v10 from v2
-through v9, lifecycle schema v3 from v1 through v2, and Planning schema v12 from
-v2 through v11. Accounted Planning turns retain the exact shared-ledger call
+through v9, lifecycle schema v3 from v1 through v2, and Planning schema v13 from
+v2 through v12. Main-thread and repeated SIGINT tests must prove exact child
+cleanup before lease release, CLI exit 130, and a terminal Planning turn/session.
+Adapter exceptions must retain unknown process/provider evidence and settle once;
+accounting failures must not replace the original interruption or execution error.
+Accounted Planning turns retain the exact shared-ledger call
 record, including invalid responses before runtime creation; their exports must
 remain independently cost-auditable without provider session stores. New plans always bind a material primary workflow to user input
 or clarification and downstream requirements, even for a throwaway prototype;

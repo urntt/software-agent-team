@@ -10,7 +10,6 @@ import threading
 import time
 import unicodedata
 from collections.abc import Callable, Collection, Mapping
-from contextlib import suppress
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -64,10 +63,12 @@ from software_agent_team.execution import (
     AgentExecutor,
     AgentToolActionClass,
     AgentToolTargetClass,
+    execution_exception_result,
 )
 from software_agent_team.integrity import canonical_model_sha256
 from software_agent_team.invocation_lifecycle import (
     InitializationCheckpoint,
+    InvocationLifecycleEvidence,
     InvocationPhase,
     InvocationStopReason,
 )
@@ -122,7 +123,7 @@ from software_agent_team.teams import (
     permission_for_capability,
 )
 
-PLANNING_SCHEMA_VERSION = 12
+PLANNING_SCHEMA_VERSION = 13
 MINIMUM_READABLE_PLANNING_SCHEMA_VERSION = 2
 PLANNING_TEMPLATE = Path(__file__).with_name("prompt_templates") / "adaptive_planner.md"
 MAX_PLANNING_EVIDENCE_CHARACTERS = 1_000_000
@@ -242,6 +243,7 @@ class PlanningSessionStatus(StrEnum):
     PROPOSED = "proposed"
     APPROVED = "approved"
     CANCELLED = "cancelled"
+    FAILED = "failed"
 
 
 class PlanningResponseKind(StrEnum):
@@ -1430,7 +1432,7 @@ def _digest_text(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
 
 
-def _safe_validation_detail(error: ValueError) -> str:
+def _safe_validation_detail(error: BaseException | str) -> str:
     if isinstance(error, ValidationError):
         details = []
         for issue in error.errors(
@@ -1566,9 +1568,9 @@ class PlanningRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, 9, 10, 11, PLANNING_SCHEMA_VERSION] = (
-        PLANNING_SCHEMA_VERSION
-    )
+    schema_version: Literal[
+        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, PLANNING_SCHEMA_VERSION
+    ] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     project_name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
     source_request: str = Field(min_length=1, max_length=2000)
@@ -3792,12 +3794,6 @@ def _planning_response_schema_for_correction(
     return schema
 
 
-def _planning_submission_transport_schema() -> dict[str, object]:
-    """Capture one JSON object before Controller-owned semantic validation."""
-
-    return {"type": "object", "additionalProperties": True}
-
-
 def _planning_request_prompt_context(request: PlanningRequest) -> dict[str, object]:
     """Project only model-relevant request facts into the Planning prompt."""
 
@@ -3814,9 +3810,9 @@ class AdaptiveImplementationPlan(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, 9, 10, 11, PLANNING_SCHEMA_VERSION] = (
-        PLANNING_SCHEMA_VERSION
-    )
+    schema_version: Literal[
+        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, PLANNING_SCHEMA_VERSION
+    ] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     team_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     revision: int = Field(ge=1)
@@ -3881,6 +3877,9 @@ class PlanningExecutionEvidence(BaseModel):
     budget_error: str | None = Field(default=None, min_length=1, max_length=2000)
     provider_liveness: ProviderLivenessEvidence | None = None
     error: str | None = None
+    invocation_lifecycle: InvocationLifecycleEvidence | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     cost_record: ModelCallCostRecord | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
@@ -3912,9 +3911,9 @@ class PlanningTurn(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, 9, 10, 11, PLANNING_SCHEMA_VERSION] = (
-        PLANNING_SCHEMA_VERSION
-    )
+    schema_version: Literal[
+        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, PLANNING_SCHEMA_VERSION
+    ] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     sequence: int = Field(ge=1)
     previous_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
@@ -3965,6 +3964,12 @@ class PlanningTurn(BaseModel):
 
     @model_validator(mode="after")
     def validate_evidence(self) -> Self:
+        if self.schema_version < 13 and (
+            "invocation_lifecycle" in self.execution.model_fields_set
+        ):
+            raise ValueError(
+                "legacy Planning turns cannot contain invocation lifecycle"
+            )
         if self.schema_version < 12 and (
             "runtime_rejection_evidence" in self.execution.model_fields_set
         ):
@@ -4084,9 +4089,9 @@ class PlanningProposal(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, 9, 10, 11, PLANNING_SCHEMA_VERSION] = (
-        PLANNING_SCHEMA_VERSION
-    )
+    schema_version: Literal[
+        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, PLANNING_SCHEMA_VERSION
+    ] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     revision: int = Field(ge=1)
     created_at: datetime
@@ -4144,9 +4149,9 @@ class PlanningSession(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, 9, 10, 11, PLANNING_SCHEMA_VERSION] = (
-        PLANNING_SCHEMA_VERSION
-    )
+    schema_version: Literal[
+        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, PLANNING_SCHEMA_VERSION
+    ] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     request_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     status: PlanningSessionStatus
@@ -4164,6 +4169,8 @@ class PlanningSession(BaseModel):
 
     @model_validator(mode="after")
     def validate_state(self) -> Self:
+        if self.schema_version < 13 and self.status is PlanningSessionStatus.FAILED:
+            raise ValueError("legacy Planning sessions cannot contain failed state")
         if self.updated_at < self.created_at:
             raise ValueError("Planning session cannot update before creation")
         if (self.turn_count == 0) != (self.turn_head_sha256 is None):
@@ -4325,9 +4332,9 @@ class PlanningApproval(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, 9, 10, 11, PLANNING_SCHEMA_VERSION] = (
-        PLANNING_SCHEMA_VERSION
-    )
+    schema_version: Literal[
+        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, PLANNING_SCHEMA_VERSION
+    ] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     revision: int = Field(ge=1)
     approved_at: datetime
@@ -5552,6 +5559,7 @@ class PlanningStore:
         if session.status in {
             PlanningSessionStatus.APPROVED,
             PlanningSessionStatus.CANCELLED,
+            PlanningSessionStatus.FAILED,
         }:
             raise PlanningError("terminal Planning session cannot accept another turn")
         sequence = session.turn_count + 1
@@ -5596,6 +5604,7 @@ class PlanningStore:
                 budget_error=budget_error,
                 cost_record=cost_record,
                 provider_liveness=result.telemetry.provider_liveness,
+                invocation_lifecycle=result.telemetry.invocation_lifecycle,
                 runtime_rejection_evidence=(
                     RuntimeRejectionEvidence(
                         transcript_sha256=result.telemetry.session_transcript_sha256,
@@ -5615,7 +5624,14 @@ class PlanningStore:
         self._write_session(
             session.model_copy(
                 update={
-                    "status": PlanningSessionStatus.CLARIFYING,
+                    "schema_version": PLANNING_SCHEMA_VERSION,
+                    "status": (
+                        PlanningSessionStatus.CANCELLED
+                        if result.status is AgentExecutionStatus.INTERRUPTED
+                        else PlanningSessionStatus.FAILED
+                        if result.status is not AgentExecutionStatus.COMPLETED
+                        else PlanningSessionStatus.CLARIFYING
+                    ),
                     "updated_at": _utc(now),
                     "turn_count": sequence,
                     "turn_head_sha256": canonical_model_sha256(turn),
@@ -6069,11 +6085,6 @@ class AdaptivePlanningCoordinator:
                     if correction_plan is None
                     else AgentSubmissionPurpose.SEMANTIC_CORRECTION
                 ),
-                transport_schema=(
-                    _planning_submission_transport_schema()
-                    if correction_plan is None
-                    else None
-                ),
             )
             execution_request = AgentExecutionRequest(
                 run_id=request.run_id,
@@ -6121,21 +6132,21 @@ class AdaptivePlanningCoordinator:
                     model=request.model,
                 )
 
+            execution_started_at = _utc(self.clock())
+            execution_exception: BaseException | None = None
             try:
                 result = self.executor.execute(
                     execution_request,
                     activity_handler=observe_execution_activity,
                 )
-            except BaseException:
-                if self.budget_ledger is not None and reservation is not None:
-                    with suppress(AgentBudgetExceeded):
-                        self.budget_ledger.complete_call(
-                            reservation,
-                            input_tokens=None,
-                            output_tokens=None,
-                            duration_ms=0,
-                        )
-                raise
+            except BaseException as error:
+                execution_exception = error
+                result = execution_exception_result(
+                    execution_request,
+                    error,
+                    started_at=execution_started_at,
+                    finished_at=_utc(self.clock()),
+                )
             self._emit_activity(
                 activity_handler,
                 PlanningActivity(
@@ -6212,7 +6223,7 @@ class AdaptivePlanningCoordinator:
                     ),
                 )
             if result.status is not AgentExecutionStatus.COMPLETED:
-                validation_error = (
+                validation_error = _safe_validation_detail(
                     result.error or f"Planning execution ended as {result.status.value}"
                 )
             else:
@@ -6464,6 +6475,12 @@ class AdaptivePlanningCoordinator:
                 budget_error=budget_error,
                 cost_record=cost_record,
             )
+            if execution_exception is not None:
+                raise execution_exception
+            if result.status is AgentExecutionStatus.INTERRUPTED:
+                raise KeyboardInterrupt
+            if result.status is not AgentExecutionStatus.COMPLETED:
+                raise PlanningError(result.error or "Planning invocation failed")
             if budget_error is not None:
                 raise PlanningError(budget_error)
             if parsed is not None:

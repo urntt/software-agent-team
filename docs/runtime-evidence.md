@@ -231,9 +231,9 @@ an invocation-bound `sat_submit_artifact` tool, not through assistant-message
 framing. Before each call, the controller freezes the exact semantic response JSON
 Schema, creates a fresh invocation binding, and starts the isolated OpenClaw process
 with only owner-private paths and digests. The tool exposes one exact outer argument,
-`artifact`, whose value is the semantic object. Dynamic Agents expose their exact
-semantic schema inside that argument. Adaptive Planning exposes an object-only inner
-transport schema while retaining the exact Planning semantic-schema digest in the
+`artifact`, whose value is the semantic object. Dynamic work artifacts expose their exact
+semantic schema inside that argument. Planning and targeted semantic corrections
+expose an object-only inner transport schema while retaining the exact semantic-schema digest in the
 private binding. On reviewed compatibility routes whose API otherwise permits a
 plain assistant response, bootstrap Planning selects this exact named function at
 the provider boundary. Dynamic Agents instead use a required-any-authorized-tool
@@ -332,10 +332,12 @@ repair value so coupled disposition, source, statement, and downstream reference
 cannot be repaired as a misleading sequence of isolated scalar edits. The exact
 semantic correction schema requires the slot count, and Controller validation
 requires every authorized handle exactly once before copying or mutation;
-dynamic Agents expose it directly inside the canonical `artifact` argument, while
-Adaptive Planning uses the same exact correction schema at its submission boundary.
-Only an initial Planning question or proposal uses the object-only capture schema
-before exact Controller validation. In either case the model cannot repeat or widen field authority.
+both Planning and dynamic corrections use object-only capture inside the canonical
+`artifact` argument before Controller validation. The shared submission-contract
+factory owns this distinction. Value errors therefore return to the Controller's
+typed diagnostic and improvement gate instead of entering an upstream tool-schema
+retry loop. Capture acceptance proves provenance, not semantic acceptance.
+The model cannot repeat or widen field authority.
 The model calls the same submission tool once,
 and assistant prose is again non-authoritative. The
 Controller applies each value to its pre-authorized path on a copy, preserves
@@ -551,6 +553,14 @@ evaluation may instead record an allowed timeout envelope and exact resolved
 seconds. Approval revalidates that authority against the TeamPlan at the
 execution boundary.
 The bootstrap Planner cannot create Agents or change lifecycle state.
+
+Planning schema v13 additionally preserves the shared executor's terminal invocation
+lifecycle and distinguishes failed sessions from user cancellation. An interrupt or
+adapter exception settles its reservation once and appends the invocation before
+propagating to the CLI. Missing usage remains unknown; an adapter exception cannot
+invent a process exit or cleanup record. The session index publishes the terminal
+status with its new turn anchor, rather than leaving the failed call in `clarifying`.
+Planning v2 through v12 remain canonically readable without rewriting old evidence.
 
 Planning schema v12 preserves runtime rejection diagnostics with their session
 digest and record count, using the same negative-only evidence contract as

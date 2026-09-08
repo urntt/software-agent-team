@@ -104,6 +104,14 @@ class AgentSubmissionContract(BaseModel):
     ) -> Self:
         """Freeze a semantic schema and an optional transport-only schema."""
 
+        if transport_schema is None and purpose in {
+            AgentSubmissionPurpose.PLANNING_RESPONSE,
+            AgentSubmissionPurpose.SEMANTIC_CORRECTION,
+        }:
+            # These consumers own normalization and no-improvement admission.
+            # Capture one object and terminate the tool turn before interpreting
+            # its values; upstream schema retries cannot enforce that authority.
+            transport_schema = {"type": "object", "additionalProperties": True}
         encoded = canonical_json_bytes(schema)
         return cls(
             purpose=purpose,

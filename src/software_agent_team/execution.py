@@ -882,6 +882,41 @@ class AgentExecutionResult(BaseModel):
         return self
 
 
+def execution_exception_result(
+    request: AgentExecutionRequest,
+    error: BaseException,
+    *,
+    started_at: datetime,
+    finished_at: datetime,
+) -> AgentExecutionResult:
+    """Record an adapter exception without inventing process or provider evidence."""
+
+    interrupted = isinstance(error, KeyboardInterrupt)
+    detail = str(error).strip() or type(error).__name__
+    return AgentExecutionResult(
+        status=(
+            AgentExecutionStatus.INTERRUPTED
+            if interrupted
+            else AgentExecutionStatus.LAUNCH_FAILED
+        ),
+        error=f"Agent executor raised {type(error).__name__}: {detail}",
+        telemetry=AgentExecutionTelemetry(
+            role=request.role,
+            agent_id=request.agent_id,
+            capability=request.capability,
+            session_key=request.session_key,
+            command=("agent-executor",),
+            started_at=started_at,
+            finished_at=finished_at,
+            duration_ms=max(
+                0, round((finished_at - started_at).total_seconds() * 1000)
+            ),
+            exit_code=None,
+            interrupted=interrupted,
+        ),
+    )
+
+
 @runtime_checkable
 class AgentExecutor(Protocol):
     """Replaceable synchronous execution boundary used by the controller."""
@@ -2999,6 +3034,26 @@ class OpenClawSubprocessExecutor:
                         )
                         stdout, stderr = self._await_process_stop(process, lifecycle)
                         break
+        except KeyboardInterrupt:
+            # A terminal SIGINT interrupts communicate on the main thread. It
+            # must converge through the same stop/result path as runtime controls,
+            # rather than bypassing evidence capture and releasing a live lease.
+            self._begin_stop(
+                process,
+                lifecycle,
+                reason=InvocationStopReason.USER_INTERRUPT,
+                now=self.monotonic(),
+            )
+            stdout, stderr = self._await_process_stop(process, lifecycle)
+        except BaseException:
+            self._begin_stop(
+                process,
+                lifecycle,
+                reason=InvocationStopReason.PROCESS_FAILURE,
+                now=self.monotonic(),
+            )
+            stdout, stderr = self._await_process_stop(process, lifecycle)
+            raise
         finally:
             with self._process_lock:
                 self._active_processes.pop(request.session_key, None)
@@ -3071,15 +3126,16 @@ class OpenClawSubprocessExecutor:
         deadline = lifecycle.stop_started_monotonic + self.process_grace_seconds
         while True:
             remaining = deadline - self.monotonic()
-            if remaining <= 0:
-                self._kill_process(process)
-                lifecycle.mark_kill_sent()
-                return process.communicate()
             try:
+                if remaining <= 0:
+                    self._kill_process(process)
+                    lifecycle.mark_kill_sent()
+                    return process.communicate()
                 return process.communicate(
                     timeout=min(self.liveness_poll_seconds, remaining)
                 )
-            except subprocess.TimeoutExpired:
+            except (subprocess.TimeoutExpired, KeyboardInterrupt):
+                # Repeated Ctrl+C cannot abandon an owned child or renew grace.
                 continue
 
     @staticmethod

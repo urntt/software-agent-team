@@ -2320,6 +2320,87 @@ def test_default_openclaw_process_can_be_interrupted_by_agent_identity(
     assert executor.interrupt("planner") == 0
 
 
+@pytest.mark.parametrize("interrupt_count", [1, 3])
+def test_keyboard_interrupt_collects_process_result_before_releasing_lease(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    interrupt_count: int,
+) -> None:
+    """The main-thread interrupt must return the same durable stop evidence."""
+
+    binary = tmp_path / "interrupt-openclaw"
+    binary.write_text("#!/usr/bin/env python3\nimport time\ntime.sleep(30)\n")
+    binary.chmod(0o700)
+    leases = ProcessLeaseStore(tmp_path / "leases")
+    executor = OpenClawSubprocessExecutor(
+        openclaw_binary=binary,
+        process_grace_seconds=1,
+        process_lease_store=leases,
+    )
+    communicate = subprocess.Popen.communicate
+    observed: list[subprocess.Popen[str]] = []
+
+    def interrupt_once(process, *args, **kwargs):  # type: ignore[no-untyped-def]
+        if len(observed) < interrupt_count:
+            observed.append(process)
+            raise KeyboardInterrupt
+        return communicate(process, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess.Popen, "communicate", interrupt_once)
+    try:
+        result = executor.execute(request())
+        assert result.status is AgentExecutionStatus.INTERRUPTED
+        assert result.telemetry.interrupted
+        lifecycle = result.telemetry.invocation_lifecycle
+        assert lifecycle is not None
+        assert lifecycle.shutdown.reason is InvocationStopReason.USER_INTERRUPT
+        assert lifecycle.shutdown.cleanup_completed
+        assert lifecycle.shutdown.terminate_sent
+        assert observed[0].poll() is not None
+        assert not leases.inspect().processes
+    finally:
+        # Keep the intentionally failing old implementation's TDD run bounded.
+        for process in observed:
+            if process.poll() is None:
+                process.kill()
+            communicate(process)
+
+
+def test_unexpected_adapter_exception_reaps_child_before_releasing_lease(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    binary = tmp_path / "failing-openclaw"
+    binary.write_text("#!/usr/bin/env python3\nimport time\ntime.sleep(30)\n")
+    binary.chmod(0o700)
+    leases = ProcessLeaseStore(tmp_path / "leases")
+    executor = OpenClawSubprocessExecutor(
+        openclaw_binary=binary,
+        process_grace_seconds=1,
+        process_lease_store=leases,
+    )
+    communicate = subprocess.Popen.communicate
+    observed = []
+
+    def fail_once(process, *args, **kwargs):
+        if not observed:
+            observed.append(process)
+            raise RuntimeError("original adapter failure")
+        return communicate(process, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess.Popen, "communicate", fail_once)
+    try:
+        with pytest.raises(RuntimeError, match="original adapter failure"):
+            executor.execute(request())
+        assert observed[0].poll() is not None
+        assert not leases.inspect().processes
+    finally:
+        for process in observed:
+            if process.poll() is None:
+                process.kill()
+            communicate(process)
+
+
 def test_interrupt_escalates_when_the_process_ignores_termination(
     tmp_path: Path,
 ) -> None:

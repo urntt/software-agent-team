@@ -124,6 +124,38 @@ def test_submission_contract_separates_transport_from_semantic_schema() -> None:
     assert value.transport_schema_sha256 == canonical_json_sha256(expected_tool_schema)
 
 
+@pytest.mark.parametrize(
+    "purpose",
+    [
+        AgentSubmissionPurpose.PLANNING_RESPONSE,
+        AgentSubmissionPurpose.SEMANTIC_CORRECTION,
+    ],
+)
+def test_controller_validated_submission_captures_once_before_semantic_validation(
+    purpose: AgentSubmissionPurpose,
+) -> None:
+    """A value error must reach the Controller, not an upstream tool retry loop."""
+
+    value = AgentSubmissionContract.from_schema(SCHEMA, purpose=purpose)
+    assert value.parameters_schema() == SCHEMA
+    assert value.transport_payload_schema() == {
+        "type": "object",
+        "additionalProperties": True,
+    }
+    invalid = {"summary": [], "unexpected": "preserve for Controller diagnosis"}
+    submission, evidence = validate_submission_capture(
+        value,
+        binding_sha256=BINDING,
+        capture=capture(invalid, schema_sha256=value.schema_sha256),
+        tool_calls=(tool_call(invalid),),
+        tool_evidence_error=None,
+    )
+    assert submission is not None and submission.payload == invalid
+    assert evidence.status is AgentSubmissionStatus.ACCEPTED
+    # Capture acceptance is transport provenance, not semantic or work acceptance.
+    assert contract().transport_payload_schema() == SCHEMA
+
+
 def test_submission_transport_envelope_lifts_semantic_definitions() -> None:
     semantic_schema = {
         "$defs": {

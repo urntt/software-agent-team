@@ -44,8 +44,8 @@ from software_agent_team.execution import (
     AgentExecutionRequest,
     AgentExecutionResult,
     AgentExecutionStatus,
-    AgentExecutionTelemetry,
     AgentExecutor,
+    execution_exception_result,
 )
 from software_agent_team.git_workspace import (
     GitSnapshot,
@@ -1518,26 +1518,8 @@ class DynamicAgentRunner:
                 activity_handler=activity_handler,
             )
         except Exception as error:
-            finished_at = _utc(self.clock)
-            duration_ms = max(
-                0,
-                round((finished_at - started_at).total_seconds() * 1000),
-            )
-            detail = self._error_detail(error)
-            return AgentExecutionResult(
-                status=AgentExecutionStatus.LAUNCH_FAILED,
-                error=f"Agent executor raised {type(error).__name__}: {detail}",
-                telemetry=AgentExecutionTelemetry(
-                    role=None,
-                    agent_id=request.agent_id,
-                    capability=request.capability,
-                    session_key=request.session_key,
-                    command=("agent-executor",),
-                    started_at=started_at,
-                    finished_at=finished_at,
-                    duration_ms=duration_ms,
-                    exit_code=None,
-                ),
+            return execution_exception_result(
+                request, error, started_at=started_at, finished_at=_utc(self.clock)
             )
 
     def _validate_execution_result(
