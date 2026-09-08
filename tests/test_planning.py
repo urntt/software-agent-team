@@ -1634,7 +1634,7 @@ def test_product_definition_references_must_resolve_to_the_proposal() -> None:
         )
 
 
-def test_direct_user_decision_requires_attributable_input_without_model_retry(
+def test_direct_user_decision_rejects_unattributable_input_with_zero_repair_budget(
     tmp_path: Path,
 ) -> None:
     body = proposal_body()
@@ -1675,7 +1675,7 @@ def test_direct_user_decision_requires_attributable_input_without_model_retry(
     coordinator = AdaptivePlanningCoordinator(
         executor=executor,
         store=store,
-        policy=policy(response_repair_limit=2),
+        policy=policy(response_repair_limit=0),
         clock=AdvancingClock(),
     )
 
@@ -1689,12 +1689,126 @@ def test_direct_user_decision_requires_attributable_input_without_model_retry(
     turn = store.load_turn(request().run_id, 1)
     assert turn.response_validation is not None
     assert turn.response_validation.failure_class is (
-        ResponseFailureClass.MISSING_USER_DECISION
+        ResponseFailureClass.SEMANTIC_CONTEXT
     )
-    assert turn.response_validation.correction_paths == ()
+    assert turn.response_validation.correction_paths == (
+        f"/proposal/decisions/{len(body.decisions)}/provenance/source",
+    )
     assert {item.authority for item in turn.response_validation.issues} == {
-        ResponseIssueAuthority.USER
+        ResponseIssueAuthority.MODEL
     }
+
+
+@pytest.mark.parametrize("correct_quote", [True, False])
+def test_direct_decision_quote_correction_preserves_user_authority(
+    tmp_path: Path, correct_quote: bool
+) -> None:
+    payload = proposal_response().model_dump(mode="json")
+    index = len(payload["proposal"]["decisions"])
+    payload["proposal"]["decisions"].append(
+        {
+            "id": "DECISION_NO_NETWORK",
+            "category": "privacy_or_data",
+            "authority": "user",
+            "provenance": {"kind": "explicit_input", "source": "scope"},
+            "summary": "scope",
+            "rationale": "Preserve the requested no-fetch boundary.",
+        }
+    )
+    path = f"/proposal/decisions/{index}/provenance/source"
+    replacement = "without fetching remote URLs" if correct_quote else "scope"
+    executor = ScriptedAgentExecutor(
+        [
+            ScriptedAgentResponse(text="ignored", submission_payload=payload),
+            ScriptedAgentResponse(
+                text="ignored",
+                submission_payload=json.loads(
+                    correction_response(payload, {path: replacement})
+                ),
+            ),
+        ]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor, store=store, policy=policy(), clock=AdvancingClock()
+    )
+    if correct_quote:
+        created = coordinator.start(
+            request(), answer_question=lambda _: pytest.fail("unexpected question")
+        )
+        assert created is not None
+    else:
+        with pytest.raises(PlanningError, match="not present in the Planning request"):
+            coordinator.start(
+                request(), answer_question=lambda _: pytest.fail("unexpected question")
+            )
+    assert len(executor.requests) == 2
+    first, second = (store.load_turn(request().run_id, n) for n in (1, 2))
+    assert first.submission_payload == payload
+    assert first.response_validation.correction_paths == (path,)
+    assert second.semantic_correction_request.target_paths == (path,)
+    if correct_quote:
+        repaired = second.parsed_response.proposal.decisions[-1]
+        assert repaired.category is PlanningDecisionCategory.PRIVACY_OR_DATA
+        assert repaired.authority is PlanningDecisionAuthority.USER
+        assert repaired.provenance.source == replacement
+        assert repaired.summary == replacement
+    else:
+        assert second.parsed_response is None
+
+
+def test_quote_diagnostics_collect_independent_sources_without_widening_slots() -> None:
+    body = proposal_body()
+    extra = tuple(
+        PlanningDecisionRecord(
+            id=f"DECISION_QUOTE_{index}",
+            category=PlanningDecisionCategory.PRIVACY_OR_DATA,
+            authority=PlanningDecisionAuthority.USER,
+            provenance=PlanningDecisionProvenance(
+                kind=PlanningDecisionProvenanceKind.EXPLICIT_INPUT, source="scope"
+            ),
+            summary="scope",
+            rationale="Preserve the real user restriction.",
+        )
+        for index in range(2)
+    )
+    with pytest.raises(planning._PlanningContextInvariantsError) as caught:
+        planning._validate_decision_provenance(
+            body.model_copy(update={"decisions": (*body.decisions, *extra)}),
+            normalized_inputs=(request().source_request.casefold(),),
+            require_current_provenance=True,
+        )
+    assert tuple(item.paths for item in caught.value.invariants) == tuple(
+        (f"/proposal/decisions/{len(body.decisions) + index}/provenance/source",)
+        for index in range(2)
+    )
+
+
+@pytest.mark.parametrize("missing_kind", ["input", "provenance"])
+def test_genuinely_missing_user_source_remains_user_owned(missing_kind: str) -> None:
+    decision = PlanningDecisionRecord(
+        id="DECISION_PERMISSION",
+        category=PlanningDecisionCategory.EXTERNAL_ACTION,
+        authority=PlanningDecisionAuthority.USER,
+        provenance=(
+            None
+            if missing_kind == "provenance"
+            else PlanningDecisionProvenance(
+                kind=PlanningDecisionProvenanceKind.EXPLICIT_INPUT,
+                source="Publish the project",
+            )
+        ),
+        summary="Publish the project",
+        rationale="This needs actual user authorization.",
+    )
+    with pytest.raises(planning._PlanningContextInvariantError) as caught:
+        planning._validate_decision_provenance(
+            proposal_body().model_copy(update={"decisions": (decision,)}),
+            normalized_inputs=(),
+            require_current_provenance=True,
+        )
+    assert caught.value.authority is ResponseIssueAuthority.USER
+    assert caught.value.failure_class is ResponseFailureClass.MISSING_USER_DECISION
 
 
 def test_product_definition_decision_links_are_disposition_specific() -> None:
@@ -4093,9 +4207,11 @@ def test_planning_store_accepts_evidence_indexes_beyond_three_digits(
 
 
 @pytest.mark.parametrize("cache_read_tokens", [0, 1_000_000])
+@pytest.mark.parametrize("invalid_proposal", [False, True])
 def test_planning_uses_the_shared_task_cost_ledger_and_persists_source(
     tmp_path: Path,
     cache_read_tokens: int,
+    invalid_proposal: bool,
 ) -> None:
     task_budget = AgentBudget(
         authority=BudgetAuthority.USER_TASK,
@@ -4103,10 +4219,13 @@ def test_planning_uses_the_shared_task_cost_ledger_and_persists_source(
     )
     ledger = AgentBudgetLedger(task_budget)
     store = PlanningStore(tmp_path / "planning")
+    submitted = proposal_response().model_dump(mode="json")
+    if invalid_proposal:
+        submitted["proposal"]["non_goals"] = []
     executor = ScriptedAgentExecutor(
         [
             ScriptedAgentResponse(
-                text=response(proposal_response()),
+                text=json.dumps(submitted),
                 model="provider/model",
                 provider="provider",
                 usage=AgentTokenUsage(
@@ -4122,7 +4241,7 @@ def test_planning_uses_the_shared_task_cost_ledger_and_persists_source(
     coordinator = AdaptivePlanningCoordinator(
         executor=executor,
         store=store,
-        policy=policy(budget=task_budget),
+        policy=policy(budget=task_budget, response_repair_limit=0),
         budget_ledger=ledger,
         pricing=ModelPricing(
             model="provider/model",
@@ -4141,13 +4260,20 @@ def test_planning_uses_the_shared_task_cost_ledger_and_persists_source(
         clock=AdvancingClock(),
     )
 
-    assert (
-        coordinator.start(
-            request(),
-            answer_question=lambda _question: pytest.fail("unexpected question"),
+    if invalid_proposal:
+        with pytest.raises(PlanningError):
+            coordinator.start(
+                request(),
+                answer_question=lambda _question: pytest.fail("unexpected question"),
+            )
+    else:
+        assert (
+            coordinator.start(
+                request(),
+                answer_question=lambda _question: pytest.fail("unexpected question"),
+            )
+            is not None
         )
-        is not None
-    )
 
     usage = ledger.snapshot()
     assert usage.calls_started == 1
@@ -4159,9 +4285,31 @@ def test_planning_uses_the_shared_task_cost_ledger_and_persists_source(
     execution = store.load_turn(request().run_id, 1).execution
     assert execution.estimated_cost_usd == expected
     assert ledger.call_records()[0].cache_usage.read_tokens == cache_read_tokens
+    assert execution.cost_record == ledger.call_records()[0]
+    assert execution.cost_record.cost_usd == expected
     assert execution.pricing_source is ModelMetadataSource.RUNTIME_CATALOG
     assert execution.budget_usage == usage
     assert execution.budget_error is None
+    turn = store.load_turn(request().run_id, 1)
+    serialized = turn.model_dump(mode="json")
+    assert (
+        PlanningTurn.model_validate(serialized).execution.cost_record
+        == execution.cost_record
+    )
+    legacy = json.loads(json.dumps(serialized))
+    legacy["schema_version"] = 10
+    with pytest.raises(ValidationError, match="legacy Planning turns"):
+        PlanningTurn.model_validate(legacy)
+    del legacy["execution"]["cost_record"]
+    assert PlanningTurn.model_validate(legacy).model_dump(mode="json") == legacy
+    missing = json.loads(json.dumps(serialized))
+    del missing["execution"]["cost_record"]
+    with pytest.raises(ValidationError, match="requires its cost record"):
+        PlanningTurn.model_validate(missing)
+    foreign = json.loads(json.dumps(serialized))
+    foreign["execution"]["cost_record"]["run_id"] = "another-run"
+    with pytest.raises(ValidationError, match="another invocation"):
+        PlanningTurn.model_validate(foreign)
 
 
 def test_planning_cost_progress_and_approval_overview_show_remaining_authority() -> (

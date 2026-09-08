@@ -51,6 +51,7 @@ from software_agent_team.budgets import (
     AgentBudgetLedger,
     AgentBudgetUsage,
     BudgetAuthority,
+    ModelCallCostRecord,
     ModelPricing,
 )
 from software_agent_team.execution import (
@@ -120,7 +121,7 @@ from software_agent_team.teams import (
     permission_for_capability,
 )
 
-PLANNING_SCHEMA_VERSION = 10
+PLANNING_SCHEMA_VERSION = 11
 MINIMUM_READABLE_PLANNING_SCHEMA_VERSION = 2
 PLANNING_TEMPLATE = Path(__file__).with_name("prompt_templates") / "adaptive_planner.md"
 MAX_PLANNING_EVIDENCE_CHARACTERS = 1_000_000
@@ -1564,7 +1565,7 @@ class PlanningRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, 9, PLANNING_SCHEMA_VERSION] = (
+    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, 9, 10, PLANNING_SCHEMA_VERSION] = (
         PLANNING_SCHEMA_VERSION
     )
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -2569,8 +2570,9 @@ def _validate_decision_provenance(
     normalized_inputs: tuple[str, ...],
     require_current_provenance: bool,
 ) -> None:
-    """Validate sources without treating missing user input as model patching."""
+    """Separate model-authored quote defects from genuinely missing user input."""
 
+    quote_invariants: list[_PlanningInvariant] = []
     for decision_index, decision in enumerate(body.decisions):
         provenance = decision.provenance
         if provenance is None:
@@ -2617,19 +2619,27 @@ def _validate_decision_provenance(
             _normalized_evidence_text(provenance.source) in value
             for value in normalized_inputs
         ):
-            raise _planning_context_invariant(
-                "planning_decision_explicit_source",
-                (
+            invariant = _PlanningInvariant(
+                invariant_id="planning_decision_explicit_source",
+                message=(
                     f"decision {decision.id} claims explicit user input that is "
-                    "not present in the Planning request or a user revision"
+                    "not present in the Planning request or a user revision; "
+                    "source must quote one contiguous verbatim substring of "
+                    "the existing user input, not a label or invented permission"
                 ),
-                paths=(f"/proposal/decisions/{decision_index}/provenance",),
+                paths=(f"/proposal/decisions/{decision_index}/provenance/source",),
                 subjects=_planning_subjects(
                     (ResponseIssueSubjectKind.DECISION, decision.id)
                 ),
-                failure_class=ResponseFailureClass.MISSING_USER_DECISION,
-                authority=ResponseIssueAuthority.USER,
             )
+            if not normalized_inputs:
+                raise _PlanningContextInvariantError(
+                    invariant,
+                    failure_class=ResponseFailureClass.MISSING_USER_DECISION,
+                    authority=ResponseIssueAuthority.USER,
+                )
+            quote_invariants.append(invariant)
+            continue
         if (
             provenance.kind is PlanningDecisionProvenanceKind.EXPLICIT_INPUT
             and _normalized_evidence_text(decision.summary)
@@ -2646,6 +2656,9 @@ def _validate_decision_provenance(
                     (ResponseIssueSubjectKind.DECISION, decision.id)
                 ),
             )
+
+    if quote_invariants:
+        raise _PlanningContextInvariantsError(tuple(quote_invariants))
 
 
 def _product_definition_dimension_invariant(
@@ -3800,7 +3813,7 @@ class AdaptiveImplementationPlan(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, 9, PLANNING_SCHEMA_VERSION] = (
+    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, 9, 10, PLANNING_SCHEMA_VERSION] = (
         PLANNING_SCHEMA_VERSION
     )
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -3867,6 +3880,22 @@ class PlanningExecutionEvidence(BaseModel):
     budget_error: str | None = Field(default=None, min_length=1, max_length=2000)
     provider_liveness: ProviderLivenessEvidence | None = None
     error: str | None = None
+    cost_record: ModelCallCostRecord | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+
+    @model_validator(mode="after")
+    def require_consistent_cost_record(self) -> Self:
+        record = self.cost_record
+        if record is not None and (
+            record.input_tokens != self.input_tokens
+            or record.output_tokens != self.output_tokens
+            or record.duration_ms != self.duration_ms
+            or record.cost_usd != self.estimated_cost_usd
+            or record.pricing_source != self.pricing_source
+        ):
+            raise ValueError("Planning cost record differs from execution evidence")
+        return self
 
     @field_validator("started_at", "finished_at")
     @classmethod
@@ -3879,7 +3908,7 @@ class PlanningTurn(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, 9, PLANNING_SCHEMA_VERSION] = (
+    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, 9, 10, PLANNING_SCHEMA_VERSION] = (
         PLANNING_SCHEMA_VERSION
     )
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -3932,6 +3961,18 @@ class PlanningTurn(BaseModel):
 
     @model_validator(mode="after")
     def validate_evidence(self) -> Self:
+        cost_record = self.execution.cost_record
+        if self.schema_version < 11 and cost_record is not None:
+            raise ValueError("legacy Planning turns cannot contain a cost record")
+        if self.schema_version >= 11:
+            if self.execution.budget_usage is not None and cost_record is None:
+                raise ValueError("accounted Planning turn requires its cost record")
+            if cost_record is not None and (
+                cost_record.run_id != self.run_id
+                or cost_record.stage != "planning"
+                or cost_record.agent_id != "clarifier"
+            ):
+                raise ValueError("Planning cost record belongs to another invocation")
         if self.schema_version < 7 and (
             self.submission_payload is not None or self.submission_evidence is not None
         ):
@@ -4035,7 +4076,7 @@ class PlanningProposal(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, 9, PLANNING_SCHEMA_VERSION] = (
+    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, 9, 10, PLANNING_SCHEMA_VERSION] = (
         PLANNING_SCHEMA_VERSION
     )
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -4095,7 +4136,7 @@ class PlanningSession(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, 9, PLANNING_SCHEMA_VERSION] = (
+    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, 9, 10, PLANNING_SCHEMA_VERSION] = (
         PLANNING_SCHEMA_VERSION
     )
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -4276,7 +4317,7 @@ class PlanningApproval(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, 9, PLANNING_SCHEMA_VERSION] = (
+    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, 9, 10, PLANNING_SCHEMA_VERSION] = (
         PLANNING_SCHEMA_VERSION
     )
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -5497,6 +5538,7 @@ class PlanningStore:
         pricing_source: ModelMetadataSource | None = None,
         budget_usage: AgentBudgetUsage | None = None,
         budget_error: str | None = None,
+        cost_record: ModelCallCostRecord | None = None,
     ) -> PlanningTurn:
         session = self.load_session(run_id)
         if session.status in {
@@ -5544,6 +5586,7 @@ class PlanningStore:
                 pricing_source=pricing_source,
                 budget_usage=budget_usage,
                 budget_error=budget_error,
+                cost_record=cost_record,
                 provider_liveness=result.telemetry.provider_liveness,
                 error=result.error,
             ),
@@ -6105,6 +6148,7 @@ class AdaptivePlanningCoordinator:
             estimated_cost: Decimal | None = None
             budget_usage: AgentBudgetUsage | None = None
             budget_error: str | None = None
+            cost_record: ModelCallCostRecord | None = None
             if self.budget_ledger is not None and reservation is not None:
                 assert self.pricing is not None
                 usage = result.telemetry.usage
@@ -6131,6 +6175,11 @@ class AdaptivePlanningCoordinator:
                 except AgentBudgetExceeded as error:
                     budget_usage = error.usage
                     budget_error = str(error)
+                cost_record = next(
+                    record
+                    for record in self.budget_ledger.call_records()
+                    if record.sequence == reservation.sequence
+                )
                 self._emit_activity(
                     activity_handler,
                     PlanningActivity(
@@ -6396,6 +6445,7 @@ class AdaptivePlanningCoordinator:
                 ),
                 budget_usage=budget_usage,
                 budget_error=budget_error,
+                cost_record=cost_record,
             )
             if budget_error is not None:
                 raise PlanningError(budget_error)

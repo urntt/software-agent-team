@@ -4,6 +4,16 @@
   "target_version": "0.1.0",
   "changes": [
     {
+      "id": "durable-planning-call-accounting",
+      "impact": "patch",
+      "summary": "Persist settled shared-ledger records in versioned planning turns so pre-runtime failures retain independently auditable cache usage and frozen prices"
+    },
+    {
+      "id": "decision-quote-correction-authority",
+      "impact": "patch",
+      "summary": "Distinguish model-authored citation errors from missing user decisions and correct only attributable source leaves without widening authorization"
+    },
+    {
       "id": "complete-cache-token-accounting",
       "impact": "patch",
       "summary": "Freeze cache read/write rates and account disjoint usage across planning, execution, budgets and reports while preserving historical records"

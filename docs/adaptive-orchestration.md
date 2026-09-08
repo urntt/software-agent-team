@@ -247,6 +247,17 @@ and Agent-owned categories with Agent provenance. It does not offer a Cartesian
 product of categories and provenance kinds that the controller would later have
 to reject.
 
+Decision authority and quote authorship are different boundaries. An invalid
+model-authored `explicit_input.source` is a semantic citation defect, not proof
+that the user omitted a decision. When user input exists, correction may replace
+only that source leaf with a contiguous quote from the immutable input; category,
+provenance kind, authority, and unrelated proposal fields are not replacement
+targets. The existing compiler derives the summary from the corrected quote.
+All independently invalid decision quotes are reported together. Invented quotes
+remain invalid and repeated non-improvement stops. Missing user input, missing
+decision provenance, and unanswered question authority are not model-correctable
+user decisions. Product-depth and actual question-answer validation still apply.
+
 This is a dependency contract, not a questionnaire count. An explicit
 throwaway prototype can proceed directly with a lean proposal. An
 under-specified reusable product must clarify material user-owned depth first.

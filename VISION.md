@@ -252,6 +252,12 @@ when code, usability evidence, or controlled experiments justify a replacement.
   sanitized tool-call/result records plus transcript provenance.
 - Execution Agents cannot spawn additional model calls. The controller is the sole
   authority for Agent invocation, accounting, and ordering.
+- A model-authored citation is not itself a user decision. Correcting an invalid
+  quote may change only its model-owned source reference and must still pass
+  immutable user-input validation; it cannot invent permission or replace a
+  missing user answer. Settled Planning calls retain the shared ledger's frozen
+  accounting record even when no execution workflow is created, so exported
+  evidence does not depend on private provider sessions to explain costs.
 - A fixed bootstrap Planning capability may propose requirements,
   implementation, Agent, and model plans. It cannot create Agents or advance
   the lifecycle. The controller creates run-scoped execution Agents only after

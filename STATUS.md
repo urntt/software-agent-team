@@ -14,11 +14,16 @@ frozen prices across Planning, execution, correction, progress, and reports.
 Missing prices require confirmation before a task; missing usage remains
 unknown. Partial usage preserves known buckets and settles atomically, and an
 explicit model override cannot inherit another model's prices. Configuration v9
-and Planning v10 retain historical readers without rewriting old evidence.
+and Planning v11 retain historical readers without rewriting old evidence.
+Settled Planning turns now retain the authoritative per-call record, including
+cache usage and frozen prices, even when Planning fails before runtime creation.
+Invalid model-authored direct-input quotes receive source-leaf-only correction;
+missing user authority still cannot be supplied by a model. Focused Planning,
+schema, release, and CLI checks passed 213 tests. The combined full gate passed
+1,259 tests with no owned residuals or new OOM events; clean-candidate, fresh
+delivery, and release validation remain pending.
 Writer instructions also identify the exact input commit as the revision base;
-the independent ancestry rejection remains unchanged. The implementation gate
-passed 1,252 tests with no owned residuals or new OOM events. Clean-candidate,
-fresh delivery, and release validation of this combined change remain pending.
+the independent ancestry rejection remains unchanged.
 
 Fresh installation exposed a mismatch between the pinned Node version and a
 moving upstream CLI installer. Setup now owns dependency-only installation from

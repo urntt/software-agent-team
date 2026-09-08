@@ -538,8 +538,14 @@ seconds. Approval revalidates that authority against the TeamPlan at the
 execution boundary.
 The bootstrap Planner cannot create Agents or change lifecycle state.
 
-Planning schema v10 carries separately sourced cache pricing in task metadata
-and model routes. Budget, TeamPlan, and self-check schema v2 preserve their v1
+Planning schema v11 retains each settled shared-ledger call record inside its
+immutable turn, including invalid responses and budget stops before runtime
+creation. The record includes the exact frozen prices, price sources/timestamps,
+disjoint token buckets, route and cost; it is not recomputed from later settings.
+Turns with accounting must carry that record and agree with its execution
+summary. Schema v10 introduced separately sourced cache pricing in task metadata
+and model routes; v2 through v10 remain canonically readable without inventing
+missing historical call records. Budget, TeamPlan, and self-check schema v2 preserve their v1
 readers; absent cache extensions omit themselves when reading historical data,
 so old canonical identities do not change. Each new invocation records cache
 read/write usage in its shared cost ledger alongside frozen prices. Input,

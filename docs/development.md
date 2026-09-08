@@ -334,8 +334,10 @@ single poll coalesces a start and completion, both history events therefore carr
 the current inactive state and the current completed count; neither event may
 reconstruct a stale `tool_active` phase from its kind. `RunEvent` schema v4 must
 remain canonically readable from v2 through v3, Artifact schema v9 from v2
-through v8, lifecycle schema v3 from v1 through v2, and Planning schema v10 from
-v2 through v9. New plans always bind a material primary workflow to user input
+through v8, lifecycle schema v3 from v1 through v2, and Planning schema v11 from
+v2 through v10. Accounted Planning turns retain the exact shared-ledger call
+record, including invalid responses before runtime creation; their exports must
+remain independently cost-auditable without provider session stores. New plans always bind a material primary workflow to user input
 or clarification and downstream requirements, even for a throwaway prototype;
 historical preview alone retains the old exemption. Tool-evidence regression
 tests must preserve a valid async `exec` start as nonterminal `deferred`
