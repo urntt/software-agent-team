@@ -182,6 +182,14 @@ with captured, sanitized inputs and integrated production paths before repairing
 individual symptoms. Mock the external boundary where needed, not the accepted
 submission or state transition that the test is supposed to establish.
 
+Shared accounting integration must use ordinary task USD authority, not only
+evaluation call counters. Carry priced Planning spend into the real workflow and
+verify success and budget exhaustion through terminal persistence. Exercise an
+authorized fallback with different frozen route prices, including billable failed
+attempts: switching must neither reset spend nor inherit the previous model's
+prices, and exhaustion must prevent subsequent work. Provider usage remains an
+explicit fixture in these tests, not evidence of actual provider billing.
+
 - During implementation, run affected unit and integration tests. Work-in-progress
   commits must record the checks performed and remaining validation; they do not
   claim batch acceptance. Documentation-only changes require content, link, and

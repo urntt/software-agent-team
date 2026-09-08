@@ -64,7 +64,7 @@ from software_agent_team.invocation_lifecycle import (
     InvocationPhase,
     InvocationStopReason,
 )
-from software_agent_team.model_costs import CachePricing
+from software_agent_team.model_costs import CachePricing, CacheTokenUsage
 from software_agent_team.model_metadata import ModelMetadataSource
 from software_agent_team.planning import (
     AdaptiveImplementationPlan,
@@ -888,34 +888,76 @@ def test_dynamic_workflow_prices_cache_in_records_progress_and_report(
     assert "$0.014020" in report
 
 
+@pytest.mark.parametrize("ceiling", ["5", "0.00021"])
 def test_dynamic_workflow_continues_one_shared_planning_budget_ledger(
     tmp_path: Path,
+    ceiling: str,
 ) -> None:
-    approved = approved_inputs(run_id="adaptive-shared-budget")
-    ledger = AgentBudgetLedger(approved.team_plan.budget)
-    planning_call = ledger.reserve_call("clarifier")
-    planning_usage = ledger.complete_call(
-        planning_call,
-        input_tokens=100,
-        output_tokens=50,
-        duration_ms=20,
+    approved = approved_inputs(
+        run_id="adaptive-shared-budget",
+        run_budget=AgentBudget(
+            authority=BudgetAuthority.USER_TASK, max_estimated_cost_usd=ceiling
+        ),
     )
+    ledger = AgentBudgetLedger(approved.team_plan.budget)
     source = initialize_source(tmp_path)
     executor = AdaptiveExecutor(tmp_path / "workspaces" / approved.task_brief.run_id)
-
-    outcome = coordinator(
+    workflow = coordinator(
         tmp_path,
         approved,
         executor,
         RecordingQualityGateFactory(),
         budget_ledger=ledger,
-    ).execute(approved, source_repository=source)
-
-    assert outcome.record.phase is RunPhase.COMPLETED
-    usage = ledger.snapshot()
-    assert usage.calls_completed == (
-        planning_usage.calls_completed + len(approved.team_plan.agents)
     )
+    planning_call = ledger.reserve_call(
+        "clarifier",
+        run_id=approved.task_brief.run_id,
+        stage="planning",
+        route_id="default",
+        pricing=workflow.pricing_by_model[MODEL],
+    )
+    planning_usage = ledger.complete_call(
+        planning_call,
+        input_tokens=100,
+        output_tokens=50,
+        duration_ms=20,
+        cache_usage=CacheTokenUsage(read_tokens=0, write_tokens=0),
+    )
+    outcome = workflow.execute(approved, source_repository=source)
+
+    assert planning_usage.known_estimated_cost_usd == Decimal("0.0002")
+    exhausted = ceiling != "5"
+    assert outcome.record.phase is (
+        RunPhase.FAILED if exhausted else RunPhase.COMPLETED
+    )
+    if exhausted:
+        assert len(executor.requests) == 1
+        assert (
+            outcome.record.termination_reason
+            is TerminationReason.RESOURCE_LIMIT_REACHED
+        )
+    usage = ledger.snapshot()
+    assert usage.calls_completed == planning_usage.calls_completed + len(
+        executor.requests
+    )
+    assert usage.calls_started == usage.calls_completed
+    assert usage.active_calls == 0
+    assert usage.known_estimated_cost_usd == Decimal("0.0002") + Decimal(
+        "0.00002"
+    ) * len(executor.requests)
+    assert ledger.call_records()[0].stage == "planning"
+    assert all(
+        call.run_id == approved.task_brief.run_id for call in ledger.call_records()
+    )
+    run_directory = tmp_path / "runs" / approved.task_brief.run_id
+    persisted = json.loads((run_directory / "budget-ledger.json").read_text())
+    assert persisted["usage"] == usage.model_dump(mode="json")
+    assert persisted["calls"] == [
+        call.model_dump(mode="json") for call in ledger.call_records()
+    ]
+    report = (run_directory / "final-report.md").read_text()
+    assert "`planning` | `clarifier`" in report
+    assert "provider-side spending or quota limit" in report
     invocation_usages = tuple(
         event.budget_usage
         for event in outcome.events

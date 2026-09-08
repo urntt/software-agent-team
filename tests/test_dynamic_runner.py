@@ -7,6 +7,7 @@ import json
 import subprocess
 import threading
 from datetime import UTC, datetime
+from decimal import Decimal
 from io import StringIO
 from pathlib import Path
 
@@ -2113,6 +2114,70 @@ def test_dynamic_runner_switches_only_after_approved_provider_failure(
         "default",
         "fallback",
     )
+
+
+@pytest.mark.parametrize("ceiling", ["1", "0.00003"])
+def test_provider_fallback_spends_the_same_budget_at_its_own_prices(
+    tmp_path: Path,
+    ceiling: str,
+) -> None:
+    runner, team_plan, executor, _, _ = runtime(
+        tmp_path,
+        run_budget=AgentBudget(
+            authority=BudgetAuthority.USER_TASK, max_estimated_cost_usd=ceiling
+        ),
+        model_switching=True,
+        executor_options={"provider_fail_once_for": "builder"},
+    )
+    fallback = "test/fallback-model"
+    runner.pricing_by_model[fallback] = runner.pricing_by_model[fallback].model_copy(
+        update={
+            "input_cost_per_million_usd": Decimal("3"),
+            "output_cost_per_million_usd": Decimal("4"),
+        }
+    )
+    execute = executor.execute
+
+    def priced_failure(request, *, activity_handler=None):
+        result = execute(request, activity_handler=activity_handler)
+        if result.status is AgentExecutionStatus.PROVIDER_FAILED:
+            result = result.model_copy(
+                update={
+                    "telemetry": result.telemetry.model_copy(
+                        update={
+                            "usage": AgentTokenUsage(
+                                input_tokens=10,
+                                output_tokens=5,
+                                cache_read_tokens=0,
+                                cache_write_tokens=0,
+                            )
+                        }
+                    )
+                }
+            )
+        return result
+
+    executor.execute = priced_failure
+    result = DagScheduler().execute(team_plan, runner)
+    records = runner.budget_ledger.call_records()
+    assert records[0].model == MODEL
+    assert records[0].cost_usd == Decimal("0.00002")
+    assert records[1].model == fallback
+    assert records[1].route_id == "fallback"
+    assert records[1].cost_usd == Decimal("0.00005")
+    usage = runner.budget_ledger.snapshot()
+    assert usage.known_estimated_cost_usd == sum(record.cost_usd for record in records)
+    assert usage.calls_started == usage.calls_completed == len(executor.requests)
+    assert usage.active_calls == 0
+    if ceiling != "1":
+        assert result.status is ScheduleStatus.FAILED
+        assert len(executor.requests) == 2
+        assert (
+            runner.termination_reasons["builder"]
+            is TerminationReason.RESOURCE_LIMIT_REACHED
+        )
+    else:
+        assert result.status is ScheduleStatus.COMPLETED
 
 
 @pytest.mark.parametrize(
