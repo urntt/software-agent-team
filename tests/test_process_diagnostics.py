@@ -177,3 +177,46 @@ def test_tree_identity_unavailable_is_explicit():
     )
     assert result.incomplete
     assert not result.processes
+
+
+@pytest.mark.parametrize("children_present", [True, False])
+def test_tree_bound_limits_identity_reads_not_only_saved_records(
+    monkeypatch, children_present
+):
+    root = read_linux_process_identity(os.getpid())
+    observed = diagnostics.snapshot_process_wait(root, expected_uid=os.getuid())
+    children = [root.pid + offset for offset in range(1, 13)]
+    child_reads = []
+
+    def identity(pid):
+        if pid != root.pid:
+            child_reads.append(pid)
+            if not children_present:
+                return None
+        return root.model_copy(update={"pid": pid})
+
+    monkeypatch.setattr(diagnostics, "MAX_WAIT_SNAPSHOT_PROCESSES", 4)
+    monkeypatch.setattr(diagnostics, "read_linux_process_identity", identity)
+    monkeypatch.setattr(
+        diagnostics,
+        "snapshot_process_wait",
+        lambda value, **kwargs: observed.model_copy(update={"identity": value}),
+    )
+    monkeypatch.setattr(
+        diagnostics,
+        "_read_proc_field",
+        lambda path: (
+            " ".join(map(str, children)) if path.parts[2] == str(root.pid) else ""
+        ),
+    )
+    result = diagnostics.snapshot_initialization_wait(
+        root,
+        expected_uid=os.getuid(),
+        reason="suspected",
+        elapsed_ms=1,
+    )
+    assert result.incomplete
+    assert len(result.processes) == (4 if children_present else 1)
+    assert set(child_reads) == set(children[:3])
+    # Each admitted child is read once for admission and once as a parent.
+    assert len(child_reads) <= 6

@@ -182,6 +182,7 @@ def snapshot_initialization_wait(
     records = []
     seen = set()
     incomplete = identity is None
+    remaining_candidates = max(0, MAX_WAIT_SNAPSHOT_PROCESSES - 1)
     while pending and len(records) < MAX_WAIT_SNAPSHOT_PROCESSES:
         current = pending.pop()
         if current.pid in seen:
@@ -199,6 +200,10 @@ def snapshot_initialization_wait(
                 incomplete = True
                 continue
             for child in children:
+                if remaining_candidates == 0:
+                    incomplete = True
+                    break
+                remaining_candidates -= 1
                 child_identity = read_linux_process_identity(child)
                 if child_identity is None:
                     incomplete = True

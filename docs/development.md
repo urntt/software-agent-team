@@ -458,7 +458,9 @@ the first initialization suspicion and before an initialization-stall shutdown,
 not during every poll. Snapshots follow currently attributable leader-thread
 descendants within the isolated process group; this is not a census of threads
 or detached processes. Coverage is explicitly incomplete when attribution,
-reads, or the diagnostic process bound prevent traversal. Lifecycle v4 persists
+reads, or the diagnostic process bound prevent traversal. The bound also limits
+candidate child inspection, including rejected identities, rather than merely
+truncating the final output after traversing an arbitrarily large tree. Lifecycle v4 persists
 these snapshots independently of readiness; recovered calls retain the suspicion
 snapshot without claiming a terminal stall. Focused tests exercise live
 processes, identity changes, denied reads, bounded/non-symlink reads, recovery,
