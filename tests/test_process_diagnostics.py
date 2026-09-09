@@ -1,7 +1,9 @@
 """Diagnostic snapshots must not grant progress or inspect process content."""
 
 import os
+import signal
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -41,6 +43,7 @@ def test_live_snapshot_is_content_free_and_does_not_signal(monkeypatch):
     monkeypatch.setattr(os, "kill", forbidden)
     snapshot = diagnostics.snapshot_process_wait(identity, expected_uid=os.getuid())
     assert snapshot.status == "observed"
+    assert snapshot.expected_uid == os.getuid()
     assert snapshot.user_ticks is not None
     assert snapshot.major_faults is not None
     assert reads == ["stat", "status", "io", "wchan"]
@@ -112,3 +115,65 @@ def test_diagnostic_read_is_bounded(tmp_path: Path):
     oversized.write_text("x" * 16_385)
     with pytest.raises(ValueError, match="bound"):
         diagnostics._read_proc_field(oversized)
+
+
+def test_live_tree_observes_owned_runtime_child():
+    child = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import subprocess,time,signal\n"
+            "p=subprocess.Popen(['sleep','30'])\n"
+            "def stop(*args): raise SystemExit(0)\n"
+            "signal.signal(signal.SIGTERM,stop)\n"
+            "print(p.pid,flush=True)\n"
+            "try: time.sleep(30)\n"
+            "finally:\n p.terminate()\n p.wait()\n",
+        ],
+        stdout=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        descendant_pid = int(child.stdout.readline())
+        identity = read_linux_process_identity(child.pid)
+        result = diagnostics.snapshot_initialization_wait(
+            identity,
+            expected_uid=os.getuid(),
+            reason="suspected",
+            elapsed_ms=1,
+        )
+        assert not result.incomplete
+        assert {item.identity.pid for item in result.processes} == {
+            child.pid,
+            descendant_pid,
+        }
+        assert all(item.status == "observed" for item in result.processes)
+    finally:
+        os.killpg(child.pid, signal.SIGTERM)
+        child.wait(timeout=5)
+        child.stdout.close()
+
+
+def test_tree_bound_reports_incomplete_instead_of_assuming_no_children(monkeypatch):
+    identity = read_linux_process_identity(os.getpid())
+    monkeypatch.setattr(diagnostics, "MAX_WAIT_SNAPSHOT_PROCESSES", 0)
+    result = diagnostics.snapshot_initialization_wait(
+        identity,
+        expected_uid=os.getuid(),
+        reason="stalled",
+        elapsed_ms=1,
+    )
+    assert result.incomplete
+    assert result.processes == ()
+
+
+def test_tree_identity_unavailable_is_explicit():
+    result = diagnostics.snapshot_initialization_wait(
+        None,
+        expected_uid=os.getuid(),
+        reason="suspected",
+        elapsed_ms=1,
+    )
+    assert result.incomplete
+    assert not result.processes

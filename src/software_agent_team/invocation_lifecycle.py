@@ -7,6 +7,8 @@ from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from software_agent_team.process_diagnostics import InitializationWaitDiagnostic
+
 
 class InvocationPhase(StrEnum):
     """Controller-owned phases for an invocation and its exact process."""
@@ -261,7 +263,12 @@ class InvocationLifecycleEvidence(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: int = Field(default=3, ge=1, le=3)
+    schema_version: int = Field(default=4, ge=1, le=4)
+    initialization_wait: tuple[InitializationWaitDiagnostic, ...] = Field(
+        default=(),
+        max_length=2,
+        exclude_if=lambda value: not value,
+    )
     transitions: tuple[InvocationLifecycleTransition, ...] = Field(min_length=2)
     initialization: InitializationLivenessEvidence
     response_finalization: ResponseFinalizationEvidence | None = Field(
@@ -272,6 +279,15 @@ class InvocationLifecycleEvidence(BaseModel):
 
     @model_validator(mode="after")
     def validate_lifecycle(self) -> Self:
+        if self.schema_version < 4 and "initialization_wait" in self.model_fields_set:
+            raise ValueError(
+                "legacy lifecycle evidence cannot contain wait diagnostics"
+            )
+        reasons = [item.reason for item in self.initialization_wait]
+        if reasons not in ([], ["suspected"], ["stalled"], ["suspected", "stalled"]):
+            raise ValueError("initialization wait boundaries must occur once in order")
+        if "stalled" in reasons and not self.initialization.stalled:
+            raise ValueError("stall diagnostic requires an initialization stall")
         if (self.schema_version == 1) != (self.response_finalization is None):
             raise ValueError(
                 "lifecycle schema v2 and later require response-finalization evidence"

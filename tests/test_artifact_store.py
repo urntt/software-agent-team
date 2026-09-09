@@ -1102,6 +1102,53 @@ def test_store_round_trips_agent_execution_telemetry(tmp_path: Path) -> None:
     assert store.load(record_ref) == record
 
 
+def test_live_initialization_wait_survives_invocation_settlement_and_storage(tmp_path):
+    from test_execution import live_liveness_executor, request
+
+    from software_agent_team.budgets import AgentBudgetLedger
+    from software_agent_team.execution import InitializationLivenessPolicy
+    from software_agent_team.invocation import persist_agent_invocation
+
+    invocation = request(timeout_seconds=0, model="provider/model")
+    executor = live_liveness_executor(
+        tmp_path,
+        "import time\ntime.sleep(30)\n",
+        initialization_policy=InitializationLivenessPolicy(
+            no_progress_seconds=0.22,
+            stall_grace_seconds=0.08,
+            source="test initialization persistence",
+        ),
+        process_grace_seconds=0.10,
+    )
+    store = make_store(tmp_path)
+    ledger = AgentBudgetLedger(store.team_plan.budget)
+    reservation = ledger.reserve_call(invocation.agent_id)
+    result = executor.execute(invocation)
+    persisted = persist_agent_invocation(
+        artifact_store=store,
+        budget_ledger=ledger,
+        reservation=reservation,
+        request=invocation,
+        result=result,
+        stage="plan",
+        attempt=1,
+        response_reference=None,
+        error=result.error,
+        controller_supplied_fields=(),
+        ignored_controller_fields=(),
+        pricing=None,
+    )
+    loaded = store.load(persisted.reference)
+    assert loaded.schema_version == 11
+    assert loaded.invocation_lifecycle == result.telemetry.invocation_lifecycle
+    assert [
+        item.reason for item in loaded.invocation_lifecycle.initialization_wait
+    ] == ["suspected", "stalled"]
+    assert loaded.invocation_lifecycle.shutdown.cleanup_completed
+    assert ledger.snapshot().calls_completed == 1
+    assert ledger.snapshot().active_calls == 0
+
+
 def test_execution_outputs_are_write_once_and_stage_bound(tmp_path: Path) -> None:
     store = make_store(tmp_path)
     arguments = {

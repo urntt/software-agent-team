@@ -15,6 +15,9 @@ from software_agent_team.process_lifecycle import (
     read_linux_process_identity,
 )
 
+MAX_WAIT_SNAPSHOT_PROCESSES = 64
+MAX_PROC_DIAGNOSTIC_CHARACTERS = 16_384
+
 
 class ProcessWaitSnapshot(BaseModel):
     """One identity-checked observation, not proof of useful work or a cause."""
@@ -22,6 +25,7 @@ class ProcessWaitSnapshot(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     identity: ProcessIdentity
+    expected_uid: int = Field(ge=0)
     status: Literal["observed", "identity_changed", "unavailable"]
     state: str | None = Field(default=None, pattern=r"^[A-Za-z]$")
     user_ticks: int | None = Field(default=None, ge=0)
@@ -71,8 +75,8 @@ def _read_proc_field(path: Path) -> str:
 
     descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     with os.fdopen(descriptor, "r", encoding="utf-8") as stream:
-        content = stream.read(16_385)
-    if len(content) > 16_384:
+        content = stream.read(MAX_PROC_DIAGNOSTIC_CHARACTERS + 1)
+    if len(content) > MAX_PROC_DIAGNOSTIC_CHARACTERS:
         raise ValueError("procfs diagnostic field exceeds its bound")
     return content
 
@@ -86,13 +90,19 @@ def snapshot_process_wait(
     try:
         before = read_linux_process_identity(identity.pid)
         if before is None:
-            return ProcessWaitSnapshot(identity=identity, status="unavailable")
+            return ProcessWaitSnapshot(
+                identity=identity, expected_uid=expected_uid, status="unavailable"
+            )
         if before != identity or base.stat().st_uid != expected_uid:
-            return ProcessWaitSnapshot(identity=identity, status="identity_changed")
+            return ProcessWaitSnapshot(
+                identity=identity, expected_uid=expected_uid, status="identity_changed"
+            )
         raw = _read_proc_field(base / "stat")
         fields = raw[raw.rindex(")") + 2 :].split()
         if int(fields[19]) != identity.start_time_ticks:
-            return ProcessWaitSnapshot(identity=identity, status="identity_changed")
+            return ProcessWaitSnapshot(
+                identity=identity, expected_uid=expected_uid, status="identity_changed"
+            )
         metrics: dict[str, object] = {
             "state": fields[0],
             "minor_faults": int(fields[7]),
@@ -129,12 +139,85 @@ def snapshot_process_wait(
             read_linux_process_identity(identity.pid) != identity
             or base.stat().st_uid != expected_uid
         ):
-            return ProcessWaitSnapshot(identity=identity, status="identity_changed")
+            return ProcessWaitSnapshot(
+                identity=identity, expected_uid=expected_uid, status="identity_changed"
+            )
         return ProcessWaitSnapshot(
             identity=identity,
+            expected_uid=expected_uid,
             status="observed",
             unavailable_fields=tuple(unavailable),
             **metrics,
         )
     except (OSError, ValueError, IndexError, UnicodeError, ProcessLifecycleError):
-        return ProcessWaitSnapshot(identity=identity, status="unavailable")
+        return ProcessWaitSnapshot(
+            identity=identity, expected_uid=expected_uid, status="unavailable"
+        )
+
+
+class InitializationWaitDiagnostic(BaseModel):
+    """Bounded leader-thread descendant coverage at one abnormal boundary."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    reason: Literal["suspected", "stalled"]
+    elapsed_ms: int = Field(ge=0)
+    scope: Literal["leader_thread_descendants"] = "leader_thread_descendants"
+    processes: tuple[ProcessWaitSnapshot, ...] = Field(
+        max_length=MAX_WAIT_SNAPSHOT_PROCESSES
+    )
+    incomplete: bool
+
+
+def snapshot_initialization_wait(
+    identity: ProcessIdentity | None,
+    *,
+    expected_uid: int,
+    reason: Literal["suspected", "stalled"],
+    elapsed_ms: int,
+) -> InitializationWaitDiagnostic:
+    """Follow currently attributable children; never infer ownership from old PIDs."""
+
+    pending = [] if identity is None else [identity]
+    records = []
+    seen = set()
+    incomplete = identity is None
+    while pending and len(records) < MAX_WAIT_SNAPSHOT_PROCESSES:
+        current = pending.pop()
+        if current.pid in seen:
+            continue
+        seen.add(current.pid)
+        observation = snapshot_process_wait(current, expected_uid=expected_uid)
+        records.append(observation)
+        if observation.status != "observed":
+            incomplete = True
+            continue
+        children_path = Path(f"/proc/{current.pid}/task/{current.pid}/children")
+        try:
+            children = [int(value) for value in _read_proc_field(children_path).split()]
+            if read_linux_process_identity(current.pid) != current:
+                incomplete = True
+                continue
+            for child in children:
+                child_identity = read_linux_process_identity(child)
+                if child_identity is None:
+                    incomplete = True
+                    continue
+                # Revalidate the parent edge after obtaining the child's start time.
+                still_children = _read_proc_field(children_path).split()
+                if (
+                    read_linux_process_identity(current.pid) != current
+                    or str(child) not in still_children
+                    or child_identity.process_group_id != identity.process_group_id
+                ):
+                    incomplete = True
+                    continue
+                pending.append(child_identity)
+        except (OSError, ValueError, UnicodeError, ProcessLifecycleError):
+            incomplete = True
+    return InitializationWaitDiagnostic(
+        reason=reason,
+        elapsed_ms=elapsed_ms,
+        processes=tuple(records),
+        incomplete=incomplete or bool(pending),
+    )

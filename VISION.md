@@ -194,6 +194,12 @@ when code, usability evidence, or controlled experiments justify a replacement.
   attributable private-state checkpoints and has its own no-progress guard;
   a content-free pre-launch baseline prevents files or a matching turn inherited
   from an earlier invocation from counting as progress for the new invocation;
+  abnormal initialization boundaries retain identity-bound, content-free process
+  wait diagnostics separately from readiness. CPU, page faults, I/O and kernel
+  wait channels may help explain a failure but never renew the initialization
+  guard or prove the cause of a historical stall. Missing or incomplete kernel
+  observations remain explicit, and diagnostic traversal does not become an
+  Agent-count or work-time limit;
   provider inactivity begins only after the exact current turn or private stream
   is attributable. Both observations enter provider wait through that single
   initialization readiness authority, so observer order cannot move a lifecycle

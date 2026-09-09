@@ -217,7 +217,7 @@ def lifecycle_payload(
     *,
     exit_code: int | None = 0,
     signal: int | None = None,
-    schema_version: int = 3,
+    schema_version: int = 4,
 ) -> dict[str, object]:
     """Return minimal coherent lifecycle evidence for record binding tests."""
 
@@ -416,9 +416,9 @@ def test_current_lifecycle_records_the_pre_invocation_baseline() -> None:
 
     restored = AgentExecutionRecord.model_validate(payload)
 
-    assert restored.schema_version == 10
+    assert restored.schema_version == 11
     assert restored.invocation_lifecycle is not None
-    assert restored.invocation_lifecycle.schema_version == 3
+    assert restored.invocation_lifecycle.schema_version == 4
     assert (
         restored.invocation_lifecycle.initialization.baseline_matching_turn_count == 1
     )
@@ -430,6 +430,35 @@ def test_current_lifecycle_records_the_pre_invocation_baseline() -> None:
     legacy_lifecycle = deepcopy(lifecycle)
     legacy_lifecycle["schema_version"] = 2
     with pytest.raises(ValidationError, match="legacy lifecycle evidence"):
+        InvocationLifecycleEvidence.model_validate(legacy_lifecycle)
+
+
+@pytest.mark.parametrize("version", [9, 10])
+def test_pre_diagnostic_lifecycle_keeps_canonical_serialization(version):
+    payload = valid_execution_payload()
+    payload["schema_version"] = version
+    payload["execution_status"] = "completed"
+    payload["invocation_lifecycle"] = lifecycle_payload(schema_version=3)
+    record = AgentExecutionRecord.model_validate(payload)
+    canonical = record.model_dump(mode="json")
+    assert "initialization_wait" not in canonical["invocation_lifecycle"]
+    assert (
+        AgentExecutionRecord.model_validate(canonical).model_dump(mode="json")
+        == canonical
+    )
+    legacy_lifecycle = deepcopy(payload["invocation_lifecycle"])
+    legacy_lifecycle["initialization_wait"] = [
+        {
+            "reason": "suspected",
+            "elapsed_ms": 1,
+            "processes": [],
+            "incomplete": True,
+        }
+    ]
+    with pytest.raises(ValidationError, match="legacy lifecycle"):
+        InvocationLifecycleEvidence.model_validate(legacy_lifecycle)
+    legacy_lifecycle["initialization_wait"] = []
+    with pytest.raises(ValidationError, match="legacy lifecycle"):
         InvocationLifecycleEvidence.model_validate(legacy_lifecycle)
 
 
@@ -574,7 +603,7 @@ def test_runtime_rejections_require_new_schema_and_captured_provenance() -> None
         }
     )
     record = AgentExecutionRecord.model_validate(payload)
-    assert record.schema_version == 10
+    assert record.schema_version == 11
     assert record.tool_calls == ()
     assert len(record.runtime_rejections) == 1
     for version in range(2, 10):
@@ -621,7 +650,7 @@ def test_deferred_tool_evidence_requires_artifact_schema_eight() -> None:
 
     current = AgentExecutionRecord.model_validate(payload)
 
-    assert current.schema_version == 10
+    assert current.schema_version == 11
     assert current.tool_calls[0].outcome is AgentToolCallOutcome.DEFERRED
 
     payload["schema_version"] = 7

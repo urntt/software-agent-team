@@ -125,6 +125,32 @@ _PROTOCOL = DecisionLimitCategory.PROTOCOL_SCHEMA_BOUND
 
 DECISION_LIMIT_REGISTRY: tuple[DecisionLimitDefinition, ...] = (
     _definition(
+        "infrastructure.initialization-diagnostic-processes",
+        _INFRASTRUCTURE,
+        DecisionValueReferenceKind.PYTHON_ATTRIBUTE,
+        "software_agent_team.process_diagnostics:MAX_WAIT_SNAPSHOT_PROCESSES",
+        owner="Initialization wait diagnostics",
+        rationale="Abnormal-boundary diagnostics must not enumerate an unbounded process tree.",
+        visibility=DecisionLimitVisibility.DETAILED,
+        configurability=DecisionLimitConfigurability.MAINTAINER_POLICY,
+        consequence="Additional descendants remain unobserved and the snapshot reports incomplete coverage; no process is stopped by this bound.",
+        recovery="Inspect incomplete coverage before changing the diagnostic bound; never interpret this as an Agent-count limit.",
+        evidence="tests/test_process_diagnostics.py",
+    ),
+    _definition(
+        "infrastructure.initialization-diagnostic-field-size",
+        _INFRASTRUCTURE,
+        DecisionValueReferenceKind.PYTHON_ATTRIBUTE,
+        "software_agent_team.process_diagnostics:MAX_PROC_DIAGNOSTIC_CHARACTERS",
+        owner="Initialization wait diagnostics",
+        rationale="Read only bounded kernel metrics without loading arbitrary process content.",
+        visibility=DecisionLimitVisibility.DETAILED,
+        configurability=DecisionLimitConfigurability.MAINTAINER_POLICY,
+        consequence="Oversized diagnostic fields are unavailable, never zero or readiness progress.",
+        recovery="Inspect the exact procfs field boundary before changing this guard.",
+        evidence="tests/test_process_diagnostics.py",
+    ),
+    _definition(
         "user.task-cost-usd",
         DecisionLimitCategory.USER_CHOICE,
         DecisionValueReferenceKind.MODEL_FIELD,

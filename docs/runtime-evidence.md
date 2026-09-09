@@ -505,6 +505,18 @@ workspaces/<run_id>/
 └── detached self-contained Git clone and generated result
 ```
 
+Artifact schema v11 carries lifecycle v4 `initialization_wait` diagnostics at
+the first suspected initialization stall and before a terminal initialization
+stall. Each snapshot binds PID, process group, start time and UID checks, and
+retains only kernel state, CPU ticks, faults, RSS/swap, I/O bytes and wait channel.
+Identity changes discard metrics; unavailable values remain null. Traversal is
+limited to currently attributable leader-thread descendants in the invocation
+group, with incomplete coverage explicitly marked. These observations neither
+renew readiness nor prove useful work or a failure's root cause. Recovered
+invocations may retain a suspicion snapshot without a terminal-stall snapshot.
+Artifact v2-v10 and lifecycle v1-v3 retain their historical canonical form;
+older lifecycle versions reject the new field rather than silently discarding it.
+
 Artifact schema v10 adds `runtime_rejections`: provenance-bound negative
 diagnostics for the pinned OpenClaw runtime's exact unknown-tool error shape.
 OpenClaw can sanitize an unsupported assistant call out of its session while
@@ -573,6 +585,10 @@ evaluation may instead record an allowed timeout envelope and exact resolved
 seconds. Approval revalidates that authority against the TeamPlan at the
 execution boundary.
 The bootstrap Planner cannot create Agents or change lifecycle state.
+
+Planning schema v14 carries the same lifecycle-v4 initialization diagnostics as
+execution, preserving Planning v2-v13 reads. New lifecycle evidence cannot be
+written under an older Planning version.
 
 Planning schema v13 additionally preserves the shared executor's terminal invocation
 lifecycle and distinguishes failed sessions from user cancellation. An interrupt or

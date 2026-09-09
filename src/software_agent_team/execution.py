@@ -57,9 +57,15 @@ from software_agent_team.openclaw_session_evidence import (
     inspect_openclaw_initialization,
     inspect_openclaw_session_activity,
 )
+from software_agent_team.process_diagnostics import (
+    InitializationWaitDiagnostic,
+    snapshot_initialization_wait,
+)
 from software_agent_team.process_lifecycle import (
     InvocationProcessLease,
     ProcessLeaseStore,
+    ProcessLifecycleError,
+    read_linux_process_identity,
 )
 from software_agent_team.submissions import (
     ARTIFACT_SUBMISSION_ARGUMENT,
@@ -1173,6 +1179,7 @@ class _InvocationLifecycleRecorder:
         self.process_lease_released = True
         self.active_tool_count = 0
         self.completed_tool_count = 0
+        self.initialization_wait: list[InitializationWaitDiagnostic] = []
         self.initialization_evidence = InitializationLivenessEvidence(
             mode="unavailable",
             policy_source=initialization_policy.source,
@@ -1456,6 +1463,7 @@ class _InvocationLifecycleRecorder:
         )
         return InvocationLifecycleEvidence(
             transitions=tuple(self.transitions),
+            initialization_wait=tuple(self.initialization_wait),
             initialization=self.initialization_evidence,
             response_finalization=self.response_finalization_evidence,
             shutdown=shutdown,
@@ -2866,6 +2874,10 @@ class OpenClawSubprocessExecutor:
             start_new_session=os.name == "posix",
         )
         process_started = self.monotonic()
+        try:
+            diagnostic_identity = read_linux_process_identity(process.pid)
+        except ProcessLifecycleError:
+            diagnostic_identity = None
         lifecycle.process_launched(
             now=process_started,
             process_group_targeted=os.name == "posix",
@@ -2965,7 +2977,24 @@ class OpenClawSubprocessExecutor:
                         )
                         stdout, stderr = self._await_process_stop(process, lifecycle)
                         break
-                    if initialization_monitor.poll(now):
+                    initialization_stalled = initialization_monitor.poll(now)
+                    for boundary, should_capture in (
+                        ("suspected", initialization_monitor.suspected),
+                        ("stalled", initialization_stalled),
+                    ):
+                        if should_capture and not any(
+                            item.reason == boundary
+                            for item in lifecycle.initialization_wait
+                        ):
+                            lifecycle.initialization_wait.append(
+                                snapshot_initialization_wait(
+                                    diagnostic_identity,
+                                    expected_uid=os.getuid(),
+                                    reason=boundary,
+                                    elapsed_ms=lifecycle.elapsed_ms(now),
+                                )
+                            )
+                    if initialization_stalled:
                         self._begin_stop(
                             process,
                             lifecycle,

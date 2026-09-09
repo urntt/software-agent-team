@@ -4,6 +4,11 @@
   "target_version": "0.1.0",
   "changes": [
     {
+      "id": "initialization-wait-diagnostics",
+      "impact": "patch",
+      "summary": "Persist bounded identity-bound startup wait snapshots without renewing readiness, with backward-readable lifecycle v4, Artifact v11 and Planning v14 records"
+    },
+    {
       "id": "aggregate-independent-criterion-corrections",
       "impact": "patch",
       "summary": "Collect independent criterion relation failures into one identity-bound correction while preserving prerequisite ordering and strict revalidation"

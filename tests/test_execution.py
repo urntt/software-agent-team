@@ -2026,6 +2026,19 @@ def test_initialization_no_progress_warns_stops_collects_and_reaps(
     lifecycle = result.telemetry.invocation_lifecycle
     assert lifecycle is not None
     assert lifecycle.initialization.stalled
+    assert lifecycle.schema_version == 4
+    assert [item.reason for item in lifecycle.initialization_wait] == [
+        "suspected",
+        "stalled",
+    ]
+    assert all(item.processes for item in lifecycle.initialization_wait)
+    assert all(
+        item.processes[0].status == "observed" for item in lifecycle.initialization_wait
+    )
+    assert (
+        lifecycle.initialization_wait[0].processes[0].identity
+        == lifecycle.initialization_wait[1].processes[0].identity
+    )
     assert lifecycle.initialization.checkpoints == (
         InitializationCheckpoint.PROCESS_LAUNCHED,
     )
@@ -2104,6 +2117,7 @@ time.sleep(0.04)
         == lifecycle.initialization.stall_suspected_count
     )
     assert not lifecycle.initialization.stalled
+    assert [item.reason for item in lifecycle.initialization_wait] == ["suspected"]
     kinds = [activity.kind for activity in activities]
     suspected = [
         index
