@@ -204,6 +204,13 @@ attempts: switching must neither reset spend nor inherit the previous model's
 prices, and exhaustion must prevent subsequent work. Provider usage remains an
 explicit fixture in these tests, not evidence of actual provider billing.
 
+The successful cache-pricing workflow is also the composed consistency boundary:
+the same production coordinator must bind per-call records, aggregate progress,
+the terminal report, and a clean descendant workspace commit while leaving the
+source repository unchanged. Separate negative ancestry and budget cases prove
+that a broken revision or exhausted authorization cannot enter delivery. These
+fixtures share state owners but do not replace a provider-backed product journey.
+
 Carry upstream-incomplete writer results through the whole workflow as well as
 the runner. With real Git and the shared ledger, verify same-session continuation
 through gates and Review to a terminal report, plus no-progress, exhausted-budget,

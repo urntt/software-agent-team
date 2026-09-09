@@ -849,6 +849,8 @@ def test_dynamic_workflow_prices_cache_in_records_progress_and_report(
         ),
     )
     source = initialize_source(tmp_path)
+    seed = git(source, "rev-parse", "HEAD").stdout.strip()
+    workspace = tmp_path / "workspaces" / approved.task_brief.run_id
 
     class CachedExecutor(AdaptiveExecutor):
         def execute(self, request, *, activity_handler=None):
@@ -864,7 +866,7 @@ def test_dynamic_workflow_prices_cache_in_records_progress_and_report(
             )
 
     ledger = AgentBudgetLedger(approved.team_plan.budget)
-    executor = CachedExecutor(tmp_path / "workspaces" / approved.task_brief.run_id)
+    executor = CachedExecutor(workspace)
     outcome = coordinator(
         tmp_path,
         approved,
@@ -878,7 +880,13 @@ def test_dynamic_workflow_prices_cache_in_records_progress_and_report(
     assert ledger.snapshot().known_estimated_cost_usd == expected_call * len(
         approved.team_plan.agents
     )
-    store, _ = load_report(tmp_path, outcome, approved)
+    store, final_report = load_report(tmp_path, outcome, approved)
+    workspace_head = git(workspace, "rev-parse", "HEAD").stdout.strip()
+    assert final_report.status is FinalStatus.COMPLETED
+    assert final_report.final_commit == workspace_head
+    git(workspace, "merge-base", "--is-ancestor", seed, workspace_head)
+    assert git(source, "rev-parse", "HEAD").stdout.strip() == seed
+    assert git(source, "status", "--short").stdout == ""
     assert all(
         store.load(reference).estimated_cost_usd == expected_call
         for reference in outcome.execution_records
@@ -890,6 +898,15 @@ def test_dynamic_workflow_prices_cache_in_records_progress_and_report(
         event.budget_usage for event in outcome.events if event.budget_usage is not None
     ][-1]
     assert final_event_usage == ledger.snapshot()
+    invocation_event = next(
+        event
+        for event in outcome.events
+        if event.kind is ProgressEventKind.AGENT_INVOCATION_COMPLETED
+    )
+    assert invocation_event.checkpoint is not None
+    assert invocation_event.budget_usage is not None
+    assert invocation_event.budget_usage.known_estimated_cost_usd == expected_call
+    assert outcome.events[-1].phase is RunPhase.COMPLETED
     report = (
         tmp_path / "runs" / approved.task_brief.run_id / "final-report.md"
     ).read_text()
