@@ -141,6 +141,11 @@ class InitializationLivenessEvidence(BaseModel):
         exclude_if=lambda value: value == 0,
     )
     checkpoints: tuple[InitializationCheckpoint, ...] = ()
+    process_activity_observations: int = Field(
+        default=0,
+        ge=0,
+        exclude_if=lambda value: value == 0,
+    )
     stall_suspected_count: int = Field(default=0, ge=0)
     stall_recovered_count: int = Field(default=0, ge=0)
     maximum_no_progress_ms: int = Field(default=0, ge=0)
@@ -263,7 +268,7 @@ class InvocationLifecycleEvidence(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: int = Field(default=4, ge=1, le=4)
+    schema_version: int = Field(default=5, ge=1, le=5)
     initialization_wait: tuple[InitializationWaitDiagnostic, ...] = Field(
         default=(),
         max_length=2,
@@ -279,6 +284,12 @@ class InvocationLifecycleEvidence(BaseModel):
 
     @model_validator(mode="after")
     def validate_lifecycle(self) -> Self:
+        if self.schema_version < 5 and (
+            "process_activity_observations" in self.initialization.model_fields_set
+        ):
+            raise ValueError(
+                "legacy lifecycle evidence cannot contain process activity"
+            )
         if self.schema_version < 4 and "initialization_wait" in self.model_fields_set:
             raise ValueError(
                 "legacy lifecycle evidence cannot contain wait diagnostics"

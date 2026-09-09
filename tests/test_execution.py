@@ -1866,6 +1866,48 @@ def test_slow_initialization_reaches_current_turn_before_provider_lease(
     ]
 
 
+def test_active_initialization_process_renews_inactivity_without_readiness(
+    tmp_path: Path,
+) -> None:
+    program = (
+        "import time\n"
+        "deadline = time.monotonic() + 1.1\n"
+        "value = 0\n"
+        "while time.monotonic() < deadline:\n"
+        "    value = (value + 1) % 1_000_003\n" + FAKE_OPENCLAW_SETUP + "\nfinish()\n"
+    )
+    executor = live_liveness_executor(
+        tmp_path,
+        program,
+        initialization_policy=InitializationLivenessPolicy(
+            no_progress_seconds=0.8,
+            stall_grace_seconds=0.25,
+            source="test initialization contract",
+        ),
+        process_grace_seconds=0.10,
+    )
+    # Establish the coarse baseline before launch. Only identity-bound process
+    # counters can keep this invocation alive until it publishes a new turn.
+    sessions = tmp_path / "state" / "agents" / "planner" / "sessions"
+    sessions.mkdir(parents=True)
+
+    result = executor.execute(request(timeout_seconds=0, model="provider/model"))
+
+    assert result.status is AgentExecutionStatus.COMPLETED
+    lifecycle = result.telemetry.invocation_lifecycle
+    assert lifecycle is not None
+    assert lifecycle.initialization.baseline_checkpoint is (
+        InitializationCheckpoint.SESSION_DIRECTORY
+    )
+    assert lifecycle.initialization.process_activity_observations > 0
+    assert not lifecycle.initialization.stalled
+    assert lifecycle.initialization.checkpoints[-1] is (
+        InitializationCheckpoint.CURRENT_TURN
+    )
+    assert result.telemetry.provider_liveness is not None
+    assert result.telemetry.provider_liveness.lease_start_source == "current_turn"
+
+
 def test_preexisting_current_turn_cannot_keep_a_new_invocation_alive(
     tmp_path: Path,
 ) -> None:
@@ -2026,7 +2068,7 @@ def test_initialization_no_progress_warns_stops_collects_and_reaps(
     lifecycle = result.telemetry.invocation_lifecycle
     assert lifecycle is not None
     assert lifecycle.initialization.stalled
-    assert lifecycle.schema_version == 4
+    assert lifecycle.schema_version == 5
     assert [item.reason for item in lifecycle.initialization_wait] == [
         "suspected",
         "stalled",

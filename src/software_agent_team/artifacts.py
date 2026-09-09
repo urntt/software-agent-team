@@ -36,7 +36,7 @@ from software_agent_team.submissions import (
 )
 from software_agent_team.versioning import SoftwareVersionReport
 
-ARTIFACT_SCHEMA_VERSION = 11
+ARTIFACT_SCHEMA_VERSION = 12
 MINIMUM_READABLE_ARTIFACT_SCHEMA_VERSION = 2
 COMMIT_PATTERN = r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
 AGENT_ID_PATTERN = r"^[a-z][a-z0-9_]*$"
@@ -574,7 +574,7 @@ class HandoffEnvelope(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, 9, 10, ARTIFACT_SCHEMA_VERSION] = (
+    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, 9, 10, 11, ARTIFACT_SCHEMA_VERSION] = (
         ARTIFACT_SCHEMA_VERSION
     )
     kind: Literal[ArtifactKind.HANDOFF_ENVELOPE] = ArtifactKind.HANDOFF_ENVELOPE
@@ -639,7 +639,7 @@ class PhaseArtifact(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, 9, 10, ARTIFACT_SCHEMA_VERSION] = (
+    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, 9, 10, 11, ARTIFACT_SCHEMA_VERSION] = (
         ARTIFACT_SCHEMA_VERSION
     )
     kind: ArtifactKind
@@ -872,7 +872,7 @@ class AgentExecutionRecord(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, 9, 10, ARTIFACT_SCHEMA_VERSION] = (
+    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, 9, 10, 11, ARTIFACT_SCHEMA_VERSION] = (
         ARTIFACT_SCHEMA_VERSION
     )
     kind: Literal[ArtifactKind.AGENT_EXECUTION_RECORD] = (
@@ -1177,7 +1177,11 @@ class AgentExecutionRecord(BaseModel):
                 else (
                     2
                     if self.schema_version < 9
-                    else (3 if self.schema_version < 11 else 4)
+                    else (
+                        3
+                        if self.schema_version < 11
+                        else (4 if self.schema_version < 12 else 5)
+                    )
                 )
             )
             if self.invocation_lifecycle.schema_version != expected_lifecycle_schema:

@@ -59,10 +59,12 @@ from software_agent_team.openclaw_session_evidence import (
 )
 from software_agent_team.process_diagnostics import (
     InitializationWaitDiagnostic,
+    initialization_process_activity_detected,
     snapshot_initialization_wait,
 )
 from software_agent_team.process_lifecycle import (
     InvocationProcessLease,
+    ProcessIdentity,
     ProcessLeaseStore,
     ProcessLifecycleError,
     read_linux_process_identity,
@@ -89,6 +91,8 @@ from software_agent_team.teams import (
 DEFAULT_PROCESS_SHUTDOWN_GRACE_SECONDS = 35
 DEFAULT_INITIALIZATION_NO_PROGRESS_SECONDS = 90.0
 DEFAULT_INITIALIZATION_STALL_GRACE_SECONDS = 15.0
+MAX_INITIALIZATION_PROCESS_SAMPLE_SECONDS = 1.0
+INITIALIZATION_PROCESS_SAMPLES_PER_GRACE = 4
 DEFAULT_RESPONSE_FINALIZATION_NO_PROGRESS_SECONDS = 60.0
 DEFAULT_RESPONSE_FINALIZATION_STALL_GRACE_SECONDS = 10.0
 DEFAULT_CLOUD_PROVIDER_SILENCE_SECONDS = 120.0
@@ -96,6 +100,18 @@ DEFAULT_LOCAL_PROVIDER_SILENCE_SECONDS = 300.0
 DEFAULT_PROVIDER_STALL_GRACE_SECONDS = 30.0
 DEFAULT_LIVENESS_POLL_SECONDS = 0.25
 PROVIDER_ACTIVITY_REPORT_SECONDS = 10.0
+
+
+def resolve_initialization_process_sample_interval(
+    policy: InitializationLivenessPolicy,
+) -> float:
+    """Bound process sampling while retaining multiple observations per grace."""
+
+    return min(
+        MAX_INITIALIZATION_PROCESS_SAMPLE_SECONDS,
+        policy.stall_grace_seconds / INITIALIZATION_PROCESS_SAMPLES_PER_GRACE,
+    )
+
 
 ROLE_ARTIFACT_KINDS: dict[AgentRole, frozenset[ArtifactKind]] = {
     AgentRole.CLARIFIER: frozenset({ArtifactKind.CLARIFICATION_RECORD}),
@@ -1541,7 +1557,7 @@ class _InvocationLifecycleRecorder:
 
 
 class _InitializationLivenessMonitor:
-    """Enforce finite exact progress before provider liveness can begin."""
+    """Enforce inactivity without mistaking activity for readiness."""
 
     def __init__(
         self,
@@ -1551,6 +1567,8 @@ class _InitializationLivenessMonitor:
         state_dir: Path | None,
         baseline: OpenClawInitializationBaseline | None,
         baseline_error: bool,
+        process_identity: ProcessIdentity | None,
+        expected_uid: int,
         started_monotonic: float,
         lifecycle: _InvocationLifecycleRecorder,
     ) -> None:
@@ -1560,6 +1578,14 @@ class _InitializationLivenessMonitor:
         self.baseline = baseline
         self.started_monotonic = started_monotonic
         self.last_progress = started_monotonic
+        self.process_identity = process_identity
+        self.expected_uid = expected_uid
+        self.process_activity_observations = 0
+        self.process_sample_interval = resolve_initialization_process_sample_interval(
+            policy
+        )
+        self.next_process_sample = started_monotonic
+        self.previous_process_snapshot: InitializationWaitDiagnostic | None = None
         self.lifecycle = lifecycle
         self.checkpoints: list[InitializationCheckpoint] = [
             InitializationCheckpoint.PROCESS_LAUNCHED
@@ -1616,6 +1642,8 @@ class _InitializationLivenessMonitor:
             return False
         if observation is not None:
             self._advance(observation.checkpoint, now=now)
+        if not self.ready:
+            self._observe_process_activity(now)
         inactive = max(0.0, now - self.last_progress)
         self.maximum_no_progress_ms = max(
             self.maximum_no_progress_ms,
@@ -1715,20 +1743,52 @@ class _InitializationLivenessMonitor:
             self.lifecycle.initialization_progress(candidate, now=now)
         self.last_progress = now
         if self.suspected:
-            self.suspected = False
-            self.stall_recovered_count += 1
-            self.lifecycle.set_initialization_evidence(self.evidence())
-            self.lifecycle.emit_initialization(
-                AgentExecutionActivityKind.INITIALIZATION_STALL_RECOVERED,
-                now=now,
-                checkpoint=checkpoint,
-            )
+            self._recover(now=now, checkpoint=checkpoint)
         if checkpoint in {
             InitializationCheckpoint.CURRENT_TURN,
             InitializationCheckpoint.PROVIDER_STREAM,
         }:
             self.ready = True
             self.lifecycle.provider_ready(checkpoint, now=now)
+
+    def _observe_process_activity(self, now: float) -> None:
+        """Renew inactivity from exact counters without granting readiness."""
+
+        if self.process_identity is None or now < self.next_process_sample:
+            return
+        snapshot = snapshot_initialization_wait(
+            self.process_identity,
+            expected_uid=self.expected_uid,
+            reason="suspected",
+            elapsed_ms=self.lifecycle.elapsed_ms(now),
+        )
+        previous = self.previous_process_snapshot
+        self.previous_process_snapshot = snapshot
+        self.next_process_sample = now + self.process_sample_interval
+        if previous is None or not initialization_process_activity_detected(
+            previous,
+            snapshot,
+        ):
+            return
+        self.process_activity_observations += 1
+        self.last_progress = now
+        if self.suspected:
+            self._recover(now=now, checkpoint=None)
+
+    def _recover(
+        self,
+        *,
+        now: float,
+        checkpoint: InitializationCheckpoint | None,
+    ) -> None:
+        self.suspected = False
+        self.stall_recovered_count += 1
+        self.lifecycle.set_initialization_evidence(self.evidence())
+        self.lifecycle.emit_initialization(
+            AgentExecutionActivityKind.INITIALIZATION_STALL_RECOVERED,
+            now=now,
+            checkpoint=checkpoint,
+        )
 
     def evidence(self) -> InitializationLivenessEvidence:
         return InitializationLivenessEvidence(
@@ -1747,6 +1807,7 @@ class _InitializationLivenessMonitor:
                 0 if self.baseline is None else self.baseline.matching_turn_count
             ),
             checkpoints=tuple(self.checkpoints),
+            process_activity_observations=self.process_activity_observations,
             stall_suspected_count=self.stall_suspected_count,
             stall_recovered_count=self.stall_recovered_count,
             maximum_no_progress_ms=self.maximum_no_progress_ms,
@@ -2888,6 +2949,8 @@ class OpenClawSubprocessExecutor:
             state_dir=state_dir,
             baseline=initialization_baseline,
             baseline_error=initialization_baseline_error,
+            process_identity=diagnostic_identity,
+            expected_uid=os.getuid(),
             started_monotonic=process_started,
             lifecycle=lifecycle,
         )

@@ -164,9 +164,14 @@ execution, retaining Artifact v2-v9 and Planning v2-v11 reads. Lifecycle schema
 v3 records a content-free pre-invocation initialization baseline while retaining
 lifecycle v1-v2 reads. Lifecycle v4 adds bounded identity-bound wait snapshots at
 initialization suspicion and stall boundaries, carried by Artifact v11 and
-Planning v14 with canonical historical reads. The focused live-child checks
-cover capture, recovery and cleanup; these diagnostics do not establish the
-cause or resolution of historical OpenClaw startup stalls. Artifact schema v8 added a distinct
+Planning v14. Lifecycle v5 separates pre-readiness inactivity from readiness:
+exact invocation-owned CPU, fault, I/O, or complete process-topology changes
+renew only the initialization inactivity lease and are counted in Artifact v12
+and Planning v15; only a new current turn or invocation-private stream starts
+provider waiting. Historical schemas remain canonically readable. Focused
+live-child checks cover active initialization, truly inactive stall, capture,
+recovery, and exact cleanup; this contract does not retroactively identify one
+unique cause for every historical OpenClaw startup stall. Artifact schema v8 added a distinct
 nonterminal `deferred` outcome for validated async `exec`/`process` starts.
 Deferred calls remain visible in the audit chain but cannot
 prove a satisfied Review claim or replace a later terminal process result or

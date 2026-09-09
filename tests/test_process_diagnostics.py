@@ -9,7 +9,81 @@ from pathlib import Path
 import pytest
 
 from software_agent_team import process_diagnostics as diagnostics
-from software_agent_team.process_lifecycle import read_linux_process_identity
+from software_agent_team.process_lifecycle import (
+    ProcessIdentity,
+    read_linux_process_identity,
+)
+
+
+def wait_diagnostic(
+    *processes: diagnostics.ProcessWaitSnapshot,
+    incomplete: bool = False,
+) -> diagnostics.InitializationWaitDiagnostic:
+    return diagnostics.InitializationWaitDiagnostic(
+        reason="suspected",
+        elapsed_ms=1,
+        processes=processes,
+        incomplete=incomplete,
+    )
+
+
+def wait_snapshot(
+    *,
+    pid: int = 101,
+    user_ticks: int = 1,
+    read_bytes: int | None = 1,
+) -> diagnostics.ProcessWaitSnapshot:
+    return diagnostics.ProcessWaitSnapshot(
+        identity=ProcessIdentity(
+            pid=pid,
+            process_group_id=101,
+            start_time_ticks=1000 + pid,
+        ),
+        expected_uid=1000,
+        status="observed",
+        state="S",
+        user_ticks=user_ticks,
+        system_ticks=1,
+        minor_faults=1,
+        major_faults=1,
+        rss_kib=1,
+        swap_kib=0,
+        read_bytes=read_bytes,
+        write_bytes=1,
+        wait_channel="do_wait",
+        unavailable_fields=("read_bytes",) if read_bytes is None else (),
+    )
+
+
+def test_exact_counter_increase_is_initialization_activity_only():
+    previous = wait_diagnostic(wait_snapshot(user_ticks=1))
+    current = wait_diagnostic(wait_snapshot(user_ticks=2))
+
+    assert diagnostics.initialization_process_activity_detected(previous, current)
+
+
+def test_state_memory_and_unavailable_counters_do_not_invent_activity():
+    previous = wait_snapshot(read_bytes=None)
+    current = previous.model_copy(update={"state": "R", "rss_kib": 200})
+
+    assert not diagnostics.initialization_process_activity_detected(
+        wait_diagnostic(previous),
+        wait_diagnostic(current),
+    )
+
+
+def test_only_complete_attributed_topology_change_is_activity():
+    parent = wait_snapshot()
+    child = wait_snapshot(pid=102)
+
+    assert diagnostics.initialization_process_activity_detected(
+        wait_diagnostic(parent),
+        wait_diagnostic(parent, child),
+    )
+    assert not diagnostics.initialization_process_activity_detected(
+        wait_diagnostic(parent, incomplete=True),
+        wait_diagnostic(parent, child),
+    )
 
 
 def test_live_owned_child_survives_snapshot():

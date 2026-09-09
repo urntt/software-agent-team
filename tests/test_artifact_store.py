@@ -1139,7 +1139,7 @@ def test_live_initialization_wait_survives_invocation_settlement_and_storage(tmp
         pricing=None,
     )
     loaded = store.load(persisted.reference)
-    assert loaded.schema_version == 11
+    assert loaded.schema_version == 12
     assert loaded.invocation_lifecycle == result.telemetry.invocation_lifecycle
     assert [
         item.reason for item in loaded.invocation_lifecycle.initialization_wait

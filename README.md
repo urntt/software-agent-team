@@ -174,9 +174,13 @@ observes a finite sequence of attributable OpenClaw initialization checkpoints
 in its private state. It captures a content-free baseline immediately before
 launch, so a session directory, index, binding, transcript header, or matching
 turn inherited from an earlier invocation is not current progress; reusing the
-same prompt requires a newly observed turn occurrence. Ninety seconds without checkpoint progress opens a visible
-final 15-second diagnostic window; continued inactivity stops only that
-invocation, while a late checkpoint recovers the same invocation. An unavailable
+same prompt requires a newly observed turn occurrence. During that pre-readiness
+interval, identity-bound CPU, fault, I/O, or complete process-topology changes
+renew only the initialization inactivity lease; they never create a readiness
+checkpoint or start provider waiting. Ninety seconds without either attributable
+process activity or checkpoint progress opens a visible final 15-second diagnostic
+window; continued inactivity stops only that invocation, while later activity
+recovers the same invocation. An unavailable
 or malformed initialization observer fails closed instead of leaving an
 unobservable process running. A session index or transcript that is exactly
 missing at open time is instead treated as “not published yet” and remains at

@@ -169,6 +169,53 @@ class InitializationWaitDiagnostic(BaseModel):
     incomplete: bool
 
 
+_ACTIVITY_COUNTER_FIELDS = (
+    "user_ticks",
+    "system_ticks",
+    "minor_faults",
+    "major_faults",
+    "read_bytes",
+    "write_bytes",
+)
+
+
+def initialization_process_activity_detected(
+    previous: InitializationWaitDiagnostic,
+    current: InitializationWaitDiagnostic,
+) -> bool:
+    """Detect exact-identity counter or complete-topology progress.
+
+    The result is suitable only for renewing an initialization inactivity
+    lease. It is not readiness evidence and does not prove useful work.
+    """
+
+    previous_observed = {
+        item.identity: item for item in previous.processes if item.status == "observed"
+    }
+    current_observed = {
+        item.identity: item for item in current.processes if item.status == "observed"
+    }
+    if (
+        not previous.incomplete
+        and not current.incomplete
+        and set(previous_observed) != set(current_observed)
+    ):
+        return True
+    for identity in previous_observed.keys() & current_observed.keys():
+        before = previous_observed[identity]
+        after = current_observed[identity]
+        for field in _ACTIVITY_COUNTER_FIELDS:
+            old_value = getattr(before, field)
+            new_value = getattr(after, field)
+            if (
+                old_value is not None
+                and new_value is not None
+                and new_value > old_value
+            ):
+                return True
+    return False
+
+
 def snapshot_initialization_wait(
     identity: ProcessIdentity | None,
     *,

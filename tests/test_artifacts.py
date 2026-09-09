@@ -217,7 +217,7 @@ def lifecycle_payload(
     *,
     exit_code: int | None = 0,
     signal: int | None = None,
-    schema_version: int = 4,
+    schema_version: int = 5,
 ) -> dict[str, object]:
     """Return minimal coherent lifecycle evidence for record binding tests."""
 
@@ -416,9 +416,9 @@ def test_current_lifecycle_records_the_pre_invocation_baseline() -> None:
 
     restored = AgentExecutionRecord.model_validate(payload)
 
-    assert restored.schema_version == 11
+    assert restored.schema_version == 12
     assert restored.invocation_lifecycle is not None
-    assert restored.invocation_lifecycle.schema_version == 4
+    assert restored.invocation_lifecycle.schema_version == 5
     assert (
         restored.invocation_lifecycle.initialization.baseline_matching_turn_count == 1
     )
@@ -460,6 +460,27 @@ def test_pre_diagnostic_lifecycle_keeps_canonical_serialization(version):
     legacy_lifecycle["initialization_wait"] = []
     with pytest.raises(ValidationError, match="legacy lifecycle"):
         InvocationLifecycleEvidence.model_validate(legacy_lifecycle)
+
+
+def test_artifact_eleven_keeps_lifecycle_four_without_process_activity() -> None:
+    payload = valid_execution_payload()
+    payload["schema_version"] = 11
+    payload["execution_status"] = "completed"
+    payload["invocation_lifecycle"] = lifecycle_payload(schema_version=4)
+
+    record = AgentExecutionRecord.model_validate(payload)
+    canonical = record.model_dump(mode="json")
+
+    assert record.invocation_lifecycle is not None
+    assert record.invocation_lifecycle.schema_version == 4
+    assert (
+        "process_activity_observations"
+        not in canonical["invocation_lifecycle"]["initialization"]
+    )
+    incompatible = deepcopy(payload["invocation_lifecycle"])
+    incompatible["initialization"]["process_activity_observations"] = 1
+    with pytest.raises(ValidationError, match="legacy lifecycle"):
+        InvocationLifecycleEvidence.model_validate(incompatible)
 
 
 def test_upstream_incomplete_outcome_requires_artifact_schema_seven() -> None:
@@ -603,7 +624,7 @@ def test_runtime_rejections_require_new_schema_and_captured_provenance() -> None
         }
     )
     record = AgentExecutionRecord.model_validate(payload)
-    assert record.schema_version == 11
+    assert record.schema_version == 12
     assert record.tool_calls == ()
     assert len(record.runtime_rejections) == 1
     for version in range(2, 10):
@@ -650,7 +671,7 @@ def test_deferred_tool_evidence_requires_artifact_schema_eight() -> None:
 
     current = AgentExecutionRecord.model_validate(payload)
 
-    assert current.schema_version == 11
+    assert current.schema_version == 12
     assert current.tool_calls[0].outcome is AgentToolCallOutcome.DEFERRED
 
     payload["schema_version"] = 7

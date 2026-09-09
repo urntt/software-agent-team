@@ -95,7 +95,9 @@ records one user-approved USD ceiling and an optional whole-run deadline. Each
 provider invocation is protected by a separate renewable inactivity contract:
 trustworthy provider streaming, tool lifecycle/output, controller-verified
 artifact, or checkpoint activity renews the lease; SAT's own elapsed-time
-heartbeat and a live process do not. Sustained silence enters a visible
+heartbeat and mere process existence do not. Before provider readiness, exact
+invocation-owned CPU, fault, I/O, or complete topology changes may renew only
+the separate initialization inactivity lease and cannot grant readiness. Sustained silence enters a visible
 suspected-stall probe and grace state before interruption and evidence cleanup.
 
 Before Planning or execution, a separate local readiness check verifies each

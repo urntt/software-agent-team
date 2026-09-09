@@ -22,6 +22,7 @@ from software_agent_team.artifacts import AgentRole, ArtifactKind
 from software_agent_team.execution import (
     AgentExecutionActivityKind,
     AgentExecutionRequest,
+    AgentExecutionResult,
     OpenClawSubprocessExecutor,
     ProviderLivenessPolicy,
     ResponseFinalizationPolicy,
@@ -33,13 +34,14 @@ from software_agent_team.teams import AgentCapability, load_team_manifest
 
 MODEL = "deepseek/deepseek-v4-flash-vision-exp"
 SCENARIOS = ("stream", "recovery", "disconnect", "hang")
-OPTIONAL_SCENARIOS = ("tool-rejection",)
+OPTIONAL_SCENARIOS = ("tool-rejection", "continuation")
 _EXPECTED_TERMINAL = {
     "stream": ("completed", "completed"),
     "recovery": ("completed", "completed"),
     "disconnect": ("process_failed", "process_failure"),
     "hang": ("provider_stalled", "provider_stall"),
     "tool-rejection": ("completed", "completed"),
+    "continuation": ("completed", "completed"),
 }
 _TERMINAL_PHASES = ("stopping", "collecting_evidence", "stopped")
 _EXPECTED_RESPONSE = '{"status":"ok"}'
@@ -195,6 +197,51 @@ def validate_scenario_outcome(outcome: Mapping[str, object]) -> ScenarioValidati
             mismatches.append("expected independent successful fixture read evidence")
         if requests_seen != 3:
             mismatches.append("expected rejection, read, and final response requests")
+    elif scenario == "continuation":
+        invocations = _sequence(outcome.get("invocations"))
+        if len(invocations) != 2:
+            mismatches.append("continuation must record exactly two invocations")
+        else:
+            for index, invocation in enumerate(invocations, start=1):
+                item = _mapping(invocation)
+                if item.get("status") != "completed" or item.get("exit_code") != 0:
+                    mismatches.append(
+                        f"continuation invocation {index} did not complete"
+                    )
+                initialization = _mapping(item.get("initialization"))
+                if initialization.get("mode") != "enforced":
+                    mismatches.append(
+                        "continuation invocation "
+                        f"{index} lacked enforced initialization"
+                    )
+                checkpoints = _sequence(initialization.get("checkpoints"))
+                if index == 1 and not {
+                    "current_turn",
+                    "provider_stream",
+                }.intersection(checkpoints):
+                    mismatches.append(
+                        "continuation invocation 1 lacked attributable readiness"
+                    )
+                if index == 2 and "current_turn" not in checkpoints:
+                    mismatches.append(
+                        "continuation invocation 2 lacked a new current turn"
+                    )
+            second_initialization = _mapping(
+                _mapping(invocations[1]).get("initialization")
+            )
+            if second_initialization.get("baseline_checkpoint") != "current_turn":
+                mismatches.append(
+                    "continuation did not start from the existing current turn"
+                )
+            matching_turn_count = second_initialization.get(
+                "baseline_matching_turn_count"
+            )
+            if not isinstance(matching_turn_count, int) or matching_turn_count < 1:
+                mismatches.append(
+                    "continuation did not preserve the matching-turn baseline"
+                )
+        if requests_seen != 2:
+            mismatches.append("continuation endpoint must observe exactly two requests")
 
     return ScenarioValidation(
         scenario=scenario,
@@ -533,6 +580,66 @@ def running_server(scenario: str) -> Iterator[ScenarioServer]:
         worker.join(timeout=5)
 
 
+def _serialize_invocation(
+    result: AgentExecutionResult,
+    activities: Sequence[Mapping[str, object]],
+) -> dict[str, object]:
+    """Serialize one invocation without losing initialization evidence."""
+
+    lifecycle = result.telemetry.invocation_lifecycle
+    provider_liveness = result.telemetry.provider_liveness
+    response_finalization = (
+        None if lifecycle is None else lifecycle.response_finalization
+    )
+    return {
+        "status": result.status.value,
+        "stop_reason": (None if lifecycle is None else lifecycle.shutdown.reason.value),
+        "response_text": result.response_text,
+        "exit_code": result.telemetry.exit_code,
+        "duration_ms": result.telemetry.duration_ms,
+        "provider": result.telemetry.provider,
+        "model": result.telemetry.model,
+        "usage": (
+            None
+            if result.telemetry.usage is None
+            else result.telemetry.usage.model_dump(mode="json")
+        ),
+        "tool_evidence_status": result.telemetry.tool_evidence_status.value,
+        "tool_calls": [
+            item.model_dump(mode="json") for item in result.telemetry.tool_calls
+        ],
+        "runtime_rejections": [
+            item.model_dump(mode="json") for item in result.telemetry.runtime_rejections
+        ],
+        "initialization": (
+            None
+            if lifecycle is None
+            else lifecycle.initialization.model_dump(mode="json")
+        ),
+        "liveness": (
+            None
+            if provider_liveness is None
+            else provider_liveness.model_dump(mode="json")
+        ),
+        "response_finalization": (
+            None
+            if response_finalization is None
+            else response_finalization.model_dump(mode="json")
+        ),
+        "phases": (
+            []
+            if lifecycle is None
+            else [item.phase.value for item in lifecycle.transitions]
+        ),
+        "activities": list(activities),
+        "cleanup_completed": (
+            None if lifecycle is None else lifecycle.shutdown.cleanup_completed
+        ),
+        "stdout_tail": result.telemetry.stdout[-4000:],
+        "stderr_tail": result.telemetry.stderr[-4000:],
+    }
+
+
 def execute_scenario(
     repository: Path,
     root: Path,
@@ -619,26 +726,37 @@ def execute_scenario(
                 source="controlled loopback response-finalization validation",
             ),
         )
-        activities: list[dict[str, object]] = []
-        activity_started = time.monotonic()
-
-        def record_activity(activity: object) -> None:
-            dumped = activity.model_dump(mode="json")
-            activities.append(
-                {
-                    "elapsed_ms": round((time.monotonic() - activity_started) * 1000),
-                    "activity": dumped,
-                }
-            )
-            if (
-                scenario == "recovery"
-                and dumped.get("kind")
-                == AgentExecutionActivityKind.STALL_SUSPECTED.value
-            ):
-                server.signal_controller_stall()
-
+        invocations: list[dict[str, object]] = []
+        current_activities: list[dict[str, object]] = []
         try:
-            result = executor.execute(request, activity_handler=record_activity)
+            invocation_count = 2 if scenario == "continuation" else 1
+            for _ in range(invocation_count):
+                current_activities = []
+                activity_started = time.monotonic()
+
+                def record_activity(
+                    activity: object,
+                    activity_records: list[dict[str, object]] = current_activities,
+                    started: float = activity_started,
+                ) -> None:
+                    dumped = activity.model_dump(mode="json")
+                    activity_records.append(
+                        {
+                            "elapsed_ms": round((time.monotonic() - started) * 1000),
+                            "activity": dumped,
+                        }
+                    )
+                    if (
+                        scenario == "recovery"
+                        and dumped.get("kind")
+                        == AgentExecutionActivityKind.STALL_SUSPECTED.value
+                    ):
+                        server.signal_controller_stall()
+
+                result = executor.execute(request, activity_handler=record_activity)
+                invocations.append(_serialize_invocation(result, current_activities))
+                if result.status.value != "completed":
+                    break
         except Exception as error:  # pragma: no cover - exercised by the live tool
             sandbox_cleanup = remove_sandbox_containers(
                 docker_binary, request.session_key
@@ -652,7 +770,8 @@ def execute_scenario(
                 "error_type": type(error).__name__,
                 "error": str(error),
                 "phases": [],
-                "activities": activities,
+                "activities": current_activities,
+                "invocations": invocations,
                 "server_events": list(server.events),
                 "requests_seen": server.requests_seen,
                 "cleanup_completed": False,
@@ -661,49 +780,15 @@ def execute_scenario(
             }
         sandbox_cleanup = remove_sandbox_containers(docker_binary, request.session_key)
 
-    lifecycle = result.telemetry.invocation_lifecycle
-    provider_liveness = result.telemetry.provider_liveness
-    response_finalization = (
-        None if lifecycle is None else lifecycle.response_finalization
-    )
+    final_invocation = invocations[-1]
     return {
         "scenario": scenario,
-        "status": result.status.value,
-        "stop_reason": None if lifecycle is None else lifecycle.shutdown.reason.value,
-        "response_text": result.response_text,
-        "exit_code": result.telemetry.exit_code,
-        "duration_ms": result.telemetry.duration_ms,
-        "provider": result.telemetry.provider,
-        "model": result.telemetry.model,
-        "usage": None
-        if result.telemetry.usage is None
-        else result.telemetry.usage.model_dump(mode="json"),
-        "tool_evidence_status": result.telemetry.tool_evidence_status.value,
-        "tool_calls": [
-            item.model_dump(mode="json") for item in result.telemetry.tool_calls
-        ],
-        "runtime_rejections": [
-            item.model_dump(mode="json") for item in result.telemetry.runtime_rejections
-        ],
-        "liveness": None
-        if provider_liveness is None
-        else provider_liveness.model_dump(mode="json"),
-        "response_finalization": None
-        if response_finalization is None
-        else response_finalization.model_dump(mode="json"),
-        "phases": []
-        if lifecycle is None
-        else [item.phase.value for item in lifecycle.transitions],
-        "activities": activities,
+        **final_invocation,
+        "invocations": invocations,
         "server_events": list(server.events),
         "requests_seen": server.requests_seen,
-        "cleanup_completed": None
-        if lifecycle is None
-        else lifecycle.shutdown.cleanup_completed,
         "sandbox_containers_before_launch": containers_before_launch,
         "sandbox_cleanup": sandbox_cleanup,
-        "stdout_tail": result.telemetry.stdout[-4000:],
-        "stderr_tail": result.telemetry.stderr[-4000:],
     }
 
 
@@ -745,7 +830,7 @@ def _run_matrix(args: argparse.Namespace) -> dict[str, object]:
                 for scenario in scenarios
             ]
     return {
-        "schema_version": 3,
+        "schema_version": 4,
         "model": MODEL,
         "external_provider_calls": 0,
         "outcomes": outcomes,

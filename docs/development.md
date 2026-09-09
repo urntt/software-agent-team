@@ -248,6 +248,14 @@ diagnostics and successful paired work without session-attribution degradation.
 It uses no external provider or real credential and is separate from the four
 default transport/liveness scenarios.
 
+The additional `--scenario continuation` case invokes the same real OpenClaw
+session twice. Its oracle requires two endpoint requests and two independently
+completed invocations; the second launch must start from the existing
+`current_turn` baseline and become ready only after a new matching turn is
+observed. The output retains each invocation's initialization evidence and
+duration, so this focused check covers reused-session startup without running a
+complete product journey or calling an external provider.
+
 ## Checkout Installation
 
 Contributors who need checkout-bound `sat` and `sat-uninstall` launchers may
@@ -453,15 +461,18 @@ versus detailed progress. Register each changed threshold or polling constant in
 The `process_diagnostics` collector provides bounded, read-only Linux snapshots
 of an exact PID/start-time/group/UID identity. It reads only stat, status, I/O,
 and wait-channel fields; unavailable metrics remain null rather than zero.
-It never signals processes or grants readiness. The executor takes snapshots at
-the first initialization suspicion and before an initialization-stall shutdown,
-not during every poll. Snapshots follow currently attributable leader-thread
+It never signals processes or grants readiness. The executor samples exact
+identity-bound counters at a bounded interval while initialization is active,
+and retains snapshots only at the first initialization suspicion and before an
+initialization-stall shutdown. Counter or complete-topology changes renew only
+the initialization inactivity lease; they never grant readiness. Snapshots follow currently attributable leader-thread
 descendants within the isolated process group; this is not a census of threads
 or detached processes. Coverage is explicitly incomplete when attribution,
 reads, or the diagnostic process bound prevent traversal. The bound also limits
 candidate child inspection, including rejected identities, rather than merely
-truncating the final output after traversing an arbitrarily large tree. Lifecycle v4 persists
-these snapshots independently of readiness; recovered calls retain the suspicion
+truncating the final output after traversing an arbitrarily large tree. Lifecycle v5
+adds the count of attributed process-activity renewals; lifecycle v4 persists
+the retained snapshots independently of readiness. Recovered calls retain the suspicion
 snapshot without claiming a terminal stall. Focused tests exercise live
 processes, identity changes, denied reads, bounded/non-symlink reads, recovery,
 and terminal cleanup.
@@ -486,9 +497,9 @@ late history during shutdown, same-phase clock preservation, and distinct schedu
 decisions. Include phase publication before the corresponding history delta:
 the displayed completed-tool count must come from the current numeric snapshot,
 not a cached prose total in the previous action description. `RunEvent` schema v5 must
-remain canonically readable from v2 through v4, Artifact schema v11 from v2
-through v10, lifecycle schema v4 from v1 through v3, and Planning schema v14 from
-v2 through v13. Main-thread and repeated SIGINT tests must prove exact child
+remain canonically readable from v2 through v4, Artifact schema v12 from v2
+through v11, lifecycle schema v5 from v1 through v4, and Planning schema v15 from
+v2 through v14. Main-thread and repeated SIGINT tests must prove exact child
 cleanup before lease release, CLI exit 130, and a terminal Planning turn/session.
 Run the CLI interrupt path with the real task ledger as well: after that process
 exits, reload the turn and verify its unique settlement, unknown cost, separate

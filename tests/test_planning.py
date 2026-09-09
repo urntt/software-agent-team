@@ -6045,8 +6045,17 @@ raise SystemExit(cli.main([]))
 
         assert not ProcessLeaseStore(tmp_path / "leases").inspect().processes
         legacy = turn.model_dump(mode="json")
-        assert legacy["schema_version"] == 14
-        assert legacy["execution"]["invocation_lifecycle"]["schema_version"] == 4
+        assert legacy["schema_version"] == 15
+        assert legacy["execution"]["invocation_lifecycle"]["schema_version"] == 5
+        legacy["schema_version"] = 14
+        with pytest.raises(ValidationError, match="lifecycle v5"):
+            PlanningTurn.model_validate(legacy)
+        legacy["execution"]["invocation_lifecycle"]["schema_version"] = 4
+        legacy["execution"]["invocation_lifecycle"]["initialization"].pop(
+            "process_activity_observations",
+            None,
+        )
+        assert PlanningTurn.model_validate(legacy).model_dump(mode="json") == legacy
         legacy["schema_version"] = 13
         with pytest.raises(ValidationError, match="lifecycle v4"):
             PlanningTurn.model_validate(legacy)

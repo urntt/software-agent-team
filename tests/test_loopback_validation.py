@@ -103,6 +103,45 @@ def test_tool_rejection_oracle_requires_diagnostic_and_independent_work() -> Non
         assert validation_exit_code(result) == 2
 
 
+def test_continuation_oracle_requires_two_new_current_turns() -> None:
+    sample = outcome("stream")
+    first = {
+        **sample,
+        "initialization": {
+            "mode": "enforced",
+            "checkpoints": ["process_launched", "provider_stream"],
+        },
+    }
+    second = {
+        **first,
+        "initialization": {
+            "mode": "enforced",
+            "baseline_checkpoint": "current_turn",
+            "baseline_matching_turn_count": 1,
+            "checkpoints": ["process_launched", "current_turn"],
+        },
+    }
+    sample.update(
+        {
+            "scenario": "continuation",
+            "requests_seen": 2,
+            "invocations": [first, second],
+        }
+    )
+
+    assert validate_matrix([sample], expected_scenarios=("continuation",))["passed"]
+
+    invalid = deepcopy(sample)
+    invalid["invocations"][1]["initialization"]["baseline_matching_turn_count"] = 0
+    result = validate_matrix([invalid], expected_scenarios=("continuation",))
+
+    assert result["passed"] is False
+    assert any(
+        "matching-turn baseline" in mismatch
+        for mismatch in result["scenarios"][0]["mismatches"]
+    )
+
+
 def test_cleanup_success_cannot_hide_a_failed_recovery_outcome() -> None:
     outcomes = valid_outcomes()
     recovery = outcomes[1]

@@ -505,16 +505,21 @@ workspaces/<run_id>/
 └── detached self-contained Git clone and generated result
 ```
 
-Artifact schema v11 carries lifecycle v4 `initialization_wait` diagnostics at
-the first suspected initialization stall and before a terminal initialization
+Artifact schema v12 carries lifecycle v5 initialization evidence. During
+pre-readiness waiting, a bounded sampler compares only exact PID/group/start-time/UID
+identities and monotonic CPU, fault, I/O, or complete process-topology changes.
+Those observations renew the initialization inactivity lease and are counted as
+`process_activity_observations`; they never create a readiness checkpoint or
+start provider waiting. Artifact schema v11 carries lifecycle v4
+`initialization_wait` diagnostics at the first suspected initialization stall and before a terminal initialization
 stall. Each snapshot binds PID, process group, start time and UID checks, and
 retains only kernel state, CPU ticks, faults, RSS/swap, I/O bytes and wait channel.
 Identity changes discard metrics; unavailable values remain null. Traversal is
 limited to currently attributable leader-thread descendants in the invocation
-group, with incomplete coverage explicitly marked. These observations neither
-renew readiness nor prove useful work or a failure's root cause. Recovered
+group, with incomplete coverage explicitly marked. Retained boundary snapshots
+neither renew readiness nor prove useful work or a failure's root cause. Recovered
 invocations may retain a suspicion snapshot without a terminal-stall snapshot.
-Artifact v2-v10 and lifecycle v1-v3 retain their historical canonical form;
+Artifact v2-v11 and lifecycle v1-v4 retain their historical canonical form;
 older lifecycle versions reject the new field rather than silently discarding it.
 
 Artifact schema v10 adds `runtime_rejections`: provenance-bound negative
@@ -586,9 +591,10 @@ seconds. Approval revalidates that authority against the TeamPlan at the
 execution boundary.
 The bootstrap Planner cannot create Agents or change lifecycle state.
 
-Planning schema v14 carries the same lifecycle-v4 initialization diagnostics as
-execution, preserving Planning v2-v13 reads. New lifecycle evidence cannot be
-written under an older Planning version.
+Planning schema v15 carries lifecycle-v5 initialization activity evidence as
+execution, preserving Planning v2-v14 reads. Planning schema v14 remains paired
+with lifecycle v4 diagnostics. New lifecycle evidence cannot be written under
+an older Planning version.
 
 Planning schema v13 additionally preserves the shared executor's terminal invocation
 lifecycle and distinguishes failed sessions from user cancellation. An interrupt or
@@ -1146,7 +1152,9 @@ when investigating it rather than editing artifacts in place.
   only when it is beyond that baseline, belongs to a different attributed
   session, or adds a new occurrence of the same prompt. Pre-existing runtime
   files therefore cannot keep a hung invocation alive.
-  This initialization monitor is the sole readiness authority: both the session
+  Exact invocation-owned CPU, fault, I/O, or complete process-topology changes
+  renew only this initialization inactivity lease. They do not add a checkpoint,
+  start provider wait, or prove useful work. This initialization monitor is the sole readiness authority: both the session
   activity observer and private-stream observer submit their trusted checkpoint
   through it before provider wait can begin. A faster observer therefore cannot
   publish provider wait and leave a slower observer to move the lifecycle back
@@ -1167,8 +1175,9 @@ when investigating it rather than editing artifacts in place.
   still contribute retained session evidence and terminal counters, but cannot
   publish live-working progress or reopen an earlier phase. Shutdown events
   remain visible through evidence collection and the exact terminal outcome.
-  Prompt content is neither retained nor emitted. Ninety seconds without a new
-  checkpoint enters a visible final 15-second grace, after which the exact
+  Prompt content is neither retained nor emitted. Ninety seconds without new
+  attributable process activity or a new checkpoint enters a visible final
+  15-second grace, after which the exact
   process is stopped as `initialization_stall`. Observer absence or malformed
   attribution fails closed as `process_failure`; neither outcome is rewritten as
   provider silence. Exact index or transcript absence reported by the guarded
