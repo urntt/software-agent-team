@@ -16,8 +16,11 @@ Mixed user- and model-owned defects are revalidated together after the answer.
 Relational correction now grants the shared `decisions` slot together with the
 affected ProductDefinition dimensions only when no eligible decision exists;
 an actual two-question, five-dimension regression reaches a valid proposal in
-one targeted correction. The preceding exact clean candidate passed 1,406
-canonical checks without owned resource residuals. The current session-state follow-up also persists terminally
+one targeted correction. The last committed clean candidate passed 1,409
+canonical checks without owned resource residuals. The current declared-bundle
+follow-up passes 213 focused Planning, correction, schema, release, and
+documentation checks; a canonical gate on the exact release candidate remains
+a release condition. The current session-state follow-up also persists terminally
 invalid initial Planning as failed and restores the preceding proposal after a
 completed invalid revision.
 
@@ -508,8 +511,10 @@ two or three suggestions and a custom-answer path, or one complete proposal.
 Planning schema v5 records each question's decision category and owner, missing
 evidence, material consequences, alternatives, and the exact ProductDefinition
 dimensions it can resolve. The controller enforces the fixed responsibility
-matrix before showing a question, and every answered question must resolve to
-one proposal decision with unchanged ownership. Current proposals must carry
+matrix before showing a question. Tightly coupled dimensions can share one
+explicitly declared question and proposal decision; undeclared dimensions are
+not authorized, and statement values are projected from the exact transcript
+answer instead of model-authored user wording. Current proposals must carry
 an attributable ProductDefinition covering target users, primary workflow,
 delivery maturity, usability, operations, and delivery expectations. Each
 dimension records whether it came from explicit input, a resolved question, a

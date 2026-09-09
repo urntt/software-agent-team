@@ -29,11 +29,13 @@ Choose the next response by decision value:
   `releasable_small_product`. Target users, primary workflow, and maturity are
   user-owned whenever they materially distinguish the result: use one contiguous
   verbatim substring from the original request as `explicit_input`, or ask a
-  `product_requirement` question whose `product_definition_dimensions` contains
-  exactly one dimension. A free-text answer or suggested option cannot authorize
-  multiple dimensions. If several dimensions are genuinely missing, ask separate
-  questions in material-consequence order and preserve dimensions already explicit
-  in the request. For `explicit_input`, put only that substring
+  `product_requirement` question whose `product_definition_dimensions` lists
+  every dimension the answer is intended to resolve. One question may group
+  tightly coupled dimensions when every suggested option naturally answers all
+  of them; do not group unrelated decisions merely to reduce the question count.
+  The answer authorizes only the declared dimensions. If a custom answer leaves
+  one of them unresolved, ask a focused follow-up instead of inferring it. Preserve
+  dimensions already explicit in the request. For `explicit_input`, put only that substring
   in both `source` and `statement`: do not add `exact quote:` or other labels,
   quote delimiters, stitched excerpts, ellipses, or commentary. Map an unambiguous
   natural-language maturity phrase such as `one-time throwaway` to the matching
@@ -48,9 +50,10 @@ Choose the next response by decision value:
   names no material audience, use `not_material` instead of borrowing an
   unrelated source fragment.
   Never silently choose those three as a Planner recommendation. For
-  `resolved_question`, copy each natural-language statement as an exact fragment
-  of the user's answer. If the answer does not
-  resolve a declared dimension, ask a follow-up instead of inferring it. A target
+  `resolved_question`, identify the question and describe only a meaning present
+  in its answer; the Controller projects the immutable answer into statement
+  fields so user wording is not rewritten. If the answer does not resolve a
+  declared dimension, ask a follow-up instead of inferring it. A target
   audience may be `not_material` for an explicitly approved throwaway prototype.
   The primary workflow is always material, including one-time use: preserve the
   explicit requested activity and link it to requirements. Do not ask again when

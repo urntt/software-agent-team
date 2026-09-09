@@ -551,12 +551,13 @@ offer either array alone as a relational correction target. A live-contract
 change updates its submission schema hash; bump the persisted Planning schema
 only when stored canonical structure changes.
 
-Apply the same authority atomicity to ProductDefinition questions. One focused
-question may resolve exactly one ProductDefinition dimension. Tests must reject
-a question that assigns one free-text answer to multiple dimensions and must
-prove that resolving one dimension leaves every explicit sibling dimension
-unchanged. Legacy persisted transcripts remain readable; current admission is
-where the narrower authority contract is enforced.
+Apply the same bounded authority to ProductDefinition questions. One focused
+question may declare a tightly coupled bundle of known dimensions only when its
+choices answer the complete bundle. Tests must prove that one answer authorizes
+only the declared dimensions, that an undeclared or ambiguous sibling returns to
+focused clarification, and that the controller projects exact transcript wording
+instead of accepting a model paraphrase as user evidence. Legacy persisted
+transcripts remain readable; current admission enforces the declared bundle.
 
 Typed-submission tests must distinguish transport attempts from successful
 semantic submissions. OpenClaw may return a schema error to the model and let it

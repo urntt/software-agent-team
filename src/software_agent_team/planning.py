@@ -861,6 +861,7 @@ def _normalize_planning_response_payload(
     *,
     profile_criterion_ids: Collection[str] = (),
     user_inputs: Collection[str] = (),
+    question_answers: Mapping[str, str] | None = None,
 ) -> tuple[dict[str, object], tuple[str, ...]]:
     """Apply bounded semantic-preserving normalization before strict validation."""
 
@@ -1019,6 +1020,30 @@ def _normalize_planning_response_payload(
     product_dimensions = (
         product_definition if isinstance(product_definition, dict) else {}
     )
+    for dimension in ProductDefinitionDimension:
+        if dimension is ProductDefinitionDimension.DELIVERY_MATURITY:
+            continue
+        item = product_dimensions.get(dimension.value)
+        if (
+            not isinstance(item, dict)
+            or item.get("disposition")
+            != ProductDefinitionDisposition.RESOLVED_QUESTION.value
+            or not isinstance((question_id := item.get("source")), str)
+        ):
+            continue
+        answer = None if question_answers is None else question_answers.get(question_id)
+        if (
+            answer is None
+            or not answer.strip()
+            or len(answer.strip()) > 1000
+            or item.get("statement") == answer.strip()
+        ):
+            continue
+        item["statement"] = answer.strip()
+        changes.append(
+            "compiled proposal.product_definition."
+            f"{dimension.value}.statement from exact question answer"
+        )
     for dimension in ProductDefinitionDimension:
         if dimension is ProductDefinitionDimension.PRIMARY_WORKFLOW:
             # Core workflow materiality is never normalized away. Preserve the
@@ -1727,8 +1752,9 @@ class PlanningQuestion(BaseModel):
         default=(),
         exclude_if=lambda values: not values,
         description=(
-            "The single product-depth dimension this answer resolves; empty for "
-            "a material product decision outside the six adequacy dimensions."
+            "Every product-depth dimension this answer is intended to resolve; "
+            "empty for a material product decision outside the six adequacy "
+            "dimensions."
         ),
     )
     options: tuple[PlanningOption, ...] = Field(min_length=2, max_length=3)
@@ -2600,18 +2626,6 @@ def validate_question_admission(
                 (ResponseIssueSubjectKind.QUESTION, question.id)
             ),
         )
-    if len(question.product_definition_dimensions) > 1:
-        raise _planning_context_invariant(
-            "planning_product_question_atomic_dimension",
-            (
-                "one free-text Planning answer cannot authorize multiple "
-                "product-definition dimensions"
-            ),
-            paths=("/question",),
-            subjects=_planning_subjects(
-                (ResponseIssueSubjectKind.QUESTION, question.id)
-            ),
-        )
     if not question.missing_evidence:
         raise _planning_context_invariant(
             "planning_question_missing_evidence",
@@ -2636,6 +2650,34 @@ def _normalized_evidence_text(value: str) -> str:
     """Normalize user-visible text only enough for attributable quote matching."""
 
     return " ".join(value.casefold().split())
+
+
+_MATURITY_EVIDENCE_ALIASES = {
+    DeliveryMaturity.THROWAWAY_PROTOTYPE: (
+        "throwaway prototype",
+        "personal local one time helper",
+    ),
+    DeliveryMaturity.USABLE_LOCAL_PRODUCT: (
+        "usable local product",
+        "personal reusable local tool",
+    ),
+    DeliveryMaturity.RELEASABLE_SMALL_PRODUCT: (
+        "releasable small product",
+        "reusable for others",
+    ),
+}
+
+
+def _maturity_levels_in_answer(value: str) -> frozenset[DeliveryMaturity]:
+    """Recognize only the canonical levels and labels exposed by Planning."""
+
+    normalized = re.sub(r"[_-]+", " ", _normalized_evidence_text(value))
+    normalized = " ".join(re.findall(r"[\w]+", normalized))
+    return frozenset(
+        level
+        for level, aliases in _MATURITY_EVIDENCE_ALIASES.items()
+        if any(alias in normalized for alias in aliases)
+    )
 
 
 def _validate_decision_provenance(
@@ -2879,12 +2921,19 @@ def _product_definition_dimension_invariant(
             contract is None
             or contract.category is not PlanningDecisionCategory.PRODUCT_REQUIREMENT
             or contract.owner is not PlanningDecisionAuthority.USER
-            or dimension not in contract.product_definition_dimensions
         ):
             return issue(
                 "planning_product_question_dimension",
                 f"{dimension.value} was not resolved by its declared question",
                 subjects=subjects,
+            )
+        if dimension not in contract.product_definition_dimensions:
+            return issue(
+                "planning_product_question_dimension",
+                f"{dimension.value} was not resolved by its declared question",
+                subjects=subjects,
+                failure_class=ResponseFailureClass.MISSING_USER_DECISION,
+                authority=ResponseIssueAuthority.USER,
             )
         resolved_value = (
             definition.delivery_maturity.level.value.replace("_", " ")
@@ -2892,13 +2941,34 @@ def _product_definition_dimension_invariant(
             else getattr(item, "statement", "")
         )
         if contract.answer is not None:
-            if _normalized_evidence_text(
-                resolved_value
-            ) not in _normalized_evidence_text(contract.answer):
+            maturity_levels = (
+                _maturity_levels_in_answer(contract.answer)
+                if dimension is ProductDefinitionDimension.DELIVERY_MATURITY
+                else frozenset()
+            )
+            answer_preserves_value = (
+                maturity_levels == {definition.delivery_maturity.level}
+                if dimension is ProductDefinitionDimension.DELIVERY_MATURITY
+                else _normalized_evidence_text(resolved_value)
+                in _normalized_evidence_text(contract.answer)
+            )
+            if not answer_preserves_value:
                 return issue(
                     "planning_product_question_answer",
                     f"{dimension.value} is not preserved in its user answer",
                     subjects=subjects,
+                    failure_class=(
+                        ResponseFailureClass.MISSING_USER_DECISION
+                        if dimension is ProductDefinitionDimension.DELIVERY_MATURITY
+                        and not maturity_levels
+                        else ResponseFailureClass.SEMANTIC_CONTEXT
+                    ),
+                    authority=(
+                        ResponseIssueAuthority.USER
+                        if dimension is ProductDefinitionDimension.DELIVERY_MATURITY
+                        and not maturity_levels
+                        else ResponseIssueAuthority.MODEL
+                    ),
                 )
         else:
             approved_values = dict(contract.approved_dimension_values)
@@ -3589,7 +3659,7 @@ def _planning_response_schema() -> dict[str, object]:
                 required.append(field_name)
     question_properties = definitions["PlanningQuestion"]["properties"]
     dimension_schema = question_properties["product_definition_dimensions"]
-    dimension_schema["maxItems"] = 1
+    dimension_schema["maxItems"] = len(ProductDefinitionDimension)
     for field_name in ("decision_category",):
         field_schema = question_properties[field_name]
         options = field_schema.get("anyOf")
@@ -6325,6 +6395,7 @@ class AdaptivePlanningCoordinator:
         change_request: str | None = None,
         activity_handler: PlanningActivityHandler | None = None,
     ) -> _Invocation:
+        question_contracts = self._question_contracts(transcript, current_proposal)
         correction_plan: SemanticCorrectionPlan | None = None
         clarification_recovery: _PlanningClarificationRecovery | None = None
         seen_correction_fingerprints: set[str] = set()
@@ -6552,6 +6623,11 @@ class AdaptivePlanningCoordinator:
                                 request.source_request,
                                 *(() if change_request is None else (change_request,)),
                             ),
+                            question_answers={
+                                question_id: contract.answer
+                                for question_id, contract in question_contracts.items()
+                                if contract.answer is not None
+                            },
                         )
                     )
                     normalization_list = [
@@ -6606,10 +6682,6 @@ class AdaptivePlanningCoordinator:
                             paths=("/",),
                             authority=ResponseIssueAuthority.CONTROLLER,
                         )
-                    question_contracts = self._question_contracts(
-                        transcript,
-                        current_proposal,
-                    )
                     if parsed.kind is PlanningResponseKind.QUESTION:
                         assert parsed.question is not None
                         validate_question_admission(

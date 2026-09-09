@@ -1045,7 +1045,7 @@ def test_product_question_declares_one_atomic_dimension() -> None:
     assert "Product definition affected: target_users" in output
 
 
-def test_one_free_text_answer_cannot_authorize_multiple_product_dimensions(
+def test_one_question_can_authorize_an_explicit_product_dimension_bundle(
     tmp_path: Path,
 ) -> None:
     question = product_intent_question_response().question
@@ -1074,16 +1074,295 @@ def test_one_free_text_answer_cannot_authorize_multiple_product_dimensions(
         clock=AdvancingClock(),
     )
 
-    with pytest.raises(PlanningError, match="cannot authorize multiple"):
-        coordinator.start(
-            request(),
-            answer_question=lambda _question: pytest.fail(
-                "bundled product question reached the user"
+    shown: list[PlanningQuestion] = []
+
+    created = coordinator.start(
+        request(),
+        answer_question=lambda shown_question: shown.append(shown_question) or None,
+    )
+
+    assert created is None
+    assert shown == [bundled]
+
+
+def test_bundled_product_answer_is_projected_without_model_paraphrase(
+    tmp_path: Path,
+) -> None:
+    question = PlanningQuestion(
+        id="product_intent",
+        text="Who will use the tool, for what workflow, and at what maturity?",
+        why="These coupled choices change product scope and delivery depth.",
+        decision_category=PlanningDecisionCategory.PRODUCT_REQUIREMENT,
+        decision_owner=PlanningDecisionAuthority.USER,
+        missing_evidence=(
+            "The request does not identify the audience, workflow, or maturity.",
+        ),
+        material_consequences=(
+            "The answer changes requirements, acceptance, and delivery.",
+        ),
+        product_definition_dimensions=(
+            ProductDefinitionDimension.TARGET_USERS,
+            ProductDefinitionDimension.PRIMARY_WORKFLOW,
+            ProductDefinitionDimension.DELIVERY_MATURITY,
+        ),
+        options=(
+            PlanningOption(
+                id="one_time",
+                label="Personal local, one-time helper",
+                description="A throwaway_prototype for one local scan.",
             ),
-        )
+            PlanningOption(
+                id="reusable",
+                label="Personal reusable local tool",
+                description="A usable_local_product for repeated local scans.",
+            ),
+        ),
+    )
+    answer = (
+        "Personal reusable local tool. I will run it repeatedly on local "
+        "directories to check Markdown links."
+    )
+    body = proposal_body(question_id=question.id)
+    definition = body.product_definition
+    assert definition is not None
+    decision_id = "DECISION_LINK_SCOPE_ANSWER"
+    body = body.model_copy(
+        update={
+            "product_definition": definition.model_copy(
+                update={
+                    "target_users": definition.target_users.model_copy(
+                        update={
+                            "statement": "The requester",
+                            "disposition": (
+                                ProductDefinitionDisposition.RESOLVED_QUESTION
+                            ),
+                            "source": question.id,
+                            "decision_ids": (decision_id,),
+                        }
+                    ),
+                    "primary_workflow": definition.primary_workflow.model_copy(
+                        update={
+                            "statement": "Run repeated local link scans",
+                            "disposition": (
+                                ProductDefinitionDisposition.RESOLVED_QUESTION
+                            ),
+                            "source": question.id,
+                            "decision_ids": (decision_id,),
+                        }
+                    ),
+                    "delivery_maturity": definition.delivery_maturity.model_copy(
+                        update={
+                            "level": DeliveryMaturity.USABLE_LOCAL_PRODUCT,
+                            "disposition": (
+                                ProductDefinitionDisposition.RESOLVED_QUESTION
+                            ),
+                            "source": question.id,
+                            "decision_ids": (decision_id,),
+                        }
+                    ),
+                }
+            )
+        }
+    )
+    executor = ScriptedAgentExecutor(
+        [
+            response(
+                PlanningModelResponse(
+                    kind=PlanningResponseKind.QUESTION,
+                    question=question,
+                )
+            ),
+            response(
+                PlanningModelResponse(
+                    kind=PlanningResponseKind.PROPOSAL,
+                    proposal=body,
+                )
+            ),
+        ]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(response_repair_limit=0),
+        clock=AdvancingClock(),
+    )
+
+    created = coordinator.start(
+        request(),
+        answer_question=lambda _question: answer,
+    )
+
+    assert created is not None
+    created_definition = created.body.product_definition
+    assert created_definition is not None
+    assert created_definition.target_users.statement == answer
+    assert created_definition.primary_workflow.statement == answer
+    assert created_definition.delivery_maturity.level is (
+        DeliveryMaturity.USABLE_LOCAL_PRODUCT
+    )
+    turn = store.load_turn(request().run_id, 2)
+    assert {
+        item
+        for item in turn.response_normalizations
+        if "statement from exact question answer" in item
+    } == {
+        "compiled proposal.product_definition.target_users.statement from exact "
+        "question answer",
+        "compiled proposal.product_definition.primary_workflow.statement from exact "
+        "question answer",
+    }
 
 
-def test_bundled_product_question_is_replaced_as_one_authority_unit(
+def test_bundled_answer_with_ambiguous_maturity_returns_to_focused_dialogue(
+    tmp_path: Path,
+) -> None:
+    question = PlanningQuestion(
+        id="product_intent",
+        text="Who will use the tool, for what workflow, and at what maturity?",
+        why="These coupled choices change product scope and delivery depth.",
+        decision_category=PlanningDecisionCategory.PRODUCT_REQUIREMENT,
+        decision_owner=PlanningDecisionAuthority.USER,
+        missing_evidence=(
+            "The request does not identify the audience, workflow, or maturity.",
+        ),
+        material_consequences=(
+            "The answer changes requirements, acceptance, and delivery.",
+        ),
+        product_definition_dimensions=(
+            ProductDefinitionDimension.TARGET_USERS,
+            ProductDefinitionDimension.PRIMARY_WORKFLOW,
+            ProductDefinitionDimension.DELIVERY_MATURITY,
+        ),
+        options=(
+            PlanningOption(
+                id="one_time",
+                label="Personal local, one-time helper",
+                description="A throwaway_prototype for one local scan.",
+            ),
+            PlanningOption(
+                id="reusable",
+                label="Personal reusable local tool",
+                description="A usable_local_product for repeated local scans.",
+            ),
+        ),
+    )
+    answer = "A developer will use it repeatedly to scan local directories."
+    body = proposal_body(question_id=question.id)
+    definition = body.product_definition
+    assert definition is not None
+    decision_id = "DECISION_LINK_SCOPE_ANSWER"
+    body = body.model_copy(
+        update={
+            "product_definition": definition.model_copy(
+                update={
+                    "target_users": definition.target_users.model_copy(
+                        update={
+                            "statement": "A developer",
+                            "disposition": (
+                                ProductDefinitionDisposition.RESOLVED_QUESTION
+                            ),
+                            "source": question.id,
+                            "decision_ids": (decision_id,),
+                        }
+                    ),
+                    "primary_workflow": definition.primary_workflow.model_copy(
+                        update={
+                            "statement": "Scan local directories repeatedly",
+                            "disposition": (
+                                ProductDefinitionDisposition.RESOLVED_QUESTION
+                            ),
+                            "source": question.id,
+                            "decision_ids": (decision_id,),
+                        }
+                    ),
+                    "delivery_maturity": definition.delivery_maturity.model_copy(
+                        update={
+                            "level": DeliveryMaturity.USABLE_LOCAL_PRODUCT,
+                            "disposition": (
+                                ProductDefinitionDisposition.RESOLVED_QUESTION
+                            ),
+                            "source": question.id,
+                            "decision_ids": (decision_id,),
+                        }
+                    ),
+                }
+            )
+        }
+    )
+    followup = PlanningQuestion(
+        id="delivery_maturity_followup",
+        text="How mature should the delivered tool be?",
+        why="The previous answer did not state a delivery maturity.",
+        decision_category=PlanningDecisionCategory.PRODUCT_REQUIREMENT,
+        decision_owner=PlanningDecisionAuthority.USER,
+        missing_evidence=("The delivery maturity remains ambiguous.",),
+        material_consequences=("Maturity changes packaging and verification.",),
+        product_definition_dimensions=(ProductDefinitionDimension.DELIVERY_MATURITY,),
+        options=(
+            PlanningOption(
+                id="throwaway",
+                label="Throwaway prototype",
+                description="Prove the workflow once with minimal polish.",
+            ),
+            PlanningOption(
+                id="usable",
+                label="Usable local product",
+                description="Support repeated use with tests and docs.",
+            ),
+        ),
+    )
+    executor = ScriptedAgentExecutor(
+        [
+            response(
+                PlanningModelResponse(
+                    kind=PlanningResponseKind.QUESTION,
+                    question=question,
+                )
+            ),
+            response(
+                PlanningModelResponse(
+                    kind=PlanningResponseKind.PROPOSAL,
+                    proposal=body,
+                )
+            ),
+            response(
+                PlanningModelResponse(
+                    kind=PlanningResponseKind.QUESTION,
+                    question=followup,
+                )
+            ),
+        ]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(response_repair_limit=0),
+        clock=AdvancingClock(),
+    )
+    shown: list[str] = []
+
+    def answer_question(shown_question: PlanningQuestion) -> str | None:
+        shown.append(shown_question.id)
+        return answer if shown_question.id == question.id else None
+
+    created = coordinator.start(request(), answer_question=answer_question)
+
+    assert created is None
+    assert shown == [question.id, followup.id]
+    invalid = store.load_turn(request().run_id, 2)
+    assert invalid.response_validation is not None
+    assert invalid.response_validation.failure_class is (
+        ResponseFailureClass.MISSING_USER_DECISION
+    )
+    assert {issue.path for issue in invalid.response_validation.issues} == {
+        "/proposal/product_definition/delivery_maturity"
+    }
+    assert invalid.response_validation.correction_paths == ()
+
+
+def test_invalid_product_question_is_replaced_as_one_authority_unit(
     tmp_path: Path,
 ) -> None:
     initial = product_intent_question_response().model_dump(mode="json")
@@ -1102,7 +1381,7 @@ def test_bundled_product_question_is_replaced_as_one_authority_unit(
     ]
     initial_question["product_definition_dimensions"] = [
         "target_users",
-        "primary_workflow",
+        "target_users",
     ]
     initial_question["options"] = [
         {
@@ -1382,9 +1661,10 @@ def test_question_backed_product_definition_reaches_confirmed_task_brief(
     assert preview.implementation_plan.product_definition == definition
 
 
-def test_question_backed_product_depth_cannot_invent_beyond_the_user_answer(
+def test_question_backed_product_depth_discards_model_paraphrase(
     tmp_path: Path,
 ) -> None:
+    store = PlanningStore(tmp_path / "planning")
     coordinator = AdaptivePlanningCoordinator(
         executor=ScriptedAgentExecutor(
             [
@@ -1392,20 +1672,27 @@ def test_question_backed_product_depth_cannot_invent_beyond_the_user_answer(
                 response(proposal_response(resolved_product_body())),
             ]
         ),
-        store=PlanningStore(tmp_path / "planning"),
+        store=store,
         policy=policy(response_repair_limit=0),
         clock=AdvancingClock(),
     )
 
-    with pytest.raises(PlanningError, match="not preserved in its user answer"):
-        coordinator.start(
-            request(
-                source_request=(
-                    "Build a usable local product that checks Markdown links."
-                )
-            ),
-            answer_question=lambda _question: "Researchers",
-        )
+    created = coordinator.start(
+        request(
+            source_request=("Build a usable local product that checks Markdown links.")
+        ),
+        answer_question=lambda _question: "Researchers",
+    )
+
+    assert created is not None
+    definition = created.body.product_definition
+    assert definition is not None
+    assert definition.target_users.statement == "Researchers"
+    turn = store.load_turn(request().run_id, 2)
+    assert (
+        "compiled proposal.product_definition.target_users.statement from exact "
+        "question answer"
+    ) in turn.response_normalizations
 
 
 def test_resolved_dimension_must_be_declared_by_its_question(tmp_path: Path) -> None:
@@ -1418,6 +1705,8 @@ def test_resolved_dimension_must_be_declared_by_its_question(tmp_path: Path) -> 
             )
         }
     )
+    followup = question.model_copy(update={"id": "target_users_followup"})
+    store = PlanningStore(tmp_path / "planning")
     coordinator = AdaptivePlanningCoordinator(
         executor=ScriptedAgentExecutor(
             [
@@ -1428,18 +1717,38 @@ def test_resolved_dimension_must_be_declared_by_its_question(tmp_path: Path) -> 
                     )
                 ),
                 response(proposal_response(resolved_product_body())),
+                response(
+                    PlanningModelResponse(
+                        kind=PlanningResponseKind.QUESTION,
+                        question=followup,
+                    )
+                ),
             ]
         ),
-        store=PlanningStore(tmp_path / "planning"),
+        store=store,
         policy=policy(response_repair_limit=0),
         clock=AdvancingClock(),
     )
 
-    with pytest.raises(PlanningError, match="was not resolved"):
-        coordinator.start(
-            request(source_request="Build a CLI that summarizes a Markdown directory."),
-            answer_question=lambda _question: "Developers and researchers",
-        )
+    shown: list[str] = []
+
+    def answer(shown_question: PlanningQuestion) -> str | None:
+        shown.append(shown_question.id)
+        return "Developers and researchers" if len(shown) == 1 else None
+
+    created = coordinator.start(
+        request(source_request="Build a CLI that summarizes a Markdown directory."),
+        answer_question=answer,
+    )
+
+    assert created is None
+    assert shown == [narrowed.id, followup.id]
+    invalid = store.load_turn(request().run_id, 2)
+    assert invalid.response_validation is not None
+    assert invalid.response_validation.failure_class is (
+        ResponseFailureClass.MISSING_USER_DECISION
+    )
+    assert invalid.response_validation.correction_paths == ()
 
 
 def test_controller_rejects_questions_for_autonomous_decisions(
@@ -4675,9 +4984,9 @@ def test_dialogue_revision_structured_edit_and_approval_are_recoverable(
     }
     assert "decision_owner" not in question_schema["properties"]
     assert "decision_owner" not in question_schema["required"]
-    assert (
-        question_schema["properties"]["product_definition_dimensions"]["maxItems"] == 1
-    )
+    assert question_schema["properties"]["product_definition_dimensions"][
+        "maxItems"
+    ] == len(ProductDefinitionDimension)
     assert {"requirement_ids", "verification_agent_ids"}.issubset(
         criterion_schema["required"]
     )
@@ -4988,7 +5297,7 @@ def test_missing_product_decision_returns_to_atomic_clarification(
         update={
             "target_users": initial_definition.target_users.model_copy(
                 update={
-                    "statement": "Developers",
+                    "statement": "Developers use it repeatedly.",
                     "disposition": ProductDefinitionDisposition.RESOLVED_QUESTION,
                     "source": target_question_id,
                     "decision_ids": ("DECISION_LINK_SCOPE_ANSWER",),
@@ -5064,7 +5373,6 @@ def test_missing_product_decision_returns_to_atomic_clarification(
         (issue.invariant_id, issue.authority)
         for issue in invalid_turn.response_validation.issues
     } == {
-        ("planning_product_question_answer", ResponseIssueAuthority.MODEL),
         (
             "planning_product_user_decision_required",
             ResponseIssueAuthority.USER,
@@ -5145,6 +5453,10 @@ def test_product_decision_correction_can_repair_the_shared_decision_relation(
     body = proposal_body(question_id=target_question.id)
     definition = body.product_definition
     assert definition is not None
+    target_answer = (
+        "Developers and researchers use the reports for local Markdown collections."
+    )
+    maturity_answer = "Usable local product with tests and docs."
     maturity_decision = PlanningDecisionRecord(
         id="DECISION_MATURITY_ANSWER",
         category=PlanningDecisionCategory.PRODUCT_REQUIREMENT,
@@ -5160,7 +5472,7 @@ def test_product_decision_correction_can_repair_the_shared_decision_relation(
         update={
             "target_users": definition.target_users.model_copy(
                 update={
-                    "statement": "Developers and researchers",
+                    "statement": target_answer,
                     "disposition": ProductDefinitionDisposition.RESOLVED_QUESTION,
                     "source": target_question.id,
                     "decision_ids": ("DECISION_LINK_SCOPE_ANSWER",),
@@ -5221,6 +5533,10 @@ def test_product_decision_correction_can_repair_the_shared_decision_relation(
             criterion.id for criterion in policy().profile_acceptance_criteria
         ),
         user_inputs=(source_request,),
+        question_answers={
+            target_question.id: target_answer,
+            maturity_question_id: maturity_answer,
+        },
     )
     valid_payload = json.loads(response(valid_response))
     valid_proposal_payload = valid_payload["proposal"]
@@ -5263,10 +5579,8 @@ def test_product_decision_correction_can_repair_the_shared_decision_relation(
     )
 
     answers = {
-        target_question.id: (
-            "Developers and researchers use the reports for local Markdown collections."
-        ),
-        maturity_question_id: "Usable local product with tests and docs.",
+        target_question.id: target_answer,
+        maturity_question_id: maturity_answer,
     }
     created = coordinator.start(
         request(source_request=source_request),

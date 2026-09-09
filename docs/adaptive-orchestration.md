@@ -184,17 +184,17 @@ match the mapping. This is an admission boundary, not a claim that deterministic
 code can infer the semantic value of arbitrary prose; ambiguous real tasks
 remain the usability test for under- and over-questioning.
 
-A ProductDefinition question resolves exactly one ProductDefinition dimension.
-When several dimensions remain undecided, Planning asks separate questions in
-consequence order. This keeps each free-text answer bound to one declared
-authority slot: an answer about audience cannot silently erase an already
-explicit workflow, maturity, or delivery expectation. The controller enforces
-this atomic question boundary before showing the question to the user. The
-question text, rationale, missing evidence, consequences, choices, and declared
-dimension form one correction authority unit. A defect in any of those related
-fields requires replacement of the complete question; changing only its
-dimension label cannot reclassify preserved multi-dimensional wording as an
-atomic question.
+A ProductDefinition question declares every dimension its answer is intended to
+resolve. Tightly coupled audience, workflow, and maturity choices may be grouped
+when every suggested option answers the complete declared bundle; unrelated
+decisions remain separate questions. The answer authorizes no undeclared
+dimension. If a custom answer leaves a declared value ambiguous, the controller
+returns only that missing value to focused clarification instead of inferring it.
+For statement dimensions, the controller projects the immutable transcript
+answer rather than accepting a model paraphrase as user wording. The question
+text, rationale, missing evidence, consequences, choices, and declared bundle
+remain one correction authority unit, so a defect replaces the complete
+question rather than relabeling preserved wording through one field patch.
 
 A current proposal records one stable ID per requirement, explicit non-goals,
 and attributable decision records. Every current decision has typed provenance:
@@ -335,8 +335,9 @@ may perform only these bounded, semantics-preserving normalizations:
 
 The current model-facing question contract is enforced again at the Controller
 boundary, independently of prompt and tool-schema enforcement. Every current
-question must explicitly submit its complete required key set, including an
-empty or one-item `product_definition_dimensions` array. Unknown question keys
+question must explicitly submit its complete required key set, including a
+unique `product_definition_dimensions` array bounded by the six known dimensions.
+Unknown question keys
 are not silently discarded because a misspelling can remove or relabel user
 decision authority. Older persisted records remain readable through the
 versioned internal schema; that compatibility does not weaken new submissions.

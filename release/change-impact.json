@@ -29,6 +29,11 @@
       "summary": "Apply any nonempty subset of unique authorized correction slots to an unpublished copy, preserve omissions exactly, and continue only after complete revalidation proves typed progress"
     },
     {
+      "id": "declared-product-question-bundles",
+      "impact": "patch",
+      "summary": "Let one focused Planning question declare tightly coupled ProductDefinition dimensions, project exact transcript answers into statement fields, and return undeclared or ambiguous values to focused clarification"
+    },
+    {
       "id": "durable-stop-before-every-invocation",
       "impact": "patch",
       "summary": "Check durable cancellation and interruption before initial, correction, fallback and continuation calls instead of relying only on currently live subprocesses"
