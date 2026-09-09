@@ -977,6 +977,106 @@ def test_dynamic_workflow_continues_one_shared_planning_budget_ledger(
     assert invocation_usages[0].calls_completed >= 2
 
 
+@pytest.mark.parametrize("ending", ["complete", "no_progress", "budget", "cancel"])
+def test_upstream_continuation_reaches_one_workflow_terminal_authority(
+    tmp_path: Path, ending: str
+) -> None:
+    from test_dynamic_runner import DynamicExecutor
+
+    approved = approved_inputs(
+        run_id="adaptive-continuation-terminal",
+        run_budget=AgentBudget(
+            authority=BudgetAuthority.USER_TASK,
+            max_estimated_cost_usd="0.00001" if ending == "budget" else "1",
+        ),
+    )
+    source = initialize_source(tmp_path)
+    seed = git(source, "rev-parse", "HEAD").stdout.strip()
+    workspace = tmp_path / "workspaces" / approved.task_brief.run_id
+    controls = []
+
+    class InterruptedToolExecutor(AdaptiveExecutor):
+        def execute(self, request, *, activity_handler=None):
+            writer_calls = sum(item.agent_id == "builder" for item in self.requests)
+            if request.agent_id == "builder" and (
+                writer_calls == 0 or ending == "no_progress"
+            ):
+                self._emit_start(request, activity_handler)
+                self.requests.append(request)
+                if writer_calls == 0:
+                    (self.workspace / "greeting.py").write_text(
+                        "def greet(name):\n    return f'Hello, {name}!'\n"
+                    )
+                if ending == "cancel":
+                    controls[0].request(
+                        command=ControlCommandType.CANCEL,
+                        target=ControlTarget(kind=ControlTargetKind.RUN),
+                        application_boundary=ControlApplicationBoundary.IMMEDIATE,
+                        command_id="ctl-between-continuation",
+                    )
+                self._emit_stop(
+                    request, activity_handler, InvocationStopReason.UPSTREAM_INCOMPLETE
+                )
+                return DynamicExecutor._upstream_incomplete_result(request)
+            return super().execute(request, activity_handler=activity_handler)
+
+    executor = InterruptedToolExecutor(workspace)
+    gates = RecordingQualityGateFactory()
+    ledger = AgentBudgetLedger(approved.team_plan.budget)
+    outcome = coordinator(
+        tmp_path,
+        approved,
+        executor,
+        gates,
+        budget_ledger=ledger,
+        control_store_handler=lambda store, _plan: controls.append(store),
+    ).execute(approved, source_repository=source)
+    store, report = load_report(tmp_path, outcome, approved)
+    records = [store.load(reference) for reference in outcome.execution_records]
+    assert records[0].execution_status is AgentExecutionStatus.UPSTREAM_INCOMPLETE
+    assert records[0].response_artifact is None
+    writer_requests = [item for item in executor.requests if item.agent_id == "builder"]
+    assert len(writer_requests) == (2 if ending in {"complete", "no_progress"} else 1)
+    if len(writer_requests) == 2:
+        assert writer_requests[0].session_key == writer_requests[1].session_key
+        assert writer_requests[0].model == writer_requests[1].model
+        assert "CONTROLLED_UPSTREAM_CONTINUATION_V1" in writer_requests[1].prompt
+    if ending == "complete":
+        assert outcome.record.phase is RunPhase.COMPLETED
+        assert report.status is FinalStatus.COMPLETED
+        assert report.final_commit == git(workspace, "rev-parse", "HEAD").stdout.strip()
+        git(workspace, "merge-base", "--is-ancestor", seed, report.final_commit)
+        assert gates.calls == [1]
+        assert any(item.agent_id == "reviewer" for item in executor.requests)
+    else:
+        expected = {
+            "no_progress": TerminationReason.DEPENDENCY_UNAVAILABLE,
+            "budget": TerminationReason.RESOURCE_LIMIT_REACHED,
+            "cancel": TerminationReason.USER_CANCELLED,
+        }[ending]
+        assert outcome.record.termination_reason is expected
+        assert report.status is (
+            FinalStatus.CANCELLED if ending == "cancel" else FinalStatus.FAILED
+        )
+        assert gates.calls == []
+        assert all(item.agent_id == "builder" for item in executor.requests)
+        assert all(event.phase is not RunPhase.DELIVERING for event in outcome.events)
+        assert git(workspace, "rev-parse", "HEAD").stdout.strip() == seed
+        assert (workspace / "greeting.py").is_file()
+    usage = ledger.snapshot()
+    assert usage.calls_started == usage.calls_completed == len(executor.requests)
+    assert usage.active_calls == 0
+    assert usage.known_estimated_cost_usd == Decimal("0.00002") * len(executor.requests)
+    persisted = json.loads(
+        (
+            tmp_path / "runs" / approved.task_brief.run_id / "budget-ledger.json"
+        ).read_text()
+    )
+    assert persisted["usage"] == usage.model_dump(mode="json")
+    assert git(source, "rev-parse", "HEAD").stdout.strip() == seed
+    assert git(source, "status", "--short").stdout == ""
+
+
 @pytest.mark.parametrize("valid_selection", [True, False])
 def test_captured_multi_selector_correction_controls_workflow_delivery(
     tmp_path: Path, valid_selection: bool

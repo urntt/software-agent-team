@@ -204,6 +204,15 @@ attempts: switching must neither reset spend nor inherit the previous model's
 prices, and exhaustion must prevent subsequent work. Provider usage remains an
 explicit fixture in these tests, not evidence of actual provider billing.
 
+Carry upstream-incomplete writer results through the whole workflow as well as
+the runner. With real Git and the shared ledger, verify same-session continuation
+through gates and Review to a terminal report, plus no-progress, exhausted-budget,
+and between-call cancellation branches. Queue cancellation through the persisted
+control store, not a mocked stop decision. Partial work must remain unaccepted,
+failed branches must never enter delivery, and every invocation settles once.
+The external result fixture does not replace session classification or real
+provider evidence, and workflow completion is not external project installation.
+
 - During implementation, run affected unit and integration tests. Work-in-progress
   commits must record the checks performed and remaining validation; they do not
   claim batch acceptance. Documentation-only changes require content, link, and
