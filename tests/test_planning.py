@@ -2343,6 +2343,12 @@ def test_natural_language_revision_revalidates_the_complete_product_definition(
             answer_question=lambda _question: pytest.fail("unexpected question"),
         )
 
+    session = coordinator.store.load_session(planning_request.run_id)
+    assert session.status is PlanningSessionStatus.PROPOSED
+    assert session.latest_proposal_revision == first.revision
+    approved = coordinator.approve(planning_request, first)
+    assert approved.approval.revision == first.revision
+
 
 def test_natural_language_revision_can_supply_new_explicit_product_depth(
     tmp_path: Path,
@@ -5618,6 +5624,9 @@ def test_product_planning_stops_after_a_non_improving_correction(
     assert store.load_turn(request().run_id, 2).semantic_correction_outcome == (
         "no_improvement"
     )
+    failed_session = store.load_session(request().run_id)
+    assert failed_session.status is PlanningSessionStatus.FAILED
+    assert failed_session.turn_count == 2
 
 
 def test_invalid_correction_slot_identity_is_typed_model_input(tmp_path: Path) -> None:

@@ -159,6 +159,12 @@ Questions should be selected for decision value. The planner must not turn
 every implementation detail into a user prompt or silently decide a missing
 product requirement on the user's behalf.
 
+If a proposal is returned before a material user-owned ProductDefinition
+decision exists, the controller does not expose that field to model correction.
+It requests one atomic question for the missing dimension, records the answer in
+the ordinary transcript, and revalidates the complete proposal. Independent
+model-owned defects remain subject to the normal typed correction contract.
+
 Every focused question carries a stable decision category, the
 evidence that is missing, the material consequences of choosing differently,
 and two or three alternatives plus a custom-answer path. The controller derives
@@ -570,6 +576,12 @@ to requirements, priorities, Agent responsibilities, dependencies, and model
 preferences. Raw system prompts, arbitrary tool grants, and direct policy-file
 editing remain an advanced contributor surface. Even advanced changes pass the
 same controller validation.
+
+Planning session status follows the product outcome. A terminally invalid
+initial dialogue is persisted as `failed`, while a completed invalid revision
+restores the preceding valid proposal so it can still be reviewed or approved.
+Executor failure, interruption, and cancellation retain their distinct terminal
+states and are never converted into revision recovery.
 
 Approval freezes version one of the run contract. Product plans record
 `provider_activity` with zero per-Agent wall-clock limits plus the optional

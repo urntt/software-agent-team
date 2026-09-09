@@ -2,12 +2,23 @@
 
 **Current milestone:** Phase 3E implemented; invocation lifecycle, classified checkpoint progress, ProductDefinition, typed submission, exact-slot correction, and Controller-bound Review evidence selection are offline-verified; final fresh-run and release validation remain in progress
 
-**Last updated:** September 8, 2026
+**Last updated:** September 9, 2026
 
 This document records what the repository implements now, what evidence
 supports that claim, and what remains unavailable. It does not redefine the
 product, architecture, experiment, or roadmap; those decisions belong to
 [`VISION.md`](VISION.md).
+
+ProductDefinition validation now preserves per-invariant authority. A proposal
+that lacks a material user-owned decision returns to one dimension-specific
+question instead of attempting to model-correct that decision inside a proposal.
+Mixed user- and model-owned defects are revalidated together after the answer.
+Focused Planning, CLI, and runtime-configuration checks pass 242 tests; the
+preceding exact clean candidate passed 1,405 canonical checks without owned
+resource residuals. The current session-state follow-up also persists terminally
+invalid initial Planning as failed and restores the preceding proposal after a
+completed invalid revision; its focused regressions pass, while the updated
+candidate still requires its one canonical gate and ordinary product journey.
 
 Planning and dynamic Agent configuration now explicitly disable the optional
 memory plugin slot. Four focused checks, including the pinned runtime's actual

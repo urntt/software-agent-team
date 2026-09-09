@@ -64,6 +64,11 @@
       "summary": "Preserve per-invariant user authority and return a rejected proposal to one atomic question-only Planning response instead of attempting to model-correct a missing user decision"
     },
     {
+      "id": "planning-terminal-state-settlement",
+      "impact": "patch",
+      "summary": "Persist terminally invalid initial Planning as failed and restore the preceding valid proposal after a completed invalid revision without masking executor terminal states"
+    },
+    {
       "id": "complete-cache-token-accounting",
       "impact": "patch",
       "summary": "Freeze cache read/write rates and account disjoint usage across planning, execution, budgets and reports while preserving historical records"

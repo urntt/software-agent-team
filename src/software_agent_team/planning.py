@@ -5895,6 +5895,61 @@ class PlanningStore:
             )
         )
 
+    def fail(self, run_id: str, *, now: datetime) -> None:
+        """Persist a terminal coordinator failure without rewriting its turns."""
+
+        session = self.load_session(run_id)
+        if session.status is PlanningSessionStatus.FAILED:
+            return
+        if session.status in {
+            PlanningSessionStatus.APPROVED,
+            PlanningSessionStatus.CANCELLED,
+        }:
+            raise PlanningError("terminal Planning session cannot be failed")
+        self._write_session(
+            session.model_copy(
+                update={
+                    "schema_version": PLANNING_SCHEMA_VERSION,
+                    "status": PlanningSessionStatus.FAILED,
+                    "updated_at": _utc(now),
+                }
+            )
+        )
+
+    def restore_proposed_revision(
+        self,
+        run_id: str,
+        revision: int,
+        *,
+        now: datetime,
+    ) -> None:
+        """Restore the last valid proposal after a completed invalid revision."""
+
+        session = self.load_session(run_id)
+        if (
+            session.status is PlanningSessionStatus.PROPOSED
+            and session.latest_proposal_revision == revision
+        ):
+            return
+        if session.status is not PlanningSessionStatus.CLARIFYING:
+            raise PlanningError(
+                "only a clarifying Planning session can restore a proposal"
+            )
+        if session.latest_proposal_revision != revision:
+            raise PlanningIntegrityError(
+                "Planning revision recovery does not match the latest proposal"
+            )
+        self.load_proposal(run_id, revision)
+        self._write_session(
+            session.model_copy(
+                update={
+                    "schema_version": PLANNING_SCHEMA_VERSION,
+                    "status": PlanningSessionStatus.PROPOSED,
+                    "updated_at": _utc(now),
+                }
+            )
+        )
+
 
 @dataclass(frozen=True)
 class _Invocation:
@@ -5944,6 +5999,23 @@ class AdaptivePlanningCoordinator:
         """Ask only high-value questions, then persist one validated proposal."""
 
         self.store.create(request)
+        try:
+            return self._start_dialogue(
+                request,
+                answer_question=answer_question,
+                activity_handler=activity_handler,
+            )
+        except PlanningError:
+            self.store.fail(request.run_id, now=self.clock())
+            raise
+
+    def _start_dialogue(
+        self,
+        request: PlanningRequest,
+        *,
+        answer_question: QuestionAnswerer,
+        activity_handler: PlanningActivityHandler | None,
+    ) -> PlanningProposal | None:
         transcript: list[dict[str, object]] = []
         user_message = request.source_request
         clarification_rounds = 0
@@ -5999,6 +6071,34 @@ class AdaptivePlanningCoordinator:
         activity_handler: PlanningActivityHandler | None = None,
     ) -> PlanningProposal | None:
         """Use natural language to produce a complete replacement revision."""
+
+        try:
+            return self._revise_dialogue(
+                request,
+                proposal,
+                change_request,
+                answer_question=answer_question,
+                activity_handler=activity_handler,
+            )
+        except PlanningError:
+            session = self.store.load_session(request.run_id)
+            if session.status is PlanningSessionStatus.CLARIFYING:
+                self.store.restore_proposed_revision(
+                    request.run_id,
+                    proposal.revision,
+                    now=self.clock(),
+                )
+            raise
+
+    def _revise_dialogue(
+        self,
+        request: PlanningRequest,
+        proposal: PlanningProposal,
+        change_request: str,
+        *,
+        answer_question: QuestionAnswerer,
+        activity_handler: PlanningActivityHandler | None,
+    ) -> PlanningProposal | None:
 
         if (
             self.policy.max_proposal_revisions is not None
@@ -7197,6 +7297,9 @@ def run_interactive_planning(
                     activity_handler=progress,
                 )
             except PlanningError as error:
+                session = coordinator.store.load_session(request.run_id)
+                if session.status is PlanningSessionStatus.FAILED:
+                    raise
                 write(f"Plan was not changed: {error}")
                 continue
             finally:
