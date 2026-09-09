@@ -13,12 +13,15 @@ ProductDefinition validation now preserves per-invariant authority. A proposal
 that lacks a material user-owned decision returns to one dimension-specific
 question instead of attempting to model-correct that decision inside a proposal.
 Mixed user- and model-owned defects are revalidated together after the answer.
-Focused Planning, CLI, and runtime-configuration checks pass 242 tests; the
+Relational correction now grants the shared `decisions` slot together with the
+affected ProductDefinition dimensions only when no eligible decision exists;
+an actual two-question, five-dimension regression reaches a valid proposal in
+one targeted correction. Planning and correction checks pass 177 tests. The
 preceding exact clean candidate passed 1,405 canonical checks without owned
 resource residuals. The current session-state follow-up also persists terminally
 invalid initial Planning as failed and restores the preceding proposal after a
-completed invalid revision; its focused regressions pass, while the updated
-candidate still requires its one canonical gate and ordinary product journey.
+completed invalid revision; the updated candidate still requires its one
+canonical gate and ordinary product journey.
 
 Planning and dynamic Agent configuration now explicitly disable the optional
 memory plugin slot. Four focused checks, including the pinned runtime's actual

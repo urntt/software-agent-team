@@ -2760,11 +2760,12 @@ def _product_definition_dimension_invariant(
         subjects: tuple[ResponseIssueSubject, ...] = (),
         failure_class: ResponseFailureClass = ResponseFailureClass.SEMANTIC_CONTEXT,
         authority: ResponseIssueAuthority = ResponseIssueAuthority.MODEL,
+        related_paths: tuple[str, ...] = (),
     ) -> _PlanningInvariant:
         return _PlanningInvariant(
             invariant_id=invariant_id,
             message=message,
-            paths=(path,),
+            paths=tuple(sorted({path, *related_paths})),
             subjects=subjects,
             failure_class=failure_class,
             authority=authority,
@@ -2855,7 +2856,11 @@ def _product_definition_dimension_invariant(
         ):
             return issue(
                 "planning_product_question_source",
-                f"{dimension.value} must reference one user-owned product question",
+                (
+                    f"{dimension.value} must reference one user-owned product "
+                    "question decision and cite its ID"
+                ),
+                related_paths=("/proposal/decisions",),
             )
         if (
             linked[0].id not in item.decision_ids
@@ -2920,20 +2925,6 @@ def _product_definition_dimension_invariant(
                 failure_class=ResponseFailureClass.MISSING_USER_DECISION,
                 authority=ResponseIssueAuthority.USER,
             )
-        if item.source != "planner" or not item.decision_ids:
-            return issue(
-                "planning_product_recommendation_source",
-                f"{dimension.value} Planner recommendation needs decision provenance",
-            )
-        if any(
-            decisions[decision_id].authority
-            is not PlanningDecisionAuthority.PLANNER_PROPOSAL
-            for decision_id in item.decision_ids
-        ):
-            return issue(
-                "planning_product_recommendation_authority",
-                f"{dimension.value} references a non-Planner decision",
-            )
         expected_category = {
             ProductDefinitionDimension.USABILITY_EXPECTATIONS: (
                 PlanningDecisionCategory.ACCEPTANCE_SCOPE
@@ -2945,6 +2936,31 @@ def _product_definition_dimension_invariant(
                 PlanningDecisionCategory.DELIVERY
             ),
         }[dimension]
+        decision_related_paths = (
+            ()
+            if any(
+                decision.authority is PlanningDecisionAuthority.PLANNER_PROPOSAL
+                and decision.category is expected_category
+                for decision in decisions.values()
+            )
+            else ("/proposal/decisions",)
+        )
+        if item.source != "planner" or not item.decision_ids:
+            return issue(
+                "planning_product_recommendation_source",
+                f"{dimension.value} Planner recommendation needs decision provenance",
+                related_paths=decision_related_paths,
+            )
+        if any(
+            decisions[decision_id].authority
+            is not PlanningDecisionAuthority.PLANNER_PROPOSAL
+            for decision_id in item.decision_ids
+        ):
+            return issue(
+                "planning_product_recommendation_authority",
+                f"{dimension.value} references a non-Planner decision",
+                related_paths=decision_related_paths,
+            )
         category_matches = tuple(
             decisions[decision_id].category is expected_category
             for decision_id in item.decision_ids
@@ -2960,6 +2976,7 @@ def _product_definition_dimension_invariant(
                     f"{dimension.value} may cite only its corresponding "
                     "Planner decision category"
                 ),
+                related_paths=decision_related_paths,
             )
         return None
 

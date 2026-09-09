@@ -69,6 +69,11 @@
       "summary": "Persist terminally invalid initial Planning as failed and restore the preceding valid proposal after a completed invalid revision without masking executor terminal states"
     },
     {
+      "id": "reachable-product-decision-correction",
+      "impact": "patch",
+      "summary": "Grant atomic ProductDefinition fields and their required shared decision relation together while preserving narrower correction when an eligible decision already exists"
+    },
+    {
       "id": "complete-cache-token-accounting",
       "impact": "patch",
       "summary": "Freeze cache read/write rates and account disjoint usage across planning, execution, budgets and reports while preserving historical records"

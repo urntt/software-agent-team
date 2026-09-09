@@ -165,6 +165,14 @@ It requests one atomic question for the missing dimension, records the answer in
 the ordinary transcript, and revalidates the complete proposal. Independent
 model-owned defects remain subject to the normal typed correction contract.
 
+When an answered question or Planner recommendation is represented in a
+ProductDefinition dimension but its required decision record does not exist,
+the correction authority contains both the atomic dimension and the shared
+`decisions` container. Replacing only the dimension could not satisfy that
+relation. If an eligible decision record already exists, the shared container
+stays immutable and the correction is limited to the dimension that must cite
+it.
+
 Every focused question carries a stable decision category, the
 evidence that is missing, the material consequences of choosing differently,
 and two or three alternatives plus a custom-answer path. The controller derives
