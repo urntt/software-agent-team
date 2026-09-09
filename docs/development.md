@@ -164,6 +164,13 @@ evaluation repair limit still stops without publishing the partial result.
 Earlier work, provider usage, and quality commands remain explicit fixtures;
 this narrow integration is not a full sandbox or provider journey.
 
+Also carry multi-selector capture through the workflow terminal boundary. Valid
+choices must reach a completed report bound to the verified commit; a mixed
+submission followed by an invalid remaining choice must never enter delivery.
+Verify unpublished partial artifacts, unchanged source Git history, and unique
+priced settlement in both cases. This is not installation or external delivery
+acceptance: model content and quality-command execution remain fixtures.
+
 Planning source-quotation integration routes both the initial proposal and its
 correction through the real plugin and bound capture before the coordinator.
 Assert the persisted submission evidence, precise source-only correction, and

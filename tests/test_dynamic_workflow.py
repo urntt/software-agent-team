@@ -95,6 +95,7 @@ from software_agent_team.schema_compatibility import supported_schemas
 from software_agent_team.submissions import (
     AgentSemanticSubmission,
     AgentSubmissionEvidence,
+    AgentSubmissionPurpose,
     AgentSubmissionStatus,
     canonical_json_sha256,
 )
@@ -405,12 +406,14 @@ class AdaptiveExecutor:
         always_revise: bool = False,
         omit_builder_model: bool = False,
         timeout_second_review: bool = False,
+        invalid_review_selectors: bool = False,
     ) -> None:
         self.workspace = workspace
         self.revise_first = revise_first
         self.always_revise = always_revise
         self.omit_builder_model = omit_builder_model
         self.timeout_second_review = timeout_second_review
+        self.invalid_review_selectors = invalid_review_selectors
         self.requests: list[AgentExecutionRequest] = []
         self.counts: dict[str, int] = {}
 
@@ -537,6 +540,12 @@ class AdaptiveExecutor:
         contract = request.submission_contract
         assert contract is not None
         submission_payload = json.loads(body)
+        if is_review and self.invalid_review_selectors:
+            submission_payload["criterion_assessments"][0]["tool_evidence"] = [
+                {"observable": "invented-first-observation"},
+                {"observable": "invented-second-observation"},
+            ]
+            body = json.dumps(submission_payload)
         review_calls = (review_tool_call(),) if is_review else ()
         external_id = f"workflow-submission-{len(review_calls) + 1:03d}"
         output = b"workflow-semantic-submission"
@@ -966,6 +975,110 @@ def test_dynamic_workflow_continues_one_shared_planning_budget_ledger(
     assert invocation_usages
     assert invocation_usages[0] is not None
     assert invocation_usages[0].calls_completed >= 2
+
+
+@pytest.mark.parametrize("valid_selection", [True, False])
+def test_captured_multi_selector_correction_controls_workflow_delivery(
+    tmp_path: Path, valid_selection: bool
+) -> None:
+    from test_submission_bridge import capture_controller_correction
+
+    approved = approved_inputs(
+        run_id="adaptive-selector-delivery",
+        run_budget=AgentBudget(
+            authority=BudgetAuthority.USER_TASK, max_estimated_cost_usd="1"
+        ),
+    )
+    source = initialize_source(tmp_path)
+    seed = git(source, "rev-parse", "HEAD").stdout.strip()
+    workspace = tmp_path / "workspaces" / approved.task_brief.run_id
+    captures = []
+
+    class SelectorExecutor(AdaptiveExecutor):
+        def execute(self, request, *, activity_handler=None):
+            result = super().execute(request, activity_handler=activity_handler)
+            contract = request.submission_contract
+            assert contract is not None
+            if contract.purpose is not AgentSubmissionPurpose.SEMANTIC_CORRECTION:
+                return result
+            variants = contract.parameters_schema()["properties"]["replacements"][
+                "items"
+            ]["oneOf"]
+            payload = {
+                "replacements": [
+                    {
+                        "slot_handle": variant["properties"]["slot_handle"]["const"],
+                        "replacement_value": (
+                            "evidence_ffffffffffffffff"
+                            if not valid_selection
+                            and (len(variants) == 1 or index == 1)
+                            else variant["properties"]["replacement_value"]["enum"][0]
+                        ),
+                    }
+                    for index, variant in enumerate(variants)
+                ]
+            }
+            captured, status, evidence = capture_controller_correction(
+                tmp_path / f"workflow-capture-{len(captures)}", request, payload
+            )
+            captures.append(evidence)
+            return result.model_copy(
+                update={
+                    "response_text": None,
+                    "semantic_submission": captured,
+                    "submission_evidence": status,
+                    "telemetry": result.telemetry.model_copy(
+                        update={
+                            "stdout": "",
+                            "tool_calls": evidence.tool_calls,
+                            "session_transcript_sha256": evidence.transcript_sha256,
+                            "session_record_count": evidence.record_count,
+                            "session_id": "controller-bridge",
+                        }
+                    ),
+                }
+            )
+
+    executor = SelectorExecutor(workspace, invalid_review_selectors=True)
+    ledger = AgentBudgetLedger(approved.team_plan.budget)
+    gates = RecordingQualityGateFactory()
+    outcome = coordinator(
+        tmp_path, approved, executor, gates, budget_ledger=ledger
+    ).execute(approved, source_repository=source)
+    store, report = load_report(tmp_path, outcome, approved)
+    reviews = [
+        store.load(ref)
+        for ref in outcome.execution_records
+        if store.load(ref).agent_id == "reviewer"
+    ]
+    assert len(reviews) == (2 if valid_selection else 3)
+    assert all(record.response_artifact is None for record in reviews[:-1])
+    assert len(reviews[1].semantic_correction_request.target_paths) == 2
+    assert all(len(capture.tool_calls) == 1 for capture in captures)
+    assert (
+        ledger.snapshot().calls_started
+        == ledger.snapshot().calls_completed
+        == len(executor.requests)
+    )
+    assert ledger.snapshot().active_calls == 0
+    assert ledger.snapshot().known_estimated_cost_usd == Decimal("0.00002") * len(
+        executor.requests
+    )
+    assert git(source, "rev-parse", "HEAD").stdout.strip() == seed
+    assert gates.calls == [1]
+    if valid_selection:
+        assert reviews[-1].semantic_correction_outcome == "accepted"
+        assert outcome.record.phase is RunPhase.COMPLETED
+        assert report.status is FinalStatus.COMPLETED
+        assert report.final_commit == git(workspace, "rev-parse", "HEAD").stdout.strip()
+    else:
+        assert reviews[1].semantic_correction_outcome == "improved"
+        assert len(reviews[2].semantic_correction_request.target_paths) == 1
+        assert reviews[-1].response_artifact is None
+        assert outcome.record.phase is RunPhase.FAILED
+        assert report.status is FinalStatus.FAILED
+        assert outcome.record.termination_reason is TerminationReason.ARTIFACT_INVALID
+        assert all(event.phase is not RunPhase.DELIVERING for event in outcome.events)
 
 
 def test_dynamic_workflow_revises_from_commit_bound_feedback_then_accepts(
