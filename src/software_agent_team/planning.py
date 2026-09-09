@@ -148,6 +148,17 @@ class _PlanningInvariant:
     message: str
     paths: tuple[str, ...]
     subjects: tuple[ResponseIssueSubject, ...] = ()
+    failure_class: ResponseFailureClass = ResponseFailureClass.SEMANTIC_CONTEXT
+    authority: ResponseIssueAuthority = ResponseIssueAuthority.MODEL
+
+
+@dataclass(frozen=True)
+class _PlanningClarificationRecovery:
+    """One user-owned product decision that an invalid proposal must ask about."""
+
+    dimension: ProductDefinitionDimension
+    invariant_ids: tuple[str, ...]
+    messages: tuple[str, ...]
 
 
 class _PlanningModelInvariantError(ValueError):
@@ -165,12 +176,14 @@ class _PlanningContextInvariantError(PlanningError):
         self,
         invariant: _PlanningInvariant,
         *,
-        failure_class: ResponseFailureClass = ResponseFailureClass.SEMANTIC_CONTEXT,
-        authority: ResponseIssueAuthority = ResponseIssueAuthority.MODEL,
+        failure_class: ResponseFailureClass | None = None,
+        authority: ResponseIssueAuthority | None = None,
     ) -> None:
         self.invariant = invariant
-        self.failure_class = failure_class
-        self.authority = authority
+        self.failure_class = (
+            invariant.failure_class if failure_class is None else failure_class
+        )
+        self.authority = invariant.authority if authority is None else authority
         super().__init__(invariant.message)
 
 
@@ -230,9 +243,9 @@ def _planning_context_invariant(
             message=message,
             paths=tuple(sorted(set(paths))),
             subjects=subjects,
+            failure_class=failure_class,
+            authority=authority,
         ),
-        failure_class=failure_class,
-        authority=authority,
     )
 
 
@@ -423,6 +436,7 @@ class PlanningActivityKind(StrEnum):
     RESPONSE_RECEIVED = "response_received"
     BUDGET_UPDATED = "budget_updated"
     CORRECTION_SCHEDULED = "correction_scheduled"
+    CLARIFICATION_SCHEDULED = "clarification_scheduled"
     RESPONSE_VALIDATED = "response_validated"
 
 
@@ -452,6 +466,7 @@ class PlanningActivity:
     budget_usage: AgentBudgetUsage | None = None
     budget_ceiling_usd: Decimal | None = None
     pricing_source: ModelMetadataSource | None = None
+    clarification_dimension: ProductDefinitionDimension | None = None
 
 
 PlanningActivityHandler = Callable[[PlanningActivity], None]
@@ -693,6 +708,16 @@ class TerminalPlanningProgress:
             self._print(
                 "↻ Planning response has targeted model-owned fields; "
                 f"requesting correction attempt {attempt_label}"
+            )
+        elif activity.kind is PlanningActivityKind.CLARIFICATION_SCHEDULED:
+            dimension = (
+                "a product requirement"
+                if activity.clarification_dimension is None
+                else activity.clarification_dimension.value
+            )
+            self._print(
+                "↻ Planning proposal needs a user decision; "
+                f"requesting one focused {dimension} question"
             )
         else:
             self._print("✓ Planning response validated")
@@ -1451,15 +1476,17 @@ def _planning_invariant_diagnostic(
     payload: dict[str, object],
     invariant: _PlanningInvariant,
     *,
-    authority: ResponseIssueAuthority = ResponseIssueAuthority.MODEL,
-    failure_class: ResponseFailureClass = ResponseFailureClass.SEMANTIC_CONTEXT,
+    authority: ResponseIssueAuthority | None = None,
+    failure_class: ResponseFailureClass | None = None,
 ) -> ResponseValidationDiagnostic:
     """Compile validator-owned identity without parsing human error text."""
 
     return diagnostic_from_invariant(
         payload,
-        failure_class=failure_class,
-        authority=authority,
+        failure_class=(
+            invariant.failure_class if failure_class is None else failure_class
+        ),
+        authority=invariant.authority if authority is None else authority,
         code="planning_context",
         invariant_id=invariant.invariant_id,
         subjects=invariant.subjects,
@@ -1477,22 +1504,65 @@ def _planning_invariants_diagnostic(
     diagnostics = tuple(
         _planning_invariant_diagnostic(payload, invariant) for invariant in invariants
     )
+    needs_user_decision = any(
+        issue.authority is ResponseIssueAuthority.USER
+        for diagnostic in diagnostics
+        for issue in diagnostic.issues
+    )
     return ResponseValidationDiagnostic(
-        failure_class=ResponseFailureClass.SEMANTIC_CONTEXT,
+        failure_class=(
+            ResponseFailureClass.MISSING_USER_DECISION
+            if needs_user_decision
+            else ResponseFailureClass.SEMANTIC_CONTEXT
+        ),
         response_sha256=canonical_json_sha256(payload),
         issues=tuple(
             issue for diagnostic in diagnostics for issue in diagnostic.issues
         ),
-        correction_paths=tuple(
-            sorted(
-                {
-                    path
-                    for diagnostic in diagnostics
-                    for path in diagnostic.correction_paths
-                }
+        correction_paths=(
+            ()
+            if needs_user_decision
+            else tuple(
+                sorted(
+                    {
+                        path
+                        for diagnostic in diagnostics
+                        for path in diagnostic.correction_paths
+                    }
+                )
             )
         ),
     )
+
+
+def _clarification_recovery_from_diagnostic(
+    diagnostic: ResponseValidationDiagnostic,
+) -> _PlanningClarificationRecovery | None:
+    """Recover one atomic product question instead of repairing user authority."""
+
+    if diagnostic.failure_class is not ResponseFailureClass.MISSING_USER_DECISION:
+        return None
+    for dimension in (
+        ProductDefinitionDimension.TARGET_USERS,
+        ProductDefinitionDimension.PRIMARY_WORKFLOW,
+        ProductDefinitionDimension.DELIVERY_MATURITY,
+    ):
+        base_path = f"/proposal/product_definition/{dimension.value}"
+        matching = tuple(
+            issue
+            for issue in diagnostic.issues
+            if issue.authority is ResponseIssueAuthority.USER
+            and (issue.path == base_path or issue.path.startswith(f"{base_path}/"))
+        )
+        if matching:
+            return _PlanningClarificationRecovery(
+                dimension=dimension,
+                invariant_ids=tuple(
+                    sorted({issue.invariant_id or issue.code for issue in matching})
+                ),
+                messages=tuple(issue.message for issue in matching),
+            )
+    return None
 
 
 def _planning_validation_diagnostic(
@@ -2688,12 +2758,16 @@ def _product_definition_dimension_invariant(
         message: str,
         *,
         subjects: tuple[ResponseIssueSubject, ...] = (),
+        failure_class: ResponseFailureClass = ResponseFailureClass.SEMANTIC_CONTEXT,
+        authority: ResponseIssueAuthority = ResponseIssueAuthority.MODEL,
     ) -> _PlanningInvariant:
         return _PlanningInvariant(
             invariant_id=invariant_id,
             message=message,
             paths=(path,),
             subjects=subjects,
+            failure_class=failure_class,
+            authority=authority,
         )
 
     if (
@@ -2843,6 +2917,8 @@ def _product_definition_dimension_invariant(
             return issue(
                 "planning_product_user_decision_required",
                 f"{dimension.value} cannot be silently chosen by Planning",
+                failure_class=ResponseFailureClass.MISSING_USER_DECISION,
+                authority=ResponseIssueAuthority.USER,
             )
         if item.source != "planner" or not item.decision_ids:
             return issue(
@@ -2891,6 +2967,8 @@ def _product_definition_dimension_invariant(
         return issue(
             "planning_product_maturity_required",
             "delivery maturity is always material to the approved product",
+            failure_class=ResponseFailureClass.MISSING_USER_DECISION,
+            authority=ResponseIssueAuthority.USER,
         )
     if (
         dimension
@@ -2904,6 +2982,8 @@ def _product_definition_dimension_invariant(
         return issue(
             "planning_product_user_decision_required",
             f"{dimension.value} may be not_material only for a throwaway prototype",
+            failure_class=ResponseFailureClass.MISSING_USER_DECISION,
+            authority=ResponseIssueAuthority.USER,
         )
     if item.source != "planner":
         return issue(
@@ -3765,27 +3845,81 @@ def _planning_proposal_body_for_model(
     return payload
 
 
+def _planning_question_response_schema(
+    recovery: _PlanningClarificationRecovery,
+) -> dict[str, object]:
+    """Constrain recovery to one atomic user-owned product question."""
+
+    schema = _planning_response_schema()
+    properties = schema.get("properties")
+    definitions = schema.get("$defs")
+    required = schema.get("required")
+    if (
+        not isinstance(properties, dict)
+        or not isinstance(definitions, dict)
+        or not isinstance(required, list)
+    ):
+        raise PlanningError("Planning response schema has an invalid root")
+    question_schema = properties.get("question")
+    question_options = (
+        None if not isinstance(question_schema, dict) else question_schema.get("anyOf")
+    )
+    if not isinstance(question_options, list):
+        raise PlanningError("Planning response schema has no nullable question union")
+    question_non_null = [
+        option for option in question_options if option.get("type") != "null"
+    ]
+    if len(question_non_null) != 1:
+        raise PlanningError("Planning response schema has an invalid question union")
+    properties["kind"] = {
+        "const": PlanningResponseKind.QUESTION.value,
+        "type": "string",
+    }
+    properties["question"] = question_non_null[0]
+    properties.pop("proposal", None)
+    required[:] = ["kind", "question"]
+
+    definition = definitions.get("PlanningQuestion")
+    question_properties = (
+        None if not isinstance(definition, dict) else definition.get("properties")
+    )
+    if not isinstance(question_properties, dict):
+        raise PlanningError("Planning response schema has no question definition")
+    question_properties["decision_category"] = {
+        "const": PlanningDecisionCategory.PRODUCT_REQUIREMENT.value,
+        "type": "string",
+    }
+    question_properties["product_definition_dimensions"] = {
+        "items": {"const": recovery.dimension.value, "type": "string"},
+        "maxItems": 1,
+        "minItems": 1,
+        "type": "array",
+    }
+    return schema
+
+
 def _planning_response_schema_for_correction(
     plan: SemanticCorrectionPlan,
+    *,
+    base_schema: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """Bind correction-only assumption references to existing autonomy IDs."""
 
-    schema = _planning_response_schema()
+    schema = deepcopy(
+        _planning_response_schema() if base_schema is None else base_schema
+    )
     if "/question" in plan.evidence.target_paths:
         question_schema = schema["properties"]["question"]
         question_options = question_schema.get("anyOf")
-        if not isinstance(question_options, list):
-            raise PlanningError(
-                "Planning response schema has no nullable question union"
-            )
-        question_non_null = [
-            option for option in question_options if option.get("type") != "null"
-        ]
-        if len(question_non_null) != 1:
-            raise PlanningError(
-                "Planning response schema has an invalid question union"
-            )
-        schema["properties"]["question"] = question_non_null[0]
+        if isinstance(question_options, list):
+            question_non_null = [
+                option for option in question_options if option.get("type") != "null"
+            ]
+            if len(question_non_null) != 1:
+                raise PlanningError(
+                    "Planning response schema has an invalid question union"
+                )
+            schema["properties"]["question"] = question_non_null[0]
     proposal = plan.base_payload.get("proposal")
     decisions = proposal.get("decisions") if isinstance(proposal, dict) else None
     autonomous_ids: list[str] = []
@@ -6075,6 +6209,7 @@ class AdaptivePlanningCoordinator:
         activity_handler: PlanningActivityHandler | None = None,
     ) -> _Invocation:
         correction_plan: SemanticCorrectionPlan | None = None
+        clarification_recovery: _PlanningClarificationRecovery | None = None
         seen_correction_fingerprints: set[str] = set()
         semantic_corrections = 0
         maximum_attempts = (
@@ -6084,10 +6219,18 @@ class AdaptivePlanningCoordinator:
         )
         attempt = 1
         while True:
-            response_schema = (
+            base_response_schema = (
                 _planning_response_schema()
+                if clarification_recovery is None
+                else _planning_question_response_schema(clarification_recovery)
+            )
+            response_schema = (
+                base_response_schema
                 if correction_plan is None
-                else _planning_response_schema_for_correction(correction_plan)
+                else _planning_response_schema_for_correction(
+                    correction_plan,
+                    base_schema=base_response_schema,
+                )
             )
             prompt = self._prompt(
                 request,
@@ -6095,6 +6238,7 @@ class AdaptivePlanningCoordinator:
                 current_proposal=current_proposal,
                 change_request=change_request,
                 correction_plan=correction_plan,
+                clarification_recovery=clarification_recovery,
                 response_schema=response_schema,
             )
             submission_contract = AgentSubmissionContract.from_schema(
@@ -6199,6 +6343,7 @@ class AdaptivePlanningCoordinator:
             )
             correction_applied = correction_plan is None
             next_correction_plan: SemanticCorrectionPlan | None = None
+            next_clarification_recovery: _PlanningClarificationRecovery | None = None
             estimated_cost: Decimal | None = None
             budget_usage: AgentBudgetUsage | None = None
             budget_error: str | None = None
@@ -6330,6 +6475,20 @@ class AdaptivePlanningCoordinator:
                             )
                             response_normalizations = tuple(normalization_list)
                     response_normalizations = tuple(normalization_list)
+                    if (
+                        clarification_recovery is not None
+                        and parsed.kind is not PlanningResponseKind.QUESTION
+                    ):
+                        raise _planning_context_invariant(
+                            "planning_required_clarification_response",
+                            (
+                                "Planning must ask the requested user-owned "
+                                f"{clarification_recovery.dimension.value} question "
+                                "before returning a proposal"
+                            ),
+                            paths=("/",),
+                            authority=ResponseIssueAuthority.CONTROLLER,
+                        )
                     question_contracts = self._question_contracts(
                         transcript,
                         current_proposal,
@@ -6463,8 +6622,11 @@ class AdaptivePlanningCoordinator:
                     parsed = None
 
                 if parsed is None and response_validation is not None:
+                    next_clarification_recovery = (
+                        _clarification_recovery_from_diagnostic(response_validation)
+                    )
                     if correction_plan is None:
-                        if payload is not None:
+                        if next_clarification_recovery is None and payload is not None:
                             next_correction_plan = build_semantic_correction_plan(
                                 payload,
                                 response_validation,
@@ -6481,6 +6643,7 @@ class AdaptivePlanningCoordinator:
                         if (
                             current_correction_outcome
                             is SemanticCorrectionOutcome.IMPROVED
+                            and next_clarification_recovery is None
                             and payload is not None
                         ):
                             next_correction_plan = build_semantic_correction_plan(
@@ -6531,6 +6694,21 @@ class AdaptivePlanningCoordinator:
                     ),
                 )
                 return _Invocation(response=parsed, turn=turn)
+            if next_clarification_recovery is not None:
+                correction_plan = None
+                clarification_recovery = next_clarification_recovery
+                self._emit_activity(
+                    activity_handler,
+                    PlanningActivity(
+                        kind=PlanningActivityKind.CLARIFICATION_SCHEDULED,
+                        attempt=attempt,
+                        maximum_attempts=maximum_attempts,
+                        model=request.model,
+                        clarification_dimension=(next_clarification_recovery.dimension),
+                    ),
+                )
+                attempt += 1
+                continue
             correction_allowed = next_correction_plan is not None and (
                 self.policy.response_repair_limit is None
                 or semantic_corrections < self.policy.response_repair_limit
@@ -6679,6 +6857,7 @@ class AdaptivePlanningCoordinator:
         current_proposal: PlanningProposal | None,
         change_request: str | None,
         correction_plan: SemanticCorrectionPlan | None,
+        clarification_recovery: _PlanningClarificationRecovery | None,
         response_schema: dict[str, object],
     ) -> str:
         template = Template(PLANNING_TEMPLATE.read_text(encoding="utf-8"))
@@ -6691,6 +6870,21 @@ class AdaptivePlanningCoordinator:
                 else _planning_proposal_body_for_model(current_proposal.body)
             ),
             "change_request": change_request,
+            "required_clarification": (
+                None
+                if clarification_recovery is None
+                else {
+                    "product_definition_dimension": (
+                        clarification_recovery.dimension.value
+                    ),
+                    "invariant_ids": list(clarification_recovery.invariant_ids),
+                    "validation_messages": list(clarification_recovery.messages),
+                    "instruction": (
+                        "Return one question for exactly this user-owned dimension; "
+                        "do not return or repair a proposal in this invocation."
+                    ),
+                }
+            ),
             "controller_policy": {
                 "maximum_agents": self.policy.max_agents,
                 "maximum_concurrency": self.policy.max_concurrency,

@@ -223,8 +223,13 @@ validation remain incomplete; the corresponding issues are not closed by
 offline evidence.
 
 The response compiler now distinguishes transport, schema, contextual, and
-evidence-grounding failures; a missing user-owned decision remains on the
-typed Planning-question path instead of entering correction. It deterministically
+evidence-grounding failures. Each collected ProductDefinition invariant retains
+its own authority and failure class; if a rejected proposal exposes a missing
+target-user, primary-workflow, or delivery-maturity decision, the Coordinator
+requests a question-only typed response constrained to that one dimension instead
+of entering proposal-field correction. Mixed model/user diagnostics expose no
+replacement path and the model-owned siblings are revalidated against the next
+complete proposal. It deterministically
 removes only schema-forbidden fields that cannot carry controller/evidence
 authority and records each normalization. Profile-criterion ID collisions now
 remove only redundant echoes; a task-specific relation needed for requirement

@@ -1298,28 +1298,48 @@ def test_under_specified_request_requires_question_backed_core_dimensions(
             ),
         }
     )
-    coordinator = AdaptivePlanningCoordinator(
-        executor=ScriptedAgentExecutor(
-            [
-                response(
-                    proposal_response(
-                        proposal_body().model_copy(
-                            update={"product_definition": invented}
-                        )
-                    )
+    executor = ScriptedAgentExecutor(
+        [
+            response(
+                proposal_response(
+                    proposal_body().model_copy(update={"product_definition": invented})
                 )
-            ]
-        ),
-        store=PlanningStore(tmp_path / "planning"),
+            ),
+            response(product_intent_question_response()),
+        ]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
         policy=policy(response_repair_limit=0),
         clock=AdvancingClock(),
     )
 
-    with pytest.raises(PlanningError, match="cannot be silently chosen"):
-        coordinator.start(
-            request(source_request=source),
-            answer_question=lambda _question: pytest.fail("unexpected question"),
-        )
+    seen_questions: list[PlanningQuestion] = []
+
+    def cancel_after_question(question: PlanningQuestion) -> None:
+        seen_questions.append(question)
+        return None
+
+    created = coordinator.start(
+        request(source_request=source),
+        answer_question=cancel_after_question,
+    )
+
+    assert created is None
+    assert [item.product_definition_dimensions for item in seen_questions] == [
+        (ProductDefinitionDimension.TARGET_USERS,)
+    ]
+    first = store.load_turn(request().run_id, 1)
+    assert first.response_validation is not None
+    assert first.response_validation.failure_class is (
+        ResponseFailureClass.MISSING_USER_DECISION
+    )
+    assert first.response_validation.correction_paths == ()
+    assert store.load_session(request().run_id).status is (
+        PlanningSessionStatus.CANCELLED
+    )
 
 
 def test_question_backed_product_definition_reaches_confirmed_task_brief(
@@ -4844,6 +4864,236 @@ def test_invalid_complete_proposal_is_repaired_before_it_is_shown(
     assert [
         (activity.attempt, activity.maximum_attempts) for activity in activities
     ] == [(1, 2)] * 9 + [(2, 2)] * 9
+
+
+def test_missing_product_decision_returns_to_atomic_clarification(
+    tmp_path: Path,
+) -> None:
+    source_request = (
+        "Build a tool that checks Markdown links in files and fragments without "
+        "fetching remote URLs."
+    )
+    target_question_id = "target_users"
+    maturity_question_id = "delivery_maturity"
+    target_question = PlanningModelResponse(
+        kind=PlanningResponseKind.QUESTION,
+        question=PlanningQuestion(
+            id=target_question_id,
+            text="Who will use this link checker?",
+            why="The audience changes usability and delivery expectations.",
+            decision_category=PlanningDecisionCategory.PRODUCT_REQUIREMENT,
+            decision_owner=PlanningDecisionAuthority.USER,
+            missing_evidence=("The request does not name an audience.",),
+            material_consequences=("Audience changes the product quality bar.",),
+            product_definition_dimensions=(ProductDefinitionDimension.TARGET_USERS,),
+            options=(
+                PlanningOption(
+                    id="developers",
+                    label="Developers",
+                    description="Developers use it repeatedly.",
+                ),
+                PlanningOption(
+                    id="maintainers",
+                    label="Maintainers",
+                    description="Repository maintainers use it in reviews.",
+                ),
+            ),
+            allow_custom=True,
+        ),
+    )
+    maturity_question = PlanningModelResponse(
+        kind=PlanningResponseKind.QUESTION,
+        question=PlanningQuestion(
+            id=maturity_question_id,
+            text="How mature should the delivered tool be?",
+            why="Maturity changes packaging, verification, and documentation.",
+            decision_category=PlanningDecisionCategory.PRODUCT_REQUIREMENT,
+            decision_owner=PlanningDecisionAuthority.USER,
+            missing_evidence=("The request does not state delivery maturity.",),
+            material_consequences=("Maturity changes the delivery quality bar.",),
+            product_definition_dimensions=(
+                ProductDefinitionDimension.DELIVERY_MATURITY,
+            ),
+            options=(
+                PlanningOption(
+                    id="throwaway",
+                    label="Throwaway prototype",
+                    description="Prove the workflow once with minimal polish.",
+                ),
+                PlanningOption(
+                    id="usable",
+                    label="Usable local product",
+                    description="Support repeated local use with tests and docs.",
+                ),
+                PlanningOption(
+                    id="releasable",
+                    label="Releasable small product",
+                    description="Add packaging and distribution readiness.",
+                ),
+            ),
+            allow_custom=True,
+        ),
+    )
+
+    initial = proposal_body(question_id=target_question_id)
+    initial_definition = initial.product_definition
+    assert initial_definition is not None
+    invalid = initial.model_copy(
+        update={
+            "product_definition": initial_definition.model_copy(
+                update={
+                    "target_users": initial_definition.target_users.model_copy(
+                        update={
+                            "statement": "Operators",
+                            "disposition": (
+                                ProductDefinitionDisposition.RESOLVED_QUESTION
+                            ),
+                            "source": target_question_id,
+                            "decision_ids": ("DECISION_LINK_SCOPE_ANSWER",),
+                        }
+                    ),
+                    "delivery_maturity": (
+                        initial_definition.delivery_maturity.model_copy(
+                            update={
+                                "disposition": (
+                                    ProductDefinitionDisposition.PLANNER_RECOMMENDATION
+                                ),
+                                "source": "planner",
+                                "decision_ids": ("DECISION_DELIVERY",),
+                            }
+                        )
+                    ),
+                }
+            )
+        }
+    )
+    maturity_decision = PlanningDecisionRecord(
+        id="DECISION_MATURITY_ANSWER",
+        category=PlanningDecisionCategory.PRODUCT_REQUIREMENT,
+        authority=PlanningDecisionAuthority.USER,
+        provenance=PlanningDecisionProvenance(
+            kind=PlanningDecisionProvenanceKind.RESOLVED_QUESTION,
+            source=maturity_question_id,
+        ),
+        summary="Usable local product",
+        rationale="The user selected the reusable local delivery quality bar.",
+    )
+    final_definition = initial_definition.model_copy(
+        update={
+            "target_users": initial_definition.target_users.model_copy(
+                update={
+                    "statement": "Developers",
+                    "disposition": ProductDefinitionDisposition.RESOLVED_QUESTION,
+                    "source": target_question_id,
+                    "decision_ids": ("DECISION_LINK_SCOPE_ANSWER",),
+                }
+            ),
+            "delivery_maturity": initial_definition.delivery_maturity.model_copy(
+                update={
+                    "level": DeliveryMaturity.USABLE_LOCAL_PRODUCT,
+                    "disposition": ProductDefinitionDisposition.RESOLVED_QUESTION,
+                    "source": maturity_question_id,
+                    "decision_ids": ("DECISION_MATURITY_ANSWER",),
+                }
+            ),
+        }
+    )
+    final = initial.model_copy(
+        update={
+            "product_definition": final_definition,
+            "decisions": (*initial.decisions, maturity_decision),
+        }
+    )
+    executor = ScriptedAgentExecutor(
+        [
+            response(target_question),
+            response(
+                PlanningModelResponse(
+                    kind=PlanningResponseKind.PROPOSAL,
+                    proposal=invalid,
+                )
+            ),
+            response(maturity_question),
+            response(
+                PlanningModelResponse(
+                    kind=PlanningResponseKind.PROPOSAL,
+                    proposal=final,
+                )
+            ),
+        ]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(response_repair_limit=0),
+        clock=AdvancingClock(),
+    )
+    answered: list[str] = []
+    activities: list[PlanningActivity] = []
+
+    def answer(question: PlanningQuestion) -> str:
+        answered.append(question.id)
+        if question.id == target_question_id:
+            return "Developers use it repeatedly."
+        return "Usable local product with tests and documentation."
+
+    created = coordinator.start(
+        request(source_request=source_request),
+        answer_question=answer,
+        activity_handler=activities.append,
+    )
+
+    assert created is not None
+    assert created.body == final
+    assert answered == [target_question_id, maturity_question_id]
+    assert len(executor.requests) == 4
+    invalid_turn = store.load_turn(request().run_id, 2)
+    assert invalid_turn.response_validation is not None
+    assert invalid_turn.response_validation.failure_class is (
+        ResponseFailureClass.MISSING_USER_DECISION
+    )
+    assert invalid_turn.response_validation.correction_paths == ()
+    assert {
+        (issue.invariant_id, issue.authority)
+        for issue in invalid_turn.response_validation.issues
+    } == {
+        ("planning_product_question_answer", ResponseIssueAuthority.MODEL),
+        (
+            "planning_product_user_decision_required",
+            ResponseIssueAuthority.USER,
+        ),
+    }
+    recovery_contract = executor.requests[2].submission_contract
+    assert recovery_contract is not None
+    assert recovery_contract.purpose is AgentSubmissionPurpose.PLANNING_RESPONSE
+    recovery_schema = recovery_contract.parameters_schema()
+    assert recovery_schema["properties"]["kind"]["const"] == "question"
+    assert "proposal" not in recovery_schema["properties"]
+    question_definition = recovery_schema["$defs"]["PlanningQuestion"]
+    assert question_definition["properties"]["product_definition_dimensions"] == {
+        "items": {"const": "delivery_maturity", "type": "string"},
+        "maxItems": 1,
+        "minItems": 1,
+        "type": "array",
+    }
+    assert '"required_clarification"' in executor.requests[2].prompt
+    assert '"delivery_maturity"' in executor.requests[2].prompt
+    clarification = [
+        activity
+        for activity in activities
+        if activity.kind is PlanningActivityKind.CLARIFICATION_SCHEDULED
+    ]
+    assert len(clarification) == 1
+    assert clarification[0].clarification_dimension is (
+        ProductDefinitionDimension.DELIVERY_MATURITY
+    )
+    output: list[str] = []
+    TerminalPlanningProgress(write=output.append)(clarification[0])
+    assert output == [
+        "↻ Planning proposal needs a user decision; requesting one focused "
+        "delivery_maturity question"
+    ]
 
 
 def test_planning_projects_response_finalization_as_a_distinct_phase() -> None:

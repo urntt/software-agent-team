@@ -255,7 +255,15 @@ targets. The existing compiler derives the summary from the corrected quote.
 All independently invalid decision quotes are reported together. Invented quotes
 remain invalid and repeated non-improvement stops. Missing user input, missing
 decision provenance, and unanswered question authority are not model-correctable
-user decisions. Product-depth and actual question-answer validation still apply.
+user decisions. If validation of a proposed plan exposes one of the three
+user-owned product-depth decisions as genuinely missing, the Controller discards
+proposal-field correction authority and requests one question-only Planning
+response constrained to that exact atomic dimension. The resulting question
+returns through the ordinary dialogue before Planning may propose again; it
+cannot silently preserve `kind=proposal`, fill the decision itself, or create an
+execution Agent. Other model-owned defects in the rejected proposal remain
+diagnostic evidence and are revalidated against the next complete proposal.
+Product-depth and actual question-answer validation still apply.
 
 This is a dependency contract, not a questionnaire count. An explicit
 throwaway prototype can proceed directly with a lean proposal. An
@@ -446,6 +454,11 @@ back from a valid or semantically constrained value to a coarser type or shape
 failure in the same authority slot is a regression, not a new improvement. A
 more specific constraint exposed after a coarse schema defect may still proceed.
 Controlled evaluation may intentionally impose a zero-or-one correction cap.
+Missing-user-decision diagnostics are a separate state transition, not another
+semantic correction attempt: each issue retains its own authority, mixed
+model/user diagnostics expose no proposal replacement path, and the next
+submission schema permits only one `product_requirement` question for the named
+ProductDefinition dimension.
 
 Every workspace scope describes controller authority inside the generated
 repository: `repository` grants whole-project access and `repository/path`

@@ -59,6 +59,11 @@
       "summary": "Distinguish model-authored citation errors from missing user decisions and correct only attributable source leaves without widening authorization"
     },
     {
+      "id": "user-authority-clarification-recovery",
+      "impact": "patch",
+      "summary": "Preserve per-invariant user authority and return a rejected proposal to one atomic question-only Planning response instead of attempting to model-correct a missing user decision"
+    },
+    {
       "id": "complete-cache-token-accounting",
       "impact": "patch",
       "summary": "Freeze cache read/write rates and account disjoint usage across planning, execution, budgets and reports while preserving historical records"
