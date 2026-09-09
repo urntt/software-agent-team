@@ -24,6 +24,11 @@
       "summary": "Continue an ordinary targeted correction only when its typed issue set strictly shrinks, narrowing the next request to unresolved siblings while unchanged remainders stop"
     },
     {
+      "id": "partial-authorized-correction-subsets",
+      "impact": "patch",
+      "summary": "Apply any nonempty subset of unique authorized correction slots to an unpublished copy, preserve omissions exactly, and continue only after complete revalidation proves typed progress"
+    },
+    {
       "id": "durable-stop-before-every-invocation",
       "impact": "patch",
       "summary": "Check durable cancellation and interruption before initial, correction, fallback and continuation calls instead of relying only on currently live subprocesses"

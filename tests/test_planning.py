@@ -5570,6 +5570,84 @@ def test_planning_corrects_independent_criterion_failures_in_one_turn(
     assert json.dumps(invalid_payload, sort_keys=True) == original
 
 
+def test_planning_accepts_partial_sibling_correction_then_narrows_to_remainder(
+    tmp_path: Path,
+) -> None:
+    valid_payload = proposal_response().model_dump(mode="json")
+    invalid_payload = json.loads(json.dumps(valid_payload))
+    criteria = invalid_payload["proposal"]["acceptance_criteria"]
+    correction_paths = (
+        "/proposal/acceptance_criteria/0/verification_agent_ids",
+        "/proposal/acceptance_criteria/1/verification_agent_ids",
+    )
+    for criterion in criteria[:2]:
+        criterion["verification_agent_ids"] = ["cli_developer"]
+    correction_base, _ = planning._normalize_planning_response_payload(
+        invalid_payload,
+        profile_criterion_ids=(
+            criterion.id for criterion in policy().profile_acceptance_criteria
+        ),
+        user_inputs=(request().source_request,),
+    )
+    partial_payload = json.loads(json.dumps(correction_base))
+    partial_payload["proposal"]["acceptance_criteria"][0]["verification_agent_ids"] = (
+        valid_payload["proposal"]["acceptance_criteria"][0]["verification_agent_ids"]
+    )
+    executor = ScriptedAgentExecutor(
+        [
+            json.dumps(invalid_payload),
+            correction_response(
+                correction_base,
+                {
+                    correction_paths[0]: valid_payload["proposal"][
+                        "acceptance_criteria"
+                    ][0]["verification_agent_ids"]
+                },
+            ),
+            correction_response(
+                partial_payload,
+                {
+                    correction_paths[1]: valid_payload["proposal"][
+                        "acceptance_criteria"
+                    ][1]["verification_agent_ids"]
+                },
+            ),
+        ]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(response_repair_limit=None),
+        clock=AdvancingClock(),
+    )
+
+    created = coordinator.start(
+        request(),
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+
+    assert created is not None
+    assert len(executor.requests) == 3
+    first_contract = executor.requests[1].submission_contract
+    assert first_contract is not None
+    first_replacements = first_contract.parameters_schema()["properties"][
+        "replacements"
+    ]
+    assert first_replacements["minItems"] == 1
+    assert first_replacements["maxItems"] == 2
+    first_correction = store.load_turn(request().run_id, 2)
+    assert first_correction.semantic_correction_outcome == "improved"
+    assert first_correction.response_validation is not None
+    assert first_correction.response_validation.correction_paths == (
+        correction_paths[1],
+    )
+    final = store.load_turn(request().run_id, 3)
+    assert final.semantic_correction_outcome == "accepted"
+    assert final.parsed_response is not None
+    assert final.parsed_response.proposal == proposal_response().proposal
+
+
 def test_product_planning_preserves_normalization_and_targets_new_root_cause(
     tmp_path: Path,
 ) -> None:
@@ -5840,7 +5918,7 @@ def test_invalid_correction_slot_identity_is_typed_model_input(tmp_path: Path) -
         policy=policy(response_repair_limit=None),
         clock=AdvancingClock(),
     )
-    with pytest.raises(PlanningError, match="slot coverage differs"):
+    with pytest.raises(PlanningError, match="slot outside controller authority"):
         coordinator.start(
             request(), answer_question=lambda _: pytest.fail("unexpected question")
         )

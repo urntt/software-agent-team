@@ -443,9 +443,11 @@ produces a content-free diagnostic and a correction request whose persisted
 evidence is bound to the retained object's SHA-256. The Controller assigns an
 opaque handle to each exact validator-owned JSON-pointer path; the model submits
 order-independent `{slot_handle, replacement_value}` records through the same
-typed tool under a correction-only semantic schema. The Controller requires exact
-handle coverage before applying anything; missing, duplicate, unknown,
-cross-response, and legacy positional submissions fail closed. Every model-visible
+typed tool under a correction-only semantic schema. One submission may contain any
+nonempty subset of the authorized handles. The Controller atomically applies only
+that subset to a copy, preserves omitted slots exactly, and revalidates the complete
+object before deciding whether measurable progress justifies another call. Empty,
+duplicate, unknown, cross-response, and legacy positional submissions fail closed. Every model-visible
 slot also includes the exact response-schema
 fragment for its replacement value and its validator-owned constraints. Independent
 ProductDefinition dimension defects are collected in one validation pass, and each
@@ -456,7 +458,8 @@ order has no semantic meaning. Derived parent
 errors are not copied into a child-field request. Every other value remains
 immutable. Product
 Planning continues only after the typed issue set makes strict measurable
-progress and a targetable remainder remains within the task budget. Removing one
+progress and a targetable remainder remains within the task budget. Partial slot
+coverage alone is not progress. Removing one
 or more independent sibling issues is progress even when another prior sibling
 remains; the next request narrows to that remainder, and an unchanged remainder
 fingerprint stops. A newly exposed relational error is not treated as the same defect merely

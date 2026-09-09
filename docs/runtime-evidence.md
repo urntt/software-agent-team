@@ -330,8 +330,10 @@ beside it. ProductDefinition validation reports
 independent invalid dimensions together, and each complete dimension is the atomic
 repair value so coupled disposition, source, statement, and downstream references
 cannot be repaired as a misleading sequence of isolated scalar edits. The exact
-semantic correction schema requires the slot count, and Controller validation
-requires every authorized handle exactly once before copying or mutation;
+semantic correction schema requires a nonempty set of unique authorized handles
+and bounds it by the current slot count. Controller validation may atomically apply
+that subset to a copy while preserving omitted slots exactly; it then validates the
+complete semantic object before any result can advance or publish.
 both Planning and dynamic corrections use object-only capture inside the canonical
 `artifact` argument before Controller validation. The shared submission-contract
 factory owns this distinction. Value errors therefore return to the Controller's
@@ -344,7 +346,8 @@ Controller applies each value to its pre-authorized path on a copy, preserves
 every unrelated field, and revalidates the compiled result. A writer's verified commit and snapshot
 are frozen before correction and must remain unchanged. A missing user-owned
 decision returns through the typed Planning-question path and never enters this
-protocol. Transport failures, unlocated errors, invalid slot identity or coverage, repeated
+protocol. Transport failures, unlocated errors, empty correction submissions,
+invalid slot identity, repeated
 invariant/subject fingerprints, and corrections that leave the same typed defect in place
 stop rather than consuming a random full-response retry. JSON-pointer ancestry
 alone does not identify the same defect: a newly exposed container relation may

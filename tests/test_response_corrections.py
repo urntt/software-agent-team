@@ -95,7 +95,9 @@ def test_plan_targets_only_invalid_fields_and_preserves_other_content() -> None:
     }
 
 
-def test_correction_rejects_a_value_count_that_cannot_bind_all_targets() -> None:
+def test_correction_applies_an_authorized_subset_and_preserves_omitted_targets() -> (
+    None
+):
     payload: dict[str, object] = {
         "summary": "",
         "tasks": [],
@@ -104,15 +106,17 @@ def test_correction_rejects_a_value_count_that_cannot_bind_all_targets() -> None
     plan = build_semantic_correction_plan(payload, diagnostic(payload))
     assert plan is not None
 
-    try:
-        apply_semantic_correction(
-            correction_submission(plan, {"/summary": "valid"}),
-            plan,
-        )
-    except ValueError as error:
-        assert "value count differs: expected 2, received 1" in str(error)
-    else:
-        raise AssertionError("incomplete semantic correction was accepted")
+    corrected = apply_semantic_correction(
+        correction_submission(plan, {"/summary": "valid"}),
+        plan,
+    )
+
+    assert corrected == {
+        "summary": "valid",
+        "tasks": [],
+        "preserved": "keep",
+    }
+    assert plan.base_payload == payload
 
 
 def test_correction_rejects_duplicate_unknown_cross_plan_and_positional_payloads() -> (
@@ -216,7 +220,7 @@ def test_correction_prompt_keeps_path_authority_in_the_controller() -> None:
     assert '"replacements"' in schema
     assert '"slot_handle"' in schema
     assert '"replacement_value"' in schema
-    assert '"minItems": 2' in schema
+    assert '"minItems": 1' in schema
     assert '"maxItems": 2' in schema
     assert '"path"' not in schema
     assert '"kind"' not in schema
@@ -462,6 +466,28 @@ def selection_plan() -> SemanticCorrectionPlan:
     )
 
 
+def test_candidate_submission_applies_an_authorized_subset_without_guessing() -> None:
+    plan = selection_plan()
+
+    application = apply_semantic_correction_with_evidence(
+        correction_submission(
+            plan,
+            {"/first": "evidence_0000000000000001"},
+        ),
+        plan,
+    )
+
+    assert application.payload == {
+        "first": "exact evidence 1",
+        "second": "bad",
+        "keep": [1, 2],
+    }
+    assert application.normalizations == (
+        "bound controller evidence candidate evidence_0000000000000001 to /first",
+    )
+    assert plan.base_payload == {"first": "bad", "second": "bad", "keep": [1, 2]}
+
+
 def test_mixed_candidate_selection_stages_only_verified_bindings() -> None:
     plan = selection_plan()
     original = json.dumps(plan.base_payload, sort_keys=True)
@@ -517,7 +543,6 @@ def test_mixed_candidate_selection_stages_only_verified_bindings() -> None:
         "wrong_slots",
         "duplicate_slot",
         "unknown_slot",
-        "missing_slot",
         "shape",
     ],
 )
@@ -542,8 +567,6 @@ def test_invalid_candidate_submission_fails_typed_without_guess_or_retry(
         replacements[1]["slot_handle"] = replacements[0]["slot_handle"]
     elif defect == "unknown_slot":
         replacements[1]["slot_handle"] = "slot_ffffffffffffffff"
-    elif defect == "missing_slot":
-        replacements.pop()
     else:
         payload = {"replacements": "not an array"}
     with pytest.raises(SemanticCorrectionSubmissionError) as caught:

@@ -281,8 +281,10 @@ opaque response-bound handles and the model submits order-independent
 `{slot_handle, replacement_value}` records, so it cannot submit the response
 digest, select a parent container, or otherwise widen correction authority. The
 correction contract discriminates each record by its constant handle and exact
-value schema; Controller validation rejects missing, duplicate, unknown,
-cross-response, and legacy positional submissions before mutation. Constraint
+value schema. A submission may contain a nonempty subset of unique authorized
+handles; the Controller applies it only to a copy, preserves omitted slots, and
+revalidates the complete response. Empty, duplicate, unknown, cross-response, and
+legacy positional submissions are rejected before mutation. Constraint
 convergence distinguishes genuine
 refinement from regression: a more specific invariant exposed after a coarse
 schema failure may continue, while falling back to a coarser type/shape error in

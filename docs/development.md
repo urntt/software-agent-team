@@ -398,8 +398,9 @@ Do not treat a prompt instruction as evidence that the provider must call a tool
 
 When changing targeted correction, test object-only capture followed by the exact
 Controller-owned per-slot semantic schema,
-order-independent opaque-handle binding, exact handle coverage, atomic rejection,
-and post-application validation. A different diagnostic fingerprint is not by
+order-independent opaque-handle binding, nonempty authorized-subset application,
+exact preservation of omitted slots, atomic rejection of unknown or duplicate
+handles, and complete post-application validation. A different diagnostic fingerprint is not by
 itself improvement: regressions to a coarser type or shape in the same authority
 slot must stop. A strict reduction of independent typed sibling issues is progress
 and must narrow the next request to the remaining siblings; an unchanged remainder
@@ -414,7 +415,7 @@ passes post-application grounding.
 
 Candidate-selection regressions must distinguish model-submission errors from
 Controller plan faults. Cover mixed valid/invalid choices, wrong-slot handles,
-duplicate or missing identity, all-invalid/no-progress termination, and immutable
+duplicate or unknown identity, omitted authorized slots, all-invalid/no-progress termination, and immutable
 staging with a strictly smaller pending set. Exercise the dynamic runner's final
 grounding and ledger, not only the application helper. Partial bindings never
 publish an artifact; free-form siblings must not be retained without validation.

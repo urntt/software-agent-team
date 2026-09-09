@@ -829,7 +829,7 @@ def semantic_correction_schema(
         "type": "array",
         "title": "Replacements",
         "items": {"oneOf": replacement_variants},
-        "minItems": len(plan.evidence.target_paths),
+        "minItems": 1,
         "maxItems": len(plan.evidence.target_paths),
     }
     return schema
@@ -1029,11 +1029,15 @@ def correction_prompt(
         "for this invocation. "
         "The prior semantic JSON object was parsed and retained by the controller. "
         "Do not regenerate or repeat that object. Submit only an object matching "
-        "CORRECTION_SCHEMA_JSON. Provide one `slot_handle` and `replacement_value` "
-        "record for every authorized slot; record order has no meaning. Return only "
-        "the supplied opaque handles, not target paths. The controller owns the "
-        "response identity and path bindings. All other fields are "
-        "immutable and will be preserved by the controller. When a slot includes "
+        "CORRECTION_SCHEMA_JSON. Provide one or more `slot_handle` and "
+        "`replacement_value` records for authorized slots; include every slot you "
+        "can correct, and do not invent a value merely to cover a slot. Record order "
+        "has no meaning. Omitted slots keep their exact prior values and the "
+        "controller revalidates the complete object before deciding whether another "
+        "targeted correction is useful. Return only the supplied opaque handles, not "
+        "target paths. The controller owns the response identity and path bindings. "
+        "All other fields are immutable and will be preserved by the controller. "
+        "When a slot includes "
         "value_schema, that schema is the exact type and shape contract for its "
         "replacement value; satisfy its listed error constraints as well. When a "
         "slot includes candidate_catalog, submit only one listed opaque handle for "
@@ -1073,24 +1077,15 @@ def apply_semantic_correction_with_evidence(
             "semantic correction requires unique typed slot/value records",
             plan=plan,
         ) from error
-    expected_count = len(plan.evidence.target_paths)
-    if len(submission.replacements) != expected_count:
-        raise SemanticCorrectionSubmissionError(
-            "semantic correction value count differs: "
-            f"expected {expected_count}, received {len(submission.replacements)}",
-            plan=plan,
-        )
-
     expected_handles = _semantic_correction_slot_bindings(plan)
     submitted_by_handle = {
         item.slot_handle: item.replacement_value for item in submission.replacements
     }
     submitted_handles = set(submitted_by_handle)
-    missing_handles = set(expected_handles) - submitted_handles
     unknown_handles = submitted_handles - set(expected_handles)
-    if missing_handles or unknown_handles:
+    if unknown_handles:
         raise SemanticCorrectionSubmissionError(
-            "semantic correction slot coverage differs from controller authority",
+            "semantic correction includes a slot outside controller authority",
             plan=plan,
         )
 
@@ -1101,6 +1096,8 @@ def apply_semantic_correction_with_evidence(
     handles_by_path = {path: handle for handle, path in expected_handles.items()}
     for path in plan.evidence.target_paths:
         handle = handles_by_path[path]
+        if handle not in submitted_by_handle:
+            continue
         submitted_value = submitted_by_handle[handle]
         candidate_slot = candidate_slots.get(path)
         if candidate_slot is None:
@@ -1116,7 +1113,7 @@ def apply_semantic_correction_with_evidence(
             f"bound controller evidence candidate {selected.handle} to {path}"
         )
 
-    if invalid_paths and len(candidate_slots) != expected_count:
+    if invalid_paths and len(candidate_slots) != len(plan.evidence.target_paths):
         # Unvalidated free-form siblings cannot establish selection progress.
         resolved_values = {}
         normalizations = []
