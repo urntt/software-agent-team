@@ -450,6 +450,14 @@ exact-process cleanup, persisted Planning and execution evidence, and compact
 versus detailed progress. Register each changed threshold or polling constant in
 `decision_limits.py`; do not turn it into an Agent work budget.
 
+The `process_diagnostics` collector provides bounded, read-only Linux snapshots
+of an exact PID/start-time/group/UID identity. It reads only stat, status, I/O,
+and wait-channel fields; unavailable metrics remain null rather than zero.
+It never signals processes or grants readiness. This collector is currently an
+integration building block: automatic initialization-boundary capture and
+versioned persistence are not yet connected. Its focused tests exercise live
+processes, identity changes, denied reads, and bounded/non-symlink reads.
+
 Initialization liveness precedes that lease and uses the same execution-adapter
 lifecycle for Planning and runtime Agents. Tests must separately cover slow
 checkpoint progress, permanent startup hang, recovery inside the visible grace,
