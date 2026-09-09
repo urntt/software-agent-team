@@ -455,15 +455,17 @@ replace, widen, or reorder the response identity or private path authority; reco
 order has no semantic meaning. Derived parent
 errors are not copied into a child-field request. Every other value remains
 immutable. Product
-Planning continues only after every prior validator-owned invariant/subject
-identity disappears and a distinct targetable failure remains within the task
-budget. A newly exposed relational error is not treated as the same defect merely
+Planning continues only after the typed issue set makes strict measurable
+progress and a targetable remainder remains within the task budget. Removing one
+or more independent sibling issues is progress even when another prior sibling
+remains; the next request narrows to that remainder, and an unchanged remainder
+fingerprint stops. A newly exposed relational error is not treated as the same defect merely
 because its JSON pointer overlaps the corrected field; each Planning relational
 validator supplies a stable invariant ID, structured criterion/task/Agent or
 other entity subjects, and the smallest model-owned authority path it can
 justify. Error prose is display-only. An unclassified relation fails closed
-without guessing a broad replacement. A repeated fingerprint or the same typed
-issue stops. Constraint progress is ordered as well: a replacement that falls
+without guessing a broad replacement. A repeated fingerprint or a typed issue set
+that retains every prior issue stops. Constraint progress is ordered as well: a replacement that falls
 back from a valid or semantically constrained value to a coarser type or shape
 failure in the same authority slot is a regression, not a new improvement. A
 more specific constraint exposed after a coarse schema defect may still proceed.

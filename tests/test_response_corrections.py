@@ -687,6 +687,61 @@ def test_outcome_requires_targeted_errors_to_disappear_and_rejects_cycles() -> N
     )
 
 
+def test_outcome_continues_after_sibling_reduction_then_stops_cycle() -> None:
+    payload: dict[str, object] = {
+        "first": "duplicate evidence",
+        "second": "duplicate evidence",
+        "preserved": "keep",
+    }
+    initial = diagnostic_from_invariant(
+        payload,
+        failure_class=ResponseFailureClass.SEMANTIC_SCHEMA,
+        authority=ResponseIssueAuthority.MODEL,
+        code="value_error",
+        invariant_id="review_evidence_fragments_distinct",
+        subjects=(),
+        message="criterion boundary checks require distinct evidence fragments",
+        paths=("/first", "/second"),
+    )
+    plan = build_semantic_correction_plan(payload, initial)
+    assert plan is not None
+    reduced_payload = {
+        **payload,
+        "first": "independent evidence",
+    }
+    reduced = diagnostic_from_invariant(
+        reduced_payload,
+        failure_class=ResponseFailureClass.SEMANTIC_SCHEMA,
+        authority=ResponseIssueAuthority.MODEL,
+        code="value_error",
+        invariant_id="review_evidence_fragments_distinct",
+        subjects=(),
+        message="criterion boundary checks require distinct evidence fragments",
+        paths=("/second",),
+    )
+
+    assert initial.fingerprint != reduced.fingerprint
+    assert (
+        correction_outcome(
+            plan,
+            reduced,
+            seen_fingerprints=frozenset({initial.fingerprint}),
+        )
+        is SemanticCorrectionOutcome.IMPROVED
+    )
+
+    narrowed_plan = build_semantic_correction_plan(reduced_payload, reduced)
+    assert narrowed_plan is not None
+    assert (
+        correction_outcome(
+            narrowed_plan,
+            reduced,
+            seen_fingerprints=frozenset({initial.fingerprint, reduced.fingerprint}),
+        )
+        is SemanticCorrectionOutcome.NO_IMPROVEMENT
+    )
+
+
 def test_outcome_rejects_a_schema_regression_in_the_same_authority_slot() -> None:
     payload: dict[str, object] = {
         "summary": "candidate",

@@ -16,12 +16,10 @@ Mixed user- and model-owned defects are revalidated together after the answer.
 Relational correction now grants the shared `decisions` slot together with the
 affected ProductDefinition dimensions only when no eligible decision exists;
 an actual two-question, five-dimension regression reaches a valid proposal in
-one targeted correction. Planning and correction checks pass 177 tests. The
-preceding exact clean candidate passed 1,405 canonical checks without owned
-resource residuals. The current session-state follow-up also persists terminally
+one targeted correction. The preceding exact clean candidate passed 1,406
+canonical checks without owned resource residuals. The current session-state follow-up also persists terminally
 invalid initial Planning as failed and restores the preceding proposal after a
-completed invalid revision; the updated candidate still requires its one
-canonical gate and ordinary product journey.
+completed invalid revision.
 
 Planning and dynamic Agent configuration now explicitly disable the optional
 memory plugin slot. Four focused checks, including the pinned runtime's actual
@@ -34,10 +32,12 @@ provider-backed product acceptance remains pending.
 Review candidate selection now distinguishes invalid model submissions from
 Controller faults. Mixed catalog-backed selections can retain verified bindings
 on an unpublished copy and request only a strictly smaller pending set; no
-progress or invalid identity stops without guessing. Full grounding still gates
-artifact publication. Focused regressions and a read-only replay of an actual
-four-slot failure cover this behavior; clean-candidate and fresh delivery
-validation remain outstanding.
+progress or invalid identity stops without guessing. The same convergence rule
+now recognizes a strict reduction of independent typed sibling issues, narrows the
+next request to the unresolved remainder, and stops if that remainder repeats.
+Full grounding still gates artifact publication. Response, dynamic-runner,
+prompting, and Review correction checks pass 187 tests; the updated candidate's
+clean canonical gate and accepted ordinary delivery remain outstanding.
 
 The durable user-stop check now covers every dynamic invocation admission,
 including semantic correction and provider fallback, rather than only upstream

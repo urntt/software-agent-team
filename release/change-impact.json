@@ -19,6 +19,11 @@
       "summary": "Collect independent criterion relation failures into one identity-bound correction while preserving prerequisite ordering and strict revalidation"
     },
     {
+      "id": "strict-semantic-sibling-convergence",
+      "impact": "patch",
+      "summary": "Continue an ordinary targeted correction only when its typed issue set strictly shrinks, narrowing the next request to unresolved siblings while unchanged remainders stop"
+    },
+    {
       "id": "durable-stop-before-every-invocation",
       "impact": "patch",
       "summary": "Check durable cancellation and interruption before initial, correction, fallback and continuation calls instead of relying only on currently live subprocesses"

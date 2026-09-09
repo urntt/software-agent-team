@@ -1195,7 +1195,7 @@ def correction_outcome(
     *,
     seen_fingerprints: frozenset[str],
 ) -> SemanticCorrectionOutcome:
-    """Continue only after every targeted prior typed issue was removed."""
+    """Continue only after strict typed progress without a schema regression."""
 
     if diagnostic is None:
         return SemanticCorrectionOutcome.ACCEPTED
@@ -1227,7 +1227,11 @@ def correction_outcome(
         )
     }
     current_issues = {issue.identity for issue in diagnostic.issues}
-    if prior_issues & current_issues:
+    if prior_issues <= current_issues:
+        # Retaining every prior issue is not progress, even if another issue
+        # became visible. Removing at least one independently identified
+        # sibling is measurable progress: the next plan narrows to the
+        # remaining issue set, and its fingerprint stops an unchanged retry.
         return SemanticCorrectionOutcome.NO_IMPROVEMENT
     return SemanticCorrectionOutcome.IMPROVED
 

@@ -23,6 +23,7 @@ from software_agent_team.artifacts import (
     CommandEvidence,
     HandoffEnvelope,
     HandoffStatus,
+    ReviewBoundaryKind,
     ReviewReport,
     TaskBrief,
     WorkResult,
@@ -183,7 +184,7 @@ def initialize_source(root: Path) -> Path:
     return source
 
 
-def brief() -> TaskBrief:
+def brief(*, review_boundaries: tuple[ReviewBoundaryKind, ...] = ()) -> TaskBrief:
     """Return a small confirmed brief with deterministic and manual criteria."""
 
     return TaskBrief(
@@ -201,6 +202,7 @@ def brief() -> TaskBrief:
                 id="AC_REVIEW",
                 description="The result is clearly documented.",
                 verification="Review the public usage documentation.",
+                review_boundaries=review_boundaries,
             ),
         ],
         constraints=["Keep the implementation small."],
@@ -229,10 +231,11 @@ def dynamic_inputs(
     chain_quality: bool = False,
     run_budget: AgentBudget | None = None,
     writer_scope: str = "repository",
+    review_boundaries: tuple[ReviewBoundaryKind, ...] = (),
 ) -> tuple[TaskBrief, AdaptiveImplementationPlan, TeamPlan]:
     """Build one internally coherent approved plan for runner tests."""
 
-    task_brief = brief()
+    task_brief = brief(review_boundaries=review_boundaries)
     tasks = [
         ProposedTask(
             id="TASK_BUILD",
@@ -398,6 +401,7 @@ class DynamicExecutor:
         zero_review_tool_calls_once: bool = False,
         invalid_review_selector_once: bool = False,
         invalid_review_response_once: bool = False,
+        invalid_review_sibling_once: bool = False,
         invalid_review_evidence: bool = False,
         unapproved_review_boundaries: bool = False,
         writer_presentation_arrays: bool = False,
@@ -416,6 +420,7 @@ class DynamicExecutor:
         self.zero_review_tool_calls_once = zero_review_tool_calls_once
         self.invalid_review_selector_once = invalid_review_selector_once
         self.invalid_review_response_once = invalid_review_response_once
+        self.invalid_review_sibling_once = invalid_review_sibling_once
         self.invalid_review_evidence = invalid_review_evidence
         self.unapproved_review_boundaries = unapproved_review_boundaries
         self.writer_presentation_arrays = writer_presentation_arrays
@@ -715,7 +720,59 @@ class DynamicExecutor:
                 ]
             response_text = json.dumps(valid_payload)
             submission_payload = valid_payload
-            if self.invalid_review_response_once:
+            if self.invalid_review_sibling_once:
+                invalid_payload = json.loads(json.dumps(valid_payload))
+                assessments = invalid_payload["criterion_assessments"]
+                assert isinstance(assessments, list)
+                assessment = assessments[0]
+                assert isinstance(assessment, dict)
+                duplicate_boundaries = [
+                    {
+                        "boundary": "top_level_input",
+                        "adversarial_check": "Checked the direct input boundary.",
+                        "tool_evidence": [{"observable": "fake-review"}],
+                    },
+                    {
+                        "boundary": "nested_input",
+                        "adversarial_check": "Checked the nested input boundary.",
+                        "tool_evidence": [{"observable": "fake-review"}],
+                    },
+                ]
+                assessment["boundary_checks"] = duplicate_boundaries
+                invalid_payload["summary"] = ""
+                if count == 1:
+                    submission_payload = invalid_payload
+                    response_text = json.dumps(submission_payload)
+                elif count == 2:
+                    first_correction = semantic_correction_response(
+                        invalid_payload,
+                        {
+                            "/criterion_assessments/0/boundary_checks": (
+                                duplicate_boundaries
+                            ),
+                            "/summary": valid_payload["summary"],
+                        },
+                    )
+                    submission_payload = json.loads(first_correction)
+                    response_text = first_correction
+                else:
+                    reduced_payload = json.loads(json.dumps(invalid_payload))
+                    reduced_payload["summary"] = valid_payload["summary"]
+                    distinct_boundaries = json.loads(json.dumps(duplicate_boundaries))
+                    distinct_boundaries[1]["tool_evidence"] = [
+                        {"observable": "observation"}
+                    ]
+                    final_correction = semantic_correction_response(
+                        reduced_payload,
+                        {
+                            "/criterion_assessments/0/boundary_checks": (
+                                distinct_boundaries
+                            )
+                        },
+                    )
+                    submission_payload = json.loads(final_correction)
+                    response_text = final_correction
+            elif self.invalid_review_response_once:
                 invalid_payload = dict(valid_payload)
                 invalid_payload["summary"] = ""
                 if count == 1:
@@ -1088,6 +1145,7 @@ def runtime(
     chain_quality: bool = False,
     run_budget: AgentBudget | None = None,
     writer_scope: str = "repository",
+    review_boundaries: tuple[ReviewBoundaryKind, ...] = (),
     executor_options: dict[str, object] | None = None,
     model_switching: bool = False,
 ) -> tuple[DynamicAgentRunner, TeamPlan, DynamicExecutor, FakeQualityGate, Path]:
@@ -1099,6 +1157,7 @@ def runtime(
         chain_quality=chain_quality,
         run_budget=run_budget,
         writer_scope=writer_scope,
+        review_boundaries=review_boundaries,
     )
     if model_switching:
         assignments = tuple(
@@ -1823,6 +1882,52 @@ def test_pending_stop_prevents_semantic_correction_invocation(
         == 1
     )
     assert runner.termination_reasons["reviewer"] is reason
+    assert runner.budget_ledger.snapshot().active_calls == 0
+
+
+def test_reviewer_correction_continues_after_strict_sibling_reduction(
+    tmp_path: Path,
+) -> None:
+    runner, team_plan, executor, _, _ = runtime(
+        tmp_path,
+        review_boundaries=(
+            ReviewBoundaryKind.TOP_LEVEL_INPUT,
+            ReviewBoundaryKind.NESTED_INPUT,
+        ),
+        executor_options={"invalid_review_sibling_once": True},
+    )
+
+    result = DagScheduler().execute(team_plan, runner)
+
+    assert result.status is ScheduleStatus.COMPLETED
+    review_requests = [
+        request for request in executor.requests if request.agent_id == "reviewer"
+    ]
+    assert len(review_requests) == 3
+    records = [
+        runner.artifact_store.load(ref)
+        for ref in runner.execution_records
+        if "/verify/reviewer-" in ref.path
+    ]
+    assert len(records) == 3
+    assert records[0].response_validation is not None
+    assert records[0].response_validation.correction_paths == (
+        "/criterion_assessments/0/boundary_checks",
+        "/summary",
+    )
+    assert records[1].semantic_correction_outcome == "improved"
+    assert records[1].response_validation is not None
+    assert records[1].response_validation.correction_paths == (
+        "/criterion_assessments/0/boundary_checks",
+    )
+    assert records[2].semantic_correction_outcome == "accepted"
+    assert records[2].response_validation is None
+    review = runner.artifact_store.load(runner.outputs["reviewer"])
+    assert isinstance(review, ReviewReport)
+    assert tuple(
+        check.tool_evidence[0].observable
+        for check in review.criterion_assessments[0].boundary_checks
+    ) == ("fake-review", "observation")
     assert runner.budget_ledger.snapshot().active_calls == 0
 
 
