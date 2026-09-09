@@ -513,6 +513,15 @@ safety guarantee must declare all four controller-known entry boundaries:
 top-level input, nested input, alias or indirection, and failure path. These
 obligations are shown in the overview and become part of the confirmed
 TaskBrief; they cannot be silently weakened by the execution Reviewer.
+The clarity validator classifies an incomplete declaration as a typed,
+model-owned criterion invariant with the exact criterion subject and
+`review_boundaries` leaf. Independent criteria are collected in the same pass,
+so resolving an earlier proposal defect can expose every boundary sibling in one
+correction request instead of falling back to unclassified root authority. If
+the user request itself contains an unqualified guarantee but no criterion
+preserves all four boundaries, the complete acceptance-criteria relation remains
+the correction boundary because the Controller cannot choose which product
+criterion should carry that guarantee.
 
 Boundary identifiers have controller-owned meanings; they are not casual labels
 that an Agent may reinterpret from filesystem depth:

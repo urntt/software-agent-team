@@ -3489,6 +3489,24 @@ def validate_planning_clarity(
                         ),
                     ),
                 )
+        if _ABSOLUTE_GUARANTEE_PATTERN.search(criterion.description) and set(
+            criterion.review_boundaries
+        ) != set(_ALL_REVIEW_BOUNDARIES):
+            raise _planning_context_invariant(
+                "planning_criterion_review_boundaries",
+                (
+                    f"criterion {criterion.id} contains an unqualified "
+                    "prohibition or safety guarantee and must require top-level, "
+                    "nested, alias-or-indirection, and failure-path Review "
+                    "boundaries"
+                ),
+                paths=(
+                    f"/proposal/acceptance_criteria/{criterion_index}/review_boundaries",
+                ),
+                subjects=_planning_subjects(
+                    (ResponseIssueSubjectKind.CRITERION, criterion.id)
+                ),
+            )
 
     criterion_invariants = []
     for criterion_index, criterion in enumerate(body.acceptance_criteria):
@@ -3498,6 +3516,24 @@ def validate_planning_clarity(
             criterion_invariants.append(error.invariant)
     if criterion_invariants:
         raise _PlanningContextInvariantsError(tuple(criterion_invariants))
+
+    if (
+        source_request is not None
+        and _ABSOLUTE_GUARANTEE_PATTERN.search(source_request)
+        and not any(
+            set(criterion.review_boundaries) == set(_ALL_REVIEW_BOUNDARIES)
+            for criterion in body.acceptance_criteria
+        )
+    ):
+        raise _planning_context_invariant(
+            "planning_request_review_boundaries",
+            (
+                "the user request contains an unqualified prohibition or safety "
+                "guarantee, but no proposed acceptance criterion preserves all "
+                "four Review boundaries"
+            ),
+            paths=("/proposal/acceptance_criteria",),
+        )
 
     missing_requirement_coverage = requirement_ids - covered_requirements
     if missing_requirement_coverage:
@@ -4851,27 +4887,6 @@ def preview_adaptive_proposal(
         raise PlanningError(
             f"proposal requires up to {planned_calls} planned Agent calls, but the "
             f"approved budget permits {policy.budget.max_calls}"
-        )
-    incomplete_absolute_boundaries = tuple(
-        criterion.id
-        for criterion in body.acceptance_criteria
-        if _ABSOLUTE_GUARANTEE_PATTERN.search(criterion.description)
-        and set(criterion.review_boundaries) != set(_ALL_REVIEW_BOUNDARIES)
-    )
-    if incomplete_absolute_boundaries:
-        raise PlanningError(
-            "unqualified prohibitions and safety guarantees must require "
-            "top-level, nested, alias-or-indirection, and failure-path Review "
-            "boundaries: " + ", ".join(incomplete_absolute_boundaries)
-        )
-    if _ABSOLUTE_GUARANTEE_PATTERN.search(request.source_request) and not any(
-        set(criterion.review_boundaries) == set(_ALL_REVIEW_BOUNDARIES)
-        for criterion in body.acceptance_criteria
-    ):
-        raise PlanningError(
-            "the user request contains an unqualified prohibition or safety "
-            "guarantee, but no proposed acceptance criterion preserves all four "
-            "Review boundaries"
         )
     profile_criterion_ids = {
         criterion.id for criterion in policy.profile_acceptance_criteria

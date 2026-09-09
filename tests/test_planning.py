@@ -5817,6 +5817,97 @@ def test_product_planning_distinguishes_new_relational_invariant_and_continues(
     )
 
 
+def test_planning_exposes_review_boundary_siblings_after_prior_correction(
+    tmp_path: Path,
+) -> None:
+    valid_payload = proposal_response().model_dump(mode="json")
+    invalid_payload = json.loads(json.dumps(valid_payload))
+    invalid_payload["proposal"]["product_definition"]["primary_workflow"].update(
+        disposition="not_material",
+        source="planner",
+    )
+    criteria = invalid_payload["proposal"]["acceptance_criteria"]
+    criteria[0].update(
+        description="Files that differ in content must not be reported as duplicates.",
+        review_boundaries=[ReviewBoundaryKind.TOP_LEVEL_INPUT.value],
+    )
+    criteria[1].update(
+        description=(
+            "Content comparison must not hold every file content in memory at once."
+        ),
+        review_boundaries=[ReviewBoundaryKind.NESTED_INPUT.value],
+    )
+    first_corrected = json.loads(json.dumps(invalid_payload))
+    first_corrected["proposal"]["product_definition"]["primary_workflow"] = (
+        valid_payload["proposal"]["product_definition"]["primary_workflow"]
+    )
+    all_boundaries = [boundary.value for boundary in ReviewBoundaryKind]
+    final_payload = json.loads(json.dumps(first_corrected))
+    for criterion in final_payload["proposal"]["acceptance_criteria"][:2]:
+        criterion["review_boundaries"] = all_boundaries
+
+    boundary_paths = (
+        "/proposal/acceptance_criteria/0/review_boundaries",
+        "/proposal/acceptance_criteria/1/review_boundaries",
+    )
+    executor = ScriptedAgentExecutor(
+        [
+            json.dumps(invalid_payload),
+            correction_response(
+                invalid_payload,
+                {
+                    "/proposal/product_definition/primary_workflow": (
+                        valid_payload["proposal"]["product_definition"][
+                            "primary_workflow"
+                        ]
+                    )
+                },
+            ),
+            correction_response(
+                first_corrected,
+                {path: all_boundaries for path in boundary_paths},
+            ),
+        ]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(response_repair_limit=None),
+        clock=AdvancingClock(),
+    )
+
+    created = coordinator.start(
+        request(),
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+
+    assert created is not None
+    expected = PlanningModelResponse.model_validate(final_payload).proposal
+    assert created.body == expected
+    assert len(executor.requests) == 3
+    first = store.load_turn(request().run_id, 1)
+    assert first.response_validation is not None
+    assert first.response_validation.correction_paths == (
+        "/proposal/product_definition/primary_workflow",
+    )
+    second = store.load_turn(request().run_id, 2)
+    assert second.semantic_correction_outcome == "improved"
+    assert second.response_validation is not None
+    assert second.response_validation.correction_paths == boundary_paths
+    assert {issue.invariant_id for issue in second.response_validation.issues} == {
+        "planning_criterion_review_boundaries"
+    }
+    assert {
+        subject.identifier
+        for issue in second.response_validation.issues
+        for subject in issue.subjects
+    } == {criteria[0]["id"], criteria[1]["id"]}
+    assert store.load_turn(request().run_id, 3).semantic_correction_outcome == (
+        "accepted"
+    )
+
+
 @pytest.mark.parametrize(
     ("field", "invalid_value"),
     [

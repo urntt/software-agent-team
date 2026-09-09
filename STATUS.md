@@ -16,13 +16,14 @@ Mixed user- and model-owned defects are revalidated together after the answer.
 Relational correction now grants the shared `decisions` slot together with the
 affected ProductDefinition dimensions only when no eligible decision exists;
 an actual two-question, five-dimension regression reaches a valid proposal in
-one targeted correction. The last committed clean candidate passed 1,409
-canonical checks without owned resource residuals. The current declared-bundle
-follow-up passes 213 focused Planning, correction, schema, release, and
-documentation checks; a canonical gate on the exact release candidate remains
-a release condition. The current session-state follow-up also persists terminally
-invalid initial Planning as failed and restores the preceding proposal after a
-completed invalid revision.
+one targeted correction. Exact committed candidate `138db757` passed 1,411
+canonical checks without owned resource residuals. A subsequent focused
+production-coordinator regression passes all 154 Planning tests and classifies
+absolute-guarantee Review-boundary omissions as exact criterion siblings after
+an earlier correction, instead of unclassified root authority. A canonical gate
+on the final committed candidate remains a release condition. The current
+session-state path also persists terminally invalid initial Planning as failed
+and restores the preceding proposal after a completed invalid revision.
 
 Planning and dynamic Agent configuration now explicitly disable the optional
 memory plugin slot. Four focused checks, including the pinned runtime's actual

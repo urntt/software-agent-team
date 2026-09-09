@@ -34,6 +34,11 @@
       "summary": "Let one focused Planning question declare tightly coupled ProductDefinition dimensions, project exact transcript answers into statement fields, and return undeclared or ambiguous values to focused clarification"
     },
     {
+      "id": "typed-review-boundary-corrections",
+      "impact": "patch",
+      "summary": "Classify absolute-guarantee Review boundary omissions as typed criterion siblings so prior corrections can expose and repair every exact leaf without falling back to root authority"
+    },
+    {
       "id": "durable-stop-before-every-invocation",
       "impact": "patch",
       "summary": "Check durable cancellation and interruption before initial, correction, fallback and continuation calls instead of relying only on currently live subprocesses"

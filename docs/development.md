@@ -183,6 +183,10 @@ within each criterion and defer global coverage checks until those failures are
 resolved. Regression tests must exercise the resulting correction through the
 coordinator, including reordered keyed replacements and unchanged valid siblings;
 checking the diagnostic message alone is insufficient.
+This includes absolute-guarantee Review-boundary declarations: test at least two
+invalid criteria behind a distinct earlier proposal defect, then prove that the
+next diagnostic exposes both exact `review_boundaries` leaves and that one bound
+correction reaches full proposal acceptance without widening authority.
 
 Group related defects by their shared contract or state owner. Reproduce failures
 with captured, sanitized inputs and integrated production paths before repairing
