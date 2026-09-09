@@ -419,7 +419,9 @@ execution-profile confirmation, user-owned success conditions, automatic run
 preparation, controller-backed progress, accepted-result delivery, and safe
 uninstallation are implemented and covered offline. Provider credential
 creation remains in SAT's isolated OpenClaw-owned boundary. Repeated
-comparative experiments and human rubric scoring remain pending.
+comparative experiments and cross-participant human-factors generalization
+remain pending. The latter is a separate optional study, not a requirement for
+the current operator to perform a user-side black-box rubric.
 
 The exact acceptance procedure is in
 [`docs/phase1-runbook.md`](docs/phase1-runbook.md). Offline scripted executions
@@ -524,8 +526,9 @@ and delivery boundary. Current proposals fail closed when any trace is missing
 or a writer claims its own independent verification. Planning schema v2 through
 v4 remain readable without changing their canonical serialization; safe edits
 retain the legacy version rather than relabeling it. Ambiguous-task provider
-behavior and real-user comprehension are not established by these offline
-contracts.
+behavior and user-side comprehension are not established by these offline
+contracts. That black-box interaction may be performed by the current test
+operator; it does not require a separate human participant.
 
 Planning criterion ownership is now explicit. The response schema requires
 every Planner-defined criterion to have implementation-task coverage and
@@ -1765,7 +1768,8 @@ derived from the task.
 - Automatic CLI resume of an interrupted run;
 - Executable `single_agent` and `implementation_domain_specialized` workflow
   paths;
-- Repeated comparative trials, human rubric scoring, and topology selection;
+- Repeated comparative trials, optional cross-participant human-factors study,
+  and topology selection;
 - Additional product execution profiles and their independent quality
   contracts.
 
@@ -1782,10 +1786,12 @@ and progress boundaries with captured failures and focused production-path
 integration checks. Run the canonical full gate once that implementation batch
 is ready, then freeze one exact candidate.
 
-Only after that technical candidate is ready should an ordinary user supply a
-genuine task for the remaining Planning-adequacy and comprehension acceptance.
-That future participant input does not block technical work that can proceed
-now. The independent-device demonstration, a provider-backed two-route run,
+Only after that technical candidate is ready should a user-side test operator
+submit a representative task through the ordinary interface for the remaining
+Planning-adequacy and comprehension acceptance. The current contributor or an
+automated operator may fill that role without inspecting privileged state first;
+no separate human participant blocks technical work. The independent-device
+demonstration, a provider-backed two-route run,
 and stable release lifecycle follow shared candidate acceptance; they are not
 diagnostic substitutes for the current technical work.
 

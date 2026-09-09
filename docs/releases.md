@@ -123,8 +123,9 @@ tag reuse, incomplete schema metadata, or a tag bound to another commit.
 
 ## Publish Stable
 
-Pushing the exact annotated version tag is the explicit human publication
-authorization:
+Pushing the exact annotated version tag is the explicit authorized publication
+action. It may be performed by the current operator or automation acting within
+already-granted repository authority; no separate live participant is required:
 
 ```bash
 git tag -a v0.1.0 -m "release: SAT 0.1.0"

@@ -128,6 +128,13 @@ OpenClaw configuration in the normal flow. Advanced output may expose the
 validated plan and resolved model routes for inspection without making those
 files prerequisites for starting a build.
 
+`User` is an interaction role at this boundary, not a claim about operator
+identity. A project owner, contributor, Codex, or another test driver may
+exercise the ordinary flow, provided requests, answers, approval, controls, and
+comprehension judgments use only this product surface before privileged state is
+inspected or changed. Such evidence validates the interface contract; broader
+human-factors generalization is a separate evaluation question.
+
 ## Planning Session
 
 ### Entry and Authorization

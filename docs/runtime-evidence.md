@@ -1269,12 +1269,14 @@ when investigating it rather than editing artifacts in place.
   network, Docker, or provider quota with SAT; these are resource-contention
   boundaries, not permission for SAT to control that program.
 
-## Human Authorization Boundary
+## External-Action Authorization Boundary
 
-Human authorization remains required before merge, push, deployment,
+Explicit authority remains required before merge, push, deployment,
 publication, external communication, destructive operations, or additional
-spending. A completed harness run is an auditable candidate delivery, not
-authorization for an external side effect.
+spending. The current operator or automation may perform an action within
+authority already granted for that repository, account, and scope; SAT cannot
+create or infer that authority from a completed run. A completed harness run is
+an auditable candidate delivery, not authorization for an external side effect.
 
 For the procedure that verifies these boundaries in a controlled
 provider-backed evaluation, use

@@ -176,8 +176,8 @@ when code, usability evidence, or controlled experiments justify a replacement.
   explicit inspection.
 - Normal commits do not change the numeric release. At release-scope freeze, a
   machine-readable impact ledger determines the minimum SemVer increment; one
-  exact candidate commit must pass local and repository gates before a human
-  authorizes an immutable tag and GitHub Release.
+  exact candidate commit must pass local and repository gates before an
+  authorized publisher creates an immutable tag and GitHub Release.
 - Every resolved `provider/model` must pass SAT's isolated catalog and auth
   checks before its Agent invocation. Startup validates saved defaults;
   run-scoped preflight validates the approved route plan without generation,
@@ -524,7 +524,8 @@ change in the same controlled trial.
 | Admit Planning questions through a deterministic responsibility matrix | The user owns product intent, material trade-offs, privacy, external actions, and organization policy; Planning recommends acceptance, delivery, team, and routes; execution handles reversible implementation choices; Controller policy alone owns safety and evidence integrity. Recording category, owner, missing evidence, material consequences, and alternatives lets the controller reject misplaced questions without pretending it can judge their semantic usefulness from prose alone. |
 | Require an attributable ProductDefinition before team design | A feature list does not establish who will use the result, its killer workflow, or whether the user expects a throwaway prototype, a reusable local product, or a releasable small product. Current Planning therefore records target users, primary workflow, delivery maturity, usability, operations, and delivery expectations with `explicit_input`, `resolved_question`, `planner_recommendation`, or `not_material` provenance. The primary workflow is always material, including one-time use: it requires explicit user input or focused clarification and downstream requirement trace. A lean prototype may omit irrelevant audience research, not its core workflow; explicit activity must not trigger a redundant question. Every material dimension identifies its downstream requirement, criterion, or decision effects; `not_material` carries an attributable rationale and no contradictory downstream references. An `explicit_input` source is one contiguous verbatim user-input substring, but provenance alone does not establish semantic relevance: audience evidence must name an actor that uses or receives the result, and workflow evidence must describe that actor's activity rather than a build instruction, product type, or delivery qualifier. An unambiguous natural-language phrase may map to the matching delivery-maturity enum without requiring the user to speak Controller vocabulary. Missing material user-owned depth becomes a bounded question; Planner-owned quality recommendations become visible approval choices. The overview must expose architecture, team, cost, and delivery effects, while an explicit throwaway prototype remains eligible for a lean plan rather than a fixed questionnaire or inflated team. |
 | Bind each ProductDefinition question to one indivisible decision unit | A free-text answer to one question is authority for the decision that was actually asked, not every nearby missing product field. Planning therefore asks separate questions when several dimensions remain undecided, and the Controller rejects a question that declares more than one ProductDefinition dimension before it reaches the user. Question text, rationale, missing evidence, consequences, options, and the declared dimension are one semantic correction unit: a defect replaces the complete question rather than relabeling preserved wording through one field patch. Current submissions must explicitly contain every question authority key, and an unknown key is not silently removed; versioned persisted evidence may remain backward-readable without weakening this live boundary. This preserves explicit sibling decisions and makes later question-to-answer attribution auditable without depending on model intelligence. |
-| Require a deterministic Planning clarity gate before approval | A syntactically executable plan may still conceal scope or responsibility. Current proposals therefore need stable requirement and decision references, explicit non-goals and assumptions, and a complete requirement-to-criterion-to-writer-to-independent-verifier graph. The overview projects those facts together with Agent inputs, outputs, handoffs, resources, risks, and delivery boundaries; real comprehensibility still requires user validation rather than another model score. |
+| Require a deterministic Planning clarity gate before approval | A syntactically executable plan may still conceal scope or responsibility. Current proposals therefore need stable requirement and decision references, explicit non-goals and assumptions, and a complete requirement-to-criterion-to-writer-to-independent-verifier graph. The overview projects those facts together with Agent inputs, outputs, handoffs, resources, risks, and delivery boundaries; comprehensibility still requires user-side black-box validation rather than model self-scoring. |
+| Define ordinary-user evidence by the product boundary, not operator identity | A project owner, contributor, Codex, or another test operator may all supply user input through the managed bare-`sat` interface. What makes the evidence ordinary-user evidence is that requests, answers, approval, controls, and comprehension judgments use only the exposed product surface before privileged state is inspected or changed. A fixed request must retain its actual source and cannot be presented as someone else's personal need, but it does not require a separate human participant. Population-level human-factors generalization remains a distinct optional experiment rather than a product or release blocker. |
 | Show one editable plan overview before execution | Requirements, implementation intent, Agent responsibilities, dependencies, permissions, budgets, and model routes affect quality and cost. The user must be able to approve or revise them before the controller creates the team. Controller-owned execution-profile constraints and additional task-specific Planning constraints are shown under distinct authority labels; the Planner must not restate or paraphrase the former, and the compiled TaskBrief preserves both without concealing an approved addition. |
 | Use OpenClaw as the Agent runtime, not the orchestrator | OpenClaw provides model/provider integration, sessions, tools, and sandboxing; the experiment still needs a model-independent control plane. |
 | Isolate SAT's OpenClaw runtime and state from every existing installation | Compatibility is not ownership. Installing a pinned private binary and overriding every mutable OpenClaw path gives SAT reproducibility without reading, changing, stopping, or deleting a user's existing binary, Gateway, profile, configuration, credentials, sessions, caches, or workspaces. A collision at SAT's private target fails safely instead of being adopted. |
@@ -677,12 +678,12 @@ policies retain the code owners listed in
 - Automated tests passed and failed;
 - Static-analysis findings;
 - Blocking and non-blocking review findings;
-- Human rubric score for correctness and usability;
+- User-side black-box rubric score for correctness and usability;
 - Reproducibility from a clean checkout.
 
 ### First-Delivery Effectiveness
 
-- Human corrections after requirements confirmation;
+- User-side corrections after requirements confirmation;
 - Guidance, correction, pause, interruption, and cancellation counts;
 - Control-command application latency and invalidated downstream work;
 - Internal implementation iterations;
@@ -723,9 +724,9 @@ Safe execution is a product constraint, not an optional deployment concern.
 The implementation must preserve sandbox isolation, least-privilege capability
 profiles, explicit non-secret environments, auditable authorized model routes,
 strict pinned-model evaluation, bounded resources and cost, integrity-checked
-evidence, and human authorization for external side effects.
+evidence, and explicit authorization for external side effects.
 
-The concrete Git, sandbox, credential, model, resource, storage, and human
+The concrete Git, sandbox, credential, model, resource, storage, and external-action
 authorization boundaries are maintained in
 [`docs/runtime-evidence.md`](docs/runtime-evidence.md). The qualifying
 operator checklist is maintained in
