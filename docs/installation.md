@@ -304,6 +304,12 @@ both rates before the first task call. Enter zero for cache writes only when
 that route does not bill that bucket separately. The explicit zero confirmation
 is not a substitute for missing usage evidence. It never contains a credential.
 
+Before task authorization, the route summary shows all four frozen rates
+(uncached input, output, cache read, and cache write), including the independent
+ordinary and cache price sources. Blank input is not zero; unknown rates require
+completion, and entering two zero rates requires explicit confirmation before
+that price pair can be authorized.
+
 Advanced configuration can set cache rates without a dialogue:
 
 ```bash

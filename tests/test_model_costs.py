@@ -126,6 +126,7 @@ def test_explicit_unknown_and_total_only_usage_stay_unknown() -> None:
 
 def test_admission_completes_unknown_cache_rates_and_preserves_user_prices(
     monkeypatch,
+    capsys,
 ) -> None:
     when = datetime(2026, 9, 8, tzinfo=UTC)
     configuration = UserConfiguration(
@@ -174,6 +175,60 @@ def test_admission_completes_unknown_cache_rates_and_preserves_user_prices(
     assert any("Cache read" in prompt for prompt in prompts)
     assert any("Cache write" in prompt for prompt in prompts)
     assert not any("Context-window" in prompt for prompt in prompts)
+    authorization_view = capsys.readouterr().out.split("Models available to this task")[
+        1
+    ]
+    assert "$1 input / $2 output" in authorization_view
+    assert "$0.014 cache read / $0 cache write" in authorization_view
+    assert "per million tokens (user_supplied)" in authorization_view
+    assert "provider-side spending or quota limit" in authorization_view
+
+
+@pytest.mark.parametrize("confirm_zero", [True, False])
+def test_unknown_model_price_requires_explicit_zero_confirmation_before_authorization(
+    monkeypatch, capsys, confirm_zero: bool
+) -> None:
+    configuration = UserConfiguration(model="provider/model")
+    inspection = OpenClawModelInspection(
+        model="provider/model", available=True, context_window_tokens=120000
+    )
+    prompts = []
+    answers = iter(
+        ["", "0", "0", "yes" if confirm_zero else "no"]
+        + (["0", "0", "yes", "2", "no", "yes"] if confirm_zero else [])
+    )
+
+    def answer(prompt):
+        prompts.append(prompt)
+        return next(answers)
+
+    monkeypatch.setattr("builtins.input", answer)
+    if not confirm_zero:
+        with pytest.raises(
+            cli.RuntimeConfigurationError, match="confirmation was declined"
+        ):
+            cli._complete_model_metadata(
+                configuration, (inspection,), offer_price_change=False
+            )
+        assert not any("Maximum total model spend" in prompt for prompt in prompts)
+        return
+    completed = cli._complete_model_metadata(
+        configuration, (inspection,), offer_price_change=False
+    )
+    authorization = cli._collect_task_resource_authorization(completed)
+    assert authorization is not None
+    frozen = authorization.model_metadata[0]
+    assert frozen.pricing_source is ModelMetadataSource.CONFIRMED_ZERO
+    assert frozen.cache_pricing.source is ModelMetadataSource.CONFIRMED_ZERO
+    assert frozen.input_cost_per_million_usd == frozen.output_cost_per_million_usd == 0
+    assert frozen.cache_pricing.read_cost_per_million_usd == 0
+    assert frozen.cache_pricing.write_cost_per_million_usd == 0
+    assert sum("Input price per million" in prompt for prompt in prompts) == 2
+    assert not any("Context-window" in prompt for prompt in prompts)
+    view = capsys.readouterr().out.split("Models available to this task")[1]
+    assert "$0 input / $0 output" in view
+    assert "$0 cache read / $0 cache write" in view
+    assert view.count("confirmed_zero") == 2
 
 
 def test_legacy_pricing_extension_does_not_change_serialization() -> None:

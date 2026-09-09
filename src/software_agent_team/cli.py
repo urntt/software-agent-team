@@ -450,6 +450,9 @@ def _collect_task_resource_authorization(
             f"${profile.input_cost_per_million_usd} input / "
             f"${profile.output_cost_per_million_usd} output per million tokens "
             f"({profile.pricing_source.value}); "
+            f"${profile.cache_pricing.read_cost_per_million_usd} cache read / "
+            f"${profile.cache_pricing.write_cost_per_million_usd} cache write "
+            f"per million tokens ({profile.cache_pricing.source.value}); "
             f"context {profile.context_window_tokens} "
             f"({profile.context_source.value})"
         )
