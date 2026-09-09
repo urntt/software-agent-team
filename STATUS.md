@@ -1775,12 +1775,22 @@ action succeeded after interruption.
 
 ## Next Milestone
 
-The next verification steps are the independent-device demonstration and a
-provider-backed run using two planned model routes with live switch evidence.
-Phase 3F then closes the remaining acceptance and usability defects.
-Fixed-topology comparison remains in Phase 4
-so it can serve as a controlled baseline rather than define the product's
-permanent role layout.
+The next executable milestone is a stable shared candidate, not another
+full user journey used to discover basic integration defects. First resolve
+the remaining initialization, Planning-correction, accounting, Git-ancestry,
+and progress boundaries with captured failures and focused production-path
+integration checks. Run the canonical full gate once that implementation batch
+is ready, then freeze one exact candidate.
+
+Only after that technical candidate is ready should an ordinary user supply a
+genuine task for the remaining Planning-adequacy and comprehension acceptance.
+That future participant input does not block technical work that can proceed
+now. The independent-device demonstration, a provider-backed two-route run,
+and stable release lifecycle follow shared candidate acceptance; they are not
+diagnostic substitutes for the current technical work.
+
+Fixed-topology comparison remains in Phase 4 so it can serve as a controlled
+baseline rather than define the product's permanent role layout.
 The detailed sequence and acceptance criteria are in
 [`docs/adaptive-orchestration.md`](docs/adaptive-orchestration.md).
 

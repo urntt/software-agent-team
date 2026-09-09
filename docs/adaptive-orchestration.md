@@ -2,21 +2,11 @@
 
 This contributor-facing specification defines the product contract for
 task-defined Agent teams, interactive planning, observable execution, user
-controls, and model routing. Planning, run-scoped execution identity, prompts,
-runtime configuration, handoffs, telemetry, Agent-namespaced artifact
-persistence, deterministic DAG scheduling, multi-iteration lifecycle
-convergence, bare-`sat` activation, and configurable per-Agent progress are
-implemented and offline verified. A fresh public-install, bare-`sat`, strict
-single-route rehearsal has also completed accepted delivery and independent
-post-delivery validation. The foreground control channel is implemented and
-offline verified; a separate provider-backed ordinary-user rehearsal has now
-applied detailed visibility, guidance, cooperative pause, `/controls`, and
-resume. Durable process-restart recovery remains pending. Secret-free model profiles,
-deterministic plan-time route resolution, route-specific runtime validation,
-and explicit provider-failure switching are implemented and offline verified;
-a provider-backed two-route rehearsal remains pending.
-Current behavior and gaps remain authoritative in
-[`STATUS.md`](../STATUS.md); the completed guided baseline remains specified in
+controls, and model routing. It defines required behavior and compatibility;
+it does not track which batches currently pass, which live rehearsals have run,
+or what should be executed next. Those time-sensitive implementation and
+verification facts belong only to [`STATUS.md`](../STATUS.md). The completed
+guided baseline remains specified in
 [`product-demo-slice.md`](product-demo-slice.md).
 
 The durable product and architecture decisions behind this design belong to
@@ -878,8 +868,9 @@ exposes the following line-mode palette after plan approval:
 
 Each accepted command is written before the controller applies it. Request
 ordering uses a controller-assigned mailbox sequence rather than timestamp or
-random command-ID ordering. A later secondary `sat` process may submit the same
-contract, but that secondary-process interface is not implemented yet.
+random command-ID ordering. Any secondary `sat` process that exposes this
+control surface must submit the same authenticated contract and preserve the
+same ordering; interface availability is reported in `STATUS.md`.
 Presentation may evolve, but these semantics remain stable:
 
 ### Guide
@@ -1007,12 +998,12 @@ before any model invocation.
 **Exit:** a user can start from an ordinary request, revise the proposed team,
 and approve a complete validated TeamPlan without editing an internal file.
 
-**Implementation note:** the versioned request, question/proposal response,
-append-only turn and proposal store, natural-language revision, safe limit
-editor, complete overview, explicit approval evidence, and deterministic
-ordinary-user interaction test are implemented. Bare `sat` now activates this
-interaction together with Batch 3C, so an approved dynamic plan is the exact
-plan the controller executes. Before strict validation, the Planning boundary
+**Compatibility and behavior contract:** the versioned request,
+question/proposal response, append-only turn and proposal store,
+natural-language revision, safe limit editor, complete overview, and explicit
+approval evidence form one path. Bare `sat` activates this interaction together
+with Batch 3C, so an approved dynamic plan is the exact plan the controller
+executes. Before strict validation, the Planning boundary
 infers only an unambiguous response kind, canonicalizes only safe relative-path
 presentation, removes redundant active-profile definition echoes, and
 deterministically deconflicts an echo whose model-owned relationship is still
@@ -1065,19 +1056,19 @@ counters and never stores streamed response content as progress.
 teams and complete or fail through the same controller, evidence, and cleanup
 boundary.
 
-**Implementation note:** run-scoped Agent identity and capability telemetry,
+**Runtime contract:** run-scoped Agent identity and capability telemetry,
 approved-Agent-only OpenClaw configuration, AgentSpec-derived prompt and
 response contracts, exact model and controller time-authority binding, and
-AgentSpec-derived cleanup selection are implemented. Adaptive plans may use one downstream independent
+AgentSpec-derived cleanup selection share one controller authority. Adaptive plans may use one downstream independent
 quality Agent for a small task; separate testing and review Agents remain an
 explicit justified choice rather than a hidden minimum topology. Controller
 artifact/handoff attribution, bounded DAG dispatch, shared controller-owned
 WorkResult/TestReport/ReviewReport assembly, and dynamic iteration aggregation
-are also implemented. Iteration validation requires a chained result from
+share the same controller path. Iteration validation requires a chained result from
 every approved writer, deterministic evidence from every approved Tester or
 from the controller when no Tester exists, evidence from every approved
 Reviewer, one immutable quality commit, and complete manual-review coverage.
-The dynamic runner now binds each scheduler-approved Agent to its exact model,
+The dynamic runner binds each scheduler-approved Agent to its exact model,
 time authority, prompt, invocation-scoped typed submission schema,
 semantic-correction policy, Git or read-only boundary, aggregate
 budget, execution record, and durable handoffs. Its persisted events distinguish
@@ -1124,11 +1115,11 @@ boundary before the first quality Agent starts, aggregates every approved
 output, decides accept/revise/fail, binds prior blocking evidence to the next
 iteration's starting commit, stops an unchanged repeated blocker, and writes
 the same integrity-checked final evidence and human report as the compatibility
-workflow. Bare `sat` now authorizes Planning, creates its read-only bootstrap
+workflow. Bare `sat` authorizes Planning, creates its read-only bootstrap
 runtime, presents the complete overview, materializes only an approved
 source/run, executes the approved Dynamic Team, delivers only acceptance, and
-cleans bootstrap and runtime sandboxes. Safe plan amendment checkpoints remain
-in this batch.
+cleans bootstrap and runtime sandboxes. Plan amendments may apply only at the
+validated safe checkpoints defined by the same controller lifecycle.
 
 The current single-clone Git backend serializes every writer and excludes
 readers while a writer is active; independently ready read-only quality Agents
@@ -1152,7 +1143,7 @@ evaluation limits remain separate experiment inputs.
 level with deterministic event evidence; an authorized live run demonstrates
 at least guidance and cooperative pause/resume without losing integrity.
 
-**Implementation note:** append-only events now project scheduler queue and
+**Event and control contract:** append-only events project scheduler queue and
 readiness, invocation and provider wait, targeted semantic correction, completion,
 failure, and blocked states with Agent dependencies, capability, stage, model,
 duration, evidence, and aggregate budget data. Configuration schema v8 selects
@@ -1163,14 +1154,11 @@ for safe correction and pause checkpoints, resumes cooperatively, sends
 best-effort process-group termination for interrupt or cancel, and records
 provider-cost caveats. Correction produces a cancelled superseded-run report
 and starts a fresh Planning request with the user's correction preserved;
-cancel produces a terminal cancellation report and the existing exact-owned
-sandbox cleanup still runs. Offline unit and end-to-end tests cover these
-semantics. Heartbeat lifecycle is independent of visibility filtering, hidden
+cancel produces a terminal cancellation report and exact-owned sandbox cleanup
+still runs. Heartbeat lifecycle is independent of visibility filtering, hidden
 invocation-completed events stop provider waits, and an Agent terminal state
 closes every repaired attempt. Gate events distinguish pass from failure in
 their symbols instead of marking every completed command with a check mark.
-Provider-backed guidance/pause rehearsal, process-crash recovery,
-and a secondary-process control client remain in this batch.
 
 ### Batch 3E: Model Profiles and Routing
 
@@ -1185,14 +1173,13 @@ provider, budget rejection, authorized switch, refused switch, and strict
 evaluation behavior; one authorized run uses two planned routes without silent
 fallback.
 
-**Implementation note:** configuration schema v8 now owns the secret-free
+**Routing contract:** configuration schema v8 owns the secret-free
 profiles, attributable price/context metadata, and route policy. Planning resolves and displays an exact assignment
 for every Agent, preflight checks every approved model, prompts and response
 validation bind the active route, and the runtime records or refuses provider
-switches at the controller boundary. Offline tests cover precedence,
-capability mismatch, unavailable routes, fallback call-budget rejection,
-authorized and refused switching, and strict-mode compatibility. The
-provider-backed two-route exit run remains pending.
+switches at the controller boundary. Verification must cover precedence,
+capability mismatch, unavailable routes, budget rejection, authorized and
+refused switching, and strict-mode compatibility.
 
 ### Batch 3F: Product Acceptance and Experiment Handoff
 
@@ -1207,15 +1194,6 @@ provider-backed two-route exit run remains pending.
 internal files or evaluation commands, and the resulting plan, events, model
 routes, interventions, Git evidence, quality results, and cleanup are
 auditable.
-
-**Implementation note:** the strict single-route ordinary-user subset now has
-provider-backed evidence from public installation through Planning, user
-approval, dynamic execution, evidence-backed Review, accepted delivery,
-independent project checks, and cleanup. A subsequent run supplies
-provider-backed foreground guidance and pause/resume evidence but exposed
-Review-protocol and generated-lock portability defects; their corrected clean
-retry remains pending. The remaining exit evidence also covers a two-route run
-and an independent supported device.
 
 ## Acceptance Criteria
 
