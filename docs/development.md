@@ -515,8 +515,8 @@ decisions. Include phase publication before the corresponding history delta:
 the displayed completed-tool count must come from the current numeric snapshot,
 not a cached prose total in the previous action description. `RunEvent` schema v5 must
 remain canonically readable from v2 through v4, Artifact schema v12 from v2
-through v11, lifecycle schema v5 from v1 through v4, and Planning schema v15 from
-v2 through v14. Main-thread and repeated SIGINT tests must prove exact child
+through v11, lifecycle schema v5 from v1 through v4, and Planning schema v16 from
+v2 through v15. Main-thread and repeated SIGINT tests must prove exact child
 cleanup before lease release, CLI exit 130, and a terminal Planning turn/session.
 Run the CLI interrupt path with the real task ledger as well: after that process
 exits, reload the turn and verify its unique settlement, unknown cost, separate

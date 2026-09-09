@@ -551,11 +551,16 @@ criterion. Testing and Review Agents may own tasks that state their verification
 focus. Those entries are preserved in the overview and prompt, but they do not
 create an Agent, grant tools or write access, expand review scope, choose a
 model, set a timeout, or create another model call. Those authorities come only
-from the approved `AgentSpec` and controller policy. Every task owner must exist,
-the task DAG must be acyclic, and a cross-Agent task dependency is valid only
-when the owning Agent depends transitively on the dependency owner. The
-controller applies the same binding validation during proposal parsing, prompt
-construction, and runner startup.
+from the approved `AgentSpec` and controller policy. Every task owner must exist
+and the task DAG must be acyclic. A model-authored task dependency can express
+local order only between tasks owned by the same Agent. Before strict proposal
+validation, the Controller compiles each cross-Agent task edge from the direct
+Agent dependency DAG in stable task-declaration order. It removes redundant
+transitive restatements, while unknown references, unrelated cross-Agent edges,
+and cycles still fail closed. The persisted proposal, implementation plan,
+approval overview, prompt construction, and runner startup all validate that
+same canonical projection, so task text cannot become a second execution-order
+owner.
 
 Testing and Review capabilities are always read-only. Their tasks may describe
 inspection, evidence analysis, exercising existing behavior, or review focus,

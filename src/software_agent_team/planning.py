@@ -124,7 +124,7 @@ from software_agent_team.teams import (
     permission_for_capability,
 )
 
-PLANNING_SCHEMA_VERSION = 15
+PLANNING_SCHEMA_VERSION = 16
 MINIMUM_READABLE_PLANNING_SCHEMA_VERSION = 2
 PLANNING_TEMPLATE = Path(__file__).with_name("prompt_templates") / "adaptive_planner.md"
 MAX_PLANNING_EVIDENCE_CHARACTERS = 1_000_000
@@ -856,6 +856,104 @@ def _canonicalize_model_path(value: object) -> object:
     return str(path)
 
 
+def _compile_task_dependency_projection(
+    proposal: dict[str, object],
+) -> tuple[str, ...]:
+    """Compile cross-Agent task edges from the authoritative Agent DAG."""
+
+    raw_agents = proposal.get("agents")
+    raw_tasks = proposal.get("tasks")
+    if not isinstance(raw_agents, list) or not isinstance(raw_tasks, list):
+        return ()
+    if not all(isinstance(agent, dict) for agent in raw_agents) or not all(
+        isinstance(task, dict) for task in raw_tasks
+    ):
+        return ()
+
+    agent_ids = [agent.get("id") for agent in raw_agents]
+    task_ids = [task.get("id") for task in raw_tasks]
+    if (
+        not all(isinstance(agent_id, str) for agent_id in agent_ids)
+        or len(agent_ids) != len(set(agent_ids))
+        or not all(isinstance(task_id, str) for task_id in task_ids)
+        or len(task_ids) != len(set(task_ids))
+    ):
+        return ()
+    known_agents = set(agent_ids)
+    known_tasks = set(task_ids)
+
+    agent_dependencies: dict[str, tuple[str, ...]] = {}
+    for agent_id, agent in zip(agent_ids, raw_agents, strict=True):
+        dependencies = agent.get("dependencies", [])
+        if not isinstance(dependencies, list) or not all(
+            isinstance(item, str) for item in dependencies
+        ):
+            return ()
+        if not set(dependencies).issubset(known_agents):
+            return ()
+        agent_dependencies[agent_id] = tuple(dependencies)
+
+    task_owners: dict[str, str] = {}
+    task_dependencies: dict[str, tuple[str, ...]] = {}
+    for task_id, task in zip(task_ids, raw_tasks, strict=True):
+        owner = task.get("owner_agent_id")
+        dependencies = task.get("dependencies", [])
+        if (
+            not isinstance(owner, str)
+            or owner not in known_agents
+            or not isinstance(dependencies, list)
+            or not all(isinstance(item, str) for item in dependencies)
+            or not set(dependencies).issubset(known_tasks)
+        ):
+            return ()
+        task_owners[task_id] = owner
+        task_dependencies[task_id] = tuple(dependencies)
+
+    def transitive_agent_dependencies(agent_id: str) -> set[str]:
+        pending = list(agent_dependencies[agent_id])
+        seen: set[str] = set()
+        while pending:
+            dependency = pending.pop()
+            if dependency in seen:
+                continue
+            seen.add(dependency)
+            pending.extend(agent_dependencies[dependency])
+        return seen
+
+    changed = False
+    for task_id, task in zip(task_ids, raw_tasks, strict=True):
+        owner = task_owners[task_id]
+        direct_upstream_agents = set(agent_dependencies[owner])
+        all_upstream_agents = transitive_agent_dependencies(owner)
+        existing = task_dependencies[task_id]
+        same_owner = [
+            dependency for dependency in existing if task_owners[dependency] == owner
+        ]
+        derived_cross_agent = [
+            candidate_id
+            for candidate_id in task_ids
+            if task_owners[candidate_id] in direct_upstream_agents
+        ]
+        unauthorized_cross_agent = [
+            dependency
+            for dependency in existing
+            if task_owners[dependency] != owner
+            and task_owners[dependency] not in all_upstream_agents
+        ]
+        canonical = list(
+            dict.fromkeys(
+                (*same_owner, *derived_cross_agent, *unauthorized_cross_agent)
+            )
+        )
+        if list(existing) == canonical:
+            continue
+        task["dependencies"] = canonical
+        changed = True
+    if not changed:
+        return ()
+    return ("compiled cross-Agent task dependencies from the authoritative Agent DAG",)
+
+
 def _normalize_planning_response_payload(
     payload: dict[str, object],
     *,
@@ -897,6 +995,7 @@ def _normalize_planning_response_payload(
     proposal = normalized.get("proposal")
     if not isinstance(proposal, dict):
         return normalized, tuple(changes)
+    changes.extend(_compile_task_dependency_projection(proposal))
     requirements = proposal.get("requirements")
     if isinstance(requirements, list) and any(
         isinstance(item, dict) for item in requirements
@@ -1665,7 +1764,7 @@ class PlanningRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal[
-        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, PLANNING_SCHEMA_VERSION
+        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, PLANNING_SCHEMA_VERSION
     ] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     project_name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
@@ -2062,7 +2161,13 @@ class ProposedTask(BaseModel):
     id: str = Field(pattern=r"^TASK_[A-Z0-9_]+$")
     owner_agent_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     description: str = Field(min_length=1, max_length=500)
-    dependencies: tuple[str, ...] = ()
+    dependencies: tuple[str, ...] = Field(
+        default=(),
+        description=(
+            "Local ordering between tasks owned by the same Agent. The Controller "
+            "compiles cross-Agent task dependencies from the Agent DAG."
+        ),
+    )
     acceptance_criteria: tuple[str, ...] = Field(min_length=1)
     expected_paths: tuple[str, ...] = Field(
         default=(),
@@ -2158,6 +2263,8 @@ def validate_task_agent_bindings(
     tasks: tuple[ProposedTask, ...],
     agent_dependencies: Mapping[str, tuple[str, ...]],
     writer_agent_ids: Collection[str],
+    *,
+    require_canonical_cross_agent_projection: bool = False,
 ) -> None:
     """Validate task ownership and ordering against one approved Agent DAG."""
 
@@ -2260,6 +2367,39 @@ def validate_task_agent_bindings(
                         (ResponseIssueSubjectKind.TASK, task.id),
                     ),
                 )
+
+    if require_canonical_cross_agent_projection:
+        for task_index, task in enumerate(tasks):
+            same_owner = tuple(
+                dependency_id
+                for dependency_id in task.dependencies
+                if task_owner_by_id[dependency_id] == task.owner_agent_id
+            )
+            direct_upstream = set(agent_dependencies[task.owner_agent_id])
+            derived_cross_agent = tuple(
+                candidate.id
+                for candidate in tasks
+                if task_owner_by_id[candidate.id] in direct_upstream
+            )
+            canonical = tuple(dict.fromkeys((*same_owner, *derived_cross_agent)))
+            if task.dependencies == canonical:
+                continue
+            raise _planning_model_invariant(
+                "planning_task_dependency_projection",
+                (
+                    f"task {task.id} dependencies do not match the "
+                    "Controller projection of the Agent DAG"
+                ),
+                paths=(f"/proposal/tasks/{task_index}/dependencies",),
+                subjects=_planning_subjects(
+                    (ResponseIssueSubjectKind.AGENT, task.owner_agent_id),
+                    (ResponseIssueSubjectKind.TASK, task.id),
+                    *(
+                        (ResponseIssueSubjectKind.TASK, dependency_id)
+                        for dependency_id in canonical
+                    ),
+                ),
+            )
 
 
 def validate_task_criterion_references(
@@ -4210,7 +4350,7 @@ class AdaptiveImplementationPlan(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal[
-        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, PLANNING_SCHEMA_VERSION
+        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, PLANNING_SCHEMA_VERSION
     ] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     team_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
@@ -4311,7 +4451,7 @@ class PlanningTurn(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal[
-        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, PLANNING_SCHEMA_VERSION
+        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, PLANNING_SCHEMA_VERSION
     ] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     sequence: int = Field(ge=1)
@@ -4467,6 +4607,23 @@ class PlanningTurn(BaseModel):
             )
         if self.parsed_response is not None and self.validation_error is not None:
             raise ValueError("valid Planning turns cannot contain a validation error")
+        if (
+            self.schema_version >= 16
+            and self.parsed_response is not None
+            and self.parsed_response.proposal is not None
+        ):
+            proposal = self.parsed_response.proposal
+            validate_task_agent_bindings(
+                proposal.tasks,
+                {agent.id: agent.dependencies for agent in proposal.agents},
+                {
+                    agent.id
+                    for agent in proposal.agents
+                    if agent.capability
+                    in {AgentCapability.IMPLEMENTATION, AgentCapability.INTEGRATION}
+                },
+                require_canonical_cross_agent_projection=True,
+            )
         if (self.semantic_correction_request is None) != (
             self.semantic_correction_outcome is None
         ):
@@ -4502,7 +4659,7 @@ class PlanningProposal(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal[
-        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, PLANNING_SCHEMA_VERSION
+        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, PLANNING_SCHEMA_VERSION
     ] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     revision: int = Field(ge=1)
@@ -4553,6 +4710,18 @@ class PlanningProposal(BaseModel):
             for seconds in self.timeout_overrides_seconds.values()
         ):
             raise ValueError("timeout overrides must be within 30..3600s")
+        if self.schema_version >= 16:
+            validate_task_agent_bindings(
+                self.body.tasks,
+                {agent.id: agent.dependencies for agent in self.body.agents},
+                {
+                    agent.id
+                    for agent in self.body.agents
+                    if agent.capability
+                    in {AgentCapability.IMPLEMENTATION, AgentCapability.INTEGRATION}
+                },
+                require_canonical_cross_agent_projection=True,
+            )
         return self
 
 
@@ -4562,7 +4731,7 @@ class PlanningSession(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal[
-        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, PLANNING_SCHEMA_VERSION
+        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, PLANNING_SCHEMA_VERSION
     ] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     request_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -4745,7 +4914,7 @@ class PlanningApproval(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal[
-        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, PLANNING_SCHEMA_VERSION
+        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, PLANNING_SCHEMA_VERSION
     ] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     revision: int = Field(ge=1)
@@ -4881,6 +5050,19 @@ class ApprovedPlanningResult(BaseModel):
     @model_validator(mode="after")
     def validate_approval_boundary(self) -> Self:
         """Bind execution inputs to the exact proposal revision the user approved."""
+
+        if self.implementation_plan.schema_version >= 16:
+            validate_task_agent_bindings(
+                self.implementation_plan.tasks,
+                {agent.id: agent.dependencies for agent in self.team_plan.agents},
+                {
+                    agent.id
+                    for agent in self.team_plan.agents
+                    if agent.capability
+                    in {AgentCapability.IMPLEMENTATION, AgentCapability.INTEGRATION}
+                },
+                require_canonical_cross_agent_projection=True,
+            )
 
         run_ids = {
             self.task_brief.run_id,

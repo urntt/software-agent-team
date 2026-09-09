@@ -3509,6 +3509,197 @@ def quality_task_payload(
     }
 
 
+def multi_task_quality_payload(*, review_dependencies: list[str]) -> dict[str, object]:
+    """Return a Journey-43-shaped proposal with two writer tasks."""
+
+    payload = proposal_response().model_dump(mode="json")
+    tasks = payload["proposal"]["tasks"]
+    tasks.append(
+        {
+            "id": "TASK_TESTS",
+            "owner_agent_id": "cli_developer",
+            "description": "Add deterministic tests for the implementation.",
+            "dependencies": ["TASK_IMPLEMENT"],
+            "acceptance_criteria": ["AC_SCAN", "AC_REPORT"],
+            "expected_paths": ["tests"],
+        }
+    )
+    tasks.append(
+        {
+            "id": "TASK_REVIEW",
+            "owner_agent_id": "quality_reviewer",
+            "description": "Independently review all writing tasks.",
+            "dependencies": review_dependencies,
+            "acceptance_criteria": ["AC_SCAN", "AC_REPORT"],
+            "expected_paths": ["src", "tests", "README.md"],
+        }
+    )
+    return payload
+
+
+def test_response_normalizer_compiles_cross_agent_task_dependencies() -> None:
+    payload = multi_task_quality_payload(review_dependencies=[])
+    payload["proposal"]["tasks"][-1].pop("dependencies")
+    original = deepcopy(payload)
+
+    normalized, changes = planning._normalize_planning_response_payload(payload)
+    parsed = PlanningModelResponse.model_validate(normalized)
+
+    assert payload == original
+    assert parsed.proposal is not None
+    tasks = {task.id: task for task in parsed.proposal.tasks}
+    assert tasks["TASK_TESTS"].dependencies == ("TASK_IMPLEMENT",)
+    assert tasks["TASK_REVIEW"].dependencies == (
+        "TASK_IMPLEMENT",
+        "TASK_TESTS",
+    )
+    assert changes == (
+        "compiled cross-Agent task dependencies from the authoritative Agent DAG",
+    )
+    persisted = PlanningProposal(
+        run_id=request().run_id,
+        revision=1,
+        created_at=FIXED_TIME,
+        source=PlanningProposalSource.MODEL,
+        source_turn_sequence=1,
+        body=parsed.proposal,
+    )
+    assert persisted.body.tasks[-1].dependencies == (
+        "TASK_IMPLEMENT",
+        "TASK_TESTS",
+    )
+
+
+def test_current_proposal_rejects_uncompiled_task_dependency_projection() -> None:
+    raw = PlanningModelResponse.model_validate(
+        multi_task_quality_payload(review_dependencies=[])
+    )
+    assert raw.proposal is not None
+
+    with pytest.raises(ValidationError, match="Controller projection"):
+        PlanningProposal(
+            run_id=request().run_id,
+            revision=1,
+            created_at=FIXED_TIME,
+            source=PlanningProposalSource.MODEL,
+            source_turn_sequence=1,
+            body=raw.proposal,
+        )
+
+    legacy = PlanningProposal(
+        schema_version=15,
+        run_id=request().run_id,
+        revision=1,
+        created_at=FIXED_TIME,
+        source=PlanningProposalSource.MODEL,
+        source_turn_sequence=1,
+        body=raw.proposal,
+    )
+    assert legacy.body.tasks[-1].dependencies == ()
+
+
+def test_task_dependency_projection_follows_direct_agent_dag_only() -> None:
+    payload = multi_task_quality_payload(review_dependencies=["TASK_IMPLEMENT"])
+    agents = payload["proposal"]["agents"]
+    reviewer = next(agent for agent in agents if agent["id"] == "quality_reviewer")
+    reviewer["dependencies"] = ["acceptance_tester"]
+    payload["proposal"]["tasks"].insert(
+        2,
+        {
+            "id": "TASK_ACCEPTANCE",
+            "owner_agent_id": "acceptance_tester",
+            "description": "Inspect the implemented behavior against acceptance.",
+            "dependencies": [],
+            "acceptance_criteria": ["AC_SCAN", "AC_REPORT"],
+            "expected_paths": ["src", "tests"],
+        },
+    )
+
+    normalized, changes = planning._normalize_planning_response_payload(payload)
+    parsed = PlanningModelResponse.model_validate(normalized)
+
+    assert parsed.proposal is not None
+    tasks = {task.id: task for task in parsed.proposal.tasks}
+    assert tasks["TASK_ACCEPTANCE"].dependencies == (
+        "TASK_IMPLEMENT",
+        "TASK_TESTS",
+    )
+    assert tasks["TASK_REVIEW"].dependencies == ("TASK_ACCEPTANCE",)
+    assert changes == (
+        "compiled cross-Agent task dependencies from the authoritative Agent DAG",
+    )
+
+
+def test_task_dependency_projection_keeps_unrelated_edges_for_rejection() -> None:
+    payload = multi_task_quality_payload(review_dependencies=[])
+    payload["proposal"]["tasks"].insert(
+        2,
+        {
+            "id": "TASK_ACCEPTANCE",
+            "owner_agent_id": "acceptance_tester",
+            "description": "Inspect the implemented behavior against acceptance.",
+            "dependencies": [],
+            "acceptance_criteria": ["AC_SCAN"],
+            "expected_paths": ["src"],
+        },
+    )
+    payload["proposal"]["tasks"][-1]["dependencies"] = ["TASK_ACCEPTANCE"]
+
+    normalized, _ = planning._normalize_planning_response_payload(payload)
+
+    with pytest.raises(ValidationError, match="does not depend on acceptance_tester"):
+        PlanningModelResponse.model_validate(normalized)
+
+
+def test_coordinator_persists_one_canonical_dependency_projection(
+    tmp_path: Path,
+) -> None:
+    payload = multi_task_quality_payload(review_dependencies=[])
+    executor = ScriptedAgentExecutor([json.dumps(payload)])
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(response_repair_limit=0),
+        clock=AdvancingClock(),
+    )
+
+    created = coordinator.start(
+        request(),
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+
+    assert created is not None
+    assert len(executor.requests) == 1
+    assert created.body.tasks[-1].dependencies == (
+        "TASK_IMPLEMENT",
+        "TASK_TESTS",
+    )
+    turn = store.load_turn(request().run_id, 1)
+    assert turn.parsed_response is not None
+    assert turn.parsed_response.proposal is not None
+    assert turn.parsed_response.proposal.tasks[-1].dependencies == (
+        "TASK_IMPLEMENT",
+        "TASK_TESTS",
+    )
+    assert turn.response_normalizations == (
+        "compiled cross-Agent task dependencies from the authoritative Agent DAG",
+    )
+    preview = preview_adaptive_proposal(
+        request(),
+        created,
+        policy(response_repair_limit=0),
+        created_at=FIXED_TIME,
+    )
+    assert preview.implementation_plan.tasks[-1].dependencies == (
+        "TASK_IMPLEMENT",
+        "TASK_TESTS",
+    )
+    assert "dependencies: TASK_IMPLEMENT, TASK_TESTS" in render_planning_overview(
+        preview
+    )
+
+
 def test_proposal_preserves_quality_owned_work_without_granting_authority() -> None:
     payload = proposal_response().model_dump(mode="json")
     payload["proposal"]["tasks"].append(quality_task_payload())
@@ -7092,7 +7283,7 @@ raise SystemExit(cli.main([]))
 
         assert not ProcessLeaseStore(tmp_path / "leases").inspect().processes
         legacy = turn.model_dump(mode="json")
-        assert legacy["schema_version"] == 15
+        assert legacy["schema_version"] == 16
         assert legacy["execution"]["invocation_lifecycle"]["schema_version"] == 5
         legacy["schema_version"] = 14
         with pytest.raises(ValidationError, match="lifecycle v5"):

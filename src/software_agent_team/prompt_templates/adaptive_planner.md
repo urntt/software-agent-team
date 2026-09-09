@@ -143,6 +143,10 @@ Choose the next response by decision value:
   implementation or integration Agent. A quality-owned task may describe only
   inspection, evidence analysis, testing of existing behavior, or review focus;
   its `expected_paths` are paths to inspect, not files it may write.
+  Use task `dependencies` only for local ordering between tasks owned by the
+  same Agent. The Controller compiles every cross-Agent task dependency from
+  the Agent dependency DAG; do not restate that execution order independently
+  in the task graph.
 - For every unqualified prohibition or safety guarantee, define acceptance and
   test intent across all relevant entry boundaries, including top-level input,
   nested input, aliases or indirection, and failure paths. Do not reduce an

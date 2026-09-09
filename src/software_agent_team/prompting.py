@@ -263,6 +263,9 @@ class DynamicAgentPromptInputs(BaseModel):
                         AgentCapability.INTEGRATION,
                     }
                 },
+                require_canonical_cross_agent_projection=(
+                    self.implementation_plan.schema_version >= 16
+                ),
             )
         except ValueError as error:
             raise ValueError(f"dynamic implementation plan {error}") from error

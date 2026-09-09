@@ -601,7 +601,11 @@ seconds. Approval revalidates that authority against the TeamPlan at the
 execution boundary.
 The bootstrap Planner cannot create Agents or change lifecycle state.
 
-Planning schema v15 carries lifecycle-v5 initialization activity evidence as
+Planning schema v16 adds the canonical Controller projection from the runtime
+Agent DAG to cross-Agent task dependencies. This keeps the persisted proposal,
+implementation plan, approval overview, Agent prompts, and runtime binding on
+one execution-order authority without another model call. Planning schema v15
+carries lifecycle-v5 initialization activity evidence as
 execution, preserving Planning v2-v14 reads. Planning schema v14 remains paired
 with lifecycle v4 diagnostics. New lifecycle evidence cannot be written under
 an older Planning version.
