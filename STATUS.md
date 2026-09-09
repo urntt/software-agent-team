@@ -13,15 +13,18 @@ ProductDefinition validation now preserves per-invariant authority. A proposal
 that lacks a material user-owned decision returns to one dimension-specific
 question instead of attempting to model-correct that decision inside a proposal.
 Mixed user- and model-owned defects are revalidated together after the answer.
-Relational correction now grants the shared `decisions` slot together with the
-affected ProductDefinition dimensions only when no eligible decision exists;
-an actual two-question, five-dimension regression reaches a valid proposal in
-one targeted correction. Exact committed candidate `138db757` passed 1,411
-canonical checks without owned resource residuals. A subsequent focused
-production-coordinator regression passes all 154 Planning tests and classifies
-absolute-guarantee Review-boundary omissions as exact criterion siblings after
-an earlier correction, instead of unclassified root authority. A canonical gate
-on the final committed candidate remains a release condition. The current
+Relational correction grants the shared `decisions` slot together with affected
+ProductDefinition dimensions only when no eligible decision exists. Its
+machine-readable value schemas now also bind requirement, criterion, decision,
+Agent, and task references to canonical IDs whenever the defining collection is
+immutable for that correction; jointly corrected identity collections remain
+open so atomic definition-and-reference repair stays reachable. Active
+profile-owned criterion IDs participate in the same vocabulary. Production-
+coordinator regressions cover a real two-question, five-dimension decision
+repair, multiple independent Review-boundary siblings, two ProductDefinition
+dimensions carrying an unknown requirement reference, exact Agent and criterion
+relations, and no-progress termination. All 155 Planning tests and an adjacent
+236-test schema/submission/release-documentation group pass. The current
 session-state path also persists terminally invalid initial Planning as failed
 and restores the preceding proposal after a completed invalid revision.
 
