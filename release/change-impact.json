@@ -4,9 +4,14 @@
   "target_version": "0.1.0",
   "changes": [
     {
-      "id": "initialization-wait-diagnostics",
+      "id": "initialization-liveness-and-wait-diagnostics",
       "impact": "patch",
-      "summary": "Persist bounded identity-bound startup wait snapshots without renewing readiness, with backward-readable lifecycle v4, Artifact v11 and Planning v14 records"
+      "summary": "Persist bounded identity-bound startup wait snapshots, renew pre-readiness inactivity only from exact process activity without granting readiness, and retain backward-readable lifecycle v4-v5, Artifact v11-v12 and Planning v14-v15 records"
+    },
+    {
+      "id": "private-openclaw-memory-isolation",
+      "impact": "patch",
+      "summary": "Disable the optional implicit OpenClaw memory slot for controlled Planning and runtime Agents while preserving isolated sessions, typed submission, and the default context engine"
     },
     {
       "id": "aggregate-independent-criterion-corrections",

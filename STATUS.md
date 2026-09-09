@@ -13,8 +13,9 @@ Planning and dynamic Agent configuration now explicitly disable the optional
 memory plugin slot. Four focused checks, including the pinned runtime's actual
 slot resolver, verify that the previous implicit `memory-core` selection is
 removed without disabling the submission plugin. No startup-performance or
-provider-backed acceptance claim follows from those checks; initialization
-stalls remain under investigation.
+provider-backed acceptance claim follows from those checks. Initialization now
+has a separate activity-versus-readiness contract described below; the shared
+provider-backed product acceptance remains pending.
 
 Review candidate selection now distinguishes invalid model submissions from
 Controller faults. Mixed catalog-backed selections can retain verified bindings
