@@ -39,6 +39,11 @@
       "summary": "Classify absolute-guarantee Review boundary omissions as typed criterion siblings so prior corrections can expose and repair every exact leaf without falling back to root authority"
     },
     {
+      "id": "canonical-correction-reference-vocabularies",
+      "impact": "patch",
+      "summary": "Bind targeted relation corrections to canonical immutable requirement, criterion, decision, Agent and task IDs while preserving jointly created identities"
+    },
+    {
       "id": "durable-stop-before-every-invocation",
       "impact": "patch",
       "summary": "Check durable cancellation and interruption before initial, correction, fallback and continuation calls instead of relying only on currently live subprocesses"

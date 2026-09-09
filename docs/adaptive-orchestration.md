@@ -327,9 +327,15 @@ may perform only these bounded, semantics-preserving normalizations:
   atomic record already binds identity to meaning;
 - Compile each current model-facing atomic assumption `{statement,
   decision_id}` into the canonical backward-readable statement and decision-ID
-  indexes. During targeted correction, the `decision_id` schema permits only
-  the existing Agent-autonomy decisions retained in the immutable base
-  proposal;
+  indexes;
+- During targeted correction, derive every relation vocabulary from the
+  retained canonical proposal. When the referenced requirement, criterion,
+  decision, Agent, or task identities are outside correction authority, the
+  replacement schema permits only those exact IDs, including active
+  profile-owned criteria. If the same correction may change an identity-owning
+  collection, keep that vocabulary open so a new definition and its references
+  remain atomically reachable. Assumptions use only retained Agent-autonomy
+  decision IDs when decisions remain immutable;
 - Remove a schema-forbidden field only when removing it cannot grant or hide
   controller/evidence authority.
 

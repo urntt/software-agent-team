@@ -404,7 +404,10 @@ When changing targeted correction, test object-only capture followed by the exac
 Controller-owned per-slot semantic schema,
 order-independent opaque-handle binding, nonempty authorized-subset application,
 exact preservation of omitted slots, atomic rejection of unknown or duplicate
-handles, and complete post-application validation. A different diagnostic fingerprint is not by
+handles, and complete post-application validation. For relation fields, assert that
+an immutable definition collection produces an exact canonical-ID enum, including
+profile-owned criteria, while a jointly corrected identity collection remains open
+to valid new IDs. A different diagnostic fingerprint is not by
 itself improvement: regressions to a coarser type or shape in the same authority
 slot must stop. A strict reduction of independent typed sibling issues is progress
 and must narrow the next request to the remaining siblings; an unchanged remainder

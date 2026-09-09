@@ -4025,8 +4025,9 @@ def _planning_response_schema_for_correction(
     plan: SemanticCorrectionPlan,
     *,
     base_schema: dict[str, object] | None = None,
+    profile_criterion_ids: Collection[str] = (),
 ) -> dict[str, object]:
-    """Bind correction-only assumption references to existing autonomy IDs."""
+    """Bind stable correction references when their identity owners are immutable."""
 
     schema = deepcopy(
         _planning_response_schema() if base_schema is None else base_schema
@@ -4044,23 +4045,151 @@ def _planning_response_schema_for_correction(
                 )
             schema["properties"]["question"] = question_non_null[0]
     proposal = plan.base_payload.get("proposal")
-    decisions = proposal.get("decisions") if isinstance(proposal, dict) else None
-    autonomous_ids: list[str] = []
-    if isinstance(decisions, list):
-        for decision in decisions:
-            if not isinstance(decision, dict):
+    if not isinstance(proposal, dict):
+        return schema
+
+    target_paths = plan.evidence.target_paths
+
+    def identity_owner_is_mutable(collection_path: str) -> bool:
+        prefix = f"{collection_path}/"
+        for target_path in target_paths:
+            if target_path == "/" or target_path == collection_path:
+                return True
+            if collection_path.startswith(f"{target_path.rstrip('/')}/"):
+                return True
+            if not target_path.startswith(prefix):
                 continue
-            decision_id = decision.get("id")
-            authority = decision.get("authority")
-            if (
-                isinstance(decision_id, str)
-                and authority == PlanningDecisionAuthority.AGENT_AUTONOMY.value
-            ):
-                autonomous_ids.append(decision_id)
-    definitions = schema["$defs"]
-    assumption = definitions["ProposedAssumption"]
-    decision_id_schema = assumption["properties"]["decision_id"]
-    decision_id_schema["enum"] = list(dict.fromkeys(autonomous_ids))
+            suffix = target_path[len(prefix) :].split("/")
+            if len(suffix) == 1 or (len(suffix) > 1 and suffix[1] == "id"):
+                return True
+        return False
+
+    def record_ids(collection_name: str) -> list[str]:
+        values = proposal.get(collection_name)
+        if not isinstance(values, list):
+            return []
+        return list(
+            dict.fromkeys(
+                identifier
+                for value in values
+                if isinstance(value, dict)
+                and isinstance((identifier := value.get("id")), str)
+            )
+        )
+
+    requirement_ids = proposal.get("requirement_ids")
+    stable_requirement_ids = (
+        list(
+            dict.fromkeys(value for value in requirement_ids if isinstance(value, str))
+        )
+        if isinstance(requirement_ids, list)
+        else record_ids("requirements")
+    )
+    stable_criterion_ids = list(
+        dict.fromkeys((*record_ids("acceptance_criteria"), *profile_criterion_ids))
+    )
+    stable_decision_ids = record_ids("decisions")
+    stable_agent_ids = record_ids("agents")
+    stable_task_ids = record_ids("tasks")
+    autonomous_ids = [
+        decision["id"]
+        for decision in proposal.get("decisions", [])
+        if isinstance(decision, dict)
+        and isinstance(decision.get("id"), str)
+        and decision.get("authority") == PlanningDecisionAuthority.AGENT_AUTONOMY.value
+    ]
+
+    definitions = schema.get("$defs")
+    if not isinstance(definitions, dict):
+        raise PlanningError("Planning response schema has no definitions")
+
+    def definition_properties(definition_name: str) -> dict[str, object]:
+        definition = definitions.get(definition_name)
+        properties = (
+            definition.get("properties") if isinstance(definition, dict) else None
+        )
+        if not isinstance(properties, dict):
+            raise PlanningError(
+                f"Planning response schema has no {definition_name} fields"
+            )
+        return properties
+
+    def bind_array_items(
+        definition_name: str,
+        field_name: str,
+        allowed_ids: list[str],
+    ) -> None:
+        field_schema = definition_properties(definition_name).get(field_name)
+        items = field_schema.get("items") if isinstance(field_schema, dict) else None
+        if not isinstance(items, dict):
+            raise PlanningError(
+                "Planning response schema has no "
+                f"{definition_name}.{field_name} item contract"
+            )
+        items["enum"] = allowed_ids
+
+    def bind_scalar(
+        definition_name: str,
+        field_name: str,
+        allowed_ids: list[str],
+    ) -> None:
+        field_schema = definition_properties(definition_name).get(field_name)
+        if not isinstance(field_schema, dict):
+            raise PlanningError(
+                f"Planning response schema has no {definition_name}.{field_name}"
+            )
+        field_schema["enum"] = allowed_ids
+
+    if not identity_owner_is_mutable("/proposal/requirements"):
+        for definition_name in (
+            "ProductDefinitionStatement",
+            "PrimaryWorkflowStatement",
+            "ProductMaturityDefinition",
+            "ProposedCriterion",
+        ):
+            bind_array_items(
+                definition_name,
+                "requirement_ids",
+                stable_requirement_ids,
+            )
+    if not identity_owner_is_mutable("/proposal/acceptance_criteria"):
+        for definition_name in (
+            "ProductDefinitionStatement",
+            "PrimaryWorkflowStatement",
+            "ProductMaturityDefinition",
+        ):
+            bind_array_items(
+                definition_name,
+                "criterion_ids",
+                stable_criterion_ids,
+            )
+        bind_array_items(
+            "ProposedTask",
+            "acceptance_criteria",
+            stable_criterion_ids,
+        )
+    if not identity_owner_is_mutable("/proposal/decisions"):
+        for definition_name in (
+            "ProductDefinitionStatement",
+            "PrimaryWorkflowStatement",
+            "ProductMaturityDefinition",
+        ):
+            bind_array_items(
+                definition_name,
+                "decision_ids",
+                stable_decision_ids,
+            )
+        bind_scalar("ProposedAssumption", "decision_id", autonomous_ids)
+    if not identity_owner_is_mutable("/proposal/agents"):
+        bind_array_items(
+            "ProposedCriterion",
+            "verification_agent_ids",
+            stable_agent_ids,
+        )
+        bind_array_items("ProposedAgent", "dependencies", stable_agent_ids)
+        bind_scalar("ProposedTask", "owner_agent_id", stable_agent_ids)
+    if not identity_owner_is_mutable("/proposal/tasks"):
+        bind_array_items("ProposedTask", "dependencies", stable_task_ids)
     return schema
 
 
@@ -6433,6 +6562,10 @@ class AdaptivePlanningCoordinator:
                 else _planning_response_schema_for_correction(
                     correction_plan,
                     base_schema=base_response_schema,
+                    profile_criterion_ids=tuple(
+                        criterion.id
+                        for criterion in self.policy.profile_acceptance_criteria
+                    ),
                 )
             )
             prompt = self._prompt(

@@ -10,6 +10,7 @@ import socket
 import subprocess
 import sys
 import time
+from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -1967,6 +1968,91 @@ def test_product_definition_references_must_resolve_to_the_proposal() -> None:
             policy(),
             created_at=FIXED_TIME,
         )
+
+
+def test_product_definition_correction_binds_immutable_reference_vocabularies(
+    tmp_path: Path,
+) -> None:
+    initial_payload = json.loads(response(proposal_response()))
+    for dimension in ("target_users", "primary_workflow"):
+        initial_payload["proposal"]["product_definition"][dimension][
+            "requirement_ids"
+        ].append("REQ_GHOST")
+    correction_base, _ = planning._normalize_planning_response_payload(
+        initial_payload,
+        user_inputs=(request().source_request,),
+    )
+    corrected_dimensions = {}
+    for dimension in ("target_users", "primary_workflow"):
+        corrected = deepcopy(
+            correction_base["proposal"]["product_definition"][dimension]
+        )
+        corrected["requirement_ids"].remove("REQ_GHOST")
+        corrected_dimensions[f"/proposal/product_definition/{dimension}"] = corrected
+    profile_criterion = AcceptanceCriterion(
+        id="AC_PROFILE",
+        description="The project satisfies the fixed execution contract.",
+        verification="Run the profile gate.",
+    )
+    executor = ScriptedAgentExecutor(
+        [
+            json.dumps(initial_payload),
+            correction_response(correction_base, corrected_dimensions),
+        ]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    configured = policy(
+        response_repair_limit=1,
+        profile_acceptance_criteria=(profile_criterion,),
+    )
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=configured,
+        clock=AdvancingClock(),
+    )
+
+    created = coordinator.start(
+        request(),
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+
+    assert created is not None
+    rejected = store.load_turn(request().run_id, 1)
+    assert rejected.response_validation is not None
+    assert rejected.response_validation.correction_paths == (
+        "/proposal/product_definition/primary_workflow",
+        "/proposal/product_definition/target_users",
+    )
+    assert {issue.invariant_id for issue in rejected.response_validation.issues} == {
+        "planning_product_definition_reference"
+    }
+    contract = executor.requests[1].submission_contract
+    assert contract is not None
+    variants = contract.parameters_schema()["properties"]["replacements"]["items"][
+        "oneOf"
+    ]
+    expected_requirements = correction_base["proposal"]["requirement_ids"]
+    expected_criteria = [
+        *(
+            criterion["id"]
+            for criterion in correction_base["proposal"]["acceptance_criteria"]
+        ),
+        profile_criterion.id,
+    ]
+    expected_decisions = [
+        decision["id"] for decision in correction_base["proposal"]["decisions"]
+    ]
+    assert len(variants) == 2
+    for variant in variants:
+        properties = variant["properties"]["replacement_value"]["properties"]
+        assert properties["requirement_ids"]["items"]["enum"] == (expected_requirements)
+        assert "REQ_GHOST" not in properties["requirement_ids"]["items"]["enum"]
+        assert properties["criterion_ids"]["items"]["enum"] == expected_criteria
+        assert properties["decision_ids"]["items"]["enum"] == expected_decisions
+    assert store.load_turn(request().run_id, 2).semantic_correction_outcome == (
+        "accepted"
+    )
 
 
 def test_direct_user_decision_rejects_unattributable_input_with_zero_repair_budget(
@@ -5136,6 +5222,9 @@ def test_invalid_complete_proposal_is_repaired_before_it_is_shown(
     replacement_variant = replacement_schema["items"]["oneOf"][0]
     assert replacement_variant["properties"]["slot_handle"]["const"].startswith("slot_")
     assert replacement_variant["properties"]["replacement_value"]["type"] == ("string")
+    assert replacement_variant["properties"]["replacement_value"]["enum"] == [
+        agent["id"] for agent in invalid_payload["proposal"]["agents"]
+    ]
     assert executor.requests[1].submission_contract.transport_payload_schema() == {
         "type": "object",
         "additionalProperties": True,
@@ -5596,6 +5685,25 @@ def test_product_decision_correction_can_repair_the_shared_decision_relation(
         "planning_product_question_source",
         "planning_product_recommendation_source",
     }
+    correction_contract = executor.requests[3].submission_contract
+    assert correction_contract is not None
+    replacement_variants = correction_contract.parameters_schema()["properties"][
+        "replacements"
+    ]["items"]["oneOf"]
+    product_replacements = [
+        variant["properties"]["replacement_value"]
+        for variant in replacement_variants
+        if isinstance(
+            variant["properties"]["replacement_value"].get("properties"),
+            dict,
+        )
+        and "decision_ids" in variant["properties"]["replacement_value"]["properties"]
+    ]
+    assert product_replacements
+    assert all(
+        "enum" not in replacement["properties"]["decision_ids"]["items"]
+        for replacement in product_replacements
+    )
     corrected = store.load_turn(request().run_id, 4)
     assert corrected.semantic_correction_outcome == "accepted"
 
@@ -5962,6 +6070,19 @@ def test_planning_corrects_independent_criterion_failures_in_one_turn(
             for subject in issue.subjects
             if subject.kind.value == "criterion"
         } == {criterion["id"] for criterion in criteria[:invalid_count]}
+        contract = executor.requests[1].submission_contract
+        assert contract is not None
+        variants = contract.parameters_schema()["properties"]["replacements"]["items"][
+            "oneOf"
+        ]
+        expected_agents = [
+            agent["id"] for agent in invalid_payload["proposal"]["agents"]
+        ]
+        assert all(
+            variant["properties"]["replacement_value"]["items"]["enum"]
+            == expected_agents
+            for variant in variants
+        )
     else:
         # Requirement normalization/schema checks already aggregate these
         # failures before the semantic relation validator is reached.
