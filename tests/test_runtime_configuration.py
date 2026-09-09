@@ -2,6 +2,8 @@
 
 import json
 import os
+import re
+import subprocess
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -296,6 +298,7 @@ def test_materialized_config_contains_only_approved_run_scoped_agents(
     )
     assert all("sessions_spawn" in agent["tools"]["deny"] for agent in agents)
     assert payload["plugins"]["enabled"] is True
+    assert payload["plugins"]["slots"] == {"memory": "none"}
     assert payload["plugins"]["allow"] == ["sat-artifact-submission"]
     assert payload["plugins"]["entries"] == {
         "sat-artifact-submission": {"enabled": True}
@@ -343,11 +346,84 @@ def test_bootstrap_runtime_contains_only_the_selected_read_only_capability(
         "fallbacks": [],
     }
     assert "generalist_developer" not in json.dumps(agents)
+    assert payload["plugins"]["slots"] == {"memory": "none"}
     assert payload["plugins"]["allow"] == ["sat-artifact-submission"]
     assert payload["plugins"]["entries"] == {
         "sat-artifact-submission": {"enabled": True}
     }
     assert payload["tools"]["sandbox"]["tools"]["alsoAllow"] == ["sat_submit_artifact"]
+
+
+@pytest.mark.parametrize("bootstrap", [True, False])
+def test_materialized_plugins_disable_pinned_runtime_memory_slot(
+    tmp_path: Path, bootstrap: bool
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    destination = tmp_path / "openclaw.runtime.json"
+    materialize_run_configuration(
+        OPENCLAW_TEMPLATE,
+        destination,
+        manifest=load_team_manifest(TEAM_CONFIG),
+        workspace=workspace,
+        sandbox_image="sat-agent:phase1",
+        sandbox_user="1000:1000",
+        bootstrap_capability=AgentCapability.CLARIFICATION if bootstrap else None,
+        team_plan=None if bootstrap else adaptive_team_plan(),
+    )
+    pins = (REPOSITORY_ROOT / "configs/toolchain.sh").read_text()
+    match = re.search(r'^task_node_version="([^"]+)"$', pins, re.MULTILINE)
+    assert match is not None
+    runtime = REPOSITORY_ROOT / ".sat/openclaw/tools" / f"node-v{match[1]}"
+    dist = runtime / "lib/node_modules/openclaw/dist"
+    modules = [
+        path
+        for path in dist.glob("config-state-*.js")
+        if "function resolveMemorySlotDecision(" in path.read_text()
+    ]
+    assert len(modules) == 1, "review plugin-slot compatibility after a runtime update"
+    result = subprocess.run(
+        [
+            str(runtime / "bin/node"),
+            "--input-type=module",
+            "-e",
+            """
+import fs from 'node:fs';
+const exports = await import(process.argv[1]);
+const normalize = Object.values(exports).find(f => f.name === 'normalizePluginsConfig');
+const resolve = Object.values(exports).find(
+    f => f.name === 'resolveMemorySlotDecision');
+const plugins = JSON.parse(fs.readFileSync(process.argv[2], 'utf8')).plugins;
+const baseline = structuredClone(plugins);
+delete baseline.slots;
+const inspect = config => {
+    const normalized = normalize(config);
+    const slot = normalized.slots.memory;
+    return {
+        slot,
+        memory: resolve({id: 'memory-core', kind: 'memory', slot}),
+        submission: resolve({id: 'sat-artifact-submission', slot}),
+    };
+};
+console.log(JSON.stringify({baseline: inspect(baseline), actual: inspect(plugins)}));
+""",
+            modules[0].as_uri(),
+            str(destination),
+        ],
+        env={"HOME": str(tmp_path)},
+        text=True,
+        capture_output=True,
+        check=True,
+        timeout=30,
+    )
+    observed = json.loads(result.stdout)
+    assert observed["baseline"]["slot"] == "memory-core"
+    assert observed["baseline"]["memory"]["enabled"] is True
+    assert observed["actual"] == {
+        "slot": None,
+        "memory": {"enabled": False, "reason": "memory slot disabled"},
+        "submission": {"enabled": True},
+    }
 
 
 def test_bootstrap_runtime_cannot_mix_with_an_approved_team(tmp_path: Path) -> None:

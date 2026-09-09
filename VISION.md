@@ -259,6 +259,10 @@ when code, usability evidence, or controlled experiments justify a replacement.
   deterministic command evidence, and fixed review scope.
 - Git owns source history.
 - Persisted artifacts own cross-Agent communication.
+- Planning and dynamic execution disable the optional OpenClaw memory plugin
+  slot. Task facts and handoffs remain Controller-owned artifacts; invocation
+  continuity still uses OpenClaw sessions and its default context engine. A
+  plugin allow-list alone does not disable an upstream default memory slot.
 - Raw OpenClaw session history remains private runtime state and is not a
   persisted reproducibility dependency. During an invocation, the controller
   may validate the exact current session turn and persist only bounded,

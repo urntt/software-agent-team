@@ -9,6 +9,13 @@ supports that claim, and what remains unavailable. It does not redefine the
 product, architecture, experiment, or roadmap; those decisions belong to
 [`VISION.md`](VISION.md).
 
+Planning and dynamic Agent configuration now explicitly disable the optional
+memory plugin slot. Four focused checks, including the pinned runtime's actual
+slot resolver, verify that the previous implicit `memory-core` selection is
+removed without disabling the submission plugin. No startup-performance or
+provider-backed acceptance claim follows from those checks; initialization
+stalls remain under investigation.
+
 Review candidate selection now distinguishes invalid model submissions from
 Controller faults. Mixed catalog-backed selections can retain verified bindings
 on an unpublished copy and request only a strictly smaller pending set; no

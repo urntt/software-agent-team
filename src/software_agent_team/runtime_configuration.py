@@ -1095,6 +1095,7 @@ def materialize_run_configuration(
             "enabled": True,
             "allow": [ARTIFACT_SUBMISSION_PLUGIN_ID],
             "deny": [],
+            "slots": {"memory": "none"},
             "load": {"paths": [str(plugin_path)]},
             "entries": {
                 ARTIFACT_SUBMISSION_PLUGIN_ID: {

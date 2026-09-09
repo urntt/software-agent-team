@@ -189,6 +189,13 @@ with captured, sanitized inputs and integrated production paths before repairing
 individual symptoms. Mock the external boundary where needed, not the accepted
 submission or state transition that the test is supposed to establish.
 
+Planning and dynamic runtime configuration explicitly disable OpenClaw's memory
+plugin slot while enabling SAT's terminal submission plugin. Check the generated
+configuration against the pinned runtime's actual slot resolver: an allow-list
+alone still defaults to `memory-core`. This does not disable session history or
+the default context engine, and a slot-resolution test does not establish overall
+startup performance or eliminate imports required by upstream state migration.
+
 Shared accounting integration must use ordinary task USD authority, not only
 evaluation call counters. Carry priced Planning spend into the real workflow and
 verify success and budget exhaustion through terminal persistence. Exercise an
