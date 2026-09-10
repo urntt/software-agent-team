@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** Phase 3E shared product acceptance completed; failed `v0.1.0` and `v0.1.1` exact-tag gates are preserved while the corrected `0.1.2` candidate is being validated
+**Current milestone:** `v0.1.2` is the first published stable release and its fresh managed lifecycle is validated
 
 **Last updated:** September 10, 2026
 
@@ -9,17 +9,23 @@ supports that claim, and what remains unavailable. It does not redefine the
 product, architecture, experiment, or roadmap; those decisions belong to
 [`VISION.md`](VISION.md).
 
-## Current Release Candidate
+## Current Release
 
-The shared product-acceptance implementation revision is
-`654b1521a3bfd302b0491e420d2b93aaf0f11f0f`. Its clean canonical `make check`
-completed with Ruff formatting and lint checks plus
-1,418 passing tests. The supervisor recorded a 369,745,920-byte aggregate peak
-RSS, no new cgroup or kernel OOM event, and no residual SAT-owned process,
-container, volume, process lease, stage process, or private test directory.
+The public `main` branch, immutable `v0.1.2` tag, GitHub Release, and release
+manifest identify source revision
+`64dcfc448fc229e4d03b4dd3722549ebeb09d2fb`, package version `0.1.2`, and Git
+archive digest
+`sha256:6baebe8610673e9b9795779c9f5965ef452f8bd03d065f3b37a93bdd4fa9543e`.
+The exact clean revision passed the local canonical `make check` with Ruff
+formatting and lint checks plus 1,418 tests. Its exact-tag GitHub Actions run
+passed 1,417 tests with one expected root-only skip on the hosted non-root
+runner, cleaned its private test tree, and only then published the manifest and
+Release. The failed `v0.1.0` and `v0.1.1` tags remain immutable and unpublished.
 
-The same candidate completed one managed, non-root, bare-`sat` reusable-product
-journey with `deepseek/deepseek-v4-flash-vision-exp`. Task admission passed all
+The product implementation at
+`654b1521a3bfd302b0491e420d2b93aaf0f11f0f` completed one managed, non-root,
+bare-`sat` reusable-product journey with
+`deepseek/deepseek-v4-flash-vision-exp`. Task admission passed all
 26 checks and approved-plan admission passed all 33 checks. Planning asked one
 material audience/workflow/maturity question, then three automatic typed
 corrections converged without an operator `r`. The approved Agent DAG placed a
@@ -38,20 +44,23 @@ invalid-input, symlink, and read-only behavior. The documented default scan of
 dependency-file matches and remains a non-blocking usability finding.
 
 This evidence closes the shared Planning-correction, Review-authority, Git
-ancestry, dependency-projection, and usable-product acceptance boundaries. The
-first `v0.1.0` exact-tag workflow correctly blocked publication after two
-workspace-ownership tests used hard-coded UID 1001, which is also the hosted
-runner's real UID. No GitHub Release was created and that tag remains immutable.
-The fixture now derives a simulated UID distinct from its actual path owner.
-The subsequent `v0.1.1` exact-tag workflow passed all runnable assertions
-(1,417 passed and 1 root-only test skipped), but correctly refused publication
-because restrictive permission fixtures were not restored before the non-root
-runner cleaned its private pytest tree. Those fixtures now restore their modes
-and owners in `finally` paths, and the next patch candidate is versioned
-`0.1.2`. The remaining release work is its root/non-root and canonical gates, a
-new exact-tag GitHub Actions gate, immutable manifest/Release, fresh stable
-install, stable/dev round trip, update check, rollback, and preservation-aware
-uninstall.
+ancestry, dependency-projection, and usable-product acceptance boundaries.
+Release-head changes after the accepted product journey were limited to release
+metadata and cross-environment test-fixture corrections; the exact release head
+then passed the canonical gates above.
+
+A fresh non-root installation using the documented one-command bootstrap
+resolved the published stable Release and reported
+`sat 0.1.2+g64dcfc448fc2 [stable]`. It completed local version and current-update
+checks, first-run configuration with cancellation before any model call, an
+explicit stable-to-dev-to-stable round trip on the same source revision, a
+same-ref no-op, secret-free export, and preservation-aware full uninstall.
+Stable and dev used distinct immutable provenance directories. A separately
+owned OpenClaw process and its configuration, credential, and binary sentinels
+remained unchanged throughout. SAT-owned application, configuration, and state
+were removed, while uv, Docker, and the shared quality image were preserved.
+Failed-activation rollback remains covered by real fault evidence whose three
+lifecycle-owner Git blobs are identical at `v0.1.2`.
 
 ## Implementation Evidence History
 
@@ -1835,9 +1844,6 @@ derived from the task.
 
 ## Not Yet Available or Completed
 
-- A published stable GitHub Release and fresh supported-device evidence for
-  stable install, stable update, stable↔dev switch, failed-activation rollback,
-  and versioned uninstall;
 - Fresh installed-device evidence for task-admission/approved-plan remediation
   and process-orphan recovery;
 - An independent-device live demonstration of the activated Adaptive Planning
@@ -1866,23 +1872,16 @@ action succeeded after interruption.
 
 ## Next Milestone
 
-The next executable milestone is the immutable `0.1.2` stable publication and
-its fresh managed lifecycle. The `v0.1.0` and `v0.1.1` tags remain bound to
-their failed exact-tag workflows and are never moved or reused. Validate the
-corrected fixture under root and non-root process identities, freeze the final
-documentation and impact ledger, run the canonical local release gate once on
-that exact clean commit, generate and inspect the pre-tag manifest, push the
-commit, then create the annotated `v0.1.2` tag. The exact-tag GitHub Actions run
-must pass the same canonical gate and publish exactly one verified identity
-manifest before stable installation begins.
+The next product milestone improves Planning concision and question authority
+before expanding dynamic role depth. It will remove repeated fixed constraints
+from the user overview, distinguish genuinely material user decisions from
+optional context that the Planner can decide, and preserve one visible,
+editable plan as the authority for downstream team generation. Dynamic role
+expansion follows that corrected Planning contract rather than adding more
+fixed role labels first.
 
-Post-publication validation uses a fresh supported non-root environment and the
-ordinary one-command installer. It must verify exact version/manifest identity,
-current-version update behavior, stable-to-dev and dev-to-stable switching,
-activation rollback, existing-OpenClaw isolation, state-aware export/uninstall,
-and exact cleanup. The first release has no previous stable, so a genuine
-stable-to-newer-stable upgrade remains deferred until the next release rather
-than being simulated.
+The first release has no previous stable, so a genuine stable-to-newer-stable
+upgrade remains deferred until the next release rather than being simulated.
 
 Fixed-topology comparison remains in Phase 4 so it can serve as a controlled
 baseline rather than define the product's permanent role layout.
