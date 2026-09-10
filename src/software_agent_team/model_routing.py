@@ -12,6 +12,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from software_agent_team.model_costs import CachePriceSupport
 from software_agent_team.model_metadata import ModelMetadataSource
+from software_agent_team.model_runtime import (
+    ModelRuntimeProfile,
+    ModelRuntimeProfileSource,
+    runtime_profile_for_model,
+)
 from software_agent_team.teams import (
     AgentCapability,
     ModelRoute,
@@ -34,6 +39,7 @@ class ModelProfile(CachePriceSupport):
 
     id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     model: str = Field(min_length=3)
+    runtime_profile: ModelRuntimeProfile
     capabilities: tuple[AgentCapability, ...] = Field(min_length=1)
     priority: int = Field(default=100, ge=1)
     input_cost_per_million_usd: Decimal | None = Field(
@@ -56,11 +62,35 @@ class ModelProfile(CachePriceSupport):
     @model_validator(mode="before")
     @classmethod
     def infer_explicit_metadata_sources(cls, value: object) -> object:
-        """Attribute legacy explicit metadata without inventing discovery."""
+        """Attribute legacy metadata and one deterministic runtime profile."""
 
         if not isinstance(value, dict):
             return value
         payload = dict(value)
+        if payload.get("runtime_profile") is None and isinstance(
+            payload.get("model"), str
+        ):
+            runtime_profile = runtime_profile_for_model(payload["model"])
+            payload["runtime_profile"] = runtime_profile.model_dump(mode="json")
+        else:
+            runtime_profile = None
+            if isinstance(payload.get("runtime_profile"), dict):
+                runtime_profile = ModelRuntimeProfile.model_validate(
+                    payload["runtime_profile"]
+                )
+            elif isinstance(payload.get("runtime_profile"), ModelRuntimeProfile):
+                runtime_profile = payload["runtime_profile"]
+        if (
+            payload.get("context_window_tokens") is None
+            and runtime_profile is not None
+            and runtime_profile.context_window_tokens is not None
+        ):
+            payload["context_window_tokens"] = runtime_profile.context_window_tokens
+            payload["context_source"] = (
+                ModelMetadataSource.USER_SUPPLIED.value
+                if runtime_profile.source is ModelRuntimeProfileSource.USER_SUPPLIED
+                else ModelMetadataSource.PROVIDER_CATALOG.value
+            )
         prices_present = (
             payload.get("input_cost_per_million_usd") is not None
             and payload.get("output_cost_per_million_usd") is not None
@@ -119,6 +149,11 @@ class ModelProfile(CachePriceSupport):
             or self.output_cost_per_million_usd != 0
         ):
             raise ValueError("confirmed-zero pricing requires two zero prices")
+        provider_id, _, _ = self.model.partition("/")
+        if self.runtime_profile.provider_id != provider_id:
+            raise ValueError(
+                "model profile runtime provider must match its model reference"
+            )
         return self
 
     @field_validator("pricing_observed_at", "context_observed_at")
@@ -137,6 +172,12 @@ class ModelProfile(CachePriceSupport):
         """Return whether this profile is user-authorized for one SAT capability."""
 
         return capability in self.capabilities
+
+    @property
+    def runtime_profile_sha256(self) -> str:
+        """Return the exact secret-free runtime contract identity."""
+
+        return self.runtime_profile.sha256
 
 
 class ModelRoutingPolicy(BaseModel):
@@ -338,6 +379,8 @@ def resolve_model_route_plan(
         ModelRoute(
             id=profile.id,
             model=profile.model,
+            runtime_profile=profile.runtime_profile,
+            runtime_profile_sha256=profile.runtime_profile_sha256,
             eligible_capabilities=profile.capabilities,
             input_cost_per_million_usd=profile.input_cost_per_million_usd,
             output_cost_per_million_usd=profile.output_cost_per_million_usd,

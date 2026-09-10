@@ -1184,14 +1184,22 @@ when investigating it rather than editing artifacts in place.
   request was made and prevents Agent creation.
   `runtime-preflight.json` persists every inspected model, availability result,
   and bounded non-secret error.
-- A reviewed compatibility catalog may add routing and model metadata absent
-  from the pinned OpenClaw release. It cannot contain a credential or silently
-  select a fallback. When a trusted caller credential variable is available,
-  the generated config contains only its variable reference; SAT's isolated
-  auth profiles remain the other credential source. A reviewed named-function
-  override may be activated only when bound artifact submission is the invocation's
-  sole semantic action. Dynamic multi-tool runtimes use required-any-tool semantics;
-  neither override may leak into model checks, provider smoke, or legacy text calls.
+- Every authorized route carries one frozen runtime-profile digest from saved
+  configuration through TeamPlan, invocation, and evidence. The profile
+  explicitly distinguishes OpenClaw-native, remote, and local routes and owns
+  provider-native identity, transport, endpoint policy, credential reference,
+  model limits, and capabilities. Startup inspection, provider smoke, Planning,
+  and dynamic execution compile this same profile; none may infer a different
+  transport from the model name.
+- A reviewed preset may add routing and model metadata absent from the pinned
+  OpenClaw release. User-supplied custom endpoints use the same schema. Neither
+  may contain a credential value or silently select a fallback. When a trusted
+  caller credential variable is configured, the generated config contains only
+  its variable reference; SAT's isolated auth profiles remain the other
+  credential source. A reviewed named-function override may be activated only
+  when bound artifact submission is the invocation's sole semantic action.
+  Dynamic multi-tool runtimes use required-any-tool semantics; neither override
+  may leak into model checks, provider smoke, or legacy text calls.
 - Agent containers receive an explicit non-secret environment instead of the
   host process environment or provider credentials.
 - SAT's isolated OpenClaw host process owns model-provider access. Credentials

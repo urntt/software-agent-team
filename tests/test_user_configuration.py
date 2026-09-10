@@ -346,6 +346,25 @@ def test_current_configuration_persists_profiles_as_single_source_of_truth(
     assert "stage_timeout_seconds" not in payload
 
 
+def test_v9_configuration_migrates_to_frozen_runtime_profiles(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "config.json"
+    payload = sample_configuration().model_dump(mode="json")
+    payload["schema_version"] = 9
+    for profile in payload["model_profiles"]:
+        profile.pop("runtime_profile", None)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.warns(UserWarning, match="immutable transport profiles"):
+        migrated = load_user_configuration(path)
+
+    assert migrated is not None
+    assert migrated.schema_version == USER_CONFIGURATION_SCHEMA_VERSION
+    assert migrated.default_model_profile.runtime_profile.provider_id == "provider"
+    assert migrated.default_model_profile.runtime_profile_sha256
+
+
 def test_user_configuration_refuses_a_symbolic_link(tmp_path: Path) -> None:
     target = tmp_path / "target.json"
     target.write_text("{}", encoding="utf-8")

@@ -166,15 +166,26 @@ sat configure --show
 ```
 
 The normal wizard stores one selected `provider/model` as a strict default
-profile. Advanced configuration can add secret-free model profiles, declare
-the Agent capabilities each profile may serve, choose deterministic stage or
-capability routes, and explicitly authorize a bounded switch after an
-attributable provider failure. It also stores non-secret price/context metadata
-with its source, plus adaptive maximum concurrency and
-compact/standard/detailed progress visibility. Before each task's first model
-call, SAT refreshes those model facts and asks for one task-wide USD ceiling
-and an optional whole-run deadline; no deadline is the default. Use
-`sat configure --help` for the complete advanced interface.
+profile. It can use an OpenClaw-native provider route, while the advanced
+`sat configure` interface can declare custom remote or local endpoints with an
+explicit transport, including OpenAI Completions, OpenAI Responses, Anthropic
+Messages, and Ollama. Every profile is secret-free and carries one immutable
+runtime digest. The same profile is used for startup inspection, provider
+smoke, Planning, and execution instead of rebuilding provider details in each
+path.
+
+Configuration is validated before it is committed. Interactive setup uses a
+staged copy of SAT's private provider state; non-interactive setup validates the
+same profile contract. A validation failure or cancellation leaves the prior
+SAT and private OpenClaw configuration unchanged, and success states explicitly
+that the local routes passed while no live provider call was made. Advanced
+configuration can also declare Agent capabilities, deterministic stage or
+capability routes, and a bounded switch after an attributable provider failure.
+Before each task's first model call, SAT refreshes non-secret price and context
+facts and asks for one task-wide USD ceiling and an optional whole-run deadline;
+no deadline is the default. Use `sat configure --help` for the complete advanced
+interface and pragmatic custom-provider examples in the
+[installation guide](docs/installation.md#saved-configuration).
 
 Provider credentials remain in SAT's isolated OpenClaw state or in an
 explicitly trusted caller environment; they are not written to the repository,

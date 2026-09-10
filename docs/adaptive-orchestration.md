@@ -1091,7 +1091,14 @@ partial workspace as an accepted delivery.
 ## Model Configuration and Routing
 
 Users can maintain multiple secret-free model profiles while credentials stay
-inside SAT's isolated provider boundary. Route resolution uses this precedence:
+inside SAT's isolated provider boundary or a named trusted environment
+variable. Each `ModelProfile` embeds one immutable transport-neutral runtime
+profile and canonical digest. It explicitly distinguishes an OpenClaw-native
+route from a remote or local endpoint and carries the provider-native model,
+API, endpoint policy, limits, and capabilities used by every runtime consumer.
+Configuration validates all resulting profiles before replacing saved state;
+failure or cancellation cannot leave Planning and execution with different
+provider facts. Route resolution then uses this precedence:
 
 1. An explicit per-Agent profile edit approved in the current TeamPlan;
 2. A configured stage override;

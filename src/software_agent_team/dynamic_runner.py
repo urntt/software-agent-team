@@ -1566,6 +1566,16 @@ class DynamicAgentRunner:
                 "successful execution omitted provider metadata",
                 TerminationReason.DEPENDENCY_UNAVAILABLE,
             )
+        route = next(
+            route
+            for route in self.team_plan.model_routes.routes
+            if route.model == request.model
+        )
+        if telemetry.provider != route.runtime_profile.provider_id:
+            raise DynamicAgentRunnerError(
+                "execution provider differs from the approved runtime profile",
+                TerminationReason.SAFETY_BOUNDARY_CROSSED,
+            )
         if (
             telemetry.usage is None
             or telemetry.usage.input_tokens is None

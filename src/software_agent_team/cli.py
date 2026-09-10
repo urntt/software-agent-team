@@ -9,13 +9,15 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import warnings
 from collections.abc import Callable, Iterator, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
+import json5
 from pydantic import BaseModel, ValidationError
 
 from software_agent_team.artifacts import (
@@ -54,6 +56,16 @@ from software_agent_team.managed_install import (
 from software_agent_team.model_costs import CachePricing
 from software_agent_team.model_metadata import ModelMetadataSource
 from software_agent_team.model_routing import ModelProfile
+from software_agent_team.model_runtime import (
+    ArtifactSubmissionPolicy,
+    CredentialSource,
+    ModelApi,
+    ModelEndpointKind,
+    ModelRuntimeProfile,
+    ModelRuntimeProfileSource,
+    runtime_profile_for_model,
+    runtime_profile_from_openclaw_configuration,
+)
 from software_agent_team.openclaw_runtime import isolated_openclaw_environment
 from software_agent_team.paths import user_state_root
 from software_agent_team.planning import (
@@ -104,7 +116,6 @@ from software_agent_team.runtime_configuration import (
     OpenClawModelInspection,
     RuntimeConfigurationError,
     RuntimePreflight,
-    has_model_compatibility,
     inspect_openclaw_model,
     inspect_runtime_preflight,
     inspect_sandbox_image,
@@ -206,6 +217,10 @@ class _RuntimeLaunchOptions:
     input_cost_per_million_usd: Decimal | None
     output_cost_per_million_usd: Decimal | None
     cache_pricing: CachePricing | None = field(default=None, kw_only=True)
+    model_runtime_profile: ModelRuntimeProfile | None = field(
+        default=None,
+        kw_only=True,
+    )
 
 
 @dataclass(frozen=True)
@@ -286,6 +301,15 @@ def _print_configuration(configuration: UserConfiguration, path: Path) -> None:
             f"  - {profile.id}{default}: {profile.model}; priority "
             f"{profile.priority}; {capabilities}; {pricing}; {context}"
         )
+        runtime = profile.runtime_profile
+        transport = "OpenClaw native" if runtime.api is None else runtime.api.value
+        endpoint = runtime.base_url or "OpenClaw-managed"
+        print(
+            f"    runtime: {transport}; {runtime.endpoint_kind.value}; "
+            f"{endpoint}; profile {profile.runtime_profile_sha256[:12]}"
+        )
+        if runtime.credential_env is not None:
+            print(f"    credential reference: env:{runtime.credential_env}")
     if configuration.capability_profile_overrides:
         print("capability routes:")
         for capability, profile_id in sorted(
@@ -735,6 +759,183 @@ def _replace_profile(
     raise ValueError(f"unknown model profile: {profile_id}")
 
 
+def _configuration_assignment_map(
+    values: Sequence[str],
+    *,
+    label: str,
+) -> dict[str, str]:
+    """Parse repeatable profile assignments without last-write ambiguity."""
+
+    assignments: dict[str, str] = {}
+    for value in values:
+        profile_id, assigned = _split_configuration_assignment(value, label=label)
+        if profile_id in assignments:
+            raise ValueError(f"{label} repeats profile {profile_id}")
+        assignments[profile_id] = assigned
+    return assignments
+
+
+def _configuration_bool(value: str, *, label: str) -> bool:
+    normalized = value.casefold()
+    if normalized == "true":
+        return True
+    if normalized == "false":
+        return False
+    raise ValueError(f"{label} requires true or false")
+
+
+def _apply_runtime_profile_arguments(
+    profiles: list[ModelProfile],
+    *,
+    args: argparse.Namespace,
+) -> None:
+    """Apply transport-neutral provider fields to existing model profiles."""
+
+    raw_fields = {
+        "api": (args.profile_api, "--profile-api"),
+        "endpoint_kind": (
+            args.profile_endpoint_kind,
+            "--profile-endpoint-kind",
+        ),
+        "base_url": (args.profile_base_url, "--profile-base-url"),
+        "native_model_id": (
+            args.profile_native_model_id,
+            "--profile-native-model-id",
+        ),
+        "credential_env": (
+            args.profile_credential_env,
+            "--profile-credential-env",
+        ),
+        "context_window_tokens": (
+            args.profile_context_window_tokens,
+            "--profile-context-window-tokens",
+        ),
+        "max_output_tokens": (
+            args.profile_max_output_tokens,
+            "--profile-max-output-tokens",
+        ),
+        "input_modalities": (
+            args.profile_input_modalities,
+            "--profile-input-modalities",
+        ),
+        "supports_tools": (
+            args.profile_supports_tools,
+            "--profile-supports-tools",
+        ),
+        "provider_request_timeout_seconds": (
+            args.profile_request_timeout_seconds,
+            "--profile-request-timeout-seconds",
+        ),
+    }
+    parsed = {
+        field: _configuration_assignment_map(values, label=label)
+        for field, (values, label) in raw_fields.items()
+    }
+    touched = {profile_id for values in parsed.values() for profile_id in values}
+    known = {profile.id for profile in profiles}
+    if unknown := touched - known:
+        raise ValueError(
+            "runtime profile fields reference unknown profiles: "
+            + ", ".join(sorted(unknown))
+        )
+
+    for profile_id in sorted(touched):
+        profile = next(item for item in profiles if item.id == profile_id)
+        current = profile.runtime_profile
+        values: dict[str, object] = current.model_dump(mode="json")
+        if "api" in parsed and profile_id in parsed["api"]:
+            values["api"] = ModelApi(parsed["api"][profile_id]).value
+        if profile_id in parsed["endpoint_kind"]:
+            values["endpoint_kind"] = ModelEndpointKind(
+                parsed["endpoint_kind"][profile_id]
+            ).value
+        if profile_id in parsed["base_url"]:
+            values["base_url"] = parsed["base_url"][profile_id]
+        if profile_id in parsed["native_model_id"]:
+            values["native_model_id"] = parsed["native_model_id"][profile_id]
+        if profile_id in parsed["context_window_tokens"]:
+            raw_context = parsed["context_window_tokens"][profile_id]
+            if not raw_context.isdecimal() or int(raw_context) < 1:
+                raise ValueError(
+                    "--profile-context-window-tokens requires a positive integer"
+                )
+            values["context_window_tokens"] = int(raw_context)
+        if profile_id in parsed["max_output_tokens"]:
+            raw_maximum = parsed["max_output_tokens"][profile_id]
+            if not raw_maximum.isdecimal() or int(raw_maximum) < 1:
+                raise ValueError(
+                    "--profile-max-output-tokens requires a positive integer"
+                )
+            values["max_output_tokens"] = int(raw_maximum)
+        if profile_id in parsed["provider_request_timeout_seconds"]:
+            raw_timeout = parsed["provider_request_timeout_seconds"][profile_id]
+            if not raw_timeout.isdecimal() or int(raw_timeout) < 1:
+                raise ValueError(
+                    "--profile-request-timeout-seconds requires a positive integer"
+                )
+            values["provider_request_timeout_seconds"] = int(raw_timeout)
+        if profile_id in parsed["input_modalities"]:
+            modalities = tuple(
+                item.strip()
+                for item in parsed["input_modalities"][profile_id].split(",")
+                if item.strip()
+            )
+            if not modalities:
+                raise ValueError(
+                    "--profile-input-modalities requires at least one modality"
+                )
+            values["input_modalities"] = modalities
+        if profile_id in parsed["supports_tools"]:
+            values["supports_tools"] = _configuration_bool(
+                parsed["supports_tools"][profile_id],
+                label="--profile-supports-tools",
+            )
+
+        endpoint_kind = ModelEndpointKind(values["endpoint_kind"])
+        if endpoint_kind is ModelEndpointKind.OPENCLAW_NATIVE:
+            raise ValueError(
+                "runtime profile flags configure remote or local endpoints; "
+                "omit them for an OpenClaw-native route"
+            )
+        values["source"] = ModelRuntimeProfileSource.USER_SUPPLIED.value
+        if profile_id in parsed["credential_env"]:
+            values["credential_source"] = CredentialSource.ENVIRONMENT.value
+            values["credential_env"] = parsed["credential_env"][profile_id]
+        elif endpoint_kind is ModelEndpointKind.LOCAL:
+            values["credential_source"] = CredentialSource.NONE.value
+            values["credential_env"] = None
+        elif values.get("credential_source") != CredentialSource.ENVIRONMENT.value:
+            raise ValueError(f"profile {profile_id} requires --profile-credential-env")
+        if values.get("supports_tools") is not True:
+            raise ValueError(
+                f"profile {profile_id} must explicitly declare tool support"
+            )
+        if values.get("api") is None:
+            raise ValueError(f"profile {profile_id} requires --profile-api")
+        api = ModelApi(values["api"])
+        values["artifact_submission_policy"] = (
+            ArtifactSubmissionPolicy.OPENAI_REQUIRED.value
+            if api
+            in {
+                ModelApi.OPENAI_COMPLETIONS,
+                ModelApi.OPENAI_RESPONSES,
+                ModelApi.AZURE_OPENAI_RESPONSES,
+            }
+            else ArtifactSubmissionPolicy.RUNTIME_DEFAULT.value
+        )
+        runtime_profile = ModelRuntimeProfile.model_validate(values)
+        profile_updates: dict[str, object] = {
+            "runtime_profile": runtime_profile.model_dump(mode="json")
+        }
+        if profile_id in parsed["context_window_tokens"]:
+            profile_updates.update(
+                context_window_tokens=runtime_profile.context_window_tokens,
+                context_source=ModelMetadataSource.USER_SUPPLIED,
+                context_observed_at=datetime.now(UTC),
+            )
+        _replace_profile(profiles, profile_id, **profile_updates)
+
+
 def _configured_model_fields(
     *,
     current: UserConfiguration | None,
@@ -842,6 +1043,8 @@ def _configured_model_fields(
             for stage, selected in stage_overrides.items()
             if selected != profile_id
         }
+
+    _apply_runtime_profile_arguments(profiles, args=args)
 
     for value in args.profile_capabilities:
         profile_id, raw_capabilities = _split_configuration_assignment(
@@ -983,6 +1186,16 @@ def _configure(args: argparse.Namespace) -> int:
                 args.profile_priority,
                 args.profile_pricing,
                 args.profile_cache_pricing,
+                args.profile_api,
+                args.profile_endpoint_kind,
+                args.profile_base_url,
+                args.profile_native_model_id,
+                args.profile_credential_env,
+                args.profile_context_window_tokens,
+                args.profile_max_output_tokens,
+                args.profile_input_modalities,
+                args.profile_supports_tools,
+                args.profile_request_timeout_seconds,
                 args.route_capability,
                 args.clear_capability_route,
                 args.route_stage,
@@ -1012,128 +1225,139 @@ def _configure(args: argparse.Namespace) -> int:
         return 0
 
     interactive = not args.non_interactive and sys.stdin.isatty() and not supplied
-    if interactive:
-        state_paths = ProductStatePaths.below(user_state_root())
-        ensure_product_state(state_paths)
-        openclaw_config = state_paths.openclaw / "openclaw.json"
-        _validate_optional_openclaw_configuration(openclaw_config)
-        print("SAT uses its own isolated OpenClaw runtime and provider state.")
-        print("Existing OpenClaw installations and configuration are never used.")
-        if _prompt_yes_no(
-            "Open SAT's isolated OpenClaw provider setup now?",
-            default=not openclaw_config.is_file(),
-        ):
-            _run_openclaw_configuration(
-                DEFAULT_OPENCLAW_BINARY,
-                state_dir=state_paths.openclaw,
-                config_path=openclaw_config,
-            )
-        discovered_model = _discover_openclaw_default_model(
-            DEFAULT_OPENCLAW_BINARY,
-            state_dir=state_paths.openclaw,
-            config_path=openclaw_config,
+    if not interactive and not supplied:
+        raise ValueError(
+            "interactive configuration requires a terminal; supply configuration "
+            "flags or use --show"
         )
-        if discovered_model is not None:
-            print(f"OpenClaw default model detected: {discovered_model}")
-        print("Press Enter to keep a value shown in brackets.")
-        default_model = current.model if current is not None else discovered_model
-        model = _prompt_value(
-            "OpenClaw model reference",
-            default_model,
-        )
-        same_model = current is not None and model == current.model
-        input_cost = current.input_cost_per_million_usd if same_model else None
-        output_cost = current.output_cost_per_million_usd if same_model else None
-        concurrency = current.max_concurrency if current is not None else 2
-        progress_visibility = (
-            current.progress_visibility if current is not None else "standard"
-        )
-    else:
-        if not supplied:
-            raise ValueError(
-                "interactive configuration requires a terminal; supply configuration "
-                "flags or use --show"
-            )
-        model = (
-            args.model if args.model is not None else current.model if current else None
-        )
-        price_flags = (
-            args.input_cost_per_million_usd is not None,
-            args.output_cost_per_million_usd is not None,
-        )
-        if price_flags[0] != price_flags[1]:
-            raise ValueError("input and output price flags must be supplied together")
-        model_changed = (
-            current is not None and args.model is not None and model != current.model
-        )
-        if all(price_flags):
-            input_cost = args.input_cost_per_million_usd
-            output_cost = args.output_cost_per_million_usd
-        elif current is not None and not model_changed:
-            input_cost = current.input_cost_per_million_usd
-            output_cost = current.output_cost_per_million_usd
-        else:
-            input_cost = None
-            output_cost = None
-        concurrency = (
-            args.max_concurrency
-            if args.max_concurrency is not None
-            else current.max_concurrency
-            if current
-            else 2
-        )
-        progress_visibility = (
-            args.progress_visibility
-            if args.progress_visibility is not None
-            else current.progress_visibility
-            if current
-            else "standard"
-        )
-        if model is None:
-            raise ValueError(
-                "first-time non-interactive configuration requires --model"
-            )
-
-    model_fields = _configured_model_fields(
-        current=current,
-        model=model,
-        input_cost=input_cost,
-        output_cost=output_cost,
-        args=args,
+    state_paths = ProductStatePaths.below(user_state_root())
+    ensure_product_state(state_paths)
+    openclaw_config = state_paths.openclaw / "openclaw.json"
+    _validate_optional_openclaw_configuration(openclaw_config)
+    state_context = (
+        _staged_openclaw_state(state_paths.openclaw)
+        if interactive
+        else nullcontext((state_paths.openclaw, openclaw_config))
     )
-    configuration = UserConfiguration(
-        **model_fields,
-        max_concurrency=concurrency,
-        progress_visibility=progress_visibility,
-    )
-    if interactive:
-        _render_model_inspection_start(len(configuration.model_profiles))
-        inspections = tuple(
-            _inspect_selected_model(
-                DEFAULT_OPENCLAW_BINARY,
-                profile.model,
-                state_dir=state_paths.openclaw,
-                config_path=openclaw_config,
+    provider_setup_changed = False
+    with state_context as (candidate_state, candidate_config):
+        if interactive:
+            print("SAT uses its own isolated OpenClaw runtime and provider state.")
+            print("Existing OpenClaw installations and configuration are never used.")
+            provider_setup_changed = _prompt_yes_no(
+                "Open SAT's isolated OpenClaw provider setup now?",
+                default=not openclaw_config.is_file(),
             )
-            for profile in configuration.model_profiles
-        )
-        if unavailable := tuple(
-            inspection for inspection in inspections if not inspection.available
-        ):
-            raise RuntimeConfigurationError(
-                "selected model configuration is not locally ready: "
-                + "; ".join(
-                    f"{inspection.model}: {inspection.error}"
-                    for inspection in unavailable
+            if provider_setup_changed:
+                _run_openclaw_configuration(
+                    DEFAULT_OPENCLAW_BINARY,
+                    state_dir=candidate_state,
+                    config_path=candidate_config,
                 )
+            discovered_model = _discover_openclaw_default_model(
+                DEFAULT_OPENCLAW_BINARY,
+                state_dir=candidate_state,
+                config_path=candidate_config,
             )
-        configuration = _complete_model_metadata(
-            configuration,
-            inspections,
-            offer_price_change=True,
+            if discovered_model is not None:
+                print(f"OpenClaw default model detected: {discovered_model}")
+            print("Press Enter to keep a value shown in brackets.")
+            default_model = current.model if current is not None else discovered_model
+            model = _prompt_value("OpenClaw model reference", default_model)
+            same_model = current is not None and model == current.model
+            input_cost = current.input_cost_per_million_usd if same_model else None
+            output_cost = current.output_cost_per_million_usd if same_model else None
+            concurrency = current.max_concurrency if current is not None else 2
+            progress_visibility = (
+                current.progress_visibility if current is not None else "standard"
+            )
+        else:
+            model = (
+                args.model
+                if args.model is not None
+                else current.model
+                if current
+                else None
+            )
+            price_flags = (
+                args.input_cost_per_million_usd is not None,
+                args.output_cost_per_million_usd is not None,
+            )
+            if price_flags[0] != price_flags[1]:
+                raise ValueError(
+                    "input and output price flags must be supplied together"
+                )
+            model_changed = (
+                current is not None
+                and args.model is not None
+                and model != current.model
+            )
+            if all(price_flags):
+                input_cost = args.input_cost_per_million_usd
+                output_cost = args.output_cost_per_million_usd
+            elif current is not None and not model_changed:
+                input_cost = current.input_cost_per_million_usd
+                output_cost = current.output_cost_per_million_usd
+            else:
+                input_cost = None
+                output_cost = None
+            concurrency = (
+                args.max_concurrency
+                if args.max_concurrency is not None
+                else current.max_concurrency
+                if current
+                else 2
+            )
+            progress_visibility = (
+                args.progress_visibility
+                if args.progress_visibility is not None
+                else current.progress_visibility
+                if current
+                else "standard"
+            )
+            if model is None:
+                raise ValueError(
+                    "first-time non-interactive configuration requires --model"
+                )
+
+        model_fields = _configured_model_fields(
+            current=current,
+            model=model,
+            input_cost=input_cost,
+            output_cost=output_cost,
+            args=args,
         )
-    save_user_configuration(configuration, path)
-    print("configuration saved")
+        configuration = UserConfiguration(
+            **model_fields,
+            max_concurrency=concurrency,
+            progress_visibility=progress_visibility,
+        )
+        configuration = _bind_private_runtime_profiles(
+            configuration,
+            config_path=candidate_config,
+            refresh_private_configuration=provider_setup_changed,
+        )
+        inspections = _inspect_model_configuration(
+            configuration,
+            state_dir=candidate_state,
+            config_path=candidate_config,
+        )
+        configuration = (
+            _complete_model_metadata(
+                configuration,
+                inspections,
+                offer_price_change=True,
+            )
+            if interactive
+            else _merge_discovered_model_metadata(configuration, inspections)
+        )
+        _commit_configuration_transaction(
+            configuration,
+            user_path=path,
+            live_openclaw_state=state_paths.openclaw,
+            staged_openclaw_state=(candidate_state if provider_setup_changed else None),
+        )
+    print("configuration saved: local routes validated; live check not run")
     _print_configuration(configuration, path)
     print("provider credentials: not stored by SAT")
     print("next: enter a project parent directory and run sat")
@@ -1582,6 +1806,7 @@ def _with_team_plan_model_inspections(
                     openclaw_state_dir=openclaw_state_dir,
                     config_path=runtime_config,
                     model=route.model,
+                    runtime_profile=route.runtime_profile,
                 )
             )
     return RuntimePreflight.model_validate(
@@ -1644,6 +1869,9 @@ def _inspect_approved_plan_runtime(
             sandbox_image=quality.policy.sandbox.image,
             expected_sandbox_image_id=sandbox.sandbox_image_id,
             expected_model=default_model,
+            expected_runtime_profile=team_plan.model_routes.get_route(
+                team_plan.model_routes.default_route_id
+            ).runtime_profile,
         )
         return _with_team_plan_model_inspections(
             preflight,
@@ -1707,6 +1935,9 @@ def _prepare_runtime_boundary(
             sandbox_open_files=limits.open_files,
             sandbox_tmpfs_mb=limits.writable_tmpfs_mb,
             model=options.model if team_plan is None else None,
+            model_runtime_profile=(
+                options.model_runtime_profile if team_plan is None else None
+            ),
             team_plan=team_plan,
         )
         preflight = inspect_runtime_preflight(
@@ -1722,6 +1953,13 @@ def _prepare_runtime_boundary(
                 else team_plan.model_routes.get_route(
                     team_plan.model_routes.default_route_id
                 ).model
+            ),
+            expected_runtime_profile=(
+                options.model_runtime_profile
+                if team_plan is None
+                else team_plan.model_routes.get_route(
+                    team_plan.model_routes.default_route_id
+                ).runtime_profile
             ),
         )
         if team_plan is not None:
@@ -2027,6 +2265,13 @@ def _run_workflow(args: argparse.Namespace) -> int:
         if user_configuration is not None and user_configuration.model == model
         else None
     )
+    model_runtime_profile = (
+        user_configuration.default_model_profile.runtime_profile
+        if user_configuration is not None and user_configuration.model == model
+        else runtime_profile_for_model(model)
+        if model is not None
+        else None
+    )
     cache_read = args.cache_read_cost_per_million_usd
     cache_write = args.cache_write_cost_per_million_usd
     if (cache_read is None) != (cache_write is None):
@@ -2093,6 +2338,7 @@ def _run_workflow(args: argparse.Namespace) -> int:
             model=model,
             input_cost_per_million_usd=input_cost,
             output_cost_per_million_usd=output_cost,
+            model_runtime_profile=model_runtime_profile,
             stage_timeout_seconds=timeout,
             cache_pricing=cache_pricing,
             artifact_repair_limit=args.artifact_repair_limit,
@@ -2156,43 +2402,199 @@ def _run_openclaw_configuration(
 
 
 @contextmanager
+def _staged_openclaw_state(state_dir: Path) -> Iterator[tuple[Path, Path]]:
+    """Clone SAT's private OpenClaw state for a reversible configuration edit."""
+
+    state_dir.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if state_dir.is_symlink() or (state_dir.exists() and not state_dir.is_dir()):
+        raise RuntimeConfigurationError("SAT OpenClaw state must be a real directory")
+    if state_dir.exists():
+        for entry in state_dir.rglob("*"):
+            if entry.is_symlink():
+                raise RuntimeConfigurationError(
+                    "SAT OpenClaw state cannot contain symbolic links during setup"
+                )
+            if not entry.is_dir() and not entry.is_file():
+                raise RuntimeConfigurationError(
+                    "SAT OpenClaw state contains an unsupported filesystem entry"
+                )
+    candidate = Path(
+        tempfile.mkdtemp(
+            prefix=f".{state_dir.name}.candidate-",
+            dir=state_dir.parent,
+        )
+    )
+    os.chmod(candidate, 0o700)
+    try:
+        if state_dir.exists():
+            shutil.copytree(state_dir, candidate, dirs_exist_ok=True)
+        yield candidate, candidate / "openclaw.json"
+    finally:
+        if candidate.exists():
+            shutil.rmtree(candidate)
+
+
+def _replace_exact_private_file(
+    path: Path,
+    content: bytes,
+    *,
+    mode: int,
+) -> None:
+    """Atomically replace one private file with caller-supplied exact bytes."""
+
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    descriptor, raw_temporary = tempfile.mkstemp(
+        prefix=f".{path.name}.restore-",
+        dir=path.parent,
+    )
+    temporary = Path(raw_temporary)
+    try:
+        with os.fdopen(descriptor, "wb") as output:
+            output.write(content)
+            output.flush()
+            os.fsync(output.fileno())
+        os.chmod(temporary, mode)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _commit_configuration_transaction(
+    configuration: UserConfiguration,
+    *,
+    user_path: Path,
+    live_openclaw_state: Path,
+    staged_openclaw_state: Path | None,
+) -> None:
+    """Commit validated SAT and optional OpenClaw state as one rollback unit."""
+
+    previous_exists = user_path.is_file()
+    previous_content = user_path.read_bytes() if previous_exists else None
+    previous_mode = user_path.stat().st_mode & 0o777 if previous_exists else None
+    try:
+        save_user_configuration(configuration, user_path)
+    except Exception:
+        _restore_user_configuration(
+            user_path,
+            existed=previous_exists,
+            content=previous_content,
+            mode=previous_mode,
+        )
+        raise
+    if staged_openclaw_state is None:
+        return
+
+    backup = Path(
+        tempfile.mkdtemp(
+            prefix=f".{live_openclaw_state.name}.rollback-",
+            dir=live_openclaw_state.parent,
+        )
+    )
+    backup.rmdir()
+    moved_live = False
+    try:
+        if live_openclaw_state.exists():
+            os.replace(live_openclaw_state, backup)
+            moved_live = True
+        os.replace(staged_openclaw_state, live_openclaw_state)
+    except Exception as commit_error:
+        rollback_errors: list[Exception] = []
+        if moved_live and backup.exists() and not live_openclaw_state.exists():
+            try:
+                os.replace(backup, live_openclaw_state)
+            except (
+                Exception
+            ) as error:  # pragma: no cover - catastrophic filesystem loss
+                rollback_errors.append(error)
+        try:
+            _restore_user_configuration(
+                user_path,
+                existed=previous_exists,
+                content=previous_content,
+                mode=previous_mode,
+            )
+        except Exception as error:  # pragma: no cover - catastrophic filesystem loss
+            rollback_errors.append(error)
+        if rollback_errors:
+            raise RuntimeConfigurationError(
+                "configuration commit failed and rollback was incomplete"
+            ) from rollback_errors[0]
+        raise commit_error
+    else:
+        if backup.exists():
+            try:
+                shutil.rmtree(backup)
+            except OSError as error:  # committed state remains authoritative
+                warnings.warn(
+                    f"validated configuration committed, but its private rollback "
+                    f"copy could not be removed: {error}",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+
+
+def _restore_user_configuration(
+    path: Path,
+    *,
+    existed: bool,
+    content: bytes | None,
+    mode: int | None,
+) -> None:
+    """Restore the exact pre-transaction user configuration."""
+
+    if existed:
+        assert content is not None and mode is not None
+        _replace_exact_private_file(path, content, mode=mode)
+    else:
+        path.unlink(missing_ok=True)
+
+
+@contextmanager
 def _effective_model_configuration(
     *,
-    model: str,
+    profile: ModelProfile,
     configured_path: Path,
 ) -> Iterator[Path]:
-    """Yield the private config plus any pinned model-catalog supplement."""
+    """Yield one profile-compiled config without copying private secrets."""
 
-    if not has_model_compatibility(model) and configured_path.is_file():
-        yield configured_path
-        return
+    _validate_optional_openclaw_configuration(configured_path)
     with tempfile.TemporaryDirectory(prefix="sat-model-check-") as temporary:
         compatibility_path = Path(temporary) / "openclaw.model.json"
         materialize_model_check_configuration(
             compatibility_path,
-            model=model,
+            profile=profile,
         )
         yield compatibility_path
 
 
 def _inspect_selected_model(
     openclaw_binary: Path,
-    model: str,
+    model: str | ModelProfile,
     *,
     state_dir: Path,
     config_path: Path,
 ) -> OpenClawModelInspection:
     """Inspect the exact effective model without making a provider request."""
 
+    profile = (
+        model
+        if isinstance(model, ModelProfile)
+        else ModelProfile(
+            id="default",
+            model=model,
+            capabilities=tuple(AgentCapability),
+        )
+    )
     with _effective_model_configuration(
-        model=model,
+        profile=profile,
         configured_path=config_path,
     ) as effective_config:
         return inspect_openclaw_model(
             openclaw_binary=openclaw_binary,
             openclaw_state_dir=state_dir,
             config_path=effective_config,
-            model=model,
+            model=profile.model,
+            runtime_profile=profile.runtime_profile,
         )
 
 
@@ -2215,15 +2617,24 @@ def _render_model_inspection_start(profile_count: int) -> None:
 
 def _run_provider_smoke(
     openclaw_binary: Path,
-    model: str,
+    model: str | ModelProfile,
     *,
     state_dir: Path,
     config_path: Path,
 ) -> None:
     """Run one explicitly authorized minimal provider request."""
 
+    profile = (
+        model
+        if isinstance(model, ModelProfile)
+        else ModelProfile(
+            id="default",
+            model=model,
+            capabilities=tuple(AgentCapability),
+        )
+    )
     with _effective_model_configuration(
-        model=model,
+        profile=profile,
         configured_path=config_path,
     ) as effective_config:
         try:
@@ -2235,7 +2646,7 @@ def _run_provider_smoke(
                     "run",
                     "--local",
                     "--model",
-                    model,
+                    profile.model,
                     "--prompt",
                     'Reply with exactly: {"status":"ok"}',
                     "--json",
@@ -2275,6 +2686,13 @@ def _run_provider_smoke(
     ):
         raise RuntimeConfigurationError(
             "the provider smoke check did not return a successful response"
+        )
+    if (
+        payload.get("provider") != profile.runtime_profile.provider_id
+        or payload.get("model") != profile.runtime_profile.native_model_id
+    ):
+        raise RuntimeConfigurationError(
+            "the provider smoke check used a route other than the frozen profile"
         )
 
 
@@ -2336,6 +2754,184 @@ def _validate_optional_openclaw_configuration(config_path: Path) -> None:
         )
 
 
+def _read_private_openclaw_configuration(config_path: Path) -> dict[str, object]:
+    """Read one private OpenClaw config without exposing its secret values."""
+
+    _validate_optional_openclaw_configuration(config_path)
+    if not config_path.is_file():
+        return {}
+    try:
+        payload = json5.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError) as error:
+        raise RuntimeConfigurationError(
+            "SAT's private OpenClaw configuration is not valid JSON5"
+        ) from error
+    if not isinstance(payload, dict):
+        raise RuntimeConfigurationError(
+            "SAT's private OpenClaw configuration must be an object"
+        )
+    return payload
+
+
+def _bind_private_runtime_profiles(
+    configuration: UserConfiguration,
+    *,
+    config_path: Path,
+    refresh_private_configuration: bool = False,
+) -> UserConfiguration:
+    """Promote sanitized custom-provider facts into the shared profile owner."""
+
+    payload = _read_private_openclaw_configuration(config_path)
+    profiles: list[ModelProfile] = []
+    for profile in configuration.model_profiles:
+        source = profile.runtime_profile.source
+        may_bind = source is ModelRuntimeProfileSource.OPENCLAW_NATIVE or (
+            refresh_private_configuration
+            and source is ModelRuntimeProfileSource.PRIVATE_OPENCLAW_CONFIG
+        )
+        if not may_bind:
+            profiles.append(profile)
+            continue
+        try:
+            runtime_profile = runtime_profile_from_openclaw_configuration(
+                profile.model,
+                payload,
+            )
+        except (ValueError, ValidationError) as error:
+            raise RuntimeConfigurationError(
+                f"OpenClaw provider metadata is invalid for {profile.model}"
+            ) from error
+        if runtime_profile is None:
+            if source is ModelRuntimeProfileSource.PRIVATE_OPENCLAW_CONFIG:
+                raise RuntimeConfigurationError(
+                    f"OpenClaw provider metadata is missing for {profile.model}"
+                )
+            profiles.append(profile)
+            continue
+        profiles.append(
+            ModelProfile.model_validate(
+                {
+                    **profile.model_dump(mode="json"),
+                    "runtime_profile": runtime_profile.model_dump(mode="json"),
+                }
+            )
+        )
+    return UserConfiguration.model_validate(
+        {
+            **configuration.model_dump(mode="json"),
+            "model_profiles": tuple(profiles),
+        }
+    )
+
+
+def _inspect_model_configuration(
+    configuration: UserConfiguration,
+    *,
+    state_dir: Path,
+    config_path: Path,
+) -> tuple[OpenClawModelInspection, ...]:
+    """Validate every saved route through the same compiled profile boundary."""
+
+    for profile in configuration.model_profiles:
+        runtime = profile.runtime_profile
+        if (
+            runtime.credential_source is CredentialSource.ENVIRONMENT
+            and runtime.credential_env is not None
+            and not os.environ.get(runtime.credential_env, "").strip()
+        ):
+            raise RuntimeConfigurationError(
+                f"credential environment variable is missing for {profile.model}: "
+                f"{runtime.credential_env}"
+            )
+        if (
+            runtime.endpoint_kind is not ModelEndpointKind.OPENCLAW_NATIVE
+            and runtime.supports_tools is not True
+        ):
+            raise RuntimeConfigurationError(
+                f"model profile does not declare required tool support: {profile.model}"
+            )
+    _render_model_inspection_start(len(configuration.model_profiles))
+    inspections = tuple(
+        _inspect_selected_model(
+            DEFAULT_OPENCLAW_BINARY,
+            profile,
+            state_dir=state_dir,
+            config_path=config_path,
+        )
+        for profile in configuration.model_profiles
+    )
+    unavailable = tuple(item for item in inspections if not item.available)
+    if unavailable:
+        raise RuntimeConfigurationError(
+            "selected model configuration is not locally ready: "
+            + "; ".join(
+                f"{inspection.model}: {inspection.error}" for inspection in unavailable
+            )
+        )
+    return inspections
+
+
+def _merge_discovered_model_metadata(
+    configuration: UserConfiguration,
+    inspections: Sequence[OpenClawModelInspection],
+    *,
+    observed_at: datetime | None = None,
+) -> UserConfiguration:
+    """Merge attributable catalog facts without prompting or inventing values."""
+
+    when = (observed_at or datetime.now(UTC)).astimezone(UTC)
+    by_model = {item.model: item for item in inspections}
+    if len(by_model) != len(inspections) or set(by_model) != {
+        profile.model for profile in configuration.model_profiles
+    }:
+        raise RuntimeConfigurationError(
+            "model metadata inspections do not cover the configured profiles"
+        )
+    profiles: list[ModelProfile] = []
+    for profile in configuration.model_profiles:
+        inspection = by_model[profile.model]
+        updates: dict[str, object] = {}
+        if (
+            inspection.context_window_tokens is not None
+            and profile.context_source
+            not in {
+                ModelMetadataSource.USER_SUPPLIED,
+                ModelMetadataSource.PROVIDER_CATALOG,
+            }
+        ):
+            updates.update(
+                context_window_tokens=inspection.context_window_tokens,
+                context_source=ModelMetadataSource.RUNTIME_CATALOG,
+                context_observed_at=when,
+            )
+        if (
+            inspection.input_cost_per_million_usd is not None
+            and inspection.output_cost_per_million_usd is not None
+            and profile.pricing_source
+            not in {
+                ModelMetadataSource.USER_SUPPLIED,
+                ModelMetadataSource.CONFIRMED_ZERO,
+            }
+        ):
+            updates.update(
+                input_cost_per_million_usd=(inspection.input_cost_per_million_usd),
+                output_cost_per_million_usd=(inspection.output_cost_per_million_usd),
+                pricing_source=ModelMetadataSource.RUNTIME_CATALOG,
+                pricing_observed_at=when,
+            )
+        if inspection.cache_pricing is not None and (
+            profile.cache_pricing is None
+            or profile.cache_pricing.source
+            not in {
+                ModelMetadataSource.USER_SUPPLIED,
+                ModelMetadataSource.CONFIRMED_ZERO,
+            }
+        ):
+            updates["cache_pricing"] = inspection.cache_pricing
+        profiles.append(profile.model_copy(update=updates))
+    return configuration.model_copy(update={"model_profiles": tuple(profiles)})
+
+
 def _ensure_product_configuration(
     state_paths: ProductStatePaths,
 ) -> tuple[UserConfiguration, tuple[OpenClawModelInspection, ...]]:
@@ -2346,26 +2942,20 @@ def _ensure_product_configuration(
     openclaw_config = state_paths.openclaw / "openclaw.json"
     _validate_optional_openclaw_configuration(openclaw_config)
     if current is not None:
-        _render_model_inspection_start(len(current.model_profiles))
-        default_profile = current.default_model_profile
-        default_inspection = _inspect_selected_model(
-            DEFAULT_OPENCLAW_BINARY,
-            default_profile.model,
-            state_dir=state_paths.openclaw,
+        current = _bind_private_runtime_profiles(
+            current,
             config_path=openclaw_config,
         )
-        if default_inspection.available:
-            additional_inspections = tuple(
-                _inspect_selected_model(
-                    DEFAULT_OPENCLAW_BINARY,
-                    profile.model,
-                    state_dir=state_paths.openclaw,
-                    config_path=openclaw_config,
-                )
-                for profile in current.model_profiles
-                if profile.id != default_profile.id
+        try:
+            inspected = _inspect_model_configuration(
+                current,
+                state_dir=state_paths.openclaw,
+                config_path=openclaw_config,
             )
-            inspected = (default_inspection, *additional_inspections)
+        except RuntimeConfigurationError as error:
+            print("! Saved model configuration is not locally ready:")
+            print(f"  {error}")
+        else:
             completed = _complete_model_metadata(
                 current,
                 inspected,
@@ -2374,28 +2964,13 @@ def _ensure_product_configuration(
             if completed != current:
                 save_user_configuration(completed, path)
                 current = completed
-            print(f"✓ Bootstrap model: {default_profile.model}")
-            unavailable_optional = tuple(
-                item for item in additional_inspections if not item.available
-            )
-            if unavailable_optional:
-                print(
-                    "! Optional model profiles are not locally ready; a plan "
-                    "that selects them will stop at run preflight:"
-                )
-                for inspection in unavailable_optional:
-                    print(f"  {inspection.model}: {inspection.error}")
-                print("  Run 'sat configure' to update model routing.")
-            elif additional_inspections:
-                print(
-                    f"✓ Additional model profiles: {len(additional_inspections)} ready"
-                )
+            print(f"✓ Bootstrap model: {current.default_model_profile.model}")
+            if len(inspected) > 1:
+                print(f"✓ Additional model profiles: {len(inspected) - 1} ready")
             for profile in current.model_profiles:
                 print(f"  {profile.id}: {profile.model}")
             print(f"✓ Isolated OpenClaw state: {state_paths.openclaw}")
             return current, tuple(inspected)
-        print("! Saved bootstrap model is not locally ready:")
-        print(f"  {default_inspection.model}: {default_inspection.error}")
 
     print(
         "\nModel configuration repair"
@@ -2409,67 +2984,64 @@ def _ensure_product_configuration(
     )
     if current is not None:
         print(f"Saved SAT model reference: {current.model}")
-    if _prompt_yes_no(
-        "Open SAT's isolated OpenClaw provider setup now? "
-        "Choose no only when credentials come from the current shell environment.",
-        default=True,
+    with _staged_openclaw_state(state_paths.openclaw) as (
+        candidate_state,
+        candidate_config,
     ):
-        _run_openclaw_configuration(
-            DEFAULT_OPENCLAW_BINARY,
-            state_dir=state_paths.openclaw,
-            config_path=openclaw_config,
+        provider_setup_changed = _prompt_yes_no(
+            "Open SAT's isolated OpenClaw provider setup now? "
+            "Choose no only when credentials come from the current shell environment.",
+            default=True,
         )
-    discovered_model = _discover_openclaw_default_model(
-        DEFAULT_OPENCLAW_BINARY,
-        state_dir=state_paths.openclaw,
-        config_path=openclaw_config,
-    )
-    if discovered_model is not None:
-        print(f"✓ OpenClaw default model detected: {discovered_model}")
-    default_model = current.model if current is not None else discovered_model
-    model = _prompt_value(
-        "OpenClaw model reference (provider/model)",
-        default_model,
-    )
-    if current is not None and model == current.model:
-        configuration = current
-    else:
-        configuration = UserConfiguration(
-            model=model,
-            max_concurrency=(current.max_concurrency if current is not None else 2),
-            progress_visibility=(
-                current.progress_visibility if current is not None else "standard"
-            ),
-        )
-    _render_model_inspection_start(len(configuration.model_profiles))
-    inspections = tuple(
-        _inspect_selected_model(
-            DEFAULT_OPENCLAW_BINARY,
-            profile.model,
-            state_dir=state_paths.openclaw,
-            config_path=openclaw_config,
-        )
-        for profile in configuration.model_profiles
-    )
-    unavailable = tuple(item for item in inspections if not item.available)
-    if unavailable:
-        if len(unavailable) == 1:
-            inspection = unavailable[0]
-            raise RuntimeConfigurationError(
-                f"selected model is not locally ready: {inspection.error}"
+        if provider_setup_changed:
+            _run_openclaw_configuration(
+                DEFAULT_OPENCLAW_BINARY,
+                state_dir=candidate_state,
+                config_path=candidate_config,
             )
-        raise RuntimeConfigurationError(
-            "selected model profiles are not locally ready: "
-            + "; ".join(
-                f"{inspection.model}: {inspection.error}" for inspection in unavailable
-            )
+        discovered_model = _discover_openclaw_default_model(
+            DEFAULT_OPENCLAW_BINARY,
+            state_dir=candidate_state,
+            config_path=candidate_config,
         )
-    configuration = _complete_model_metadata(
-        configuration,
-        inspections,
-        offer_price_change=True,
-    )
-    save_user_configuration(configuration, path)
+        if discovered_model is not None:
+            print(f"✓ OpenClaw default model detected: {discovered_model}")
+        default_model = current.model if current is not None else discovered_model
+        model = _prompt_value(
+            "OpenClaw model reference (provider/model)",
+            default_model,
+        )
+        if current is not None and model == current.model:
+            configuration = current
+        else:
+            configuration = UserConfiguration(
+                model=model,
+                max_concurrency=(current.max_concurrency if current is not None else 2),
+                progress_visibility=(
+                    current.progress_visibility if current is not None else "standard"
+                ),
+            )
+        configuration = _bind_private_runtime_profiles(
+            configuration,
+            config_path=candidate_config,
+            refresh_private_configuration=provider_setup_changed,
+        )
+        inspections = _inspect_model_configuration(
+            configuration,
+            state_dir=candidate_state,
+            config_path=candidate_config,
+        )
+        configuration = _complete_model_metadata(
+            configuration,
+            inspections,
+            offer_price_change=True,
+        )
+        _commit_configuration_transaction(
+            configuration,
+            user_path=path,
+            live_openclaw_state=state_paths.openclaw,
+            staged_openclaw_state=(candidate_state if provider_setup_changed else None),
+        )
     print(f"✓ Saved secret-free model configuration to {path}")
     if _prompt_yes_no(
         "Run one minimal provider check now? This may incur provider usage.",
@@ -2477,7 +3049,7 @@ def _ensure_product_configuration(
     ):
         _run_provider_smoke(
             DEFAULT_OPENCLAW_BINARY,
-            configuration.model,
+            configuration.default_model_profile,
             state_dir=state_paths.openclaw,
             config_path=openclaw_config,
         )
@@ -2654,6 +3226,7 @@ def _run_product_planning(
             sandbox_open_files=limits.open_files,
             sandbox_tmpfs_mb=limits.writable_tmpfs_mb,
             model=configuration.model,
+            model_runtime_profile=(configuration.default_model_profile.runtime_profile),
             bootstrap_capability=AgentCapability.CLARIFICATION,
         )
         try:
@@ -2665,6 +3238,9 @@ def _run_product_planning(
                 sandbox_image=quality.policy.sandbox.image,
                 expected_sandbox_image_id=inspection.sandbox_image_id,
                 expected_model=configuration.model,
+                expected_runtime_profile=(
+                    configuration.default_model_profile.runtime_profile
+                ),
             )
         except RuntimeConfigurationError as error:
             raise RuntimeConfigurationError(
@@ -3005,7 +3581,7 @@ def _run_product() -> int:
         model_inspections = tuple(
             _inspect_selected_model(
                 DEFAULT_OPENCLAW_BINARY,
-                profile.model,
+                profile,
                 state_dir=state_paths.openclaw,
                 config_path=state_paths.openclaw / "openclaw.json",
             )
@@ -3161,7 +3737,7 @@ def _run_product() -> int:
             refreshed_inspections = tuple(
                 _inspect_selected_model(
                     DEFAULT_OPENCLAW_BINARY,
-                    profile.model,
+                    profile,
                     state_dir=state_paths.openclaw,
                     config_path=state_paths.openclaw / "openclaw.json",
                 )
@@ -3198,7 +3774,7 @@ def _run_product() -> int:
                 refreshed_inspections = tuple(
                     _inspect_selected_model(
                         DEFAULT_OPENCLAW_BINARY,
-                        profile.model,
+                        profile,
                         state_dir=state_paths.openclaw,
                         config_path=state_paths.openclaw / "openclaw.json",
                     )
@@ -3464,6 +4040,80 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         metavar="ID=READ,WRITE",
         help="Set explicit USD cache read/write rates per million input tokens.",
+    )
+    configure.add_argument(
+        "--profile-api",
+        action="append",
+        default=[],
+        metavar="ID=API",
+        help=(
+            "Set a pinned OpenClaw transport such as openai-responses, "
+            "anthropic-messages, or ollama."
+        ),
+    )
+    configure.add_argument(
+        "--profile-endpoint-kind",
+        action="append",
+        default=[],
+        choices=None,
+        metavar="ID=remote|local",
+        help="Classify a custom endpoint for network-policy validation.",
+    )
+    configure.add_argument(
+        "--profile-base-url",
+        action="append",
+        default=[],
+        metavar="ID=URL",
+        help="Set a custom remote HTTPS or local loopback endpoint.",
+    )
+    configure.add_argument(
+        "--profile-native-model-id",
+        action="append",
+        default=[],
+        metavar="ID=MODEL",
+        help="Set the provider-native model ID exposed at the endpoint.",
+    )
+    configure.add_argument(
+        "--profile-credential-env",
+        action="append",
+        default=[],
+        metavar="ID=ENV",
+        help="Reference a credential environment variable without storing its value.",
+    )
+    configure.add_argument(
+        "--profile-context-window-tokens",
+        action="append",
+        default=[],
+        metavar="ID=INTEGER",
+        help="Set provider-documented context length when it cannot be discovered.",
+    )
+    configure.add_argument(
+        "--profile-max-output-tokens",
+        action="append",
+        default=[],
+        metavar="ID=INTEGER",
+        help="Set the provider model's maximum output length.",
+    )
+    configure.add_argument(
+        "--profile-input-modalities",
+        action="append",
+        default=[],
+        metavar="ID=TEXT,IMAGE,...",
+        help="Declare provider-documented input modalities.",
+    )
+    configure.add_argument(
+        "--profile-supports-tools",
+        action="append",
+        default=[],
+        metavar="ID=true|false",
+        help="Declare provider-documented tool-calling capability.",
+    )
+    configure.add_argument(
+        "--profile-request-timeout-seconds",
+        action="append",
+        default=[],
+        metavar="ID=INTEGER",
+        help="Set the provider's liveness timeout for one request.",
     )
     configure.add_argument(
         "--default-model-profile",

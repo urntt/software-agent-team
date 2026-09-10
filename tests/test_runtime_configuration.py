@@ -507,7 +507,8 @@ def test_materialized_config_registers_the_pinned_deepseek_vision_model(
             "function": {"name": "sat_submit_artifact"},
         },
     }
-    assert "apiKey" not in destination.read_text(encoding="utf-8")
+    assert provider["apiKey"] == "${DEEPSEEK_API_KEY}"
+    assert "must-not-be-persisted" not in destination.read_text(encoding="utf-8")
 
 
 def test_legacy_text_runtime_does_not_force_the_typed_submission_tool(
@@ -636,7 +637,9 @@ def test_dynamic_config_registers_compatibility_for_an_authorized_fallback(
         agent["model"] == {"primary": "provider/model", "fallbacks": []}
         for agent in payload["agents"]["list"]
     )
-    assert "apiKey" not in destination.read_text(encoding="utf-8")
+    assert payload["models"]["providers"]["deepseek"]["apiKey"] == (
+        "${DEEPSEEK_API_KEY}"
+    )
 
 
 def test_model_check_configuration_is_private_secret_free_and_write_once(
@@ -659,7 +662,9 @@ def test_model_check_configuration_is_private_secret_free_and_write_once(
     assert payload["agents"]["defaults"]["models"][DEEPSEEK_VISION_MODEL]["params"][
         "extra_body"
     ] == {"thinking": {"type": "disabled"}}
-    assert "apiKey" not in destination.read_text(encoding="utf-8")
+    assert payload["models"]["providers"]["deepseek"]["apiKey"] == (
+        "${DEEPSEEK_API_KEY}"
+    )
     assert destination.stat().st_mode & 0o777 == 0o600
     with pytest.raises(RuntimeConfigurationError, match="already exists"):
         materialize_model_check_configuration(

@@ -17,8 +17,12 @@ from software_agent_team.budgets import AgentBudget
 from software_agent_team.integrity import canonical_model_sha256
 from software_agent_team.model_costs import CachePriceSupport
 from software_agent_team.model_metadata import ModelMetadataSource
+from software_agent_team.model_runtime import (
+    ModelRuntimeProfile,
+    runtime_profile_for_model,
+)
 
-TEAM_PLAN_SCHEMA_VERSION = 3
+TEAM_PLAN_SCHEMA_VERSION = 4
 SPECIALIZATION_CATALOG_VERSION = 1
 
 
@@ -307,6 +311,8 @@ class ModelRoute(CachePriceSupport):
 
     id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     model: str = Field(min_length=3)
+    runtime_profile: ModelRuntimeProfile
+    runtime_profile_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     required_capabilities: tuple[str, ...] = ()
     eligible_capabilities: tuple[AgentCapability, ...] = tuple(AgentCapability)
     input_cost_per_million_usd: Decimal | None = Field(
@@ -334,6 +340,17 @@ class ModelRoute(CachePriceSupport):
         if not isinstance(value, dict):
             return value
         payload = dict(value)
+        if payload.get("runtime_profile") is None and isinstance(
+            payload.get("model"), str
+        ):
+            runtime_profile = runtime_profile_for_model(payload["model"])
+            payload["runtime_profile"] = runtime_profile.model_dump(mode="json")
+            payload.setdefault("runtime_profile_sha256", runtime_profile.sha256)
+        elif isinstance(payload.get("runtime_profile"), dict):
+            runtime_profile = ModelRuntimeProfile.model_validate(
+                payload["runtime_profile"]
+            )
+            payload.setdefault("runtime_profile_sha256", runtime_profile.sha256)
         if (
             payload.get("input_cost_per_million_usd") is not None
             and payload.get("output_cost_per_million_usd") is not None
@@ -395,6 +412,11 @@ class ModelRoute(CachePriceSupport):
             or self.output_cost_per_million_usd != 0
         ):
             raise ValueError("confirmed-zero route pricing requires two zero prices")
+        provider_id, _, _ = self.model.partition("/")
+        if self.runtime_profile.provider_id != provider_id:
+            raise ValueError("model route runtime provider must match its model")
+        if self.runtime_profile_sha256 != self.runtime_profile.sha256:
+            raise ValueError("model route runtime profile digest does not match")
         return self
 
     @field_validator("pricing_observed_at", "context_observed_at")
@@ -625,7 +647,9 @@ class TeamPlan(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[1, 2, TEAM_PLAN_SCHEMA_VERSION] = TEAM_PLAN_SCHEMA_VERSION
+    schema_version: Literal[1, 2, 3, TEAM_PLAN_SCHEMA_VERSION] = (
+        TEAM_PLAN_SCHEMA_VERSION
+    )
     specialization_catalog_version: Literal[SPECIALIZATION_CATALOG_VERSION] = (
         SPECIALIZATION_CATALOG_VERSION
     )

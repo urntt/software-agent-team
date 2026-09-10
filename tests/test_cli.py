@@ -92,6 +92,30 @@ def ready_user_configuration(
     )
 
 
+def ready_model_inspection(
+    _binary: Path,
+    model: str | ModelProfile,
+    **_kwargs: object,
+) -> OpenClawModelInspection:
+    """Return one local-validation result for CLI configuration unit tests."""
+
+    profile = (
+        model
+        if isinstance(model, ModelProfile)
+        else ModelProfile(
+            id="default",
+            model=model,
+            capabilities=tuple(AgentCapability),
+        )
+    )
+    return OpenClawModelInspection(
+        model=profile.model,
+        runtime_profile_sha256=profile.runtime_profile_sha256,
+        available=True,
+        context_window_tokens=120_000,
+    )
+
+
 def task_resource_authorization(
     configuration: UserConfiguration,
     *,
@@ -1079,8 +1103,16 @@ def test_approved_plan_runtime_check_covers_all_routes_before_workspace_creation
     source = tmp_path / "source"
     source.mkdir()
     routes = (
-        SimpleNamespace(id="default", model="provider/default"),
-        SimpleNamespace(id="review", model="provider/review"),
+        SimpleNamespace(
+            id="default",
+            model="provider/default",
+            runtime_profile=cli.runtime_profile_for_model("provider/default"),
+        ),
+        SimpleNamespace(
+            id="review",
+            model="provider/review",
+            runtime_profile=cli.runtime_profile_for_model("provider/review"),
+        ),
     )
 
     class Routes:
@@ -1401,8 +1433,14 @@ def test_dynamic_runtime_preflight_checks_every_approved_model_route(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     route_values = (
-        SimpleNamespace(model="provider/default"),
-        SimpleNamespace(model="provider/quality"),
+        SimpleNamespace(
+            model="provider/default",
+            runtime_profile=cli.runtime_profile_for_model("provider/default"),
+        ),
+        SimpleNamespace(
+            model="provider/quality",
+            runtime_profile=cli.runtime_profile_for_model("provider/quality"),
+        ),
     )
 
     class Routes:
@@ -1526,6 +1564,8 @@ def test_cli_noninteractive_configuration_is_private_and_reconfigurable(
 ) -> None:
     path = tmp_path / "config.json"
     monkeypatch.setenv("SAT_CONFIG_PATH", str(path))
+    monkeypatch.setenv("SAT_STATE_ROOT", str(tmp_path / "state"))
+    monkeypatch.setattr(cli, "_inspect_selected_model", ready_model_inspection)
 
     assert (
         main(
@@ -1574,6 +1614,354 @@ def test_cli_noninteractive_configuration_is_private_and_reconfigurable(
     assert "provider credentials: not stored by SAT" in output
 
 
+def test_noninteractive_invalid_route_preserves_exact_saved_configuration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    path = tmp_path / "config.json"
+    state = tmp_path / "state"
+    monkeypatch.setenv("SAT_CONFIG_PATH", str(path))
+    monkeypatch.setenv("SAT_STATE_ROOT", str(state))
+    save_user_configuration(ready_user_configuration(model="provider/old"), path)
+    original = path.read_bytes()
+    monkeypatch.setattr(
+        cli,
+        "_inspect_selected_model",
+        lambda _binary, profile, **_kwargs: OpenClawModelInspection(
+            model=profile.model,
+            runtime_profile_sha256=profile.runtime_profile_sha256,
+            available=False,
+            error="route unavailable",
+        ),
+    )
+
+    assert (
+        main(
+            [
+                "configure",
+                "--non-interactive",
+                "--model",
+                "provider/new",
+            ]
+        )
+        == 1
+    )
+
+    assert path.read_bytes() == original
+    output = capsys.readouterr().out
+    assert "route unavailable" in output
+    assert "configuration saved" not in output
+
+
+def test_custom_openai_responses_profile_uses_the_ordinary_configure_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    path = tmp_path / "config.json"
+    monkeypatch.setenv("SAT_CONFIG_PATH", str(path))
+    monkeypatch.setenv("SAT_STATE_ROOT", str(tmp_path / "state"))
+    monkeypatch.setenv("QWEN_API_KEY", "test-secret-must-not-be-saved")
+    observed: list[ModelProfile] = []
+
+    def inspect(
+        _binary: Path,
+        profile: ModelProfile,
+        **_kwargs: object,
+    ) -> OpenClawModelInspection:
+        observed.append(profile)
+        return OpenClawModelInspection(
+            model=profile.model,
+            runtime_profile_sha256=profile.runtime_profile_sha256,
+            available=True,
+            context_window_tokens=120_000,
+        )
+
+    monkeypatch.setattr(cli, "_inspect_selected_model", inspect)
+    assert (
+        main(
+            [
+                "configure",
+                "--non-interactive",
+                "--model",
+                "urntt/qwen",
+                "--profile-api",
+                "default=openai-responses",
+                "--profile-endpoint-kind",
+                "default=remote",
+                "--profile-base-url",
+                "default=https://api.example.test/v1",
+                "--profile-native-model-id",
+                "default=qwen-runtime-id",
+                "--profile-credential-env",
+                "default=QWEN_API_KEY",
+                "--profile-context-window-tokens",
+                "default=120000",
+                "--profile-max-output-tokens",
+                "default=16384",
+                "--profile-input-modalities",
+                "default=text",
+                "--profile-supports-tools",
+                "default=true",
+            ]
+        )
+        == 0
+    )
+
+    configured = load_user_configuration(path)
+    assert configured is not None
+    runtime = configured.default_model_profile.runtime_profile
+    assert runtime.api is cli.ModelApi.OPENAI_RESPONSES
+    assert runtime.native_model_id == "qwen-runtime-id"
+    assert runtime.credential_env == "QWEN_API_KEY"
+    assert runtime.supports_tools is True
+    assert observed == [configured.default_model_profile]
+    assert "test-secret-must-not-be-saved" not in path.read_text(encoding="utf-8")
+    assert "local routes validated; live check not run" in capsys.readouterr().out
+
+
+def test_explicit_provider_setup_refreshes_a_private_frozen_profile(
+    tmp_path: Path,
+) -> None:
+    old_payload = {
+        "models": {
+            "providers": {
+                "private": {
+                    "api": "openai-responses",
+                    "baseUrl": "https://old.example/v1",
+                    "apiKey": "${QWEN_API_KEY}",
+                    "models": [
+                        {
+                            "id": "qwen",
+                            "contextWindow": 64000,
+                            "maxTokens": 8192,
+                            "compat": {"supportsTools": True},
+                        }
+                    ],
+                }
+            }
+        }
+    }
+    old_runtime = cli.runtime_profile_from_openclaw_configuration(
+        "private/qwen",
+        old_payload,
+    )
+    assert old_runtime is not None
+    configuration = UserConfiguration(
+        model_profiles=(
+            ModelProfile(
+                id="default",
+                model="private/qwen",
+                runtime_profile=old_runtime,
+                capabilities=tuple(AgentCapability),
+            ),
+        ),
+        default_model_profile_id="default",
+    )
+    new_payload = {
+        "models": {
+            "providers": {
+                "private": {
+                    "api": "anthropic-messages",
+                    "baseUrl": "https://new.example/v1",
+                    "apiKey": "${QWEN_API_KEY}",
+                    "models": [
+                        {
+                            "id": "qwen",
+                            "contextWindow": 120000,
+                            "maxTokens": 16384,
+                            "compat": {"supportsTools": True},
+                        }
+                    ],
+                }
+            }
+        }
+    }
+    config_path = tmp_path / "openclaw.json"
+    config_path.write_text(json.dumps(new_payload), encoding="utf-8")
+
+    unchanged = cli._bind_private_runtime_profiles(
+        configuration,
+        config_path=config_path,
+    )
+    refreshed = cli._bind_private_runtime_profiles(
+        configuration,
+        config_path=config_path,
+        refresh_private_configuration=True,
+    )
+
+    assert unchanged == configuration
+    assert (
+        refreshed.default_model_profile.runtime_profile.api
+        is cli.ModelApi.ANTHROPIC_MESSAGES
+    )
+    assert (
+        refreshed.default_model_profile.runtime_profile.base_url
+        == "https://new.example/v1"
+    )
+    assert refreshed.default_model_profile.runtime_profile_sha256 != (
+        configuration.default_model_profile.runtime_profile_sha256
+    )
+
+
+def test_custom_remote_profile_without_credential_fails_before_save(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    path = tmp_path / "config.json"
+    monkeypatch.setenv("SAT_CONFIG_PATH", str(path))
+    monkeypatch.setenv("SAT_STATE_ROOT", str(tmp_path / "state"))
+    monkeypatch.delenv("QWEN_API_KEY", raising=False)
+    save_user_configuration(ready_user_configuration(model="provider/old"), path)
+    original = path.read_bytes()
+    monkeypatch.setattr(
+        cli,
+        "_inspect_selected_model",
+        lambda *_args, **_kwargs: pytest.fail(
+            "a missing credential must fail before model inspection"
+        ),
+    )
+
+    assert (
+        main(
+            [
+                "configure",
+                "--non-interactive",
+                "--model",
+                "urntt/qwen",
+                "--profile-api",
+                "default=openai-responses",
+                "--profile-endpoint-kind",
+                "default=remote",
+                "--profile-base-url",
+                "default=https://api.example.test/v1",
+                "--profile-native-model-id",
+                "default=qwen-runtime-id",
+                "--profile-credential-env",
+                "default=QWEN_API_KEY",
+                "--profile-context-window-tokens",
+                "default=120000",
+                "--profile-max-output-tokens",
+                "default=16384",
+                "--profile-input-modalities",
+                "default=text",
+                "--profile-supports-tools",
+                "default=true",
+            ]
+        )
+        == 1
+    )
+
+    assert path.read_bytes() == original
+    output = capsys.readouterr().out
+    assert "credential environment variable is missing" in output
+    assert "configuration saved" not in output
+
+
+def test_interactive_provider_failure_preserves_exact_state_and_user_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    path = tmp_path / "config.json"
+    state_root = tmp_path / "state"
+    state_paths = cli.ProductStatePaths.below(state_root)
+    cli.ensure_product_state(state_paths)
+    openclaw_config = state_paths.openclaw / "openclaw.json"
+    openclaw_config.write_bytes(b'{"old": true}\n')
+    credential = state_paths.openclaw / "existing-credential.db"
+    credential.write_bytes(b"old-credential-bytes")
+    monkeypatch.setenv("SAT_CONFIG_PATH", str(path))
+    monkeypatch.setenv("SAT_STATE_ROOT", str(state_root))
+    save_user_configuration(ready_user_configuration(model="provider/old"), path)
+    user_bytes = path.read_bytes()
+    monkeypatch.setattr(cli.sys, "stdin", SimpleNamespace(isatty=lambda: True))
+    answers = iter(("yes", ""))
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+
+    def configure_candidate(
+        _binary: Path,
+        *,
+        state_dir: Path,
+        config_path: Path,
+    ) -> None:
+        assert state_dir != state_paths.openclaw
+        config_path.write_bytes(b'{"candidate": true}\n')
+        (state_dir / "new-credential.db").write_bytes(b"candidate-secret")
+
+    monkeypatch.setattr(cli, "_run_openclaw_configuration", configure_candidate)
+    monkeypatch.setattr(
+        cli,
+        "_discover_openclaw_default_model",
+        lambda *_args, **_kwargs: "provider/new",
+    )
+    monkeypatch.setattr(
+        cli,
+        "_inspect_selected_model",
+        lambda _binary, profile, **_kwargs: OpenClawModelInspection(
+            model=profile.model,
+            runtime_profile_sha256=profile.runtime_profile_sha256,
+            available=False,
+            error="candidate route unavailable",
+        ),
+    )
+
+    assert main(["configure"]) == 1
+
+    assert path.read_bytes() == user_bytes
+    assert openclaw_config.read_bytes() == b'{"old": true}\n'
+    assert credential.read_bytes() == b"old-credential-bytes"
+    assert not (state_paths.openclaw / "new-credential.db").exists()
+    assert not tuple(state_paths.openclaw.parent.glob(".openclaw.candidate-*"))
+    output = capsys.readouterr().out
+    assert "candidate route unavailable" in output
+    assert "configuration saved" not in output
+
+
+def test_configuration_commit_failure_restores_both_authorities_exactly(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user_path = tmp_path / "config" / "config.json"
+    user_path.parent.mkdir()
+    user_path.write_bytes(b'{"original": true}\n')
+    user_path.chmod(0o640)
+    original_user = user_path.read_bytes()
+
+    live_state = tmp_path / "state" / "openclaw"
+    live_state.mkdir(parents=True)
+    (live_state / "openclaw.json").write_bytes(b'{"original": true}\n')
+    (live_state / "credential.db").write_bytes(b"original-credential")
+    staged_state = tmp_path / "state" / ".openclaw.candidate-test"
+    staged_state.mkdir()
+    (staged_state / "openclaw.json").write_bytes(b'{"candidate": true}\n')
+
+    real_replace = os.replace
+
+    def fail_candidate_activation(source: str | Path, target: str | Path) -> None:
+        if Path(source) == staged_state and Path(target) == live_state:
+            raise OSError("injected candidate activation failure")
+        real_replace(source, target)
+
+    monkeypatch.setattr(cli.os, "replace", fail_candidate_activation)
+
+    with pytest.raises(OSError, match="candidate activation failure"):
+        cli._commit_configuration_transaction(
+            ready_user_configuration(model="provider/new"),
+            user_path=user_path,
+            live_openclaw_state=live_state,
+            staged_openclaw_state=staged_state,
+        )
+
+    assert user_path.read_bytes() == original_user
+    assert user_path.stat().st_mode & 0o777 == 0o640
+    assert (live_state / "openclaw.json").read_bytes() == b'{"original": true}\n'
+    assert (live_state / "credential.db").read_bytes() == b"original-credential"
+    assert not tuple(live_state.parent.glob(".openclaw.rollback-*"))
+
+
 def test_cli_configures_auditable_adaptive_model_profiles(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1581,6 +1969,8 @@ def test_cli_configures_auditable_adaptive_model_profiles(
 ) -> None:
     path = tmp_path / "config.json"
     monkeypatch.setenv("SAT_CONFIG_PATH", str(path))
+    monkeypatch.setenv("SAT_STATE_ROOT", str(tmp_path / "state"))
+    monkeypatch.setattr(cli, "_inspect_selected_model", ready_model_inspection)
     assert (
         main(
             [
@@ -1640,6 +2030,8 @@ def test_cli_can_return_adaptive_routing_to_one_strict_profile(
 ) -> None:
     path = tmp_path / "config.json"
     monkeypatch.setenv("SAT_CONFIG_PATH", str(path))
+    monkeypatch.setenv("SAT_STATE_ROOT", str(tmp_path / "state"))
+    monkeypatch.setattr(cli, "_inspect_selected_model", ready_model_inspection)
     save_user_configuration(
         UserConfiguration.model_validate(
             {
@@ -1826,6 +2218,7 @@ def test_saved_model_is_rechecked_without_a_persistent_openclaw_config(
     configuration_path = tmp_path / "config.json"
     configured = ready_user_configuration(model="deepseek/deepseek-v4-flash-vision-exp")
     monkeypatch.setenv("SAT_CONFIG_PATH", str(configuration_path))
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-only")
     save_user_configuration(configured, configuration_path)
     state_paths = cli.ProductStatePaths.below(tmp_path / "state")
     cli.ensure_product_state(state_paths)
@@ -1833,14 +2226,15 @@ def test_saved_model_is_rechecked_without_a_persistent_openclaw_config(
 
     def inspect_saved_model(
         _binary: Path,
-        model: str,
+        model: str | ModelProfile,
         *,
         config_path: Path,
         **_kwargs: object,
     ) -> OpenClawModelInspection:
         observed_paths.append(config_path)
+        model_ref = model.model if isinstance(model, ModelProfile) else model
         return OpenClawModelInspection(
-            model=model,
+            model=model_ref,
             available=True,
             context_window_tokens=1_000_000,
         )
@@ -1901,13 +2295,13 @@ def test_saved_model_is_rechecked_before_the_product_questions(
 
     with pytest.raises(
         cli.RuntimeConfigurationError,
-        match="selected model is not locally ready",
+        match="selected model configuration is not locally ready",
     ):
         cli._ensure_product_configuration(state_paths)
 
     output = capsys.readouterr().out
     assert output.count("Checking SAT's isolated model configuration") == 2
-    assert "Saved bootstrap model is not locally ready" in output
+    assert "Saved model configuration is not locally ready" in output
     assert "Model configuration repair" in output
     assert "First-run model setup" not in output
 
@@ -2006,11 +2400,7 @@ def test_interactive_reconfigure_keeps_saved_model_over_discovered_default(
     monkeypatch.setattr(
         cli,
         "_inspect_selected_model",
-        lambda _binary, model, **_kwargs: OpenClawModelInspection(
-            model=model,
-            available=True,
-            context_window_tokens=120_000,
-        ),
+        ready_model_inspection,
     )
 
     assert main(["configure"]) == 0
@@ -2048,7 +2438,7 @@ def test_saved_configuration_rejects_an_unsafe_persistent_openclaw_config(
         cli._ensure_product_configuration(state_paths)
 
 
-def test_unavailable_optional_model_profile_warns_without_resetting_configuration(
+def test_unavailable_optional_model_profile_blocks_without_resetting_configuration(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -2086,34 +2476,43 @@ def test_unavailable_optional_model_profile_warns_without_resetting_configuratio
     save_user_configuration(configured, configuration_path)
     state_paths = cli.ProductStatePaths.below(tmp_path / "state")
     cli.ensure_product_state(state_paths)
+
+    def inspect(
+        _binary: Path,
+        profile: ModelProfile,
+        **_kwargs: object,
+    ) -> OpenClawModelInspection:
+        return OpenClawModelInspection(
+            model=profile.model,
+            available=profile.model == "provider/default",
+            error=(
+                None if profile.model == "provider/default" else "route unavailable"
+            ),
+        )
+
+    monkeypatch.setattr(cli, "_inspect_selected_model", inspect)
     monkeypatch.setattr(
         cli,
-        "_inspect_selected_model",
-        lambda _binary, model, **_kwargs: OpenClawModelInspection(
-            model=model,
-            available=model == "provider/default",
-            error=None if model == "provider/default" else "route unavailable",
-        ),
+        "_discover_openclaw_default_model",
+        lambda *_args, **_kwargs: None,
     )
-    monkeypatch.setattr(
-        "builtins.input",
-        lambda _prompt: pytest.fail("optional profile must not restart setup"),
-    )
+    answers = iter(("no", ""))
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
 
-    result, inspections = cli._ensure_product_configuration(state_paths)
+    with pytest.raises(
+        cli.RuntimeConfigurationError,
+        match="provider/optional: route unavailable",
+    ):
+        cli._ensure_product_configuration(state_paths)
 
-    assert result == configured
-    assert tuple(item.model for item in inspections) == (
-        "provider/default",
-        "provider/optional",
-    )
     assert load_user_configuration(configuration_path) == configured
     output = capsys.readouterr().out
     assert "Checking SAT's isolated model configuration" in output
     assert "2 local catalog/auth routes" in output
-    assert "Optional model profiles are not locally ready" in output
+    assert "Saved model configuration is not locally ready" in output
     assert "provider/optional: route unavailable" in output
     assert "First-run model setup" not in output
+    assert "Model configuration repair" in output
 
 
 def test_provider_smoke_uses_the_selected_model_without_exposing_output(
@@ -2132,7 +2531,14 @@ def test_provider_smoke_uses_the_selected_model_without_exposing_output(
         observed["kwargs"] = kwargs
         return SimpleNamespace(
             returncode=0,
-            stdout=json.dumps({"ok": True, "outputs": [{"text": '{"status":"ok"}'}]}),
+            stdout=json.dumps(
+                {
+                    "ok": True,
+                    "provider": "provider",
+                    "model": "model",
+                    "outputs": [{"text": '{"status":"ok"}'}],
+                }
+            ),
         )
 
     monkeypatch.setattr(cli.subprocess, "run", fake_run)
@@ -2154,7 +2560,8 @@ def test_provider_smoke_uses_the_selected_model_without_exposing_output(
     assert observed["kwargs"]["shell"] is False
     assert observed["kwargs"]["capture_output"] is True
     assert observed["kwargs"]["env"]["OPENCLAW_STATE_DIR"] == str(state)
-    assert observed["kwargs"]["env"]["OPENCLAW_CONFIG_PATH"] == str(config)
+    effective_config = Path(observed["kwargs"]["env"]["OPENCLAW_CONFIG_PATH"])
+    assert effective_config != config
     assert observed["kwargs"]["env"]["OPENCLAW_AGENT_DIR"] == ""
     assert observed["kwargs"]["env"]["OPENCLAW_GATEWAY_URL"] == ""
     assert observed["kwargs"]["env"]["OPENCLAW_OAUTH_DIR"] == str(state / "credentials")
@@ -2175,7 +2582,14 @@ def test_provider_smoke_registers_the_deepseek_vision_compatibility_model(
         observed["payload"] = json.loads(effective_path.read_text(encoding="utf-8"))
         return SimpleNamespace(
             returncode=0,
-            stdout=json.dumps({"ok": True, "outputs": [{"text": '{"status":"ok"}'}]}),
+            stdout=json.dumps(
+                {
+                    "ok": True,
+                    "provider": "deepseek",
+                    "model": "deepseek-v4-flash-vision-exp",
+                    "outputs": [{"text": '{"status":"ok"}'}],
+                }
+            ),
         )
 
     monkeypatch.setattr(cli.subprocess, "run", fake_run)
@@ -2195,11 +2609,49 @@ def test_provider_smoke_registers_the_deepseek_vision_compatibility_model(
     assert payload["models"]["providers"]["deepseek"]["models"][0]["id"] == (
         "deepseek-v4-flash-vision-exp"
     )
-    assert "apiKey" not in json.dumps(payload)
+    assert payload["models"]["providers"]["deepseek"]["apiKey"] == (
+        "${DEEPSEEK_API_KEY}"
+    )
     assert observed["effective_path"] != configured_path
     assert observed["argv"][observed["argv"].index("--model") + 1] == (
         "deepseek/deepseek-v4-flash-vision-exp"
     )
+
+
+def test_provider_smoke_rejects_silent_route_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        cli.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "ok": True,
+                    "provider": "fallback",
+                    "model": "other-model",
+                    "outputs": [{"text": '{"status":"ok"}'}],
+                }
+            ),
+        ),
+    )
+    state = tmp_path / "state"
+    state.mkdir()
+    config = state / "openclaw.json"
+    config.write_text("{}", encoding="utf-8")
+
+    with pytest.raises(
+        cli.RuntimeConfigurationError,
+        match="route other than the frozen profile",
+    ):
+        cli._run_provider_smoke(
+            Path("/opt/openclaw"),
+            "provider/model",
+            state_dir=state,
+            config_path=config,
+        )
 
 
 def test_model_inspection_materializes_compatibility_without_persistent_config(

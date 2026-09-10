@@ -787,6 +787,7 @@ def _dynamic_prompt_context(inputs: DynamicAgentPromptInputs) -> dict[str, objec
             "dependencies": list(agent.dependencies),
             "model_route_id": route.id,
             "model": route.model,
+            "runtime_profile_sha256": route.runtime_profile_sha256,
         },
         "task_brief": inputs.task_brief.model_dump(mode="json"),
         "review_boundary_definitions": review_boundary_definition_map(),

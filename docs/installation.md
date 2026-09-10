@@ -250,15 +250,18 @@ On the first configured run, SAT then:
 
 1. Explains that SAT uses its own isolated OpenClaw provider state and that any
    existing OpenClaw remains untouched;
-2. Offers to open provider-credential setup inside that isolated state;
-3. Reads only SAT's isolated default model without probing the provider and
-   asks the user to confirm or replace the exact `provider/model` reference;
-4. Announces and checks that the exact selection has a local catalog/auth route
-   without generating content, allows up to 90 seconds for a cold local check,
-   and gives a corrective configuration path when it does not complete;
-5. Saves that model as one strict secret-free default profile in SAT
-   configuration;
-6. Offers one explicit minimal provider smoke check, disabled by default;
+2. Creates a private staged copy of SAT's isolated provider state and offers to
+   open OpenClaw-native credential setup there;
+3. Reads only the staged isolated default model without probing the provider
+   and asks the user to confirm or replace the exact `provider/model` reference;
+4. Compiles the selected route into SAT's transport-neutral, secret-free runtime
+   profile and checks its schema, endpoint policy, required capabilities, and
+   exact local catalog/auth identity without generating content;
+5. Atomically commits the validated SAT profile and staged provider state. A
+   cancellation or failure discards the stage and preserves the previous files
+   byte for byte;
+6. Reports local readiness separately, then offers one explicit minimal provider
+   smoke check, disabled by default because it can incur usage;
 7. Asks what the user wants to build;
 8. States the current small-project Python 3.12 execution profile and asks the
    user to confirm that runtime boundary;
@@ -289,21 +292,28 @@ SAT configuration is stored atomically with mode `0600` at:
 ${XDG_CONFIG_HOME:-$HOME/.config}/software-agent-team/config.json
 ```
 
-Schema version 9 stores one or more secret-free model profiles, the default
+Schema version 10 stores one or more secret-free model profiles, the default
 bootstrap profile, strict or policy routing, optional capability and stage
 overrides, and the only currently supported runtime switch condition:
 `provider_failure`. A profile contains a canonical OpenClaw `provider/model`,
-its authorized SAT Agent capabilities, deterministic integer priority, paired
+one versioned runtime profile and its canonical SHA-256 digest, its authorized
+SAT Agent capabilities, deterministic integer priority, paired
 input/output prices with their source and observation time, separate cache
 read/write prices with their own source and observation time, and context-window
-capacity with its source and observation time. Setup discovers these facts from
-the isolated runtime when possible, displays them, and lets the user correct
-prices. It asks for context only when discovery fails and never treats an
-unknown price as zero. Ordinary input excludes cached input; output already
-includes billable reasoning. If the catalog omits cache prices, SAT asks for
-both rates before the first task call. Enter zero for cache writes only when
-that route does not bill that bucket separately. The explicit zero confirmation
-is not a substitute for missing usage evidence. It never contains a credential.
+capacity with its source and observation time. The runtime profile declares the
+provider-native model ID, native/remote/local endpoint class, API transport,
+base URL where applicable, credential reference, context and output limits,
+modalities, and relevant tool/streaming capabilities. It never contains a
+credential value.
+
+Setup discovers non-secret facts from the isolated runtime when possible,
+displays them, and lets the user correct prices. It asks for context only when
+discovery fails and never treats an unknown price as zero. Ordinary input
+excludes cached input; output already includes billable reasoning. If the
+catalog omits cache prices, SAT asks for both rates before the first task call.
+Enter zero for cache writes only when that route does not bill that bucket
+separately. The explicit zero confirmation is not a substitute for missing
+usage evidence.
 
 Before task authorization, the route summary shows all four frozen rates
 (uncached input, output, cache read, and cache write), including the independent
@@ -322,8 +332,8 @@ The example rates are illustrative, not provider pricing advice.
 The same configuration may contain a positive adaptive `max_concurrency`
 and `compact`, `standard`, or `detailed` progress visibility. The
 guided first-use flow writes one strict default profile and uses controller
-defaults for other fields. Existing schema-v1 through schema-v8 values migrate
-one way into schema 9; old price pairs are preserved and missing cache prices
+defaults for other fields. Existing schema-v1 through schema-v9 values migrate
+one way into schema 10; old price pairs are preserved and missing cache prices
 must be completed before another task, not silently set to zero;
 the former scalar model and price fields become the default profile rather
 than a second source of truth.
@@ -348,16 +358,31 @@ OpenClaw profile. Credentials may instead come from a trusted caller
 environment. They are excluded from SAT configuration, exports, generated
 projects, and run evidence.
 
-The pinned runtime may not yet list every explicitly supported provider model.
-For a reviewed compatibility case, SAT adds versioned routing and model
-metadata to its private run configuration without copying a credential. An
-available trusted provider environment variable is represented only by its
-variable name; otherwise OpenClaw resolves the provider through SAT's isolated
-auth profiles. SAT checks the resulting exact model locally before continuing.
-The persistent `openclaw.json` file is optional: when it is absent, SAT
-materializes a private, temporary, secret-free model-check configuration from
-the saved profile and its versioned compatibility data. File presence is not a
-configuration-complete flag. A present symlink or non-regular file is rejected.
+Every saved route compiles through one runtime-profile registry. An
+OpenClaw-native route delegates transport and authentication to SAT's isolated
+OpenClaw state. A reviewed SAT preset or user-supplied remote/local route
+instead records an explicit API, endpoint class, base URL, provider-native model
+ID, capabilities, and only a credential reference. The same frozen profile and
+digest drive setup validation, later startup checks, provider smoke, Planning,
+dynamic execution, telemetry validation, and reports. There is no
+consumer-specific model-name fallback.
+
+The accepted transport values are `openai-completions`, `openai-responses`,
+`openai-chatgpt-responses`, `anthropic-messages`, `google-generative-ai`,
+`google-vertex`, `github-copilot`, `bedrock-converse-stream`, `ollama`, and
+`azure-openai-responses`. A custom route must explicitly declare tool support.
+Remote endpoints require HTTPS, a public host, and a non-empty credential
+environment variable; embedded credentials, query strings, fragments, and
+private hosts are rejected. Local endpoints require an explicit `local` marker
+and an HTTP(S) loopback or private host. Declaring a local provider does not
+grant network access to Agent sandboxes.
+
+The persistent `openclaw.json` file is optional. SAT materializes a private,
+temporary, secret-free effective configuration from the frozen profile for each
+local check or invocation. A present symlink or non-regular private config is
+rejected. Credential values remain in OpenClaw's private auth store or the
+trusted caller environment and never enter the effective config, profile, or
+digest.
 
 Reconfigure or inspect the secret-free values with:
 
@@ -366,25 +391,49 @@ sat configure
 sat configure --show
 ```
 
-Scripted product setup needs only a model:
+An OpenClaw-native route or reviewed SAT preset needs only a model. For example,
+the current DeepSeek V4.1 Flash preset uses `DEEPSEEK_API_KEY` from the trusted
+caller environment:
 
 ```bash
-sat configure --non-interactive --model provider/model
+export DEEPSEEK_API_KEY='<provider key>'
+sat configure --non-interactive --model deepseek/deepseek-flash
 ```
 
-Non-interactive configuration records the requested reference; the next
-`sat` launch validates its exact catalog/auth route before asking project
-questions. Every later launch repeats that local validation without reopening
-the configuration dialogue while the saved bootstrap profile remains ready.
-Interactive `sat configure` performs validation before saving. If a saved
-bootstrap route becomes unavailable, SAT enters an explicit repair dialogue;
-the saved model remains the proposed value even when OpenClaw reports a
-different default, so pressing Enter cannot silently switch providers or
-models. Normal startup blocks only when the default bootstrap profile is
-unavailable.
-It warns about an unavailable optional profile without deleting or resetting
-the saved policy; if Planning selects that profile, run preflight stops before
-the first execution Agent call.
+Configure a custom OpenAI Responses endpoint through the same ordinary command,
+without editing a run JSON or adding model-specific Python code:
+
+```bash
+export QWEN_API_KEY='<provider key>'
+sat configure --non-interactive \
+  --model private/qwen \
+  --profile-api default=openai-responses \
+  --profile-endpoint-kind default=remote \
+  --profile-base-url default=https://models.example/v1 \
+  --profile-native-model-id default=qwen-runtime-id \
+  --profile-credential-env default=QWEN_API_KEY \
+  --profile-context-window-tokens default=120000 \
+  --profile-max-output-tokens default=16384 \
+  --profile-input-modalities default=text \
+  --profile-supports-tools default=true
+```
+
+Use `anthropic-messages` in `--profile-api` for an Anthropic Messages endpoint.
+A local Ollama route uses `--profile-api default=ollama`,
+`--profile-endpoint-kind default=local`, and a local URL such as
+`--profile-base-url default=http://127.0.0.1:11434`; it does not require a
+credential flag unless that local service does.
+
+Both interactive and non-interactive configuration validate every resulting
+profile before saving. A successful command prints `local routes validated;
+live check not run`; it has not spent provider tokens. A missing credential,
+unknown transport, unsafe endpoint, absent tool capability, unavailable exact
+model route, cancellation, or other validation failure prints no success and
+preserves the previous configuration. Every later launch repeats the same local
+validation without reopening setup while all saved routes remain ready. If a
+saved route becomes unavailable, SAT enters explicit repair; the saved model
+remains the proposed value even when OpenClaw reports a different default, so
+pressing Enter cannot silently switch providers or models.
 
 Pricing, additional model profiles, route policy, adaptive maximum concurrency,
 and progress visibility are advanced configuration and are not part of normal

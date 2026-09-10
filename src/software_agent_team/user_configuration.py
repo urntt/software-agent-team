@@ -20,7 +20,7 @@ from software_agent_team.teams import (
     ModelSwitchCondition,
 )
 
-USER_CONFIGURATION_SCHEMA_VERSION = 9
+USER_CONFIGURATION_SCHEMA_VERSION = 10
 USER_CONFIGURATION_ENVIRONMENT_VARIABLE = "SAT_CONFIG_PATH"
 
 
@@ -461,6 +461,16 @@ def load_user_configuration(
         notice = (
             "configuration schema v8 prices were preserved; missing cache rates "
             "must be confirmed before a new task"
+        )
+        if on_migration is None:
+            warnings.warn(notice, UserWarning, stacklevel=2)
+        else:
+            on_migration(notice)
+    if payload.get("schema_version") == 9:
+        payload = {**payload, "schema_version": USER_CONFIGURATION_SCHEMA_VERSION}
+        notice = (
+            "configuration schema v9 model routes were migrated to immutable "
+            "transport profiles; provider credentials remain outside SAT config"
         )
         if on_migration is None:
             warnings.warn(notice, UserWarning, stacklevel=2)

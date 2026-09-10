@@ -250,6 +250,15 @@ def test_noninteractive_profile_cache_price_configuration(
     path = tmp_path / "config.json"
     monkeypatch.setenv("SAT_CONFIG_PATH", str(path))
     monkeypatch.setenv("SAT_STATE_ROOT", str(tmp_path / "state"))
+    monkeypatch.setattr(
+        cli,
+        "_inspect_selected_model",
+        lambda _binary, profile, **_kwargs: OpenClawModelInspection(
+            model=profile.model,
+            runtime_profile_sha256=profile.runtime_profile_sha256,
+            available=True,
+        ),
+    )
     assert (
         cli.main(
             [

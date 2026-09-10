@@ -20,6 +20,16 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from software_agent_team.configuration import load_openclaw_template
 from software_agent_team.model_costs import CachePriceSupport, CachePricing
 from software_agent_team.model_metadata import ModelMetadataSource
+from software_agent_team.model_routing import ModelProfile
+from software_agent_team.model_runtime import (
+    ModelApi,
+    ModelEndpointKind,
+    ModelRuntimeProfile,
+    has_runtime_profile_preset,
+    openclaw_agent_model_settings,
+    openclaw_provider_payload,
+    runtime_profile_for_model,
+)
 from software_agent_team.openclaw_runtime import isolated_openclaw_environment
 from software_agent_team.submissions import (
     ARTIFACT_SUBMISSION_PLUGIN_ID,
@@ -42,47 +52,7 @@ PREFLIGHT_COMMAND_TIMEOUT_SECONDS = 30
 MODEL_INSPECTION_TIMEOUT_SECONDS = 90
 
 
-_DEEPSEEK_VISION_MODEL = "deepseek/deepseek-v4-flash-vision-exp"
-_DEEPSEEK_ARTIFACT_TOOL_CHOICE = {
-    "type": "function",
-    "function": {"name": ARTIFACT_SUBMISSION_TOOL},
-}
 _ArtifactSubmissionMode = Literal["single_tool", "tool_loop"]
-_MODEL_COMPATIBILITY: dict[str, dict[str, Any]] = {
-    _DEEPSEEK_VISION_MODEL: {
-        "agent": {
-            "params": {
-                "maxTokens": 16_384,
-                "extra_body": {"thinking": {"type": "disabled"}},
-            }
-        },
-        "artifact_submission": {
-            "single_tool_choice": _DEEPSEEK_ARTIFACT_TOOL_CHOICE,
-            "tool_loop_choice": "required",
-        },
-        "provider_id": "deepseek",
-        "credential_env": "DEEPSEEK_API_KEY",
-        "provider": {
-            "baseUrl": "https://api.deepseek.com",
-            "api": "openai-completions",
-            "models": [
-                {
-                    "id": "deepseek-v4-flash-vision-exp",
-                    "name": "DeepSeek V4 Flash Vision Exp",
-                    "reasoning": True,
-                    "input": ["text", "image"],
-                    "contextWindow": 1_000_000,
-                    "maxTokens": 384_000,
-                    "compat": {
-                        "supportsUsageInStreaming": True,
-                        "supportsReasoningEffort": True,
-                        "maxTokensField": "max_tokens",
-                    },
-                }
-            ],
-        },
-    }
-}
 
 _CAPABILITY_TEMPLATE_ROLES = {
     AgentCapability.CLARIFICATION: "clarifier",
@@ -100,6 +70,12 @@ class OpenClawModelInspection(CachePriceSupport):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     model: str = Field(min_length=1)
+    runtime_profile_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    api: ModelApi | None = None
+    endpoint_kind: ModelEndpointKind | None = None
     available: bool
     local: bool | None = None
     provider_request_timeout_seconds: int | None = Field(default=None, ge=1)
@@ -277,57 +253,45 @@ class RuntimePreflight(BaseModel):
 def has_model_compatibility(model: str) -> bool:
     """Return whether SAT carries a catalog supplement for a pinned runtime."""
 
-    return model.strip() in _MODEL_COMPATIBILITY
+    return has_runtime_profile_preset(model)
 
 
 def _apply_model_compatibility(
     payload: dict[str, Any],
     model: str,
     *,
+    runtime_profile: ModelRuntimeProfile | None = None,
     artifact_submission_mode: _ArtifactSubmissionMode | None = None,
 ) -> None:
-    compatibility = _MODEL_COMPATIBILITY.get(model)
-    if compatibility is None:
-        return
+    profile = runtime_profile or runtime_profile_for_model(model)
+    provider_id, separator, _ = model.partition("/")
+    if not separator or profile.provider_id != provider_id:
+        raise RuntimeConfigurationError(
+            "model runtime profile does not match its provider/model reference"
+        )
 
-    agents = payload.setdefault("agents", {})
-    defaults = agents.setdefault("defaults", {})
-    agent_models = defaults.setdefault("models", {})
-    if not isinstance(agent_models, dict):
-        raise RuntimeConfigurationError("OpenClaw Agent model settings are invalid")
-    model_settings = agent_models.setdefault(
-        model,
-        json.loads(json.dumps(compatibility["agent"])),
+    compiled_agent = openclaw_agent_model_settings(
+        profile,
+        artifact_submission_mode=artifact_submission_mode,
+        artifact_tool_name=ARTIFACT_SUBMISSION_TOOL,
     )
-    if not isinstance(model_settings, dict):
-        raise RuntimeConfigurationError("OpenClaw Agent model settings are invalid")
-    if artifact_submission_mode is not None:
-        submission_settings = compatibility.get("artifact_submission")
-        choice_key = f"{artifact_submission_mode}_choice"
-        if not isinstance(submission_settings, dict) or choice_key not in (
-            submission_settings
-        ):
+    if compiled_agent is not None:
+        agents = payload.setdefault("agents", {})
+        defaults = agents.setdefault("defaults", {})
+        agent_models = defaults.setdefault("models", {})
+        if not isinstance(agent_models, dict):
+            raise RuntimeConfigurationError("OpenClaw Agent model settings are invalid")
+        configured_agent = agent_models.get(model)
+        if configured_agent is None:
+            agent_models[model] = compiled_agent
+        elif configured_agent != compiled_agent:
             raise RuntimeConfigurationError(
-                "artifact-submission model compatibility is invalid"
+                f"OpenClaw Agent model settings conflict with profile: {model}"
             )
-        params = model_settings.setdefault("params", {})
-        if not isinstance(params, dict):
-            raise RuntimeConfigurationError("OpenClaw Agent model params are invalid")
-        configured_extra_body = params.setdefault("extra_body", {})
-        if not isinstance(configured_extra_body, dict):
-            raise RuntimeConfigurationError(
-                "OpenClaw Agent model extra_body is invalid"
-            )
-        required_choice = submission_settings[choice_key]
-        if (
-            "tool_choice" in configured_extra_body
-            and configured_extra_body["tool_choice"] != required_choice
-        ):
-            raise RuntimeConfigurationError(
-                "OpenClaw Agent model params conflict with mandatory "
-                f"artifact submission: {model} tool_choice"
-            )
-        configured_extra_body["tool_choice"] = json.loads(json.dumps(required_choice))
+
+    provider_payload = openclaw_provider_payload(profile)
+    if provider_payload is None:
+        return
 
     models = payload.setdefault("models", {})
     if not isinstance(models, dict):
@@ -336,11 +300,6 @@ def _apply_model_compatibility(
     providers = models.setdefault("providers", {})
     if not isinstance(providers, dict):
         raise RuntimeConfigurationError("OpenClaw model providers are invalid")
-    provider_id = compatibility["provider_id"]
-    provider_payload = json.loads(json.dumps(compatibility["provider"]))
-    credential_env = compatibility.get("credential_env")
-    if isinstance(credential_env, str) and os.environ.get(credential_env, "").strip():
-        provider_payload["apiKey"] = f"${{{credential_env}}}"
     configured_provider = providers.get(provider_id)
     if configured_provider is None:
         providers[provider_id] = provider_payload
@@ -350,8 +309,14 @@ def _apply_model_compatibility(
             f"OpenClaw provider configuration is invalid: {provider_id}"
         )
     for key, value in provider_payload.items():
-        if key != "models":
-            configured_provider.setdefault(key, value)
+        if key == "models":
+            continue
+        configured_value = configured_provider.get(key)
+        if configured_value is not None and configured_value != value:
+            raise RuntimeConfigurationError(
+                f"OpenClaw provider conflicts with runtime profile: {provider_id}"
+            )
+        configured_provider[key] = value
     configured_models = configured_provider.setdefault("models", [])
     if not isinstance(configured_models, list):
         raise RuntimeConfigurationError(
@@ -450,11 +415,24 @@ def _persist_private_json(
 def materialize_model_check_configuration(
     destination: Path,
     *,
-    model: str,
+    model: str | None = None,
+    profile: ModelProfile | None = None,
 ) -> Path:
-    """Write a secret-free config for local catalog checks and approved smoke."""
+    """Write one profile-derived config for local catalog checks and smoke."""
 
-    normalized = model.strip()
+    if profile is None and model is None:
+        raise RuntimeConfigurationError("model check requires one model profile")
+    if profile is not None:
+        if model is not None and model.strip() != profile.model:
+            raise RuntimeConfigurationError(
+                "model check profile differs from its model reference"
+            )
+        normalized = profile.model
+        runtime_profile = profile.runtime_profile
+    else:
+        assert model is not None
+        normalized = model.strip()
+        runtime_profile = runtime_profile_for_model(normalized)
     provider, separator, model_id = normalized.partition("/")
     if not provider or not separator or not model_id:
         raise RuntimeConfigurationError(
@@ -467,7 +445,11 @@ def materialize_model_check_configuration(
             }
         }
     }
-    _apply_model_compatibility(payload, normalized)
+    _apply_model_compatibility(
+        payload,
+        normalized,
+        runtime_profile=runtime_profile,
+    )
     return _persist_private_json(
         payload,
         destination,
@@ -481,6 +463,7 @@ def inspect_openclaw_model(
     openclaw_state_dir: Path,
     config_path: Path,
     model: str,
+    runtime_profile: ModelRuntimeProfile | None = None,
     timeout_seconds: int = MODEL_INSPECTION_TIMEOUT_SECONDS,
 ) -> OpenClawModelInspection:
     """Check one exact local model catalog/auth route without generation."""
@@ -493,6 +476,10 @@ def inspect_openclaw_model(
         )
     if timeout_seconds < 1:
         raise RuntimeConfigurationError("model inspection timeout must be positive")
+    if runtime_profile is not None and runtime_profile.provider_id != provider:
+        raise RuntimeConfigurationError(
+            "model inspection runtime profile differs from its model reference"
+        )
     if not openclaw_binary.is_file() or not os.access(openclaw_binary, os.X_OK):
         raise RuntimeConfigurationError("OpenClaw binary is unavailable")
     if not config_path.is_file() or config_path.is_symlink():
@@ -535,6 +522,13 @@ def inspect_openclaw_model(
     if result.returncode != 0:
         return OpenClawModelInspection(
             model=normalized,
+            runtime_profile_sha256=(
+                runtime_profile.sha256 if runtime_profile is not None else None
+            ),
+            api=(runtime_profile.api if runtime_profile is not None else None),
+            endpoint_kind=(
+                runtime_profile.endpoint_kind if runtime_profile is not None else None
+            ),
             available=False,
             error=f"OpenClaw model listing exited with status {result.returncode}",
         )
@@ -543,6 +537,13 @@ def inspect_openclaw_model(
     except json.JSONDecodeError:
         return OpenClawModelInspection(
             model=normalized,
+            runtime_profile_sha256=(
+                runtime_profile.sha256 if runtime_profile is not None else None
+            ),
+            api=(runtime_profile.api if runtime_profile is not None else None),
+            endpoint_kind=(
+                runtime_profile.endpoint_kind if runtime_profile is not None else None
+            ),
             available=False,
             error="OpenClaw model listing returned invalid JSON",
         )
@@ -550,6 +551,13 @@ def inspect_openclaw_model(
     if not isinstance(entries, list):
         return OpenClawModelInspection(
             model=normalized,
+            runtime_profile_sha256=(
+                runtime_profile.sha256 if runtime_profile is not None else None
+            ),
+            api=(runtime_profile.api if runtime_profile is not None else None),
+            endpoint_kind=(
+                runtime_profile.endpoint_kind if runtime_profile is not None else None
+            ),
             available=False,
             error="OpenClaw model listing omitted its model catalog",
         )
@@ -561,6 +569,13 @@ def inspect_openclaw_model(
     if len(matches) != 1:
         return OpenClawModelInspection(
             model=normalized,
+            runtime_profile_sha256=(
+                runtime_profile.sha256 if runtime_profile is not None else None
+            ),
+            api=(runtime_profile.api if runtime_profile is not None else None),
+            endpoint_kind=(
+                runtime_profile.endpoint_kind if runtime_profile is not None else None
+            ),
             available=False,
             error=f"OpenClaw does not recognize the configured model: {normalized}",
         )
@@ -568,6 +583,13 @@ def inspect_openclaw_model(
     if matched.get("available") is not True:
         return OpenClawModelInspection(
             model=normalized,
+            runtime_profile_sha256=(
+                runtime_profile.sha256 if runtime_profile is not None else None
+            ),
+            api=(runtime_profile.api if runtime_profile is not None else None),
+            endpoint_kind=(
+                runtime_profile.endpoint_kind if runtime_profile is not None else None
+            ),
             available=False,
             error=(
                 "OpenClaw has no available catalog/auth route for the configured "
@@ -647,6 +669,13 @@ def inspect_openclaw_model(
             )
     return OpenClawModelInspection(
         model=normalized,
+        runtime_profile_sha256=(
+            runtime_profile.sha256 if runtime_profile is not None else None
+        ),
+        api=(runtime_profile.api if runtime_profile is not None else None),
+        endpoint_kind=(
+            runtime_profile.endpoint_kind if runtime_profile is not None else None
+        ),
         available=True,
         local=raw_local if isinstance(raw_local, bool) else None,
         provider_request_timeout_seconds=provider_timeout,
@@ -954,6 +983,7 @@ def materialize_run_configuration(
     sandbox_tmpfs_mb: int = 128,
     sandbox_user: str | None = None,
     model: str | None = None,
+    model_runtime_profile: ModelRuntimeProfile | None = None,
     team_plan: TeamPlan | None = None,
     bootstrap_capability: AgentCapability | None = None,
 ) -> Path:
@@ -983,6 +1013,10 @@ def materialize_run_configuration(
         model = model.strip()
         if not model:
             raise RuntimeConfigurationError("run model must not be blank")
+    if model is None and model_runtime_profile is not None:
+        raise RuntimeConfigurationError(
+            "a runtime profile cannot be supplied without its model reference"
+        )
     if team_plan is not None and bootstrap_capability is not None:
         raise RuntimeConfigurationError(
             "runtime configuration cannot mix a TeamPlan with bootstrap Planning"
@@ -1003,6 +1037,14 @@ def materialize_run_configuration(
                 "run model differs from the TeamPlan default route"
             )
         model = default_route.model
+        if (
+            model_runtime_profile is not None
+            and model_runtime_profile != default_route.runtime_profile
+        ):
+            raise RuntimeConfigurationError(
+                "the runtime profile differs from the TeamPlan default route"
+            )
+        model_runtime_profile = default_route.runtime_profile
     try:
         resolved_workspace = workspace.resolve(strict=True)
     except OSError as error:
@@ -1040,6 +1082,7 @@ def materialize_run_configuration(
         _apply_model_compatibility(
             payload,
             model,
+            runtime_profile=model_runtime_profile,
             artifact_submission_mode=artifact_submission_mode,
         )
     if team_plan is not None:
@@ -1047,6 +1090,7 @@ def materialize_run_configuration(
             _apply_model_compatibility(
                 payload,
                 route.model,
+                runtime_profile=route.runtime_profile,
                 artifact_submission_mode="tool_loop",
             )
     sandbox = defaults["sandbox"]
@@ -1167,11 +1211,16 @@ def inspect_runtime_preflight(
     sandbox_image: str,
     expected_sandbox_image_id: str | None = None,
     expected_model: str | None = None,
+    expected_runtime_profile: ModelRuntimeProfile | None = None,
     timeout_seconds: int = PREFLIGHT_COMMAND_TIMEOUT_SECONDS,
     model_inspection_timeout_seconds: int = MODEL_INSPECTION_TIMEOUT_SECONDS,
 ) -> RuntimePreflight:
     """Check config, selected model, and sandbox execution without model calls."""
 
+    if expected_model is None and expected_runtime_profile is not None:
+        raise RuntimeConfigurationError(
+            "runtime preflight profile requires an expected model"
+        )
     if timeout_seconds < 1:
         raise RuntimeConfigurationError("preflight timeout must be positive")
     if model_inspection_timeout_seconds < 1:
@@ -1217,11 +1266,27 @@ def inspect_runtime_preflight(
                 openclaw_state_dir=openclaw_state_dir,
                 config_path=runtime_config,
                 model=expected_model,
+                runtime_profile=expected_runtime_profile,
                 timeout_seconds=model_inspection_timeout_seconds,
             )
         else:
             model_inspection = OpenClawModelInspection(
                 model=expected_model,
+                runtime_profile_sha256=(
+                    expected_runtime_profile.sha256
+                    if expected_runtime_profile is not None
+                    else None
+                ),
+                api=(
+                    expected_runtime_profile.api
+                    if expected_runtime_profile is not None
+                    else None
+                ),
+                endpoint_kind=(
+                    expected_runtime_profile.endpoint_kind
+                    if expected_runtime_profile is not None
+                    else None
+                ),
                 available=False,
                 error="OpenClaw configuration is invalid",
             )

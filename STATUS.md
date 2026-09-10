@@ -64,6 +64,34 @@ lifecycle-owner Git blobs are identical at `v0.1.2`.
 
 ## Current Development Head
 
+Configuration schema v10 now embeds a versioned, secret-free
+`ModelRuntimeProfile` in every saved `ModelProfile`. The frozen profile and its
+canonical digest carry provider-native identity, explicit OpenClaw transport,
+native/remote/local endpoint policy, credential reference, model limits, and
+capabilities through route resolution, TeamPlan persistence, startup
+inspection, provider smoke, Planning, dynamic execution, telemetry validation,
+prompts, and reports. Reviewed presets cover both the earlier DeepSeek Vision
+route and `deepseek/deepseek-flash`; custom endpoints no longer require a
+per-model Python branch or handwritten run configuration.
+
+First use, interactive reconfiguration, and non-interactive reconfiguration
+now share validate-before-save semantics. Interactive OpenClaw changes are made
+in a staged private state copy; every resulting route must pass schema,
+endpoint, credential, capability, and local catalog/auth checks before the SAT
+configuration and provider state are committed. Failure or cancellation
+restores the previous files exactly and cannot print success. Custom OpenAI
+Completions, OpenAI Responses, Anthropic Messages, and local Ollama profiles
+compile through the same materializer and pass the pinned OpenClaw config
+validator. Focused live checks with DeepSeek V4.1 Flash passed exact-route
+provider smoke, Planning single-tool submission, and a dynamic tool loop with
+no fallback. These checks establish the provider integration boundary but are
+not a managed ordinary-user product campaign.
+
+The final pre-commit canonical gate completed doctor, format, lint, all 1,477
+tests, and cleanup in 840.33 seconds. Its report recorded 356,044,800 bytes peak
+aggregate RSS, no new cgroup or kernel OOM event, and no residual stage
+processes, process leases, sandbox containers, volumes, or private test tree.
+
 The current role-specialization implementation extends the line anchored by
 `c36090d543fe6bdd230c88d8de7684082733b1bb` through code candidate
 `0dc0af603a8368dfe61fdbf22362755025dfaf89`. Planning schema v19 keeps

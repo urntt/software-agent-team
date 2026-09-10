@@ -408,14 +408,45 @@ gate use that immutable ID; preflight fails if the configured tag changes
 between resolution and workspace setup or if the restricted probe cannot run
 its tool helper and remain alive.
 
-## Model Catalog Compatibility
+## Model Runtime Profiles and Catalog Compatibility
 
-`src/software_agent_team/runtime_configuration.py` owns reviewed catalog
-supplements for exact provider models absent from the pinned OpenClaw release.
-A supplement must remain narrow, versioned in Git, secret-free, and covered by
-materialization plus exact-availability tests. Record only verified routing,
-modality, context, output, and compatibility metadata; do not add a credential,
-mutable fallback, or guessed price.
+`src/software_agent_team/model_runtime.py` is the sole owner of the
+transport-neutral runtime profile and reviewed presets. The immutable,
+secret-free contract includes provider and native model identity, explicit API,
+native/remote/local endpoint policy, credential reference, model limits,
+modalities, transport capabilities, and artifact-submission behavior.
+`ModelProfile` embeds that contract and its canonical digest; route resolution,
+TeamPlan persistence, startup inspection, provider smoke, Planning, dynamic
+execution, telemetry checks, prompts, and reports must all retain the same
+profile and digest. Do not reconstruct transport facts from a model name in a
+consumer.
+
+`src/software_agent_team/runtime_configuration.py` is the compiler from that
+profile into a pinned OpenClaw configuration. It may emit only a credential
+environment reference, never a credential value. `cli.py` owns the
+validate-before-save transaction: interactive OpenClaw changes occur in a
+staged private state tree, every resulting route is compiled and locally
+validated before commit, and a failure or cancellation preserves the prior
+user configuration and provider state. Non-interactive configuration uses the
+same profile compiler and validation boundary before its atomic user-config
+replace.
+
+A reviewed preset for an exact model absent from the pinned OpenClaw catalog
+must remain narrow, versioned in Git, secret-free, and covered by materialization
+plus exact-availability tests. Record only verified routing, modality, context,
+output, and compatibility metadata; do not add a credential value, mutable
+fallback, or guessed price. User-supplied custom routes use the same schema
+rather than adding another model-name branch.
+
+The pinned transport matrix must compile and pass the real OpenClaw config
+validator for `openai-completions`, `openai-responses`,
+`anthropic-messages`, and local `ollama`. The matrix deliberately does not make
+an external provider call. Separately test unknown transports, remote HTTP or
+private endpoints, missing credential references/values, missing tool
+capability, exact rollback, and secret exclusion. A provider-backed check is
+needed only for a reviewed live route and must verify the exact provider/model
+telemetry for model inspection, provider smoke, single-submission Planning, and
+the dynamic tool loop.
 
 A compatibility entry may also carry provider-native choices for the
 invocation-bound artifact protocol. Apply a named terminal-function choice only
@@ -676,6 +707,7 @@ src/software_agent_team/
   invocation.py                Controller-owned call accounting and evidence
   loopback_validation.py       Controlled real-transport lifecycle oracle
   model_metadata.py            Attributable model price/context source values
+  model_runtime.py             Frozen provider/model transport profiles and compiler inputs
   openclaw_session_evidence.py Pinned current-turn tool-evidence extraction
   openclaw_runtime.py          Private OpenClaw path and environment isolation
   paths.py                     User-local product state resolution
