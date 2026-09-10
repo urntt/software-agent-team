@@ -82,20 +82,27 @@ On first use, SAT guides you through:
    the result. When a short request leaves them material and unknown, SAT asks
    about target users, the primary workflow, or whether the delivery is a
    throwaway prototype, reusable local product, or releasable small product;
-   each question shows the missing information and consequence first;
+   each focused question shows its exact decision scope and whether it was
+   selected by the Planner or required by Controller validation. Suggested
+   answers carry exact values for only that scope. Model-authored wording and
+   rationale remain available as advisory details, but cannot become a system
+   prerequisite or widen the answer's authority;
 7. One overview that begins with the approved audience, killer workflow,
    delivery maturity, usability/operational/delivery expectations, non-goals,
    and their architecture, team, cost, and delivery effects, followed by
    requirements, explicit assumptions,
-   requirement-to-evidence traceability, acceptance criteria, controller-owned
-   execution-profile constraints separated from additional task constraints,
+   requirement-to-evidence traceability, acceptance criteria, a compact count
+   of fixed controller-owned details separated from additional task constraints,
    Agent work assignments with their controller-derived write or read-only
    authority, proposed Agents, dependencies, permissions, explicit Review entry
-   obligations for absolute guarantees and the exact meaning of each boundary,
+   obligations for absolute guarantees,
    resolved model profiles and fallback authority, time authority and liveness
-   policy, concurrency, iterations, and budgets; and
-8. Approval, a natural-language revision request, a supported safe edit, or
-   cancellation before any execution Agent is created.
+   policy, concurrency, iterations, and budgets;
+8. An option to show or hide the complete fixed policy, execution-profile
+   constraints, and Review boundary definitions without changing the proposal
+   or calling a model; and
+9. Approval, an explicit natural-language revision request, a supported safe
+   edit, or cancellation before any execution Agent is created.
 
 After approval, SAT first persists a second self-check covering every approved
 route, Agent capability, permission, runtime, sandbox, workspace, and delivery

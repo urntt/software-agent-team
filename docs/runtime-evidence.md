@@ -601,6 +601,16 @@ seconds. Approval revalidates that authority against the TeamPlan at the
 execution boundary.
 The bootstrap Planner cannot create Agents or change lifecycle state.
 
+Planning schema v17 persists Controller-owned admission beside every current
+question turn. The admission distinguishes a Planner-selected task suggestion
+from a Controller-required recovery, binds the exact ProductDefinition scope,
+and records the invariant IDs behind a required recovery. Model-authored
+question prose never supplies this authority. Every ProductDefinition option in
+the current live response also supplies one exact value per declared dimension;
+selected values enter the in-memory transcript and proposal projection without
+trusting a combined label or model paraphrase. Planning v2 through v16 remain
+readable without adding admission evidence or changing historical hashes.
+
 Planning schema v16 adds the canonical Controller projection from the runtime
 Agent DAG to cross-Agent task dependencies. This keeps the persisted proposal,
 implementation plan, approval overview, Agent prompts, and runtime binding on

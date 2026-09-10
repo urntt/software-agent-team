@@ -162,8 +162,12 @@ product requirement on the user's behalf.
 If a proposal is returned before a material user-owned ProductDefinition
 decision exists, the controller does not expose that field to model correction.
 It requests one atomic question for the missing dimension, records the answer in
-the ordinary transcript, and revalidates the complete proposal. Independent
-model-owned defects remain subject to the normal typed correction contract.
+the ordinary transcript, and revalidates the complete proposal. The persisted
+question admission marks this as `controller_requirement` and cites the exact
+invariant that requires user authority. A question the Planner chooses before
+such a validation failure is instead `planner_suggestion`; its explanation is
+task advice, not a universal SAT prerequisite. Independent model-owned defects
+remain subject to the normal typed correction contract.
 
 When an answered question or Planner recommendation is represented in a
 ProductDefinition dimension but its required decision record does not exist,
@@ -184,14 +188,25 @@ match the mapping. This is an admission boundary, not a claim that deterministic
 code can infer the semantic value of arbitrary prose; ambiguous real tasks
 remain the usability test for under- and over-questioning.
 
+The model-authored question and the Controller-owned admission are separate
+records. For a ProductDefinition question, the ordinary interface leads with a
+Controller-owned dimension prompt, the exact admitted scope, and the admission
+source. It does not present the Planner's free-form rationale as policy. The
+user may reveal the original wording, rationale, claimed missing evidence,
+consequences, and suggestion notes as advisory details; revealing them changes
+neither the proposal nor the question's authority.
+
 A ProductDefinition question declares every dimension its answer is intended to
 resolve. Tightly coupled audience, workflow, and maturity choices may be grouped
-when every suggested option answers the complete declared bundle; unrelated
-decisions remain separate questions. The answer authorizes no undeclared
+when every suggested option supplies one exact typed value for every declared
+dimension, in the same order; unrelated decisions remain separate questions.
+The answer authorizes no undeclared
 dimension. If a custom answer leaves a declared value ambiguous, the controller
 returns only that missing value to focused clarification instead of inferring it.
-For statement dimensions, the controller projects the immutable transcript
-answer rather than accepting a model paraphrase as user wording. The question
+When the user selects a suggestion, the controller projects its typed
+per-dimension values rather than accepting either a combined label or a later
+model paraphrase as user wording. A custom answer remains attributable free
+text and must still satisfy the declared dimensions. The question
 text, rationale, missing evidence, consequences, choices, and declared bundle
 remain one correction authority unit, so a defect replaces the complete
 question rather than relabeling preserved wording through one field patch.
@@ -599,17 +614,26 @@ that graph and each Agent's inputs, expected output, and handoff. Completeness
 is deterministic; whether the presentation is understandable remains a real
 user test.
 
-The overview presents controller-owned execution-profile constraints separately
-from additional task-specific constraints proposed during Planning. The Planner
-is instructed not to repeat, paraphrase, shorten, or broaden the former. Both
-collections remain present in the compiled TaskBrief so source labeling improves
-the approval experience without discarding a material Planner addition.
+The default overview emphasizes task-specific product decisions, requirements,
+assumptions, risks, assignments, and approval boundaries. It presents a compact
+count of controller-owned execution-profile constraints, lifecycle safeguards,
+and Review boundary definitions separately from additional task-specific
+constraints proposed during Planning. The user can show or hide the complete
+fixed details with `f`; this is a presentation projection over the same proposal
+and therefore causes no model call, plan revision, or requirement change. The
+Planner is instructed not to repeat, paraphrase, shorten, or broaden fixed
+constraints. Both collections remain present in the compiled TaskBrief, so the
+compact default discards no material Planner addition or policy fact. When the
+renderer already supplies a stable requirement ID, it removes only an exactly
+matching leading ID from that requirement's description; it performs no fuzzy
+semantic deletion.
 
-The default editor supports natural-language revision and structured changes
-to requirements, priorities, Agent responsibilities, dependencies, and model
-preferences. Raw system prompts, arbitrary tool grants, and direct policy-file
-editing remain an advanced contributor surface. Even advanced changes pass the
-same controller validation.
+The default editor reserves `r` for an explicit user-requested semantic revision
+to requirements, priorities, Agent responsibilities, dependencies, or model
+preferences. The separate safe editor changes only supported concurrency,
+iteration, and model-profile fields without a model call. Raw system prompts,
+arbitrary tool grants, and direct policy-file editing remain an advanced
+contributor surface. Even advanced changes pass the same controller validation.
 
 Planning session status follows the product outcome. A terminally invalid
 initial dialogue is persisted as `failed`, while a completed invalid revision
@@ -1078,6 +1102,13 @@ deterministically deconflicts an echo whose model-owned relationship is still
 needed. The canonical profile text remains controller-owned, both task bindings
 are retained, and the raw response plus every normalization remain recorded in
 the Planning turn.
+Planning schema v17 adds Controller-owned question-admission evidence. It records
+whether a visible question is a Planner suggestion or a Controller-required
+recovery, binds the admitted ProductDefinition dimensions, and cites any
+Controller invariant that requires user authority. Suggested ProductDefinition
+answers now carry exact per-dimension values, so the ordinary interface and
+proposal compiler share one scope contract. Schema-v2 through schema-v16 records
+remain readable without invented admission fields.
 Planning schema v9 makes primary-workflow materiality mandatory for new
 proposals and their correction slots. Schema-v2 through schema-v8 records retain
 their original validation and canonical bytes; only historical preview may use

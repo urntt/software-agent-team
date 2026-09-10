@@ -69,16 +69,20 @@ from software_agent_team.planning import (
     PlanningIntegrityError,
     PlanningModelResponse,
     PlanningOption,
+    PlanningOptionValue,
     PlanningPolicy,
     PlanningProposal,
     PlanningProposalBody,
     PlanningProposalSource,
     PlanningQuestion,
+    PlanningQuestionAnswer,
+    PlanningQuestionOrigin,
     PlanningRequest,
     PlanningResponseKind,
     PlanningSessionStatus,
     PlanningStore,
     PlanningTurn,
+    PresentedPlanningQuestion,
     ProposedAgent,
     ProposedCriterion,
     ProposedTask,
@@ -451,11 +455,15 @@ def test_planning_overview_separates_constraint_authority_without_losing_data() 
         "Use only the standard library at runtime.",
     ]
     overview = render_planning_overview(preview)
-    assert "Execution-profile constraints (controller-owned):" in overview
+    assert "Fixed policy details: hidden" in overview
+    assert "Use the versioned uv environment" not in overview
     assert "Additional task constraints proposed by Planning:" in overview
     assert preview.planner_constraints == ("Use only the standard library at runtime.",)
-    assert overview.count("Use the versioned uv environment") == 1
     assert overview.count("Use only the standard library at runtime.") == 1
+    expanded = render_planning_overview(preview, include_fixed_policy=True)
+    assert "Execution-profile constraints (controller-owned):" in expanded
+    assert expanded.count("Use the versioned uv environment") == 1
+    assert expanded.count("Use only the standard library at runtime.") == 1
     assert "Product definition and scope:" in overview
     assert "target users [explicit_input]: developers" in overview
     assert "primary workflow [explicit_input]: checks Markdown links" in overview
@@ -467,7 +475,8 @@ def test_planning_overview_separates_constraint_authority_without_losing_data() 
     assert "Decisions and assumptions:" in overview
     assert "Planning recommendations requiring approval:" in overview
     assert "none beyond the user-owned source request shown above" in overview
-    assert "Non-negotiable Controller policy:" in overview
+    assert "Non-negotiable Controller policy:" not in overview
+    assert "Non-negotiable Controller policy:" in expanded
     assert "Requirement-to-evidence traceability:" in overview
     assert "AC_SCAN: writers=TASK_IMPLEMENT->cli_developer" in overview
     assert "independent verification=acceptance_tester" in overview
@@ -631,6 +640,12 @@ def product_intent_question_response() -> PlanningModelResponse:
                     id="individual_developer",
                     label="Individual developer",
                     description="One developer repeatedly scans personal notes.",
+                    product_definition_values=(
+                        PlanningOptionValue(
+                            dimension=ProductDefinitionDimension.TARGET_USERS,
+                            value="Individual developer",
+                        ),
+                    ),
                 ),
                 PlanningOption(
                     id="researchers",
@@ -638,6 +653,12 @@ def product_intent_question_response() -> PlanningModelResponse:
                     description=(
                         "Developers and researchers use the reports for local "
                         "Markdown collections."
+                    ),
+                    product_definition_values=(
+                        PlanningOptionValue(
+                            dimension=ProductDefinitionDimension.TARGET_USERS,
+                            value="Developers and researchers",
+                        ),
                     ),
                 ),
             ),
@@ -1043,7 +1064,96 @@ def test_product_question_declares_one_atomic_dimension() -> None:
         write=output.append,
     )(question)
     assert answer is not None
-    assert "Product definition affected: target_users" in output
+    assert answer.selected_option_id == "researchers"
+    assert answer.product_definition_values == (
+        PlanningOptionValue(
+            dimension=ProductDefinitionDimension.TARGET_USERS,
+            value="Developers and researchers",
+        ),
+    )
+    assert "Decision scope: target_users" in output
+    assert any("not a universal SAT prerequisite" in line for line in output)
+    assert not any(question.text in line for line in output)
+
+
+def test_product_question_option_values_must_match_exact_dimension_scope() -> None:
+    question = product_intent_question_response().question
+    assert question is not None
+    payload = question.model_dump(mode="json")
+    for option in payload["options"]:
+        option["product_definition_values"] = [
+            {"dimension": "delivery_maturity", "value": "usable local product"}
+        ]
+    parsed = PlanningQuestion.model_validate(payload)
+
+    with pytest.raises(PlanningError, match="option values must exactly match"):
+        planning.validate_question_admission(parsed)
+
+
+def test_product_question_shows_planner_prose_only_as_advisory_details() -> None:
+    question = product_intent_question_response().question
+    assert question is not None
+    answers = iter(("d", "2"))
+    output: list[str] = []
+
+    answer = planning._interactive_question_answerer(
+        read=lambda _prompt: next(answers),
+        write=output.append,
+    )(question)
+
+    assert answer is not None
+    details_index = output.index(
+        "Planner-authored advisory details (cannot expand scope):"
+    )
+    assert not any(question.text in line for line in output[:details_index])
+    assert any(question.text in line for line in output[details_index:])
+    assert answer.selected_option_id == "researchers"
+
+
+def test_product_question_renderer_cannot_widen_its_typed_scope() -> None:
+    question = product_intent_question_response().question
+    assert question is not None
+    widened = question.model_copy(
+        update={
+            "text": (
+                "Who will use this tool, and at what maturity should it be delivered?"
+            ),
+            "why": (
+                "A target user is a prerequisite for every SAT product-depth contract."
+            ),
+            "options": tuple(
+                option.model_copy(
+                    update={
+                        "label": option.label + " with releasable maturity",
+                        "description": (
+                            option.description
+                            + " Deliver it as a releasable small product."
+                        ),
+                    }
+                )
+                for option in question.options
+            ),
+        }
+    )
+    output: list[str] = []
+
+    answer = planning._interactive_question_answerer(
+        read=lambda _prompt: "1",
+        write=output.append,
+    )(widened)
+
+    assert answer is not None
+    rendered = "\n".join(output)
+    assert "Decision scope: target_users" in rendered
+    assert "not a universal SAT prerequisite" in rendered
+    assert "maturity" not in rendered.casefold()
+    assert "prerequisite for every SAT" not in rendered
+    assert answer.product_definition_values == (
+        PlanningOptionValue(
+            dimension=ProductDefinitionDimension.TARGET_USERS,
+            value="Individual developer",
+        ),
+    )
 
 
 def test_one_question_can_authorize_an_explicit_product_dimension_bundle(
@@ -1056,7 +1166,21 @@ def test_one_question_can_authorize_an_explicit_product_dimension_bundle(
             "product_definition_dimensions": (
                 ProductDefinitionDimension.TARGET_USERS,
                 ProductDefinitionDimension.PRIMARY_WORKFLOW,
-            )
+            ),
+            "options": tuple(
+                option.model_copy(
+                    update={
+                        "product_definition_values": (
+                            *option.product_definition_values,
+                            PlanningOptionValue(
+                                dimension=(ProductDefinitionDimension.PRIMARY_WORKFLOW),
+                                value="Repeatedly scan local Markdown collections",
+                            ),
+                        )
+                    }
+                )
+                for option in question.options
+            ),
         }
     )
     coordinator = AdaptivePlanningCoordinator(
@@ -1075,7 +1199,7 @@ def test_one_question_can_authorize_an_explicit_product_dimension_bundle(
         clock=AdvancingClock(),
     )
 
-    shown: list[PlanningQuestion] = []
+    shown: list[PresentedPlanningQuestion] = []
 
     created = coordinator.start(
         request(),
@@ -1083,7 +1207,24 @@ def test_one_question_can_authorize_an_explicit_product_dimension_bundle(
     )
 
     assert created is None
-    assert shown == [bundled]
+    assert len(shown) == 1
+    assert shown[0].model_dump(exclude={"admission"}) == bundled.model_dump()
+    assert shown[0].admission.origin is PlanningQuestionOrigin.PLANNER_SUGGESTION
+    assert shown[0].admission.controller_invariant_ids == ()
+    current_turn = coordinator.store.load_turn(request().run_id, 1)
+    current_payload = current_turn.model_dump(mode="json")
+    assert current_payload["schema_version"] == 17
+    assert current_payload["question_admission"]["origin"] == "planner_suggestion"
+    without_admission = dict(current_payload)
+    without_admission.pop("question_admission")
+    with pytest.raises(ValidationError, match="requires Controller admission"):
+        PlanningTurn.model_validate(without_admission)
+    legacy_payload = dict(without_admission)
+    legacy_payload["schema_version"] = 16
+    assert (
+        PlanningTurn.model_validate(legacy_payload).model_dump(mode="json")
+        == legacy_payload
+    )
 
 
 def test_bundled_product_answer_is_projected_without_model_paraphrase(
@@ -1111,17 +1252,41 @@ def test_bundled_product_answer_is_projected_without_model_paraphrase(
                 id="one_time",
                 label="Personal local, one-time helper",
                 description="A throwaway_prototype for one local scan.",
+                product_definition_values=(
+                    PlanningOptionValue(
+                        dimension=ProductDefinitionDimension.TARGET_USERS,
+                        value="Personal user",
+                    ),
+                    PlanningOptionValue(
+                        dimension=ProductDefinitionDimension.PRIMARY_WORKFLOW,
+                        value="Run one local Markdown link scan",
+                    ),
+                    PlanningOptionValue(
+                        dimension=ProductDefinitionDimension.DELIVERY_MATURITY,
+                        value=DeliveryMaturity.THROWAWAY_PROTOTYPE.value,
+                    ),
+                ),
             ),
             PlanningOption(
                 id="reusable",
                 label="Personal reusable local tool",
                 description="A usable_local_product for repeated local scans.",
+                product_definition_values=(
+                    PlanningOptionValue(
+                        dimension=ProductDefinitionDimension.TARGET_USERS,
+                        value="Personal user",
+                    ),
+                    PlanningOptionValue(
+                        dimension=ProductDefinitionDimension.PRIMARY_WORKFLOW,
+                        value="Repeatedly check Markdown links in local directories",
+                    ),
+                    PlanningOptionValue(
+                        dimension=ProductDefinitionDimension.DELIVERY_MATURITY,
+                        value=DeliveryMaturity.USABLE_LOCAL_PRODUCT.value,
+                    ),
+                ),
             ),
         ),
-    )
-    answer = (
-        "Personal reusable local tool. I will run it repeatedly on local "
-        "directories to check Markdown links."
     )
     body = proposal_body(question_id=question.id)
     definition = body.product_definition
@@ -1191,14 +1356,19 @@ def test_bundled_product_answer_is_projected_without_model_paraphrase(
 
     created = coordinator.start(
         request(),
-        answer_question=lambda _question: answer,
+        answer_question=planning._interactive_question_answerer(
+            read=lambda _prompt: "2",
+            write=lambda _line: None,
+        ),
     )
 
     assert created is not None
     created_definition = created.body.product_definition
     assert created_definition is not None
-    assert created_definition.target_users.statement == answer
-    assert created_definition.primary_workflow.statement == answer
+    assert created_definition.target_users.statement == "Personal user"
+    assert created_definition.primary_workflow.statement == (
+        "Repeatedly check Markdown links in local directories"
+    )
     assert created_definition.delivery_maturity.level is (
         DeliveryMaturity.USABLE_LOCAL_PRODUCT
     )
@@ -1240,11 +1410,39 @@ def test_bundled_answer_with_ambiguous_maturity_returns_to_focused_dialogue(
                 id="one_time",
                 label="Personal local, one-time helper",
                 description="A throwaway_prototype for one local scan.",
+                product_definition_values=(
+                    PlanningOptionValue(
+                        dimension=ProductDefinitionDimension.TARGET_USERS,
+                        value="Personal user",
+                    ),
+                    PlanningOptionValue(
+                        dimension=ProductDefinitionDimension.PRIMARY_WORKFLOW,
+                        value="Run one local Markdown link scan",
+                    ),
+                    PlanningOptionValue(
+                        dimension=ProductDefinitionDimension.DELIVERY_MATURITY,
+                        value=DeliveryMaturity.THROWAWAY_PROTOTYPE.value,
+                    ),
+                ),
             ),
             PlanningOption(
                 id="reusable",
                 label="Personal reusable local tool",
                 description="A usable_local_product for repeated local scans.",
+                product_definition_values=(
+                    PlanningOptionValue(
+                        dimension=ProductDefinitionDimension.TARGET_USERS,
+                        value="Personal user",
+                    ),
+                    PlanningOptionValue(
+                        dimension=ProductDefinitionDimension.PRIMARY_WORKFLOW,
+                        value="Repeatedly check Markdown links in local directories",
+                    ),
+                    PlanningOptionValue(
+                        dimension=ProductDefinitionDimension.DELIVERY_MATURITY,
+                        value=DeliveryMaturity.USABLE_LOCAL_PRODUCT.value,
+                    ),
+                ),
             ),
         ),
     )
@@ -1305,11 +1503,23 @@ def test_bundled_answer_with_ambiguous_maturity_returns_to_focused_dialogue(
                 id="throwaway",
                 label="Throwaway prototype",
                 description="Prove the workflow once with minimal polish.",
+                product_definition_values=(
+                    PlanningOptionValue(
+                        dimension=ProductDefinitionDimension.DELIVERY_MATURITY,
+                        value=DeliveryMaturity.THROWAWAY_PROTOTYPE.value,
+                    ),
+                ),
             ),
             PlanningOption(
                 id="usable",
                 label="Usable local product",
                 description="Support repeated use with tests and docs.",
+                product_definition_values=(
+                    PlanningOptionValue(
+                        dimension=ProductDefinitionDimension.DELIVERY_MATURITY,
+                        value=DeliveryMaturity.USABLE_LOCAL_PRODUCT.value,
+                    ),
+                ),
             ),
         ),
     )
@@ -1424,7 +1634,7 @@ def test_invalid_product_question_is_replaced_as_one_authority_unit(
         policy=policy(response_repair_limit=1),
         clock=AdvancingClock(),
     )
-    shown: list[PlanningQuestion] = []
+    shown: list[PresentedPlanningQuestion] = []
 
     created = coordinator.start(
         request(),
@@ -1432,7 +1642,9 @@ def test_invalid_product_question_is_replaced_as_one_authority_unit(
     )
 
     assert created is None
-    assert shown == [corrected]
+    assert len(shown) == 1
+    assert shown[0].model_dump(exclude={"admission"}) == corrected.model_dump()
+    assert shown[0].admission.origin is PlanningQuestionOrigin.PLANNER_SUGGESTION
     first = store.load_turn(request().run_id, 1)
     assert first.response_validation is not None
     assert first.response_validation.correction_paths == ("/question",)
@@ -1480,7 +1692,7 @@ def test_question_authority_field_typo_requires_whole_question_replacement(
         policy=policy(response_repair_limit=1),
         clock=AdvancingClock(),
     )
-    shown: list[PlanningQuestion] = []
+    shown: list[PresentedPlanningQuestion] = []
 
     created = coordinator.start(
         request(),
@@ -1488,7 +1700,9 @@ def test_question_authority_field_typo_requires_whole_question_replacement(
     )
 
     assert created is None
-    assert shown == [corrected]
+    assert len(shown) == 1
+    assert shown[0].model_dump(exclude={"admission"}) == corrected.model_dump()
+    assert shown[0].admission.origin is PlanningQuestionOrigin.PLANNER_SUGGESTION
     first = store.load_turn(request().run_id, 1)
     assert first.parsed_response is None
     assert first.response_normalizations == (
@@ -1499,6 +1713,28 @@ def test_question_authority_field_typo_requires_whole_question_replacement(
     assert {issue.invariant_id for issue in first.response_validation.issues} == {
         "planning_current_question_wire_contract"
     }
+
+
+def test_current_question_requires_explicit_option_values_on_wire() -> None:
+    payload = json.loads(response(question_response()))
+    question = payload["question"]
+    assert isinstance(question, dict)
+    question.pop("decision_owner")
+    options = question["options"]
+    assert isinstance(options, list)
+    first_option = options[0]
+    assert isinstance(first_option, dict)
+    first_option.pop("product_definition_values")
+    normalized, _ = planning._normalize_planning_response_payload(payload)
+
+    with pytest.raises(
+        planning._PlanningModelInvariantError,
+        match=r"options\[0\]\.product_definition_values",
+    ):
+        planning._validate_current_planning_response_wire(
+            normalized,
+            response_schema=planning._planning_response_schema(),
+        )
 
 
 def test_legacy_question_without_current_dimension_field_remains_readable() -> None:
@@ -1703,7 +1939,20 @@ def test_resolved_dimension_must_be_declared_by_its_question(tmp_path: Path) -> 
         update={
             "product_definition_dimensions": (
                 ProductDefinitionDimension.PRIMARY_WORKFLOW,
-            )
+            ),
+            "options": tuple(
+                option.model_copy(
+                    update={
+                        "product_definition_values": (
+                            PlanningOptionValue(
+                                dimension=(ProductDefinitionDimension.PRIMARY_WORKFLOW),
+                                value="Repeatedly summarize a Markdown directory",
+                            ),
+                        )
+                    }
+                )
+                for option in question.options
+            ),
         }
     )
     followup = question.model_copy(update={"id": "target_users_followup"})
@@ -2931,7 +3180,7 @@ def test_absolute_criterion_requires_all_review_entry_boundaries() -> None:
         policy(),
         created_at=FIXED_TIME,
     )
-    overview = render_planning_overview(preview)
+    overview = render_planning_overview(preview, include_fixed_policy=True)
     assert (
         "Review boundaries: top_level_input, nested_input, "
         "alias_or_indirection, failure_path"
@@ -5248,6 +5497,7 @@ def test_dialogue_revision_structured_edit_and_approval_are_recoverable(
     )
     response_schema = json.loads(schema_text)
     question_schema = response_schema["$defs"]["PlanningQuestion"]
+    option_schema = response_schema["$defs"]["PlanningOption"]
     criterion_schema = response_schema["$defs"]["ProposedCriterion"]
     proposal_schema = response_schema["$defs"]["PlanningProposalBody"]
     assert {
@@ -5264,6 +5514,10 @@ def test_dialogue_revision_structured_edit_and_approval_are_recoverable(
     assert question_schema["properties"]["product_definition_dimensions"][
         "maxItems"
     ] == len(ProductDefinitionDimension)
+    assert "product_definition_values" in option_schema["required"]
+    assert option_schema["properties"]["product_definition_values"]["maxItems"] == len(
+        ProductDefinitionDimension
+    )
     assert {"requirement_ids", "verification_agent_ids"}.issubset(
         criterion_schema["required"]
     )
@@ -5486,11 +5740,23 @@ def test_missing_product_decision_returns_to_atomic_clarification(
                     id="developers",
                     label="Developers",
                     description="Developers use it repeatedly.",
+                    product_definition_values=(
+                        PlanningOptionValue(
+                            dimension=ProductDefinitionDimension.TARGET_USERS,
+                            value="Developers",
+                        ),
+                    ),
                 ),
                 PlanningOption(
                     id="maintainers",
                     label="Maintainers",
                     description="Repository maintainers use it in reviews.",
+                    product_definition_values=(
+                        PlanningOptionValue(
+                            dimension=ProductDefinitionDimension.TARGET_USERS,
+                            value="Repository maintainers",
+                        ),
+                    ),
                 ),
             ),
             allow_custom=True,
@@ -5514,16 +5780,34 @@ def test_missing_product_decision_returns_to_atomic_clarification(
                     id="throwaway",
                     label="Throwaway prototype",
                     description="Prove the workflow once with minimal polish.",
+                    product_definition_values=(
+                        PlanningOptionValue(
+                            dimension=ProductDefinitionDimension.DELIVERY_MATURITY,
+                            value=DeliveryMaturity.THROWAWAY_PROTOTYPE.value,
+                        ),
+                    ),
                 ),
                 PlanningOption(
                     id="usable",
                     label="Usable local product",
                     description="Support repeated local use with tests and docs.",
+                    product_definition_values=(
+                        PlanningOptionValue(
+                            dimension=ProductDefinitionDimension.DELIVERY_MATURITY,
+                            value=DeliveryMaturity.USABLE_LOCAL_PRODUCT.value,
+                        ),
+                    ),
                 ),
                 PlanningOption(
                     id="releasable",
                     label="Releasable small product",
                     description="Add packaging and distribution readiness.",
+                    product_definition_values=(
+                        PlanningOptionValue(
+                            dimension=ProductDefinitionDimension.DELIVERY_MATURITY,
+                            value=DeliveryMaturity.RELEASABLE_SMALL_PRODUCT.value,
+                        ),
+                    ),
                 ),
             ),
             allow_custom=True,
@@ -5577,7 +5861,7 @@ def test_missing_product_decision_returns_to_atomic_clarification(
         update={
             "target_users": initial_definition.target_users.model_copy(
                 update={
-                    "statement": "Developers use it repeatedly.",
+                    "statement": "Developers",
                     "disposition": ProductDefinitionDisposition.RESOLVED_QUESTION,
                     "source": target_question_id,
                     "decision_ids": ("DECISION_LINK_SCOPE_ANSWER",),
@@ -5624,14 +5908,20 @@ def test_missing_product_decision_returns_to_atomic_clarification(
         policy=policy(response_repair_limit=0),
         clock=AdvancingClock(),
     )
-    answered: list[str] = []
+    answered: list[tuple[str, PlanningQuestionOrigin]] = []
     activities: list[PlanningActivity] = []
+    clarification_output: list[str] = []
+    clarification_choices = iter(("1", "2"))
+    interactive_answer = planning._interactive_question_answerer(
+        read=lambda _prompt: next(clarification_choices),
+        write=clarification_output.append,
+    )
 
-    def answer(question: PlanningQuestion) -> str:
-        answered.append(question.id)
-        if question.id == target_question_id:
-            return "Developers use it repeatedly."
-        return "Usable local product with tests and documentation."
+    def answer(
+        question: PresentedPlanningQuestion,
+    ) -> PlanningQuestionAnswer | None:
+        answered.append((question.id, question.admission.origin))
+        return interactive_answer(question)
 
     created = coordinator.start(
         request(source_request=source_request),
@@ -5641,7 +5931,20 @@ def test_missing_product_decision_returns_to_atomic_clarification(
 
     assert created is not None
     assert created.body == final
-    assert answered == [target_question_id, maturity_question_id]
+    assert answered == [
+        (target_question_id, PlanningQuestionOrigin.PLANNER_SUGGESTION),
+        (maturity_question_id, PlanningQuestionOrigin.CONTROLLER_REQUIREMENT),
+    ]
+    rendered_clarification = "\n".join(clarification_output)
+    assert "Question source: Planner-selected clarification for this task" in (
+        rendered_clarification
+    )
+    assert "Question source: Controller validation requires this user-owned" in (
+        rendered_clarification
+    )
+    assert "Controller invariants: planning_product_user_decision_required" in (
+        rendered_clarification
+    )
     assert len(executor.requests) == 4
     invalid_turn = store.load_turn(request().run_id, 2)
     assert invalid_turn.response_validation is not None
@@ -5671,6 +5974,21 @@ def test_missing_product_decision_returns_to_atomic_clarification(
         "minItems": 1,
         "type": "array",
     }
+    option_definition = recovery_schema["$defs"]["PlanningOption"]
+    assert option_definition["properties"]["product_definition_values"]["minItems"] == 1
+    assert option_definition["properties"]["product_definition_values"]["maxItems"] == 1
+    assert recovery_schema["$defs"]["PlanningOptionValue"]["properties"][
+        "dimension"
+    ] == {"const": "delivery_maturity", "type": "string"}
+    target_admission = store.load_turn(request().run_id, 1).question_admission
+    assert target_admission is not None
+    assert target_admission.origin is PlanningQuestionOrigin.PLANNER_SUGGESTION
+    maturity_admission = store.load_turn(request().run_id, 3).question_admission
+    assert maturity_admission is not None
+    assert maturity_admission.origin is PlanningQuestionOrigin.CONTROLLER_REQUIREMENT
+    assert maturity_admission.controller_invariant_ids == (
+        "planning_product_user_decision_required",
+    )
     assert '"required_clarification"' in executor.requests[2].prompt
     assert '"delivery_maturity"' in executor.requests[2].prompt
     clarification = [
@@ -5719,11 +6037,23 @@ def test_product_decision_correction_can_repair_the_shared_decision_relation(
                     id="throwaway",
                     label="Throwaway prototype",
                     description="Prove the workflow once with minimal polish.",
+                    product_definition_values=(
+                        PlanningOptionValue(
+                            dimension=ProductDefinitionDimension.DELIVERY_MATURITY,
+                            value=DeliveryMaturity.THROWAWAY_PROTOTYPE.value,
+                        ),
+                    ),
                 ),
                 PlanningOption(
                     id="usable",
                     label="Usable local product",
                     description="Support repeated local use with tests and docs.",
+                    product_definition_values=(
+                        PlanningOptionValue(
+                            dimension=ProductDefinitionDimension.DELIVERY_MATURITY,
+                            value=DeliveryMaturity.USABLE_LOCAL_PRODUCT.value,
+                        ),
+                    ),
                 ),
             ),
             allow_custom=True,
@@ -7283,8 +7613,10 @@ raise SystemExit(cli.main([]))
 
         assert not ProcessLeaseStore(tmp_path / "leases").inspect().processes
         legacy = turn.model_dump(mode="json")
-        assert legacy["schema_version"] == 16
+        assert legacy["schema_version"] == 17
         assert legacy["execution"]["invocation_lifecycle"]["schema_version"] == 5
+        legacy["schema_version"] = 16
+        assert PlanningTurn.model_validate(legacy).model_dump(mode="json") == legacy
         legacy["schema_version"] = 14
         with pytest.raises(ValidationError, match="lifecycle v5"):
             PlanningTurn.model_validate(legacy)
@@ -7366,6 +7698,8 @@ def test_ordinary_user_can_answer_revise_edit_and_approve_without_json(
     answers = iter(
         (
             "1",
+            "f",
+            "f",
             "r",
             "Make local-only scope explicit in the title.",
             "e",
@@ -7391,6 +7725,8 @@ def test_ordinary_user_can_answer_revise_edit_and_approve_without_json(
     assert approved is not None
     assert approved.task_brief.title == "Local Markdown Link Checker"
     assert approved.team_plan.max_concurrency == 1
+    assert approved.approval.revision == 3
+    assert len(executor.requests) == 3
     rendered = "\n".join(output)
     assert "Planning question" in rendered
     assert "Decision boundary: product_requirement / user" in rendered
@@ -7400,6 +7736,9 @@ def test_ordinary_user_can_answer_revise_edit_and_approve_without_json(
     assert "Planning response validated" in rendered
     assert "Custom answer" in rendered
     assert "Planning overview" in rendered
+    assert "Fixed policy details are now shown." in rendered
+    assert "Fixed policy details are now hidden." in rendered
+    assert "Plan revision 3 approved." in rendered
     assert "Additional user decisions resolved during clarification:" in rendered
     assert (
         "DECISION_LINK_SCOPE_ANSWER [product_requirement; question=link_scope]"

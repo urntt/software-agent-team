@@ -124,7 +124,7 @@ from software_agent_team.teams import (
     permission_for_capability,
 )
 
-PLANNING_SCHEMA_VERSION = 16
+PLANNING_SCHEMA_VERSION = 17
 MINIMUM_READABLE_PLANNING_SCHEMA_VERSION = 2
 PLANNING_TEMPLATE = Path(__file__).with_name("prompt_templates") / "adaptive_planner.md"
 MAX_PLANNING_EVIDENCE_CHARACTERS = 1_000_000
@@ -293,6 +293,13 @@ class PlanningDecisionAuthority(StrEnum):
     PLANNER_PROPOSAL = "planner_proposal_user_approval"
     AGENT_AUTONOMY = "agent_or_controller_autonomy"
     CONTROLLER_POLICY = "controller_policy"
+
+
+class PlanningQuestionOrigin(StrEnum):
+    """Controller-owned reason that one question reached the user."""
+
+    PLANNER_SUGGESTION = "planner_suggestion"
+    CONTROLLER_REQUIREMENT = "controller_requirement"
 
 
 class PlanningDecisionProvenanceKind(StrEnum):
@@ -960,6 +967,11 @@ def _normalize_planning_response_payload(
     profile_criterion_ids: Collection[str] = (),
     user_inputs: Collection[str] = (),
     question_answers: Mapping[str, str] | None = None,
+    question_dimension_values: Mapping[
+        str,
+        Mapping[ProductDefinitionDimension, str],
+    ]
+    | None = None,
 ) -> tuple[dict[str, object], tuple[str, ...]]:
     """Apply bounded semantic-preserving normalization before strict validation."""
 
@@ -1131,14 +1143,20 @@ def _normalize_planning_response_payload(
         ):
             continue
         answer = None if question_answers is None else question_answers.get(question_id)
+        dimension_values = (
+            {}
+            if question_dimension_values is None
+            else question_dimension_values.get(question_id, {})
+        )
+        resolved_answer = dimension_values.get(dimension, answer)
         if (
-            answer is None
-            or not answer.strip()
-            or len(answer.strip()) > 1000
-            or item.get("statement") == answer.strip()
+            resolved_answer is None
+            or not resolved_answer.strip()
+            or len(resolved_answer.strip()) > 1000
+            or item.get("statement") == resolved_answer.strip()
         ):
             continue
-        item["statement"] = answer.strip()
+        item["statement"] = resolved_answer.strip()
         changes.append(
             "compiled proposal.product_definition."
             f"{dimension.value}.statement from exact question answer"
@@ -1764,7 +1782,7 @@ class PlanningRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal[
-        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, PLANNING_SCHEMA_VERSION
+        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, PLANNING_SCHEMA_VERSION
     ] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     project_name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
@@ -1806,6 +1824,20 @@ class PlanningRequest(BaseModel):
         return _utc(value)
 
 
+class PlanningOptionValue(BaseModel):
+    """One exact product-definition value offered by a suggested answer."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    dimension: ProductDefinitionDimension
+    value: str = Field(min_length=1, max_length=500)
+
+    @field_validator("value")
+    @classmethod
+    def require_clean_value(cls, value: str) -> str:
+        return _clean_text(value, label="Planning option product value")
+
+
 class PlanningOption(BaseModel):
     """One suggested answer while preserving a custom-answer path."""
 
@@ -1814,11 +1846,19 @@ class PlanningOption(BaseModel):
     id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     label: str = Field(min_length=1, max_length=80)
     description: str = Field(min_length=1, max_length=300)
+    product_definition_values: tuple[PlanningOptionValue, ...] = ()
 
     @field_validator("label", "description")
     @classmethod
     def require_clean_text(cls, value: str) -> str:
         return _clean_text(value, label="Planning option text")
+
+    @model_validator(mode="after")
+    def require_unique_product_dimensions(self) -> Self:
+        dimensions = [item.dimension for item in self.product_definition_values]
+        if len(dimensions) != len(set(dimensions)):
+            raise ValueError("Planning option product dimensions must be unique")
+        return self
 
 
 class PlanningQuestion(BaseModel):
@@ -1883,6 +1923,68 @@ class PlanningQuestion(BaseModel):
         return self
 
 
+class PlanningQuestionAdmission(BaseModel):
+    """Controller-owned provenance for presenting one validated question."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    origin: PlanningQuestionOrigin
+    product_definition_dimensions: tuple[ProductDefinitionDimension, ...] = ()
+    controller_invariant_ids: tuple[str, ...] = ()
+
+    @field_validator("controller_invariant_ids")
+    @classmethod
+    def require_clean_invariant_ids(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        return _clean_unique(values, label="Planning question invariant")
+
+    @model_validator(mode="after")
+    def require_origin_evidence(self) -> Self:
+        if self.origin is PlanningQuestionOrigin.CONTROLLER_REQUIREMENT:
+            if len(self.product_definition_dimensions) != 1:
+                raise ValueError(
+                    "Controller-required questions must bind one product dimension"
+                )
+            if not self.controller_invariant_ids:
+                raise ValueError(
+                    "Controller-required questions need invariant evidence"
+                )
+        elif self.controller_invariant_ids:
+            raise ValueError(
+                "Planner-suggested questions cannot claim Controller invariants"
+            )
+        return self
+
+
+class PresentedPlanningQuestion(PlanningQuestion):
+    """Validated question plus non-model presentation authority."""
+
+    admission: PlanningQuestionAdmission
+
+
+class PlanningQuestionAnswer(BaseModel):
+    """One user answer with optional exact values from a displayed suggestion."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    text: str = Field(min_length=1, max_length=10_000)
+    selected_option_id: str | None = Field(
+        default=None,
+        pattern=r"^[a-z][a-z0-9_]*$",
+    )
+    product_definition_values: tuple[PlanningOptionValue, ...] = ()
+
+    @field_validator("text")
+    @classmethod
+    def require_clean_answer(cls, value: str) -> str:
+        return _clean_text(value, label="Planning question answer")
+
+    @model_validator(mode="after")
+    def require_selected_option_for_values(self) -> Self:
+        if self.product_definition_values and self.selected_option_id is None:
+            raise ValueError("Planning answer product values require a selected option")
+        return self
+
+
 @dataclass(frozen=True)
 class _PlanningQuestionContract:
     """Controller-recovered authority and adequacy scope for one question."""
@@ -1891,6 +1993,7 @@ class _PlanningQuestionContract:
     owner: PlanningDecisionAuthority
     product_definition_dimensions: tuple[ProductDefinitionDimension, ...] = ()
     answer: str | None = None
+    answer_dimension_values: tuple[tuple[ProductDefinitionDimension, str], ...] = ()
     approved_dimension_values: tuple[tuple[ProductDefinitionDimension, str], ...] = ()
 
 
@@ -2784,6 +2887,42 @@ def validate_question_admission(
                 (ResponseIssueSubjectKind.QUESTION, question.id)
             ),
         )
+    expected_dimensions = question.product_definition_dimensions
+    invalid_options = tuple(
+        option.id
+        for option in question.options
+        if tuple(value.dimension for value in option.product_definition_values)
+        != expected_dimensions
+    )
+    if invalid_options:
+        raise _planning_context_invariant(
+            "planning_question_option_scope",
+            (
+                "Planning question option values must exactly match the declared "
+                "product-definition dimension order; invalid options: "
+                + ", ".join(invalid_options)
+            ),
+            paths=("/question",),
+            subjects=_planning_subjects(
+                (ResponseIssueSubjectKind.QUESTION, question.id)
+            ),
+        )
+    maturity_values = tuple(
+        value.value
+        for option in question.options
+        for value in option.product_definition_values
+        if value.dimension is ProductDefinitionDimension.DELIVERY_MATURITY
+    )
+    allowed_maturity = {item.value for item in DeliveryMaturity}
+    if any(value not in allowed_maturity for value in maturity_values):
+        raise _planning_context_invariant(
+            "planning_question_maturity_option",
+            "Planning maturity options must use canonical delivery-maturity values",
+            paths=("/question",),
+            subjects=_planning_subjects(
+                (ResponseIssueSubjectKind.QUESTION, question.id)
+            ),
+        )
 
 
 def _normalized_evidence_text(value: str) -> str:
@@ -3081,32 +3220,42 @@ def _product_definition_dimension_invariant(
             else getattr(item, "statement", "")
         )
         if contract.answer is not None:
+            exact_dimension_value = dict(contract.answer_dimension_values).get(
+                dimension
+            )
             maturity_levels = (
                 _maturity_levels_in_answer(contract.answer)
                 if dimension is ProductDefinitionDimension.DELIVERY_MATURITY
+                and exact_dimension_value is None
                 else frozenset()
             )
             answer_preserves_value = (
-                maturity_levels == {definition.delivery_maturity.level}
+                _normalized_evidence_text(resolved_value)
+                == _normalized_evidence_text(exact_dimension_value.replace("_", " "))
+                if exact_dimension_value is not None
+                else maturity_levels == {definition.delivery_maturity.level}
                 if dimension is ProductDefinitionDimension.DELIVERY_MATURITY
                 else _normalized_evidence_text(resolved_value)
                 in _normalized_evidence_text(contract.answer)
             )
             if not answer_preserves_value:
+                missing_maturity_answer = (
+                    dimension is ProductDefinitionDimension.DELIVERY_MATURITY
+                    and exact_dimension_value is None
+                    and not maturity_levels
+                )
                 return issue(
                     "planning_product_question_answer",
                     f"{dimension.value} is not preserved in its user answer",
                     subjects=subjects,
                     failure_class=(
                         ResponseFailureClass.MISSING_USER_DECISION
-                        if dimension is ProductDefinitionDimension.DELIVERY_MATURITY
-                        and not maturity_levels
+                        if missing_maturity_answer
                         else ResponseFailureClass.SEMANTIC_CONTEXT
                     ),
                     authority=(
                         ResponseIssueAuthority.USER
-                        if dimension is ProductDefinitionDimension.DELIVERY_MATURITY
-                        and not maturity_levels
+                        if missing_maturity_answer
                         else ResponseIssueAuthority.MODEL
                     ),
                 )
@@ -3800,6 +3949,7 @@ def _planning_response_schema() -> dict[str, object]:
             "material_consequences",
             "product_definition_dimensions",
         ),
+        "PlanningOption": ("product_definition_values",),
         "ProposedCriterion": (
             "requirement_ids",
             "verification_agent_ids",
@@ -3836,6 +3986,9 @@ def _planning_response_schema() -> dict[str, object]:
     question_properties = definitions["PlanningQuestion"]["properties"]
     dimension_schema = question_properties["product_definition_dimensions"]
     dimension_schema["maxItems"] = len(ProductDefinitionDimension)
+    option_properties = definitions["PlanningOption"]["properties"]
+    option_values_schema = option_properties["product_definition_values"]
+    option_values_schema["maxItems"] = len(ProductDefinitionDimension)
     for field_name in ("decision_category",):
         field_schema = question_properties[field_name]
         options = field_schema.get("anyOf")
@@ -4056,13 +4209,25 @@ def _validate_current_planning_response_wire(
     # decision_owner is compiled by the Controller after transport capture and is
     # therefore valid in the normalized payload even though models cannot submit it.
     unknown = sorted(set(question) - set(properties) - {"decision_owner"})
-    if not missing and not unknown:
+    options = question.get("options")
+    missing_option_fields = (
+        []
+        if not isinstance(options, list)
+        else [
+            f"options[{index}].product_definition_values"
+            for index, option in enumerate(options)
+            if isinstance(option, dict) and "product_definition_values" not in option
+        ]
+    )
+    if not missing and not unknown and not missing_option_fields:
         return
     details: list[str] = []
     if missing:
         details.append("missing current fields: " + ", ".join(missing))
     if unknown:
         details.append("unknown current fields: " + ", ".join(unknown))
+    if missing_option_fields:
+        details.append("missing current fields: " + ", ".join(missing_option_fields))
     question_id = question.get("id")
     subjects = (
         ()
@@ -4157,6 +4322,29 @@ def _planning_question_response_schema(
         "maxItems": 1,
         "minItems": 1,
         "type": "array",
+    }
+    option_definition = definitions.get("PlanningOption")
+    option_properties = (
+        None
+        if not isinstance(option_definition, dict)
+        else option_definition.get("properties")
+    )
+    option_value_definition = definitions.get("PlanningOptionValue")
+    option_value_properties = (
+        None
+        if not isinstance(option_value_definition, dict)
+        else option_value_definition.get("properties")
+    )
+    if not isinstance(option_properties, dict) or not isinstance(
+        option_value_properties, dict
+    ):
+        raise PlanningError("Planning response schema has no option value definition")
+    option_properties["product_definition_values"].update(
+        {"maxItems": 1, "minItems": 1}
+    )
+    option_value_properties["dimension"] = {
+        "const": recovery.dimension.value,
+        "type": "string",
     }
     return schema
 
@@ -4350,7 +4538,7 @@ class AdaptiveImplementationPlan(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal[
-        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, PLANNING_SCHEMA_VERSION
+        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, PLANNING_SCHEMA_VERSION
     ] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     team_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
@@ -4451,7 +4639,7 @@ class PlanningTurn(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal[
-        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, PLANNING_SCHEMA_VERSION
+        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, PLANNING_SCHEMA_VERSION
     ] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     sequence: int = Field(ge=1)
@@ -4473,6 +4661,10 @@ class PlanningTurn(BaseModel):
         exclude_if=lambda value: value is None,
     )
     parsed_response: PlanningModelResponse | None = None
+    question_admission: PlanningQuestionAdmission | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     response_normalizations: tuple[str, ...] = Field(
         default=(),
         exclude_if=lambda values: not values,
@@ -4503,6 +4695,27 @@ class PlanningTurn(BaseModel):
 
     @model_validator(mode="after")
     def validate_evidence(self) -> Self:
+        parsed_question = (
+            None if self.parsed_response is None else self.parsed_response.question
+        )
+        if self.schema_version >= 17:
+            if (parsed_question is None) != (self.question_admission is None):
+                raise ValueError(
+                    "current Planning question requires Controller admission evidence"
+                )
+            if (
+                parsed_question is not None
+                and self.question_admission is not None
+                and self.question_admission.product_definition_dimensions
+                != parsed_question.product_definition_dimensions
+            ):
+                raise ValueError(
+                    "Planning question admission scope differs from the question"
+                )
+        elif self.question_admission is not None:
+            raise ValueError(
+                "legacy Planning turns cannot contain question admission evidence"
+            )
         lifecycle = self.execution.invocation_lifecycle
         if (
             self.schema_version < 15
@@ -4659,7 +4872,7 @@ class PlanningProposal(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal[
-        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, PLANNING_SCHEMA_VERSION
+        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, PLANNING_SCHEMA_VERSION
     ] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     revision: int = Field(ge=1)
@@ -4731,7 +4944,7 @@ class PlanningSession(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal[
-        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, PLANNING_SCHEMA_VERSION
+        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, PLANNING_SCHEMA_VERSION
     ] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     request_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -4914,7 +5127,7 @@ class PlanningApproval(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal[
-        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, PLANNING_SCHEMA_VERSION
+        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, PLANNING_SCHEMA_VERSION
     ] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     revision: int = Field(ge=1)
@@ -5135,13 +5348,48 @@ class ApprovedPlanningResult(BaseModel):
 
 
 Clock = Callable[[], datetime]
-QuestionAnswerer = Callable[[PlanningQuestion], str | None]
+QuestionAnswerer = Callable[
+    [PresentedPlanningQuestion],
+    str | PlanningQuestionAnswer | None,
+]
 InputReader = Callable[[str], str]
 OutputWriter = Callable[[str], None]
 
 
 def _system_clock() -> datetime:
     return datetime.now(UTC)
+
+
+def _normalize_question_answer(
+    question: PresentedPlanningQuestion,
+    value: str | PlanningQuestionAnswer,
+) -> PlanningQuestionAnswer:
+    """Accept custom text or verify one exact Controller-presented option."""
+
+    answer = (
+        PlanningQuestionAnswer(text=value)
+        if isinstance(value, str)
+        else PlanningQuestionAnswer.model_validate(value)
+    )
+    if answer.selected_option_id is None:
+        if answer.product_definition_values:
+            raise PlanningError(
+                "custom Planning answers cannot claim suggested product values"
+            )
+        return answer
+    selected = next(
+        (
+            option
+            for option in question.options
+            if option.id == answer.selected_option_id
+        ),
+        None,
+    )
+    if selected is None:
+        raise PlanningError("Planning answer selected an unknown option")
+    if answer.product_definition_values != selected.product_definition_values:
+        raise PlanningError("Planning answer changed the selected option values")
+    return answer
 
 
 def preview_adaptive_proposal(
@@ -5513,12 +5761,20 @@ def render_planning_overview(
     preview: PlanningPreview,
     *,
     budget_usage: AgentBudgetUsage | None = None,
+    include_fixed_policy: bool = False,
 ) -> str:
-    """Render every material decision a user approves before execution."""
+    """Render task authority, with lossless fixed-policy details on request."""
 
     brief = preview.task_brief
     implementation = preview.implementation_plan
     plan = preview.team_plan
+    used_boundaries = tuple(
+        dict.fromkeys(
+            boundary
+            for criterion in brief.acceptance_criteria
+            for boundary in criterion.review_boundaries
+        )
+    )
     requirement_pairs = (
         tuple(
             zip(
@@ -5533,7 +5789,11 @@ def render_planning_overview(
             for index, text in enumerate(brief.requirements, start=1)
         )
     )
-    lines = ["Planning overview", "  Product definition and scope:"]
+    lines = [
+        "Planning overview",
+        "  Task-specific plan (requires approval):",
+        "  Product definition and scope:",
+    ]
     lines.extend(_render_prefixed_text("  Product: ", brief.title))
     lines.extend(_render_prefixed_text("  Request: ", brief.source_request))
     definition = implementation.product_definition
@@ -5587,7 +5847,7 @@ def render_planning_overview(
     else:
         lines.append("    - unavailable in legacy Planning evidence")
     lines.extend(_render_prefixed_text("  Destination: ", preview.destination))
-    lines.append("  Execution profile:")
+    lines.append("  Selected execution profile (controller-owned):")
     for item in preview.execution_profile:
         lines.extend(_render_prefixed_text("    - ", item))
     lines.append("  Requirements:")
@@ -5602,10 +5862,20 @@ def render_planning_overview(
                 canonical_description,
             )
         )
-    if preview.execution_profile_constraints:
+    if include_fixed_policy and preview.execution_profile_constraints:
         lines.append("  Execution-profile constraints (controller-owned):")
         for item in preview.execution_profile_constraints:
             lines.extend(_render_prefixed_text("    - ", item))
+    elif not include_fixed_policy:
+        lines.append(
+            "  Fixed policy details: hidden "
+            f"({len(preview.execution_profile_constraints)} execution-profile "
+            "constraints, 4 lifecycle safeguards, "
+            f"{len(used_boundaries)} Review boundary definitions)."
+        )
+        lines.append(
+            "    - Use review choice f to show them without revising the plan."
+        )
     if preview.planner_constraints:
         lines.append("  Additional task constraints proposed by Planning:")
         for item in preview.planner_constraints:
@@ -5668,15 +5938,16 @@ def render_planning_overview(
     else:
         for item in implementation.assumptions:
             lines.extend(_render_prefixed_text("      - legacy/unowned: ", item))
-    lines.extend(
-        (
-            "    Non-negotiable Controller policy:",
-            "      - secret isolation and least-privilege permissions",
-            "      - immutable evidence and fail-closed lifecycle transitions",
-            "      - cleanup limited to resources proven to be SAT-owned",
-            "      - only a verified accepted workspace may be delivered",
+    if include_fixed_policy:
+        lines.extend(
+            (
+                "    Non-negotiable Controller policy:",
+                "      - secret isolation and least-privilege permissions",
+                "      - immutable evidence and fail-closed lifecycle transitions",
+                "      - cleanup limited to resources proven to be SAT-owned",
+                "      - only a verified accepted workspace may be delivered",
+            )
         )
-    )
     lines.append("  Acceptance criteria:")
     for item in brief.acceptance_criteria:
         review_boundaries = (
@@ -5689,14 +5960,7 @@ def render_planning_overview(
                 f"Review boundaries: {review_boundaries})",
             )
         )
-    used_boundaries = tuple(
-        dict.fromkeys(
-            boundary
-            for criterion in brief.acceptance_criteria
-            for boundary in criterion.review_boundaries
-        )
-    )
-    if used_boundaries:
+    if include_fixed_policy and used_boundaries:
         definitions = review_boundary_definition_map()
         lines.extend(
             (
@@ -6116,6 +6380,7 @@ class PlanningStore:
         prompt: str,
         result: AgentExecutionResult,
         parsed_response: PlanningModelResponse | None,
+        question_admission: PlanningQuestionAdmission | None,
         response_normalizations: tuple[str, ...],
         validation_error: str | None,
         now: datetime,
@@ -6156,6 +6421,7 @@ class PlanningStore:
             ),
             submission_evidence=result.submission_evidence,
             parsed_response=parsed_response,
+            question_admission=question_admission,
             response_normalizations=response_normalizations,
             validation_error=validation_error,
             response_validation=response_validation,
@@ -6369,6 +6635,22 @@ class _Invocation:
     response: PlanningModelResponse
     turn: PlanningTurn
 
+    def presented_question(self) -> PresentedPlanningQuestion:
+        """Bind a model question to the Controller admission stored with its turn."""
+
+        question = self.response.question
+        admission = self.turn.question_admission
+        if question is None or admission is None:
+            raise PlanningIntegrityError(
+                "Planning question is missing Controller admission evidence"
+            )
+        return PresentedPlanningQuestion.model_validate(
+            {
+                **question.model_dump(mode="json"),
+                "admission": admission.model_dump(mode="json"),
+            }
+        )
+
 
 class AdaptivePlanningCoordinator:
     """Run bounded dialogue while retaining approval and lifecycle authority."""
@@ -6460,18 +6742,27 @@ class AdaptivePlanningCoordinator:
                 and clarification_rounds >= self.policy.max_clarification_rounds
             ):
                 raise PlanningError("Planning exceeded its clarification-round limit")
-            answer = answer_question(response.question)
-            if answer is None:
+            presented_question = invocation.presented_question()
+            answer_value = answer_question(presented_question)
+            if answer_value is None:
                 self.store.cancel(request.run_id, now=self.clock())
                 return None
-            answer = _clean_text(answer, label="clarification answer")
+            answer = _normalize_question_answer(
+                presented_question,
+                answer_value,
+            )
             transcript.append(
                 {
                     "question": response.question.model_dump(mode="json"),
-                    "answer": answer,
+                    "answer": answer.text,
+                    "selected_option_id": answer.selected_option_id,
+                    "product_definition_values": [
+                        item.model_dump(mode="json")
+                        for item in answer.product_definition_values
+                    ],
                 }
             )
-            user_message = answer
+            user_message = answer.text
             clarification_rounds += 1
 
     def revise(
@@ -6552,18 +6843,27 @@ class AdaptivePlanningCoordinator:
                 and clarification_rounds >= self.policy.max_clarification_rounds
             ):
                 raise PlanningError("Planning revision exceeded its question limit")
-            answer = answer_question(response.question)
-            if answer is None:
+            presented_question = invocation.presented_question()
+            answer_value = answer_question(presented_question)
+            if answer_value is None:
                 self.store.cancel(request.run_id, now=self.clock())
                 return None
-            answer = _clean_text(answer, label="clarification answer")
+            answer = _normalize_question_answer(
+                presented_question,
+                answer_value,
+            )
             transcript.append(
                 {
                     "question": response.question.model_dump(mode="json"),
-                    "answer": answer,
+                    "answer": answer.text,
+                    "selected_option_id": answer.selected_option_id,
+                    "product_definition_values": [
+                        item.model_dump(mode="json")
+                        for item in answer.product_definition_values
+                    ],
                 }
             )
-            user_message = answer
+            user_message = answer.text
             clarification_rounds += 1
 
     def structured_edit(
@@ -6695,6 +6995,22 @@ class AdaptivePlanningCoordinator:
                 raise PlanningError(
                     "persisted Planning transcript has an invalid user answer"
                 )
+            answer_values_payload = entry.get("product_definition_values", ())
+            if not isinstance(answer_values_payload, (list, tuple)):
+                raise PlanningError(
+                    "persisted Planning transcript has invalid product values"
+                )
+            answer_values = tuple(
+                PlanningOptionValue.model_validate(item)
+                for item in answer_values_payload
+            )
+            if any(
+                item.dimension not in question.product_definition_dimensions
+                for item in answer_values
+            ):
+                raise PlanningError(
+                    "persisted Planning answer exceeds its question dimension scope"
+                )
             if question.decision_category is None or question.decision_owner is None:
                 raise PlanningError(
                     "persisted Planning transcript has an incomplete question contract"
@@ -6708,6 +7024,9 @@ class AdaptivePlanningCoordinator:
                 owner=question.decision_owner,
                 product_definition_dimensions=(question.product_definition_dimensions),
                 answer=answer,
+                answer_dimension_values=tuple(
+                    (item.dimension, item.value) for item in answer_values
+                ),
             )
         return contracts
 
@@ -6847,6 +7166,7 @@ class AdaptivePlanningCoordinator:
                 ),
             )
             parsed: PlanningModelResponse | None = None
+            question_admission: PlanningQuestionAdmission | None = None
             response_normalizations: tuple[str, ...] = ()
             correction_binding_normalizations: tuple[str, ...] = ()
             validation_error: str | None = None
@@ -6958,6 +7278,11 @@ class AdaptivePlanningCoordinator:
                                 for question_id, contract in question_contracts.items()
                                 if contract.answer is not None
                             },
+                            question_dimension_values={
+                                question_id: dict(contract.answer_dimension_values)
+                                for question_id, contract in question_contracts.items()
+                                if contract.answer_dimension_values
+                            },
                         )
                     )
                     normalization_list = [
@@ -7017,6 +7342,21 @@ class AdaptivePlanningCoordinator:
                         validate_question_admission(
                             parsed.question,
                             previous_question_ids=question_contracts,
+                        )
+                        question_admission = PlanningQuestionAdmission(
+                            origin=(
+                                PlanningQuestionOrigin.PLANNER_SUGGESTION
+                                if clarification_recovery is None
+                                else PlanningQuestionOrigin.CONTROLLER_REQUIREMENT
+                            ),
+                            product_definition_dimensions=(
+                                parsed.question.product_definition_dimensions
+                            ),
+                            controller_invariant_ids=(
+                                ()
+                                if clarification_recovery is None
+                                else clarification_recovery.invariant_ids
+                            ),
                         )
                     else:
                         assert parsed.proposal is not None
@@ -7180,6 +7520,7 @@ class AdaptivePlanningCoordinator:
                 prompt=prompt,
                 result=result,
                 parsed_response=parsed,
+                question_admission=question_admission,
                 response_normalizations=response_normalizations,
                 validation_error=validation_error,
                 response_validation=response_validation,
@@ -7508,9 +7849,42 @@ def _interactive_question_answerer(
     read: InputReader,
     write: OutputWriter,
 ) -> QuestionAnswerer:
-    def answer(question: PlanningQuestion) -> str | None:
+    dimension_prompts = {
+        ProductDefinitionDimension.TARGET_USERS: (
+            "Who will use or receive the result? Say when the audience is not "
+            "material to this task."
+        ),
+        ProductDefinitionDimension.PRIMARY_WORKFLOW: (
+            "What end-to-end activity should the result support?"
+        ),
+        ProductDefinitionDimension.DELIVERY_MATURITY: (
+            "Should SAT target a throwaway prototype, usable local product, or "
+            "releasable small product?"
+        ),
+        ProductDefinitionDimension.USABILITY_EXPECTATIONS: (
+            "What usability outcome is material for this result?"
+        ),
+        ProductDefinitionDimension.OPERATIONAL_EXPECTATIONS: (
+            "What operational behavior is material for this result?"
+        ),
+        ProductDefinitionDimension.DELIVERY_EXPECTATIONS: (
+            "What must be included in the delivered result?"
+        ),
+    }
+
+    def answer(
+        question: PresentedPlanningQuestion,
+    ) -> PlanningQuestionAnswer | None:
+        admission = (
+            question.admission
+            if isinstance(question, PresentedPlanningQuestion)
+            else PlanningQuestionAdmission(
+                origin=PlanningQuestionOrigin.PLANNER_SUGGESTION,
+                product_definition_dimensions=(question.product_definition_dimensions),
+            )
+        )
         write("")
-        write(f"Planning question: {question.text}")
+        write("Planning clarification")
         assert question.decision_category is not None
         assert question.decision_owner is not None
         write(
@@ -7519,38 +7893,103 @@ def _interactive_question_answerer(
         )
         if question.product_definition_dimensions:
             write(
-                "Product definition affected: "
+                "Decision scope: "
                 + ", ".join(
                     dimension.value
                     for dimension in question.product_definition_dimensions
                 )
             )
-        write(f"Why this matters: {question.why}")
-        write("Missing evidence:")
-        for item in question.missing_evidence:
-            write(f"  - {item}")
-        write("What this can change:")
-        for item in question.material_consequences:
-            write(f"  - {item}")
+        if admission.origin is PlanningQuestionOrigin.CONTROLLER_REQUIREMENT:
+            write(
+                "Question source: Controller validation requires this user-owned "
+                "decision before the plan can be approved."
+            )
+            write(
+                "Controller invariants: "
+                + ", ".join(admission.controller_invariant_ids)
+            )
+        else:
+            write(
+                "Question source: Planner-selected clarification for this task; "
+                "it is not a universal SAT prerequisite."
+            )
+        if question.product_definition_dimensions:
+            if len(question.product_definition_dimensions) == 1:
+                write(
+                    "Decision prompt: "
+                    + dimension_prompts[question.product_definition_dimensions[0]]
+                )
+            else:
+                write(
+                    "Decision prompt: Choose one complete set of values for only "
+                    "the product fields listed in Decision scope."
+                )
+        else:
+            write(f"Planning question: {question.text}")
+            write(f"Planner reason: {question.why}")
+            write("Missing evidence:")
+            for item in question.missing_evidence:
+                write(f"  - {item}")
+            write("What this can change:")
+            for item in question.material_consequences:
+                write(f"  - {item}")
         for index, option in enumerate(question.options, start=1):
-            write(f"  {index}. {option.label} — {option.description}")
+            if question.product_definition_dimensions:
+                values = "; ".join(
+                    f"{item.dimension.value}: {item.value}"
+                    for item in option.product_definition_values
+                )
+                write(f"  {index}. {values}")
+            else:
+                write(f"  {index}. {option.label} — {option.description}")
+        if question.product_definition_dimensions:
+            write("  d. Show Planner wording and suggestion notes (advisory only)")
         write("  c. Custom answer")
         write("  x. Cancel")
         while True:
             choice = read("Choose an option or enter a custom answer: ").strip()
             if choice.casefold() in {"x", "cancel"}:
                 return None
+            if question.product_definition_dimensions and choice.casefold() in {
+                "d",
+                "details",
+            }:
+                write("Planner-authored advisory details (cannot expand scope):")
+                write(f"  wording: {question.text}")
+                write(f"  reason: {question.why}")
+                write("  missing evidence claimed by Planner:")
+                for item in question.missing_evidence:
+                    write(f"    - {item}")
+                write("  possible consequences claimed by Planner:")
+                for item in question.material_consequences:
+                    write(f"    - {item}")
+                write("  suggestion notes:")
+                for option in question.options:
+                    write(f"    - {option.label}: {option.description}")
+                continue
             if choice.casefold() in {"c", "custom"}:
                 custom = read("Your answer: ").strip()
                 if custom:
-                    return custom
+                    return PlanningQuestionAnswer(text=custom)
                 write("Please enter a non-empty answer.")
                 continue
             if choice.isdigit() and 1 <= int(choice) <= len(question.options):
                 selected = question.options[int(choice) - 1]
-                return f"{selected.label}: {selected.description}"
+                selected_text = (
+                    "; ".join(
+                        f"{item.dimension.value}: {item.value}"
+                        for item in selected.product_definition_values
+                    )
+                    if selected.product_definition_values
+                    else f"{selected.label}: {selected.description}"
+                )
+                return PlanningQuestionAnswer(
+                    text=selected_text,
+                    selected_option_id=selected.id,
+                    product_definition_values=selected.product_definition_values,
+                )
             if choice:
-                return choice
+                return PlanningQuestionAnswer(text=choice)
             write("Please choose a suggestion, enter a custom answer, or cancel.")
 
     return answer
@@ -7667,6 +8106,7 @@ def run_interactive_planning(
         write("Planning cancelled; no runtime Agent was created.")
         return None
 
+    show_fixed_policy = False
     while True:
         preview = preview_adaptive_proposal(
             request,
@@ -7683,12 +8123,18 @@ def run_interactive_planning(
                     if coordinator.budget_ledger is None
                     else coordinator.budget_ledger.snapshot()
                 ),
+                include_fixed_policy=show_fixed_policy,
             )
         )
         write("")
         write("  a. Approve and allow the controller to create this team")
         write("  r. Request changes in your own words")
         write("  e. Edit safe limits")
+        write(
+            "  f. "
+            + ("Hide" if show_fixed_policy else "Show")
+            + " fixed policy details (no plan revision)"
+        )
         write("  c. Cancel")
         choice = read("Review choice: ").strip().casefold()
         if choice in {"a", "approve"}:
@@ -7702,6 +8148,14 @@ def run_interactive_planning(
             coordinator.store.cancel(request.run_id, now=coordinator.clock())
             write("Planning cancelled; no runtime Agent was created.")
             return None
+        if choice in {"f", "fixed"}:
+            show_fixed_policy = not show_fixed_policy
+            write(
+                "Fixed policy details are now "
+                + ("shown." if show_fixed_policy else "hidden.")
+                + " The proposal and model-call count are unchanged."
+            )
+            continue
         if choice in {"r", "revise"}:
             change = read("Describe the changes you want: ").strip()
             if not change:
@@ -7741,4 +8195,4 @@ def run_interactive_planning(
             except (PlanningError, ValidationError, ValueError) as error:
                 write(f"Plan was not changed: {_safe_validation_detail(error)}")
             continue
-        write("Choose a, r, e, or c.")
+        write("Choose a, r, e, f, or c.")

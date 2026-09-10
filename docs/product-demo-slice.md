@@ -165,7 +165,10 @@ The user may answer in ordinary language. SAT then:
    composition, dependencies, permissions, budget, or model use. Missing
    material target users, primary workflow, or delivery maturity must be
    clarified, while an explicit throwaway prototype does not trigger a fixed
-   questionnaire;
+   questionnaire. Every focused question identifies its admitted decision scope
+   and whether it is a Planner suggestion or a Controller-required recovery;
+   its suggested answers supply exact values only for that scope. Planner prose
+   is optional advisory detail, not system policy;
 6. Presents one complete overview beginning with target users, killer workflow,
    delivery maturity, usability/operational/delivery expectations, non-goals,
    and architecture/team/cost/delivery effects, then containing requirements,
@@ -173,9 +176,12 @@ The user may answer in ordinary language. SAT then:
    Agent work assignments and their derived write/read-only authority, proposed
    Agents and rationales, dependencies, permissions, workspace scopes, model,
    provider-liveness and optional whole-run deadline authority,
-   execution waves, concurrency, iterations, and budgets; and
-7. Lets the user approve, request a natural-language replacement, make a
-   supported safe edit, or cancel before any execution Agent is created.
+   execution waves, concurrency, iterations, and budgets. Fixed
+   execution-profile constraints, lifecycle safeguards, and Review definitions
+   are summarized by default and can be shown or hidden losslessly without a
+   model call or plan revision; and
+7. Lets the user approve, use `r` for an explicit natural-language replacement,
+   make a supported safe edit, or cancel before any execution Agent is created.
 
 Each interactive answer must be valid terminal Unicode. An undecodable answer
 is rejected at its prompt and collected again; it must never reach Planning

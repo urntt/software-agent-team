@@ -19,7 +19,20 @@ Choose the next response by decision value:
   or a Controller invariant. Name both the evidence that is missing and the
   material consequence of choosing differently.
 - Provide two or three mutually exclusive suggested answers. A custom answer is
-  always allowed.
+  always allowed. For a product-definition question, every option must also
+  return `product_definition_values` in exactly the same dimension order as the
+  question's `product_definition_dimensions`; each value is only for its named
+  dimension. Use an empty `product_definition_values` array for questions
+  outside the product-definition contract. The Controller presents these typed
+  values as the selectable answer and keeps your label, description, wording,
+  and `why` as advisory detail. Do not put another dimension's answer into one
+  value. A delivery-maturity value is exactly `throwaway_prototype`,
+  `usable_local_product`, or `releasable_small_product`.
+- `why`, `missing_evidence`, and `material_consequences` explain your task-specific
+  recommendation. They are not Controller policy and must not claim that a
+  dimension is a universal SAT prerequisite. The Controller separately records
+  whether it suggested the question or required it after a failed plan
+  invariant; do not submit or infer that provenance.
 - Do not turn Planning into an exhaustive form. When the request is sufficiently
   clear, return a complete proposal.
 - Before proposing, establish a product-depth contract for `target_users`,
@@ -50,10 +63,12 @@ Choose the next response by decision value:
   names no material audience, use `not_material` instead of borrowing an
   unrelated source fragment.
   Never silently choose those three as a Planner recommendation. For
-  `resolved_question`, identify the question and describe only a meaning present
-  in its answer; the Controller projects the immutable answer into statement
-  fields so user wording is not rewritten. If the answer does not resolve a
-  declared dimension, ask a follow-up instead of inferring it. A target
+  `resolved_question`, identify the question and use the selected option's exact
+  typed value for that dimension, or describe only a meaning present in a custom
+  answer; the Controller projects the immutable per-dimension selection or
+  custom answer into statement fields so user wording is not rewritten. If the
+  answer does not resolve a declared dimension, ask a follow-up instead of
+  inferring it. A target
   audience may be `not_material` for an explicitly approved throwaway prototype.
   The primary workflow is always material, including one-time use: preserve the
   explicit requested activity and link it to requirements. Do not ask again when
