@@ -987,6 +987,34 @@ def _normalize_planning_response_payload(
 
     normalized: dict[str, object] = json.loads(json.dumps(payload))
     changes: list[str] = []
+    envelope_fields = {"kind", "question", "proposal"}
+    if not envelope_fields.intersection(normalized):
+        payload_fields = set(normalized)
+        bare_candidates: list[tuple[PlanningResponseKind, type[BaseModel]]] = []
+        for response_kind, body_type in (
+            (PlanningResponseKind.QUESTION, PlanningQuestion),
+            (PlanningResponseKind.PROPOSAL, PlanningProposalBody),
+        ):
+            allowed_fields = set(body_type.model_fields)
+            required_fields = {
+                name
+                for name, field in body_type.model_fields.items()
+                if field.is_required()
+            }
+            if required_fields.issubset(payload_fields) and payload_fields.issubset(
+                allowed_fields
+            ):
+                bare_candidates.append((response_kind, body_type))
+        if len(bare_candidates) == 1:
+            response_kind, _ = bare_candidates[0]
+            normalized = {
+                "kind": response_kind.value,
+                response_kind.value: normalized,
+            }
+            changes.append(
+                f"framed bare {response_kind.value} body as "
+                f"{response_kind.value} response"
+            )
     if "kind" not in normalized:
         candidates = tuple(
             name

@@ -576,11 +576,12 @@ Its request proves explicit model-work authorization. Every model invocation,
 including a rejected semantic response, becomes a write-once turn containing
 the prompt digest, exact typed submission and content-free binding evidence,
 any non-authoritative assistant response and its digest, plus bounded provider
-evidence. When the controller infers an
-unambiguous missing question/proposal discriminator, resolves an exact active
-profile criterion ID collision, or canonicalizes a safe relative Planning path
-presentation, it stores the validated normalized body and an explicit
-normalization list alongside that raw evidence. A redundant definition is
+evidence. When the controller frames a complete bare question or proposal body
+that matches exactly one current body schema, infers an unambiguous missing
+question/proposal discriminator on an existing envelope, resolves an exact
+active profile criterion ID collision, or canonicalizes a safe relative
+Planning path presentation, it stores the validated normalized body and an
+explicit normalization list alongside that raw evidence. A redundant definition is
 removed without adopting its text. If removal would erase otherwise-uncovered
 requirement coverage with a responsible writer, the model criterion receives a
 deterministic non-reserved ID and ambiguous task references are expanded to both
@@ -589,6 +590,8 @@ relationships remain model-owned.
 Quality-owned tasks are retained as approved semantic intent and passed to the
 matching read-only Agent. They do not alter the AgentSpec-owned permission,
 dependency, model, time authority, scope, or invocation contract.
+The bare-body framing path requires all required fields, forbids envelope and
+unknown fields, and never applies to a partial or mixed question/proposal object.
 Unsafe, ambiguous, or permission-changing values remain validation failures.
 Turns form a predecessor-digest chain anchored by atomic `session.json` state.
 Proposal revisions are immutable and must match their source turn or a

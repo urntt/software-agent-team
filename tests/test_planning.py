@@ -7443,6 +7443,72 @@ def test_safe_response_variants_do_not_consume_a_model_repair_call(
     )
 
 
+def test_bare_proposal_body_is_framed_without_a_model_repair_call(
+    tmp_path: Path,
+) -> None:
+    expected = proposal_response()
+    assert expected.proposal is not None
+    payload = expected.proposal.model_dump(mode="json")
+    executor = ScriptedAgentExecutor(
+        [ScriptedAgentResponse(text="ignored", submission_payload=payload)]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(response_repair_limit=0),
+        clock=AdvancingClock(),
+    )
+
+    created = coordinator.start(
+        request(),
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+
+    assert created is not None
+    assert len(executor.requests) == 1
+    turn = store.load_turn(request().run_id, 1)
+    assert turn.submission_payload == payload
+    assert turn.parsed_response == expected
+    assert turn.response_validation is None
+    assert turn.response_normalizations == (
+        "framed bare proposal body as proposal response",
+    )
+
+
+def test_bare_question_body_has_one_unambiguous_response_frame() -> None:
+    expected = question_response()
+    assert expected.question is not None
+    payload = expected.question.model_dump(mode="json")
+
+    normalized, changes = planning._normalize_planning_response_payload(payload)
+
+    assert PlanningModelResponse.model_validate(normalized) == expected
+    assert changes == ("framed bare question body as question response",)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"title": "Partial", "objective": "Not a complete proposal body."},
+        {
+            **proposal_response().proposal.model_dump(mode="json"),
+            **question_response().question.model_dump(mode="json"),
+        },
+    ],
+    ids=("partial", "mixed-question-and-proposal"),
+)
+def test_bare_response_framing_rejects_partial_or_ambiguous_shapes(
+    payload: dict[str, object],
+) -> None:
+    normalized, changes = planning._normalize_planning_response_payload(payload)
+
+    assert normalized == payload
+    assert not any(change.startswith("framed bare ") for change in changes)
+    with pytest.raises(ValidationError):
+        PlanningModelResponse.model_validate(normalized)
+
+
 def test_valid_quality_task_does_not_consume_a_model_repair_call(
     tmp_path: Path,
 ) -> None:

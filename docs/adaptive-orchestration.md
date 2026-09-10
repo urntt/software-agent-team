@@ -314,8 +314,13 @@ Planning responses remain strict, but harmless presentation differences are
 not treated as reasoning failures. Before schema validation, the controller
 may perform only these bounded, semantics-preserving normalizations:
 
-- Infer `kind` when exactly one non-null `question` or `proposal` body makes it
-  unambiguous;
+- Frame a bare Planning question or proposal body when its top-level fields
+  contain every required field of exactly one current body schema, contain no
+  envelope or unknown fields, and cannot match the other body. The Controller
+  preserves that complete object as the body and supplies only the derived
+  response kind; partial, mixed, and ambiguous objects remain invalid;
+- Infer `kind` when an existing envelope has exactly one non-null `question` or
+  `proposal` body and therefore makes the discriminator unambiguous;
 - Remove a criterion definition whose exact ID belongs to the active
   controller-owned execution profile, while retaining any task binding to that
   known ID and using only the profile's canonical definition. If the colliding
@@ -1101,9 +1106,11 @@ question/proposal response, append-only turn and proposal store,
 natural-language revision, safe limit editor, complete overview, and explicit
 approval evidence form one path. Bare `sat` activates this interaction together
 with Batch 3C, so an approved dynamic plan is the exact plan the controller
-executes. Before strict validation, the Planning boundary
-infers only an unambiguous response kind, canonicalizes only safe relative-path
-presentation, removes redundant active-profile definition echoes, and
+executes. Before strict validation, the Planning boundary frames only a
+complete, unambiguous bare question or proposal body, infers only an
+unambiguous response kind for an existing body envelope, canonicalizes only
+safe relative-path presentation, removes redundant active-profile definition
+echoes, and
 deterministically deconflicts an echo whose model-owned relationship is still
 needed. The canonical profile text remains controller-owned, both task bindings
 are retained, and the raw response plus every normalization remain recorded in
