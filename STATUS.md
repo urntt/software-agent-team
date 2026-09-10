@@ -64,8 +64,9 @@ lifecycle-owner Git blobs are identical at `v0.1.2`.
 
 ## Current Development Head
 
-The current role-specialization implementation is anchored by
-`c36090d543fe6bdd230c88d8de7684082733b1bb`. Planning schema v19 keeps
+The current role-specialization implementation extends the line anchored by
+`c36090d543fe6bdd230c88d8de7684082733b1bb` through code candidate
+`0dc0af603a8368dfe61fdbf22362755025dfaf89`. Planning schema v19 keeps
 schema-v2 through schema-v18 evidence readable and separates three authorities:
 Controller-required recovery, Planner-selected task clarification, and user
 approval. A focused question can change only its declared decision scope;
@@ -101,11 +102,30 @@ different Agent sets, dependency waves, typed outputs, verifier assignments,
 acceptance strategies, and user overviews without deriving authority from a
 free-form role label.
 
-This exact clean revision passed one canonical `make check` with 1,445 tests
-and zero residual stage processes, process leases, sandbox containers, volumes,
-or private test directories. A provider-backed ordinary-interface run that
-selects and executes each new specialization remains pending; offline schema,
-runtime, and gate success does not establish that external boundary.
+The subsequent planning-authority changes make the typed Agent graph the sole
+owner of approved team topology and use request-local semantic correction slot
+identities without relaxing exact Controller authority. Runtime
+`expected_paths` are now explicitly advisory planning forecasts: they do not
+create required deliverables, write authority, or an exception to repository
+ignore policy. A production-shaped regression preserves the Journey 49 path
+set, including an ignored `uv.lock`, and verifies that the developer prompt
+cannot turn that forecast into a lockfile obligation.
+
+Managed upgrades now label SAT-owned sandbox images, retain only the active
+application and its direct predecessor, restore the prior image tag on failed
+activation, and remove a superseded image only when its exact identity is
+attributable, untagged, and unused by every container. Unknown version entries,
+legacy images, and foreign Docker resources fail closed or remain untouched.
+Consecutive-upgrade, idempotent-reactivation, rollback, and foreign-resource
+regressions exercise those ownership boundaries.
+
+The exact clean code candidate `0dc0af603a8368dfe61fdbf22362755025dfaf89`
+passed one canonical `make check` with 1,460 tests in 816.46 seconds. The report
+records zero cgroup/kernel OOM delta and no residual stage processes, process
+leases, sandbox containers, volumes, or gate-private test directory. A fresh
+managed upgrade and provider-backed ordinary-interface run that executes each
+new specialization remain pending; offline schema, lifecycle, and gate success
+do not establish those external boundaries.
 
 The preceding managed non-root bare-`sat` Planning acceptance on `d94850e`
 used `deepseek/deepseek-v4-flash-vision-exp`, asked only the overwrite-policy
