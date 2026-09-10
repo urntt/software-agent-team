@@ -7535,7 +7535,11 @@ def test_product_planning_distinguishes_new_relational_invariant_and_continues(
             json.dumps(invalid_payload),
             correction_response(
                 invalid_payload,
-                {"/proposal/tasks": valid_payload["proposal"]["tasks"]},
+                {
+                    "/proposal/tasks/0/acceptance_criteria": (
+                        valid_payload["proposal"]["tasks"][0]["acceptance_criteria"]
+                    )
+                },
             ),
             correction_response(
                 first_corrected,
@@ -7567,7 +7571,9 @@ def test_product_planning_distinguishes_new_relational_invariant_and_continues(
     first = store.load_turn(request().run_id, 1)
     assert first.response_validation is not None
     assert first.response_validation.schema_version == 2
-    assert first.response_validation.correction_paths == ("/proposal/tasks",)
+    assert first.response_validation.correction_paths == (
+        "/proposal/tasks/0/acceptance_criteria",
+    )
     assert first.response_validation.issues[0].invariant_id == (
         "planning_writer_criterion_coverage"
     )
@@ -7575,6 +7581,15 @@ def test_product_planning_distinguishes_new_relational_invariant_and_continues(
         item.model_dump(mode="json")
         for item in first.response_validation.issues[0].subjects
     ] == [{"kind": "criterion", "identifier": "AC_SCAN"}]
+    contract = executor.requests[1].submission_contract
+    assert contract is not None
+    replacement = contract.parameters_schema()["properties"]["replacements"]["items"][
+        "oneOf"
+    ][0]["properties"]["replacement_value"]
+    assert replacement["type"] == "array"
+    assert replacement["items"]["enum"] == ["AC_SCAN", "AC_REPORT"]
+    assert replacement["uniqueItems"] is True
+    assert replacement["allOf"] == [{"contains": {"const": "AC_SCAN"}}]
 
     second = store.load_turn(request().run_id, 2)
     assert second.semantic_correction_outcome == "improved"
@@ -7594,6 +7609,106 @@ def test_product_planning_distinguishes_new_relational_invariant_and_continues(
     ]
     assert "planning_criterion_verifier_capability" in executor.requests[2].prompt
     assert store.load_turn(request().run_id, 3).semantic_correction_outcome == (
+        "accepted"
+    )
+
+
+def test_writer_coverage_correction_preserves_multiple_writer_choice(
+    tmp_path: Path,
+) -> None:
+    body = proposal_body()
+    primary_writer = body.agents[0].model_copy(
+        update={"workspace_scope": "repository/src"}
+    )
+    second_writer = ProposedAgent(
+        id="docs_developer",
+        label="Documentation Developer",
+        responsibility="Implement the documented user workflow.",
+        rationale="The separate documentation scope can proceed independently.",
+        capability=AgentCapability.IMPLEMENTATION,
+        specialization=AgentSpecialization.PRODUCT_IMPLEMENTATION,
+        stage_id="implement",
+        workspace_scope="repository/docs",
+        workload=AgentWorkload.ROUTINE,
+    )
+    quality_agents = tuple(
+        agent.model_copy(update={"dependencies": (primary_writer.id, second_writer.id)})
+        for agent in body.agents[1:]
+    )
+    primary_task = body.tasks[0].model_copy(
+        update={
+            "acceptance_criteria": ("AC_SCAN",),
+            "expected_paths": ("src",),
+        }
+    )
+    secondary_task = ProposedTask(
+        id="TASK_DOCUMENT",
+        owner_agent_id=second_writer.id,
+        description="Implement documentation for the reported result.",
+        acceptance_criteria=("AC_SCAN",),
+        expected_paths=("docs",),
+    )
+    invalid = body.model_copy(
+        update={
+            "agents": (primary_writer, second_writer, *quality_agents),
+            "tasks": (primary_task, secondary_task),
+        }
+    )
+    valid = invalid.model_copy(
+        update={
+            "tasks": (
+                primary_task,
+                secondary_task.model_copy(
+                    update={"acceptance_criteria": ("AC_REPORT",)}
+                ),
+            )
+        }
+    )
+    valid_payload = proposal_response(valid).model_dump(mode="json")
+    invalid_payload = deepcopy(valid_payload)
+    invalid_payload["proposal"]["tasks"] = [
+        task.model_dump(mode="json") for task in invalid.tasks
+    ]
+    executor = ScriptedAgentExecutor(
+        [
+            json.dumps(invalid_payload),
+            correction_response(
+                invalid_payload,
+                {"/proposal/tasks": valid_payload["proposal"]["tasks"]},
+            ),
+        ]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(response_repair_limit=None),
+        clock=AdvancingClock(),
+    )
+
+    created = coordinator.start(
+        request(),
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+
+    assert created is not None
+    assert created.body == valid
+    contract = executor.requests[1].submission_contract
+    assert contract is not None
+    replacement = contract.parameters_schema()["properties"]["replacements"]["items"][
+        "oneOf"
+    ][0]["properties"]["replacement_value"]
+    assert [
+        item["properties"]["owner_agent_id"]["const"]
+        for item in replacement["prefixItems"]
+    ] == [primary_writer.id, second_writer.id]
+    assert replacement["allOf"][0]["contains"]["properties"]["owner_agent_id"][
+        "enum"
+    ] == [primary_writer.id, second_writer.id]
+    assert replacement["allOf"][0]["contains"]["properties"]["acceptance_criteria"][
+        "contains"
+    ] == {"const": "AC_REPORT"}
+    assert store.load_turn(request().run_id, 2).semantic_correction_outcome == (
         "accepted"
     )
 
@@ -8628,7 +8743,11 @@ def test_profile_collision_preserves_relation_before_writer_binding_correction(
             json.dumps(payload),
             correction_response(
                 correction_base,
-                {"/proposal/tasks": corrected_tasks},
+                {
+                    "/proposal/tasks/0/acceptance_criteria": corrected_tasks[0][
+                        "acceptance_criteria"
+                    ]
+                },
             ),
         ]
     )
@@ -8653,7 +8772,9 @@ def test_profile_collision_preserves_relation_before_writer_binding_correction(
         "AC_TASK_DOCUMENTATION from controller-owned profile ID",
     )
     assert first.response_validation is not None
-    assert first.response_validation.correction_paths == ("/proposal/tasks",)
+    assert first.response_validation.correction_paths == (
+        "/proposal/tasks/0/acceptance_criteria",
+    )
     assert first.response_validation.issues[0].invariant_id == (
         "planning_writer_criterion_coverage"
     )

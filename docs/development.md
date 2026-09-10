@@ -222,6 +222,13 @@ The production correction loop must repair the complete task without asking for
 a user revision. Re-run that provider-backed counterexample only once as part of
 frozen-candidate batch acceptance, not after each local repair.
 
+Exercise missing writer coverage through the same production correction path.
+The task-array slot must preserve existing task identities and owners, expose
+only known criterion and dependency IDs, and require every missing criterion to
+appear in at least one write-capable task. Include both single- and multi-writer
+cases so the Controller constrains authority without choosing the Planner's
+semantic assignment.
+
 Planning and dynamic runtime configuration explicitly disable OpenClaw's memory
 plugin slot while enabling SAT's terminal submission plugin. Check the generated
 configuration against the pinned runtime's actual slot resolver: an allow-list

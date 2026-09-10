@@ -565,6 +565,14 @@ rejects any other ID before an overview is shown and preserves valid profile
 bindings when it materializes the TaskBrief and implementation plan. A profile
 criterion need not be forced onto a task merely because it exists.
 
+When validation finds proposal criteria absent from all writer-owned tasks, the
+correction slot keeps the current task count, positions, IDs, and owners fixed.
+For every missing criterion, its array schema requires at least one existing
+implementation or integration task to contain that ID. With multiple writers,
+the Planner still chooses the appropriate task; the Controller does not assign
+semantic work itself. A quality task, an unknown or duplicate ID, or an unchanged
+task array cannot satisfy this relationship.
+
 Each Planner-owned criterion also declares `review_boundaries`. Most criteria
 use an empty list. A description containing an unqualified prohibition or
 safety guarantee must declare all four controller-known entry boundaries:

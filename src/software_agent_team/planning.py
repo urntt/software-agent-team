@@ -2927,6 +2927,11 @@ class PlanningProposalBody(BaseModel):
         expected = set(criterion_ids)
         missing = expected - covered
         if missing:
+            writer_task_indexes = tuple(
+                index
+                for index, task in enumerate(self.tasks)
+                if task.owner_agent_id in implementation_agents
+            )
             message = (
                 "writer tasks do not cover proposal acceptance criteria: "
                 + ", ".join(sorted(missing))
@@ -2934,7 +2939,11 @@ class PlanningProposalBody(BaseModel):
             raise _planning_model_invariant(
                 "planning_writer_criterion_coverage",
                 message,
-                paths=("/proposal/tasks",),
+                paths=(
+                    (f"/proposal/tasks/{writer_task_indexes[0]}/acceptance_criteria")
+                    if len(writer_task_indexes) == 1
+                    else "/proposal/tasks",
+                ),
                 subjects=_planning_subjects(
                     *((ResponseIssueSubjectKind.CRITERION, item) for item in missing)
                 ),
@@ -5204,6 +5213,165 @@ def _planning_response_schema_for_correction(
         if not isinstance(tasks_schema, dict):
             raise PlanningError("Planning response schema has no task collection")
         tasks_schema["prefixItems"] = task_items
+
+    writer_coverage_issues = tuple(
+        issue
+        for issue in plan.diagnostic.issues
+        if issue.invariant_id == "planning_writer_criterion_coverage"
+        and issue.path in target_paths
+        and (
+            issue.path == "/proposal/tasks"
+            or re.fullmatch(
+                r"/proposal/tasks/[0-9]+/acceptance_criteria",
+                issue.path,
+            )
+            is not None
+        )
+    )
+    if writer_coverage_issues:
+        mutable_coverage_inputs = tuple(
+            path
+            for path in (
+                "/proposal/acceptance_criteria",
+                "/proposal/agents",
+            )
+            if identity_owner_is_mutable(path)
+        )
+        if mutable_coverage_inputs:
+            raise PlanningError(
+                "Writer coverage correction cannot be compiled while its "
+                "criterion or Agent authority is mutable: "
+                + ", ".join(mutable_coverage_inputs)
+            )
+
+        raw_agents = proposal.get("agents")
+        raw_tasks = proposal.get("tasks")
+        if not isinstance(raw_agents, list) or not isinstance(raw_tasks, list):
+            raise PlanningError(
+                "Writer coverage correction requires typed Agents and tasks"
+            )
+        try:
+            agents = tuple(ProposedAgent.model_validate(item) for item in raw_agents)
+            tasks = tuple(ProposedTask.model_validate(item) for item in raw_tasks)
+        except ValidationError as error:
+            raise PlanningError(
+                "Writer coverage correction authority inputs are not structurally valid"
+            ) from error
+
+        missing_criterion_ids = tuple(
+            dict.fromkeys(
+                subject.identifier
+                for issue in writer_coverage_issues
+                for subject in issue.subjects
+                if subject.kind is ResponseIssueSubjectKind.CRITERION
+            )
+        )
+        if not missing_criterion_ids or any(
+            criterion_id not in stable_criterion_ids
+            for criterion_id in missing_criterion_ids
+        ):
+            raise PlanningError(
+                "Writer coverage correction has no exact known criterion subjects"
+            )
+        writer_ids = tuple(
+            agent.id
+            for agent in agents
+            if agent.capability
+            in {AgentCapability.IMPLEMENTATION, AgentCapability.INTEGRATION}
+        )
+        if not writer_ids:
+            raise PlanningError("Writer coverage correction has no writer Agents")
+
+        task_definition = definitions.get("ProposedTask")
+        if not isinstance(task_definition, dict):
+            raise PlanningError("Planning response schema has no task definition")
+        exact_task_indexes = {
+            int(issue.path.split("/")[3])
+            for issue in writer_coverage_issues
+            if issue.path != "/proposal/tasks"
+        }
+        if any(index >= len(tasks) for index in exact_task_indexes):
+            raise PlanningError("Writer coverage correction index is out of range")
+        task_items: list[dict[str, object]] = []
+        for task_index, task in enumerate(tasks):
+            scoped_task = deepcopy(task_definition)
+            scoped_properties = scoped_task.get("properties")
+            if not isinstance(scoped_properties, dict):
+                raise PlanningError(
+                    "Planning response schema has no task field contract"
+                )
+            scoped_properties["id"] = {
+                "const": task.id,
+                "type": "string",
+            }
+            scoped_properties["owner_agent_id"] = {
+                "const": task.owner_agent_id,
+                "type": "string",
+            }
+            acceptance_schema = scoped_properties.get("acceptance_criteria")
+            acceptance_items = (
+                acceptance_schema.get("items")
+                if isinstance(acceptance_schema, dict)
+                else None
+            )
+            dependencies_schema = scoped_properties.get("dependencies")
+            dependency_items = (
+                dependencies_schema.get("items")
+                if isinstance(dependencies_schema, dict)
+                else None
+            )
+            if not isinstance(acceptance_items, dict) or not isinstance(
+                dependency_items, dict
+            ):
+                raise PlanningError(
+                    "Planning response schema has no task relation contract"
+                )
+            acceptance_items["enum"] = stable_criterion_ids
+            acceptance_schema["uniqueItems"] = True
+            if task_index in exact_task_indexes:
+                acceptance_schema["allOf"] = [
+                    {"contains": {"const": criterion_id}}
+                    for criterion_id in missing_criterion_ids
+                ]
+            dependency_items["enum"] = stable_task_ids
+            dependencies_schema["uniqueItems"] = True
+            task_items.append(scoped_task)
+
+        tasks_schema = definition_properties("PlanningProposalBody").get("tasks")
+        if not isinstance(tasks_schema, dict):
+            raise PlanningError("Planning response schema has no task collection")
+        tasks_schema["prefixItems"] = task_items
+        if any(issue.path == "/proposal/tasks" for issue in writer_coverage_issues):
+            tasks_schema.update(
+                {
+                    "items": False,
+                    "minItems": len(tasks),
+                    "maxItems": len(tasks),
+                    "allOf": [
+                        {
+                            "contains": {
+                                "type": "object",
+                                "properties": {
+                                    "owner_agent_id": {
+                                        "type": "string",
+                                        "enum": list(writer_ids),
+                                    },
+                                    "acceptance_criteria": {
+                                        "type": "array",
+                                        "contains": {"const": criterion_id},
+                                    },
+                                },
+                                "required": [
+                                    "owner_agent_id",
+                                    "acceptance_criteria",
+                                ],
+                            },
+                            "minContains": 1,
+                        }
+                        for criterion_id in missing_criterion_ids
+                    ],
+                }
+            )
     return schema
 
 
