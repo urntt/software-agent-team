@@ -635,10 +635,13 @@ requirement and requires no user revision.
 After deriving non-overlapping Review scopes, the Controller also checks every
 Review-owned task against its owner's exact criterion set. Any out-of-scope
 criterion targets the complete affected task as a model-owned correction slot so
-owner, description, dependencies, criteria, and expected paths can be repaired
-coherently. The same invariant is re-derived from approved artifacts at runtime;
-task prose cannot transfer acceptance authority between general, security, and
-experience Reviewers.
+description, dependencies, criteria, and expected paths can be repaired as one
+coherent object. For this invariant, the slot-local schema pins the existing task
+ID and owner at that array position and enumerates only the owner's currently
+compiled criterion scope. Review-authority inputs remain immutable during the
+correction, so the replacement cannot transfer acceptance authority between
+general, security, and experience Reviewers. The same invariant is re-derived
+from approved artifacts at runtime.
 
 Testing and Review capabilities are always read-only. Their tasks may describe
 inspection, evidence analysis, exercising existing behavior, or review focus,

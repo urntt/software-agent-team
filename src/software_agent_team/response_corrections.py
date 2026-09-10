@@ -947,7 +947,13 @@ def correction_value_schema(
         if isinstance(properties, Mapping) and part in properties:
             candidate = properties[part]
         elif part.isdecimal():
-            candidate = container.get("items")
+            index = int(part)
+            prefix_items = container.get("prefixItems")
+            candidate = (
+                prefix_items[index]
+                if isinstance(prefix_items, list) and index < len(prefix_items)
+                else container.get("items")
+            )
         else:
             return None
         if not isinstance(candidate, Mapping):

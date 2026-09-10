@@ -5021,7 +5021,7 @@ def test_planning_repairs_missing_security_specialist_through_typed_slots(
     }
 
 
-def test_planning_repairs_review_task_scope_without_user_revision(
+def test_planning_binds_review_task_corrections_to_each_compiled_scope(
     tmp_path: Path,
 ) -> None:
     body = proposal_body()
@@ -5052,6 +5052,13 @@ def test_planning_repairs_review_task_scope_without_user_revision(
         dependencies=("TASK_IMPLEMENT",),
         acceptance_criteria=("AC_SECURITY",),
     )
+    general_task = ProposedTask(
+        id="TASK_GENERAL_REVIEW",
+        owner_agent_id="quality_reviewer",
+        description="Review general correctness and reporting behavior.",
+        dependencies=("TASK_IMPLEMENT",),
+        acceptance_criteria=("AC_REPORT",),
+    )
     valid = body.model_copy(
         update={
             "requirements": (*body.requirements, "Contain every untrusted path."),
@@ -5066,6 +5073,7 @@ def test_planning_repairs_review_task_scope_without_user_revision(
                         )
                     }
                 ),
+                general_task,
                 security_task,
             ),
             "agents": (*body.agents, security_agent),
@@ -5075,6 +5083,9 @@ def test_planning_repairs_review_task_scope_without_user_revision(
         update={
             "tasks": (
                 valid.tasks[0],
+                general_task.model_copy(
+                    update={"acceptance_criteria": ("AC_REPORT", "AC_SECURITY")}
+                ),
                 security_task.model_copy(
                     update={"acceptance_criteria": ("AC_REPORT",)}
                 ),
@@ -5106,13 +5117,16 @@ def test_planning_repairs_review_task_scope_without_user_revision(
         profile_criterion_ids=(),
         user_inputs=(source_request,),
     )
-    task_path = "/proposal/tasks/1"
+    task_paths = ("/proposal/tasks/1", "/proposal/tasks/2")
     executor = ScriptedAgentExecutor(
         [
             json.dumps(invalid_payload),
             correction_response(
                 correction_base,
-                {task_path: valid_payload["proposal"]["tasks"][1]},
+                {
+                    path: valid_payload["proposal"]["tasks"][index]
+                    for index, path in enumerate(task_paths, start=1)
+                },
             ),
         ]
     )
@@ -5134,7 +5148,31 @@ def test_planning_repairs_review_task_scope_without_user_revision(
     assert created.body == valid
     first = store.load_turn(request().run_id, 1)
     assert first.response_validation is not None
-    assert first.response_validation.correction_paths == (task_path,)
+    assert first.response_validation.correction_paths == task_paths
+    contract = executor.requests[1].submission_contract
+    assert contract is not None
+    variants = contract.parameters_schema()["properties"]["replacements"]["items"][
+        "oneOf"
+    ]
+    assert len(variants) == 2
+    expected = (
+        ("TASK_GENERAL_REVIEW", "quality_reviewer", ["AC_SCAN", "AC_REPORT"]),
+        ("TASK_SECURITY_REVIEW", "security_assessor", ["AC_SECURITY"]),
+    )
+    for variant, (task_id, owner, criterion_ids) in zip(
+        variants, expected, strict=True
+    ):
+        task_schema = variant["properties"]["replacement_value"]
+        properties = task_schema["properties"]
+        assert properties["id"] == {"const": task_id, "type": "string"}
+        assert properties["owner_agent_id"] == {
+            "const": owner,
+            "type": "string",
+        }
+        acceptance = properties["acceptance_criteria"]
+        assert acceptance["items"]["enum"] == criterion_ids
+        assert acceptance["uniqueItems"] is True
+        assert "AC_UNKNOWN" not in acceptance["items"]["enum"]
     assert store.load_turn(request().run_id, 2).semantic_correction_outcome == (
         "accepted"
     )

@@ -327,7 +327,9 @@ when code, usability evidence, or controlled experiments justify a replacement.
   contradict the overview or approved runtime team. A Review-owned task must be
   a subset of its owner's compiled criterion scope; an inconsistent task returns
   to targeted model correction instead of asking the user to revise unchanged
-  requirements.
+  requirements. That correction slot pins the existing task identity and owner
+  and exposes only the owner's compiled criterion IDs, so correction cannot
+  silently transfer Review authority.
 
 ### Isolation and Permissions
 

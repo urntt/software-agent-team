@@ -5093,6 +5093,117 @@ def _planning_response_schema_for_correction(
         bind_scalar("ProposedTask", "owner_agent_id", stable_agent_ids)
     if not identity_owner_is_mutable("/proposal/tasks"):
         bind_array_items("ProposedTask", "dependencies", stable_task_ids)
+
+    review_task_paths = {
+        issue.path
+        for issue in plan.diagnostic.issues
+        if issue.invariant_id == "planning_review_task_scope"
+        and issue.path in target_paths
+        and re.fullmatch(r"/proposal/tasks/[0-9]+", issue.path) is not None
+    }
+    if review_task_paths:
+        mutable_scope_inputs = tuple(
+            path
+            for path in (
+                "/proposal/acceptance_criteria",
+                "/proposal/agents",
+                "/proposal/product_definition",
+            )
+            if identity_owner_is_mutable(path)
+        )
+        if mutable_scope_inputs:
+            raise PlanningError(
+                "Review task correction scope cannot be compiled while its "
+                "acceptance authority inputs are mutable: "
+                + ", ".join(mutable_scope_inputs)
+            )
+
+        raw_criteria = proposal.get("acceptance_criteria")
+        raw_agents = proposal.get("agents")
+        raw_definition = proposal.get("product_definition")
+        raw_tasks = proposal.get("tasks")
+        if not isinstance(raw_criteria, list) or not isinstance(raw_agents, list):
+            raise PlanningError(
+                "Review task correction requires typed criteria and Agents"
+            )
+        if not isinstance(raw_tasks, list):
+            raise PlanningError("Review task correction requires typed tasks")
+        try:
+            criteria = tuple(
+                ProposedCriterion.model_validate(item) for item in raw_criteria
+            )
+            agents = tuple(ProposedAgent.model_validate(item) for item in raw_agents)
+            definition = (
+                None
+                if raw_definition is None
+                else ProductDefinition.model_validate(raw_definition)
+            )
+            tasks = tuple(ProposedTask.model_validate(item) for item in raw_tasks)
+        except ValidationError as error:
+            raise PlanningError(
+                "Review task correction authority inputs are not structurally valid"
+            ) from error
+
+        review_scopes, scope_invariants = _resolve_review_scope_assignments(
+            criteria=criteria,
+            definition=definition,
+            agents=agents,
+            profile_criterion_ids=profile_criterion_ids,
+        )
+        if scope_invariants:
+            raise PlanningError(
+                "Review task correction scope cannot be compiled from unresolved "
+                "Review authority"
+            )
+
+        task_definition = definitions.get("ProposedTask")
+        if not isinstance(task_definition, dict):
+            raise PlanningError("Planning response schema has no task definition")
+        task_items: list[dict[str, object]] = [
+            {"$ref": "#/$defs/ProposedTask"} for _ in tasks
+        ]
+        for path in review_task_paths:
+            task_index = int(path.rsplit("/", 1)[1])
+            if task_index >= len(tasks):
+                raise PlanningError("Review task correction index is out of range")
+            task = tasks[task_index]
+            scope = review_scopes.get(task.owner_agent_id)
+            if scope is None:
+                raise PlanningError(
+                    "Review task correction owner has no compiled Review scope"
+                )
+            scoped_task = deepcopy(task_definition)
+            scoped_properties = scoped_task.get("properties")
+            if not isinstance(scoped_properties, dict):
+                raise PlanningError(
+                    "Planning response schema has no task field contract"
+                )
+            scoped_properties["id"] = {
+                "const": task.id,
+                "type": "string",
+            }
+            scoped_properties["owner_agent_id"] = {
+                "const": task.owner_agent_id,
+                "type": "string",
+            }
+            acceptance_schema = scoped_properties.get("acceptance_criteria")
+            acceptance_items = (
+                acceptance_schema.get("items")
+                if isinstance(acceptance_schema, dict)
+                else None
+            )
+            if not isinstance(acceptance_items, dict):
+                raise PlanningError(
+                    "Planning response schema has no task acceptance contract"
+                )
+            acceptance_items["enum"] = list(scope)
+            acceptance_schema["uniqueItems"] = True
+            task_items[task_index] = scoped_task
+
+        tasks_schema = definition_properties("PlanningProposalBody").get("tasks")
+        if not isinstance(tasks_schema, dict):
+            raise PlanningError("Planning response schema has no task collection")
+        tasks_schema["prefixItems"] = task_items
     return schema
 
 
