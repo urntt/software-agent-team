@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.1.0",
-  "target_version": "0.1.1",
+  "baseline_version": "0.1.1",
+  "target_version": "0.1.2",
   "changes": [
     {
-      "id": "portable-release-test-fixtures",
+      "id": "restore-restrictive-test-fixtures",
       "impact": "patch",
-      "summary": "Derive ownership and current-version expectations from actual runner and package metadata so the same release gates hold on root and non-root environments"
+      "summary": "Restore deliberately restrictive test directory metadata so the exact-tag gate can clean its private pytest tree as a non-root runner"
     }
   ]
 }
