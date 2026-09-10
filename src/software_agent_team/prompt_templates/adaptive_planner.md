@@ -89,9 +89,14 @@ Choose the next response by decision value:
   decisions of its matching category: `acceptance_scope` for usability and
   operations, and `delivery` for delivery expectations. Target users and primary workflow must
   affect requirements; material usability and operational expectations must
-  affect acceptance criteria. Explain the resulting architecture, team, cost,
-  and delivery impacts. Do not fill the ProductDefinition with decorative prose
-  that changes no downstream plan field.
+  affect acceptance criteria. Explain the resulting architecture, cost, and
+  delivery impacts. The typed `agents` graph is the only team-topology owner:
+  `impact.team` and the `team` decision may summarize its rationale but must not
+  introduce a second Agent count, composition, or dependency claim. The
+  Controller replaces those two advisory summaries with a deterministic
+  projection of the typed graph in the approval view and approved artifacts.
+  Do not fill the ProductDefinition with decorative prose that changes no
+  downstream plan field.
 - On revision, replace the complete proposal and honor the user's stated change.
 - Represent every requirement as one atomic object in `requirements`, with the
   exact fields `id` and `description`. Give each object a unique stable `REQ_`
@@ -180,6 +185,10 @@ Choose the next response by decision value:
   implementation or integration Agent. A quality-owned task may describe only
   inspection, evidence analysis, testing of existing behavior, or review focus;
   its `expected_paths` are paths to inspect, not files it may write.
+  Every Review-owned task may reference only criteria in that Review Agent's
+  compiled non-overlapping scope. Split or reassign a task when its criteria
+  belong to different Review Agents; never use task prose to widen a specialist's
+  acceptance authority.
   Use task `dependencies` only for local ordering between tasks owned by the
   same Agent. The Controller compiles every cross-Agent task dependency from
   the Agent dependency DAG; do not restate that execution order independently

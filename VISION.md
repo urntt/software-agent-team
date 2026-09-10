@@ -318,6 +318,14 @@ when code, usability evidence, or controlled experiments justify a replacement.
   criterion linked to both the primary workflow and usability expectations
   requires experience authority. It compiles one non-overlapping Review scope
   per Agent and returns an incomplete assignment to targeted Planning correction.
+  The typed Agent graph is also the sole team-topology authority. Raw Planner
+  turns remain immutable evidence, but the Controller deterministically projects
+  Agent count, specialization composition, and graph authority into the approved
+  ProductDefinition impact and team decision. Free-form Planning prose cannot
+  contradict the overview or approved runtime team. A Review-owned task must be
+  a subset of its owner's compiled criterion scope; an inconsistent task returns
+  to targeted model correction instead of asking the user to revise unchanged
+  requirements.
 
 ### Isolation and Permissions
 

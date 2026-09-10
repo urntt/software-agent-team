@@ -223,6 +223,15 @@ non-overlapping mapping, and dynamic execution re-derives it from the approved
 TaskBrief, implementation plan, TeamPlan, and actual manual-review set. A caller
 cannot replace it with a different runtime mapping.
 
+Current approval artifacts do not trust an independent prose copy of the team
+topology. Raw Planning turns retain the model-authored ProductDefinition team
+impact and team-decision text as evidence, while the Controller compiles their
+approved counterparts from the typed Agent graph. It also rejects any
+Review-owned task whose criterion IDs are not a subset of that Agent's compiled
+Review scope, both before approval and when execution re-derives the contract.
+These are model-owned consistency repairs; they never require a user revision
+unless the user actually changes the underlying product requirement.
+
 Execution records label this grounded Reviewer shape `semantic_body_v4`; other
 current semantic bodies remain `semantic_body_v1`. `semantic_body_v2` and
 `semantic_body_v3` remain valid historical evidence for the attempt-qualified

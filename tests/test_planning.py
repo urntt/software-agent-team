@@ -565,6 +565,8 @@ def test_planner_contract_does_not_treat_provenance_as_semantic_relevance() -> N
 
     assert "An exact substring is necessary provenance, not proof" in contract
     assert "a build instruction, product type" in contract
+    assert "typed `agents` graph is the only team-topology owner" in contract
+    assert "Every Review-owned task may reference only criteria" in contract
     assert "cannot be used as target users" in contract
     assert (
         "must leave `requirement_ids`, `criterion_ids`, and `decision_ids` empty"
@@ -4572,6 +4574,212 @@ def test_materially_different_requests_compile_distinct_specialist_contracts() -
     ) in security_overview
 
 
+def test_controller_projects_team_narrative_from_the_typed_agent_graph() -> None:
+    body = proposal_body()
+    assert body.product_definition is not None
+    stale = "Two runtime Agents: one writer and one general Reviewer."
+    definition = body.product_definition.model_copy(
+        update={
+            "impact": body.product_definition.impact.model_copy(update={"team": stale})
+        }
+    )
+    decisions = tuple(
+        decision.model_copy(update={"summary": stale, "rationale": stale})
+        if decision.category is PlanningDecisionCategory.TEAM
+        else decision
+        for decision in body.decisions
+    )
+    security_criterion = ProposedCriterion(
+        id="AC_SECURITY",
+        description="No untrusted path can escape the selected root.",
+        verification="Probe every approved path-entry boundary.",
+        review_boundaries=tuple(ReviewBoundaryKind),
+        requirement_ids=("REQ_SECURITY",),
+        verification_agent_ids=("security_assessor",),
+    )
+    security_agent = ProposedAgent(
+        id="security_assessor",
+        label="Path Security Assessor",
+        responsibility="Assess untrusted path boundaries and residual risk.",
+        rationale="The request introduces an untrusted-input boundary.",
+        capability=AgentCapability.REVIEW,
+        specialization=AgentSpecialization.SECURITY_ASSESSMENT,
+        stage_id="verify",
+        dependencies=("cli_developer",),
+        workspace_scope="repository",
+        workload=AgentWorkload.ROUTINE,
+    )
+    current = body.model_copy(
+        update={
+            "product_definition": definition,
+            "decisions": decisions,
+            "requirements": (*body.requirements, "Contain every untrusted path."),
+            "requirement_ids": (*body.requirement_ids, "REQ_SECURITY"),
+            "acceptance_criteria": (*body.acceptance_criteria, security_criterion),
+            "tasks": (
+                body.tasks[0].model_copy(
+                    update={
+                        "acceptance_criteria": (
+                            *body.tasks[0].acceptance_criteria,
+                            "AC_SECURITY",
+                        )
+                    }
+                ),
+            ),
+            "agents": (*body.agents, security_agent),
+        }
+    )
+
+    preview = preview_adaptive_proposal(
+        request(),
+        proposal(body=current),
+        policy(),
+        created_at=FIXED_TIME,
+    )
+
+    expected = (
+        "Controller-derived from the typed Agent graph: 4 runtime Agents; "
+        "specialization composition: product_implementation=1, "
+        "deterministic_testing=1, general_review=1, security_assessment=1. "
+        "The typed Agent identities and dependencies are the sole runtime-team "
+        "authority."
+    )
+    assert preview.task_brief.product_definition is not None
+    assert preview.task_brief.product_definition.impact.team == expected
+    assert preview.implementation_plan.product_definition is not None
+    assert preview.implementation_plan.product_definition.impact.team == expected
+    team_decision = next(
+        decision
+        for decision in preview.implementation_plan.decisions
+        if decision.category is PlanningDecisionCategory.TEAM
+    )
+    assert team_decision.summary == expected
+    assert team_decision.rationale == (
+        "The Planner proposes the typed Agent graph; the Controller validates its "
+        "capabilities, permissions, dependencies, outputs, and acceptance scopes. "
+        "Per-Agent rationales below explain the task-specific composition."
+    )
+    overview = render_planning_overview(preview)
+    assert stale not in overview
+    assert expected in overview
+    assert len(preview.team_plan.agents) == 4
+    assert current.product_definition is not None
+    assert current.product_definition.impact.team == stale
+    assert (
+        next(
+            decision
+            for decision in current.decisions
+            if decision.category is PlanningDecisionCategory.TEAM
+        ).summary
+        == stale
+    )
+
+
+def test_controller_rejects_review_task_outside_compiled_scope() -> None:
+    body = proposal_body()
+    security_criterion = ProposedCriterion(
+        id="AC_SECURITY",
+        description="No untrusted path can escape the selected root.",
+        verification="Probe every approved path-entry boundary.",
+        review_boundaries=tuple(ReviewBoundaryKind),
+        requirement_ids=("REQ_SECURITY",),
+        verification_agent_ids=("security_assessor",),
+    )
+    security_agent = ProposedAgent(
+        id="security_assessor",
+        label="Path Security Assessor",
+        responsibility="Assess untrusted path boundaries and residual risk.",
+        rationale="The request introduces an untrusted-input boundary.",
+        capability=AgentCapability.REVIEW,
+        specialization=AgentSpecialization.SECURITY_ASSESSMENT,
+        stage_id="verify",
+        dependencies=("cli_developer",),
+        workspace_scope="repository",
+        workload=AgentWorkload.ROUTINE,
+    )
+    mismatched_review_task = ProposedTask(
+        id="TASK_SECURITY_REVIEW",
+        owner_agent_id="security_assessor",
+        description="Review general reporting behavior.",
+        dependencies=("TASK_IMPLEMENT",),
+        acceptance_criteria=("AC_REPORT",),
+    )
+    invalid = body.model_copy(
+        update={
+            "requirements": (*body.requirements, "Contain every untrusted path."),
+            "requirement_ids": (*body.requirement_ids, "REQ_SECURITY"),
+            "acceptance_criteria": (*body.acceptance_criteria, security_criterion),
+            "tasks": (
+                body.tasks[0].model_copy(
+                    update={
+                        "acceptance_criteria": (
+                            *body.tasks[0].acceptance_criteria,
+                            "AC_SECURITY",
+                        )
+                    }
+                ),
+                mismatched_review_task,
+            ),
+            "agents": (*body.agents, security_agent),
+        }
+    )
+
+    with pytest.raises(PlanningError, match="outside its compiled Review scope"):
+        preview_adaptive_proposal(
+            request(),
+            proposal(body=invalid),
+            policy(),
+            created_at=FIXED_TIME,
+        )
+
+    valid = invalid.model_copy(
+        update={
+            "tasks": (
+                invalid.tasks[0],
+                mismatched_review_task.model_copy(
+                    update={"acceptance_criteria": ("AC_SECURITY",)}
+                ),
+            )
+        }
+    )
+    preview = preview_adaptive_proposal(
+        request(),
+        proposal(body=valid),
+        policy(),
+        created_at=FIXED_TIME,
+    )
+    corrupted_implementation = preview.implementation_plan.model_copy(
+        update={"tasks": invalid.tasks}
+    )
+    corrupted_team = preview.team_plan.model_copy(
+        update={
+            "implementation_plan_sha256": canonical_model_sha256(
+                corrupted_implementation
+            )
+        }
+    )
+    approval = planning.PlanningApproval(
+        run_id=request().run_id,
+        revision=1,
+        approved_at=FIXED_TIME,
+        confirmation="user_approved",
+        proposal_sha256="a" * 64,
+        task_brief_sha256=canonical_model_sha256(preview.task_brief),
+        implementation_plan_sha256=canonical_model_sha256(corrupted_implementation),
+        team_plan_sha256=canonical_model_sha256(corrupted_team),
+        timeout_resolutions=preview.timeout_resolutions,
+    )
+    corrupted_approved = ApprovedPlanningResult(
+        task_brief=preview.task_brief,
+        implementation_plan=corrupted_implementation,
+        team_plan=corrupted_team,
+        approval=approval,
+    )
+
+    with pytest.raises(PlanningError, match="approved Review task contract"):
+        compile_approved_review_scopes(corrupted_approved)
+
+
 def test_controller_rejects_security_boundaries_assigned_to_general_review() -> None:
     body = proposal_body()
     security_criterion = ProposedCriterion(
@@ -4810,6 +5018,125 @@ def test_planning_repairs_missing_security_specialist_through_typed_slots(
         "quality_reviewer": ("AC_SCAN", "AC_REPORT"),
         "security_assessor": ("AC_SECURITY",),
     }
+
+
+def test_planning_repairs_review_task_scope_without_user_revision(
+    tmp_path: Path,
+) -> None:
+    body = proposal_body()
+    security_criterion = ProposedCriterion(
+        id="AC_SECURITY",
+        description="No untrusted path can ever escape the selected root.",
+        verification="Probe every approved path-entry boundary.",
+        review_boundaries=tuple(ReviewBoundaryKind),
+        requirement_ids=("REQ_SECURITY",),
+        verification_agent_ids=("security_assessor",),
+    )
+    security_agent = ProposedAgent(
+        id="security_assessor",
+        label="Path Security Assessor",
+        responsibility="Assess untrusted path boundaries and residual risk.",
+        rationale="The request introduces an untrusted-input boundary.",
+        capability=AgentCapability.REVIEW,
+        specialization=AgentSpecialization.SECURITY_ASSESSMENT,
+        stage_id="verify",
+        dependencies=("cli_developer",),
+        workspace_scope="repository",
+        workload=AgentWorkload.ROUTINE,
+    )
+    security_task = ProposedTask(
+        id="TASK_SECURITY_REVIEW",
+        owner_agent_id="security_assessor",
+        description="Review every untrusted path boundary.",
+        dependencies=("TASK_IMPLEMENT",),
+        acceptance_criteria=("AC_SECURITY",),
+    )
+    valid = body.model_copy(
+        update={
+            "requirements": (*body.requirements, "Contain every untrusted path."),
+            "requirement_ids": (*body.requirement_ids, "REQ_SECURITY"),
+            "acceptance_criteria": (*body.acceptance_criteria, security_criterion),
+            "tasks": (
+                body.tasks[0].model_copy(
+                    update={
+                        "acceptance_criteria": (
+                            *body.tasks[0].acceptance_criteria,
+                            "AC_SECURITY",
+                        )
+                    }
+                ),
+                security_task,
+            ),
+            "agents": (*body.agents, security_agent),
+        }
+    )
+    invalid = valid.model_copy(
+        update={
+            "tasks": (
+                valid.tasks[0],
+                security_task.model_copy(
+                    update={"acceptance_criteria": ("AC_REPORT",)}
+                ),
+            )
+        }
+    )
+    invalid_payload = json.loads(
+        response(
+            PlanningModelResponse(
+                kind=PlanningResponseKind.PROPOSAL,
+                proposal=invalid,
+            )
+        )
+    )
+    valid_payload = json.loads(
+        response(
+            PlanningModelResponse(
+                kind=PlanningResponseKind.PROPOSAL,
+                proposal=valid,
+            )
+        )
+    )
+    source_request = (
+        f"{request().source_request} Treat every path as untrusted and never "
+        "permit a root escape."
+    )
+    correction_base, _ = planning._normalize_planning_response_payload(
+        invalid_payload,
+        profile_criterion_ids=(),
+        user_inputs=(source_request,),
+    )
+    task_path = "/proposal/tasks/1"
+    executor = ScriptedAgentExecutor(
+        [
+            json.dumps(invalid_payload),
+            correction_response(
+                correction_base,
+                {task_path: valid_payload["proposal"]["tasks"][1]},
+            ),
+        ]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(response_repair_limit=None),
+        clock=AdvancingClock(),
+    )
+    planning_request = request(source_request=source_request)
+
+    created = coordinator.start(
+        planning_request,
+        answer_question=lambda _question: pytest.fail("unexpected user question"),
+    )
+
+    assert created is not None
+    assert created.body == valid
+    first = store.load_turn(request().run_id, 1)
+    assert first.response_validation is not None
+    assert first.response_validation.correction_paths == (task_path,)
+    assert store.load_turn(request().run_id, 2).semantic_correction_outcome == (
+        "accepted"
+    )
 
 
 def test_controller_resolves_visible_per_agent_model_routes_before_approval() -> None:

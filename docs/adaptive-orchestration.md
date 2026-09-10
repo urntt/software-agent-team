@@ -610,6 +610,23 @@ approval overview, prompt construction, and runner startup all validate that
 same canonical projection, so task text cannot become a second execution-order
 owner.
 
+The typed Agent graph likewise owns runtime-team topology. The raw model turn is
+preserved unchanged for audit, including any advisory ProductDefinition team
+impact or team-decision prose. During preview compilation, the Controller derives
+one canonical team summary from the actual Agent count and specialization
+composition and uses that projection in the TaskBrief, implementation plan, and
+approval overview. Approval therefore cannot bind a stale prose claim such as
+"two Agents" beside a larger typed graph. This projection changes no user
+requirement and requires no user revision.
+
+After deriving non-overlapping Review scopes, the Controller also checks every
+Review-owned task against its owner's exact criterion set. Any out-of-scope
+criterion targets the complete affected task as a model-owned correction slot so
+owner, description, dependencies, criteria, and expected paths can be repaired
+coherently. The same invariant is re-derived from approved artifacts at runtime;
+task prose cannot transfer acceptance authority between general, security, and
+experience Reviewers.
+
 Testing and Review capabilities are always read-only. Their tasks may describe
 inspection, evidence analysis, exercising existing behavior, or review focus,
 but every task that creates or changes project code, tests, configuration, or

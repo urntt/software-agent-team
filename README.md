@@ -119,7 +119,12 @@ either authority or expand tools. The Controller requires security authority
 for an all-boundary safety criterion and experience authority when one criterion
 is explicitly linked to both the primary workflow and usability expectations;
 an invalid generic assignment returns to targeted Planning correction before
-approval.
+approval. The typed Agent graph—not a second prose description—determines the
+team shown for approval, and every Review task must remain inside its assigned
+criterion scope. SAT sends either inconsistency back to the Planner
+automatically; `r` is reserved for a user who actually wants to change the
+request.
+
 The controller derives actual launch order from the approved dependency graph,
 enforces concurrency and shared-workspace safety, monitors provider activity and
 any user-authorized whole-run deadline, records verified Git snapshots and

@@ -212,6 +212,15 @@ fail before Agent creation. External provider content remains unnecessary for
 this integration layer and is reserved for the frozen-candidate product
 acceptance run.
 
+Treat the typed Agent graph and Controller-compiled Review scopes as the single
+consistency boundary for Planning approval. Regression coverage must prove that
+stale free-form team prose is replaced only in the approved projection while the
+raw turn remains readable, that a Review-owned task cannot claim criteria outside
+its owner's compiled scope, and that the production correction loop repairs the
+complete task without asking for a user revision. Re-run that provider-backed
+counterexample only once as part of frozen-candidate batch acceptance, not after
+each local repair.
+
 Planning and dynamic runtime configuration explicitly disable OpenClaw's memory
 plugin slot while enabling SAT's terminal submission plugin. Check the generated
 configuration against the pinned runtime's actual slot resolver: an allow-list

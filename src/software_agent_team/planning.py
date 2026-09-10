@@ -3854,6 +3854,91 @@ def _resolve_review_scope_assignments(
     )
 
 
+def _review_task_scope_invariants(
+    *,
+    tasks: Collection[ProposedTask],
+    review_scope_by_agent: Mapping[str, Collection[str]],
+) -> tuple[_PlanningInvariant, ...]:
+    """Reject Review work that claims another Reviewer's acceptance authority."""
+
+    invariants: list[_PlanningInvariant] = []
+    normalized_scopes = {
+        agent_id: set(criterion_ids)
+        for agent_id, criterion_ids in review_scope_by_agent.items()
+    }
+    for task_index, task in enumerate(tasks):
+        scope = normalized_scopes.get(task.owner_agent_id)
+        if scope is None:
+            continue
+        outside_scope = tuple(
+            criterion_id
+            for criterion_id in task.acceptance_criteria
+            if criterion_id not in scope
+        )
+        if not outside_scope:
+            continue
+        invariants.append(
+            _PlanningInvariant(
+                invariant_id="planning_review_task_scope",
+                message=(
+                    f"Review task {task.id} owned by {task.owner_agent_id} claims "
+                    "criteria outside its compiled Review scope: "
+                    + ", ".join(outside_scope)
+                ),
+                paths=(f"/proposal/tasks/{task_index}",),
+                subjects=_planning_subjects(
+                    (ResponseIssueSubjectKind.TASK, task.id),
+                    (ResponseIssueSubjectKind.AGENT, task.owner_agent_id),
+                    *(
+                        (ResponseIssueSubjectKind.CRITERION, criterion_id)
+                        for criterion_id in outside_scope
+                    ),
+                ),
+            )
+        )
+    return tuple(invariants)
+
+
+def _compile_team_topology_projection(
+    body: PlanningProposalBody,
+) -> tuple[ProductDefinition | None, tuple[PlanningDecisionRecord, ...]]:
+    """Project human-readable team text from the authoritative typed Agent graph."""
+
+    specialization_counts: dict[AgentSpecialization, int] = {}
+    for agent in body.agents:
+        specialization_counts[agent.specialization] = (
+            specialization_counts.get(agent.specialization, 0) + 1
+        )
+    composition = ", ".join(
+        f"{specialization.value}={count}"
+        for specialization, count in specialization_counts.items()
+    )
+    summary = (
+        f"Controller-derived from the typed Agent graph: {len(body.agents)} runtime "
+        f"Agents; specialization composition: {composition}. The typed Agent "
+        "identities and dependencies are the sole runtime-team authority."
+    )
+    rationale = (
+        "The Planner proposes the typed Agent graph; the Controller validates its "
+        "capabilities, permissions, dependencies, outputs, and acceptance scopes. "
+        "Per-Agent rationales below explain the task-specific composition."
+    )
+    product_definition = body.product_definition
+    if product_definition is not None:
+        product_definition = product_definition.model_copy(
+            update={
+                "impact": product_definition.impact.model_copy(update={"team": summary})
+            }
+        )
+    decisions = tuple(
+        decision.model_copy(update={"summary": summary, "rationale": rationale})
+        if decision.category is PlanningDecisionCategory.TEAM
+        else decision
+        for decision in body.decisions
+    )
+    return product_definition, decisions
+
+
 def validate_planning_clarity(
     body: PlanningProposalBody,
     *,
@@ -4199,14 +4284,22 @@ def validate_planning_clarity(
         raise _PlanningContextInvariantsError(tuple(criterion_invariants))
 
     if enforce_specialized_review_authority:
-        _, review_scope_invariants = _resolve_review_scope_assignments(
-            criteria=body.acceptance_criteria,
-            definition=body.product_definition,
-            agents=body.agents,
-            profile_criterion_ids=allowed_criterion_ids,
+        review_scope_by_agent, review_scope_invariants = (
+            _resolve_review_scope_assignments(
+                criteria=body.acceptance_criteria,
+                definition=body.product_definition,
+                agents=body.agents,
+                profile_criterion_ids=allowed_criterion_ids,
+            )
         )
         if review_scope_invariants:
             raise _PlanningContextInvariantsError(review_scope_invariants)
+        review_task_invariants = _review_task_scope_invariants(
+            tasks=body.tasks,
+            review_scope_by_agent=review_scope_by_agent,
+        )
+        if review_task_invariants:
+            raise _PlanningContextInvariantsError(review_task_invariants)
 
     if (
         source_request is not None
@@ -5968,6 +6061,15 @@ def compile_approved_review_scopes(
             "approved review-scope contract is invalid: "
             + "; ".join(invariant.message for invariant in invariants)
         )
+    task_invariants = _review_task_scope_invariants(
+        tasks=implementation.tasks,
+        review_scope_by_agent=scopes,
+    )
+    if task_invariants:
+        raise PlanningError(
+            "approved Review task contract is invalid: "
+            + "; ".join(invariant.message for invariant in task_invariants)
+        )
     return scopes
 
 
@@ -6117,13 +6219,18 @@ def preview_adaptive_proposal(
         if review_scope_invariants:
             raise _PlanningContextInvariantsError(review_scope_invariants)
 
+    if proposal.schema_version >= 19:
+        product_definition, decisions = _compile_team_topology_projection(body)
+    else:
+        product_definition, decisions = body.product_definition, body.decisions
+
     constraints = tuple(dict.fromkeys((*request.base_constraints, *body.constraints)))
     task_brief = TaskBrief(
         run_id=request.run_id,
         title=body.title,
         source_request=request.source_request,
         requirements=list(body.requirements),
-        product_definition=body.product_definition,
+        product_definition=product_definition,
         acceptance_criteria=[
             AcceptanceCriterion(
                 id=item.id,
@@ -6146,7 +6253,7 @@ def preview_adaptive_proposal(
         revision=proposal.revision,
         created_at=created_at,
         objective=body.objective,
-        product_definition=body.product_definition,
+        product_definition=product_definition,
         requirement_ids=body.requirement_ids,
         requirements=body.requirements,
         acceptance_criteria=body.acceptance_criteria,
@@ -6156,7 +6263,7 @@ def preview_adaptive_proposal(
         risks=body.risks,
         assumptions=body.assumptions,
         assumption_decision_ids=body.assumption_decision_ids,
-        decisions=body.decisions,
+        decisions=decisions,
     )
 
     routing_policy = policy.model_routing or ModelRoutingPolicy(
