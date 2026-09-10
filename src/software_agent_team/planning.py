@@ -130,7 +130,7 @@ from software_agent_team.teams import (
     specialization_contract,
 )
 
-PLANNING_SCHEMA_VERSION = 19
+PLANNING_SCHEMA_VERSION = 20
 MINIMUM_READABLE_PLANNING_SCHEMA_VERSION = 2
 PLANNING_TEMPLATE = Path(__file__).with_name("prompt_templates") / "adaptive_planner.md"
 MAX_PLANNING_EVIDENCE_CHARACTERS = 1_000_000
@@ -1897,6 +1897,7 @@ class PlanningRequest(BaseModel):
         16,
         17,
         18,
+        19,
         PLANNING_SCHEMA_VERSION,
     ] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -2068,12 +2069,13 @@ class PlanningQuestionAdmission(BaseModel):
                 raise ValueError(
                     "Controller-required questions need invariant evidence"
                 )
-            if bool(self.product_definition_dimensions) == bool(
-                self.controller_decision_id
+            if (
+                not self.product_definition_dimensions
+                and self.controller_decision_id is None
             ):
                 raise ValueError(
-                    "Controller-required questions must bind one product dimension "
-                    "or one material decision"
+                    "Controller-required questions must bind a product dimension, "
+                    "a material decision, or both"
                 )
         elif self.controller_invariant_ids or self.controller_decision_id is not None:
             raise ValueError(
@@ -4892,7 +4894,22 @@ def _planning_question_response_schema(
             "const": recovery.question_id,
             "type": "string",
         }
-    if recovery.dimension is None:
+    decision_may_bind_product_dimension = (
+        recovery.dimension is None
+        and recovery.decision_id is not None
+        and recovery.decision_category is PlanningDecisionCategory.PRODUCT_REQUIREMENT
+    )
+    if decision_may_bind_product_dimension:
+        question_properties["product_definition_dimensions"] = {
+            "items": {
+                "enum": [item.value for item in ProductDefinitionDimension],
+                "type": "string",
+            },
+            "maxItems": 1,
+            "type": "array",
+            "uniqueItems": True,
+        }
+    elif recovery.dimension is None:
         question_properties["product_definition_dimensions"] = {
             "maxItems": 0,
             "type": "array",
@@ -4921,7 +4938,10 @@ def _planning_question_response_schema(
     ):
         raise PlanningError("Planning response schema has no option value definition")
     option_values = option_properties["product_definition_values"]
-    if recovery.dimension is None:
+    if decision_may_bind_product_dimension:
+        option_values.pop("minItems", None)
+        option_values["maxItems"] = 1
+    elif recovery.dimension is None:
         option_values.pop("minItems", None)
         option_values["maxItems"] = 0
     else:
@@ -5409,6 +5429,7 @@ class AdaptiveImplementationPlan(BaseModel):
         16,
         17,
         18,
+        19,
         PLANNING_SCHEMA_VERSION,
     ] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -5527,6 +5548,7 @@ class PlanningTurn(BaseModel):
         16,
         17,
         18,
+        19,
         PLANNING_SCHEMA_VERSION,
     ] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -5600,6 +5622,18 @@ class PlanningTurn(BaseModel):
                 raise ValueError(
                     "Planning question admission scope differs from the question"
                 )
+            if (
+                parsed_question is not None
+                and self.question_admission is not None
+                and self.question_admission.controller_decision_id is not None
+                and self.question_admission.product_definition_dimensions
+                and parsed_question.decision_category
+                is not PlanningDecisionCategory.PRODUCT_REQUIREMENT
+            ):
+                raise ValueError(
+                    "only a product-requirement question may bind a Controller "
+                    "decision and product dimension together"
+                )
         elif self.question_admission is not None:
             raise ValueError(
                 "legacy Planning turns cannot contain question admission evidence"
@@ -5611,6 +5645,16 @@ class PlanningTurn(BaseModel):
         ):
             raise ValueError(
                 "legacy Planning turns cannot contain Controller decision binding"
+            )
+        if (
+            self.schema_version < 20
+            and self.question_admission is not None
+            and self.question_admission.controller_decision_id is not None
+            and self.question_admission.product_definition_dimensions
+        ):
+            raise ValueError(
+                "legacy Planning turns cannot combine Controller decision and "
+                "product-dimension binding"
             )
         lifecycle = self.execution.invocation_lifecycle
         if (
@@ -5785,6 +5829,7 @@ class PlanningProposal(BaseModel):
         16,
         17,
         18,
+        19,
         PLANNING_SCHEMA_VERSION,
     ] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -5874,6 +5919,7 @@ class PlanningSession(BaseModel):
         16,
         17,
         18,
+        19,
         PLANNING_SCHEMA_VERSION,
     ] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -6074,6 +6120,7 @@ class PlanningApproval(BaseModel):
         16,
         17,
         18,
+        19,
         PLANNING_SCHEMA_VERSION,
     ] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -8849,8 +8896,22 @@ class AdaptivePlanningCoordinator:
                             if clarification_recovery.dimension is not None
                             else (
                                 "Return one question using the exact required question "
-                                "ID and decision category; keep "
-                                "product_definition_dimensions empty."
+                                "ID and decision category. Because this is a product-"
+                                "requirement decision, you may also declare at most "
+                                "one "
+                                "product_definition_dimension only when this same "
+                                "question resolves it; if declared, every option must "
+                                "carry that dimension's exact typed value. Otherwise "
+                                "keep product_definition_dimensions and option values "
+                                "empty."
+                                if clarification_recovery.decision_id is not None
+                                and clarification_recovery.decision_category
+                                is PlanningDecisionCategory.PRODUCT_REQUIREMENT
+                                else (
+                                    "Return one question using the exact required "
+                                    "question ID and decision category; keep "
+                                    "product_definition_dimensions empty."
+                                )
                             )
                         )
                         + " Do not return or repair a proposal in this invocation."
@@ -9026,8 +9087,17 @@ def _interactive_question_answerer(
             f"{question.decision_category.value} / {question.decision_owner.value}"
         )
         if question.product_definition_dimensions:
+            decision_scope = (
+                ""
+                if admission.controller_decision_id is None
+                else (
+                    f"{question.decision_category.value} / "
+                    f"{admission.controller_decision_id}; product definition: "
+                )
+            )
             write(
                 "Decision scope: "
+                + decision_scope
                 + ", ".join(
                     dimension.value
                     for dimension in question.product_definition_dimensions

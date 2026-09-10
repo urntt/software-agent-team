@@ -1221,7 +1221,7 @@ def test_one_question_can_authorize_an_explicit_product_dimension_bundle(
     assert shown[0].admission.controller_invariant_ids == ()
     current_turn = coordinator.store.load_turn(request().run_id, 1)
     current_payload = current_turn.model_dump(mode="json")
-    assert current_payload["schema_version"] == 19
+    assert current_payload["schema_version"] == planning.PLANNING_SCHEMA_VERSION
     assert current_payload["question_admission"]["origin"] == "planner_suggestion"
     schema_seventeen = deepcopy(current_payload)
     schema_seventeen["schema_version"] = 17
@@ -2195,14 +2195,18 @@ def test_unknown_user_question_provenance_requests_bound_clarification(
         "const": "product_requirement",
         "type": "string",
     }
-    assert question_definition["properties"]["product_definition_dimensions"] == {
-        "maxItems": 0,
-        "type": "array",
-    }
+    product_dimensions = question_definition["properties"][
+        "product_definition_dimensions"
+    ]
+    assert product_dimensions["maxItems"] == 1
+    assert product_dimensions["uniqueItems"] is True
+    assert product_dimensions["items"]["enum"] == [
+        item.value for item in ProductDefinitionDimension
+    ]
     option_definition = recovery_schema["$defs"]["PlanningOption"]
     option_values = option_definition["properties"]["product_definition_values"]
     assert option_values["items"] == {"$ref": "#/$defs/PlanningOptionValue"}
-    assert option_values["maxItems"] == 0
+    assert option_values["maxItems"] == 1
     assert "minItems" not in option_values
     assert '"question_id": "existing_report_handling"' in executor.requests[1].prompt
     assert '"decision_id": "DECISION_EXISTING_REPORT_HANDLING"' in (
@@ -2210,7 +2214,7 @@ def test_unknown_user_question_provenance_requests_bound_clarification(
     )
     recovery_turn = store.load_turn(request().run_id, 2)
     recovery_payload = recovery_turn.model_dump(mode="json")
-    assert recovery_payload["schema_version"] == 19
+    assert recovery_payload["schema_version"] == planning.PLANNING_SCHEMA_VERSION
     assert recovery_payload["question_admission"]["controller_decision_id"] == (
         decision.id
     )
@@ -2221,6 +2225,189 @@ def test_unknown_user_question_provenance_requests_bound_clarification(
         match="legacy Planning turns cannot contain Controller decision binding",
     ):
         PlanningTurn.model_validate(schema_seventeen)
+
+
+@pytest.mark.parametrize(
+    ("answer_inputs", "resolved_value"),
+    (
+        (
+            ("1",),
+            "Default to the current directory, group human-readable results, "
+            "and offer machine-readable output with documented exit codes.",
+        ),
+        (
+            (
+                "c",
+                "Require an explicit directory, emit grouped text by default, "
+                "and provide an optional JSON report with documented exit codes.",
+            ),
+            "Require an explicit directory, emit grouped text by default, and "
+            "provide an optional JSON report with documented exit codes.",
+        ),
+    ),
+)
+def test_controller_bound_product_decision_can_share_one_declared_dimension(
+    tmp_path: Path,
+    answer_inputs: tuple[str, ...],
+    resolved_value: str,
+) -> None:
+    """Replay Journey 52 through the production question authority chain."""
+
+    question_id = "q_usage_contract"
+    decision_id = "DECISION_USABILITY"
+    selected_value = (
+        "Default to the current directory, group human-readable results, and offer "
+        "machine-readable output with documented exit codes."
+    )
+    user_decision = PlanningDecisionRecord(
+        id=decision_id,
+        category=PlanningDecisionCategory.PRODUCT_REQUIREMENT,
+        authority=PlanningDecisionAuthority.USER,
+        provenance=PlanningDecisionProvenance(
+            kind=PlanningDecisionProvenanceKind.RESOLVED_QUESTION,
+            source=question_id,
+        ),
+        summary=resolved_value,
+        rationale="The selected option defines the developer-facing CLI contract.",
+    )
+    base = proposal_body()
+    invalid_body = base.model_copy(
+        update={"decisions": (*base.decisions, user_decision)}
+    )
+    recovery_question = PlanningQuestion(
+        id=question_id,
+        text="How should the no-argument CLI and script output behave?",
+        why="The answer changes the CLI, report, documentation, and tests.",
+        decision_category=PlanningDecisionCategory.PRODUCT_REQUIREMENT,
+        decision_owner=PlanningDecisionAuthority.USER,
+        missing_evidence=("The usage contract has not been selected.",),
+        material_consequences=(
+            "The choice changes defaults, output modes, and exit-code tests.",
+        ),
+        product_definition_dimensions=(
+            ProductDefinitionDimension.USABILITY_EXPECTATIONS,
+        ),
+        options=(
+            PlanningOption(
+                id="default_and_machine_readable",
+                label="Safe default plus machine-readable option",
+                description=selected_value,
+                product_definition_values=(
+                    PlanningOptionValue(
+                        dimension=(ProductDefinitionDimension.USABILITY_EXPECTATIONS),
+                        value=selected_value,
+                    ),
+                ),
+            ),
+            PlanningOption(
+                id="explicit_root",
+                label="Require an explicit directory",
+                description="Require a path and print only grouped text.",
+                product_definition_values=(
+                    PlanningOptionValue(
+                        dimension=(ProductDefinitionDimension.USABILITY_EXPECTATIONS),
+                        value="Require a directory and print grouped text.",
+                    ),
+                ),
+            ),
+        ),
+    )
+    definition = base.product_definition
+    assert definition is not None
+    resolved_body = invalid_body.model_copy(
+        update={
+            "product_definition": definition.model_copy(
+                update={
+                    "usability_expectations": (
+                        definition.usability_expectations.model_copy(
+                            update={
+                                "statement": resolved_value,
+                                "disposition": (
+                                    ProductDefinitionDisposition.RESOLVED_QUESTION
+                                ),
+                                "source": question_id,
+                                "decision_ids": (decision_id,),
+                            }
+                        )
+                    )
+                }
+            )
+        }
+    )
+    executor = ScriptedAgentExecutor(
+        [
+            response(proposal_response(invalid_body)),
+            response(
+                PlanningModelResponse(
+                    kind=PlanningResponseKind.QUESTION,
+                    question=recovery_question,
+                )
+            ),
+            response(proposal_response(resolved_body)),
+        ]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(response_repair_limit=0),
+        clock=AdvancingClock(),
+    )
+    shown: list[PresentedPlanningQuestion] = []
+    output: list[str] = []
+    answers = iter(answer_inputs)
+    interactive_answer = planning._interactive_question_answerer(
+        read=lambda _prompt: next(answers), write=output.append
+    )
+
+    created = coordinator.start(
+        request(),
+        answer_question=lambda question: (
+            shown.append(question) or interactive_answer(question)
+        ),
+    )
+
+    assert created is not None
+    assert created.body == resolved_body
+    assert len(shown) == 1
+    admission = shown[0].admission
+    assert admission.controller_decision_id == decision_id
+    assert admission.product_definition_dimensions == (
+        ProductDefinitionDimension.USABILITY_EXPECTATIONS,
+    )
+    assert (
+        "Decision scope: product_requirement / DECISION_USABILITY; product "
+        "definition: usability_expectations"
+    ) in output
+    recovery_turn = store.load_turn(request().run_id, 2)
+    assert recovery_turn.schema_version == planning.PLANNING_SCHEMA_VERSION
+    legacy_payload = recovery_turn.model_dump(mode="json")
+    legacy_payload["schema_version"] = 19
+    with pytest.raises(
+        ValidationError,
+        match="legacy Planning turns cannot combine Controller decision",
+    ):
+        PlanningTurn.model_validate(legacy_payload)
+
+
+def test_controller_bound_non_product_decision_schema_denies_dimensions() -> None:
+    schema = planning._planning_question_response_schema(
+        planning._PlanningClarificationRecovery(
+            decision_category=PlanningDecisionCategory.EXTERNAL_ACTION,
+            invariant_ids=("planning_question_decision_completeness",),
+            messages=("Publishing authority has not been supplied.",),
+            question_id="q_publish",
+            decision_id="DECISION_PUBLISH",
+        )
+    )
+
+    question = schema["$defs"]["PlanningQuestion"]
+    assert question["properties"]["product_definition_dimensions"] == {
+        "maxItems": 0,
+        "type": "array",
+    }
+    option = schema["$defs"]["PlanningOption"]
+    assert option["properties"]["product_definition_values"]["maxItems"] == 0
 
 
 def test_controller_bound_question_rejects_a_different_decision_identity() -> None:
@@ -8983,7 +9170,7 @@ raise SystemExit(cli.main([]))
 
         assert not ProcessLeaseStore(tmp_path / "leases").inspect().processes
         legacy = turn.model_dump(mode="json")
-        assert legacy["schema_version"] == 19
+        assert legacy["schema_version"] == planning.PLANNING_SCHEMA_VERSION
         assert legacy["execution"]["invocation_lifecycle"]["schema_version"] == 5
         legacy["schema_version"] = 16
         assert PlanningTurn.model_validate(legacy).model_dump(mode="json") == legacy

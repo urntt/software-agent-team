@@ -582,8 +582,8 @@ decisions. Include phase publication before the corresponding history delta:
 the displayed completed-tool count must come from the current numeric snapshot,
 not a cached prose total in the previous action description. `RunEvent` schema v5 must
 remain canonically readable from v2 through v4, Artifact schema v12 from v2
-through v11, lifecycle schema v5 from v1 through v4, and Planning schema v18 from
-v2 through v17. Main-thread and repeated SIGINT tests must prove exact child
+through v11, lifecycle schema v5 from v1 through v4, and Planning schema v20 from
+v2 through v19. Main-thread and repeated SIGINT tests must prove exact child
 cleanup before lease release, CLI exit 130, and a terminal Planning turn/session.
 Run the CLI interrupt path with the real task ledger as well: after that process
 exits, reload the turn and verify its unique settlement, unknown cost, separate
@@ -632,6 +632,10 @@ only the declared dimensions, that an undeclared or ambiguous sibling returns to
 focused clarification, and that the controller projects exact transcript wording
 instead of accepting a model paraphrase as user evidence. Legacy persisted
 transcripts remain readable; current admission enforces the declared bundle.
+A Controller-required product-decision recovery may share at most one of those
+dimensions when the same visible question resolves both. Test preset and custom
+answers, the one-dimension ceiling, non-product rejection, exact decision
+identity, and schema-v19 compatibility through the production coordinator path.
 
 Typed-submission tests must distinguish transport attempts from successful
 semantic submissions. OpenClaw may return a schema error to the model and let it

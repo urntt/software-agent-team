@@ -641,12 +641,22 @@ seconds. Approval revalidates that authority against the TeamPlan at the
 execution boundary.
 The bootstrap Planner cannot create Agents or change lifecycle state.
 
+Planning schema v20 lets a Controller-required product-decision admission also
+bind at most one explicitly declared ProductDefinition dimension when the same
+question resolves both. The question-only schema freezes the question ID,
+decision category, and one-dimension ceiling; every suggested option carries
+the exact typed dimension value, and the visible question shows both scopes.
+Custom text remains attributable only to that declared scope. Non-product
+decisions, additional dimensions, and undeclared fields remain unauthorized.
+Planning v2 through v19 remain readable, while schema-v19 evidence cannot claim
+the combined binding.
+
 Planning schema v18 lets a Controller-required admission bind one exact
 non-ProductDefinition decision ID. If model output claims `resolved_question`
 provenance for a question absent from the transcript, the validation issue names
 both that question and its user-owned decision and carries `missing_user_decision`
 authority. A question-only recovery schema freezes the question ID and category,
-requires empty ProductDefinition values, and records the decision binding beside
+requires empty ProductDefinition values under that schema, and records the decision binding beside
 the accepted question. It cannot be routed through model-owned proposal
 correction. The inverse case—an answered question omitted from a proposal—is
 still model-owned relation repair. Planning v2 through v17 remain readable

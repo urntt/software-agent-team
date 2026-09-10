@@ -314,13 +314,16 @@ returns through the ordinary dialogue before Planning may propose again; it
 cannot silently preserve `kind=proposal`, fill the decision itself, or create an
 execution Agent. Other model-owned defects in the rejected proposal remain
 diagnostic evidence and are revalidated against the next complete proposal.
-The same authority rule covers a material user decision outside ProductDefinition:
-if a proposal claims `resolved_question` provenance for a question that does not
-exist in the transcript, the diagnostic binds its question ID and decision ID,
-and the Controller requires a question-only response with that exact ID and
-category. Conversely, omitting the decision for a question the user already
-answered remains a model-owned relation correction. Product-depth and actual
-question-answer validation still apply.
+The same authority rule covers a material user decision whose claimed question
+does not exist in the transcript. The diagnostic binds its question ID and
+decision ID, and the Controller requires a question-only response with that
+exact ID and category. When the bound decision is a product requirement, the
+question may additionally declare at most one ProductDefinition dimension that
+the same answer resolves; every suggested option must carry that dimension's
+exact typed value. A non-product decision keeps ProductDefinition scope empty,
+and no answer authorizes an undeclared dimension. Conversely, omitting the
+decision for a question the user already answered remains a model-owned relation
+correction. Product-depth and actual question-answer validation still apply.
 
 This is a dependency contract, not a questionnaire count. An explicit
 throwaway prototype can proceed directly with a lean proposal. An
@@ -1207,12 +1210,21 @@ deterministically deconflicts an echo whose model-owned relationship is still
 needed. The canonical profile text remains controller-owned, both task bindings
 are retained, and the raw response plus every normalization remain recorded in
 the Planning turn.
+Planning schema v20 permits one Controller-required product decision and at
+most one explicitly declared ProductDefinition dimension to share the same
+question admission. The decision ID and category remain Controller-fixed, every
+suggested option supplies the declared dimension's exact typed value, and the
+ordinary interface shows both scopes before accepting an answer. Non-product
+decisions and undeclared dimensions remain outside that authority. Planning v2
+through v19 remain readable; a schema-v19 turn cannot claim the combined
+binding.
+
 Planning schema v18 extends Controller-owned question admission to a material
 user decision outside ProductDefinition. When a proposal cites a question that
 was never asked, the diagnostic identifies both the claimed question and its
 user-owned decision. Recovery then constrains the question-only response to the
-same ID and category, records the decision ID in admission evidence, and keeps
-ProductDefinition dimensions empty. It cannot enter model-owned proposal
+same ID and category and records the decision ID in admission evidence. In the
+schema-v18 contract, ProductDefinition dimensions remain empty. It cannot enter model-owned proposal
 correction. An answered question missing from a later proposal remains a
 model-owned relation defect. Schema-v2 through schema-v17 records remain readable
 without inventing the new decision binding.
