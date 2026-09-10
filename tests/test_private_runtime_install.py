@@ -7,11 +7,37 @@ import os
 import shutil
 import subprocess
 import tarfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).parents[1]
+
+
+@contextmanager
+def temporary_directory_mode(path: Path, mode: int) -> Iterator[None]:
+    """Apply a restrictive test mode without leaking it into pytest cleanup."""
+
+    original_mode = path.stat().st_mode & 0o777
+    path.chmod(mode)
+    try:
+        yield
+    finally:
+        path.chmod(original_mode)
+
+
+@contextmanager
+def temporary_directory_owner(path: Path, uid: int, gid: int) -> Iterator[None]:
+    """Apply a foreign test owner and restore the test runner's ownership."""
+
+    metadata = path.stat()
+    os.chown(path, uid, gid)
+    try:
+        yield
+    finally:
+        os.chown(path, metadata.st_uid, metadata.st_gid)
 
 
 def executable(path: Path, text: str) -> None:
@@ -216,25 +242,25 @@ def test_private_runtime_owns_cache_before_node_and_on_direct_launch(
     foreign.mkdir(mode=0o700)
     sentinel = foreign / "keep"
     sentinel.write_text("foreign cache must stay untouched")
-    foreign.chmod(0o500)
-    environment.update(
-        NODE_COMPILE_CACHE=str(foreign),
-        NODE_DISABLE_COMPILE_CACHE="1",
-        EXPECTED_CACHE=str(prefix / "compile-cache"),
-    )
-    result = run(root, prefix, environment)
-    assert result.returncode == 0, result.stderr
-    cache = prefix / "compile-cache"
-    assert cache.is_dir() and cache.stat().st_mode & 0o777 == 0o700
-    probe = subprocess.run(
-        [str(prefix / "bin/openclaw"), "--version"],
-        env=environment,
-        capture_output=True,
-        text=True,
-    )
-    assert probe.returncode == 0, probe.stderr
-    assert sentinel.read_text() == "foreign cache must stay untouched"
-    assert list(foreign.iterdir()) == [sentinel]
+    with temporary_directory_mode(foreign, 0o500):
+        environment.update(
+            NODE_COMPILE_CACHE=str(foreign),
+            NODE_DISABLE_COMPILE_CACHE="1",
+            EXPECTED_CACHE=str(prefix / "compile-cache"),
+        )
+        result = run(root, prefix, environment)
+        assert result.returncode == 0, result.stderr
+        cache = prefix / "compile-cache"
+        assert cache.is_dir() and cache.stat().st_mode & 0o777 == 0o700
+        probe = subprocess.run(
+            [str(prefix / "bin/openclaw"), "--version"],
+            env=environment,
+            capture_output=True,
+            text=True,
+        )
+        assert probe.returncode == 0, probe.stderr
+        assert sentinel.read_text() == "foreign cache must stay untouched"
+        assert list(foreign.iterdir()) == [sentinel]
 
 
 def test_private_runtime_refuses_redirected_cache_before_node(tmp_path: Path) -> None:
@@ -258,13 +284,13 @@ def test_private_runtime_preserves_invalid_cache_permissions(
 ) -> None:
     root, prefix, environment = fixture(tmp_path)
     cache = prefix / "compile-cache"
-    cache.mkdir(mode=mode)
-    cache.chmod(mode)
-    result = run(root, prefix, environment)
-    assert result.returncode != 0
-    assert "compile cache" in result.stderr
-    assert cache.stat().st_mode & 0o777 == mode
-    assert not Path(environment["CALL_LOG"]).exists()
+    cache.mkdir(mode=0o700)
+    with temporary_directory_mode(cache, mode):
+        result = run(root, prefix, environment)
+        assert result.returncode != 0
+        assert "compile cache" in result.stderr
+        assert cache.stat().st_mode & 0o777 == mode
+        assert not Path(environment["CALL_LOG"]).exists()
 
 
 def test_private_launcher_revalidates_cache_without_touching_redirect(
@@ -312,9 +338,9 @@ def test_private_runtime_refuses_another_users_cache(tmp_path: Path) -> None:
     root, prefix, environment = fixture(tmp_path)
     cache = prefix / "compile-cache"
     cache.mkdir(mode=0o700)
-    os.chown(cache, 65534, 65534)
-    result = run(root, prefix, environment)
-    assert result.returncode != 0
-    assert "compile cache" in result.stderr
-    assert cache.stat().st_uid == 65534
-    assert not Path(environment["CALL_LOG"]).exists()
+    with temporary_directory_owner(cache, 65534, 65534):
+        result = run(root, prefix, environment)
+        assert result.returncode != 0
+        assert "compile cache" in result.stderr
+        assert cache.stat().st_uid == 65534
+        assert not Path(environment["CALL_LOG"]).exists()
