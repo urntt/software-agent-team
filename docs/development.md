@@ -214,10 +214,11 @@ acceptance run.
 
 Treat the typed Agent graph and Controller-compiled Review scopes as the single
 consistency boundary for Planning approval. Regression coverage must prove that
-stale free-form team prose is replaced only in the approved projection while the
-raw turn remains readable, that a Review-owned task cannot claim criteria outside
-its owner's compiled scope, and that each task-correction slot pins its existing
-task ID and owner while enumerating only that owner's compiled criterion IDs.
+stale free-form team and topology-dependent cost prose is replaced only in the
+approved projection while the raw turn remains readable, that a Review-owned
+task cannot claim criteria outside its owner's compiled scope, and that each
+task-correction slot pins its existing task ID and owner while enumerating only
+that owner's compiled criterion IDs.
 The production correction loop must repair the complete task without asking for
 a user revision. Re-run that provider-backed counterexample only once as part of
 frozen-candidate batch acceptance, not after each local repair.

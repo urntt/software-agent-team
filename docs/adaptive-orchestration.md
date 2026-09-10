@@ -637,11 +637,13 @@ to inspect without requiring or permitting writes.
 The typed Agent graph likewise owns runtime-team topology. The raw model turn is
 preserved unchanged for audit, including any advisory ProductDefinition team
 impact or team-decision prose. During preview compilation, the Controller derives
-one canonical team summary from the actual Agent count and specialization
-composition and uses that projection in the TaskBrief, implementation plan, and
-approval overview. Approval therefore cannot bind a stale prose claim such as
-"two Agents" beside a larger typed graph. This projection changes no user
-requirement and requires no user revision.
+one canonical team summary and topology-dependent cost scope from the actual
+Agent count and specialization composition and uses those projections in the
+TaskBrief, implementation plan, and approval overview. Approval therefore cannot
+bind either a stale prose claim such as "two Agents" beside a larger typed graph
+or a cost explanation that silently omits approved specialists. Exact task-wide
+budget and settled-call accounting remain Controller-owned. This projection
+changes no user requirement and requires no user revision.
 
 After deriving non-overlapping Review scopes, the Controller also checks every
 Review-owned task against its owner's exact criterion set. Any out-of-scope

@@ -224,9 +224,11 @@ TaskBrief, implementation plan, TeamPlan, and actual manual-review set. A caller
 cannot replace it with a different runtime mapping.
 
 Current approval artifacts do not trust an independent prose copy of the team
-topology. Raw Planning turns retain the model-authored ProductDefinition team
-impact and team-decision text as evidence, while the Controller compiles their
-approved counterparts from the typed Agent graph. It also rejects any
+topology. Raw Planning turns retain the model-authored ProductDefinition team and
+cost impacts plus team-decision text as evidence, while the Controller compiles
+their approved topology and execution-cost counterparts from the typed Agent
+graph. Exact task-wide budget and settled-call accounting remain separate
+Controller-owned evidence. It also rejects any
 Review-owned task whose criterion IDs are not a subset of that Agent's compiled
 Review scope, both before approval and when execution re-derives the contract.
 These are model-owned consistency repairs; they never require a user revision

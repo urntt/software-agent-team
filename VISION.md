@@ -322,9 +322,11 @@ when code, usability evidence, or controlled experiments justify a replacement.
   per Agent and returns an incomplete assignment to targeted Planning correction.
   The typed Agent graph is also the sole team-topology authority. Raw Planner
   turns remain immutable evidence, but the Controller deterministically projects
-  Agent count, specialization composition, and graph authority into the approved
-  ProductDefinition impact and team decision. Free-form Planning prose cannot
-  contradict the overview or approved runtime team. A Review-owned task must be
+  Agent count, specialization composition, graph authority, and the corresponding
+  execution-cost scope into the approved ProductDefinition impact and team
+  decision. Free-form Planning prose cannot contradict the overview, approved
+  runtime team, or specialist-cost scope. Exact task-wide budget and settled-call
+  cost remain separate Controller-owned facts. A Review-owned task must be
   a subset of its owner's compiled criterion scope; an inconsistent task returns
   to targeted model correction instead of asking the user to revise unchanged
   requirements. That correction slot pins the existing task identity and owner

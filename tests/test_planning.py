@@ -4766,9 +4766,14 @@ def test_controller_projects_team_narrative_from_the_typed_agent_graph() -> None
     body = proposal_body()
     assert body.product_definition is not None
     stale = "Two runtime Agents: one writer and one general Reviewer."
+    stale_cost = (
+        "No specialist cost is expected because only the two stated Agents run."
+    )
     definition = body.product_definition.model_copy(
         update={
-            "impact": body.product_definition.impact.model_copy(update={"team": stale})
+            "impact": body.product_definition.impact.model_copy(
+                update={"team": stale, "cost": stale_cost}
+            )
         }
     )
     decisions = tuple(
@@ -4836,6 +4841,16 @@ def test_controller_projects_team_narrative_from_the_typed_agent_graph() -> None
     assert preview.task_brief.product_definition.impact.team == expected
     assert preview.implementation_plan.product_definition is not None
     assert preview.implementation_plan.product_definition.impact.team == expected
+    expected_cost = (
+        "Controller-derived execution-cost scope from the typed Agent graph: "
+        "4 runtime Agents across product_implementation=1, "
+        "deterministic_testing=1, general_review=1, security_assessment=1. "
+        "Planning and Agent calls share the approved task-wide model budget, and "
+        "actual cost is metered from settled calls. This summary cannot authorize "
+        "another Agent or an independent budget."
+    )
+    assert preview.task_brief.product_definition.impact.cost == expected_cost
+    assert preview.implementation_plan.product_definition.impact.cost == expected_cost
     team_decision = next(
         decision
         for decision in preview.implementation_plan.decisions
@@ -4849,10 +4864,13 @@ def test_controller_projects_team_narrative_from_the_typed_agent_graph() -> None
     )
     overview = render_planning_overview(preview)
     assert stale not in overview
+    assert stale_cost not in overview
     assert expected in overview
+    assert expected_cost in overview
     assert len(preview.team_plan.agents) == 4
     assert current.product_definition is not None
     assert current.product_definition.impact.team == stale
+    assert current.product_definition.impact.cost == stale_cost
     assert (
         next(
             decision

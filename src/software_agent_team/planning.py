@@ -3915,7 +3915,7 @@ def _review_task_scope_invariants(
 def _compile_team_topology_projection(
     body: PlanningProposalBody,
 ) -> tuple[ProductDefinition | None, tuple[PlanningDecisionRecord, ...]]:
-    """Project human-readable team text from the authoritative typed Agent graph."""
+    """Project team and topology-dependent cost text from the typed Agent graph."""
 
     specialization_counts: dict[AgentSpecialization, int] = {}
     for agent in body.agents:
@@ -3936,11 +3936,20 @@ def _compile_team_topology_projection(
         "capabilities, permissions, dependencies, outputs, and acceptance scopes. "
         "Per-Agent rationales below explain the task-specific composition."
     )
+    cost_summary = (
+        "Controller-derived execution-cost scope from the typed Agent graph: "
+        f"{len(body.agents)} runtime Agents across {composition}. Planning and "
+        "Agent calls share the approved task-wide model budget, and actual cost is "
+        "metered from settled calls. This summary cannot authorize another Agent "
+        "or an independent budget."
+    )
     product_definition = body.product_definition
     if product_definition is not None:
         product_definition = product_definition.model_copy(
             update={
-                "impact": product_definition.impact.model_copy(update={"team": summary})
+                "impact": product_definition.impact.model_copy(
+                    update={"team": summary, "cost": cost_summary}
+                )
             }
         )
     decisions = tuple(

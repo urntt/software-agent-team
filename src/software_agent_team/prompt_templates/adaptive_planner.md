@@ -91,10 +91,12 @@ Choose the next response by decision value:
   affect requirements; material usability and operational expectations must
   affect acceptance criteria. Explain the resulting architecture, cost, and
   delivery impacts. The typed `agents` graph is the only team-topology owner:
-  `impact.team` and the `team` decision may summarize its rationale but must not
-  introduce a second Agent count, composition, or dependency claim. The
-  Controller replaces those two advisory summaries with a deterministic
-  projection of the typed graph in the approval view and approved artifacts.
+  `impact.team`, topology-dependent statements in `impact.cost`, and the `team`
+  decision may summarize its rationale but must not introduce a second Agent
+  count, composition, dependency, or specialist-cost claim. The Controller
+  replaces those advisory summaries with a deterministic projection of the
+  typed graph in the approval view and approved artifacts. Exact task-wide model
+  budget and settled-call accounting remain Controller-owned.
   Do not fill the ProductDefinition with decorative prose that changes no
   downstream plan field.
 - On revision, replace the complete proposal and honor the user's stated change.
