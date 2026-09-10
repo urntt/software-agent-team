@@ -452,6 +452,7 @@ def test_detailed_renderer_projects_agent_state_route_dependencies_and_budget(
         "agent_id": "api_builder",
         "iteration": 1,
         "capability": "implementation",
+        "specialization": "product_implementation",
         "stage_id": "implement",
         "model": "provider/model",
         "dependency_ids": ("schema_builder",),
@@ -501,6 +502,7 @@ def test_detailed_renderer_projects_agent_state_route_dependencies_and_budget(
 
     rendered = output.getvalue()
     assert "state=queued" in rendered
+    assert "specialization=product_implementation" in rendered
     assert "model=provider/model" in rendered
     assert "dependencies=schema_builder" in rendered
     assert "input=120 output=40" in rendered
