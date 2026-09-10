@@ -4,6 +4,7 @@ import json
 import os
 from datetime import UTC, datetime
 from decimal import Decimal
+from importlib.metadata import version as distribution_version
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -180,6 +181,7 @@ def test_cli_version_commands_are_local_and_machine_readable(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    expected_release = distribution_version("software-agent-team")
     application = tmp_path / "installed-package"
     application.mkdir()
     monkeypatch.setattr(cli, "PROJECT_ROOT", application)
@@ -189,11 +191,11 @@ def test_cli_version_commands_are_local_and_machine_readable(
     )
 
     assert main(["--version"]) == 0
-    assert capsys.readouterr().out == "sat 0.1.0\n"
+    assert capsys.readouterr().out == f"sat {expected_release}\n"
 
     assert main(["version", "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
-    assert payload["release_version"] == "0.1.0"
+    assert payload["release_version"] == expected_release
     assert payload["install_mode"] == "package"
     assert payload["source_revision"] is None
     assert payload["identity_status"] == "partial"

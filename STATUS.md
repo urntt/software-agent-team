@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** Phase 3E shared product acceptance completed; the exact `0.1.0` release candidate is awaiting immutable publication and stable lifecycle validation
+**Current milestone:** Phase 3E shared product acceptance completed; the first `v0.1.0` release gate exposed a cross-UID test-fixture defect and the corrected `0.1.1` candidate is being validated
 
 **Last updated:** September 10, 2026
 
@@ -38,10 +38,15 @@ invalid-input, symlink, and read-only behavior. The documented default scan of
 dependency-file matches and remains a non-blocking usability finding.
 
 This evidence closes the shared Planning-correction, Review-authority, Git
-ancestry, dependency-projection, and usable-product acceptance boundaries. It
-does not claim that `0.1.0` is published: the remaining release work is the
-exact-tag GitHub Actions gate, immutable manifest/Release, fresh stable install,
-stable/dev round trip, update check, rollback, and preservation-aware uninstall.
+ancestry, dependency-projection, and usable-product acceptance boundaries. The
+first `v0.1.0` exact-tag workflow correctly blocked publication after two
+workspace-ownership tests used hard-coded UID 1001, which is also the hosted
+runner's real UID. No GitHub Release was created and that tag remains immutable.
+The fixture now derives a simulated UID distinct from its actual path owner, and
+the patch candidate is versioned `0.1.1`. The remaining release work is its
+root/non-root and canonical gates, a new exact-tag GitHub Actions gate, immutable
+manifest/Release, fresh stable install, stable/dev round trip, update check,
+rollback, and preservation-aware uninstall.
 
 ## Implementation Evidence History
 
@@ -1856,13 +1861,15 @@ action succeeded after interruption.
 
 ## Next Milestone
 
-The next executable milestone is the immutable `0.1.0` stable publication and
-its fresh managed lifecycle. Freeze the final documentation and impact ledger,
-run the canonical local release gate once on that exact clean commit, generate
-and inspect the pre-tag manifest, push the commit, then create the one annotated
-`v0.1.0` tag. The exact-tag GitHub Actions run must pass the same canonical gate
-and publish exactly one verified identity manifest before stable installation
-begins.
+The next executable milestone is the immutable `0.1.1` stable publication and
+its fresh managed lifecycle. The first `v0.1.0` tag remains bound to its failed
+exact-tag workflow and is never moved or reused. Validate the corrected fixture
+under root and non-root process identities, freeze the final documentation and
+impact ledger, run the canonical local release gate once on that exact clean
+commit, generate and inspect the pre-tag manifest, push the commit, then create
+the annotated `v0.1.1` tag. The exact-tag GitHub Actions run must pass the same
+canonical gate and publish exactly one verified identity manifest before stable
+installation begins.
 
 Post-publication validation uses a fresh supported non-root environment and the
 ordinary one-command installer. It must verify exact version/manifest identity,

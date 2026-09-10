@@ -46,8 +46,8 @@ the exact Git revision on the dev channel while the numeric candidate version
 remains unchanged. Change the number when a release scope is frozen and the
 candidate is being prepared for stable publication.
 
-Classify every user-visible change since the last stable release in
-`release/change-impact.json`:
+Classify every user-visible change since the highest prior immutable version
+tag in `release/change-impact.json`:
 
 - `patch`: compatible fixes, hardening, documentation, or packaging corrections;
 - `minor`: a new user-visible capability or a compatibility break while SAT is
@@ -63,8 +63,11 @@ tag reuse, incomplete schema metadata, or a tag bound to another commit.
 
 1. Freeze the intended release scope. Resolve or explicitly defer every issue
    selected for that release.
-2. Set `baseline_version` to the previous stable release, or `null` only for the
-   first release. Set `target_version` and list the classified changes in
+2. Set `baseline_version` to the highest prior immutable version tag, or `null`
+   only when no earlier release tag exists. A tag whose exact-tag publication
+   gate failed is still immutable and burns that version; the next candidate
+   uses it as the baseline without presenting it as a published stable release.
+   Set `target_version` and list only the changes since that tag in
    `release/change-impact.json`.
 3. Set the same target version in `pyproject.toml`, then refresh the derived lock:
 

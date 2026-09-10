@@ -60,6 +60,13 @@ def write_policy(path: Path) -> None:
     )
 
 
+def uid_distinct_from_owner(path: Path) -> int:
+    """Return a valid simulated effective UID that cannot own ``path``."""
+
+    owner_uid = path.stat().st_uid
+    return 1 if owner_uid == 0 else 0
+
+
 def test_prepare_sandbox_skill_mountpoint_is_user_owned_and_idempotent(
     tmp_path: Path,
 ) -> None:
@@ -103,7 +110,8 @@ def test_legacy_repair_uses_one_constrained_exact_docker_mount(
     target.mkdir(parents=True)
     policy = tmp_path / "policy.json"
     write_policy(policy)
-    monkeypatch.setattr(os, "geteuid", lambda: 1001)
+    simulated_uid = uid_distinct_from_owner(target)
+    monkeypatch.setattr(os, "geteuid", lambda: simulated_uid)
     image_id = "sha256:" + "a" * 64
     runner = ScriptedRunner([completed(image_id + "\n"), completed()])
 
@@ -148,7 +156,8 @@ def test_legacy_repair_refuses_foreign_nonempty_content_before_docker(
     (target / "unexpected.txt").write_text("preserve\n", encoding="utf-8")
     policy = tmp_path / "policy.json"
     write_policy(policy)
-    monkeypatch.setattr(os, "geteuid", lambda: 1001)
+    simulated_uid = uid_distinct_from_owner(target)
+    monkeypatch.setattr(os, "geteuid", lambda: simulated_uid)
     runner = ScriptedRunner([])
 
     with pytest.raises(WorkspaceMountError, match="non-empty"):
