@@ -2,7 +2,7 @@
 
 **Implementation status:** [`STATUS.md`](STATUS.md)
 
-**Last updated:** September 5, 2026
+**Last updated:** September 10, 2026
 
 ## Purpose
 

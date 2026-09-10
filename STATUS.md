@@ -64,9 +64,9 @@ lifecycle-owner Git blobs are identical at `v0.1.2`.
 
 ## Current Development Head
 
-Public `main` now identifies
-`d94850e6aecf731fc551ffe0fefc4c4662ddaf42`. Planning schema v18 keeps
-schema-v2 through schema-v17 evidence readable and separates three authorities:
+The current role-specialization implementation is anchored by
+`c36090d543fe6bdd230c88d8de7684082733b1bb`. Planning schema v19 keeps
+schema-v2 through schema-v18 evidence readable and separates three authorities:
 Controller-required recovery, Planner-selected task clarification, and user
 approval. A focused question can change only its declared decision scope;
 unknown user-question provenance returns to dialogue instead of model-owned
@@ -81,17 +81,39 @@ remain available through a lossless `f` display toggle. That toggle changes no
 proposal, model-call count, or user requirement; `r` remains reserved for a
 deliberate semantic requirement revision.
 
-The exact clean development revision passed the canonical `make check` once
-with 1,429 tests and zero residual stage processes, process leases, sandbox
-containers, volumes, or private test directories. A managed non-root bare-`sat`
-Planning journey using `deepseek/deepseek-v4-flash-vision-exp` then asked only
-the one overwrite-policy decision deliberately left open by the request,
-produced revision 1, preserved the selected answer with resolved-question
-provenance, and displayed compact/expanded/compact views without a model call
-or revision. The operator cancelled before approval; SAT created no runtime
-Agent, workspace, destination, or delivery and removed the bootstrap sandbox.
-This validates the pre-execution Planning interface, not end-to-end software
-delivery on this development head.
+TeamPlan schema v3 now separates each task-specific Agent label and
+responsibility from a versioned specialization and a compatible executable
+capability. The Controller-owned catalog binds professional purpose, prompt
+module, permission ceiling, typed output, handoff boundary, and acceptance
+claim class. Security and end-user-experience assessment are the first two
+non-generic specializations: both retain the read-only Review capability while
+producing distinct grounded `SecurityAssessment` and `ExperienceAssessment`
+artifacts. Unknown or incompatible combinations, permission or output
+escalation, missing packaged prompt modules, mismatched execution identity, and
+criterion-scope drift fail before Agent creation or artifact persistence.
+
+The same identity now crosses prompt composition, execution requests and
+telemetry, schema-v13 execution records, scheduler records, schema-v6 progress
+events, typed handoffs, lifecycle transitions, and the approved-plan self-check.
+A production-shaped Planning matrix verifies that an ordinary task, an
+untrusted-input security task, and an interactive-workflow task compile to
+different Agent sets, dependency waves, typed outputs, verifier assignments,
+acceptance strategies, and user overviews without deriving authority from a
+free-form role label.
+
+This exact clean revision passed one canonical `make check` with 1,445 tests
+and zero residual stage processes, process leases, sandbox containers, volumes,
+or private test directories. A provider-backed ordinary-interface run that
+selects and executes each new specialization remains pending; offline schema,
+runtime, and gate success does not establish that external boundary.
+
+The preceding managed non-root bare-`sat` Planning acceptance on `d94850e`
+used `deepseek/deepseek-v4-flash-vision-exp`, asked only the overwrite-policy
+decision deliberately left open by the request, preserved its typed
+provenance, and switched compact/expanded/compact views without a model call or
+revision. It created no runtime Agent or delivery. Those unchanged Planning
+authority facts remain evidence for this head, but they do not substitute for
+the pending specialization acceptance.
 
 ## Implementation Evidence History
 
@@ -1875,6 +1897,8 @@ derived from the task.
 
 ## Not Yet Available or Completed
 
+- Provider-backed ordinary-interface evidence that materially different tasks
+  select and execute the security and experience specialization contracts;
 - Fresh installed-device evidence for task-admission/approved-plan remediation
   and process-orphan recovery;
 - An independent-device live demonstration of the activated Adaptive Planning
@@ -1901,15 +1925,13 @@ The current `sat run` command starts from a confirmed `TaskBrief`, requires a
 fresh run ID, and intentionally does not infer that an unrecorded external
 action succeeded after interruption.
 
-## Next Milestone
+## Current Validation Boundary
 
-The next product milestone improves Planning concision and question authority
-before expanding dynamic role depth. It will remove repeated fixed constraints
-from the user overview, distinguish genuinely material user decisions from
-optional context that the Planner can decide, and preserve one visible,
-editable plan as the authority for downstream team generation. Dynamic role
-expansion follows that corrected Planning contract rather than adding more
-fixed role labels first.
+Planning concision and question authority are implemented and have
+provider-backed pre-execution evidence. Task-derived specialization is
+implemented and has clean offline evidence on the current head, but it remains
+outside completed product acceptance until materially different ordinary-user
+requests select and execute the two new contracts through the managed runtime.
 
 The first release has no previous stable, so a genuine stable-to-newer-stable
 upgrade remains deferred until the next release rather than being simulated.
