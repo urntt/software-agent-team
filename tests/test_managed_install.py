@@ -511,6 +511,237 @@ def test_initial_install_stages_verifies_and_activates_one_logical_link(
     assert report.channel is ManagedChannel.DEV
 
 
+def test_consecutive_upgrades_retain_only_active_and_direct_predecessor(
+    tmp_path: Path,
+) -> None:
+    repository, first_revision = prepare_repository(tmp_path)
+    install_paths = paths(tmp_path)
+    install_managed_target(dev_target(repository, first_revision), install_paths)
+    first_release = install_paths.application_link.resolve(strict=True)
+
+    (repository / "second.txt").write_text("second\n", encoding="utf-8")
+    git(repository, "add", ".")
+    git(repository, "commit", "-m", "test: add second revision")
+    second_revision = git(repository, "rev-parse", "HEAD")
+    install_managed_target(dev_target(repository, second_revision), install_paths)
+    second_release = install_paths.application_link.resolve(strict=True)
+
+    (repository / "third.txt").write_text("third\n", encoding="utf-8")
+    git(repository, "add", ".")
+    git(repository, "commit", "-m", "test: add third revision")
+    third_revision = git(repository, "rev-parse", "HEAD")
+    install_managed_target(dev_target(repository, third_revision), install_paths)
+    third_release = install_paths.application_link.resolve(strict=True)
+
+    assert not first_release.exists()
+    assert second_release.is_dir()
+    assert third_release.is_dir()
+    assert set(install_paths.versions_root.iterdir()) == {
+        second_release,
+        third_release,
+    }
+
+    activate_staged_application(
+        stage_managed_target(
+            dev_target(repository, third_revision),
+            install_paths,
+        ),
+        install_paths,
+    )
+    assert set(install_paths.versions_root.iterdir()) == {
+        second_release,
+        third_release,
+    }
+
+
+def test_upgrade_refuses_to_delete_an_unattributed_version_entry(
+    tmp_path: Path,
+) -> None:
+    repository, first_revision = prepare_repository(tmp_path)
+    install_paths = paths(tmp_path)
+    first_record = install_managed_target(
+        dev_target(repository, first_revision),
+        install_paths,
+    )
+    first_release = install_paths.application_link.resolve(strict=True)
+    foreign = install_paths.versions_root / "foreign"
+    foreign.mkdir()
+    (foreign / "preserve.txt").write_text("user data\n", encoding="utf-8")
+    (repository / "second.txt").write_text("second\n", encoding="utf-8")
+    git(repository, "add", ".")
+    git(repository, "commit", "-m", "test: add second revision")
+    second_revision = git(repository, "rev-parse", "HEAD")
+
+    with pytest.raises(
+        ManagedInstallError, match="managed application marker is invalid"
+    ):
+        install_managed_target(
+            dev_target(repository, second_revision),
+            install_paths,
+        )
+
+    assert install_paths.application_link.resolve(strict=True) == first_release
+    assert load_installation_record(install_paths.installation_record) == first_record
+    assert (foreign / "preserve.txt").read_text(encoding="utf-8") == "user data\n"
+
+
+def test_successful_activation_removes_only_attributable_dangling_image(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reference = "sat-python-quality:phase1-v6"
+    previous_id = "sha256:" + "a" * 64
+    candidate_id = "sha256:" + "b" * 64
+    commands: list[tuple[str, ...]] = []
+
+    def fake_docker(
+        arguments: tuple[str, ...],
+        *,
+        check: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        commands.append(arguments)
+        if arguments[:2] == ("image", "inspect"):
+            assert arguments[-1] == previous_id
+            payload = {
+                "Id": previous_id,
+                "RepoTags": None,
+                "Config": {
+                    "Labels": {
+                        managed_install_module.SANDBOX_IMAGE_OWNER_LABEL: "true",
+                        managed_install_module.SANDBOX_IMAGE_REFERENCE_LABEL: reference,
+                    }
+                },
+            }
+            return subprocess.CompletedProcess(arguments, 0, json.dumps(payload), "")
+        if arguments[:2] == ("container", "ls"):
+            return subprocess.CompletedProcess(arguments, 0, "", "")
+        if arguments[:2] == ("image", "rm"):
+            assert check is True
+            return subprocess.CompletedProcess(arguments, 0, previous_id + "\n", "")
+        raise AssertionError(f"unexpected Docker command: {arguments}")
+
+    monkeypatch.setattr(managed_install_module, "_docker_command", fake_docker)
+    transition = managed_install_module.SandboxImageTransition(
+        reference=reference,
+        previous=managed_install_module.SandboxImageIdentity(
+            image_id=previous_id,
+            repository_tags=(reference,),
+            owned=True,
+        ),
+        candidate=managed_install_module.SandboxImageIdentity(
+            image_id=candidate_id,
+            repository_tags=(reference,),
+            owned=True,
+        ),
+    )
+
+    managed_install_module._cleanup_superseded_sandbox_image(transition)
+
+    assert ("image", "rm", previous_id) in commands
+
+
+def test_successful_activation_preserves_unattributed_previous_image(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def reject_docker(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("an unattributed image must not be touched")
+
+    monkeypatch.setattr(managed_install_module, "_docker_command", reject_docker)
+    transition = managed_install_module.SandboxImageTransition(
+        reference="sat-python-quality:phase1-v6",
+        previous=managed_install_module.SandboxImageIdentity(
+            image_id="sha256:" + "a" * 64,
+            repository_tags=(),
+            owned=False,
+        ),
+        candidate=managed_install_module.SandboxImageIdentity(
+            image_id="sha256:" + "b" * 64,
+            repository_tags=("sat-python-quality:phase1-v6",),
+            owned=True,
+        ),
+    )
+
+    managed_install_module._cleanup_superseded_sandbox_image(transition)
+
+
+def test_failed_activation_restores_previous_image_tag_and_removes_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reference = "sat-python-quality:phase1-v6"
+    previous_id = "sha256:" + "a" * 64
+    candidate_id = "sha256:" + "b" * 64
+    current_tag = {"image_id": candidate_id}
+    removed: set[str] = set()
+
+    def identity_payload(image_id: str) -> str:
+        tags = [reference] if current_tag["image_id"] == image_id else None
+        return json.dumps(
+            {
+                "Id": image_id,
+                "RepoTags": tags,
+                "Config": {
+                    "Labels": {
+                        managed_install_module.SANDBOX_IMAGE_OWNER_LABEL: "true",
+                        managed_install_module.SANDBOX_IMAGE_REFERENCE_LABEL: reference,
+                    }
+                },
+            }
+        )
+
+    def fake_docker(
+        arguments: tuple[str, ...],
+        *,
+        check: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        if arguments[:2] == ("image", "inspect"):
+            selector = arguments[-1]
+            image_id = current_tag["image_id"] if selector == reference else selector
+            if image_id in removed:
+                return subprocess.CompletedProcess(
+                    arguments,
+                    1,
+                    "",
+                    "Error response from daemon: No such image",
+                )
+            return subprocess.CompletedProcess(
+                arguments,
+                0,
+                identity_payload(image_id),
+                "",
+            )
+        if arguments[:2] == ("image", "tag"):
+            assert check is True
+            assert arguments[2:] == (previous_id, reference)
+            current_tag["image_id"] = previous_id
+            return subprocess.CompletedProcess(arguments, 0, "", "")
+        if arguments[:2] == ("container", "ls"):
+            return subprocess.CompletedProcess(arguments, 0, "", "")
+        if arguments[:2] == ("image", "rm"):
+            assert check is True
+            removed.add(arguments[2])
+            return subprocess.CompletedProcess(arguments, 0, "", "")
+        raise AssertionError(f"unexpected Docker command: {arguments}")
+
+    monkeypatch.setattr(managed_install_module, "_docker_command", fake_docker)
+    transition = managed_install_module.SandboxImageTransition(
+        reference=reference,
+        previous=managed_install_module.SandboxImageIdentity(
+            image_id=previous_id,
+            repository_tags=(reference,),
+            owned=True,
+        ),
+        candidate=managed_install_module.SandboxImageIdentity(
+            image_id=candidate_id,
+            repository_tags=(reference,),
+            owned=True,
+        ),
+    )
+
+    managed_install_module._restore_sandbox_image_transition(transition)
+
+    assert current_tag["image_id"] == previous_id
+    assert candidate_id in removed
+
+
 def test_stable_stage_rejects_package_or_archive_identity_drift(
     tmp_path: Path,
 ) -> None:

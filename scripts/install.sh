@@ -173,6 +173,8 @@ task_image="$(
 
 if ! docker build \
     --pull=false \
+    --label software-agent-team.sandbox-image=true \
+    --label "software-agent-team.image-reference=$task_image" \
     --tag "$task_image" \
     runtime/python; then
   fail "sandbox image build failed; inspect Docker output and retry"

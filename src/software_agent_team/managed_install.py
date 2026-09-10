@@ -51,8 +51,12 @@ LATEST_RELEASE_API_ENVIRONMENT_VARIABLE = "SAT_RELEASE_API_URL"
 DEFAULT_MANAGED_DIRECTORY_NAME = "software-agent-team"
 CANDIDATE_COMPATIBILITY_TIMEOUT_SECONDS = 30
 MAX_CANDIDATE_COMPATIBILITY_OUTPUT_BYTES = 16 * 1024 * 1024
+SANDBOX_IMAGE_OWNER_LABEL = "software-agent-team.sandbox-image"
+SANDBOX_IMAGE_REFERENCE_LABEL = "software-agent-team.image-reference"
+SANDBOX_IMAGE_COMMAND_TIMEOUT_SECONDS = 30
 _SOURCE_REF_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$")
 _SOURCE_REVISION_PATTERN = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
+_SANDBOX_IMAGE_ID_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
 class ManagedInstallError(RuntimeError):
@@ -314,6 +318,25 @@ class StagedApplication:
     marker: ManagedApplicationMarker
     schema_support: tuple[SchemaSupport, ...]
     created_candidate: bool
+    sandbox_image_transition: SandboxImageTransition | None = None
+
+
+@dataclass(frozen=True)
+class SandboxImageIdentity:
+    """One locally inspected image and its deletion-safety facts."""
+
+    image_id: str
+    repository_tags: tuple[str, ...]
+    owned: bool
+
+
+@dataclass(frozen=True)
+class SandboxImageTransition:
+    """Exact mutable-tag change made while staging one managed candidate."""
+
+    reference: str
+    previous: SandboxImageIdentity | None
+    candidate: SandboxImageIdentity
 
 
 CommandRunner = Callable[[Sequence[str], Path | None, Mapping[str, str] | None], None]
@@ -407,6 +430,9 @@ def _stage_managed_target_locked(
     stage = Path(tempfile.mkdtemp(prefix=".stage-", dir=paths.versions_root)).resolve()
     cleanup_path: Path | None = stage
     runner = command_runner or _run_command
+    sandbox_image_reference: str | None = None
+    previous_sandbox_image: SandboxImageIdentity | None = None
+    sandbox_image_transition: SandboxImageTransition | None = None
     try:
         runner(("git", "init", "-b", "sat-managed", str(stage)), None, None)
         runner(
@@ -504,11 +530,25 @@ def _stage_managed_target_locked(
             "SAT_INSTALL_METADATA_PATH": str(paths.installation_record),
         }
         install_environment.pop("VIRTUAL_ENV", None)
+        sandbox_image_reference = _configured_sandbox_image(final_path)
+        if sandbox_image_reference is not None:
+            previous_sandbox_image = _inspect_sandbox_image(sandbox_image_reference)
         runner(
             (str(final_path / "scripts" / "install.sh"),),
             final_path,
             install_environment,
         )
+        if sandbox_image_reference is not None:
+            candidate_image = _inspect_sandbox_image(sandbox_image_reference)
+            if candidate_image is None or not candidate_image.owned:
+                raise ManagedInstallError(
+                    "managed installer did not produce an attributable sandbox image"
+                )
+            sandbox_image_transition = SandboxImageTransition(
+                reference=sandbox_image_reference,
+                previous=previous_sandbox_image,
+                candidate=candidate_image,
+            )
         _validate_staged_application(final_path, marker)
         schema_support = target.schema_support or _read_staged_schema_support(
             final_path
@@ -519,10 +559,32 @@ def _stage_managed_target_locked(
             marker=marker,
             schema_support=schema_support,
             created_candidate=True,
+            sandbox_image_transition=sandbox_image_transition,
         )
     except BaseException:
+        rollback_error: ManagedInstallError | None = None
+        if sandbox_image_reference is not None:
+            try:
+                current_image = _inspect_sandbox_image(sandbox_image_reference)
+                if current_image is not None and (
+                    previous_sandbox_image is None
+                    or current_image.image_id != previous_sandbox_image.image_id
+                ):
+                    _restore_sandbox_image_transition(
+                        SandboxImageTransition(
+                            reference=sandbox_image_reference,
+                            previous=previous_sandbox_image,
+                            candidate=current_image,
+                        )
+                    )
+            except ManagedInstallError as restore_error:
+                rollback_error = restore_error
         if cleanup_path is not None:
             shutil.rmtree(cleanup_path, ignore_errors=True)
+        if rollback_error is not None:
+            raise ManagedInstallError(
+                "managed sandbox image rollback failed after staging error"
+            ) from rollback_error
         raise
 
 
@@ -535,17 +597,24 @@ def activate_staged_application(
 ) -> InstallationRecord:
     """Atomically switch the stable application link and roll back any failure."""
 
-    _require_managed_root(paths)
-    _validate_staged_application(staged.path, staged.marker)
-    if Path(staged.marker.application_link) != paths.application_link:
-        raise ManagedInstallError("staged application targets a different active link")
-    with _exclusive_update_lock(paths):
-        return _activate_staged_application_locked(
-            staged,
-            paths,
-            installed_at=installed_at,
-            fail_after_link_swap=fail_after_link_swap,
-        )
+    try:
+        _require_managed_root(paths)
+        _validate_staged_application(staged.path, staged.marker)
+        if Path(staged.marker.application_link) != paths.application_link:
+            raise ManagedInstallError(
+                "staged application targets a different active link"
+            )
+        with _exclusive_update_lock(paths):
+            return _activate_staged_application_locked(
+                staged,
+                paths,
+                installed_at=installed_at,
+                fail_after_link_swap=fail_after_link_swap,
+            )
+    except BaseException:
+        if staged.sandbox_image_transition is not None:
+            _restore_sandbox_image_transition(staged.sandbox_image_transition)
+        raise
 
 
 def install_managed_target(
@@ -568,8 +637,12 @@ def install_managed_target(
         try:
             return _activate_staged_application_locked(staged, paths)
         except BaseException:
-            if staged.created_candidate:
-                shutil.rmtree(staged.path, ignore_errors=True)
+            try:
+                if staged.sandbox_image_transition is not None:
+                    _restore_sandbox_image_transition(staged.sandbox_image_transition)
+            finally:
+                if staged.created_candidate:
+                    shutil.rmtree(staged.path, ignore_errors=True)
             raise
 
 
@@ -678,6 +751,13 @@ def _activate_staged_application_locked(
             shutil.rmtree(staged.path)
     else:
         os.replace(staged.path, final_path)
+    if final_path != previous_target:
+        _retire_superseded_applications(
+            paths,
+            retained=tuple(
+                path for path in (final_path, previous_target) if path is not None
+            ),
+        )
     switched = False
     created_launchers: tuple[Path, ...] = ()
     try:
@@ -698,14 +778,26 @@ def _activate_staged_application_locked(
         save_installation_record(record, paths.installation_record)
         created_launchers = _activate_launchers(paths)
         _validate_active_application(paths)
+        if staged.sandbox_image_transition is not None:
+            _cleanup_superseded_sandbox_image(staged.sandbox_image_transition)
         return record
     except BaseException:
+        image_restore_error: ManagedInstallError | None = None
+        if staged.sandbox_image_transition is not None:
+            try:
+                _restore_sandbox_image_transition(staged.sandbox_image_transition)
+            except ManagedInstallError as restore_error:
+                image_restore_error = restore_error
         for launcher in created_launchers:
             if launcher.is_symlink():
                 launcher.unlink()
         if switched:
             _restore_application_link(paths.application_link, previous_target)
         _restore_optional_bytes(paths.installation_record, previous_record)
+        if image_restore_error is not None:
+            raise ManagedInstallError(
+                "managed sandbox image rollback failed after activation error"
+            ) from image_restore_error
         raise
 
 
@@ -1038,6 +1130,217 @@ def _validate_staged_application(
                 f"staged application is missing executable {relative}"
             )
     _capture_command((str(path / ".venv/bin/sat"), "--help"))
+
+
+def _configured_sandbox_image(application: Path) -> str | None:
+    """Return the application-owned mutable image reference when one exists."""
+
+    policy = application / "configs" / "product-policy.json"
+    if not policy.exists() and not policy.is_symlink():
+        return None
+    if policy.is_symlink() or not policy.is_file():
+        raise ManagedInstallError("managed sandbox policy must be a regular file")
+    try:
+        payload = json.loads(policy.read_text(encoding="utf-8"))
+        image = payload["sandbox"]["image"]
+    except (OSError, KeyError, TypeError, json.JSONDecodeError) as error:
+        raise ManagedInstallError(
+            "managed sandbox policy does not declare a valid image"
+        ) from error
+    if (
+        not isinstance(image, str)
+        or not image
+        or image != image.strip()
+        or image.startswith("-")
+        or any(character.isspace() or ord(character) < 32 for character in image)
+    ):
+        raise ManagedInstallError(
+            "managed sandbox policy does not declare a valid image"
+        )
+    return image
+
+
+def _docker_command(
+    arguments: Sequence[str],
+    *,
+    check: bool,
+) -> subprocess.CompletedProcess[str]:
+    """Run one bounded Docker lifecycle command without a shell."""
+
+    try:
+        completed = subprocess.run(
+            ("docker", *arguments),
+            check=False,
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            timeout=SANDBOX_IMAGE_COMMAND_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise ManagedInstallError("managed sandbox image command failed") from error
+    if check and completed.returncode != 0:
+        raise ManagedInstallError("managed sandbox image command failed")
+    return completed
+
+
+def _inspect_sandbox_image(
+    selector: str,
+    *,
+    expected_reference: str | None = None,
+) -> SandboxImageIdentity | None:
+    """Inspect one exact image without treating a missing image as owned."""
+
+    completed = _docker_command(
+        ("image", "inspect", "--format", "{{json .}}", selector),
+        check=False,
+    )
+    if completed.returncode != 0:
+        diagnostic = completed.stderr.lower()
+        if "no such image" in diagnostic or "no such object" in diagnostic:
+            return None
+        raise ManagedInstallError("managed sandbox image inspection failed")
+    try:
+        payload = json.loads(completed.stdout)
+        image_id = payload["Id"]
+        config = payload["Config"]
+        labels = config.get("Labels") or {}
+        raw_tags = payload.get("RepoTags") or []
+    except (AttributeError, KeyError, TypeError, json.JSONDecodeError) as error:
+        raise ManagedInstallError(
+            "Docker returned malformed managed sandbox image metadata"
+        ) from error
+    if (
+        not isinstance(image_id, str)
+        or _SANDBOX_IMAGE_ID_PATTERN.fullmatch(image_id) is None
+        or not isinstance(labels, dict)
+        or not isinstance(raw_tags, list)
+        or any(not isinstance(tag, str) for tag in raw_tags)
+    ):
+        raise ManagedInstallError(
+            "Docker returned malformed managed sandbox image metadata"
+        )
+    reference = selector if expected_reference is None else expected_reference
+    owned = (
+        labels.get(SANDBOX_IMAGE_OWNER_LABEL) == "true"
+        and labels.get(SANDBOX_IMAGE_REFERENCE_LABEL) == reference
+    )
+    return SandboxImageIdentity(
+        image_id=image_id,
+        repository_tags=tuple(raw_tags),
+        owned=owned,
+    )
+
+
+def _image_has_container_references(image_id: str) -> bool:
+    completed = _docker_command(
+        (
+            "container",
+            "ls",
+            "--all",
+            "--quiet",
+            "--filter",
+            f"ancestor={image_id}",
+        ),
+        check=True,
+    )
+    return bool(completed.stdout.strip())
+
+
+def _remove_owned_unreferenced_image(
+    image_id: str,
+    *,
+    expected_reference: str,
+) -> None:
+    """Remove one proven SAT image only when no tag or container retains it."""
+
+    identity = _inspect_sandbox_image(
+        image_id,
+        expected_reference=expected_reference,
+    )
+    if identity is None or not identity.owned:
+        return
+    if identity.repository_tags or _image_has_container_references(image_id):
+        return
+    _docker_command(("image", "rm", image_id), check=True)
+
+
+def _cleanup_superseded_sandbox_image(
+    transition: SandboxImageTransition,
+) -> None:
+    """Delete only the unreferenced, attributable image replaced by activation."""
+
+    previous = transition.previous
+    if (
+        previous is None
+        or previous.image_id == transition.candidate.image_id
+        or not previous.owned
+    ):
+        return
+    _remove_owned_unreferenced_image(
+        previous.image_id,
+        expected_reference=transition.reference,
+    )
+
+
+def _restore_sandbox_image_transition(
+    transition: SandboxImageTransition,
+) -> None:
+    """Restore the pre-stage tag and retire an unused candidate after failure."""
+
+    current = _inspect_sandbox_image(transition.reference)
+    previous = transition.previous
+    if previous is not None:
+        if (
+            _inspect_sandbox_image(
+                previous.image_id,
+                expected_reference=transition.reference,
+            )
+            is None
+        ):
+            raise ManagedInstallError(
+                "previous managed sandbox image is unavailable for rollback"
+            )
+        if current is None or current.image_id != previous.image_id:
+            _docker_command(
+                ("image", "tag", previous.image_id, transition.reference),
+                check=True,
+            )
+    elif current is not None and current.image_id == transition.candidate.image_id:
+        _docker_command(("image", "rm", transition.reference), check=True)
+    if transition.candidate.owned and (
+        previous is None or transition.candidate.image_id != previous.image_id
+    ):
+        _remove_owned_unreferenced_image(
+            transition.candidate.image_id,
+            expected_reference=transition.reference,
+        )
+
+
+def _retire_superseded_applications(
+    paths: ManagedInstallPaths,
+    *,
+    retained: tuple[Path, ...],
+) -> None:
+    """Keep only the active candidate and one direct predecessor release."""
+
+    root = paths.versions_root.resolve(strict=True)
+    keep = {path.resolve(strict=True) for path in retained}
+    retire: list[Path] = []
+    for candidate in sorted(root.iterdir(), key=lambda path: path.name):
+        if candidate.is_symlink():
+            raise ManagedInstallError(
+                "managed versions root contains an unsafe release entry"
+            )
+        if candidate.resolve(strict=True) in keep:
+            continue
+        if not candidate.is_dir():
+            raise ManagedInstallError(
+                "managed versions root contains an unsafe release entry"
+            )
+        _require_managed_release_target(candidate, paths)
+        retire.append(candidate)
+    for candidate in retire:
+        shutil.rmtree(candidate)
 
 
 def _final_release_path(

@@ -266,9 +266,11 @@ def test_installer_prepares_cli_image_and_checks_idempotently(tmp_path: Path) ->
     assert "install: uninstall=sat-uninstall" in first.stdout
     docker_calls = docker_log.read_text(encoding="utf-8")
     assert "info" in docker_calls
-    assert "build --pull=false --tag sat-python-quality:phase1-v6 runtime/python" in (
-        docker_calls
-    )
+    assert (
+        "build --pull=false --label software-agent-team.sandbox-image=true "
+        "--label software-agent-team.image-reference=sat-python-quality:phase1-v6 "
+        "--tag sat-python-quality:phase1-v6 runtime/python"
+    ) in docker_calls
     assert "image inspect --format {{.Id}}" in docker_calls
     assert "run --detach --name sat-install-probe-" in docker_calls
     assert "sleep infinity" in docker_calls

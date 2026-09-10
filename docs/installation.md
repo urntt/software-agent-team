@@ -97,7 +97,8 @@ The installation then:
 - Bootstraps uv and prepares the Python toolchain plus a marked SAT-private
   OpenClaw runtime when needed;
 - Synchronizes the locked SAT environment;
-- Builds and resolves the pinned sandbox image, then starts a restricted probe,
+- Builds and resolves the pinned sandbox image with SAT ownership and exact
+  configured-reference labels, then starts a restricted probe,
   executes the immutable Reviewer probe runner's self-test inside it, verifies
   that the container remains alive, and removes it; the image also contains the
   pinned `uv` used by bounded Reviewer probes of generated-project commands;
@@ -537,9 +538,14 @@ SAT then executes the final user-facing launcher; failure restores the prior
 link and record and removes only launchers created by that transaction. An
 active run, unsupported newer state, conflicting launcher, source drift, or
 failed candidate stops
-before activation. If activation itself fails, the previous link and record are
-restored. A successful change retains older release storage until uninstall;
-user configuration and isolated provider state are not rewritten.
+before activation. If activation itself fails, the previous link, record, and
+sandbox-image tag are restored. A successful change retains the active
+application and one direct predecessor, then removes only older direct version
+directories whose managed marker proves ownership. It removes the superseded
+sandbox image only when both SAT labels match the configured reference and the
+exact image has neither a remaining tag nor a container reference. Unlabelled
+legacy images and foreign Docker resources remain untouched. User configuration
+and isolated provider state are not rewritten.
 
 These commands operate only on a verified managed installation. A contributor
 or other source checkout receives an explicit refusal instead of an implicit
