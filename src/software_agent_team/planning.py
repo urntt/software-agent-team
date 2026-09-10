@@ -2428,8 +2428,10 @@ class ProposedTask(BaseModel):
     expected_paths: tuple[str, ...] = Field(
         default=(),
         description=(
-            "Canonical paths relative to the repository root; directory paths "
-            "must not end with a slash."
+            "Non-binding forecasts of repository paths likely to be relevant to "
+            "the task. They are not required outputs, a completion checklist, or "
+            "write authority. Paths are canonical and relative to the repository "
+            "root; directory paths must not end with a slash."
         ),
     )
 

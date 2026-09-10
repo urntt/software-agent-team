@@ -1286,7 +1286,13 @@ class PlanTask(BaseModel):
     description: str = Field(min_length=1)
     dependencies: tuple[str, ...] = ()
     acceptance_criteria: tuple[str, ...] = Field(min_length=1)
-    expected_paths: tuple[str, ...] = ()
+    expected_paths: tuple[str, ...] = Field(
+        default=(),
+        description=(
+            "Non-binding forecasts of repository paths likely to be relevant; "
+            "they do not require creation or grant write authority."
+        ),
+    )
 
     @field_validator("dependencies", "acceptance_criteria")
     @classmethod

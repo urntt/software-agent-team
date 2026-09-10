@@ -614,6 +614,15 @@ approval overview, prompt construction, and runner startup all validate that
 same canonical projection, so task text cannot become a second execution-order
 owner.
 
+`expected_paths` is only a canonical, non-binding forecast of repository paths
+likely to be relevant to a task. It is not a required-output list, completion
+checklist, mutation allow-list, or permission boundary. An Agent must not create,
+modify, or track a path solely because Planning listed it. The approved task,
+execution profile, Agent permission, workspace scope, generated-project command
+contract, and repository ignore policy retain their respective authority. This
+distinction also applies to quality tasks, where a forecast may identify paths
+to inspect without requiring or permitting writes.
+
 The typed Agent graph likewise owns runtime-team topology. The raw model turn is
 preserved unchanged for audit, including any advisory ProductDefinition team
 impact or team-decision prose. During preview compilation, the Controller derives

@@ -397,6 +397,41 @@ def test_dynamic_prompt_is_compiled_from_the_approved_agent_spec() -> None:
     assert "exact shell form" in rendered
 
 
+def test_dynamic_prompt_treats_expected_paths_as_non_binding_forecasts() -> None:
+    """A planned ignored lock path must not become an implementation obligation."""
+
+    plan = implementation_plan()
+    task = plan.tasks[0].model_copy(
+        update={
+            "expected_paths": (
+                "src",
+                "tests",
+                "README.md",
+                "pyproject.toml",
+                "uv.lock",
+            )
+        }
+    )
+    plan = plan.model_copy(update={"tasks": (task,)})
+    approved_team = team_plan().model_copy(
+        update={"implementation_plan_sha256": canonical_model_sha256(plan)}
+    )
+    inputs = developer_inputs().model_copy(
+        update={"implementation_plan": plan, "team_plan": approved_team}
+    )
+
+    rendered = " ".join(render_dynamic_agent_prompt(inputs).split())
+
+    assert "expected_paths` are non-binding planning forecasts" in rendered
+    assert (
+        "not required outputs, a completion checklist, or write permission" in rendered
+    )
+    assert (
+        "Do not create, modify, or track a path solely because it is listed" in rendered
+    )
+    assert "explicit ignore policy remains authoritative" in rendered
+
+
 def test_upstream_continuation_preserves_identity_and_recovery_context() -> None:
     original = build_dynamic_agent_execution_request(developer_inputs())
 

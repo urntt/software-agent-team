@@ -166,9 +166,14 @@ Choose the next response by decision value:
   `repository/path` for a narrower scope. Never repeat the destination/project
   directory, use a leading `./`, or end a scope with `/`. Parallel writers must
   use disjoint scopes.
-- Every `expected_paths` entry is relative to the repository root and canonical.
-  A directory is written as `tests`, not `tests/`; never use an absolute path,
-  backslash, `.` segment, or `..` segment.
+- `expected_paths` is a non-binding forecast of paths likely to be relevant to
+  one task. It is not a list of required outputs, a completion checklist, or a
+  permission boundary. Do not list a path merely because the starter or
+  execution profile mentions it. Omit an ignored local setup artifact unless
+  that task genuinely needs to inspect it; the execution profile remains
+  authoritative. Every listed path is relative to the repository root and
+  canonical. A directory is written as `tests`, not `tests/`; never use an
+  absolute path, backslash, `.` segment, or `..` segment.
 - The controller already owns every `base_constraints` entry in
   PLANNING_CONTEXT_JSON. Put only additional task-specific constraints in the
   proposal's `constraints` array; do not repeat, paraphrase, shorten, or broaden
@@ -184,7 +189,8 @@ Choose the next response by decision value:
   or modifies project code, tests, configuration, or documentation to an
   implementation or integration Agent. A quality-owned task may describe only
   inspection, evidence analysis, testing of existing behavior, or review focus;
-  its `expected_paths` are paths to inspect, not files it may write.
+  its `expected_paths` are non-binding paths it may inspect, not files it must
+  inspect or may write.
   Every Review-owned task may reference only criteria in that Review Agent's
   compiled non-overlapping scope. Split or reassign a task when its criteria
   belong to different Review Agents; never use task prose to widen a specialist's
