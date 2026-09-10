@@ -45,6 +45,7 @@ from software_agent_team.controls import (
 )
 from software_agent_team.dynamic_workflow import (
     DynamicWorkflowCoordinator,
+    DynamicWorkflowError,
     DynamicWorkflowOutcome,
 )
 from software_agent_team.execution import (
@@ -72,6 +73,7 @@ from software_agent_team.planning import (
     AgentWorkload,
     ApprovedPlanningResult,
     PlanningApproval,
+    ProposedCriterion,
     ProposedTask,
 )
 from software_agent_team.progress import (
@@ -837,6 +839,56 @@ def test_dynamic_workflow_accepts_one_iteration_with_live_lifecycle_order(
     )
     assert invocation_event.budget_usage is not None
     assert invocation_event.model == MODEL
+
+
+def test_dynamic_workflow_rejects_scope_different_from_approved_strategy(
+    tmp_path: Path,
+) -> None:
+    base = approved_inputs(run_id="adaptive-scope-binding")
+    implementation = base.implementation_plan.model_copy(
+        update={
+            "acceptance_criteria": (
+                ProposedCriterion(
+                    id="AC_REVIEW",
+                    description="The result is clearly documented.",
+                    verification="Review the public usage documentation.",
+                    requirement_ids=("REQ_REVIEW",),
+                    verification_agent_ids=("reviewer",),
+                ),
+            )
+        }
+    )
+    team = base.team_plan.model_copy(
+        update={"implementation_plan_sha256": canonical_model_sha256(implementation)}
+    )
+    approval = base.approval.model_copy(
+        update={
+            "implementation_plan_sha256": canonical_model_sha256(implementation),
+            "team_plan_sha256": canonical_model_sha256(team),
+        }
+    )
+    approved = ApprovedPlanningResult(
+        task_brief=base.task_brief,
+        implementation_plan=implementation,
+        team_plan=team,
+        approval=approval,
+    )
+    workflow = coordinator(
+        tmp_path,
+        approved,
+        AdaptiveExecutor(tmp_path / "workspaces" / approved.task_brief.run_id),
+        RecordingQualityGateFactory(),
+    )
+    workflow.review_scope_by_agent = {"reviewer": ("AC_CODE",)}
+
+    with pytest.raises(
+        DynamicWorkflowError,
+        match="runtime Review scopes differ from the approved acceptance strategy",
+    ):
+        workflow.execute(
+            approved,
+            source_repository=tmp_path / "unused-source",
+        )
 
 
 def test_dynamic_workflow_prices_cache_in_records_progress_and_report(

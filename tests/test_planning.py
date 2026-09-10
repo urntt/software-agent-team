@@ -92,6 +92,7 @@ from software_agent_team.planning import (
     StructuredPlanEdit,
     TerminalPlanningProgress,
     apply_structured_edit,
+    compile_approved_review_scopes,
     preview_adaptive_proposal,
     render_planning_overview,
     run_interactive_planning,
@@ -3449,13 +3450,29 @@ def test_absolute_criterion_requires_all_review_entry_boundaries() -> None:
         )
 
     complete = absolute.model_copy(
-        update={"review_boundaries": tuple(ReviewBoundaryKind)}
+        update={
+            "review_boundaries": tuple(ReviewBoundaryKind),
+            "verification_agent_ids": ("security_assessor",),
+        }
+    )
+    security_assessor = ProposedAgent(
+        id="security_assessor",
+        label="Symlink Security Assessor",
+        responsibility="Assess the approved symlink trust boundaries.",
+        rationale="The absolute containment claim needs security authority.",
+        capability=AgentCapability.REVIEW,
+        specialization=AgentSpecialization.SECURITY_ASSESSMENT,
+        stage_id="verify",
+        dependencies=("cli_developer",),
+        workspace_scope="repository",
+        workload=AgentWorkload.ROUTINE,
     )
     accepted = PlanningProposalBody.model_validate(
         body.model_copy(
             update={
                 "acceptance_criteria": (*body.acceptance_criteria, complete),
                 "tasks": tasks,
+                "agents": (*body.agents, security_assessor),
             }
         )
     )
@@ -4368,14 +4385,12 @@ def test_materially_different_requests_compile_distinct_specialist_contracts() -
         )
 
     ordinary_body = proposal_body()
+    assert ordinary_body.product_definition is not None
     security_criterion = ProposedCriterion(
         id="AC_SECURITY",
         description="A link target outside the selected root is rejected.",
         verification="Probe direct and nested untrusted path inputs.",
-        review_boundaries=(
-            ReviewBoundaryKind.TOP_LEVEL_INPUT,
-            ReviewBoundaryKind.NESTED_INPUT,
-        ),
+        review_boundaries=tuple(ReviewBoundaryKind),
         requirement_ids=("REQ_SECURITY",),
         verification_agent_ids=("security_assessor",),
     )
@@ -4458,6 +4473,15 @@ def test_materially_different_requests_compile_distinct_specialist_contracts() -
         update={
             "agents": experience_agents,
             "acceptance_criteria": experience_criteria,
+            "product_definition": ordinary_body.product_definition.model_copy(
+                update={
+                    "primary_workflow": (
+                        ordinary_body.product_definition.primary_workflow.model_copy(
+                            update={"criterion_ids": ("AC_REPORT",)}
+                        )
+                    )
+                }
+            ),
         }
     )
 
@@ -4525,6 +4549,13 @@ def test_materially_different_requests_compile_distinct_specialist_contracts() -
         "acceptance_tester",
         "experience_assessor",
     )
+    assert security.review_scope_by_agent == {
+        "quality_reviewer": ("AC_SCAN", "AC_REPORT"),
+        "security_assessor": ("AC_SECURITY",),
+    }
+    assert experience.review_scope_by_agent == {
+        "experience_assessor": ("AC_SCAN", "AC_REPORT"),
+    }
     assert security.team_plan.model_dump(
         mode="json"
     ) != experience.team_plan.model_dump(mode="json")
@@ -4536,6 +4567,249 @@ def test_materially_different_requests_compile_distinct_specialist_contracts() -
     assert "acceptance authority: user_experience" in experience_overview
     assert "output: experience_assessment" in experience_overview
     assert "acceptance authority: security" not in experience_overview
+    assert (
+        "security_assessor [security_assessment; authority=security]: AC_SECURITY"
+    ) in security_overview
+
+
+def test_controller_rejects_security_boundaries_assigned_to_general_review() -> None:
+    body = proposal_body()
+    security_criterion = ProposedCriterion(
+        id="AC_SECURITY",
+        description=(
+            "No untrusted path can escape the selected root under any input shape."
+        ),
+        verification="Probe every approved path-entry boundary.",
+        review_boundaries=tuple(ReviewBoundaryKind),
+        requirement_ids=("REQ_SECURITY",),
+        verification_agent_ids=("quality_reviewer",),
+    )
+    invalid = body.model_copy(
+        update={
+            "requirements": (*body.requirements, "Contain every untrusted path."),
+            "requirement_ids": (*body.requirement_ids, "REQ_SECURITY"),
+            "acceptance_criteria": (*body.acceptance_criteria, security_criterion),
+            "tasks": (
+                body.tasks[0].model_copy(
+                    update={
+                        "acceptance_criteria": (
+                            *body.tasks[0].acceptance_criteria,
+                            "AC_SECURITY",
+                        )
+                    }
+                ),
+            ),
+        }
+    )
+
+    with pytest.raises(PlanningError, match="security acceptance authority"):
+        preview_adaptive_proposal(
+            request(
+                source_request=(
+                    f"{request().source_request} Treat every path as untrusted and "
+                    "never permit a root escape."
+                )
+            ),
+            proposal(body=invalid),
+            policy(),
+            created_at=FIXED_TIME,
+        )
+
+
+def test_controller_rejects_overlapping_general_and_security_review() -> None:
+    body = proposal_body()
+    security_agent = ProposedAgent(
+        id="security_assessor",
+        label="Path Security Assessor",
+        responsibility="Assess untrusted path boundaries and residual risk.",
+        rationale="The request introduces an untrusted-input boundary.",
+        capability=AgentCapability.REVIEW,
+        specialization=AgentSpecialization.SECURITY_ASSESSMENT,
+        stage_id="verify",
+        dependencies=("cli_developer",),
+        workspace_scope="repository",
+        workload=AgentWorkload.ROUTINE,
+    )
+    security_criterion = ProposedCriterion(
+        id="AC_SECURITY",
+        description="No untrusted path can escape the selected root.",
+        verification="Probe every approved path-entry boundary.",
+        review_boundaries=tuple(ReviewBoundaryKind),
+        requirement_ids=("REQ_SECURITY",),
+        verification_agent_ids=("quality_reviewer", "security_assessor"),
+    )
+    invalid = body.model_copy(
+        update={
+            "requirements": (*body.requirements, "Contain every untrusted path."),
+            "requirement_ids": (*body.requirement_ids, "REQ_SECURITY"),
+            "acceptance_criteria": (*body.acceptance_criteria, security_criterion),
+            "tasks": (
+                body.tasks[0].model_copy(
+                    update={
+                        "acceptance_criteria": (
+                            *body.tasks[0].acceptance_criteria,
+                            "AC_SECURITY",
+                        )
+                    }
+                ),
+            ),
+            "agents": (*body.agents, security_agent),
+        }
+    )
+
+    with pytest.raises(PlanningError, match="exactly one Review owner"):
+        preview_adaptive_proposal(
+            request(),
+            proposal(body=invalid),
+            policy(),
+            created_at=FIXED_TIME,
+        )
+
+
+def test_controller_rejects_interactive_workflow_assigned_to_general_review() -> None:
+    body = proposal_body()
+    assert body.product_definition is not None
+    definition = body.product_definition.model_copy(
+        update={
+            "primary_workflow": body.product_definition.primary_workflow.model_copy(
+                update={"criterion_ids": ("AC_REPORT",)}
+            )
+        }
+    )
+    invalid = body.model_copy(update={"product_definition": definition})
+
+    with pytest.raises(PlanningError, match="user-experience acceptance authority"):
+        preview_adaptive_proposal(
+            request(),
+            proposal(body=invalid),
+            policy(),
+            created_at=FIXED_TIME,
+        )
+
+
+def test_planning_repairs_missing_security_specialist_through_typed_slots(
+    tmp_path: Path,
+) -> None:
+    body = proposal_body()
+    security_criterion = ProposedCriterion(
+        id="AC_SECURITY",
+        description="No untrusted path can ever escape the selected root.",
+        verification="Probe every approved path-entry boundary.",
+        review_boundaries=tuple(ReviewBoundaryKind),
+        requirement_ids=("REQ_SECURITY",),
+        verification_agent_ids=("security_assessor",),
+    )
+    security_agent = ProposedAgent(
+        id="security_assessor",
+        label="Path Security Assessor",
+        responsibility="Assess untrusted path boundaries and residual risk.",
+        rationale="The request introduces an untrusted-input boundary.",
+        capability=AgentCapability.REVIEW,
+        specialization=AgentSpecialization.SECURITY_ASSESSMENT,
+        stage_id="verify",
+        dependencies=("cli_developer",),
+        workspace_scope="repository",
+        workload=AgentWorkload.ROUTINE,
+    )
+    valid = body.model_copy(
+        update={
+            "requirements": (*body.requirements, "Contain every untrusted path."),
+            "requirement_ids": (*body.requirement_ids, "REQ_SECURITY"),
+            "acceptance_criteria": (*body.acceptance_criteria, security_criterion),
+            "tasks": (
+                body.tasks[0].model_copy(
+                    update={
+                        "acceptance_criteria": (
+                            *body.tasks[0].acceptance_criteria,
+                            "AC_SECURITY",
+                        )
+                    }
+                ),
+            ),
+            "agents": (*body.agents, security_agent),
+        }
+    )
+    invalid = valid.model_copy(
+        update={
+            "agents": body.agents,
+            "acceptance_criteria": (
+                *body.acceptance_criteria,
+                security_criterion.model_copy(
+                    update={"verification_agent_ids": ("quality_reviewer",)}
+                ),
+            ),
+        }
+    )
+    invalid_payload = json.loads(
+        response(
+            PlanningModelResponse(
+                kind=PlanningResponseKind.PROPOSAL,
+                proposal=invalid,
+            )
+        )
+    )
+    valid_payload = json.loads(
+        response(
+            PlanningModelResponse(
+                kind=PlanningResponseKind.PROPOSAL,
+                proposal=valid,
+            )
+        )
+    )
+    source_request = (
+        f"{request().source_request} Treat every path as untrusted and never "
+        "permit a root escape."
+    )
+    correction_base, _ = planning._normalize_planning_response_payload(
+        invalid_payload,
+        profile_criterion_ids=(),
+        user_inputs=(source_request,),
+    )
+    criterion_path = "/proposal/acceptance_criteria/2/verification_agent_ids"
+    executor = ScriptedAgentExecutor(
+        [
+            json.dumps(invalid_payload),
+            correction_response(
+                correction_base,
+                {
+                    "/proposal/agents": valid_payload["proposal"]["agents"],
+                    criterion_path: valid_payload["proposal"]["acceptance_criteria"][2][
+                        "verification_agent_ids"
+                    ],
+                },
+            ),
+        ]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(response_repair_limit=None),
+        clock=AdvancingClock(),
+    )
+
+    planning_request = request(source_request=source_request)
+    created = coordinator.start(
+        planning_request,
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+
+    assert created is not None
+    assert created.body == valid
+    first = store.load_turn(request().run_id, 1)
+    assert first.response_validation is not None
+    assert first.response_validation.correction_paths == (
+        criterion_path,
+        "/proposal/agents",
+    )
+    assert store.load_turn(request().run_id, 2).semantic_correction_outcome == (
+        "accepted"
+    )
+    approved = coordinator.approve(planning_request, created)
+    assert compile_approved_review_scopes(approved) == {
+        "quality_reviewer": ("AC_SCAN", "AC_REPORT"),
+        "security_assessor": ("AC_SECURITY",),
+    }
 
 
 def test_controller_resolves_visible_per_agent_model_routes_before_approval() -> None:
@@ -4826,8 +5100,25 @@ def test_controller_counts_explicit_review_boundaries_as_scope_work() -> None:
     boundaries = tuple(ReviewBoundaryKind)
     body = proposal_body()
     criteria = tuple(
-        criterion.model_copy(update={"review_boundaries": boundaries})
+        criterion.model_copy(
+            update={
+                "review_boundaries": boundaries,
+                "verification_agent_ids": tuple(
+                    dict.fromkeys(
+                        (*criterion.verification_agent_ids, "quality_reviewer")
+                    )
+                ),
+            }
+        )
         for criterion in body.acceptance_criteria
+    )
+    agents = tuple(
+        agent.model_copy(
+            update={"specialization": AgentSpecialization.SECURITY_ASSESSMENT}
+        )
+        if agent.id == "quality_reviewer"
+        else agent
+        for agent in body.agents
     )
     profile_criterion = AcceptanceCriterion(
         id="AC_PROFILE_BOUNDARY",
@@ -4838,7 +5129,11 @@ def test_controller_counts_explicit_review_boundaries_as_scope_work() -> None:
 
     preview = preview_adaptive_proposal(
         request(),
-        proposal(body=body.model_copy(update={"acceptance_criteria": criteria})),
+        proposal(
+            body=body.model_copy(
+                update={"acceptance_criteria": criteria, "agents": agents}
+            )
+        ),
         policy(profile_acceptance_criteria=(profile_criterion,)),
         created_at=FIXED_TIME,
     )
@@ -6965,6 +7260,13 @@ def test_planning_exposes_review_boundary_siblings_after_prior_correction(
     final_payload = json.loads(json.dumps(first_corrected))
     for criterion in final_payload["proposal"]["acceptance_criteria"][:2]:
         criterion["review_boundaries"] = all_boundaries
+    specialized_payload = json.loads(json.dumps(final_payload))
+    specialized_payload["proposal"]["agents"][2]["specialization"] = (
+        AgentSpecialization.SECURITY_ASSESSMENT.value
+    )
+    specialized_payload["proposal"]["acceptance_criteria"][0][
+        "verification_agent_ids"
+    ].append("quality_reviewer")
 
     boundary_paths = (
         "/proposal/acceptance_criteria/0/review_boundaries",
@@ -6987,6 +7289,17 @@ def test_planning_exposes_review_boundary_siblings_after_prior_correction(
                 first_corrected,
                 {path: all_boundaries for path in boundary_paths},
             ),
+            correction_response(
+                final_payload,
+                {
+                    "/proposal/agents": specialized_payload["proposal"]["agents"],
+                    "/proposal/acceptance_criteria/0/verification_agent_ids": (
+                        specialized_payload["proposal"]["acceptance_criteria"][0][
+                            "verification_agent_ids"
+                        ]
+                    ),
+                },
+            ),
         ]
     )
     store = PlanningStore(tmp_path / "planning")
@@ -7003,9 +7316,9 @@ def test_planning_exposes_review_boundary_siblings_after_prior_correction(
     )
 
     assert created is not None
-    expected = PlanningModelResponse.model_validate(final_payload).proposal
+    expected = PlanningModelResponse.model_validate(specialized_payload).proposal
     assert created.body == expected
-    assert len(executor.requests) == 3
+    assert len(executor.requests) == 4
     first = store.load_turn(request().run_id, 1)
     assert first.response_validation is not None
     assert first.response_validation.correction_paths == (
@@ -7023,7 +7336,15 @@ def test_planning_exposes_review_boundary_siblings_after_prior_correction(
         for issue in second.response_validation.issues
         for subject in issue.subjects
     } == {criteria[0]["id"], criteria[1]["id"]}
-    assert store.load_turn(request().run_id, 3).semantic_correction_outcome == (
+    third = store.load_turn(request().run_id, 3)
+    assert third.semantic_correction_outcome == "improved"
+    assert third.response_validation is not None
+    assert third.response_validation.correction_paths == (
+        "/proposal/acceptance_criteria/0/verification_agent_ids",
+        "/proposal/acceptance_criteria/1/verification_agent_ids",
+        "/proposal/agents",
+    )
+    assert store.load_turn(request().run_id, 4).semantic_correction_outcome == (
         "accepted"
     )
 

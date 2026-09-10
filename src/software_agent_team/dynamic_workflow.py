@@ -51,7 +51,11 @@ from software_agent_team.git_workspace import (
     WorkspaceIntegrityError,
 )
 from software_agent_team.integrity import canonical_model_sha256
-from software_agent_team.planning import ApprovedPlanningResult
+from software_agent_team.planning import (
+    ApprovedPlanningResult,
+    PlanningError,
+    compile_approved_review_scopes,
+)
 from software_agent_team.progress import (
     ProgressDraftHandler,
     ProgressEvent,
@@ -263,6 +267,24 @@ class DynamicWorkflowCoordinator:
             raise DynamicWorkflowError(
                 "manual-review scope references an unknown criterion"
             )
+        try:
+            approved_review_scopes = compile_approved_review_scopes(
+                approved,
+                manual_review_criteria=self.manual_review_criteria,
+            )
+        except PlanningError as error:
+            raise DynamicWorkflowError(str(error)) from error
+        if approved_review_scopes is not None:
+            if (
+                self.review_scope_by_agent is not None
+                and dict(self.review_scope_by_agent) != approved_review_scopes
+            ):
+                raise DynamicWorkflowError(
+                    "runtime Review scopes differ from the approved acceptance strategy"
+                )
+            review_scope_by_agent = approved_review_scopes
+        else:
+            review_scope_by_agent = self.review_scope_by_agent
         route_models = {route.model for route in team_plan.model_routes.routes}
         if set(self.pricing_by_model) != route_models:
             raise DynamicWorkflowError(
@@ -392,6 +414,7 @@ class DynamicWorkflowCoordinator:
                 workspace,
                 workspace_manager,
                 quality_gate,
+                review_scope_by_agent,
             )
         except Exception as error:
             current = controller.load(record.run_id)
@@ -418,6 +441,7 @@ class DynamicWorkflowCoordinator:
         workspace: GitWorkspace,
         workspace_manager: GitWorkspaceManager,
         quality_gate: DynamicQualityGate,
+        review_scope_by_agent: Mapping[str, tuple[str, ...]] | None,
     ) -> DynamicWorkflowOutcome:
         team_plan = context.approved.team_plan
         plan_digest = team_plan.implementation_plan_sha256
@@ -451,7 +475,7 @@ class DynamicWorkflowCoordinator:
                 budget_ledger=context.budget_ledger,
                 pricing_by_model=self.pricing_by_model,
                 manual_review_criteria=self.manual_review_criteria,
-                review_scope_by_agent=self.review_scope_by_agent,
+                review_scope_by_agent=review_scope_by_agent,
                 iteration=record.current_iteration,
                 input_commit=input_commit,
                 artifact_repair_limit=self.artifact_repair_limit,

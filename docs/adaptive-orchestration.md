@@ -66,6 +66,14 @@ Planning can combine only catalog specializations with compatible capabilities.
 A label such as `Security Auditor` cannot grant security acceptance authority or
 write access. The Controller validates the catalog reference, permission ceiling,
 prompt module, typed output, and criterion scope before it creates that Agent.
+It derives required specialist coverage from relationships already present in
+the approved plan: all four Review boundaries require exactly one assigned
+security assessor, while a criterion linked from both the primary workflow and
+usability expectations requires exactly one assigned experience assessor. A
+criterion requiring both authorities must be split. Generic criteria resolve to
+an explicitly named Reviewer, the unique general Reviewer, or the sole Reviewer.
+The overview shows the resulting non-overlapping scopes, and the runtime derives
+them again from the approved artifacts rather than trusting CLI state.
 
 Independent quality control is a controller requirement, not a fixed role
 name. A plan may assign testing and review to one or more read-only Agents, but
@@ -772,7 +780,8 @@ Agent is created:
 - Unique writable ownership or an explicit integration protocol;
 - Permission profiles compatible with each responsibility;
 - Catalog specialization, capability, permission, prompt-module, typed-output,
-  and acceptance-scope consistency;
+  and acceptance-scope consistency, including typed specialist requirements and
+  one non-overlapping Reviewer owner for every manual criterion;
 - Independent quality coverage;
 - Ordinary-task USD/deadline authority, host-derived concurrency, and any
   separate controlled-evaluation call, iteration, duration, token, or cost
@@ -798,6 +807,13 @@ union exactly equals the approved scope. These artifacts participate in the
 same handoff, iteration, lifecycle, evidence-grounding, and Controller-decision
 path as a general `ReviewReport`. None can approve a writer's work outside its
 assigned criteria or advance lifecycle state by itself.
+
+Missing specialist coverage is a model-owned Planning relation defect. The
+diagnostic opens only the Agent collection when a required catalog Agent is
+absent and the affected criteria's `verification_agent_ids`; targeted correction
+must add or select the specialist and bind those criteria before the proposal can
+be shown for approval. An operator does not use plan revision to repair this
+Planner defect.
 
 Task-specific quality remains semantic work rather than a claim made by the
 generic profile gates. Planning must turn every unqualified prohibition or

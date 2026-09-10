@@ -212,6 +212,17 @@ requires the union of specialist criterion references to equal the assigned
 scope. A model cannot choose its own kind or convert a general Reviewer label
 into specialist acceptance authority.
 
+For current Planning evidence, the Controller compiles Review scopes from the
+approved criterion graph. A criterion carrying all four Review boundaries must
+name exactly one security-authority Reviewer. A criterion referenced by both
+the primary workflow and usability expectations must name exactly one
+experience-authority Reviewer; mixed security-and-experience claims are split
+before approval. Remaining manual criteria resolve to an explicit Reviewer, the
+unique general Reviewer, or the sole Reviewer. The overview records the resulting
+non-overlapping mapping, and dynamic execution re-derives it from the approved
+TaskBrief, implementation plan, TeamPlan, and actual manual-review set. A caller
+cannot replace it with a different runtime mapping.
+
 Execution records label this grounded Reviewer shape `semantic_body_v4`; other
 current semantic bodies remain `semantic_body_v1`. `semantic_body_v2` and
 `semantic_body_v3` remain valid historical evidence for the attempt-qualified

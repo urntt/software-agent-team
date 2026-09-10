@@ -98,8 +98,9 @@ On first use, SAT guides you through:
    of fixed controller-owned details separated from additional task constraints,
    Agent work assignments with their controller-derived write or read-only
    authority, proposed Agents, task-specific roles, versioned specializations,
-   dependencies, permissions, typed outputs, acceptance authority, explicit
-   Review entry obligations for absolute guarantees,
+   dependencies, permissions, typed outputs, acceptance authority, the exact
+   non-overlapping criterion scope assigned to each Reviewer, explicit Review
+   entry obligations for absolute guarantees,
    resolved model profiles and fallback authority, time authority and liveness
    policy, concurrency, iterations, and budgets;
 8. An option to show or hide the complete fixed policy, execution-profile
@@ -114,7 +115,11 @@ prompt, permission, typed output, runtime, sandbox, workspace, and delivery
 boundary. It creates only the task-defined Agents in that exact plan after the
 required checks pass. Security and end-user-experience assessment use distinct
 typed contracts while remaining read-only; a task-specific label cannot grant
-either authority or expand tools.
+either authority or expand tools. The Controller requires security authority
+for an all-boundary safety criterion and experience authority when one criterion
+is explicitly linked to both the primary workflow and usability expectations;
+an invalid generic assignment returns to targeted Planning correction before
+approval.
 The controller derives actual launch order from the approved dependency graph,
 enforces concurrency and shared-workspace safety, monitors provider activity and
 any user-authorized whole-run deadline, records verified Git snapshots and

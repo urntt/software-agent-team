@@ -114,6 +114,7 @@ from software_agent_team.submissions import (
 from software_agent_team.teams import (
     SPECIALIZATION_CATALOG,
     SPECIALIZATION_CATALOG_VERSION,
+    AcceptanceAuthority,
     AgentCapability,
     AgentSpec,
     AgentSpecialization,
@@ -3617,6 +3618,242 @@ def _validate_product_definition(
             )
 
 
+def _specialized_review_authority(
+    criterion: ProposedCriterion,
+    definition: ProductDefinition | None,
+) -> AcceptanceAuthority | None:
+    """Derive specialist authority from existing typed acceptance relationships."""
+
+    requires_security = set(criterion.review_boundaries) == set(_ALL_REVIEW_BOUNDARIES)
+    requires_experience = bool(
+        definition is not None
+        and criterion.id in definition.primary_workflow.criterion_ids
+        and criterion.id in definition.usability_expectations.criterion_ids
+    )
+    if requires_security and requires_experience:
+        raise ValueError(
+            f"criterion {criterion.id} combines security and user-experience "
+            "acceptance authority; split the claims into independently assigned "
+            "criteria"
+        )
+    if requires_security:
+        return AcceptanceAuthority.SECURITY
+    if requires_experience:
+        return AcceptanceAuthority.USER_EXPERIENCE
+    return None
+
+
+def _resolve_review_scope_assignments(
+    *,
+    criteria: Collection[ProposedCriterion],
+    definition: ProductDefinition | None,
+    agents: Collection[ProposedAgent | AgentSpec],
+    profile_criterion_ids: Collection[str] = (),
+) -> tuple[dict[str, tuple[str, ...]], tuple[_PlanningInvariant, ...]]:
+    """Resolve one non-overlapping Reviewer owner for every manual criterion."""
+
+    criterion_items = tuple(criteria)
+    fixed_criteria = tuple(dict.fromkeys(profile_criterion_ids))
+    agent_items = tuple(agents)
+    agents_by_id = {agent.id: agent for agent in agent_items}
+    reviewers = tuple(
+        agent for agent in agent_items if agent.capability is AgentCapability.REVIEW
+    )
+    reviewer_ids = {agent.id for agent in reviewers}
+    general_reviewers = tuple(
+        agent
+        for agent in reviewers
+        if specialization_contract(agent.specialization).acceptance_authority
+        is AcceptanceAuthority.GENERAL_REVIEW
+    )
+    scopes: dict[str, list[str]] = {agent.id: [] for agent in reviewers}
+    invariants: list[_PlanningInvariant] = []
+
+    if (criterion_items or fixed_criteria) and not reviewers:
+        return {}, (
+            _PlanningInvariant(
+                invariant_id="planning_review_scope_reviewer_required",
+                message=("manual acceptance requires an independent review Agent"),
+                paths=("/proposal/agents",),
+                subjects=_planning_subjects(
+                    (ResponseIssueSubjectKind.CAPABILITY, "review")
+                ),
+            ),
+        )
+
+    def generic_owner(
+        explicit: tuple[ProposedAgent | AgentSpec, ...],
+    ) -> ProposedAgent | AgentSpec | None:
+        explicit_general = tuple(
+            agent
+            for agent in explicit
+            if specialization_contract(agent.specialization).acceptance_authority
+            is AcceptanceAuthority.GENERAL_REVIEW
+        )
+        if len(explicit_general) == 1:
+            return explicit_general[0]
+        if len(explicit_general) > 1:
+            return None
+        if len(explicit) == 1:
+            return explicit[0]
+        if explicit:
+            return None
+        if len(general_reviewers) == 1:
+            return general_reviewers[0]
+        if len(reviewers) == 1:
+            return reviewers[0]
+        return None
+
+    for criterion_index, criterion in enumerate(criterion_items):
+        explicit_reviewers = tuple(
+            agents_by_id[agent_id]
+            for agent_id in criterion.verification_agent_ids
+            if agent_id in reviewer_ids
+        )
+        try:
+            required_authority = _specialized_review_authority(
+                criterion,
+                definition,
+            )
+        except ValueError as error:
+            invariants.append(
+                _PlanningInvariant(
+                    invariant_id="planning_criterion_review_authority_conflict",
+                    message=str(error),
+                    paths=(
+                        f"/proposal/acceptance_criteria/{criterion_index}",
+                        "/proposal/product_definition/primary_workflow/criterion_ids",
+                        "/proposal/product_definition/usability_expectations/criterion_ids",
+                    ),
+                    subjects=_planning_subjects(
+                        (ResponseIssueSubjectKind.CRITERION, criterion.id)
+                    ),
+                )
+            )
+            continue
+
+        if required_authority is None:
+            owner = generic_owner(explicit_reviewers)
+            if owner is None:
+                invariants.append(
+                    _PlanningInvariant(
+                        invariant_id="planning_criterion_review_scope_ambiguous",
+                        message=(
+                            f"criterion {criterion.id} does not identify one "
+                            "unambiguous Review owner"
+                        ),
+                        paths=(
+                            f"/proposal/acceptance_criteria/{criterion_index}/"
+                            "verification_agent_ids",
+                        ),
+                        subjects=_planning_subjects(
+                            (ResponseIssueSubjectKind.CRITERION, criterion.id),
+                            *(
+                                (ResponseIssueSubjectKind.AGENT, agent.id)
+                                for agent in explicit_reviewers
+                            ),
+                        ),
+                    )
+                )
+                continue
+        else:
+            matching = tuple(
+                agent
+                for agent in explicit_reviewers
+                if specialization_contract(agent.specialization).acceptance_authority
+                is required_authority
+            )
+            if len(matching) != 1 or len(explicit_reviewers) != 1:
+                label = (
+                    "security"
+                    if required_authority is AcceptanceAuthority.SECURITY
+                    else "user-experience"
+                )
+                available_matching = tuple(
+                    agent
+                    for agent in reviewers
+                    if specialization_contract(
+                        agent.specialization
+                    ).acceptance_authority
+                    is required_authority
+                )
+                correction_paths = (
+                    f"/proposal/acceptance_criteria/{criterion_index}/"
+                    "verification_agent_ids",
+                )
+                if len(available_matching) != 1:
+                    correction_paths = ("/proposal/agents", *correction_paths)
+                invariants.append(
+                    _PlanningInvariant(
+                        invariant_id="planning_criterion_specialist_required",
+                        message=(
+                            f"criterion {criterion.id} requires exactly one Review "
+                            f"owner with {label} acceptance authority in its "
+                            "verification assignment"
+                        ),
+                        paths=correction_paths,
+                        subjects=_planning_subjects(
+                            (ResponseIssueSubjectKind.CRITERION, criterion.id),
+                            (
+                                ResponseIssueSubjectKind.CAPABILITY,
+                                required_authority.value,
+                            ),
+                            *(
+                                (ResponseIssueSubjectKind.AGENT, agent.id)
+                                for agent in explicit_reviewers
+                            ),
+                        ),
+                    )
+                )
+                continue
+            owner = matching[0]
+        scopes[owner.id].append(criterion.id)
+
+    if fixed_criteria:
+        profile_owner = generic_owner(())
+        if profile_owner is None:
+            invariants.append(
+                _PlanningInvariant(
+                    invariant_id="planning_profile_review_scope_ambiguous",
+                    message=(
+                        "controller-owned profile criteria require one unambiguous "
+                        "general Review owner"
+                    ),
+                    paths=("/proposal/agents",),
+                    subjects=_planning_subjects(
+                        (ResponseIssueSubjectKind.CAPABILITY, "general_review")
+                    ),
+                )
+            )
+        else:
+            scopes[profile_owner.id].extend(fixed_criteria)
+
+    if not invariants:
+        unused = tuple(agent for agent in reviewers if not scopes[agent.id])
+        if unused:
+            invariants.append(
+                _PlanningInvariant(
+                    invariant_id="planning_review_agent_scope_required",
+                    message=(
+                        "every Review Agent requires an assigned acceptance scope: "
+                        + ", ".join(agent.id for agent in unused)
+                    ),
+                    paths=("/proposal/agents",),
+                    subjects=_planning_subjects(
+                        *(
+                            (ResponseIssueSubjectKind.AGENT, agent.id)
+                            for agent in unused
+                        )
+                    ),
+                )
+            )
+
+    return (
+        {agent_id: tuple(criterion_ids) for agent_id, criterion_ids in scopes.items()},
+        tuple(invariants),
+    )
+
+
 def validate_planning_clarity(
     body: PlanningProposalBody,
     *,
@@ -3627,8 +3864,11 @@ def validate_planning_clarity(
     require_current_decision_provenance: bool = True,
     allow_legacy_product_decision_links: bool = False,
     allow_legacy_workflow_exemption: bool = False,
+    enforce_specialized_review_authority: bool = False,
 ) -> None:
     """Enforce the current decision and requirement-to-evidence contract."""
+
+    allowed_criterion_ids = tuple(allowed_criterion_ids)
 
     if len(body.requirement_ids) != len(body.requirements):
         raise _planning_context_invariant(
@@ -3957,6 +4197,16 @@ def validate_planning_clarity(
             criterion_invariants.append(error.invariant)
     if criterion_invariants:
         raise _PlanningContextInvariantsError(tuple(criterion_invariants))
+
+    if enforce_specialized_review_authority:
+        _, review_scope_invariants = _resolve_review_scope_assignments(
+            criteria=body.acceptance_criteria,
+            definition=body.product_definition,
+            agents=body.agents,
+            profile_criterion_ids=allowed_criterion_ids,
+        )
+        if review_scope_invariants:
+            raise _PlanningContextInvariantsError(review_scope_invariants)
 
     if (
         source_request is not None
@@ -5571,6 +5821,7 @@ class PlanningPreview(BaseModel):
     implementation_plan: AdaptiveImplementationPlan
     team_plan: TeamPlan
     timeout_resolutions: tuple[AgentTimeoutResolution, ...]
+    review_scope_by_agent: dict[str, tuple[str, ...]] = Field(default_factory=dict)
 
 
 class ApprovedPlanningResult(BaseModel):
@@ -5670,6 +5921,56 @@ class ApprovedPlanningResult(BaseModel):
         return self
 
 
+def compile_approved_review_scopes(
+    approved: ApprovedPlanningResult,
+    *,
+    manual_review_criteria: Collection[str] | None = None,
+) -> dict[str, tuple[str, ...]] | None:
+    """Compile the approved criterion contract into runtime Reviewer scopes."""
+
+    implementation = approved.implementation_plan
+    if implementation.schema_version < 19 or not implementation.acceptance_criteria:
+        return None
+    proposed_by_id = {
+        criterion.id: criterion for criterion in implementation.acceptance_criteria
+    }
+    proposed_ids = set(proposed_by_id)
+    task_brief_ids = tuple(
+        criterion.id for criterion in approved.task_brief.acceptance_criteria
+    )
+    if not proposed_ids.issubset(set(task_brief_ids)):
+        raise PlanningError(
+            "approved implementation criteria are absent from the TaskBrief"
+        )
+    manual_ids = (
+        task_brief_ids
+        if manual_review_criteria is None
+        else tuple(dict.fromkeys(manual_review_criteria))
+    )
+    if not set(manual_ids).issubset(set(task_brief_ids)):
+        raise PlanningError("manual Review scope references an unknown criterion")
+    selected_criteria = tuple(
+        proposed_by_id[criterion_id]
+        for criterion_id in manual_ids
+        if criterion_id in proposed_by_id
+    )
+    profile_criterion_ids = tuple(
+        criterion_id for criterion_id in manual_ids if criterion_id not in proposed_ids
+    )
+    scopes, invariants = _resolve_review_scope_assignments(
+        criteria=selected_criteria,
+        definition=implementation.product_definition,
+        agents=approved.team_plan.agents,
+        profile_criterion_ids=profile_criterion_ids,
+    )
+    if invariants:
+        raise PlanningError(
+            "approved review-scope contract is invalid: "
+            + "; ".join(invariant.message for invariant in invariants)
+        )
+    return scopes
+
+
 Clock = Callable[[], datetime]
 QuestionAnswerer = Callable[
     [PresentedPlanningQuestion],
@@ -5727,6 +6028,9 @@ def preview_adaptive_proposal(
     if proposal.run_id != request.run_id:
         raise PlanningError("proposal belongs to a different Planning request")
     body = proposal.body
+    profile_criterion_ids = tuple(
+        criterion.id for criterion in policy.profile_acceptance_criteria
+    )
     if proposal.schema_version >= 5:
         validate_planning_clarity(
             body,
@@ -5734,12 +6038,11 @@ def preview_adaptive_proposal(
             additional_user_inputs=(
                 () if proposal.change_request is None else (proposal.change_request,)
             ),
-            allowed_criterion_ids=(
-                criterion.id for criterion in policy.profile_acceptance_criteria
-            ),
+            allowed_criterion_ids=profile_criterion_ids,
             require_current_decision_provenance=proposal.schema_version >= 8,
             allow_legacy_product_decision_links=proposal.schema_version < 8,
             allow_legacy_workflow_exemption=proposal.schema_version < 9,
+            enforce_specialized_review_authority=proposal.schema_version >= 19,
         )
     if policy.max_agents is not None and len(body.agents) > policy.max_agents:
         raise PlanningError(
@@ -5770,11 +6073,9 @@ def preview_adaptive_proposal(
             f"proposal requires up to {planned_calls} planned Agent calls, but the "
             f"approved budget permits {policy.budget.max_calls}"
         )
-    profile_criterion_ids = {
-        criterion.id for criterion in policy.profile_acceptance_criteria
-    }
+    profile_criterion_id_set = set(profile_criterion_ids)
     proposed_criterion_ids = {criterion.id for criterion in body.acceptance_criteria}
-    collisions = profile_criterion_ids & proposed_criterion_ids
+    collisions = profile_criterion_id_set & proposed_criterion_ids
     if collisions:
         raise PlanningError(
             "proposal repeats controller-owned profile criteria: "
@@ -5783,7 +6084,7 @@ def preview_adaptive_proposal(
     try:
         validate_task_criterion_references(
             body.tasks,
-            proposed_criterion_ids | profile_criterion_ids,
+            proposed_criterion_ids | profile_criterion_id_set,
         )
     except _PlanningModelInvariantError as error:
         raise _PlanningContextInvariantError(error.invariant) from error
@@ -5803,6 +6104,18 @@ def preview_adaptive_proposal(
             f"proposal has {review_count} review Agents; this profile permits "
             f"{policy.max_review_agents}"
         )
+    review_scope_by_agent: dict[str, tuple[str, ...]] = {}
+    if proposal.schema_version >= 19:
+        review_scope_by_agent, review_scope_invariants = (
+            _resolve_review_scope_assignments(
+                criteria=body.acceptance_criteria,
+                definition=body.product_definition,
+                agents=body.agents,
+                profile_criterion_ids=profile_criterion_ids,
+            )
+        )
+        if review_scope_invariants:
+            raise _PlanningContextInvariantsError(review_scope_invariants)
 
     constraints = tuple(dict.fromkeys((*request.base_constraints, *body.constraints)))
     task_brief = TaskBrief(
@@ -5917,16 +6230,23 @@ def preview_adaptive_proposal(
             )
             continue
 
-        scope_criterion_count = (
-            len(task_brief.acceptance_criteria)
+        review_scope = (
+            tuple(task_brief.acceptance_criteria)
             if proposed.capability is AgentCapability.REVIEW
-            else None
+            and proposal.schema_version < 19
+            else tuple(
+                criterion
+                for criterion in task_brief.acceptance_criteria
+                if criterion.id in review_scope_by_agent.get(proposed.id, ())
+            )
+            if proposed.capability is AgentCapability.REVIEW
+            else ()
+        )
+        scope_criterion_count = (
+            len(review_scope) if proposed.capability is AgentCapability.REVIEW else None
         )
         scope_boundary_obligation_count = (
-            sum(
-                len(criterion.review_boundaries)
-                for criterion in task_brief.acceptance_criteria
-            )
+            sum(len(criterion.review_boundaries) for criterion in review_scope)
             if proposed.capability is AgentCapability.REVIEW
             else None
         )
@@ -6021,6 +6341,7 @@ def preview_adaptive_proposal(
         implementation_plan=implementation_plan,
         team_plan=team_plan,
         timeout_resolutions=tuple(timeout_resolutions),
+        review_scope_by_agent=review_scope_by_agent,
     )
 
 
@@ -6331,6 +6652,19 @@ def render_planning_overview(
             )
     if set(proposal_criteria) != rendered_criterion_ids:
         raise PlanningError("rendered traceability omitted a proposal criterion")
+    lines.append("  Review acceptance strategy:")
+    if not preview.review_scope_by_agent:
+        lines.append("    - unavailable in legacy Planning evidence")
+    else:
+        for agent in plan.agents:
+            if agent.id not in preview.review_scope_by_agent:
+                continue
+            contract = specialization_contract(agent.specialization)
+            scope = ", ".join(preview.review_scope_by_agent[agent.id])
+            lines.append(
+                f"    - {agent.id} [{agent.specialization.value}; "
+                f"authority={contract.acceptance_authority.value}]: {scope}"
+            )
     lines.append("  Implementation approach:")
     for item in implementation.approach:
         lines.extend(_render_prefixed_text("    - ", item))
@@ -7732,6 +8066,7 @@ class AdaptivePlanningCoordinator:
                                 criterion.id
                                 for criterion in self.policy.profile_acceptance_criteria
                             ),
+                            enforce_specialized_review_authority=True,
                         )
                         candidate = PlanningProposal(
                             run_id=request.run_id,

@@ -146,6 +146,16 @@ Choose the next response by decision value:
   independent evidence about outcome, friction, and recovery. Do not add either
   specialist when the task has no corresponding acceptance scope. Generic work
   uses the matching general catalog entry rather than a cosmetic specialist name.
+  The Controller derives mandatory specialist coverage from typed relationships,
+  not labels: a criterion carrying all four Review boundaries must name exactly
+  one Reviewer in `verification_agent_ids`, and that Reviewer must use
+  `security_assessment`; a criterion
+  linked from both `primary_workflow.criterion_ids` and
+  `usability_expectations.criterion_ids` must likewise name exactly one Reviewer,
+  using `experience_assessment`. Split a criterion if it would require both
+  authorities. These specialist assignments become non-overlapping runtime
+  Review scopes. Other criteria use one explicit Reviewer when named, otherwise
+  the Controller assigns the unique general Reviewer or the sole Reviewer.
 - A workspace scope is controller authority relative to the already-created
   project repository. Use `repository` for the whole project or a canonical
   `repository/path` for a narrower scope. Never repeat the destination/project

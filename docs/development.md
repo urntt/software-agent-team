@@ -198,7 +198,13 @@ label-only unit fixture. At minimum, compile an ordinary task, a task with an
 approved security boundary, and a task with an approved interactive workflow;
 compare their Agent sets, DAGs, specialization IDs, capabilities, permissions,
 typed outputs, verifier assignments, overview, and catalog version. Exercise
-each new specialized response through prompt composition, bound submission,
+the same proposal with missing specialist coverage and prove that the production
+Planning coordinator exposes bounded Agent/verifier correction slots, accepts a
+valid repair, compiles non-overlapping Reviewer scopes, and reuses those exact
+scopes at runtime. Security coverage must be derived from the complete typed
+Review-boundary set; experience coverage must be derived from the criterion link
+shared by primary workflow and usability expectations, not keyword matching.
+Exercise each new specialized response through prompt composition, bound submission,
 grounding, artifact assembly, handoff, run-control transition, progress, and
 the approved-plan self-check. Missing packaged prompt modules, unknown or
 incompatible catalog entries, permission escalation, and kind mismatches must
