@@ -454,6 +454,7 @@ class AgentBudgetLedger:
             active_reservation = self._active.get(reservation.sequence)
             if active_reservation != reservation:
                 raise ValueError("Agent call reservation is not active")
+            previous_detail = self._exceeded_detail(self._snapshot_locked())
             estimated_cost_usd = reservation.estimate_cost(
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
@@ -500,6 +501,17 @@ class AgentBudgetLedger:
 
             usage = self._snapshot_locked()
             detail = self._exceeded_detail(usage)
+            own_usage_unknown = self.budget.authority is BudgetAuthority.USER_TASK and (
+                input_tokens is None
+                or output_tokens is None
+                or estimated_cost_usd is None
+            )
+            if detail == previous_detail and not own_usage_unknown:
+                # Another concurrently completed call may already have made
+                # the aggregate ledger terminal.  Its violation still blocks
+                # every future reservation, but it is not a rejection of this
+                # already-reserved call's independently attributable usage.
+                detail = None
             if detail is not None:
                 raise AgentBudgetExceeded(detail, usage)
             return usage

@@ -89,6 +89,8 @@ fi
   fail "Python runtime dependency input is missing"
 [[ -f runtime/python/requirements.lock ]] || \
   fail "Python runtime dependency lock is missing"
+[[ -f runtime/python/uv-offline.toml ]] || \
+  fail "Python runtime uv configuration is missing"
 [[ -f benchmarks/task_manager/benchmark.json ]] || \
   fail "benchmark manifest is missing"
 [[ -f benchmarks/task_manager/task-brief.json ]] || \

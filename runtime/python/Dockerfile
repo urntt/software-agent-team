@@ -5,6 +5,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.lock /opt/software-agent-team/requirements.lock
+COPY uv-offline.toml /opt/software-agent-team/uv-offline.toml
 
 RUN python -m pip install --no-cache-dir --requirement \
     /opt/software-agent-team/requirements.lock
@@ -13,7 +14,9 @@ RUN mkdir -p /opt/software-agent-team/wheels \
     && python -m pip download --no-cache-dir --only-binary=:all: \
     --dest /opt/software-agent-team/wheels --requirement \
     /opt/software-agent-team/requirements.lock colorama==0.4.6 \
-    && chmod -R a=rX /opt/software-agent-team/wheels
+    && chmod -R a=rX /opt/software-agent-team/wheels \
+    && chown 0:0 /opt/software-agent-team/uv-offline.toml \
+    && chmod 0444 /opt/software-agent-team/uv-offline.toml
 
 COPY sat_probe_write.py /usr/local/bin/sat-probe-write
 COPY sat_probe_run.py /usr/local/bin/sat-probe-run
@@ -24,8 +27,7 @@ RUN chown 0:0 /usr/local/bin/sat-probe-write /usr/local/bin/sat-probe-run \
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     UV_CACHE_DIR=/tmp/uv-cache \
-    UV_FIND_LINKS=/opt/software-agent-team/wheels \
-    UV_OFFLINE=1
+    UV_CONFIG_FILE=/opt/software-agent-team/uv-offline.toml
 
 WORKDIR /workspace
 

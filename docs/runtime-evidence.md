@@ -995,7 +995,11 @@ and any bounded integrity error. Missing model, provider, token, or required
 Reviewer tool evidence is never treated as zero usage or success. A model call
 whose usage is unknown blocks any later model call under a user-task budget,
 but accounting remains a separate evidence dimension: an already-attributed
-runtime or response failure stays the primary termination reason. When no
+runtime or response failure stays the primary termination reason. When calls
+finish concurrently, only the call that introduced an unknown or aggregate
+budget violation receives that post-call rejection; another already-reserved
+call may settle its own known usage without inheriting the first call's error.
+The aggregate violation still blocks every later reservation. When no
 earlier failure exists, a post-call budget rejection remains the primary
 resource-limit reason. A model call
 for correction is permitted only for a typed model-owned semantic failure with
@@ -1162,7 +1166,11 @@ when investigating it rather than editing artifacts in place.
   an offline `uv sync` creates project-local virtual-environment entry points
   that must launch there. It first rejects tracked drift and unsafe entries,
   copies only committed regular files, and executes exact setup, test, and
-  start argv. Network remains disabled; source and root filesystems remain
+  start argv. A root-owned runtime `uv` configuration makes the bundled
+  wheelhouse the exclusive package source, including when a portable tracked
+  lock records public registry URLs; it never changes project argv or permits
+  sandbox-only paths in delivery metadata. Network remains disabled; source
+  and root filesystems remain
   read-only; the process remains non-root, capability-dropped, and bounded by
   PID, file, memory, CPU, output, and timeout limits. Scratch is discarded with
   the gate container.

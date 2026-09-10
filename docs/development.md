@@ -370,7 +370,7 @@ Build the exact image named by both product and evaluation policies with:
 
 ```bash
 docker build \
-  --tag sat-python-quality:phase1-v6 \
+  --tag sat-python-quality:phase1-v7 \
   runtime/python
 ```
 
@@ -381,9 +381,11 @@ no-network, read-only-root probe, execute the Reviewer probe runner's self-test
 inside it, inspect its state, and remove it. A successful `docker build`, image
 lookup, or momentary container start alone is not sufficient runtime evidence.
 
-The image includes the exact `uv` pinned in `runtime/python/requirements.in`
-and a locked offline wheelhouse containing project setup and build
-dependencies. The product quality profile copies clean committed files into
+The image includes the exact `uv` pinned in `runtime/python/requirements.in`,
+a locked offline wheelhouse containing project setup and build dependencies,
+and a root-owned `uv` configuration that makes the wheelhouse the exclusive
+index while preserving the generated project's exact `uv sync --dev` argv.
+The product quality profile copies clean committed files into
 fresh executable tmpfs scratch, then runs the exact generated setup, test, and
 start argv with network disabled. The source and container root remain
 read-only, and the process remains non-root, capability-dropped, and

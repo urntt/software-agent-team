@@ -29,11 +29,11 @@ def test_runtime_image_uses_content_pinned_base_and_dependency_lock() -> None:
     assert "COPY requirements.lock /opt/software-agent-team/requirements.lock" in (
         dockerfile
     )
+    assert "COPY uv-offline.toml /opt/software-agent-team/uv-offline.toml" in dockerfile
     assert "pip install --no-cache-dir --requirement" in dockerfile
     assert "pip download --no-cache-dir --only-binary=:all:" in dockerfile
-    assert "UV_FIND_LINKS=/opt/software-agent-team/wheels" in dockerfile
     assert "UV_CACHE_DIR=/tmp/uv-cache" in dockerfile
-    assert "UV_OFFLINE=1" in dockerfile
+    assert "UV_CONFIG_FILE=/opt/software-agent-team/uv-offline.toml" in dockerfile
     assert "requirements.lock colorama==0.4.6" in dockerfile
     assert "COPY sat_probe_write.py /usr/local/bin/sat-probe-write" in dockerfile
     assert "COPY sat_probe_run.py /usr/local/bin/sat-probe-run" in dockerfile
@@ -44,6 +44,13 @@ def test_runtime_image_uses_content_pinned_base_and_dependency_lock() -> None:
         dockerfile
     )
     assert 'CMD ["sleep", "infinity"]' in dockerfile
+
+    uv_configuration = (RUNTIME_ROOT / "uv-offline.toml").read_text(encoding="utf-8")
+    assert uv_configuration == (
+        "offline = true\n"
+        "no-index = true\n"
+        'find-links = ["/opt/software-agent-team/wheels"]\n'
+    )
 
     helper = (RUNTIME_ROOT / "sat_probe_write.py").read_text(encoding="utf-8")
     assert helper.startswith("#!/usr/local/bin/python\n")

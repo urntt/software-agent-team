@@ -123,6 +123,8 @@ done
   fail "Python runtime Dockerfile is missing"
 [[ -f "$task_root/runtime/python/requirements.lock" ]] || \
   fail "Python runtime dependency lock is missing"
+[[ -f "$task_root/runtime/python/uv-offline.toml" ]] || \
+  fail "Python runtime uv configuration is missing"
 [[ -f "$task_root/scripts/openclaw-environment.sh" && \
   ! -L "$task_root/scripts/openclaw-environment.sh" ]] || \
   fail "OpenClaw environment boundary is missing"

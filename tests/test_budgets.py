@@ -336,6 +336,37 @@ def test_user_task_stops_when_provider_usage_cannot_account_cost() -> None:
         reserve_user_call(ledger, attempt=2)
 
 
+def test_parallel_unknown_usage_does_not_taint_an_already_reserved_known_call() -> None:
+    ledger = AgentBudgetLedger(user_task_budget())
+    unknown = reserve_user_call(ledger)
+    known = reserve_user_call(ledger, attempt=2)
+
+    with pytest.raises(AgentBudgetExceeded, match="could not be accounted"):
+        ledger.complete_call(
+            unknown,
+            input_tokens=None,
+            output_tokens=None,
+            duration_ms=25,
+        )
+
+    usage = ledger.complete_call(
+        known,
+        input_tokens=100,
+        output_tokens=20,
+        duration_ms=50,
+        cache_usage=CacheTokenUsage(read_tokens=0, write_tokens=0),
+    )
+
+    assert usage.calls_started == 2
+    assert usage.calls_completed == 2
+    assert usage.active_calls == 0
+    assert usage.unreported_token_calls == 1
+    assert usage.unpriced_calls == 1
+    assert ledger.call_records()[1].cost_usd == Decimal("0.00045")
+    with pytest.raises(AgentBudgetExceeded, match="cannot be accounted"):
+        reserve_user_call(ledger, attempt=3)
+
+
 def test_terminal_budget_ledger_persists_attributable_cost_evidence(
     tmp_path: Path,
 ) -> None:
