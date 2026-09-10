@@ -15,6 +15,7 @@ from software_agent_team.artifact_store import (
     ArtifactStoreError,
 )
 from software_agent_team.artifacts import (
+    ARTIFACT_SCHEMA_VERSION,
     AgentExecutionRecord,
     AgentRole,
     ArtifactKind,
@@ -425,6 +426,7 @@ def execution_record(
         attempt=attempt,
         agent_id=role.value,
         capability=store.team_plan.get_agent(role.value).capability.value,
+        specialization=store.team_plan.get_agent(role.value).specialization.value,
         session_key=f"agent:{role.value}:test-session",
         session_id=f"session-{role.value}",
         model="test-provider/test-model",
@@ -711,6 +713,7 @@ def test_store_binds_dynamic_execution_to_approved_capability(
         attempt=1,
         agent_id="frontend_builder",
         capability="implementation",
+        specialization="product_implementation",
         session_key="agent:frontend_builder:test-session",
         session_id="session-frontend-builder",
         model="test/provider-model",
@@ -1139,7 +1142,7 @@ def test_live_initialization_wait_survives_invocation_settlement_and_storage(tmp
         pricing=None,
     )
     loaded = store.load(persisted.reference)
-    assert loaded.schema_version == 12
+    assert loaded.schema_version == ARTIFACT_SCHEMA_VERSION
     assert loaded.invocation_lifecycle == result.telemetry.invocation_lifecycle
     assert [
         item.reason for item in loaded.invocation_lifecycle.initialization_wait

@@ -8,18 +8,22 @@ from software_agent_team.artifacts import (
     CheckStatus,
     CommandEvidence,
     CriterionResult,
+    ExperienceAssessment,
     ReviewReport,
+    SecurityAssessment,
     TaskBrief,
     TestReport,
     WorkResult,
 )
 from software_agent_team.git_workspace import GitSnapshot
 from software_agent_team.responses import (
+    GroundedExperienceAssessmentResponse,
     GroundedReviewReportResponse,
+    GroundedSecurityAssessmentResponse,
     TestReportResponse,
     WorkResultResponse,
 )
-from software_agent_team.teams import AgentCapability, AgentSpec
+from software_agent_team.teams import AgentCapability, AgentSpec, AgentSpecialization
 
 
 class ArtifactAssemblyError(ValueError):
@@ -224,21 +228,46 @@ def assemble_review_report(
         raise ArtifactAssemblyError(
             "review criterion assessments must exactly cover controller scope"
         )
-    return ReviewReport(
-        run_id=task_brief.run_id,
-        team_id=team_id,
-        producer=agent.id,
-        created_at=_utc(created_at),
-        iteration=iteration,
-        input_commit=input_commit,
-        verdict=body.verdict,
-        termination_reason=body.termination_reason,
-        reviewed_criteria=reviewed_criteria,
-        criterion_assessments=(
+    common = {
+        "run_id": task_brief.run_id,
+        "team_id": team_id,
+        "producer": agent.id,
+        "created_at": _utc(created_at),
+        "iteration": iteration,
+        "input_commit": input_commit,
+        "verdict": body.verdict,
+        "termination_reason": body.termination_reason,
+        "reviewed_criteria": reviewed_criteria,
+        "criterion_assessments": (
             tuple(assessments_by_id[criterion_id] for criterion_id in reviewed_criteria)
             if assessments_by_id
             else ()
         ),
-        findings=body.findings,
-        summary=body.summary,
+        "findings": body.findings,
+        "summary": body.summary,
+    }
+    if agent.specialization is AgentSpecialization.SECURITY_ASSESSMENT:
+        if not isinstance(body, GroundedSecurityAssessmentResponse):
+            raise ArtifactAssemblyError(
+                "security specialist returned the wrong semantic body"
+            )
+        return SecurityAssessment(
+            **common,
+            surfaces=body.surfaces,
+            residual_risks=body.residual_risks,
+        )
+    if agent.specialization is AgentSpecialization.EXPERIENCE_ASSESSMENT:
+        if not isinstance(body, GroundedExperienceAssessmentResponse):
+            raise ArtifactAssemblyError(
+                "experience specialist returned the wrong semantic body"
+            )
+        return ExperienceAssessment(
+            **common,
+            workflows=body.workflows,
+            usability_risks=body.usability_risks,
+        )
+    if type(body) is not GroundedReviewReportResponse:
+        raise ArtifactAssemblyError("general Reviewer returned a specialized body")
+    return ReviewReport(
+        **common,
     )

@@ -15,6 +15,7 @@ from software_agent_team.budgets import AgentBudgetUsage
 from software_agent_team.integrity import canonical_model_sha256
 from software_agent_team.invocation_lifecycle import InvocationPhase
 from software_agent_team.progress import (
+    RUN_EVENT_SCHEMA_VERSION,
     AgentRunState,
     ProgressCheckpointSnapshot,
     ProgressEvent,
@@ -83,7 +84,7 @@ def test_event_state_projects_current_checkpoint_not_history_kind(
             if phase is InvocationPhase.PROVIDER_WAIT
             else AgentRunState(phase.value)
         )
-        assert event.schema_version == 5
+        assert event.schema_version == RUN_EVENT_SCHEMA_VERSION
         assert event.agent_state is expected
         assert events.load() == (event,)
         assert f"state={expected.value}" in output.getvalue()
@@ -98,6 +99,40 @@ def test_event_state_projects_current_checkpoint_not_history_kind(
             assert len(renderer._waiting) == 1
     finally:
         renderer.close()
+
+
+def test_current_agent_event_pairs_capability_and_specialization(
+    tmp_path: Path,
+) -> None:
+    events = journal(tmp_path)
+    with pytest.raises(ValidationError, match="pair capability and specialization"):
+        events.append(
+            ProgressEvent(
+                kind=ProgressEventKind.AGENT_STARTED,
+                message="Builder started",
+                agent_id="builder",
+                iteration=1,
+                attempt=1,
+                capability="implementation",
+            ),
+            lifecycle_revision=1,
+            phase=RunPhase.IMPLEMENTING,
+        )
+
+    event = events.append(
+        ProgressEvent(
+            kind=ProgressEventKind.AGENT_STARTED,
+            message="Builder started",
+            agent_id="builder",
+            iteration=1,
+            attempt=1,
+            capability="implementation",
+            specialization="product_implementation",
+        ),
+        lifecycle_revision=1,
+        phase=RunPhase.IMPLEMENTING,
+    )
+    assert event.specialization == "product_implementation"
 
 
 @pytest.mark.parametrize("version", (3, 4))

@@ -7,9 +7,11 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from software_agent_team.artifacts import AgentRole
+from software_agent_team.artifacts import AgentRole, ArtifactKind
 from software_agent_team.budgets import AgentBudget
 from software_agent_team.teams import (
+    AgentCapability,
+    AgentSpecialization,
     ModelRoutingMode,
     PermissionProfile,
     PlanApprovalSource,
@@ -264,8 +266,23 @@ def test_adaptive_plan_accepts_user_approved_run_scoped_agents() -> None:
 
     assert plan.origin is TeamPlanOrigin.ADAPTIVE_PLANNING
     assert plan.approval_source is PlanApprovalSource.USER
+    assert plan.specialization_catalog_version == 1
     assert plan.source_manifest_version is None
     assert plan.execution_waves()[-1] == ("tester", "reviewer")
+
+
+def test_current_team_plan_requires_specialization_but_reads_schema_two() -> None:
+    payload = adaptive_payload()
+    payload["agents"][0].pop("specialization")
+
+    with pytest.raises(ValidationError, match="require specialization IDs"):
+        TeamPlan.model_validate(payload)
+
+    payload["schema_version"] = 2
+    legacy = TeamPlan.model_validate(payload)
+    assert legacy.get_agent("generalist_developer").specialization is (
+        AgentSpecialization.PRODUCT_IMPLEMENTATION
+    )
 
 
 def test_adaptive_plan_budget_covers_every_planned_iteration_invocation() -> None:
@@ -447,9 +464,59 @@ def test_adaptive_plan_accepts_one_independent_quality_agent() -> None:
     assert plan.execution_waves() == (("generalist_developer",), ("reviewer",))
 
 
+@pytest.mark.parametrize(
+    ("specialization", "expected_output"),
+    [
+        (AgentSpecialization.SECURITY_ASSESSMENT, ArtifactKind.SECURITY_ASSESSMENT),
+        (
+            AgentSpecialization.EXPERIENCE_ASSESSMENT,
+            ArtifactKind.EXPERIENCE_ASSESSMENT,
+        ),
+    ],
+)
+def test_review_capability_accepts_controller_catalog_specializations(
+    specialization: AgentSpecialization,
+    expected_output: ArtifactKind,
+) -> None:
+    payload = adaptive_payload()
+    reviewer = next(item for item in payload["agents"] if item["id"] == "reviewer")
+    reviewer["specialization"] = specialization.value
+    reviewer["expected_output"] = expected_output.value
+
+    plan = TeamPlan.model_validate(payload)
+    specialist = plan.get_agent("reviewer")
+
+    assert specialist.capability is AgentCapability.REVIEW
+    assert specialist.specialization is specialization
+    assert specialist.permission_profile is PermissionProfile.READ_ONLY
+    assert specialist.expected_output is expected_output
+
+
+def test_specialization_cannot_expand_capability_permission_or_output() -> None:
+    payload = adaptive_payload()
+    reviewer = next(item for item in payload["agents"] if item["id"] == "reviewer")
+    reviewer["specialization"] = AgentSpecialization.SECURITY_ASSESSMENT.value
+    reviewer["expected_output"] = ArtifactKind.SECURITY_ASSESSMENT.value
+    reviewer["permission_profile"] = PermissionProfile.WORKSPACE_WRITE.value
+
+    with pytest.raises(ValidationError, match="specialization ceiling"):
+        TeamPlan.model_validate(payload)
+
+    reviewer["permission_profile"] = PermissionProfile.READ_ONLY.value
+    reviewer["capability"] = AgentCapability.IMPLEMENTATION.value
+    with pytest.raises(ValidationError, match="incompatible"):
+        TeamPlan.model_validate(payload)
+
+    reviewer["capability"] = AgentCapability.REVIEW.value
+    reviewer["expected_output"] = ArtifactKind.REVIEW_REPORT.value
+    with pytest.raises(ValidationError, match="expected output"):
+        TeamPlan.model_validate(payload)
+
+
 def test_adaptive_plan_rejects_bootstrap_capabilities() -> None:
     payload = adaptive_payload()
     payload["agents"][0]["capability"] = "planning"
+    payload["agents"][0]["specialization"] = "team_planning"
     payload["agents"][0]["expected_output"] = "implementation_plan"
     payload["agents"][0]["permission_profile"] = "read_only"
 

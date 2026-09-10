@@ -21,10 +21,14 @@ from software_agent_team.artifacts import (
     AgentToolEvidenceStatus,
     ArtifactKind,
     CommandEvidence,
+    ExperienceAssessment,
+    ExperienceWorkflowAssessment,
     HandoffEnvelope,
     HandoffStatus,
     ReviewBoundaryKind,
     ReviewReport,
+    SecurityAssessment,
+    SecuritySurfaceAssessment,
     TaskBrief,
     WorkResult,
 )
@@ -72,9 +76,11 @@ from software_agent_team.response_corrections import (
     semantic_payload_sha256,
 )
 from software_agent_team.responses import (
+    ExperienceAssessmentResponse,
     ReviewCriterionAssessmentResponse,
     ReviewReportResponse,
     ReviewToolEvidenceClaim,
+    SecurityAssessmentResponse,
     WorkResultResponse,
 )
 from software_agent_team.responses import (
@@ -96,6 +102,7 @@ from software_agent_team.submissions import (
 from software_agent_team.teams import (
     AgentCapability,
     AgentSpec,
+    AgentSpecialization,
     ModelRoute,
     ModelRouteAssignment,
     ModelRoutePlan,
@@ -106,6 +113,7 @@ from software_agent_team.teams import (
     PlanApprovalSource,
     TeamPlan,
     TeamPlanOrigin,
+    expected_output_for_specialization,
 )
 
 FIXED_TIME = datetime(2026, 8, 26, 12, 0, tzinfo=UTC)
@@ -232,10 +240,45 @@ def dynamic_inputs(
     run_budget: AgentBudget | None = None,
     writer_scope: str = "repository",
     review_boundaries: tuple[ReviewBoundaryKind, ...] = (),
+    review_specialization: AgentSpecialization = AgentSpecialization.GENERAL_REVIEW,
 ) -> tuple[TaskBrief, AdaptiveImplementationPlan, TeamPlan]:
     """Build one internally coherent approved plan for runner tests."""
 
     task_brief = brief(review_boundaries=review_boundaries)
+    if review_specialization is AgentSpecialization.SECURITY_ASSESSMENT:
+        criteria = list(task_brief.acceptance_criteria)
+        criteria[1] = criteria[1].model_copy(
+            update={
+                "description": "Untrusted greeting input is handled safely.",
+                "verification": "Probe the approved untrusted-input boundary.",
+            }
+        )
+        task_brief = task_brief.model_copy(
+            update={
+                "source_request": (
+                    "Build a greeting utility with an explicit untrusted-input "
+                    "security boundary."
+                ),
+                "acceptance_criteria": criteria,
+            }
+        )
+    elif review_specialization is AgentSpecialization.EXPERIENCE_ASSESSMENT:
+        criteria = list(task_brief.acceptance_criteria)
+        criteria[1] = criteria[1].model_copy(
+            update={
+                "description": "The greeting workflow and recovery are usable.",
+                "verification": "Exercise the target-user workflow and recovery.",
+            }
+        )
+        task_brief = task_brief.model_copy(
+            update={
+                "source_request": (
+                    "Build a greeting utility with an explicit interactive "
+                    "user workflow."
+                ),
+                "acceptance_criteria": criteria,
+            }
+        )
     tasks = [
         ProposedTask(
             id="TASK_BUILD",
@@ -322,12 +365,13 @@ def dynamic_inputs(
             responsibility="Review the final commit and manual criterion.",
             rationale="The writer cannot approve its own result.",
             capability=AgentCapability.REVIEW,
+            specialization=review_specialization,
             permission_profile=PermissionProfile.READ_ONLY,
             stage_id="verify",
             dependencies=(
                 ("tester",) if chain_quality and include_tester else ("builder",)
             ),
-            expected_output=ArtifactKind.REVIEW_REPORT,
+            expected_output=expected_output_for_specialization(review_specialization),
             model_route_id="default",
             timeout_seconds=47,
             workspace_scope="repository",
@@ -484,6 +528,7 @@ class DynamicExecutor:
                     role=None,
                     agent_id=request.agent_id,
                     capability=request.capability,
+                    specialization=request.specialization,
                     session_key=request.session_key,
                     command=("fake-agent", request.agent_id),
                     started_at=FIXED_TIME,
@@ -508,6 +553,7 @@ class DynamicExecutor:
                     role=None,
                     agent_id=request.agent_id,
                     capability=request.capability,
+                    specialization=request.specialization,
                     session_key=request.session_key,
                     command=("fake-agent", request.agent_id),
                     started_at=FIXED_TIME,
@@ -554,6 +600,7 @@ class DynamicExecutor:
                     role=None,
                     agent_id=request.agent_id,
                     capability=request.capability,
+                    specialization=request.specialization,
                     session_key=request.session_key,
                     command=("fake-agent", request.agent_id),
                     started_at=FIXED_TIME,
@@ -674,25 +721,60 @@ class DynamicExecutor:
                     encoding="utf-8",
                 )
             self._wait_for_quality_peer()
-            valid_payload = ReviewReportResponse(
-                verdict="accept",
-                criterion_assessments=(
-                    ReviewCriterionAssessmentResponse(
-                        criterion_id="AC_REVIEW",
-                        status="satisfied",
-                        adversarial_check=(
-                            "Compared the documented return behavior with the "
-                            "implemented function."
-                        ),
-                        evidence=(
-                            "README.md and greeting.py describe the same string result."
-                        ),
-                        tool_evidence=(review_tool_claim(),),
-                    ),
+            criterion_assessment = ReviewCriterionAssessmentResponse(
+                criterion_id="AC_REVIEW",
+                status="satisfied",
+                adversarial_check=(
+                    "Compared the approved boundary with the implemented behavior."
                 ),
-                findings=(),
-                summary="The final commit satisfies the assigned review scope.",
-            ).model_dump(mode="json")
+                evidence="The observed implementation matches the approved scope.",
+                tool_evidence=(review_tool_claim(),),
+            )
+            shared = {
+                "verdict": "accept",
+                "criterion_assessments": (criterion_assessment,),
+                "findings": (),
+                "summary": "The final commit satisfies the assigned review scope.",
+            }
+            if request.specialization is AgentSpecialization.SECURITY_ASSESSMENT:
+                semantic_response = SecurityAssessmentResponse(
+                    **shared,
+                    surfaces=(
+                        SecuritySurfaceAssessment(
+                            id="SECURITY_UNTRUSTED_INPUT",
+                            surface="Untrusted greeting input",
+                            threat="Crafted input may cross the approved boundary.",
+                            control="Validate input before producing the greeting.",
+                            status="satisfied",
+                            evidence="The attributable probe observed safe behavior.",
+                            criterion_ids=("AC_REVIEW",),
+                        ),
+                    ),
+                    residual_risks=("Unicode policy remains task-specific.",),
+                )
+            elif request.specialization is AgentSpecialization.EXPERIENCE_ASSESSMENT:
+                semantic_response = ExperienceAssessmentResponse(
+                    **shared,
+                    workflows=(
+                        ExperienceWorkflowAssessment(
+                            id="EXPERIENCE_GREETING_RECOVERY",
+                            actor="A user invoking the greeting utility",
+                            workflow="Enter a name and receive a greeting.",
+                            outcome="The intended greeting is visible.",
+                            friction="The workflow requires one direct invocation.",
+                            recovery="Correct invalid input and repeat the invocation.",
+                            status="satisfied",
+                            evidence="The attributable observation showed the result.",
+                            criterion_ids=("AC_REVIEW",),
+                        ),
+                    ),
+                    usability_risks=("Shell quoting remains environment-specific.",),
+                )
+            else:
+                semantic_response = ReviewReportResponse(
+                    **shared,
+                )
+            valid_payload = semantic_response.model_dump(mode="json")
             if self.unapproved_review_boundaries:
                 assessments = valid_payload["criterion_assessments"]
                 assert isinstance(assessments, list)
@@ -1003,6 +1085,7 @@ class DynamicExecutor:
             role=None,
             agent_id=request.agent_id,
             capability=request.capability,
+            specialization=request.specialization,
             session_key=request.session_key,
             command=("fake-agent", request.agent_id),
             started_at=FIXED_TIME,
@@ -1110,6 +1193,7 @@ class DynamicExecutor:
                 role=None,
                 agent_id=request.agent_id,
                 capability=request.capability,
+                specialization=request.specialization,
                 session_key=request.session_key,
                 command=("fake-agent", request.agent_id),
                 started_at=FIXED_TIME,
@@ -1146,6 +1230,7 @@ def runtime(
     run_budget: AgentBudget | None = None,
     writer_scope: str = "repository",
     review_boundaries: tuple[ReviewBoundaryKind, ...] = (),
+    review_specialization: AgentSpecialization = AgentSpecialization.GENERAL_REVIEW,
     executor_options: dict[str, object] | None = None,
     model_switching: bool = False,
 ) -> tuple[DynamicAgentRunner, TeamPlan, DynamicExecutor, FakeQualityGate, Path]:
@@ -1158,6 +1243,7 @@ def runtime(
         run_budget=run_budget,
         writer_scope=writer_scope,
         review_boundaries=review_boundaries,
+        review_specialization=review_specialization,
     )
     if model_switching:
         assignments = tuple(
@@ -1359,6 +1445,75 @@ def test_dynamic_runner_executes_an_approved_testing_to_review_handoff(
         isinstance(item, HandoffEnvelope)
         and item.source_agent_id == "tester"
         and item.target_agent_id == "reviewer"
+        for item in handoffs
+    )
+
+
+@pytest.mark.parametrize(
+    ("specialization", "artifact_kind", "artifact_type"),
+    [
+        (
+            AgentSpecialization.SECURITY_ASSESSMENT,
+            ArtifactKind.SECURITY_ASSESSMENT,
+            SecurityAssessment,
+        ),
+        (
+            AgentSpecialization.EXPERIENCE_ASSESSMENT,
+            ArtifactKind.EXPERIENCE_ASSESSMENT,
+            ExperienceAssessment,
+        ),
+    ],
+)
+def test_dynamic_runner_carries_specialization_through_runtime_and_handoff(
+    tmp_path: Path,
+    specialization: AgentSpecialization,
+    artifact_kind: ArtifactKind,
+    artifact_type: type[ReviewReport],
+) -> None:
+    runner, team_plan, executor, quality_gate, _ = runtime(
+        tmp_path,
+        include_quality_tasks=True,
+        chain_quality=True,
+        review_specialization=specialization,
+    )
+    events: list[ProgressEvent] = []
+    runner.activity_handler = events.append
+
+    result = DagScheduler().execute(team_plan, runner)
+
+    assert result.status is ScheduleStatus.COMPLETED
+    assert quality_gate.calls == 1
+    reviewer_record = next(
+        item for item in result.records if item.agent_id == "reviewer"
+    )
+    assert reviewer_record.specialization == specialization.value
+    reviewer_request = next(
+        item for item in executor.requests if item.agent_id == "reviewer"
+    )
+    assert reviewer_request.specialization is specialization
+    assert reviewer_request.expected_kind is artifact_kind
+    artifact = runner.artifact_store.load(runner.outputs["reviewer"])
+    assert isinstance(artifact, artifact_type)
+    assert artifact.kind is artifact_kind
+    executions = tuple(
+        runner.artifact_store.load(reference) for reference in runner.execution_records
+    )
+    execution = next(
+        item
+        for item in executions
+        if isinstance(item, AgentExecutionRecord) and item.agent_id == "reviewer"
+    )
+    assert execution.specialization == specialization.value
+    assert any(
+        event.agent_id == "reviewer" and event.specialization == specialization.value
+        for event in events
+    )
+    handoffs = [runner.artifact_store.load(reference) for reference in runner.handoffs]
+    assert any(
+        isinstance(item, HandoffEnvelope)
+        and item.source_agent_id == "reviewer"
+        and item.target_agent_id is None
+        and any(reference.kind is artifact_kind for reference in item.artifacts)
         for item in handoffs
     )
 

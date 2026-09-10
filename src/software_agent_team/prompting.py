@@ -53,6 +53,7 @@ from software_agent_team.teams import (
     AgentSpec,
     TeamPlan,
     capability_for_legacy_role,
+    specialization_contract,
 )
 
 TEMPLATE_ROOT = Path(__file__).with_name("prompt_templates")
@@ -780,6 +781,7 @@ def _dynamic_prompt_context(inputs: DynamicAgentPromptInputs) -> dict[str, objec
             "responsibility": agent.responsibility,
             "rationale": agent.rationale,
             "capability": agent.capability.value,
+            "specialization": agent.specialization.value,
             "permission_profile": agent.permission_profile.value,
             "workspace_scope": agent.workspace_scope,
             "dependencies": list(agent.dependencies),
@@ -890,6 +892,7 @@ def render_dynamic_agent_prompt(
     """Render a capability prompt from one approved run-scoped AgentSpec."""
 
     agent = inputs.agent
+    specialization = specialization_contract(agent.specialization)
     template_name = DYNAMIC_CAPABILITY_TEMPLATES.get(agent.capability)
     if template_name is None:
         raise AgentPromptError(f"no dynamic prompt exists for {agent.capability.value}")
@@ -899,11 +902,25 @@ def render_dynamic_agent_prompt(
         raise AgentPromptError(
             f"cannot load dynamic prompt template: {template_name}"
         ) from error
+    if specialization.prompt_module is None:
+        raise AgentPromptError(
+            f"specialization {agent.specialization.value} has no runtime prompt module"
+        )
+    try:
+        specialization_source = (
+            template_root / specialization.prompt_module
+        ).read_text(encoding="utf-8")
+    except OSError as error:
+        raise AgentPromptError(
+            f"cannot load specialization prompt module: {specialization.prompt_module}"
+        ) from error
     response_schema = _dynamic_response_schema(agent)
     values = {
         "agent_id": agent.id,
         "agent_label": agent.label,
         "capability": agent.capability.value,
+        "specialization": agent.specialization.value,
+        "specialization_contract": specialization_source.strip(),
         "expected_kind": agent.expected_output.value,
         "submission_tool": ARTIFACT_SUBMISSION_TOOL,
         "context_json": json.dumps(
@@ -925,6 +942,14 @@ def render_dynamic_agent_prompt(
         raise AgentPromptError(
             f"invalid dynamic prompt template: {template_name}"
         ) from error
+    rendered = (
+        f"{rendered.rstrip()}\n\n"
+        "SPECIALIZATION_CONTRACT_V1\n"
+        f"specialization: {agent.specialization.value}\n"
+        f"acceptance_authority: {specialization.acceptance_authority.value}\n"
+        f"handoff_boundary: {specialization.handoff_boundary}\n"
+        f"{specialization_source.strip()}\n"
+    )
     if not rendered.strip():
         raise AgentPromptError(
             f"dynamic prompt template rendered empty: {template_name}"
@@ -947,6 +972,7 @@ def build_dynamic_agent_execution_request(
         iteration=inputs.iteration,
         agent_id=agent.id,
         capability=agent.capability,
+        specialization=agent.specialization,
         expected_kind=agent.expected_output,
         prompt=render_dynamic_agent_prompt(inputs, template_root=template_root),
         timeout_seconds=agent.timeout_seconds,

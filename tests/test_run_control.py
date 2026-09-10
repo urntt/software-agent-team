@@ -34,6 +34,7 @@ from software_agent_team.run_control import (
     TerminationReason,
 )
 from software_agent_team.teams import (
+    AgentSpecialization,
     PlanApprovalSource,
     TeamManifest,
     TeamPlan,
@@ -361,6 +362,84 @@ def test_adaptive_planning_transition_binds_the_approved_plan_digest(
     assert record.transitions[-1].artifacts == ()
     assert record.transitions[-1].implementation_plan_sha256 == "e" * 64
     assert controller.load(record.run_id) == record
+
+
+@pytest.mark.parametrize(
+    ("specialization", "artifact_kind"),
+    [
+        (
+            AgentSpecialization.SECURITY_ASSESSMENT,
+            ArtifactKind.SECURITY_ASSESSMENT,
+        ),
+        (
+            AgentSpecialization.EXPERIENCE_ASSESSMENT,
+            ArtifactKind.EXPERIENCE_ASSESSMENT,
+        ),
+    ],
+)
+def test_review_transition_accepts_specialized_quality_evidence(
+    tmp_path: Path,
+    specialization: AgentSpecialization,
+    artifact_kind: ArtifactKind,
+) -> None:
+    payload = adaptive_team_plan().model_dump(mode="json")
+    reviewer = next(
+        agent for agent in payload["agents"] if agent["capability"] == "review"
+    )
+    reviewer["specialization"] = specialization.value
+    reviewer["expected_output"] = artifact_kind.value
+    plan = TeamPlan.model_validate(payload)
+    controller = RunController(
+        RunStore(tmp_path / "runs"),
+        None,
+        clock=lambda: FIXED_TIME,
+    )
+    record = controller.create(confirmed_task_brief(), team_plan=plan)
+    record = controller.advance(
+        record.run_id,
+        expected_revision=record.revision,
+        target=RunPhase.PREPARING_WORKSPACE,
+        reason="prepare workspace",
+    )
+    record = controller.attach_workspace(
+        record.run_id,
+        expected_revision=record.revision,
+        workspace=workspace(record.run_id),
+    )
+    record = controller.advance(
+        record.run_id,
+        expected_revision=record.revision,
+        target=RunPhase.IMPLEMENTING,
+        reason="approved adaptive plan is ready",
+        implementation_plan_sha256=plan.implementation_plan_sha256,
+    )
+    record = advance(controller, record, RunPhase.SNAPSHOTTING)
+    record = advance(controller, record, RunPhase.VERIFYING)
+    record = advance(controller, record, RunPhase.REVIEWING)
+    quality_reference = ArtifactReference(
+        kind=artifact_kind,
+        path=(
+            f"iterations/01/agents/reviewer/{artifact_kind.value.replace('_', '-')}"
+            ".json"
+        ),
+        sha256=SHA256,
+    )
+    iteration_reference = ArtifactReference(
+        kind=ArtifactKind.ITERATION_RECORD,
+        path="iterations/01/iteration-record.json",
+        sha256=SHA256,
+    )
+
+    decided = controller.advance(
+        record.run_id,
+        expected_revision=record.revision,
+        target=RunPhase.DECIDING,
+        reason="specialized quality evidence is ready",
+        artifacts=(quality_reference, iteration_reference),
+    )
+
+    assert decided.phase is RunPhase.DECIDING
+    assert controller.load(record.run_id) == decided
 
 
 def test_adaptive_planning_transition_rejects_missing_or_wrong_digest(

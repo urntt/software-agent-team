@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
+import software_agent_team.self_check_evaluation as self_check_evaluation
 from software_agent_team.budgets import AgentBudget, BudgetAuthority
 from software_agent_team.model_costs import CachePricing
 from software_agent_team.model_metadata import ModelMetadataSource
@@ -435,6 +436,7 @@ def test_plan_execution_covers_every_route_agent_runtime_and_delivery_boundary(
     assert report.previous_report_sha256 == admission.sha256
     assert {item.id for item in report.checks} >= {
         "plan.approval",
+        "agent.specialization_catalog",
         "runtime.plan",
         "route.default",
         "agent.developer",
@@ -442,6 +444,13 @@ def test_plan_execution_covers_every_route_agent_runtime_and_delivery_boundary(
         "workspace.source",
         "delivery.boundary",
     }
+    catalog = next(
+        item for item in report.checks if item.id == "agent.specialization_catalog"
+    )
+    assert catalog.status is SelfCheckStatus.PASS
+    developer = next(item for item in report.checks if item.id == "agent.developer")
+    assert "specialization=product_implementation" in developer.observed_fact
+    assert "output=work_result" in developer.observed_fact
 
     blocked = build_plan_execution_report(
         admission_report=admission,
@@ -456,3 +465,37 @@ def test_plan_execution_covers_every_route_agent_runtime_and_delivery_boundary(
     assert not blocked.ready
     assert statuses["runtime.plan"] is SelfCheckStatus.BLOCKED
     assert statuses["route.default"] is SelfCheckStatus.BLOCKED
+
+
+def test_plan_execution_blocks_missing_specialization_prompt_modules(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    admission = admission_report(tmp_path)
+    source = tmp_path / "source"
+    source.mkdir()
+    empty_templates = tmp_path / "empty-templates"
+    empty_templates.mkdir()
+    monkeypatch.setattr(
+        self_check_evaluation,
+        "PROMPT_TEMPLATE_ROOT",
+        empty_templates,
+    )
+
+    report = build_plan_execution_report(
+        admission_report=admission,
+        team_plan=team_plan(),
+        runtime_preflight=runtime_preflight(),
+        source_repository=source,
+        destination=tmp_path / "link-checker",
+        checked_at=NOW,
+    )
+
+    catalog = next(
+        item for item in report.checks if item.id == "agent.specialization_catalog"
+    )
+    assert catalog.status is SelfCheckStatus.BLOCKED
+    assert (
+        catalog.remediation == "Reinstall or repair the exact SAT application revision."
+    )
+    assert not report.ready

@@ -25,7 +25,7 @@ from software_agent_team.integrity import canonical_model_sha256
 from software_agent_team.invocation_lifecycle import InvocationPhase
 from software_agent_team.run_control import RunPhase
 
-RUN_EVENT_SCHEMA_VERSION = 5
+RUN_EVENT_SCHEMA_VERSION = 6
 MINIMUM_READABLE_RUN_EVENT_SCHEMA_VERSION = 2
 EVENTS_DIRECTORY = "events"
 EVENT_FILENAME_PATTERN = re.compile(r"^(?P<sequence>[0-9]{6})\.json$")
@@ -586,7 +586,7 @@ class RunEvent(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, RUN_EVENT_SCHEMA_VERSION] = (
+    schema_version: Literal[2, 3, 4, 5, RUN_EVENT_SCHEMA_VERSION] = (
         RUN_EVENT_SCHEMA_VERSION
     )
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -611,6 +611,10 @@ class RunEvent(BaseModel):
     attempt: int | None = Field(default=None, ge=1)
     duration_ms: int | None = Field(default=None, ge=0)
     capability: str | None = Field(
+        default=None,
+        pattern=r"^[a-z][a-z0-9_]*$",
+    )
+    specialization: str | None = Field(
         default=None,
         pattern=r"^[a-z][a-z0-9_]*$",
     )
@@ -708,6 +712,12 @@ class RunEvent(BaseModel):
                 raise ValueError("Agent events require an Agent ID")
             if (self.kind in _ATTEMPT_EVENT_KINDS) != (self.attempt is not None):
                 raise ValueError("RunEvent attempt does not match its Agent event kind")
+            if self.schema_version >= 6 and (
+                (self.capability is None) != (self.specialization is None)
+            ):
+                raise ValueError(
+                    "current Agent events must pair capability and specialization"
+                )
         elif (
             any(
                 value is not None
@@ -715,6 +725,7 @@ class RunEvent(BaseModel):
                     self.agent_id,
                     self.attempt,
                     self.capability,
+                    self.specialization,
                     self.stage_id,
                 )
             )
@@ -788,6 +799,7 @@ class ProgressEvent:
     attempt: int | None = None
     duration_ms: int | None = None
     capability: str | None = None
+    specialization: str | None = None
     stage_id: str | None = None
     model: str | None = None
     dependency_ids: tuple[str, ...] = ()
@@ -892,6 +904,7 @@ class RunEventJournal:
                 attempt=draft.attempt,
                 duration_ms=draft.duration_ms,
                 capability=draft.capability,
+                specialization=draft.specialization,
                 stage_id=draft.stage_id,
                 model=draft.model,
                 dependency_ids=draft.dependency_ids,
@@ -1295,6 +1308,8 @@ class TerminalProgressRenderer:
                 fields.append(f"state={state.value}")
             if event.capability is not None:
                 fields.append(f"capability={event.capability}")
+            if event.specialization is not None:
+                fields.append(f"specialization={event.specialization}")
             if event.stage_id is not None:
                 fields.append(f"stage={event.stage_id}")
             if event.model is not None:

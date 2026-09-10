@@ -1114,6 +1114,7 @@ class DynamicAgentRunner:
                 attempt=attempt,
                 duration_ms=duration_ms,
                 capability=agent.capability.value,
+                specialization=agent.specialization.value,
                 stage_id=agent.stage_id,
                 model=model,
                 dependency_ids=agent.dependencies,
@@ -1541,6 +1542,7 @@ class DynamicAgentRunner:
             telemetry.role is not None
             or telemetry.agent_id != request.agent_id
             or telemetry.capability is not request.capability
+            or telemetry.specialization is not request.specialization
             or telemetry.session_key != request.session_key
         ):
             raise DynamicAgentRunnerError(

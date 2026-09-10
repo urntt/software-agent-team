@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 from datetime import UTC, datetime
 from pathlib import Path
@@ -31,13 +32,19 @@ from software_agent_team.self_check import (
     TaskSelfCheckReport,
     observation_sha256,
 )
-from software_agent_team.teams import TeamPlan
+from software_agent_team.teams import (
+    SPECIALIZATION_CATALOG_VERSION,
+    TeamPlan,
+    specialization_contract,
+)
 from software_agent_team.updates import (
     ForegroundUpdateObservation,
     ForegroundUpdateStatus,
 )
 from software_agent_team.user_configuration import UserConfiguration
 from software_agent_team.versioning import IdentityStatus, SoftwareVersionReport
+
+PROMPT_TEMPLATE_ROOT = Path(__file__).with_name("prompt_templates")
 
 
 def _utc_now() -> datetime:
@@ -750,6 +757,94 @@ def build_plan_execution_report(
         )
     )
 
+    specialization_modules: list[dict[str, object]] = []
+    specialization_problems: list[str] = []
+    for agent in team_plan.agents:
+        if agent.legacy_role is not None:
+            continue
+        module = specialization_contract(agent.specialization).prompt_module
+        if module is None:
+            specialization_problems.append(
+                f"{agent.id} has no runtime specialization prompt module"
+            )
+            specialization_modules.append(
+                {
+                    "agent_id": agent.id,
+                    "specialization": agent.specialization.value,
+                    "module": None,
+                    "sha256": None,
+                }
+            )
+            continue
+        module_path = PROMPT_TEMPLATE_ROOT / module
+        digest: str | None = None
+        try:
+            if module_path.is_file() and not module_path.is_symlink():
+                digest = hashlib.sha256(module_path.read_bytes()).hexdigest()
+        except OSError:
+            digest = None
+        if digest is None:
+            specialization_problems.append(
+                f"{agent.id} requires unavailable prompt module {module}"
+            )
+        specialization_modules.append(
+            {
+                "agent_id": agent.id,
+                "specialization": agent.specialization.value,
+                "module": module,
+                "sha256": digest,
+            }
+        )
+    specialization_ready = not specialization_problems
+    checks.append(
+        _result(
+            check_id="agent.specialization_catalog",
+            checkpoint=SelfCheckCheckpoint.PLAN_EXECUTION,
+            category=SelfCheckCategory.AGENT,
+            owner=SelfCheckOwner.SAT,
+            dependencies=("plan.approval",),
+            observed_fact=(
+                f"specialization catalog v{SPECIALIZATION_CATALOG_VERSION}; "
+                f"runtime modules={len(specialization_modules)}; "
+                f"ready={specialization_ready}"
+            ),
+            evidence_kind="local_observation",
+            evidence_reference=(
+                f"packaged specialization catalog v{SPECIALIZATION_CATALOG_VERSION}"
+            ),
+            input_value={
+                "catalog_version": SPECIALIZATION_CATALOG_VERSION,
+                "modules": specialization_modules,
+                "problems": specialization_problems,
+            },
+            checked_at=when,
+            status=(
+                SelfCheckStatus.PASS
+                if specialization_ready
+                else SelfCheckStatus.BLOCKED
+            ),
+            severity=(
+                SelfCheckSeverity.INFO
+                if specialization_ready
+                else SelfCheckSeverity.REQUIRED
+            ),
+            consequence=(
+                None
+                if specialization_ready
+                else "Approved specialization prompts cannot be compiled safely."
+            ),
+            remediation=(
+                None
+                if specialization_ready
+                else "Reinstall or repair the exact SAT application revision."
+            ),
+            rerun_rule=(
+                "Re-run after SAT installation, source revision, catalog, or "
+                "approved Agent specialization changes."
+            ),
+        )
+    )
+
     if (runtime_preflight is None) == (runtime_error is None):
         raise ValueError(
             "plan execution requires exactly one runtime preflight or error"
@@ -872,11 +967,18 @@ def build_plan_execution_report(
                 checkpoint=SelfCheckCheckpoint.PLAN_EXECUTION,
                 category=SelfCheckCategory.AGENT,
                 owner=SelfCheckOwner.APPROVED_PLAN,
-                dependencies=("plan.approval", f"route.{agent.model_route_id}"),
+                dependencies=(
+                    "plan.approval",
+                    "agent.specialization_catalog",
+                    f"route.{agent.model_route_id}",
+                ),
                 observed_fact=(
                     f"{agent.label}: capability={agent.capability.value}; "
+                    f"specialization={agent.specialization.value}; "
                     f"permission={agent.permission_profile.value}; "
-                    f"workspace={agent.workspace_scope}; route={agent.model_route_id}"
+                    f"workspace={agent.workspace_scope}; "
+                    f"output={agent.expected_output.value}; "
+                    f"route={agent.model_route_id}"
                 ),
                 evidence_kind="controller_contract",
                 evidence_reference=f"TeamPlan Agent:{agent.id}",

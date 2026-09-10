@@ -21,6 +21,7 @@ from pydantic import ValidationError
 import software_agent_team.planning as planning
 from software_agent_team.artifacts import (
     AcceptanceCriterion,
+    ArtifactKind,
     DeliveryMaturity,
     ProductDefinition,
     ProductDefinitionDimension,
@@ -71,6 +72,7 @@ from software_agent_team.planning import (
     PlanningOption,
     PlanningOptionValue,
     PlanningPolicy,
+    PlanningPreview,
     PlanningProposal,
     PlanningProposalBody,
     PlanningProposalSource,
@@ -104,6 +106,7 @@ from software_agent_team.response_corrections import (
 from software_agent_team.submissions import AgentSubmissionPurpose
 from software_agent_team.teams import (
     AgentCapability,
+    AgentSpecialization,
     ModelRouteSelectionSource,
     ModelRoutingMode,
     ModelSwitchCondition,
@@ -1214,7 +1217,7 @@ def test_one_question_can_authorize_an_explicit_product_dimension_bundle(
     assert shown[0].admission.controller_invariant_ids == ()
     current_turn = coordinator.store.load_turn(request().run_id, 1)
     current_payload = current_turn.model_dump(mode="json")
-    assert current_payload["schema_version"] == 18
+    assert current_payload["schema_version"] == 19
     assert current_payload["question_admission"]["origin"] == "planner_suggestion"
     schema_seventeen = deepcopy(current_payload)
     schema_seventeen["schema_version"] = 17
@@ -2203,7 +2206,7 @@ def test_unknown_user_question_provenance_requests_bound_clarification(
     )
     recovery_turn = store.load_turn(request().run_id, 2)
     recovery_payload = recovery_turn.model_dump(mode="json")
-    assert recovery_payload["schema_version"] == 18
+    assert recovery_payload["schema_version"] == 19
     assert recovery_payload["question_admission"]["controller_decision_id"] == (
         decision.id
     )
@@ -4349,9 +4352,190 @@ def test_proposal_compiles_to_complete_controller_owned_authority() -> None:
     assert "workspace changes permitted within approved scope" in overview
     assert "timeout: 600 seconds" in overview
     assert "model: provider/model" in overview
+    assert "cost authority: metered against shared task ceiling $25" in overview
     assert "model calls: 14" in overview
     assert "cumulative Agent time: 7200 seconds" in overview
     assert "estimated cost ceiling: $25" in overview
+
+
+def test_materially_different_requests_compile_distinct_specialist_contracts() -> None:
+    def preview_for(source_request: str, body: PlanningProposalBody) -> PlanningPreview:
+        return preview_adaptive_proposal(
+            request(source_request=source_request),
+            proposal(body=body),
+            policy(),
+            created_at=FIXED_TIME,
+        )
+
+    ordinary_body = proposal_body()
+    security_criterion = ProposedCriterion(
+        id="AC_SECURITY",
+        description="A link target outside the selected root is rejected.",
+        verification="Probe direct and nested untrusted path inputs.",
+        review_boundaries=(
+            ReviewBoundaryKind.TOP_LEVEL_INPUT,
+            ReviewBoundaryKind.NESTED_INPUT,
+        ),
+        requirement_ids=("REQ_SECURITY",),
+        verification_agent_ids=("security_assessor",),
+    )
+    security_body = ordinary_body.model_copy(
+        update={
+            "requirements": (
+                *ordinary_body.requirements,
+                "Reject link targets that escape the selected root.",
+            ),
+            "requirement_ids": (*ordinary_body.requirement_ids, "REQ_SECURITY"),
+            "acceptance_criteria": (
+                *ordinary_body.acceptance_criteria,
+                security_criterion,
+            ),
+            "tasks": (
+                ordinary_body.tasks[0].model_copy(
+                    update={
+                        "acceptance_criteria": (
+                            *ordinary_body.tasks[0].acceptance_criteria,
+                            "AC_SECURITY",
+                        )
+                    }
+                ),
+            ),
+            "agents": (
+                *ordinary_body.agents,
+                ProposedAgent(
+                    id="security_assessor",
+                    label="Path Security Assessor",
+                    responsibility=(
+                        "Assess untrusted path boundaries and residual risk."
+                    ),
+                    rationale=(
+                        "The request introduces an explicit untrusted-input surface."
+                    ),
+                    capability=AgentCapability.REVIEW,
+                    specialization=AgentSpecialization.SECURITY_ASSESSMENT,
+                    stage_id="verify",
+                    dependencies=("cli_developer",),
+                    workspace_scope="repository",
+                    workload=AgentWorkload.ROUTINE,
+                ),
+            ),
+            "max_concurrency": 3,
+        }
+    )
+    experience_agents = tuple(
+        agent.model_copy(
+            update={
+                "id": "experience_assessor",
+                "label": "CLI Experience Assessor",
+                "responsibility": (
+                    "Assess the target user's failure and recovery workflow."
+                ),
+                "rationale": (
+                    "The request makes interactive recovery a delivery concern."
+                ),
+                "specialization": AgentSpecialization.EXPERIENCE_ASSESSMENT,
+                "dependencies": ("acceptance_tester",),
+            }
+        )
+        if agent.id == "quality_reviewer"
+        else agent
+        for agent in ordinary_body.agents
+    )
+    experience_criteria = tuple(
+        criterion.model_copy(
+            update={
+                "verification_agent_ids": tuple(
+                    "experience_assessor"
+                    if agent_id == "quality_reviewer"
+                    else agent_id
+                    for agent_id in criterion.verification_agent_ids
+                )
+            }
+        )
+        for criterion in ordinary_body.acceptance_criteria
+    )
+    experience_body = ordinary_body.model_copy(
+        update={
+            "agents": experience_agents,
+            "acceptance_criteria": experience_criteria,
+        }
+    )
+
+    ordinary = preview_for(request().source_request, ordinary_body)
+    security = preview_for(
+        (
+            "For developers who will use it repeatedly, build a usable local product "
+            "that checks Markdown links in files and fragments without fetching "
+            "remote URLs. Treat note paths as untrusted security inputs."
+        ),
+        security_body,
+    )
+    experience = preview_for(
+        (
+            "For developers who will use it repeatedly, build a usable local product "
+            "that checks Markdown links in files and fragments without fetching "
+            "remote URLs. Make the terminal failure and recovery workflow usable."
+        ),
+        experience_body,
+    )
+
+    security_agent = security.team_plan.get_agent("security_assessor")
+    experience_agent = experience.team_plan.get_agent("experience_assessor")
+    assert security_agent.specialization is AgentSpecialization.SECURITY_ASSESSMENT
+    assert security_agent.expected_output is ArtifactKind.SECURITY_ASSESSMENT
+    assert experience_agent.specialization is (
+        AgentSpecialization.EXPERIENCE_ASSESSMENT
+    )
+    assert experience_agent.expected_output is ArtifactKind.EXPERIENCE_ASSESSMENT
+    assert {agent.id for agent in ordinary.team_plan.agents} == {
+        "cli_developer",
+        "acceptance_tester",
+        "quality_reviewer",
+    }
+    assert {agent.id for agent in security.team_plan.agents} == {
+        "cli_developer",
+        "acceptance_tester",
+        "quality_reviewer",
+        "security_assessor",
+    }
+    assert {agent.id for agent in experience.team_plan.agents} == {
+        "cli_developer",
+        "acceptance_tester",
+        "experience_assessor",
+    }
+    assert security.team_plan.execution_waves() == (
+        ("cli_developer",),
+        ("acceptance_tester", "quality_reviewer", "security_assessor"),
+    )
+    assert experience.team_plan.execution_waves() == (
+        ("cli_developer",),
+        ("acceptance_tester",),
+        ("experience_assessor",),
+    )
+    security_acceptance = {
+        criterion.id: criterion.verification_agent_ids
+        for criterion in security.implementation_plan.acceptance_criteria
+    }
+    experience_acceptance = {
+        criterion.id: criterion.verification_agent_ids
+        for criterion in experience.implementation_plan.acceptance_criteria
+    }
+    assert security_acceptance["AC_SECURITY"] == ("security_assessor",)
+    assert experience_acceptance["AC_REPORT"] == (
+        "acceptance_tester",
+        "experience_assessor",
+    )
+    assert security.team_plan.model_dump(
+        mode="json"
+    ) != experience.team_plan.model_dump(mode="json")
+    security_overview = render_planning_overview(security)
+    experience_overview = render_planning_overview(experience)
+    assert "acceptance authority: security" in security_overview
+    assert "output: security_assessment" in security_overview
+    assert "acceptance authority: experience" not in security_overview
+    assert "acceptance authority: user_experience" in experience_overview
+    assert "output: experience_assessment" in experience_overview
+    assert "acceptance authority: security" not in experience_overview
 
 
 def test_controller_resolves_visible_per_agent_model_routes_before_approval() -> None:
@@ -5785,6 +5969,7 @@ def test_dialogue_revision_structured_edit_and_approval_are_recoverable(
     question_schema = response_schema["$defs"]["PlanningQuestion"]
     option_schema = response_schema["$defs"]["PlanningOption"]
     criterion_schema = response_schema["$defs"]["ProposedCriterion"]
+    agent_schema = response_schema["$defs"]["ProposedAgent"]
     proposal_schema = response_schema["$defs"]["PlanningProposalBody"]
     assert {
         "decision_category",
@@ -5809,6 +5994,26 @@ def test_dialogue_revision_structured_edit_and_approval_are_recoverable(
     )
     assert "review_boundaries" in criterion_schema["required"]
     assert "default" not in criterion_schema["properties"]["review_boundaries"]
+    assert "specialization" in agent_schema["required"]
+    catalog = planning_context["controller_policy"]["specialization_catalog"]
+    assert planning_context["controller_policy"]["specialization_catalog_version"] == 1
+    assert {entry["id"] for entry in catalog} == {
+        "product_implementation",
+        "system_integration",
+        "deterministic_testing",
+        "general_review",
+        "security_assessment",
+        "experience_assessment",
+    }
+    security_contract = next(
+        entry for entry in catalog if entry["id"] == "security_assessment"
+    )
+    assert security_contract["compatible_capabilities"] == ["review"]
+    assert security_contract["permission_ceiling"] == "read_only"
+    assert security_contract["expected_output"] == "security_assessment"
+    assert security_contract["prompt_module"] == (
+        "specialization_security_assessment.md"
+    )
     assert {
         "product_definition",
         "non_goals",
@@ -7965,7 +8170,7 @@ raise SystemExit(cli.main([]))
 
         assert not ProcessLeaseStore(tmp_path / "leases").inspect().processes
         legacy = turn.model_dump(mode="json")
-        assert legacy["schema_version"] == 18
+        assert legacy["schema_version"] == 19
         assert legacy["execution"]["invocation_lifecycle"]["schema_version"] == 5
         legacy["schema_version"] = 16
         assert PlanningTurn.model_validate(legacy).model_dump(mode="json") == legacy

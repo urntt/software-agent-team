@@ -25,6 +25,7 @@ from pydantic import (
 )
 
 from software_agent_team.artifacts import (
+    REVIEW_ARTIFACT_KINDS,
     ArtifactKind,
     ArtifactReference,
     IterationDecision,
@@ -747,7 +748,7 @@ class RunStore:
                     for agent in team_plan.agents
                 )
                 and not any(
-                    reference.kind is ArtifactKind.REVIEW_REPORT
+                    reference.kind in REVIEW_ARTIFACT_KINDS
                     for reference in transition.artifacts
                 )
             ):
@@ -872,7 +873,7 @@ class RunController:
                 agent.capability is AgentCapability.REVIEW for agent in team_plan.agents
             )
             and not any(
-                reference.kind is ArtifactKind.REVIEW_REPORT for reference in artifacts
+                reference.kind in REVIEW_ARTIFACT_KINDS for reference in artifacts
             )
         ):
             raise InvalidRunTransitionError(

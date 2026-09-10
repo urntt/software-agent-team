@@ -112,19 +112,24 @@ from software_agent_team.submissions import (
     canonical_json_sha256,
 )
 from software_agent_team.teams import (
+    SPECIALIZATION_CATALOG,
+    SPECIALIZATION_CATALOG_VERSION,
     AgentCapability,
     AgentSpec,
+    AgentSpecialization,
     ModelRoute,
     ModelRoutingMode,
     PermissionProfile,
     PlanApprovalSource,
     TeamPlan,
     TeamPlanOrigin,
-    expected_output_for_capability,
+    default_specialization_for_capability,
+    expected_output_for_specialization,
     permission_for_capability,
+    specialization_contract,
 )
 
-PLANNING_SCHEMA_VERSION = 18
+PLANNING_SCHEMA_VERSION = 19
 MINIMUM_READABLE_PLANNING_SCHEMA_VERSION = 2
 PLANNING_TEMPLATE = Path(__file__).with_name("prompt_templates") / "adaptive_planner.md"
 MAX_PLANNING_EVIDENCE_CHARACTERS = 1_000_000
@@ -1874,7 +1879,24 @@ class PlanningRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal[
-        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, PLANNING_SCHEMA_VERSION
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        PLANNING_SCHEMA_VERSION,
     ] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     project_name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
@@ -2316,6 +2338,7 @@ class ProposedAgent(BaseModel):
     responsibility: str = Field(min_length=1, max_length=500)
     rationale: str = Field(min_length=1, max_length=500)
     capability: AgentCapability
+    specialization: AgentSpecialization
     stage_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     dependencies: tuple[str, ...] = ()
     workspace_scope: str = Field(
@@ -2327,6 +2350,23 @@ class ProposedAgent(BaseModel):
         ),
     )
     workload: AgentWorkload
+
+    @model_validator(mode="before")
+    @classmethod
+    def infer_legacy_specialization(cls, value: object) -> object:
+        """Read proposal records created before specialization became explicit."""
+
+        if not isinstance(value, dict) or value.get("specialization") is not None:
+            return value
+        payload = dict(value)
+        try:
+            capability = AgentCapability(payload.get("capability"))
+        except (TypeError, ValueError):
+            return payload
+        payload["specialization"] = default_specialization_for_capability(
+            capability
+        ).value
+        return payload
 
     @field_validator("label", "responsibility", "rationale")
     @classmethod
@@ -2358,6 +2398,13 @@ class ProposedAgent(BaseModel):
             )
         if self.id in self.dependencies:
             raise ValueError("a proposed Agent cannot depend on itself")
+        if (
+            self.capability
+            not in specialization_contract(self.specialization).compatible_capabilities
+        ):
+            raise ValueError(
+                "proposed Agent specialization and capability are incompatible"
+            )
         return self
 
 
@@ -4329,19 +4376,45 @@ def _validate_current_planning_response_wire(
     *,
     response_schema: dict[str, object],
 ) -> None:
-    """Enforce current question keys without breaking persisted legacy records."""
+    """Enforce current wire keys without breaking persisted legacy records."""
 
+    definitions = response_schema.get("$defs")
+    if not isinstance(definitions, dict):
+        raise PlanningError("Planning response schema has no definitions")
+    if payload.get("kind") == PlanningResponseKind.PROPOSAL.value:
+        proposal = payload.get("proposal")
+        agents = None if not isinstance(proposal, dict) else proposal.get("agents")
+        missing = (
+            ()
+            if not isinstance(agents, list)
+            else tuple(
+                index
+                for index, agent in enumerate(agents)
+                if isinstance(agent, dict) and "specialization" not in agent
+            )
+        )
+        if missing:
+            raise _planning_model_invariant(
+                "planning_current_specialization_wire_contract",
+                "current Planning proposal Agents require specialization IDs",
+                paths=tuple(
+                    f"/proposal/agents/{index}/specialization" for index in missing
+                ),
+                subjects=_planning_subjects(
+                    *(
+                        (ResponseIssueSubjectKind.AGENT, str(agents[index].get("id")))
+                        for index in missing
+                        if isinstance(agents[index].get("id"), str)
+                    )
+                ),
+            )
+        return
     if payload.get("kind") != PlanningResponseKind.QUESTION.value:
         return
     question = payload.get("question")
     if not isinstance(question, dict):
         return
-    definitions = response_schema.get("$defs")
-    definition = (
-        None
-        if not isinstance(definitions, dict)
-        else definitions.get("PlanningQuestion")
-    )
+    definition = definitions.get("PlanningQuestion")
     if not isinstance(definition, dict):
         raise PlanningError("Planning response schema has no question definition")
     properties = definition.get("properties")
@@ -4695,7 +4768,24 @@ class AdaptiveImplementationPlan(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal[
-        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, PLANNING_SCHEMA_VERSION
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        PLANNING_SCHEMA_VERSION,
     ] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     team_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
@@ -4796,7 +4886,24 @@ class PlanningTurn(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal[
-        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, PLANNING_SCHEMA_VERSION
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        PLANNING_SCHEMA_VERSION,
     ] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     sequence: int = Field(ge=1)
@@ -5037,7 +5144,24 @@ class PlanningProposal(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal[
-        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, PLANNING_SCHEMA_VERSION
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        PLANNING_SCHEMA_VERSION,
     ] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     revision: int = Field(ge=1)
@@ -5109,7 +5233,24 @@ class PlanningSession(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal[
-        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, PLANNING_SCHEMA_VERSION
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        PLANNING_SCHEMA_VERSION,
     ] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     request_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -5292,7 +5433,24 @@ class PlanningApproval(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal[
-        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, PLANNING_SCHEMA_VERSION
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        PLANNING_SCHEMA_VERSION,
     ] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     revision: int = Field(ge=1)
@@ -5745,10 +5903,13 @@ def preview_adaptive_proposal(
                     responsibility=proposed.responsibility,
                     rationale=proposed.rationale,
                     capability=proposed.capability,
+                    specialization=proposed.specialization,
                     permission_profile=permission_for_capability(proposed.capability),
                     stage_id=proposed.stage_id,
                     dependencies=proposed.dependencies,
-                    expected_output=expected_output_for_capability(proposed.capability),
+                    expected_output=expected_output_for_specialization(
+                        proposed.specialization
+                    ),
                     model_route_id=assignments[proposed.id].primary_route_id,
                     timeout_seconds=0,
                     workspace_scope=proposed.workspace_scope,
@@ -5816,10 +5977,13 @@ def preview_adaptive_proposal(
                 responsibility=proposed.responsibility,
                 rationale=proposed.rationale,
                 capability=proposed.capability,
+                specialization=proposed.specialization,
                 permission_profile=permission_for_capability(proposed.capability),
                 stage_id=proposed.stage_id,
                 dependencies=proposed.dependencies,
-                expected_output=expected_output_for_capability(proposed.capability),
+                expected_output=expected_output_for_specialization(
+                    proposed.specialization
+                ),
                 model_route_id=assignments[proposed.id].primary_route_id,
                 timeout_seconds=resolved_timeout,
                 workspace_scope=proposed.workspace_scope,
@@ -6259,6 +6423,9 @@ def render_planning_overview(
         lines.extend(
             (
                 f"      capability: {agent.capability.value}",
+                f"      specialization: {agent.specialization.value}",
+                "      acceptance authority: "
+                f"{specialization_contract(agent.specialization).acceptance_authority.value}",
                 f"      dependencies: {dependencies}",
                 f"      permission: {agent.permission_profile.value}",
                 f"      workspace: {agent.workspace_scope}",
@@ -6283,6 +6450,8 @@ def render_planning_overview(
                     else "none"
                 ),
                 f"      model pricing: {_render_model_pricing(route)}",
+                "      cost authority: metered against shared task ceiling "
+                f"${plan.budget.max_estimated_cost_usd}; no per-Agent cost cap",
                 f"      workload: {timeout.workload.value}",
                 time_boundary,
             )
@@ -8017,6 +8186,28 @@ class AdaptivePlanningCoordinator:
                     AgentCapability.TESTING.value,
                     AgentCapability.REVIEW.value,
                 ],
+                "specialization_catalog": [
+                    {
+                        "id": contract.id.value,
+                        "purpose": contract.purpose,
+                        "compatible_capabilities": [
+                            capability.value
+                            for capability in contract.compatible_capabilities
+                        ],
+                        "permission_ceiling": contract.permission_ceiling.value,
+                        "expected_output": contract.expected_output.value,
+                        "prompt_module": contract.prompt_module,
+                        "acceptance_authority": (contract.acceptance_authority.value),
+                        "handoff_boundary": contract.handoff_boundary,
+                    }
+                    for contract in SPECIALIZATION_CATALOG.values()
+                    if contract.id
+                    not in {
+                        AgentSpecialization.REQUIREMENTS_CLARIFICATION,
+                        AgentSpecialization.TEAM_PLANNING,
+                    }
+                ],
+                "specialization_catalog_version": SPECIALIZATION_CATALOG_VERSION,
                 "model_routing": (
                     {
                         "mode": self.policy.model_routing.mode.value,

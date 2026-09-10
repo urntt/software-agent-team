@@ -84,8 +84,11 @@ from software_agent_team.submissions import (
 )
 from software_agent_team.teams import (
     AgentCapability,
+    AgentSpecialization,
     capability_for_legacy_role,
-    expected_output_for_capability,
+    default_specialization_for_capability,
+    expected_output_for_specialization,
+    specialization_contract,
 )
 
 DEFAULT_PROCESS_SHUTDOWN_GRACE_SECONDS = 35
@@ -599,6 +602,7 @@ class AgentExecutionRequest(BaseModel):
     role: AgentRole | None = None
     agent_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     capability: AgentCapability
+    specialization: AgentSpecialization
     expected_kind: ArtifactKind
     prompt: str = Field(min_length=1)
     timeout_seconds: int = Field(ge=0)
@@ -622,6 +626,29 @@ class AgentExecutionRequest(BaseModel):
             return payload
         payload.setdefault("agent_id", role.value)
         payload.setdefault("capability", capability_for_legacy_role(role).value)
+        payload.setdefault(
+            "specialization",
+            default_specialization_for_capability(
+                capability_for_legacy_role(role)
+            ).value,
+        )
+        return payload
+
+    @model_validator(mode="before")
+    @classmethod
+    def populate_dynamic_compatibility_specialization(cls, value: object) -> object:
+        """Keep pre-specialization dynamic callers on their exact old contract."""
+
+        if not isinstance(value, dict) or value.get("specialization") is not None:
+            return value
+        payload = dict(value)
+        try:
+            capability = AgentCapability(payload.get("capability"))
+        except (TypeError, ValueError):
+            return payload
+        payload["specialization"] = default_specialization_for_capability(
+            capability
+        ).value
         return payload
 
     @field_validator("prompt")
@@ -649,17 +676,28 @@ class AgentExecutionRequest(BaseModel):
     def validate_output_contract(self) -> Self:
         """Keep run identity, capability, and response schema coherent."""
 
+        if (
+            self.capability
+            not in specialization_contract(self.specialization).compatible_capabilities
+        ):
+            raise ValueError("Agent capability and specialization are incompatible")
         if self.role is not None:
             if self.agent_id != self.role.value:
                 raise ValueError("legacy role identity must match its Agent ID")
             if self.capability is not capability_for_legacy_role(self.role):
                 raise ValueError("legacy role and Agent capability are inconsistent")
+            if self.specialization is not default_specialization_for_capability(
+                self.capability
+            ):
+                raise ValueError("legacy role and specialization are inconsistent")
             validate_role_artifact_kind(self.role, self.expected_kind)
-        elif self.expected_kind is not expected_output_for_capability(self.capability):
+        elif self.expected_kind is not expected_output_for_specialization(
+            self.specialization
+        ):
             raise ValueError(
-                f"Agent capability {self.capability.value} cannot produce "
+                f"Agent specialization {self.specialization.value} cannot produce "
                 f"{self.expected_kind.value}; expected "
-                f"{expected_output_for_capability(self.capability).value}"
+                f"{expected_output_for_specialization(self.specialization).value}"
             )
         if self.capability is AgentCapability.PLANNING and self.iteration != 1:
             raise ValueError("the implementation plan is produced only in iteration 1")
@@ -706,6 +744,7 @@ class AgentExecutionTelemetry(BaseModel):
     role: AgentRole | None = None
     agent_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     capability: AgentCapability
+    specialization: AgentSpecialization
     session_key: str = Field(min_length=1)
     command: tuple[str, ...] = Field(min_length=1)
     started_at: datetime
@@ -754,6 +793,29 @@ class AgentExecutionTelemetry(BaseModel):
             return payload
         payload.setdefault("agent_id", role.value)
         payload.setdefault("capability", capability_for_legacy_role(role).value)
+        payload.setdefault(
+            "specialization",
+            default_specialization_for_capability(
+                capability_for_legacy_role(role)
+            ).value,
+        )
+        return payload
+
+    @model_validator(mode="before")
+    @classmethod
+    def populate_dynamic_compatibility_specialization(cls, value: object) -> object:
+        """Read telemetry emitted before specialization identity was added."""
+
+        if not isinstance(value, dict) or value.get("specialization") is not None:
+            return value
+        payload = dict(value)
+        try:
+            capability = AgentCapability(payload.get("capability"))
+        except (TypeError, ValueError):
+            return payload
+        payload["specialization"] = default_specialization_for_capability(
+            capability
+        ).value
         return payload
 
     @field_validator("started_at", "finished_at")
@@ -788,8 +850,15 @@ class AgentExecutionTelemetry(BaseModel):
         if self.role is not None and (
             self.agent_id != self.role.value
             or self.capability is not capability_for_legacy_role(self.role)
+            or self.specialization
+            is not default_specialization_for_capability(self.capability)
         ):
             raise ValueError("telemetry legacy role identity is inconsistent")
+        if (
+            self.capability
+            not in specialization_contract(self.specialization).compatible_capabilities
+        ):
+            raise ValueError("telemetry capability and specialization are incompatible")
         if self.finished_at < self.started_at:
             raise ValueError("execution cannot finish before it starts")
         if self.timed_out and self.interrupted:
@@ -926,6 +995,7 @@ def execution_exception_result(
             role=request.role,
             agent_id=request.agent_id,
             capability=request.capability,
+            specialization=request.specialization,
             session_key=request.session_key,
             command=("agent-executor",),
             started_at=started_at,
@@ -3425,6 +3495,7 @@ class OpenClawSubprocessExecutor:
             role=request.role,
             agent_id=request.agent_id,
             capability=request.capability,
+            specialization=request.specialization,
             session_key=request.session_key,
             command=command,
             started_at=started_at,
@@ -3943,6 +4014,7 @@ class ScriptedAgentExecutor:
             role=request.role,
             agent_id=request.agent_id,
             capability=request.capability,
+            specialization=request.specialization,
             session_key=request.session_key,
             command=("scripted-agent", request.agent_id),
             started_at=now,

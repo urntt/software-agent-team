@@ -97,8 +97,9 @@ On first use, SAT guides you through:
    requirement-to-evidence traceability, acceptance criteria, a compact count
    of fixed controller-owned details separated from additional task constraints,
    Agent work assignments with their controller-derived write or read-only
-   authority, proposed Agents, dependencies, permissions, explicit Review entry
-   obligations for absolute guarantees,
+   authority, proposed Agents, task-specific roles, versioned specializations,
+   dependencies, permissions, typed outputs, acceptance authority, explicit
+   Review entry obligations for absolute guarantees,
    resolved model profiles and fallback authority, time authority and liveness
    policy, concurrency, iterations, and budgets;
 8. An option to show or hide the complete fixed policy, execution-profile
@@ -108,9 +109,12 @@ On first use, SAT guides you through:
    edit, or cancellation before any execution Agent is created.
 
 After approval, SAT first persists a second self-check covering every approved
-route, Agent capability, permission, runtime, sandbox, workspace, and delivery
+route, Agent specialization/capability combination, packaged specialization
+prompt, permission, typed output, runtime, sandbox, workspace, and delivery
 boundary. It creates only the task-defined Agents in that exact plan after the
-required checks pass.
+required checks pass. Security and end-user-experience assessment use distinct
+typed contracts while remaining read-only; a task-specific label cannot grant
+either authority or expand tools.
 The controller derives actual launch order from the approved dependency graph,
 enforces concurrency and shared-workspace safety, monitors provider activity and
 any user-authorized whole-run deadline, records verified Git snapshots and

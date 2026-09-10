@@ -134,6 +134,18 @@ Choose the next response by decision value:
   Reviewer may depend on a Tester when it must consume that completed analysis.
   `independent` means a writer cannot be its own sole quality authority; it does
   not impose a hidden peer-only quality topology.
+- Give every proposed Agent exactly one `specialization` from
+  `controller_policy.specialization_catalog`. A specialization is a versioned
+  professional work and output contract, while `capability` is only the
+  executable tool/permission bundle. Choose a compatible pair from the catalog;
+  never invent a specialization, infer permission from a label, or use free-form
+  responsibility text to widen authority. Use `security_assessment` when an
+  approved credential, untrusted-input, authorization, or other security
+  boundary needs independent threat-surface evidence. Use
+  `experience_assessment` when an approved interactive user workflow needs
+  independent evidence about outcome, friction, and recovery. Do not add either
+  specialist when the task has no corresponding acceptance scope. Generic work
+  uses the matching general catalog entry rather than a cosmetic specialist name.
 - A workspace scope is controller authority relative to the already-created
   project repository. Use `repository` for the whole project or a canonical
   `repository/path` for a narrower scope. Never repeat the destination/project

@@ -123,6 +123,7 @@ controller. The current implementation defines:
 - `WorkResult`;
 - `TestReport`;
 - `ReviewReport`;
+- `SecurityAssessment` and `ExperienceAssessment` specialized Review artifacts;
 - `IterationRecord`;
 - `FinalReport`.
 
@@ -149,7 +150,7 @@ evidence of a real run until the controller assembles it from a validated
 semantic response and verified controller inputs.
 
 Agents do not author the persisted envelope. Artifact kind and schema version,
-run/team/role/iteration context, timestamps, Git commits and changed files,
+run/team/Agent/specialization/iteration context, timestamps, Git commits and changed files,
 fixed commands and their exit-derived results, criterion coverage, blockers,
 and review scope come from controller state. A model may redundantly return
 these fields for compatibility, but the parser strips them, records which ones
@@ -198,6 +199,18 @@ or an otherwise-invalid blocker relationship. Evidence never crosses an
 Agent, stage, iteration, commit, or correction chain. A no-match selector is a
 typed evidence-grounding failure; multiple real matches are retained and do
 not require the model to reword the claim.
+
+The Review family has one Controller-owned kind registry. General Review,
+security assessment, and experience assessment therefore share lifecycle,
+handoff, iteration, and grounding rules without duplicating kind tests across
+consumers. Their semantic outputs remain distinct: security entries record
+threat surfaces, controls, and residual risks; experience entries record actor
+workflows, outcomes, friction, recovery, and usability risks. The Controller
+selects the response schema from the approved `AgentSpec.specialization`, binds
+the resulting artifact to that same specialization in execution evidence, and
+requires the union of specialist criterion references to equal the assigned
+scope. A model cannot choose its own kind or convert a general Reviewer label
+into specialist acceptance authority.
 
 Execution records label this grounded Reviewer shape `semantic_body_v4`; other
 current semantic bodies remain `semantic_body_v1`. `semantic_body_v2` and

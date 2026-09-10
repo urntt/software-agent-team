@@ -36,7 +36,7 @@ from software_agent_team.submissions import (
 )
 from software_agent_team.versioning import SoftwareVersionReport
 
-ARTIFACT_SCHEMA_VERSION = 12
+ARTIFACT_SCHEMA_VERSION = 13
 MINIMUM_READABLE_ARTIFACT_SCHEMA_VERSION = 2
 COMMIT_PATTERN = r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
 AGENT_ID_PATTERN = r"^[a-z][a-z0-9_]*$"
@@ -158,10 +158,21 @@ class ArtifactKind(StrEnum):
     WORK_RESULT = "work_result"
     TEST_REPORT = "test_report"
     REVIEW_REPORT = "review_report"
+    SECURITY_ASSESSMENT = "security_assessment"
+    EXPERIENCE_ASSESSMENT = "experience_assessment"
     ITERATION_RECORD = "iteration_record"
     FINAL_REPORT = "final_report"
     HANDOFF_ENVELOPE = "handoff_envelope"
     AGENT_EXECUTION_RECORD = "agent_execution_record"
+
+
+REVIEW_ARTIFACT_KINDS = frozenset(
+    {
+        ArtifactKind.REVIEW_REPORT,
+        ArtifactKind.SECURITY_ASSESSMENT,
+        ArtifactKind.EXPERIENCE_ASSESSMENT,
+    }
+)
 
 
 class CheckStatus(StrEnum):
@@ -574,9 +585,9 @@ class HandoffEnvelope(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, 9, 10, 11, ARTIFACT_SCHEMA_VERSION] = (
-        ARTIFACT_SCHEMA_VERSION
-    )
+    schema_version: Literal[
+        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, ARTIFACT_SCHEMA_VERSION
+    ] = ARTIFACT_SCHEMA_VERSION
     kind: Literal[ArtifactKind.HANDOFF_ENVELOPE] = ArtifactKind.HANDOFF_ENVELOPE
     run_id: str = Field(min_length=1, pattern=r"^[a-z0-9][a-z0-9_-]*$")
     team_id: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9_]*$")
@@ -639,9 +650,9 @@ class PhaseArtifact(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, 9, 10, 11, ARTIFACT_SCHEMA_VERSION] = (
-        ARTIFACT_SCHEMA_VERSION
-    )
+    schema_version: Literal[
+        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, ARTIFACT_SCHEMA_VERSION
+    ] = ARTIFACT_SCHEMA_VERSION
     kind: ArtifactKind
     run_id: str = Field(min_length=1, pattern=r"^[a-z0-9][a-z0-9_-]*$")
     team_id: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9_]*$")
@@ -872,9 +883,9 @@ class AgentExecutionRecord(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, 9, 10, 11, ARTIFACT_SCHEMA_VERSION] = (
-        ARTIFACT_SCHEMA_VERSION
-    )
+    schema_version: Literal[
+        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, ARTIFACT_SCHEMA_VERSION
+    ] = ARTIFACT_SCHEMA_VERSION
     kind: Literal[ArtifactKind.AGENT_EXECUTION_RECORD] = (
         ArtifactKind.AGENT_EXECUTION_RECORD
     )
@@ -885,6 +896,11 @@ class AgentExecutionRecord(BaseModel):
     attempt: int = Field(default=1, ge=1)
     agent_id: str = Field(pattern=AGENT_ID_PATTERN)
     capability: str = Field(pattern=AGENT_ID_PATTERN)
+    specialization: str | None = Field(
+        default=None,
+        pattern=AGENT_ID_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
     execution_status: AgentExecutionStatus | None = None
     session_key: str = Field(min_length=1)
     session_id: str | None = Field(default=None, min_length=1)
@@ -986,6 +1002,7 @@ class AgentExecutionRecord(BaseModel):
         "session_id",
         "model",
         "provider",
+        "specialization",
         "tool_evidence_error",
         "error",
     )
@@ -1029,6 +1046,8 @@ class AgentExecutionRecord(BaseModel):
     def validate_execution(self) -> Self:
         """Keep timing, exit, timeout, and response evidence coherent."""
 
+        if self.schema_version >= 13 and self.specialization is None:
+            raise ValueError("current execution records require specialization")
         if self.finished_at < self.started_at:
             raise ValueError("execution finish time cannot precede start time")
         if (self.stage_timeout_seconds is None) != (
@@ -1862,6 +1881,154 @@ class ReviewReport(IterationArtifact):
         return self
 
 
+class SecuritySurfaceAssessment(BaseModel):
+    """One criterion-bound security surface evaluated by a specialist."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: str = Field(pattern=r"^SECURITY_[A-Z0-9_]+$")
+    surface: str = Field(min_length=1, max_length=1000)
+    threat: str = Field(min_length=1, max_length=1000)
+    control: str = Field(min_length=1, max_length=1000)
+    status: ReviewCriterionStatus
+    evidence: str = Field(min_length=1, max_length=2000)
+    criterion_ids: tuple[str, ...] = Field(min_length=1)
+
+    @field_validator("surface", "threat", "control", "evidence")
+    @classmethod
+    def require_clean_text(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("security assessment text must not be blank")
+        return cleaned
+
+    @field_validator("criterion_ids")
+    @classmethod
+    def require_clean_criteria(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        return _require_clean_unique_items(values)
+
+
+class ExperienceWorkflowAssessment(BaseModel):
+    """One criterion-bound end-user workflow evaluated by a specialist."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: str = Field(pattern=r"^EXPERIENCE_[A-Z0-9_]+$")
+    actor: str = Field(min_length=1, max_length=500)
+    workflow: str = Field(min_length=1, max_length=1000)
+    outcome: str = Field(min_length=1, max_length=1000)
+    friction: str = Field(min_length=1, max_length=1000)
+    recovery: str = Field(min_length=1, max_length=1000)
+    status: ReviewCriterionStatus
+    evidence: str = Field(min_length=1, max_length=2000)
+    criterion_ids: tuple[str, ...] = Field(min_length=1)
+
+    @field_validator(
+        "actor",
+        "workflow",
+        "outcome",
+        "friction",
+        "recovery",
+        "evidence",
+    )
+    @classmethod
+    def require_clean_text(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("experience assessment text must not be blank")
+        return cleaned
+
+    @field_validator("criterion_ids")
+    @classmethod
+    def require_clean_criteria(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        return _require_clean_unique_items(values)
+
+
+def _validate_specialized_assessment_scope(
+    *,
+    item_ids: tuple[str, ...],
+    item_statuses: tuple[ReviewCriterionStatus, ...],
+    item_criterion_ids: tuple[tuple[str, ...], ...],
+    reviewed_criteria: tuple[str, ...],
+    verdict: ReviewVerdict,
+    label: str,
+) -> None:
+    """Keep one specialized assessment attributable to its approved scope."""
+
+    if len(item_ids) != len(set(item_ids)):
+        raise ValueError(f"{label} IDs must be unique")
+    referenced = {
+        criterion_id
+        for criterion_ids in item_criterion_ids
+        for criterion_id in criterion_ids
+    }
+    if not referenced.issubset(set(reviewed_criteria)):
+        raise ValueError(f"{label} references criteria outside its review scope")
+    blocked = any(status is ReviewCriterionStatus.BLOCKED for status in item_statuses)
+    if verdict is ReviewVerdict.ACCEPT and blocked:
+        raise ValueError(f"accepted {label} requires every specialist check to pass")
+    if verdict is not ReviewVerdict.ACCEPT and not blocked:
+        raise ValueError(f"non-accepted {label} requires a blocked specialist check")
+
+
+class SecurityAssessment(ReviewReport):
+    """Independent security assessment with explicit threat-surface semantics."""
+
+    kind: Literal[ArtifactKind.SECURITY_ASSESSMENT] = ArtifactKind.SECURITY_ASSESSMENT
+    surfaces: tuple[SecuritySurfaceAssessment, ...] = Field(min_length=1)
+    residual_risks: tuple[str, ...] = ()
+
+    @field_validator("residual_risks")
+    @classmethod
+    def require_clean_residual_risks(
+        cls,
+        values: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        return _require_clean_unique_items(values)
+
+    @model_validator(mode="after")
+    def validate_specialized_scope(self) -> Self:
+        _validate_specialized_assessment_scope(
+            item_ids=tuple(item.id for item in self.surfaces),
+            item_statuses=tuple(item.status for item in self.surfaces),
+            item_criterion_ids=tuple(item.criterion_ids for item in self.surfaces),
+            reviewed_criteria=self.reviewed_criteria,
+            verdict=self.verdict,
+            label="security assessment",
+        )
+        return self
+
+
+class ExperienceAssessment(ReviewReport):
+    """Independent assessment of an approved end-user workflow."""
+
+    kind: Literal[ArtifactKind.EXPERIENCE_ASSESSMENT] = (
+        ArtifactKind.EXPERIENCE_ASSESSMENT
+    )
+    workflows: tuple[ExperienceWorkflowAssessment, ...] = Field(min_length=1)
+    usability_risks: tuple[str, ...] = ()
+
+    @field_validator("usability_risks")
+    @classmethod
+    def require_clean_usability_risks(
+        cls,
+        values: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        return _require_clean_unique_items(values)
+
+    @model_validator(mode="after")
+    def validate_specialized_scope(self) -> Self:
+        _validate_specialized_assessment_scope(
+            item_ids=tuple(item.id for item in self.workflows),
+            item_statuses=tuple(item.status for item in self.workflows),
+            item_criterion_ids=tuple(item.criterion_ids for item in self.workflows),
+            reviewed_criteria=self.reviewed_criteria,
+            verdict=self.verdict,
+            label="experience assessment",
+        )
+        return self
+
+
 def resolve_acceptance_results(
     test: TestReport,
     reviews: ReviewReport | tuple[ReviewReport, ...],
@@ -1950,7 +2117,6 @@ class IterationRecord(IterationArtifact):
         expected_collections = {
             "work_results": ArtifactKind.WORK_RESULT,
             "test_reports": ArtifactKind.TEST_REPORT,
-            "review_reports": ArtifactKind.REVIEW_REPORT,
         }
         for field, expected in expected_collections.items():
             references = getattr(self, field)
@@ -1959,6 +2125,14 @@ class IterationRecord(IterationArtifact):
             paths = [reference.path for reference in references]
             if len(paths) != len(set(paths)):
                 raise ValueError(f"{field} references must be unique")
+        if any(
+            reference.kind not in REVIEW_ARTIFACT_KINDS
+            for reference in self.review_reports
+        ):
+            raise ValueError("review_reports must reference only quality assessments")
+        review_paths = [reference.path for reference in self.review_reports]
+        if len(review_paths) != len(set(review_paths)):
+            raise ValueError("review_reports references must be unique")
         if self.input_commit == self.output_commit:
             raise ValueError("iteration output commit must differ from input")
         has_blocker = bool(self.blocking_finding_ids or self.blocking_reasons)
@@ -2033,6 +2207,8 @@ type PersistedArtifact = (
     | WorkResult
     | TestReport
     | ReviewReport
+    | SecurityAssessment
+    | ExperienceAssessment
     | IterationRecord
     | FinalReport
     | HandoffEnvelope
@@ -2045,6 +2221,8 @@ ARTIFACT_MODELS: dict[ArtifactKind, type[PersistedArtifact]] = {
     ArtifactKind.WORK_RESULT: WorkResult,
     ArtifactKind.TEST_REPORT: TestReport,
     ArtifactKind.REVIEW_REPORT: ReviewReport,
+    ArtifactKind.SECURITY_ASSESSMENT: SecurityAssessment,
+    ArtifactKind.EXPERIENCE_ASSESSMENT: ExperienceAssessment,
     ArtifactKind.ITERATION_RECORD: IterationRecord,
     ArtifactKind.FINAL_REPORT: FinalReport,
     ArtifactKind.HANDOFF_ENVELOPE: HandoffEnvelope,
@@ -2073,6 +2251,7 @@ def validate_artifact_context(
     task_brief: TaskBrief,
     team_id: str,
     team_agents: dict[str, str],
+    team_specializations: dict[str, str] | None = None,
     iteration_limit: int,
     team_stages: dict[str, set[str]] | None = None,
 ) -> None:
@@ -2115,6 +2294,20 @@ def validate_artifact_context(
             and artifact.capability != team_agents[agent_id]
         ):
             raise ValueError("execution capability differs from its approved AgentSpec")
+        if (
+            isinstance(artifact, AgentExecutionRecord)
+            and team_specializations is not None
+        ):
+            expected_specialization = team_specializations.get(agent_id)
+            if artifact.schema_version >= 13 and artifact.specialization is None:
+                raise ValueError("current execution record requires specialization")
+            if (
+                artifact.specialization is not None
+                and artifact.specialization != expected_specialization
+            ):
+                raise ValueError(
+                    "execution specialization differs from its approved AgentSpec"
+                )
 
     if isinstance(artifact, HandoffEnvelope):
         if artifact.created_at is None:
@@ -2180,6 +2373,18 @@ def validate_artifact_context(
             for criterion_id in finding.criterion_ids
         }
         referenced_criteria.update(artifact.reviewed_criteria)
+        if isinstance(artifact, SecurityAssessment):
+            referenced_criteria.update(
+                criterion_id
+                for surface in artifact.surfaces
+                for criterion_id in surface.criterion_ids
+            )
+        elif isinstance(artifact, ExperienceAssessment):
+            referenced_criteria.update(
+                criterion_id
+                for workflow in artifact.workflows
+                for criterion_id in workflow.criterion_ids
+            )
         if not referenced_criteria.issubset(expected_criteria):
             raise ValueError("review report references an unknown criterion")
     elif isinstance(artifact, FinalReport):

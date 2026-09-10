@@ -466,6 +466,7 @@ class ArtifactStore:
             task_brief=self.task_brief,
             team_id=self.team_plan.team_id,
             team_agents=self.team_plan.agent_capabilities,
+            team_specializations=self.team_plan.agent_specializations,
             iteration_limit=self.iteration_limit,
             team_stages=self.team_plan.stage_agents,
         )

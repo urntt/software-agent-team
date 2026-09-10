@@ -12,12 +12,14 @@ from difflib import SequenceMatcher
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from software_agent_team.artifacts import (
+    REVIEW_ARTIFACT_KINDS,
     AgentRole,
     AgentToolCallEvidence,
     AgentToolCallOutcome,
     AgentToolEvidenceStatus,
     ArtifactKind,
     CommandEvidence,
+    ExperienceWorkflowAssessment,
     ImplementationPlan,
     PlanTask,
     ReviewBoundaryCheck,
@@ -30,6 +32,7 @@ from software_agent_team.artifacts import (
     ReviewTerminationReason,
     ReviewToolEvidenceReference,
     ReviewVerdict,
+    SecuritySurfaceAssessment,
     TaskBrief,
     validate_artifact_context,
 )
@@ -437,11 +440,10 @@ def _ground_review_tool_evidence(
     """Bind fragments to eligible Reviewer results and deterministic commands."""
 
     if not body.criterion_assessments:
-        return GroundedReviewReportResponse(
-            verdict=body.verdict,
-            termination_reason=body.termination_reason,
+        return _build_grounded_review_response(
+            body,
+            criterion_assessments=(),
             findings=body.findings,
-            summary=body.summary,
         )
     telemetry = result.telemetry
     if telemetry.tool_evidence_status is AgentToolEvidenceStatus.INVALID:
@@ -751,12 +753,10 @@ def _ground_review_tool_evidence(
                 criterion_ids=(criterion_id,),
             )
         )
-    return GroundedReviewReportResponse(
-        verdict=body.verdict,
-        termination_reason=body.termination_reason,
+    return _build_grounded_review_response(
+        body,
         criterion_assessments=grounded,
         findings=_bind_unambiguous_blocking_finding_scope(tuple(findings), grounded),
-        summary=body.summary,
     )
 
 
@@ -1170,12 +1170,90 @@ class GroundedReviewReportResponse(BaseModel):
         return cleaned
 
 
+class SecurityAssessmentResponse(ReviewReportResponse):
+    """Security-specialist semantics beyond the shared review contract."""
+
+    surfaces: tuple[SecuritySurfaceAssessment, ...] = Field(min_length=1)
+    residual_risks: tuple[str, ...] = ()
+
+    @field_validator("residual_risks")
+    @classmethod
+    def require_clean_residual_risks(
+        cls,
+        values: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        return _clean_unique_text(values)
+
+
+class GroundedSecurityAssessmentResponse(GroundedReviewReportResponse):
+    """Security semantics after controller evidence binding."""
+
+    surfaces: tuple[SecuritySurfaceAssessment, ...] = Field(min_length=1)
+    residual_risks: tuple[str, ...] = ()
+
+
+class ExperienceAssessmentResponse(ReviewReportResponse):
+    """User-experience specialist semantics beyond shared review fields."""
+
+    workflows: tuple[ExperienceWorkflowAssessment, ...] = Field(min_length=1)
+    usability_risks: tuple[str, ...] = ()
+
+    @field_validator("usability_risks")
+    @classmethod
+    def require_clean_usability_risks(
+        cls,
+        values: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        return _clean_unique_text(values)
+
+
+class GroundedExperienceAssessmentResponse(GroundedReviewReportResponse):
+    """User-experience semantics after controller evidence binding."""
+
+    workflows: tuple[ExperienceWorkflowAssessment, ...] = Field(min_length=1)
+    usability_risks: tuple[str, ...] = ()
+
+
+def _build_grounded_review_response(
+    body: ReviewReportResponse,
+    *,
+    criterion_assessments: tuple[ReviewCriterionAssessment, ...],
+    findings: tuple[ReviewFinding, ...],
+) -> GroundedReviewReportResponse:
+    """Preserve the exact specialization while binding shared review evidence."""
+
+    common = {
+        "verdict": body.verdict,
+        "termination_reason": body.termination_reason,
+        "criterion_assessments": criterion_assessments,
+        "findings": findings,
+        "summary": body.summary,
+    }
+    if isinstance(body, SecurityAssessmentResponse):
+        return GroundedSecurityAssessmentResponse(
+            **common,
+            surfaces=body.surfaces,
+            residual_risks=body.residual_risks,
+        )
+    if isinstance(body, ExperienceAssessmentResponse):
+        return GroundedExperienceAssessmentResponse(
+            **common,
+            workflows=body.workflows,
+            usability_risks=body.usability_risks,
+        )
+    return GroundedReviewReportResponse(**common)
+
+
 type AgentResponseBody = (
     ImplementationPlanResponse
     | WorkResultResponse
     | TestReportResponse
     | ReviewReportResponse
     | GroundedReviewReportResponse
+    | SecurityAssessmentResponse
+    | GroundedSecurityAssessmentResponse
+    | ExperienceAssessmentResponse
+    | GroundedExperienceAssessmentResponse
 )
 
 
@@ -1184,6 +1262,8 @@ RESPONSE_BODY_MODELS: dict[ArtifactKind, type[AgentResponseBody]] = {
     ArtifactKind.WORK_RESULT: WorkResultResponse,
     ArtifactKind.TEST_REPORT: TestReportResponse,
     ArtifactKind.REVIEW_REPORT: ReviewReportResponse,
+    ArtifactKind.SECURITY_ASSESSMENT: SecurityAssessmentResponse,
+    ArtifactKind.EXPERIENCE_ASSESSMENT: ExperienceAssessmentResponse,
 }
 
 _COMMON_CONTROLLER_FIELDS = {
@@ -1212,6 +1292,12 @@ _CONTROLLER_FIELDS: dict[ArtifactKind, frozenset[str]] = {
         }
     ),
     ArtifactKind.REVIEW_REPORT: frozenset(
+        _COMMON_CONTROLLER_FIELDS | {"input_commit", "reviewed_criteria"}
+    ),
+    ArtifactKind.SECURITY_ASSESSMENT: frozenset(
+        _COMMON_CONTROLLER_FIELDS | {"input_commit", "reviewed_criteria"}
+    ),
+    ArtifactKind.EXPERIENCE_ASSESSMENT: frozenset(
         _COMMON_CONTROLLER_FIELDS | {"input_commit", "reviewed_criteria"}
     ),
 }
@@ -1276,7 +1362,7 @@ def _parse_semantic_payload(
         key: item for key, item in payload.items() if key not in controller_fields
     }
     normalizations: list[str] = []
-    if expected_kind is ArtifactKind.REVIEW_REPORT and task_brief is not None:
+    if expected_kind in REVIEW_ARTIFACT_KINDS and task_brief is not None:
         semantic_payload, boundary_normalizations = (
             _normalize_review_boundary_scope_payload(
                 semantic_payload,
@@ -1737,6 +1823,10 @@ def parse_agent_response(
         raise AgentArtifactResponseError(
             "execution telemetry capability does not match request"
         )
+    if result.telemetry.specialization is not request.specialization:
+        raise AgentArtifactResponseError(
+            "execution telemetry specialization does not match request"
+        )
     if result.telemetry.role is not request.role:
         raise AgentArtifactResponseError(
             "execution telemetry role does not match request"
@@ -1828,6 +1918,10 @@ def parse_dynamic_agent_response(
         raise AgentArtifactResponseError(
             "execution telemetry capability does not match request"
         )
+    if result.telemetry.specialization is not request.specialization:
+        raise AgentArtifactResponseError(
+            "execution telemetry specialization does not match request"
+        )
     if result.telemetry.session_key != request.session_key:
         raise AgentArtifactResponseError(
             "execution telemetry session does not match request"
@@ -1850,6 +1944,7 @@ def parse_dynamic_agent_response(
         raise AgentArtifactResponseError(str(error)) from error
     if (
         request.capability is not agent.capability
+        or request.specialization is not agent.specialization
         or request.expected_kind is not agent.expected_output
     ):
         raise AgentArtifactResponseError(
@@ -1967,6 +2062,27 @@ def parse_dynamic_agent_response(
                 raise ValueError(
                     "criterion assessments must exactly cover assigned review scope"
                     + (f" ({'; '.join(detail)})" if detail else "")
+                )
+            specialized_scope: set[str] | None = None
+            if isinstance(body, GroundedSecurityAssessmentResponse):
+                specialized_scope = {
+                    criterion_id
+                    for surface in body.surfaces
+                    for criterion_id in surface.criterion_ids
+                }
+            elif isinstance(body, GroundedExperienceAssessmentResponse):
+                specialized_scope = {
+                    criterion_id
+                    for workflow in body.workflows
+                    for criterion_id in workflow.criterion_ids
+                }
+            if (
+                specialized_scope is not None
+                and specialized_scope != expected_review_scope
+            ):
+                raise ValueError(
+                    "specialized assessment entries must exactly cover assigned "
+                    "review scope"
                 )
             criteria_by_id = {
                 criterion.id: criterion for criterion in task_brief.acceptance_criteria

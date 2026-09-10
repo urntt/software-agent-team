@@ -8,6 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 from software_agent_team.artifacts import (
+    ARTIFACT_SCHEMA_VERSION,
     AgentExecutionRecord,
     AgentExecutionStatus,
     AgentToolCallEvidence,
@@ -187,6 +188,7 @@ def valid_execution_payload() -> dict[str, object]:
         "stage": "implement",
         "agent_id": "generalist_developer",
         "capability": "implementation",
+        "specialization": "product_implementation",
         "session_key": "agent:generalist_developer:test-session",
         "session_id": "session-generalist-developer",
         "model": "test-provider/test-model",
@@ -283,7 +285,21 @@ def test_valid_agent_execution_record_is_accepted() -> None:
 
     assert record.agent_id == "generalist_developer"
     assert record.capability == "implementation"
+    assert record.specialization == "product_implementation"
     assert record.duration_ms == 2000
+
+
+def test_current_execution_requires_specialization_but_reads_schema_twelve() -> None:
+    payload = valid_execution_payload()
+    payload.pop("specialization")
+
+    with pytest.raises(ValidationError, match="require specialization"):
+        AgentExecutionRecord.model_validate(payload)
+
+    payload["schema_version"] = 12
+    legacy = AgentExecutionRecord.model_validate(payload)
+    assert legacy.specialization is None
+    assert "specialization" not in legacy.model_dump(mode="json")
 
 
 def test_schema_two_execution_record_remains_readable_without_correction_evidence() -> (
@@ -416,7 +432,7 @@ def test_current_lifecycle_records_the_pre_invocation_baseline() -> None:
 
     restored = AgentExecutionRecord.model_validate(payload)
 
-    assert restored.schema_version == 12
+    assert restored.schema_version == ARTIFACT_SCHEMA_VERSION
     assert restored.invocation_lifecycle is not None
     assert restored.invocation_lifecycle.schema_version == 5
     assert (
@@ -624,7 +640,7 @@ def test_runtime_rejections_require_new_schema_and_captured_provenance() -> None
         }
     )
     record = AgentExecutionRecord.model_validate(payload)
-    assert record.schema_version == 12
+    assert record.schema_version == ARTIFACT_SCHEMA_VERSION
     assert record.tool_calls == ()
     assert len(record.runtime_rejections) == 1
     for version in range(2, 10):
@@ -671,7 +687,7 @@ def test_deferred_tool_evidence_requires_artifact_schema_eight() -> None:
 
     current = AgentExecutionRecord.model_validate(payload)
 
-    assert current.schema_version == 12
+    assert current.schema_version == ARTIFACT_SCHEMA_VERSION
     assert current.tool_calls[0].outcome is AgentToolCallOutcome.DEFERRED
 
     payload["schema_version"] = 7

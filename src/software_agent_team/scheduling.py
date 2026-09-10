@@ -123,6 +123,7 @@ class ScheduledAgentRecord(BaseModel):
 
     agent_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     capability: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
+    specialization: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     stage_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     dependencies: tuple[str, ...] = ()
     state: ScheduledAgentState
@@ -534,6 +535,7 @@ class DagScheduler:
                     records[agent.id] = ScheduledAgentRecord(
                         agent_id=agent.id,
                         capability=agent.capability.value,
+                        specialization=agent.specialization.value,
                         stage_id=agent.stage_id,
                         dependencies=agent.dependencies,
                         state=state,
@@ -573,6 +575,7 @@ class DagScheduler:
                 records[agent.id] = ScheduledAgentRecord(
                     agent_id=agent.id,
                     capability=agent.capability.value,
+                    specialization=agent.specialization.value,
                     stage_id=agent.stage_id,
                     dependencies=agent.dependencies,
                     state=skipped_state,

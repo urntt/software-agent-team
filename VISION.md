@@ -307,6 +307,12 @@ when code, usability evidence, or controlled experiments justify a replacement.
 - Role names and team membership are task-defined on the product surface. The
   plan must still define attributable responsibilities, typed inputs and
   outputs, dependencies, permissions, budgets, and quality independence.
+- Task-specific labels and responsibilities are separate from a versioned
+  Controller-owned specialization catalog. A specialization selects professional
+  purpose, prompt module, typed output, handoff boundary, and acceptance claim
+  class; a compatible executable capability separately selects tools and the
+  permission profile. Security and experience assessment therefore share the
+  read-only Review capability while producing distinct grounded artifacts.
 
 ### Isolation and Permissions
 
@@ -334,8 +340,9 @@ when code, usability evidence, or controlled experiments justify a replacement.
   read-only permission profiles. Coding and integration responsibilities may
   use controlled writable profiles only inside their assigned workspace.
 - An Agent label or model proposal never grants a permission. The controller
-  validates every AgentSpec against versioned capability profiles before
-  creating a session.
+  validates every AgentSpec against the versioned specialization catalog and
+  capability profiles before creating a session. It also verifies the packaged
+  prompt module and typed-output binding before Agent creation.
 - A read-only OpenClaw workspace is mounted at `/agent`; a writable workspace
   is mounted at `/workspace`.
 - Controlled roles load no ambient runtime skills, so unrelated skill prompts
@@ -427,9 +434,10 @@ list.
 The product flow uses a bootstrap Planning session to propose a
 run-scoped TeamPlan from the confirmed task. The user reviews and may revise
 the plan; the deterministic controller validates and creates its Agents. The
-number and names of execution roles therefore vary with the work, while
-permission profiles, quality independence, budgets, evidence, and lifecycle
-authority remain fixed system boundaries.
+number, names, and approved catalog specializations of execution roles therefore
+vary with the work. Permission profiles, catalog compatibility, quality
+independence, budgets, evidence, and lifecycle authority remain fixed system
+boundaries; role labels never grant them.
 
 The detailed contract and migration path are defined in
 [`docs/adaptive-orchestration.md`](docs/adaptive-orchestration.md).
@@ -527,6 +535,7 @@ change in the same controlled trial.
 | Use a local-first CLI instead of a Web service | The first users can inspect Git and terminal evidence, while local execution keeps credentials, workspaces, and experimental state under their control. |
 | Keep the Python controller authoritative | Lifecycle, budgets, evidence checks, and termination must be deterministic rather than dependent on an Agent's self-report. |
 | Derive execution roles from the task, then let the controller create them | A fixed bootstrap Planning capability can propose a TeamPlan after dialogue, but it cannot spawn Agents. User approval plus deterministic validation preserves authority, budget, permission, and audit boundaries while avoiding one permanent product role list. |
+| Separate task-specific role identity from executable capability | A free-form label is necessary to explain why one Agent exists for this task, but it cannot safely define tools, permissions, output, or acceptance authority. Each approved `AgentSpec` therefore combines a task-specific label and responsibility, one versioned Controller-catalog specialization, and one compatible capability bundle. The first non-generic contracts are read-only security and experience assessment: they share Review tooling while compiling distinct prompt modules and `SecurityAssessment` or `ExperienceAssessment` artifacts. Unknown combinations, missing modules, permission escalation, wrong output kinds, and out-of-scope criterion claims fail before creation or persistence. |
 | Require independent quality coverage without imposing a permanent Tester/Reviewer pair | Every writing path needs a downstream read-only quality judgment before acceptance, but a small cohesive task may justify one quality Agent while a higher-risk task may justify independent testing and review. Fixed dual-quality fixtures remain useful experimental controls rather than product topology. |
 | Let the approved Agent DAG express quality handoffs | Independence means a writer cannot be its own sole acceptance authority; it does not require every Testing and Review Agent to be peer nodes. A Reviewer may depend on a Tester when the user-approved plan needs that completed analysis, while both remain read-only and downstream of every writer. The controller validates the DAG and the scheduler launches only ready Agents, so quality sequencing is explicit rather than hidden policy. |
 | Admit Planning questions through a deterministic responsibility matrix | The user owns product intent, material trade-offs, privacy, external actions, and organization policy; Planning recommends acceptance, delivery, team, and routes; execution handles reversible implementation choices; Controller policy alone owns safety and evidence integrity. The Controller records separately whether a question is a Planner-selected task suggestion or a recovery required by a named invariant, so model-authored rationale cannot become a universal SAT prerequisite. A recovery binds either one ProductDefinition dimension or one exact material decision; it cannot silently broaden either scope. Recording category, scope, origin, missing evidence, material consequences, and alternatives lets the Controller reject misplaced questions without pretending it can judge their semantic usefulness from prose alone. |
@@ -880,6 +889,8 @@ an ordinary request without editing an internal file.
 #### Phase 3C: Dynamic Team Runtime
 
 - Compile role prompts from AgentSpec and versioned templates;
+- Combine task-specific role identity with a versioned specialization catalog
+  and separately validated executable capability/permission bundles;
 - Create run-scoped OpenClaw sessions only through the controller;
 - Schedule the dependency DAG with bounded concurrency;
 - Enforce permission profiles, workspace ownership, typed handoffs, independent
@@ -887,7 +898,8 @@ an ordinary request without editing an internal file.
 - Apply team amendments only at validated safe checkpoints.
 
 **Exit criterion:** two materially different tasks produce different justified
-teams and complete or fail through the same controller, evidence, and cleanup
+teams, DAGs, specialization prompts, typed artifacts, and acceptance strategies,
+then complete or fail through the same controller, evidence, and cleanup
 boundary.
 
 #### Phase 3D: Observable and Controllable Execution

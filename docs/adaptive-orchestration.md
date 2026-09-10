@@ -22,7 +22,8 @@ The next product milestone must let a user:
 - Clarify requirements through ordinary dialogue and focused questions with
   suggested answers plus a custom-answer path;
 - Review and revise one overview of requirements, implementation intent, Agent
-  responsibilities, dependencies, budgets, and model choices before execution;
+  responsibilities, specializations, permissions, dependencies, typed outputs,
+  budgets, and model choices before execution;
 - See what the run and every Agent are doing at an appropriate level of detail;
 - Guide, correct, pause, resume, interrupt, or cancel a long-running build;
 - Configure different models by task, stage, Agent, or scenario without silent
@@ -48,11 +49,23 @@ is not an orchestrator. It may ask questions and propose a plan, but it cannot
 spawn Agents, grant tools, advance lifecycle state, or accept its own proposal.
 
 Execution roles are run-scoped. Their names, number, responsibilities,
-dependencies, prompt purposes, and model routes are derived from the confirmed
-task. A small CLI utility may need one implementation Agent and one independent
-quality Agent. A Web application may justify separate interface, backend,
-integration, testing, and review responsibilities. The system must explain why
-each proposed Agent exists rather than selecting a larger team by default.
+specializations, dependencies, prompt purposes, typed outputs, and model routes
+are derived from the confirmed task. Task-specific labels remain free-form, but
+each Agent also references one entry in a versioned Controller-owned
+specialization catalog. The specialization defines professional purpose, prompt
+module, output type, handoff boundary, and acceptance claim class; the separate
+capability selects the executable tool and permission bundle. A small CLI
+utility may need one implementation Agent and one independent quality Agent. A
+task with an approved untrusted-input boundary may add a security assessor,
+while an interactive workflow may instead use an experience assessor. A Web
+application may justify separate interface, backend, integration, testing, and
+review responsibilities. The system must explain why each proposed Agent exists
+rather than selecting a larger team by default.
+
+Planning can combine only catalog specializations with compatible capabilities.
+A label such as `Security Auditor` cannot grant security acceptance authority or
+write access. The Controller validates the catalog reference, permission ceiling,
+prompt module, typed output, and criterion scope before it creates that Agent.
 
 Independent quality control is a controller requirement, not a fixed role
 name. A plan may assign testing and review to one or more read-only Agents, but
@@ -69,7 +82,8 @@ unowned model choices. Responsibility is divided explicitly:
 
 | Decision | Proposal | Approval or default | Runtime enforcement |
 | --- | --- | --- | --- |
-| Agent number, labels, responsibilities, and capabilities | Bootstrap Planning derives them from the task and explains each one | User approves or revises the overview | Controller creates only approved `AgentSpec` entries |
+| Agent number, labels, responsibilities, and specializations | Bootstrap Planning derives them from the task and explains each one | User approves or revises the overview | Controller creates only approved `AgentSpec` entries |
+| Executable capability and permission | Planning references a compatible catalog bundle but cannot define one | User sees the effective permission and output before approval | Controller rejects unknown combinations and grants only the catalog permission profile |
 | Dependencies and possible parallel waves | Bootstrap Planning proposes a DAG | User approves it; policy supplies safe limits | Controller validates acyclicity and schedules only ready nodes |
 | Maximum concurrency | Bootstrap Planning proposes a bounded value | User may edit it; policy caps it | Controller decides which ready Agents actually start without exceeding the cap |
 | Whole-run time | Planning may explain likely duration but does not invent a deadline | SAT asks before the first model call; default is no deadline unless the user has a real one | Controller applies only the explicitly authorized task deadline |
@@ -670,6 +684,7 @@ creating a parallel configuration system.
 A `TeamPlan` binds one confirmed TaskBrief and ImplementationPlan to:
 
 - A stable plan ID and revision;
+- A specialization-catalog version;
 - Run-scoped `AgentSpec` entries;
 - A directed acyclic dependency graph;
 - Required handoffs and completion conditions;
@@ -685,6 +700,8 @@ Each `AgentSpec` contains:
 
 - A stable run-scoped Agent ID and user-facing label;
 - One distinct responsibility and an explanation of why it is needed;
+- One versioned professional specialization and its acceptance claim class;
+- One separately validated executable capability and permission profile;
 - Required inputs and typed outputs;
 - Predecessors, successors, and scheduling constraints;
 - A controlled permission profile;
@@ -716,7 +733,7 @@ A `ModelRoutePlan` contains:
 The controller appends structured events with:
 
 - Run ID, sequence, timestamp, and lifecycle revision;
-- Agent ID and attempt when applicable;
+- Agent ID, specialization, capability, and attempt when applicable;
 - Event category and state transition;
 - A bounded user-safe activity summary;
 - Artifact, handoff, gate, Git, budget, or model-route references;
@@ -754,6 +771,8 @@ Agent is created:
 - Acyclic dependencies and at least one terminal delivery path;
 - Unique writable ownership or an explicit integration protocol;
 - Permission profiles compatible with each responsibility;
+- Catalog specialization, capability, permission, prompt-module, typed-output,
+  and acceptance-scope consistency;
 - Independent quality coverage;
 - Ordinary-task USD/deadline authority, host-derived concurrency, and any
   separate controlled-evaluation call, iteration, duration, token, or cost
@@ -770,6 +789,15 @@ specialist, but that recommendation is only a plan-amendment request. It does
 not create a model call. A team change requires a safe checkpoint, a new
 validated TeamPlan revision, budget authorization, and user confirmation when
 the change affects scope, cost, or delivery expectations.
+
+Security and experience assessment are catalog specializations over the same
+read-only Review capability, not new permission bundles. They compile different
+prompt modules and must return `SecurityAssessment` or `ExperienceAssessment`
+artifacts with threat-surface or target-user-workflow fields whose criterion-ID
+union exactly equals the approved scope. These artifacts participate in the
+same handoff, iteration, lifecycle, evidence-grounding, and Controller-decision
+path as a general `ReviewReport`. None can approve a writer's work outside its
+assigned criteria or advance lifecycle state by itself.
 
 Task-specific quality remains semantic work rather than a claim made by the
 generic profile gates. Planning must turn every unqualified prohibition or
@@ -1168,6 +1196,8 @@ counters and never stores streamed response content as progress.
 ### Batch 3C: Dynamic Team Runtime
 
 - Compile run-scoped prompts from AgentSpec and persisted inputs;
+- Resolve task-specific roles through the versioned specialization catalog
+  without deriving permission from their labels;
 - Create only controller-authorized OpenClaw sessions;
 - Schedule the dependency graph with bounded concurrency;
 - Enforce permission profiles, workspace ownership, typed handoffs, independent
@@ -1175,8 +1205,9 @@ counters and never stores streamed response content as progress.
 - Support versioned team amendments at safe checkpoints.
 
 **Exit:** at least two materially different tasks produce different justified
-teams and complete or fail through the same controller, evidence, and cleanup
-boundary.
+teams, DAGs, specialization prompts, typed quality artifacts, and acceptance
+strategies, then complete or fail through the same controller, evidence, and
+cleanup boundary.
 
 **Runtime contract:** run-scoped Agent identity and capability telemetry,
 approved-Agent-only OpenClaw configuration, AgentSpec-derived prompt and
@@ -1326,8 +1357,8 @@ The adaptive-orchestration milestone is complete only when:
 2. Planning supports both conversation and focused questions with a custom
    answer path.
 3. The user sees and can revise requirements, implementation intent, every
-   proposed Agent, dependencies, permissions, model routes, and budgets before
-   execution.
+   proposed Agent, specialization, dependencies, permissions, typed output,
+   model routes, and cost authority before execution.
 4. The controller rejects invalid, cyclic, over-budget, over-privileged,
    unauthenticated, or quality-incomplete plans before Agent creation.
 5. All product and fixed evaluation teams execute through one TeamPlan-based
@@ -1353,6 +1384,10 @@ The adaptive-orchestration milestone is complete only when:
 14. Offline tests cover success, correction, pause/recovery, interruption,
     cancellation, invalid plans, routing failures, and non-TTY output, followed
     by at least one explicitly authorized provider-backed acceptance run.
+15. At least two non-generic quality specializations use compatible read-only
+    capability bundles but distinct prompt and typed artifact contracts; a role
+    label, unknown catalog ID, incompatible capability, missing packaged module,
+    or output mismatch cannot enlarge authority or reach Agent creation.
 
 ## Non-Goals and Boundaries
 

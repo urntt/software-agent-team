@@ -485,6 +485,7 @@ class RuntimeControlChannel:
                 message=message,
                 agent_id=agent.id,
                 capability=agent.capability.value,
+                specialization=agent.specialization.value,
                 stage_id=agent.stage_id,
                 model=route.model,
                 dependency_ids=agent.dependencies,

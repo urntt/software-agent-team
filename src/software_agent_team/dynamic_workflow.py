@@ -579,6 +579,7 @@ class DynamicWorkflowCoordinator:
                         attempt=1 if executed else None,
                         duration_ms=event.duration_ms,
                         capability=agent.capability.value,
+                        specialization=agent.specialization.value,
                         stage_id=agent.stage_id,
                         model=route.model,
                         dependency_ids=agent.dependencies,

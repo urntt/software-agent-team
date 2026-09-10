@@ -193,6 +193,19 @@ with captured, sanitized inputs and integrated production paths before repairing
 individual symptoms. Mock the external boundary where needed, not the accepted
 submission or state transition that the test is supposed to establish.
 
+Role-specialization changes require a production-shaped matrix rather than a
+label-only unit fixture. At minimum, compile an ordinary task, a task with an
+approved security boundary, and a task with an approved interactive workflow;
+compare their Agent sets, DAGs, specialization IDs, capabilities, permissions,
+typed outputs, verifier assignments, overview, and catalog version. Exercise
+each new specialized response through prompt composition, bound submission,
+grounding, artifact assembly, handoff, run-control transition, progress, and
+the approved-plan self-check. Missing packaged prompt modules, unknown or
+incompatible catalog entries, permission escalation, and kind mismatches must
+fail before Agent creation. External provider content remains unnecessary for
+this integration layer and is reserved for the frozen-candidate product
+acceptance run.
+
 Planning and dynamic runtime configuration explicitly disable OpenClaw's memory
 plugin slot while enabling SAT's terminal submission plugin. Check the generated
 configuration against the pinned runtime's actual slot resolver: an allow-list

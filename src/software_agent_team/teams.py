@@ -2,10 +2,12 @@
 
 import json
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
+from types import MappingProxyType
 from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -16,7 +18,8 @@ from software_agent_team.integrity import canonical_model_sha256
 from software_agent_team.model_costs import CachePriceSupport
 from software_agent_team.model_metadata import ModelMetadataSource
 
-TEAM_PLAN_SCHEMA_VERSION = 2
+TEAM_PLAN_SCHEMA_VERSION = 3
+SPECIALIZATION_CATALOG_VERSION = 1
 
 
 class TeamKind(StrEnum):
@@ -58,11 +61,48 @@ class AgentCapability(StrEnum):
     REVIEW = "review"
 
 
+class AgentSpecialization(StrEnum):
+    """Controller-owned professional contract selected for one task Agent."""
+
+    REQUIREMENTS_CLARIFICATION = "requirements_clarification"
+    TEAM_PLANNING = "team_planning"
+    PRODUCT_IMPLEMENTATION = "product_implementation"
+    SYSTEM_INTEGRATION = "system_integration"
+    DETERMINISTIC_TESTING = "deterministic_testing"
+    GENERAL_REVIEW = "general_review"
+    SECURITY_ASSESSMENT = "security_assessment"
+    EXPERIENCE_ASSESSMENT = "experience_assessment"
+
+
+class AcceptanceAuthority(StrEnum):
+    """Criterion claim class one specialization may support."""
+
+    NONE = "none"
+    DETERMINISTIC_EVIDENCE = "deterministic_evidence"
+    GENERAL_REVIEW = "general_review"
+    SECURITY = "security"
+    USER_EXPERIENCE = "user_experience"
+
+
 class PermissionProfile(StrEnum):
     """Versioned least-privilege profiles assignable to an AgentSpec."""
 
     READ_ONLY = "read_only"
     WORKSPACE_WRITE = "workspace_write"
+
+
+@dataclass(frozen=True)
+class SpecializationContract:
+    """Immutable Controller catalog entry for one professional specialization."""
+
+    id: AgentSpecialization
+    purpose: str
+    compatible_capabilities: tuple[AgentCapability, ...]
+    permission_ceiling: PermissionProfile
+    expected_output: ArtifactKind
+    prompt_module: str | None
+    acceptance_authority: AcceptanceAuthority
+    handoff_boundary: str
 
 
 class ModelRoutingMode(StrEnum):
@@ -103,6 +143,132 @@ _READ_ONLY_CAPABILITIES = {
     AgentCapability.TESTING,
     AgentCapability.REVIEW,
 }
+
+_DEFAULT_SPECIALIZATIONS = {
+    AgentCapability.CLARIFICATION: AgentSpecialization.REQUIREMENTS_CLARIFICATION,
+    AgentCapability.PLANNING: AgentSpecialization.TEAM_PLANNING,
+    AgentCapability.IMPLEMENTATION: AgentSpecialization.PRODUCT_IMPLEMENTATION,
+    AgentCapability.INTEGRATION: AgentSpecialization.SYSTEM_INTEGRATION,
+    AgentCapability.TESTING: AgentSpecialization.DETERMINISTIC_TESTING,
+    AgentCapability.REVIEW: AgentSpecialization.GENERAL_REVIEW,
+}
+
+SPECIALIZATION_CATALOG: Mapping[AgentSpecialization, SpecializationContract] = (
+    MappingProxyType(
+        {
+            AgentSpecialization.REQUIREMENTS_CLARIFICATION: SpecializationContract(
+                id=AgentSpecialization.REQUIREMENTS_CLARIFICATION,
+                purpose="Clarify unresolved product intent without executing work.",
+                compatible_capabilities=(AgentCapability.CLARIFICATION,),
+                permission_ceiling=PermissionProfile.READ_ONLY,
+                expected_output=ArtifactKind.CLARIFICATION_RECORD,
+                prompt_module=None,
+                acceptance_authority=AcceptanceAuthority.NONE,
+                handoff_boundary="confirmed requirement evidence",
+            ),
+            AgentSpecialization.TEAM_PLANNING: SpecializationContract(
+                id=AgentSpecialization.TEAM_PLANNING,
+                purpose="Derive a user-reviewable implementation and Agent plan.",
+                compatible_capabilities=(AgentCapability.PLANNING,),
+                permission_ceiling=PermissionProfile.READ_ONLY,
+                expected_output=ArtifactKind.IMPLEMENTATION_PLAN,
+                prompt_module=None,
+                acceptance_authority=AcceptanceAuthority.NONE,
+                handoff_boundary="user-approved plan",
+            ),
+            AgentSpecialization.PRODUCT_IMPLEMENTATION: SpecializationContract(
+                id=AgentSpecialization.PRODUCT_IMPLEMENTATION,
+                purpose="Implement approved product behavior in the project workspace.",
+                compatible_capabilities=(AgentCapability.IMPLEMENTATION,),
+                permission_ceiling=PermissionProfile.WORKSPACE_WRITE,
+                expected_output=ArtifactKind.WORK_RESULT,
+                prompt_module="specialization_product_implementation.md",
+                acceptance_authority=AcceptanceAuthority.NONE,
+                handoff_boundary="controller-verified Git result",
+            ),
+            AgentSpecialization.SYSTEM_INTEGRATION: SpecializationContract(
+                id=AgentSpecialization.SYSTEM_INTEGRATION,
+                purpose="Integrate dependency-ordered implementation results.",
+                compatible_capabilities=(AgentCapability.INTEGRATION,),
+                permission_ceiling=PermissionProfile.WORKSPACE_WRITE,
+                expected_output=ArtifactKind.WORK_RESULT,
+                prompt_module="specialization_system_integration.md",
+                acceptance_authority=AcceptanceAuthority.NONE,
+                handoff_boundary="controller-verified integrated Git result",
+            ),
+            AgentSpecialization.DETERMINISTIC_TESTING: SpecializationContract(
+                id=AgentSpecialization.DETERMINISTIC_TESTING,
+                purpose="Analyze controller-recorded deterministic command evidence.",
+                compatible_capabilities=(AgentCapability.TESTING,),
+                permission_ceiling=PermissionProfile.READ_ONLY,
+                expected_output=ArtifactKind.TEST_REPORT,
+                prompt_module="specialization_deterministic_testing.md",
+                acceptance_authority=AcceptanceAuthority.DETERMINISTIC_EVIDENCE,
+                handoff_boundary="controller-bound deterministic test report",
+            ),
+            AgentSpecialization.GENERAL_REVIEW: SpecializationContract(
+                id=AgentSpecialization.GENERAL_REVIEW,
+                purpose="Independently review assigned acceptance criteria.",
+                compatible_capabilities=(AgentCapability.REVIEW,),
+                permission_ceiling=PermissionProfile.READ_ONLY,
+                expected_output=ArtifactKind.REVIEW_REPORT,
+                prompt_module="specialization_general_review.md",
+                acceptance_authority=AcceptanceAuthority.GENERAL_REVIEW,
+                handoff_boundary="grounded criterion review",
+            ),
+            AgentSpecialization.SECURITY_ASSESSMENT: SpecializationContract(
+                id=AgentSpecialization.SECURITY_ASSESSMENT,
+                purpose=(
+                    "Assess approved security boundaries, threat surfaces, controls, "
+                    "and residual risk."
+                ),
+                compatible_capabilities=(AgentCapability.REVIEW,),
+                permission_ceiling=PermissionProfile.READ_ONLY,
+                expected_output=ArtifactKind.SECURITY_ASSESSMENT,
+                prompt_module="specialization_security_assessment.md",
+                acceptance_authority=AcceptanceAuthority.SECURITY,
+                handoff_boundary="grounded security assessment",
+            ),
+            AgentSpecialization.EXPERIENCE_ASSESSMENT: SpecializationContract(
+                id=AgentSpecialization.EXPERIENCE_ASSESSMENT,
+                purpose=(
+                    "Assess the approved target user's workflow, friction, outcome, "
+                    "and recovery behavior."
+                ),
+                compatible_capabilities=(AgentCapability.REVIEW,),
+                permission_ceiling=PermissionProfile.READ_ONLY,
+                expected_output=ArtifactKind.EXPERIENCE_ASSESSMENT,
+                prompt_module="specialization_experience_assessment.md",
+                acceptance_authority=AcceptanceAuthority.USER_EXPERIENCE,
+                handoff_boundary="grounded user-experience assessment",
+            ),
+        }
+    )
+)
+
+
+def default_specialization_for_capability(
+    capability: AgentCapability,
+) -> AgentSpecialization:
+    """Return the compatibility specialization for one executable capability."""
+
+    return _DEFAULT_SPECIALIZATIONS[capability]
+
+
+def specialization_contract(
+    specialization: AgentSpecialization,
+) -> SpecializationContract:
+    """Return one immutable Controller-owned specialization contract."""
+
+    return SPECIALIZATION_CATALOG[specialization]
+
+
+def expected_output_for_specialization(
+    specialization: AgentSpecialization,
+) -> ArtifactKind:
+    """Return the typed output selected by one approved specialization."""
+
+    return specialization_contract(specialization).expected_output
 
 
 def expected_output_for_capability(capability: AgentCapability) -> ArtifactKind:
@@ -367,6 +533,7 @@ class AgentSpec(BaseModel):
     responsibility: str = Field(min_length=1, max_length=500)
     rationale: str = Field(min_length=1, max_length=500)
     capability: AgentCapability
+    specialization: AgentSpecialization
     permission_profile: PermissionProfile
     stage_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     dependencies: tuple[str, ...] = ()
@@ -379,6 +546,23 @@ class AgentSpec(BaseModel):
     timeout_seconds: int = Field(ge=0)
     workspace_scope: str = Field(min_length=1, max_length=200)
     legacy_role: AgentRole | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def infer_legacy_specialization(cls, value: object) -> object:
+        """Upgrade pre-catalog AgentSpec payloads without changing their authority."""
+
+        if not isinstance(value, dict) or value.get("specialization") is not None:
+            return value
+        payload = dict(value)
+        try:
+            capability = AgentCapability(payload.get("capability"))
+        except (TypeError, ValueError):
+            return payload
+        payload["specialization"] = default_specialization_for_capability(
+            capability
+        ).value
+        return payload
 
     @field_validator("label", "responsibility", "rationale")
     @classmethod
@@ -413,8 +597,19 @@ class AgentSpec(BaseModel):
 
     @model_validator(mode="after")
     def validate_capability_boundary(self) -> Self:
-        if self.expected_output is not _CAPABILITY_OUTPUTS[self.capability]:
-            raise ValueError("Agent capability and expected output are inconsistent")
+        contract = specialization_contract(self.specialization)
+        if self.capability not in contract.compatible_capabilities:
+            raise ValueError(
+                "Agent specialization and executable capability are incompatible"
+            )
+        if self.expected_output is not contract.expected_output:
+            raise ValueError(
+                "Agent specialization and expected output are inconsistent"
+            )
+        if self.permission_profile is not contract.permission_ceiling:
+            raise ValueError(
+                "Agent permission exceeds or differs from its specialization ceiling"
+            )
         if self.capability in _READ_ONLY_CAPABILITIES:
             if self.permission_profile is not PermissionProfile.READ_ONLY:
                 raise ValueError("planning and quality capabilities must be read-only")
@@ -430,7 +625,10 @@ class TeamPlan(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[1, TEAM_PLAN_SCHEMA_VERSION] = TEAM_PLAN_SCHEMA_VERSION
+    schema_version: Literal[1, 2, TEAM_PLAN_SCHEMA_VERSION] = TEAM_PLAN_SCHEMA_VERSION
+    specialization_catalog_version: Literal[SPECIALIZATION_CATALOG_VERSION] = (
+        SPECIALIZATION_CATALOG_VERSION
+    )
     plan_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     revision: int = Field(ge=1)
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -460,6 +658,24 @@ class TeamPlan(BaseModel):
     max_concurrency: int = Field(ge=1)
     independent_review: bool
     revision_enabled: bool
+
+    @model_validator(mode="before")
+    @classmethod
+    def require_current_specialization_identity(cls, value: object) -> object:
+        """Keep old plans readable while current plans name catalog authority."""
+
+        if not isinstance(value, dict):
+            return value
+        version = value.get("schema_version", TEAM_PLAN_SCHEMA_VERSION)
+        if version != TEAM_PLAN_SCHEMA_VERSION:
+            return value
+        agents = value.get("agents")
+        if isinstance(agents, (list, tuple)) and any(
+            isinstance(agent, dict) and "specialization" not in agent
+            for agent in agents
+        ):
+            raise ValueError("current TeamPlan Agents require specialization IDs")
+        return value
 
     @field_validator("created_at")
     @classmethod
@@ -718,6 +934,12 @@ class TeamPlan(BaseModel):
         """Return the approved capability keyed by run-scoped Agent ID."""
 
         return {agent.id: agent.capability.value for agent in self.agents}
+
+    @property
+    def agent_specializations(self) -> dict[str, str]:
+        """Return the approved specialization keyed by run-scoped Agent ID."""
+
+        return {agent.id: agent.specialization.value for agent in self.agents}
 
     @property
     def stage_agents(self) -> dict[str, set[str]]:
@@ -1047,6 +1269,7 @@ def compile_fixed_team_plan(
     for stage in team.stages:
         for role in stage.roles:
             capability = _ROLE_CAPABILITIES[role]
+            specialization = default_specialization_for_capability(capability)
             permission = (
                 PermissionProfile.READ_ONLY
                 if capability in _READ_ONLY_CAPABILITIES
@@ -1059,10 +1282,11 @@ def compile_fixed_team_plan(
                     responsibility=_ROLE_RESPONSIBILITIES[role],
                     rationale=_ROLE_RATIONALES[role],
                     capability=capability,
+                    specialization=specialization,
                     permission_profile=permission,
                     stage_id=stage.id,
                     dependencies=tuple(item.value for item in previous_stage_roles),
-                    expected_output=_CAPABILITY_OUTPUTS[capability],
+                    expected_output=expected_output_for_specialization(specialization),
                     model_route_id="primary",
                     timeout_seconds=role_timeout_seconds[role],
                     workspace_scope=_ROLE_WORKSPACE_SCOPES[role],

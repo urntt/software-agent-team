@@ -27,6 +27,7 @@ from software_agent_team.schema_compatibility import (
     schema_support_map,
     supported_schemas,
 )
+from software_agent_team.teams import TEAM_PLAN_SCHEMA_VERSION
 from software_agent_team.user_configuration import USER_CONFIGURATION_SCHEMA_VERSION
 
 
@@ -66,11 +67,11 @@ def test_registry_declares_only_intentional_historical_read_support() -> None:
     assert run_event.supports(2)
 
     for family, item in support.items():
-        if family in {
-            SchemaFamily.BUDGET,
-            SchemaFamily.TEAM_PLAN,
-            SchemaFamily.SELF_CHECK,
-        }:
+        if family is SchemaFamily.TEAM_PLAN:
+            assert item.minimum_readable == 1
+            assert item.current == item.maximum_readable == TEAM_PLAN_SCHEMA_VERSION
+            continue
+        if family in {SchemaFamily.BUDGET, SchemaFamily.SELF_CHECK}:
             assert item.minimum_readable == 1
             assert item.current == item.maximum_readable == 2
             continue

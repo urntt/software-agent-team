@@ -14,12 +14,17 @@ from software_agent_team.artifacts import (
     AgentToolCallOutcome,
     ArtifactKind,
     CommandEvidence,
+    ExperienceAssessment,
+    ExperienceWorkflowAssessment,
     HandoffStatus,
     ReviewBoundaryKind,
     ReviewFinding,
     ReviewSeverity,
+    SecurityAssessment,
+    SecuritySurfaceAssessment,
     TaskBrief,
 )
+from software_agent_team.assembly import assemble_review_report
 from software_agent_team.budgets import AgentBudget
 from software_agent_team.execution import ScriptedAgentExecutor, ScriptedAgentResponse
 from software_agent_team.integrity import canonical_model_sha256
@@ -42,12 +47,16 @@ from software_agent_team.response_corrections import (
 )
 from software_agent_team.responses import (
     AgentArtifactResponseError,
+    ExperienceAssessmentResponse,
+    GroundedExperienceAssessmentResponse,
     GroundedReviewReportResponse,
+    GroundedSecurityAssessmentResponse,
     ReviewBoundaryCheckResponse,
     ReviewCriterionAssessmentResponse,
     ReviewReportResponse,
     ReviewToolEvidenceAttempt,
     ReviewToolEvidenceClaim,
+    SecurityAssessmentResponse,
     WorkResultResponse,
     bind_review_evidence_correction_candidates,
     parse_dynamic_agent_response,
@@ -56,6 +65,7 @@ from software_agent_team.submissions import AgentSubmissionPurpose
 from software_agent_team.teams import (
     AgentCapability,
     AgentSpec,
+    AgentSpecialization,
     ModelRoute,
     ModelRoutePlan,
     ModelRoutingMode,
@@ -533,6 +543,199 @@ def test_review_prompt_requires_adversarial_absolute_claim_boundaries() -> None:
     assert claim_schema["required"] == ["observable"]
     assert "tool_call_id" not in claim_schema["properties"]
     assert "execution_attempt" not in claim_schema["properties"]
+
+
+def specialized_review_inputs(
+    specialization: AgentSpecialization,
+    expected_output: ArtifactKind,
+) -> DynamicAgentPromptInputs:
+    """Return the production prompt input with one catalog-selected Reviewer."""
+
+    payload = team_plan().model_dump(mode="json")
+    reviewer = next(
+        item for item in payload["agents"] if item["id"] == "quality_reviewer"
+    )
+    reviewer["specialization"] = specialization.value
+    reviewer["expected_output"] = expected_output.value
+    specialized_plan = TeamPlan.model_validate(payload)
+    return DynamicAgentPromptInputs(
+        task_brief=task_brief(),
+        implementation_plan=implementation_plan(),
+        team_plan=specialized_plan,
+        agent_id="quality_reviewer",
+        iteration=1,
+        iteration_input_commit=INPUT_COMMIT,
+        input_commit=OUTPUT_COMMIT,
+        upstream_results=(upstream_result(),),
+        command_evidence=command_evidence(),
+        manual_review_criteria=("AC_LINKS",),
+    )
+
+
+@pytest.mark.parametrize(
+    ("specialization", "expected_output", "required_field", "module_text"),
+    [
+        (
+            AgentSpecialization.SECURITY_ASSESSMENT,
+            ArtifactKind.SECURITY_ASSESSMENT,
+            "surfaces",
+            "explicit threat surfaces",
+        ),
+        (
+            AgentSpecialization.EXPERIENCE_ASSESSMENT,
+            ArtifactKind.EXPERIENCE_ASSESSMENT,
+            "workflows",
+            "target-user workflow",
+        ),
+    ],
+)
+def test_specialization_selects_prompt_and_typed_output_contract(
+    specialization: AgentSpecialization,
+    expected_output: ArtifactKind,
+    required_field: str,
+    module_text: str,
+) -> None:
+    inputs = specialized_review_inputs(specialization, expected_output)
+
+    rendered = render_dynamic_agent_prompt(inputs)
+    request = build_dynamic_agent_execution_request(inputs)
+    assert request.submission_contract is not None
+    schema = request.submission_contract.parameters_schema()
+
+    assert request.capability is AgentCapability.REVIEW
+    assert request.specialization is specialization
+    assert request.expected_kind is expected_output
+    assert f"specialization: {specialization.value}" in rendered
+    assert module_text in rendered
+    assert required_field in schema["required"]
+
+
+def test_security_specialization_persists_its_typed_assessment() -> None:
+    inputs = specialized_review_inputs(
+        AgentSpecialization.SECURITY_ASSESSMENT,
+        ArtifactKind.SECURITY_ASSESSMENT,
+    )
+    request = build_dynamic_agent_execution_request(inputs)
+    response = SecurityAssessmentResponse(
+        verdict="accept",
+        criterion_assessments=(
+            ReviewCriterionAssessmentResponse(
+                criterion_id="AC_LINKS",
+                status="satisfied",
+                adversarial_check="Exercised an untrusted nested link target.",
+                evidence="The resolver rejected the unsafe target.",
+                tool_evidence=(review_tool_claim(),),
+            ),
+        ),
+        surfaces=(
+            SecuritySurfaceAssessment(
+                id="SECURITY_LINK_TARGET",
+                surface="Untrusted Markdown link targets",
+                threat="A crafted target may escape the selected root.",
+                control="Canonicalize and reject paths outside the root.",
+                status="satisfied",
+                evidence="The boundary probe was rejected.",
+                criterion_ids=("AC_LINKS",),
+            ),
+        ),
+        summary="The assigned security boundary is satisfied.",
+    )
+    result = ScriptedAgentExecutor(
+        [
+            ScriptedAgentResponse(
+                text=response.model_dump_json(), model="provider/model"
+            )
+        ],
+        clock=lambda: CREATED_AT,
+    ).execute(request)
+
+    parsed = parse_dynamic_agent_response(
+        result,
+        request,
+        task_brief=task_brief(),
+        team_plan=inputs.team_plan,
+        reviewed_criterion_ids=("AC_LINKS",),
+    )
+    assert isinstance(parsed.body, GroundedSecurityAssessmentResponse)
+    artifact = assemble_review_report(
+        parsed.body,
+        task_brief=task_brief(),
+        team_id=inputs.team_plan.team_id,
+        agent=inputs.agent,
+        iteration=1,
+        input_commit=OUTPUT_COMMIT,
+        reviewed_criteria=("AC_LINKS",),
+        created_at=CREATED_AT,
+    )
+
+    assert isinstance(artifact, SecurityAssessment)
+    assert artifact.kind is ArtifactKind.SECURITY_ASSESSMENT
+    assert artifact.surfaces[0].id == "SECURITY_LINK_TARGET"
+
+
+def test_experience_specialization_persists_its_typed_assessment() -> None:
+    inputs = specialized_review_inputs(
+        AgentSpecialization.EXPERIENCE_ASSESSMENT,
+        ArtifactKind.EXPERIENCE_ASSESSMENT,
+    )
+    request = build_dynamic_agent_execution_request(inputs)
+    response = ExperienceAssessmentResponse(
+        verdict="accept",
+        criterion_assessments=(
+            ReviewCriterionAssessmentResponse(
+                criterion_id="AC_LINKS",
+                status="satisfied",
+                adversarial_check="Followed the broken-link recovery workflow.",
+                evidence="The output identified the source and next action.",
+                tool_evidence=(review_tool_claim(),),
+            ),
+        ),
+        workflows=(
+            ExperienceWorkflowAssessment(
+                id="EXPERIENCE_BROKEN_LINK",
+                actor="A developer maintaining Markdown notes",
+                workflow="Run the checker and locate a broken link.",
+                outcome="The source location and failure are understandable.",
+                friction="One terminal command is required.",
+                recovery="Correct the target and rerun the same command.",
+                status="satisfied",
+                evidence="The scripted observation exposed the failure location.",
+                criterion_ids=("AC_LINKS",),
+            ),
+        ),
+        summary="The assigned user workflow is usable.",
+    )
+    result = ScriptedAgentExecutor(
+        [
+            ScriptedAgentResponse(
+                text=response.model_dump_json(), model="provider/model"
+            )
+        ],
+        clock=lambda: CREATED_AT,
+    ).execute(request)
+
+    parsed = parse_dynamic_agent_response(
+        result,
+        request,
+        task_brief=task_brief(),
+        team_plan=inputs.team_plan,
+        reviewed_criterion_ids=("AC_LINKS",),
+    )
+    assert isinstance(parsed.body, GroundedExperienceAssessmentResponse)
+    artifact = assemble_review_report(
+        parsed.body,
+        task_brief=task_brief(),
+        team_id=inputs.team_plan.team_id,
+        agent=inputs.agent,
+        iteration=1,
+        input_commit=OUTPUT_COMMIT,
+        reviewed_criteria=("AC_LINKS",),
+        created_at=CREATED_AT,
+    )
+
+    assert isinstance(artifact, ExperienceAssessment)
+    assert artifact.kind is ArtifactKind.EXPERIENCE_ASSESSMENT
+    assert artifact.workflows[0].id == "EXPERIENCE_BROKEN_LINK"
 
 
 def _review_result(response: ReviewReportResponse | str):
