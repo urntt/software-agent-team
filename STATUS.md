@@ -62,6 +62,37 @@ were removed, while uv, Docker, and the shared quality image were preserved.
 Failed-activation rollback remains covered by real fault evidence whose three
 lifecycle-owner Git blobs are identical at `v0.1.2`.
 
+## Current Development Head
+
+Public `main` now identifies
+`d94850e6aecf731fc551ffe0fefc4c4662ddaf42`. Planning schema v18 keeps
+schema-v2 through schema-v17 evidence readable and separates three authorities:
+Controller-required recovery, Planner-selected task clarification, and user
+approval. A focused question can change only its declared decision scope;
+unknown user-question provenance returns to dialogue instead of model-owned
+proposal repair. Complete unwrapped question or proposal bodies are framed by
+the Controller only when the current semantic schema identifies exactly one
+complete body; partial, mixed, and ambiguous objects still fail closed.
+
+The default Planning overview now emphasizes task-specific product definition,
+decisions, assumptions, risks, Agent rationale, and approval boundaries. Fixed
+execution-profile constraints, lifecycle safeguards, and Review definitions
+remain available through a lossless `f` display toggle. That toggle changes no
+proposal, model-call count, or user requirement; `r` remains reserved for a
+deliberate semantic requirement revision.
+
+The exact clean development revision passed the canonical `make check` once
+with 1,429 tests and zero residual stage processes, process leases, sandbox
+containers, volumes, or private test directories. A managed non-root bare-`sat`
+Planning journey using `deepseek/deepseek-v4-flash-vision-exp` then asked only
+the one overwrite-policy decision deliberately left open by the request,
+produced revision 1, preserved the selected answer with resolved-question
+provenance, and displayed compact/expanded/compact views without a model call
+or revision. The operator cancelled before approval; SAT created no runtime
+Agent, workspace, destination, or delivery and removed the bootstrap sandbox.
+This validates the pre-execution Planning interface, not end-to-end software
+delivery on this development head.
+
 ## Implementation Evidence History
 
 The following sections preserve chronological implementation evidence. Phrases
