@@ -102,7 +102,6 @@ from software_agent_team.response_corrections import (
     ResponseIssueAuthority,
     SemanticCorrectionOutcome,
     semantic_correction_slot_handle,
-    semantic_payload_sha256,
 )
 from software_agent_team.submissions import AgentSubmissionPurpose
 from software_agent_team.teams import (
@@ -577,14 +576,16 @@ def test_planner_contract_does_not_treat_provenance_as_semantic_relevance() -> N
 def correction_response(
     base_payload: dict[str, object],
     replacements: dict[str, object],
+    *,
+    target_paths: tuple[str, ...] | None = None,
 ) -> str:
-    base_sha256 = semantic_payload_sha256(base_payload)
+    target_paths = tuple(sorted(replacements)) if target_paths is None else target_paths
     return json.dumps(
         {
             "replacements": [
                 {
                     "slot_handle": semantic_correction_slot_handle(
-                        base_sha256,
+                        target_paths,
                         path,
                     ),
                     "replacement_value": replacements[path],
@@ -3087,7 +3088,7 @@ def test_workflow_materiality_repairs_one_atomic_slot_without_erasing_trace(
         store.load_turn(request().run_id, 2).semantic_correction_outcome == "accepted"
     )
     correction = executor.requests[1].prompt.rsplit(
-        "TARGETED_SEMANTIC_CORRECTION_SLOTS_V2", 1
+        "TARGETED_SEMANTIC_CORRECTION_SLOTS_V3", 1
     )[1]
     schema_text = correction.split("CORRECTION_SCHEMA_JSON\n", 1)[1].split(
         "\nCall `sat_submit_artifact`", 1
@@ -6787,10 +6788,10 @@ def test_invalid_complete_proposal_is_repaired_before_it_is_shown(
         "type": "object",
         "additionalProperties": True,
     }
-    assert "TARGETED_SEMANTIC_CORRECTION_SLOTS_V2" in executor.requests[1].prompt
+    assert "TARGETED_SEMANTIC_CORRECTION_SLOTS_V3" in executor.requests[1].prompt
     assert "Do not regenerate or repeat that object" in executor.requests[1].prompt
     assert (
-        "Return only the supplied opaque handles, not target paths"
+        "Return only the supplied short request-local slot IDs"
         in executor.requests[1].prompt
     )
     assert rejected.response_validation is not None
@@ -7626,6 +7627,11 @@ def test_planning_exposes_review_boundary_siblings_after_prior_correction(
                         ]
                     ),
                 },
+                target_paths=(
+                    "/proposal/acceptance_criteria/0/verification_agent_ids",
+                    "/proposal/acceptance_criteria/1/verification_agent_ids",
+                    "/proposal/agents",
+                ),
             ),
         ]
     )
@@ -7895,7 +7901,7 @@ def test_product_planning_preserves_normalization_and_targets_new_root_cause(
     assert second.response_validation is not None
     assert second.response_validation.correction_paths == ("/proposal/requirements",)
     correction = executor.requests[2].prompt.rsplit(
-        "TARGETED_SEMANTIC_CORRECTION_SLOTS_V2", 1
+        "TARGETED_SEMANTIC_CORRECTION_SLOTS_V3", 1
     )[1]
     assert '"$ref": "#/$defs/ProposedRequirement"' not in correction
     assert '"Stable requirement identity' in correction
@@ -8017,7 +8023,7 @@ def test_product_planning_repairs_assumption_relation_as_atomic_records(
     )
     assert first.response_validation.correction_paths == ("/proposal/assumptions",)
     correction = executor.requests[1].prompt.rsplit(
-        "TARGETED_SEMANTIC_CORRECTION_SLOTS_V2", 1
+        "TARGETED_SEMANTIC_CORRECTION_SLOTS_V3", 1
     )[1]
     assert '"target_path": "/proposal/assumptions"' in correction
     assert '"$ref": "#/$defs/ProposedAssumption"' not in correction
@@ -8083,7 +8089,7 @@ def test_invalid_correction_slot_identity_is_typed_model_input(tmp_path: Path) -
     invalid_correction = {
         "replacements": [
             {
-                "slot_handle": "slot_ffffffffffffffff",
+                "slot_handle": "slot_99",
                 "replacement_value": "builder",
             }
         ]

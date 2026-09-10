@@ -416,8 +416,8 @@ and the exact `observable` leaf. A bounded correction may replace those leaf
 strings together while every other assessment field and the containing array
 remain frozen. For each invalid leaf, the Controller derives a bounded catalog
 of exact fragments from protocol-eligible results in the same Review chain. The
-model selects an opaque handle; the Controller binds that handle back to the
-exact fragment and records the binding. The model therefore decides which
+model selects a short request-local candidate handle; the Controller binds it
+back to the exact fragment and records the binding. The model therefore decides which
 evidence supports its claim without retyping evidence bytes or inventing an
 attempt, tool, or command identity. If no eligible candidate exists, SAT does
 not spend a random correction call. The Controller cannot guess a replacement
@@ -463,8 +463,8 @@ inside the envelope. Planning uses a permissive object-only inner transport
 schema for an initial question or proposal so every syntactically structured
 response reaches the Controller's exact semantic validator; the private envelope
 still binds the exact Planning semantic-schema digest. A targeted Planning
-correction instead exposes its exact opaque-handle replacement schema at both the
-submission and Controller boundaries. This allows deterministic forbidden-field
+correction instead exposes its exact request-local slot replacement schema at
+both the submission and Controller boundaries. This allows deterministic forbidden-field
 normalization and targeted semantic correction to operate after transport without
 trusting invalid content. SAT gives every invocation a fresh controller binding, then
 requires the private envelope to match the final successful attributable tool call.
@@ -495,20 +495,24 @@ isolated submission plugin, binds the exact semantic schema separately, and comp
 submitted values at the controller boundary.
 Transport failures and unlocated errors stop. A targetable model-owned failure
 produces a content-free diagnostic and a correction request whose persisted
-evidence is bound to the retained object's SHA-256. The Controller assigns an
-opaque handle to each exact validator-owned JSON-pointer path; the model submits
+evidence is bound to the retained object's SHA-256. The Controller assigns a
+short ordinal slot ID to each exact validator-owned JSON-pointer path within the
+current correction request; the model submits
 order-independent `{slot_handle, replacement_value}` records through the same
 typed tool under a correction-only semantic schema. One submission may contain any
 nonempty subset of the authorized handles. The Controller atomically applies only
 that subset to a copy, preserves omitted slots exactly, and revalidates the complete
 object before deciding whether measurable progress justifies another call. Empty,
-duplicate, unknown, cross-response, and legacy positional submissions fail closed. Every model-visible
-slot also includes the exact response-schema
+duplicate, unknown, and legacy positional submissions fail closed. The private
+per-invocation submission binding and retained response digest reject
+cross-invocation evidence without requiring the model to copy either value.
+Every model-visible slot also includes the exact response-schema
 fragment for its replacement value and its validator-owned constraints. Independent
 ProductDefinition dimension defects are collected in one validation pass, and each
 dimension is an atomic replacement boundary because disposition, provenance,
 statement, and downstream references must remain coherent. It cannot submit,
-replace, widen, or reorder the response identity or private path authority; record
+replace, widen, or reorder the response identity or private path authority; the
+short IDs carry no authority outside that exact bound request, and record
 order has no semantic meaning. Derived parent
 errors are not copied into a child-field request. Every other value remains
 immutable. Product
@@ -861,8 +865,8 @@ invocation. During a targeted correction, the same Reviewer may also reuse
 integrity-checked results captured by
 an earlier attempt in that same role-stage, immutable-commit, and invocation
 chain. Deterministic command stdout/stderr from the same immutable iteration is
-also eligible. Targeted correction derives opaque candidate handles under the
-same whole-chain matching policy used by final grounding. A fragment from a
+also eligible. Targeted correction derives short request-local candidate handles
+under the same whole-chain matching policy used by final grounding. A fragment from a
 successful result is excluded when the same selector would also match an
 ineligible failed tool result or failed deterministic command, so the catalog
 cannot offer a handle that the unchanged validator must reject. The controller

@@ -73,7 +73,6 @@ from software_agent_team.progress import (
 )
 from software_agent_team.response_corrections import (
     semantic_correction_slot_handle,
-    semantic_payload_sha256,
 )
 from software_agent_team.responses import (
     ExperienceAssessmentResponse,
@@ -126,13 +125,13 @@ def semantic_correction_response(
 ) -> str:
     """Return the exact field-only correction contract used by SAT."""
 
-    base_sha256 = semantic_payload_sha256(base_payload)
+    target_paths = tuple(sorted(replacements))
     return json.dumps(
         {
             "replacements": [
                 {
                     "slot_handle": semantic_correction_slot_handle(
-                        base_sha256,
+                        target_paths,
                         path,
                     ),
                     "replacement_value": replacements[path],
@@ -1570,7 +1569,7 @@ def test_dynamic_writer_targeted_correction_keeps_timeout_and_git_evidence(
     ]
     assert len(writer_requests) == 2
     assert [request.timeout_seconds for request in writer_requests] == [71, 71]
-    assert "TARGETED_SEMANTIC_CORRECTION_SLOTS_V2" in writer_requests[1].prompt
+    assert "TARGETED_SEMANTIC_CORRECTION_SLOTS_V3" in writer_requests[1].prompt
     assert "Do not regenerate or repeat that object" in writer_requests[1].prompt
     assert len(runner.execution_records) == 4
     writer_references = [
@@ -1861,7 +1860,7 @@ def test_reviewer_correction_capture_reaches_controller_and_settlement(
             return original
         if invalid_handle:
             for item in submission_payload["replacements"]:
-                item["replacement_value"] = "evidence_ffffffffffffffff"
+                item["replacement_value"] = "candidate_99"
         captured, status, evidence = capture_controller_correction(
             tmp_path / "actual-correction",
             request,
@@ -1937,9 +1936,9 @@ def test_dynamic_reviewer_correction_uses_controller_evidence_handle(
     schema = correction.submission_contract.parameters_schema()
     variant = schema["properties"]["replacements"]["items"]["oneOf"][0]
     slot_handle = variant["properties"]["slot_handle"]["const"]
-    evidence_handle = variant["properties"]["replacement_value"]["enum"][0]
+    candidate_handle = variant["properties"]["replacement_value"]["enum"][0]
     assert slot_handle.startswith("slot_")
-    assert evidence_handle.startswith("evidence_")
+    assert candidate_handle == "candidate_1"
     reviewer_records = [
         runner.artifact_store.load(reference)
         for reference in runner.execution_records
@@ -1951,7 +1950,7 @@ def test_dynamic_reviewer_correction_uses_controller_evidence_handle(
     assert corrected.semantic_correction_outcome == "accepted"
     assert corrected.response_normalizations == (
         "bound controller evidence candidate "
-        f"{evidence_handle} to /criterion_assessments/0/tool_evidence/0/observable",
+        f"{candidate_handle} to /criterion_assessments/0/tool_evidence/0/observable",
     )
     artifact = runner.artifact_store.load(runner.outputs["reviewer"])
     assert isinstance(artifact, ReviewReport)
@@ -1980,7 +1979,7 @@ def test_invalid_candidate_selection_is_artifact_failure_not_controller_fault(
             and "replacements" in submission_payload
         ):
             for item in submission_payload["replacements"]:
-                item["replacement_value"] = "evidence_ffffffffffffffff"
+                item["replacement_value"] = "candidate_99"
             response_text = json.dumps(submission_payload)
             if unknown_usage:
                 executor.omit_usage_for = "reviewer"
@@ -2124,7 +2123,7 @@ def test_mixed_reviewer_selectors_recover_only_remaining_slot(
                                 "const"
                             ],
                             "replacement_value": (
-                                "evidence_ffffffffffffffff"
+                                "candidate_99"
                                 if selection_calls == 1 and index == 1
                                 else variant["properties"]["replacement_value"]["enum"][
                                     0

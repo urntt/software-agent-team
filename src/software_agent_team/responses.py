@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 from collections.abc import Collection
@@ -1036,19 +1035,10 @@ def bind_review_evidence_correction_candidates(
             if len(selected) == _MAX_REVIEW_EVIDENCE_CANDIDATES_PER_SLOT:
                 break
         candidates: list[SemanticCorrectionCandidate] = []
-        used_handles: set[str] = set()
-        for _, _, source, fragment in selected:
-            salt = 0
-            while True:
-                seed = fragment if salt == 0 else f"{fragment}\x00{salt}"
-                handle = f"evidence_{hashlib.sha256(seed.encode()).hexdigest()[:16]}"
-                if handle not in used_handles:
-                    break
-                salt += 1
-            used_handles.add(handle)
+        for index, (_, _, source, fragment) in enumerate(selected, start=1):
             candidates.append(
                 SemanticCorrectionCandidate(
-                    handle=handle,
+                    handle=f"candidate_{index}",
                     replacement_value=fragment,
                     source=source,
                 )

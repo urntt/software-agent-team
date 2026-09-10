@@ -962,7 +962,7 @@ def test_review_correction_selects_controller_catalog_instead_of_retyping_output
             "replacements": [
                 {
                     "slot_handle": semantic_correction_slot_handle(
-                        bound.evidence.base_response_sha256,
+                        bound.evidence.target_paths,
                         bound.evidence.target_paths[0],
                     ),
                     "replacement_value": selected.handle,
@@ -1083,7 +1083,7 @@ def test_review_correction_catalog_excludes_fragments_contaminated_by_failures()
             "replacements": [
                 {
                     "slot_handle": semantic_correction_slot_handle(
-                        bound.evidence.base_response_sha256,
+                        bound.evidence.target_paths,
                         bound.evidence.target_paths[0],
                     ),
                     "replacement_value": selected.handle,

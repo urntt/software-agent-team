@@ -61,7 +61,7 @@ def correction_submission(
         "replacements": [
             {
                 "slot_handle": semantic_correction_slot_handle(
-                    plan.evidence.base_response_sha256,
+                    plan.evidence.target_paths,
                     path,
                 ),
                 "replacement_value": value,
@@ -95,6 +95,65 @@ def test_plan_targets_only_invalid_fields_and_preserves_other_content() -> None:
     }
 
 
+def test_correction_uses_short_request_local_slot_ids_for_provider_values() -> None:
+    """Models must not copy high-entropy Controller identities to repair a value."""
+
+    path = "/proposal/product_definition/delivery_expectations"
+    payload: dict[str, object] = {
+        "proposal": {
+            "product_definition": {
+                "delivery_expectations": {"decision_ids": ["UNKNOWN"]}
+            }
+        }
+    }
+    report = diagnostic_from_invariant(
+        payload,
+        failure_class=ResponseFailureClass.SEMANTIC_CONTEXT,
+        authority=ResponseIssueAuthority.MODEL,
+        code="planning_context",
+        invariant_id="planning_product_definition_decision_reference",
+        subjects=(),
+        message="delivery expectations reference an unknown decision",
+        paths=(path,),
+    )
+    plan = build_semantic_correction_plan(payload, report)
+    assert plan is not None
+
+    schema = semantic_correction_schema(plan)
+    variants = schema["properties"]["replacements"]["items"]["oneOf"]
+    assert variants[0]["properties"]["slot_handle"]["const"] == "slot_1"
+    assert plan.evidence.base_response_sha256 not in correction_prompt(plan)
+
+    replacement = {"decision_ids": ["DECISION_DELIVERY"]}
+    corrected = apply_semantic_correction(
+        {
+            "replacements": [
+                {
+                    "slot_handle": "slot_1",
+                    "replacement_value": replacement,
+                }
+            ]
+        },
+        plan,
+    )
+    assert corrected["proposal"]["product_definition"]["delivery_expectations"] == (
+        replacement
+    )
+
+    with pytest.raises(SemanticCorrectionSubmissionError):
+        apply_semantic_correction(
+            {
+                "replacements": [
+                    {
+                        "slot_handle": "slot_2",
+                        "replacement_value": replacement,
+                    }
+                ]
+            },
+            plan,
+        )
+
+
 def test_correction_applies_an_authorized_subset_and_preserves_omitted_targets() -> (
     None
 ):
@@ -119,9 +178,7 @@ def test_correction_applies_an_authorized_subset_and_preserves_omitted_targets()
     assert plan.base_payload == payload
 
 
-def test_correction_rejects_duplicate_unknown_cross_plan_and_positional_payloads() -> (
-    None
-):
+def test_correction_rejects_duplicate_unknown_and_positional_payloads() -> None:
     payload: dict[str, object] = {
         "summary": "",
         "tasks": [],
@@ -139,31 +196,17 @@ def test_correction_rejects_duplicate_unknown_cross_plan_and_positional_payloads
     records = valid["replacements"]
     assert isinstance(records, list)
 
-    other_payload = {**payload, "preserved": "different base"}
-    other_plan = build_semantic_correction_plan(
-        other_payload,
-        diagnostic(other_payload),
-    )
-    assert other_plan is not None
-
     invalid_payloads = (
         {"replacements": [records[0], records[0]]},
         {
             "replacements": [
                 records[0],
                 {
-                    "slot_handle": "slot_ffffffffffffffff",
+                    "slot_handle": "slot_99",
                     "replacement_value": ["TASK_ONE"],
                 },
             ]
         },
-        correction_submission(
-            other_plan,
-            {
-                "/summary": "valid",
-                "/tasks": ["TASK_ONE"],
-            },
-        ),
         {"replacement_values": ["valid", ["TASK_ONE"]]},
     )
 
@@ -212,8 +255,8 @@ def test_correction_prompt_keeps_path_authority_in_the_controller() -> None:
     prompt = correction_prompt(plan)
     schema = prompt.split("CORRECTION_SCHEMA_JSON\n", maxsplit=1)[1]
 
-    assert "TARGETED_SEMANTIC_CORRECTION_SLOTS_V2" in prompt
-    assert "Return only the supplied opaque handles, not target paths" in prompt
+    assert "TARGETED_SEMANTIC_CORRECTION_SLOTS_V3" in prompt
+    assert "Return only the supplied short request-local slot IDs" in prompt
     assert "derived parent error must not be requested" not in prompt
     assert '"target_path": "/items/0/id"' in prompt
     assert '"target_path": "/items/1/id"' in prompt
@@ -316,7 +359,7 @@ def test_correction_prompt_projects_each_target_value_schema() -> None:
     )[0]
     slots = json.loads(target_json)
     slot_handle = semantic_correction_slot_handle(
-        plan.evidence.base_response_sha256,
+        plan.evidence.target_paths,
         "/items/0/id",
     )
 
@@ -370,7 +413,7 @@ def test_controller_candidate_handles_replace_exact_values_without_model_bytes()
     plan = build_semantic_correction_plan(payload, diagnostic(payload))
     assert plan is not None
     candidate = SemanticCorrectionCandidate(
-        handle="evidence_0123456789abcdef",
+        handle="candidate_1",
         replacement_value="exact\ncontroller-owned output",
         source="attempt 1 tool-004 read result",
     )
@@ -388,7 +431,7 @@ def test_controller_candidate_handles_replace_exact_values_without_model_bytes()
     schema = semantic_correction_schema(bound)
     replacement_schema = schema["properties"]["replacements"]
     slot_handle = semantic_correction_slot_handle(
-        bound.evidence.base_response_sha256,
+        bound.evidence.target_paths,
         "/summary",
     )
     assert "EVIDENCE_CANDIDATE_CATALOG" in prompt
@@ -401,7 +444,7 @@ def test_controller_candidate_handles_replace_exact_values_without_model_bytes()
                 "slot_handle": {"type": "string", "const": slot_handle},
                 "replacement_value": {
                     "type": "string",
-                    "enum": ["evidence_0123456789abcdef"],
+                    "enum": ["candidate_1"],
                 },
             },
             "required": ["slot_handle", "replacement_value"],
@@ -411,7 +454,7 @@ def test_controller_candidate_handles_replace_exact_values_without_model_bytes()
     application = apply_semantic_correction_with_evidence(
         correction_submission(
             bound,
-            {"/summary": "evidence_0123456789abcdef"},
+            {"/summary": "candidate_1"},
         ),
         bound,
     )
@@ -421,14 +464,14 @@ def test_controller_candidate_handles_replace_exact_values_without_model_bytes()
         "preserved": "keep this exact value",
     }
     assert application.normalizations == (
-        "bound controller evidence candidate evidence_0123456789abcdef to /summary",
+        "bound controller evidence candidate candidate_1 to /summary",
     )
 
     with pytest.raises(ValueError, match="not authorized for correction slot"):
         apply_semantic_correction(
             correction_submission(
                 bound,
-                {"/summary": "evidence_ffffffffffffffff"},
+                {"/summary": "candidate_99"},
             ),
             bound,
         )
@@ -455,7 +498,7 @@ def selection_plan() -> SemanticCorrectionPlan:
                 target_path=path,
                 candidates=(
                     SemanticCorrectionCandidate(
-                        handle=f"evidence_{index:016x}",
+                        handle=f"candidate_{index}",
                         replacement_value=f"exact evidence {index}",
                         source=f"tool-{index:03d}",
                     ),
@@ -472,7 +515,7 @@ def test_candidate_submission_applies_an_authorized_subset_without_guessing() ->
     application = apply_semantic_correction_with_evidence(
         correction_submission(
             plan,
-            {"/first": "evidence_0000000000000001"},
+            {"/first": "candidate_1"},
         ),
         plan,
     )
@@ -483,7 +526,7 @@ def test_candidate_submission_applies_an_authorized_subset_without_guessing() ->
         "keep": [1, 2],
     }
     assert application.normalizations == (
-        "bound controller evidence candidate evidence_0000000000000001 to /first",
+        "bound controller evidence candidate candidate_1 to /first",
     )
     assert plan.base_payload == {"first": "bad", "second": "bad", "keep": [1, 2]}
 
@@ -496,8 +539,8 @@ def test_mixed_candidate_selection_stages_only_verified_bindings() -> None:
             correction_submission(
                 plan,
                 {
-                    "/second": "evidence_0000000000000001",
-                    "/first": "evidence_0000000000000001",
+                    "/second": "candidate_1",
+                    "/first": "candidate_1",
                 },
             ),
             plan,
@@ -519,13 +562,13 @@ def test_mixed_candidate_selection_stages_only_verified_bindings() -> None:
     # Repeating a wrong selection cannot buy another call or erase staged work.
     with pytest.raises(SemanticCorrectionSubmissionError) as repeated:
         apply_semantic_correction(
-            correction_submission(pending, {"/second": "evidence_ffffffffffffffff"}),
+            correction_submission(pending, {"/second": "candidate_99"}),
             pending,
         )
     assert repeated.value.recovery_plan is None
     assert repeated.value.normalizations == ()
     corrected = apply_semantic_correction(
-        correction_submission(pending, {"/second": "evidence_0000000000000002"}),
+        correction_submission(pending, {"/second": "candidate_2"}),
         pending,
     )
     assert corrected == {
@@ -552,12 +595,12 @@ def test_invalid_candidate_submission_fails_typed_without_guess_or_retry(
     plan = selection_plan()
     payload = correction_submission(
         plan,
-        {"/first": "evidence_0000000000000001", "/second": "evidence_0000000000000002"},
+        {"/first": "candidate_1", "/second": "candidate_2"},
     )
     replacements = payload["replacements"]
     if defect == "unknown_values":
         for item in replacements:
-            item["replacement_value"] = "evidence_ffffffffffffffff"
+            item["replacement_value"] = "candidate_99"
     elif defect == "wrong_slots":
         replacements[0]["replacement_value"], replacements[1]["replacement_value"] = (
             replacements[1]["replacement_value"],
@@ -566,7 +609,7 @@ def test_invalid_candidate_submission_fails_typed_without_guess_or_retry(
     elif defect == "duplicate_slot":
         replacements[1]["slot_handle"] = replacements[0]["slot_handle"]
     elif defect == "unknown_slot":
-        replacements[1]["slot_handle"] = "slot_ffffffffffffffff"
+        replacements[1]["slot_handle"] = "slot_99"
     else:
         payload = {"replacements": "not an array"}
     with pytest.raises(SemanticCorrectionSubmissionError) as caught:
@@ -630,7 +673,7 @@ def test_candidate_schema_does_not_invent_cross_slot_distinctness() -> None:
     plan = build_semantic_correction_plan(payload, issue)
     assert plan is not None
     shared = SemanticCorrectionCandidate(
-        handle="evidence_0123456789abcdef",
+        handle="candidate_1",
         replacement_value="shared eligible observation",
         source="one eligible result",
     )
@@ -651,8 +694,8 @@ def test_candidate_schema_does_not_invent_cross_slot_distinctness() -> None:
         correction_submission(
             bound,
             {
-                "/summary": "evidence_0123456789abcdef",
-                "/preserved": "evidence_0123456789abcdef",
+                "/summary": "candidate_1",
+                "/preserved": "candidate_1",
             },
         ),
         bound,

@@ -353,13 +353,17 @@ exact model-owned JSON-pointer paths. Human-readable error text explains the
 failure but never defines its identity. The controller retains the invalid
 semantic object,
 binds its canonical SHA-256 into persisted correction-request evidence, assigns
-each exact path a response-bound opaque handle, and asks the model to submit only
+each exact path a short ordinal ID local to the current correction request, and
+asks the model to submit only
 order-independent `{slot_handle, replacement_value}` records—never the digest,
-private path authority, or the complete object. Each model-visible slot includes a self-contained projection of
-the target value's exact response schema plus the validator-owned error constraints.
+private path authority, or the complete object. Each model-visible slot includes
+a self-contained projection of the target value's exact response schema plus the
+validator-owned error constraints.
 The correction submission schema discriminates each record by its constant handle
 and exact value schema; it is not an untyped `JsonValue` list with stricter prose
-beside it. ProductDefinition validation reports
+beside it. The private invocation binding and retained digest—not a model-copied
+high-entropy identifier—bind the submission to the current response.
+ProductDefinition validation reports
 independent invalid dimensions together, and each complete dimension is the atomic
 repair value so coupled disposition, source, statement, and downstream references
 cannot be repaired as a misleading sequence of isolated scalar edits. The exact
@@ -422,7 +426,7 @@ correction; unaffected assessments, boundary descriptions, findings, verdict,
 and summary remain immutable. SAT derives up to a bounded number of exact candidate
 fragments per leaf from eligible same-chain tool results and deterministic command
 evidence, excluding failed positive proof and submission-tool output. The correction
-schema accepts only the opaque handles for those candidates. The model chooses the
+schema accepts only short request-local handles for those candidates. The model chooses the
 semantic evidence; the Controller replaces the handle with exact bytes and records
 the binding as a normalization. No eligible candidate means no evidence-selector
 correction call. SAT does not ask the model to regenerate the assessment array and

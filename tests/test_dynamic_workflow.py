@@ -1178,7 +1178,7 @@ def test_captured_multi_selector_correction_controls_workflow_delivery(
                     {
                         "slot_handle": variant["properties"]["slot_handle"]["const"],
                         "replacement_value": (
-                            "evidence_ffffffffffffffff"
+                            "candidate_99"
                             if not valid_selection
                             and (len(variants) == 1 or index == 1)
                             else variant["properties"]["replacement_value"]["enum"][0]

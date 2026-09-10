@@ -145,7 +145,7 @@ def test_production_submission_correction_bridge(tmp_path: Path, case: str) -> N
     replacements = [
         {
             "slot_handle": semantic_correction_slot_handle(
-                plan.evidence.base_response_sha256, path
+                plan.evidence.target_paths, path
             ),
             "replacement_value": value,
         }

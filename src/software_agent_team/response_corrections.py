@@ -258,11 +258,11 @@ class ResponseValidationDiagnostic(BaseModel):
 
 
 class SemanticCorrectionReplacement(BaseModel):
-    """One value explicitly bound to a controller-issued correction slot."""
+    """One value bound to a short Controller-issued request-local slot."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    slot_handle: str = Field(pattern=r"^slot_[0-9a-f]{16}$")
+    slot_handle: str = Field(pattern=r"^slot_[1-9][0-9]?$")
     replacement_value: JsonValue
 
 
@@ -289,11 +289,11 @@ class SemanticCorrectionSubmission(BaseModel):
 
 
 class SemanticCorrectionCandidate(BaseModel):
-    """One controller-owned exact value exposed through an opaque handle."""
+    """One Controller-owned exact value exposed through a short local handle."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    handle: str = Field(pattern=r"^evidence_[0-9a-f]{16}$")
+    handle: str = Field(pattern=r"^candidate_[1-9][0-9]?$")
     replacement_value: JsonValue
     source: str = Field(min_length=1, max_length=200)
 
@@ -422,35 +422,33 @@ def semantic_payload_sha256(payload: dict[str, object]) -> str:
 
 
 def semantic_correction_slot_handle(
-    base_response_sha256: str,
+    target_paths: tuple[str, ...],
     target_path: str,
 ) -> str:
-    """Derive one opaque slot identity from controller-owned correction authority."""
+    """Return a short slot ID within one Controller-bound correction request."""
 
-    if len(base_response_sha256) != 64 or any(
-        character not in "0123456789abcdef" for character in base_response_sha256
-    ):
-        raise ValueError("correction slot base response identity is invalid")
-    if target_path == "/" or not target_path.startswith("/"):
-        raise ValueError("correction slot target requires a JSON pointer")
-    _decode_pointer(target_path)
-    identity = _json_sha256(
-        {
-            "domain": "semantic-correction-slot-v1",
-            "base_response_sha256": base_response_sha256,
-            "target_path": target_path,
-        }
-    )
-    return f"slot_{identity[:16]}"
+    if not target_paths or len(target_paths) > MAX_CORRECTION_FIELDS:
+        raise ValueError("correction slot target set is invalid")
+    if len(target_paths) != len(set(target_paths)):
+        raise ValueError("correction slot targets must be unique")
+    for path in target_paths:
+        if path == "/" or not path.startswith("/"):
+            raise ValueError("correction slot target requires a JSON pointer")
+        _decode_pointer(path)
+    try:
+        position = target_paths.index(target_path) + 1
+    except ValueError as error:
+        raise ValueError("correction slot target is not authorized") from error
+    return f"slot_{position}"
 
 
 def _semantic_correction_slot_bindings(
     plan: SemanticCorrectionPlan,
 ) -> dict[str, str]:
-    """Return a collision-free opaque-handle to private-path authority map."""
+    """Return the request-local slot-ID to private-path authority map."""
 
     bindings = {
-        semantic_correction_slot_handle(plan.evidence.base_response_sha256, path): path
+        semantic_correction_slot_handle(plan.evidence.target_paths, path): path
         for path in plan.evidence.target_paths
     }
     if len(bindings) != len(plan.evidence.target_paths):
@@ -770,13 +768,6 @@ def attach_semantic_correction_candidates(
     expected_order = tuple(path for path in plan.evidence.target_paths if path in paths)
     if paths != expected_order:
         raise ValueError("semantic correction candidate slots must follow target order")
-    handle_values: dict[str, str] = {}
-    for slot in slots:
-        for candidate in slot.candidates:
-            identity = _json_sha256(candidate.replacement_value)
-            previous = handle_values.setdefault(candidate.handle, identity)
-            if previous != identity:
-                raise ValueError("correction candidate handle maps to multiple values")
     return SemanticCorrectionPlan(
         base_payload=plan.base_payload,
         diagnostic=plan.diagnostic,
@@ -1024,7 +1015,7 @@ def correction_prompt(
         )
     )
     return (
-        "\n\nTARGETED_SEMANTIC_CORRECTION_SLOTS_V2\n"
+        "\n\nTARGETED_SEMANTIC_CORRECTION_SLOTS_V3\n"
         "This correction contract supersedes the earlier FINAL_RESPONSE_CONTRACT "
         "for this invocation. "
         "The prior semantic JSON object was parsed and retained by the controller. "
@@ -1034,13 +1025,15 @@ def correction_prompt(
         "can correct, and do not invent a value merely to cover a slot. Record order "
         "has no meaning. Omitted slots keep their exact prior values and the "
         "controller revalidates the complete object before deciding whether another "
-        "targeted correction is useful. Return only the supplied opaque handles, not "
-        "target paths. The controller owns the response identity and path bindings. "
+        "targeted correction is useful. Return only the supplied short request-local "
+        "slot IDs, not target paths. The controller owns the invocation binding, "
+        "response identity, and path bindings. "
         "All other fields are immutable and will be preserved by the controller. "
         "When a slot includes "
         "value_schema, that schema is the exact type and shape contract for its "
         "replacement value; satisfy its listed error constraints as well. When a "
-        "slot includes candidate_catalog, submit only one listed opaque handle for "
+        "slot includes candidate_catalog, submit only one listed short candidate "
+        "handle for "
         "that slot. The controller, not the model, replaces the handle with the "
         "catalog's exact evidence bytes. Distinct evidence obligations require "
         "distinct handles.\n"
