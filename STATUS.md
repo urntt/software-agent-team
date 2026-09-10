@@ -1,13 +1,54 @@
 # Project Status
 
-**Current milestone:** Phase 3E implemented; invocation lifecycle, classified checkpoint progress, ProductDefinition, typed submission, exact-slot correction, and Controller-bound Review evidence selection are offline-verified; final fresh-run and release validation remain in progress
+**Current milestone:** Phase 3E shared product acceptance completed; the exact `0.1.0` release candidate is awaiting immutable publication and stable lifecycle validation
 
-**Last updated:** September 9, 2026
+**Last updated:** September 10, 2026
 
 This document records what the repository implements now, what evidence
 supports that claim, and what remains unavailable. It does not redefine the
 product, architecture, experiment, or roadmap; those decisions belong to
 [`VISION.md`](VISION.md).
+
+## Current Release Candidate
+
+The shared product-acceptance implementation revision is
+`654b1521a3bfd302b0491e420d2b93aaf0f11f0f`. Its clean canonical `make check`
+completed with Ruff formatting and lint checks plus
+1,418 passing tests. The supervisor recorded a 369,745,920-byte aggregate peak
+RSS, no new cgroup or kernel OOM event, and no residual SAT-owned process,
+container, volume, process lease, stage process, or private test directory.
+
+The same candidate completed one managed, non-root, bare-`sat` reusable-product
+journey with `deepseek/deepseek-v4-flash-vision-exp`. Task admission passed all
+26 checks and approved-plan admission passed all 33 checks. Planning asked one
+material audience/workflow/maturity question, then three automatic typed
+corrections converged without an operator `r`. The approved Agent DAG placed a
+read-only Reviewer after the Implementer; the Controller derived the matching
+cross-Agent task dependency instead of asking the model or user to repeat it.
+
+The Implementer produced a clean descendant commit, all five deterministic
+project gates passed, and six exact-slot Reviewer corrections converged to an
+accepted grounded report. The Controller delivered the same immutable commit
+with all nine acceptance criteria passed. All 13 provider calls settled in one
+task ledger, no call remained active, and no call lacked price or token usage.
+External execution of the delivered setup, start, and test commands succeeded;
+an independent nested fixture verified duplicate, unique, no-duplicate,
+invalid-input, symlink, and read-only behavior. The documented default scan of
+`.` also scans the newly created `.venv`, which produces correct but noisy
+dependency-file matches and remains a non-blocking usability finding.
+
+This evidence closes the shared Planning-correction, Review-authority, Git
+ancestry, dependency-projection, and usable-product acceptance boundaries. It
+does not claim that `0.1.0` is published: the remaining release work is the
+exact-tag GitHub Actions gate, immutable manifest/Release, fresh stable install,
+stable/dev round trip, update check, rollback, and preservation-aware uninstall.
+
+## Implementation Evidence History
+
+The following sections preserve chronological implementation evidence. Phrases
+such as “pending” describe the candidate named in that paragraph and are not the
+current release-state summary; the current facts are the section above and
+[`Not Yet Available or Completed`](#not-yet-available-or-completed).
 
 ProductDefinition validation now preserves per-invariant authority. A proposal
 that lacks a material user-owned decision returns to one dimension-specific
@@ -1815,21 +1856,21 @@ action succeeded after interruption.
 
 ## Next Milestone
 
-The next executable milestone is a stable shared candidate, not another
-full user journey used to discover basic integration defects. First resolve
-the remaining initialization, Planning-correction, accounting, Git-ancestry,
-and progress boundaries with captured failures and focused production-path
-integration checks. Run the canonical full gate once that implementation batch
-is ready, then freeze one exact candidate.
+The next executable milestone is the immutable `0.1.0` stable publication and
+its fresh managed lifecycle. Freeze the final documentation and impact ledger,
+run the canonical local release gate once on that exact clean commit, generate
+and inspect the pre-tag manifest, push the commit, then create the one annotated
+`v0.1.0` tag. The exact-tag GitHub Actions run must pass the same canonical gate
+and publish exactly one verified identity manifest before stable installation
+begins.
 
-Only after that technical candidate is ready should a user-side test operator
-submit a representative task through the ordinary interface for the remaining
-Planning-adequacy and comprehension acceptance. The current contributor or an
-automated operator may fill that role without inspecting privileged state first;
-no separate human participant blocks technical work. The independent-device
-demonstration, a provider-backed two-route run,
-and stable release lifecycle follow shared candidate acceptance; they are not
-diagnostic substitutes for the current technical work.
+Post-publication validation uses a fresh supported non-root environment and the
+ordinary one-command installer. It must verify exact version/manifest identity,
+current-version update behavior, stable-to-dev and dev-to-stable switching,
+activation rollback, existing-OpenClaw isolation, state-aware export/uninstall,
+and exact cleanup. The first release has no previous stable, so a genuine
+stable-to-newer-stable upgrade remains deferred until the next release rather
+than being simulated.
 
 Fixed-topology comparison remains in Phase 4 so it can serve as a controlled
 baseline rather than define the product's permanent role layout.

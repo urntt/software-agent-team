@@ -44,6 +44,11 @@
       "summary": "Bind targeted relation corrections to canonical immutable requirement, criterion, decision, Agent and task IDs while preserving jointly created identities"
     },
     {
+      "id": "controller-derived-cross-agent-task-order",
+      "impact": "patch",
+      "summary": "Derive cross-Agent task dependencies from the authoritative Agent DAG while preserving model-owned same-Agent task ordering and strict invalid-edge rejection"
+    },
+    {
       "id": "durable-stop-before-every-invocation",
       "impact": "patch",
       "summary": "Check durable cancellation and interruption before initial, correction, fallback and continuation calls instead of relying only on currently live subprocesses"
