@@ -292,7 +292,13 @@ returns through the ordinary dialogue before Planning may propose again; it
 cannot silently preserve `kind=proposal`, fill the decision itself, or create an
 execution Agent. Other model-owned defects in the rejected proposal remain
 diagnostic evidence and are revalidated against the next complete proposal.
-Product-depth and actual question-answer validation still apply.
+The same authority rule covers a material user decision outside ProductDefinition:
+if a proposal claims `resolved_question` provenance for a question that does not
+exist in the transcript, the diagnostic binds its question ID and decision ID,
+and the Controller requires a question-only response with that exact ID and
+category. Conversely, omitting the decision for a question the user already
+answered remains a model-owned relation correction. Product-depth and actual
+question-answer validation still apply.
 
 This is a dependency contract, not a questionnaire count. An explicit
 throwaway prototype can proceed directly with a lean proposal. An
@@ -1102,13 +1108,23 @@ deterministically deconflicts an echo whose model-owned relationship is still
 needed. The canonical profile text remains controller-owned, both task bindings
 are retained, and the raw response plus every normalization remain recorded in
 the Planning turn.
-Planning schema v17 adds Controller-owned question-admission evidence. It records
-whether a visible question is a Planner suggestion or a Controller-required
-recovery, binds the admitted ProductDefinition dimensions, and cites any
-Controller invariant that requires user authority. Suggested ProductDefinition
-answers now carry exact per-dimension values, so the ordinary interface and
-proposal compiler share one scope contract. Schema-v2 through schema-v16 records
-remain readable without invented admission fields.
+Planning schema v18 extends Controller-owned question admission to a material
+user decision outside ProductDefinition. When a proposal cites a question that
+was never asked, the diagnostic identifies both the claimed question and its
+user-owned decision. Recovery then constrains the question-only response to the
+same ID and category, records the decision ID in admission evidence, and keeps
+ProductDefinition dimensions empty. It cannot enter model-owned proposal
+correction. An answered question missing from a later proposal remains a
+model-owned relation defect. Schema-v2 through schema-v17 records remain readable
+without inventing the new decision binding.
+
+Planning schema v17 added Controller-owned question-admission evidence. It
+records whether a visible question is a Planner suggestion or a
+Controller-required recovery, binds the admitted ProductDefinition dimensions,
+and cites any Controller invariant that requires user authority. Suggested
+ProductDefinition answers carry exact per-dimension values, so the ordinary
+interface and proposal compiler share one scope contract. Schema-v2 through
+schema-v16 records remain readable without invented admission fields.
 Planning schema v9 makes primary-workflow materiality mandatory for new
 proposals and their correction slots. Schema-v2 through schema-v8 records retain
 their original validation and canonical bytes; only historical preview may use

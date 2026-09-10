@@ -168,7 +168,9 @@ The user may answer in ordinary language. SAT then:
    questionnaire. Every focused question identifies its admitted decision scope
    and whether it is a Planner suggestion or a Controller-required recovery;
    its suggested answers supply exact values only for that scope. Planner prose
-   is optional advisory detail, not system policy;
+   is optional advisory detail, not system policy. A proposal that cites an
+   unasked question for a user-owned decision returns to a question bound to that
+   exact decision instead of entering repeated proposal correction;
 6. Presents one complete overview beginning with target users, killer workflow,
    delivery maturity, usability/operational/delivery expectations, non-goals,
    and architecture/team/cost/delivery effects, then containing requirements,

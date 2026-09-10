@@ -86,7 +86,10 @@ On first use, SAT guides you through:
    selected by the Planner or required by Controller validation. Suggested
    answers carry exact values for only that scope. Model-authored wording and
    rationale remain available as advisory details, but cannot become a system
-   prerequisite or widen the answer's authority;
+   prerequisite or widen the answer's authority. If a proposal claims that a
+   user-owned decision came from a question that was never asked, the Controller
+   returns that exact decision to dialogue instead of repeatedly asking the model
+   to repair user authority;
 7. One overview that begins with the approved audience, killer workflow,
    delivery maturity, usability/operational/delivery expectations, non-goals,
    and their architecture, team, cost, and delivery effects, followed by

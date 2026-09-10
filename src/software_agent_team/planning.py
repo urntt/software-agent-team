@@ -124,7 +124,7 @@ from software_agent_team.teams import (
     permission_for_capability,
 )
 
-PLANNING_SCHEMA_VERSION = 17
+PLANNING_SCHEMA_VERSION = 18
 MINIMUM_READABLE_PLANNING_SCHEMA_VERSION = 2
 PLANNING_TEMPLATE = Path(__file__).with_name("prompt_templates") / "adaptive_planner.md"
 MAX_PLANNING_EVIDENCE_CHARACTERS = 1_000_000
@@ -154,11 +154,16 @@ class _PlanningInvariant:
 
 @dataclass(frozen=True)
 class _PlanningClarificationRecovery:
-    """One user-owned product decision that an invalid proposal must ask about."""
+    """One user-owned decision that an invalid proposal must ask about."""
 
-    dimension: ProductDefinitionDimension
+    decision_category: PlanningDecisionCategory
     invariant_ids: tuple[str, ...]
     messages: tuple[str, ...]
+    question_id: str | None = None
+    decision_id: str | None = None
+    decision_summary: str | None = None
+    decision_rationale: str | None = None
+    dimension: ProductDefinitionDimension | None = None
 
 
 class _PlanningModelInvariantError(ValueError):
@@ -474,6 +479,7 @@ class PlanningActivity:
     budget_ceiling_usd: Decimal | None = None
     pricing_source: ModelMetadataSource | None = None
     clarification_dimension: ProductDefinitionDimension | None = None
+    clarification_category: PlanningDecisionCategory | None = None
 
 
 PlanningActivityHandler = Callable[[PlanningActivity], None]
@@ -718,9 +724,13 @@ class TerminalPlanningProgress:
             )
         elif activity.kind is PlanningActivityKind.CLARIFICATION_SCHEDULED:
             dimension = (
-                "a product requirement"
-                if activity.clarification_dimension is None
-                else activity.clarification_dimension.value
+                activity.clarification_dimension.value
+                if activity.clarification_dimension is not None
+                else (
+                    "a product requirement"
+                    if activity.clarification_category is None
+                    else activity.clarification_category.value.replace("_", " ")
+                )
             )
             self._print(
                 "↻ Planning proposal needs a user decision; "
@@ -1679,8 +1689,10 @@ def _planning_invariants_diagnostic(
 
 def _clarification_recovery_from_diagnostic(
     diagnostic: ResponseValidationDiagnostic,
+    *,
+    payload: dict[str, object] | None,
 ) -> _PlanningClarificationRecovery | None:
-    """Recover one atomic product question instead of repairing user authority."""
+    """Recover one atomic user question instead of repairing user authority."""
 
     if diagnostic.failure_class is not ResponseFailureClass.MISSING_USER_DECISION:
         return None
@@ -1698,12 +1710,64 @@ def _clarification_recovery_from_diagnostic(
         )
         if matching:
             return _PlanningClarificationRecovery(
-                dimension=dimension,
+                decision_category=PlanningDecisionCategory.PRODUCT_REQUIREMENT,
                 invariant_ids=tuple(
                     sorted({issue.invariant_id or issue.code for issue in matching})
                 ),
                 messages=tuple(issue.message for issue in matching),
+                dimension=dimension,
             )
+    if payload is None:
+        return None
+    proposal = payload.get("proposal")
+    decisions = None if not isinstance(proposal, dict) else proposal.get("decisions")
+    if not isinstance(decisions, list):
+        return None
+    decisions_by_id = {
+        item.get("id"): item
+        for item in decisions
+        if isinstance(item, dict) and isinstance(item.get("id"), str)
+    }
+    for issue in diagnostic.issues:
+        if (
+            issue.authority is not ResponseIssueAuthority.USER
+            or issue.invariant_id != "planning_question_decision_completeness"
+        ):
+            continue
+        question_ids = tuple(
+            subject.identifier
+            for subject in issue.subjects
+            if subject.kind is ResponseIssueSubjectKind.QUESTION
+        )
+        decision_ids = tuple(
+            subject.identifier
+            for subject in issue.subjects
+            if subject.kind is ResponseIssueSubjectKind.DECISION
+        )
+        if len(question_ids) != 1 or len(decision_ids) != 1:
+            continue
+        decision = decisions_by_id.get(decision_ids[0])
+        if not isinstance(decision, dict):
+            continue
+        try:
+            category = PlanningDecisionCategory(decision.get("category"))
+        except (TypeError, ValueError):
+            continue
+        if _DECISION_AUTHORITY[category] is not PlanningDecisionAuthority.USER:
+            continue
+        summary = decision.get("summary")
+        rationale = decision.get("rationale")
+        if not isinstance(summary, str) or not isinstance(rationale, str):
+            continue
+        return _PlanningClarificationRecovery(
+            decision_category=category,
+            invariant_ids=(issue.invariant_id,),
+            messages=(issue.message,),
+            question_id=question_ids[0],
+            decision_id=decision_ids[0],
+            decision_summary=summary,
+            decision_rationale=rationale,
+        )
     return None
 
 
@@ -1782,7 +1846,7 @@ class PlanningRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal[
-        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, PLANNING_SCHEMA_VERSION
+        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, PLANNING_SCHEMA_VERSION
     ] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     project_name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
@@ -1931,6 +1995,11 @@ class PlanningQuestionAdmission(BaseModel):
     origin: PlanningQuestionOrigin
     product_definition_dimensions: tuple[ProductDefinitionDimension, ...] = ()
     controller_invariant_ids: tuple[str, ...] = ()
+    controller_decision_id: str | None = Field(
+        default=None,
+        pattern=r"^DECISION_[A-Z0-9_]+$",
+        exclude_if=lambda value: value is None,
+    )
 
     @field_validator("controller_invariant_ids")
     @classmethod
@@ -1940,17 +2009,24 @@ class PlanningQuestionAdmission(BaseModel):
     @model_validator(mode="after")
     def require_origin_evidence(self) -> Self:
         if self.origin is PlanningQuestionOrigin.CONTROLLER_REQUIREMENT:
-            if len(self.product_definition_dimensions) != 1:
+            if len(self.product_definition_dimensions) > 1:
                 raise ValueError(
-                    "Controller-required questions must bind one product dimension"
+                    "Controller-required questions cannot span product dimensions"
                 )
             if not self.controller_invariant_ids:
                 raise ValueError(
                     "Controller-required questions need invariant evidence"
                 )
-        elif self.controller_invariant_ids:
+            if bool(self.product_definition_dimensions) == bool(
+                self.controller_decision_id
+            ):
+                raise ValueError(
+                    "Controller-required questions must bind one product dimension "
+                    "or one material decision"
+                )
+        elif self.controller_invariant_ids or self.controller_decision_id is not None:
             raise ValueError(
-                "Planner-suggested questions cannot claim Controller invariants"
+                "Planner-suggested questions cannot claim Controller recovery evidence"
             )
         return self
 
@@ -1995,6 +2071,7 @@ class _PlanningQuestionContract:
     answer: str | None = None
     answer_dimension_values: tuple[tuple[ProductDefinitionDimension, str], ...] = ()
     approved_dimension_values: tuple[tuple[ProductDefinitionDimension, str], ...] = ()
+    required_decision_id: str | None = None
 
 
 class PlanningDecisionRecord(BaseModel):
@@ -3879,23 +3956,42 @@ def validate_planning_clarity(
     if set(linked) != set(question_contracts):
         missing = set(question_contracts) - set(linked)
         invented = set(linked) - set(question_contracts)
-        details = []
+        invariants: list[_PlanningInvariant] = []
         if missing:
-            details.append("missing " + ", ".join(sorted(missing)))
-        if invented:
-            details.append("unknown " + ", ".join(sorted(invented)))
-        message = "proposal question-decision provenance is incomplete: " + "; ".join(
-            details
-        )
-        raise _planning_context_invariant(
-            "planning_question_decision_completeness",
-            message,
-            paths=("/proposal/decisions",),
-            subjects=_planning_subjects(
-                *((ResponseIssueSubjectKind.QUESTION, item) for item in missing),
-                *((ResponseIssueSubjectKind.QUESTION, item) for item in invented),
-            ),
-        )
+            invariants.append(
+                _PlanningInvariant(
+                    invariant_id="planning_question_decision_completeness",
+                    message=(
+                        "proposal question-decision provenance is incomplete: missing "
+                        + ", ".join(sorted(missing))
+                    ),
+                    paths=("/proposal/decisions",),
+                    subjects=_planning_subjects(
+                        *((ResponseIssueSubjectKind.QUESTION, item) for item in missing)
+                    ),
+                )
+            )
+        decision_ids = tuple(item.id for item in body.decisions)
+        for question_id in sorted(invented):
+            decision = linked[question_id]
+            decision_index = decision_ids.index(decision.id)
+            invariants.append(
+                _PlanningInvariant(
+                    invariant_id="planning_question_decision_completeness",
+                    message=(
+                        "proposal question-decision provenance is incomplete: "
+                        f"unknown {question_id} for user-owned decision {decision.id}"
+                    ),
+                    paths=(f"/proposal/decisions/{decision_index}/provenance",),
+                    subjects=_planning_subjects(
+                        (ResponseIssueSubjectKind.DECISION, decision.id),
+                        (ResponseIssueSubjectKind.QUESTION, question_id),
+                    ),
+                    failure_class=ResponseFailureClass.MISSING_USER_DECISION,
+                    authority=ResponseIssueAuthority.USER,
+                )
+            )
+        raise _PlanningContextInvariantsError(tuple(invariants))
     for question_id, contract in question_contracts.items():
         decision = linked[question_id]
         if (
@@ -3909,6 +4005,25 @@ def validate_planning_clarity(
                 "planning_question_decision_contract",
                 f"decision for question {question_id} changed its category",
                 paths=(f"/proposal/decisions/{decision_index}/category",),
+                subjects=_planning_subjects(
+                    (ResponseIssueSubjectKind.DECISION, decision.id),
+                    (ResponseIssueSubjectKind.QUESTION, question_id),
+                ),
+            )
+        if (
+            contract.required_decision_id is not None
+            and decision.id != contract.required_decision_id
+        ):
+            decision_index = tuple(item.id for item in body.decisions).index(
+                decision.id
+            )
+            raise _planning_context_invariant(
+                "planning_question_decision_identity",
+                (
+                    f"decision for question {question_id} must preserve Controller-"
+                    f"bound ID {contract.required_decision_id}"
+                ),
+                paths=(f"/proposal/decisions/{decision_index}/id",),
                 subjects=_planning_subjects(
                     (ResponseIssueSubjectKind.DECISION, decision.id),
                     (ResponseIssueSubjectKind.QUESTION, question_id),
@@ -4276,7 +4391,7 @@ def _planning_proposal_body_for_model(
 def _planning_question_response_schema(
     recovery: _PlanningClarificationRecovery,
 ) -> dict[str, object]:
-    """Constrain recovery to one atomic user-owned product question."""
+    """Constrain recovery to one atomic Controller-identified user decision."""
 
     schema = _planning_response_schema()
     properties = schema.get("properties")
@@ -4314,15 +4429,26 @@ def _planning_question_response_schema(
     if not isinstance(question_properties, dict):
         raise PlanningError("Planning response schema has no question definition")
     question_properties["decision_category"] = {
-        "const": PlanningDecisionCategory.PRODUCT_REQUIREMENT.value,
+        "const": recovery.decision_category.value,
         "type": "string",
     }
-    question_properties["product_definition_dimensions"] = {
-        "items": {"const": recovery.dimension.value, "type": "string"},
-        "maxItems": 1,
-        "minItems": 1,
-        "type": "array",
-    }
+    if recovery.question_id is not None:
+        question_properties["id"] = {
+            "const": recovery.question_id,
+            "type": "string",
+        }
+    if recovery.dimension is None:
+        question_properties["product_definition_dimensions"] = {
+            "maxItems": 0,
+            "type": "array",
+        }
+    else:
+        question_properties["product_definition_dimensions"] = {
+            "items": {"const": recovery.dimension.value, "type": "string"},
+            "maxItems": 1,
+            "minItems": 1,
+            "type": "array",
+        }
     option_definition = definitions.get("PlanningOption")
     option_properties = (
         None
@@ -4339,13 +4465,16 @@ def _planning_question_response_schema(
         option_value_properties, dict
     ):
         raise PlanningError("Planning response schema has no option value definition")
-    option_properties["product_definition_values"].update(
-        {"maxItems": 1, "minItems": 1}
-    )
-    option_value_properties["dimension"] = {
-        "const": recovery.dimension.value,
-        "type": "string",
-    }
+    option_values = option_properties["product_definition_values"]
+    if recovery.dimension is None:
+        option_values.pop("minItems", None)
+        option_values["maxItems"] = 0
+    else:
+        option_values.update({"maxItems": 1, "minItems": 1})
+        option_value_properties["dimension"] = {
+            "const": recovery.dimension.value,
+            "type": "string",
+        }
     return schema
 
 
@@ -4538,7 +4667,7 @@ class AdaptiveImplementationPlan(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal[
-        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, PLANNING_SCHEMA_VERSION
+        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, PLANNING_SCHEMA_VERSION
     ] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     team_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
@@ -4639,7 +4768,7 @@ class PlanningTurn(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal[
-        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, PLANNING_SCHEMA_VERSION
+        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, PLANNING_SCHEMA_VERSION
     ] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     sequence: int = Field(ge=1)
@@ -4715,6 +4844,14 @@ class PlanningTurn(BaseModel):
         elif self.question_admission is not None:
             raise ValueError(
                 "legacy Planning turns cannot contain question admission evidence"
+            )
+        if (
+            self.schema_version < 18
+            and self.question_admission is not None
+            and self.question_admission.controller_decision_id is not None
+        ):
+            raise ValueError(
+                "legacy Planning turns cannot contain Controller decision binding"
             )
         lifecycle = self.execution.invocation_lifecycle
         if (
@@ -4872,7 +5009,7 @@ class PlanningProposal(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal[
-        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, PLANNING_SCHEMA_VERSION
+        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, PLANNING_SCHEMA_VERSION
     ] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     revision: int = Field(ge=1)
@@ -4944,7 +5081,7 @@ class PlanningSession(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal[
-        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, PLANNING_SCHEMA_VERSION
+        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, PLANNING_SCHEMA_VERSION
     ] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     request_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -5127,7 +5264,7 @@ class PlanningApproval(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal[
-        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, PLANNING_SCHEMA_VERSION
+        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, PLANNING_SCHEMA_VERSION
     ] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     revision: int = Field(ge=1)
@@ -6754,6 +6891,9 @@ class AdaptivePlanningCoordinator:
             transcript.append(
                 {
                     "question": response.question.model_dump(mode="json"),
+                    "question_admission": presented_question.admission.model_dump(
+                        mode="json"
+                    ),
                     "answer": answer.text,
                     "selected_option_id": answer.selected_option_id,
                     "product_definition_values": [
@@ -6855,6 +6995,9 @@ class AdaptivePlanningCoordinator:
             transcript.append(
                 {
                     "question": response.question.model_dump(mode="json"),
+                    "question_admission": presented_question.admission.model_dump(
+                        mode="json"
+                    ),
                     "answer": answer.text,
                     "selected_option_id": answer.selected_option_id,
                     "product_definition_values": [
@@ -6987,9 +7130,16 @@ class AdaptivePlanningCoordinator:
                     approved_dimension_values=tuple(
                         values_by_question.get(question_id, ())
                     ),
+                    required_decision_id=decision.id,
                 )
         for entry in transcript:
             question = PlanningQuestion.model_validate(entry["question"])
+            admission_payload = entry.get("question_admission")
+            admission = (
+                None
+                if admission_payload is None
+                else PlanningQuestionAdmission.model_validate(admission_payload)
+            )
             answer = entry.get("answer")
             if not isinstance(answer, str) or not answer.strip():
                 raise PlanningError(
@@ -7026,6 +7176,9 @@ class AdaptivePlanningCoordinator:
                 answer=answer,
                 answer_dimension_values=tuple(
                     (item.dimension, item.value) for item in answer_values
+                ),
+                required_decision_id=(
+                    None if admission is None else admission.controller_decision_id
                 ),
             )
         return contracts
@@ -7327,11 +7480,17 @@ class AdaptivePlanningCoordinator:
                         clarification_recovery is not None
                         and parsed.kind is not PlanningResponseKind.QUESTION
                     ):
+                        clarification_scope = (
+                            clarification_recovery.dimension.value
+                            if clarification_recovery.dimension is not None
+                            else clarification_recovery.question_id
+                            or clarification_recovery.decision_category.value
+                        )
                         raise _planning_context_invariant(
                             "planning_required_clarification_response",
                             (
                                 "Planning must ask the requested user-owned "
-                                f"{clarification_recovery.dimension.value} question "
+                                f"{clarification_scope} question "
                                 "before returning a proposal"
                             ),
                             paths=("/",),
@@ -7356,6 +7515,11 @@ class AdaptivePlanningCoordinator:
                                 ()
                                 if clarification_recovery is None
                                 else clarification_recovery.invariant_ids
+                            ),
+                            controller_decision_id=(
+                                None
+                                if clarification_recovery is None
+                                else clarification_recovery.decision_id
                             ),
                         )
                     else:
@@ -7482,7 +7646,10 @@ class AdaptivePlanningCoordinator:
 
                 if parsed is None and response_validation is not None:
                     next_clarification_recovery = (
-                        _clarification_recovery_from_diagnostic(response_validation)
+                        _clarification_recovery_from_diagnostic(
+                            response_validation,
+                            payload=payload,
+                        )
                     )
                     if correction_plan is None:
                         if next_clarification_recovery is None and payload is not None:
@@ -7565,6 +7732,9 @@ class AdaptivePlanningCoordinator:
                         maximum_attempts=maximum_attempts,
                         model=request.model,
                         clarification_dimension=(next_clarification_recovery.dimension),
+                        clarification_category=(
+                            next_clarification_recovery.decision_category
+                        ),
                     ),
                 )
                 attempt += 1
@@ -7734,14 +7904,36 @@ class AdaptivePlanningCoordinator:
                 None
                 if clarification_recovery is None
                 else {
+                    "question_id": clarification_recovery.question_id,
+                    "decision_id": clarification_recovery.decision_id,
+                    "decision_category": (
+                        clarification_recovery.decision_category.value
+                    ),
+                    "invalid_model_decision_summary": (
+                        clarification_recovery.decision_summary
+                    ),
+                    "invalid_model_decision_rationale": (
+                        clarification_recovery.decision_rationale
+                    ),
                     "product_definition_dimension": (
-                        clarification_recovery.dimension.value
+                        None
+                        if clarification_recovery.dimension is None
+                        else clarification_recovery.dimension.value
                     ),
                     "invariant_ids": list(clarification_recovery.invariant_ids),
                     "validation_messages": list(clarification_recovery.messages),
                     "instruction": (
-                        "Return one question for exactly this user-owned dimension; "
-                        "do not return or repair a proposal in this invocation."
+                        (
+                            "Return one question for exactly this user-owned product "
+                            "dimension."
+                            if clarification_recovery.dimension is not None
+                            else (
+                                "Return one question using the exact required question "
+                                "ID and decision category; keep "
+                                "product_definition_dimensions empty."
+                            )
+                        )
+                        + " Do not return or repair a proposal in this invocation."
                     ),
                 }
             ),
@@ -7898,6 +8090,12 @@ def _interactive_question_answerer(
                     dimension.value
                     for dimension in question.product_definition_dimensions
                 )
+            )
+        elif admission.controller_decision_id is not None:
+            write(
+                "Decision scope: "
+                f"{question.decision_category.value} / "
+                f"{admission.controller_decision_id}"
             )
         if admission.origin is PlanningQuestionOrigin.CONTROLLER_REQUIREMENT:
             write(

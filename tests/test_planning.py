@@ -97,6 +97,7 @@ from software_agent_team.planning import (
 from software_agent_team.response_corrections import (
     ResponseFailureClass,
     ResponseIssueAuthority,
+    SemanticCorrectionOutcome,
     semantic_correction_slot_handle,
     semantic_payload_sha256,
 )
@@ -1213,8 +1214,14 @@ def test_one_question_can_authorize_an_explicit_product_dimension_bundle(
     assert shown[0].admission.controller_invariant_ids == ()
     current_turn = coordinator.store.load_turn(request().run_id, 1)
     current_payload = current_turn.model_dump(mode="json")
-    assert current_payload["schema_version"] == 17
+    assert current_payload["schema_version"] == 18
     assert current_payload["question_admission"]["origin"] == "planner_suggestion"
+    schema_seventeen = deepcopy(current_payload)
+    schema_seventeen["schema_version"] = 17
+    assert (
+        PlanningTurn.model_validate(schema_seventeen).model_dump(mode="json")
+        == schema_seventeen
+    )
     without_admission = dict(current_payload)
     without_admission.pop("question_admission")
     with pytest.raises(ValidationError, match="requires Controller admission"):
@@ -2055,6 +2062,285 @@ def test_answered_question_must_have_exact_decision_provenance(tmp_path: Path) -
             request(source_request=AMBIGUOUS_LINK_REQUEST),
             answer_question=lambda _question: "Only local links.",
         )
+
+
+def test_unknown_user_question_provenance_requests_bound_clarification(
+    tmp_path: Path,
+) -> None:
+    """Replay the ca1ee02 existing-report authority failure through production APIs."""
+
+    question_id = "existing_report_handling"
+    decision = PlanningDecisionRecord(
+        id="DECISION_EXISTING_REPORT_HANDLING",
+        category=PlanningDecisionCategory.PRODUCT_REQUIREMENT,
+        authority=PlanningDecisionAuthority.USER,
+        provenance=PlanningDecisionProvenance(
+            kind=PlanningDecisionProvenanceKind.RESOLVED_QUESTION,
+            source=question_id,
+        ),
+        summary="Refuse to replace an existing report unless --force is supplied.",
+        rationale="Overwriting an existing output is a material user-data choice.",
+    )
+    body = proposal_body().model_copy(
+        update={"decisions": (*proposal_body().decisions, decision)}
+    )
+    recovery_question = PlanningQuestion(
+        id=question_id,
+        text="What should happen when the report path already exists?",
+        why="The answer changes whether a normal rerun can replace prior output.",
+        decision_category=PlanningDecisionCategory.PRODUCT_REQUIREMENT,
+        decision_owner=PlanningDecisionAuthority.USER,
+        missing_evidence=(
+            "The request does not authorize replacing an existing report.",
+        ),
+        material_consequences=(
+            "The choice changes default CLI behavior and failure-path tests.",
+        ),
+        options=(
+            PlanningOption(
+                id="overwrite",
+                label="Overwrite",
+                description="Replace the existing report by default.",
+            ),
+            PlanningOption(
+                id="require_force",
+                label="Require --force",
+                description="Refuse replacement unless --force is supplied.",
+            ),
+        ),
+    )
+    executor = ScriptedAgentExecutor(
+        [
+            response(proposal_response(body)),
+            response(
+                PlanningModelResponse(
+                    kind=PlanningResponseKind.QUESTION,
+                    question=recovery_question,
+                )
+            ),
+            response(proposal_response(body)),
+        ]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(response_repair_limit=0),
+        clock=AdvancingClock(),
+    )
+    shown: list[PresentedPlanningQuestion] = []
+    clarification_output: list[str] = []
+    interactive_answer = planning._interactive_question_answerer(
+        read=lambda _prompt: "2",
+        write=clarification_output.append,
+    )
+
+    created = coordinator.start(
+        request(),
+        answer_question=lambda question: (
+            shown.append(question) or interactive_answer(question)
+        ),
+    )
+
+    assert created is not None
+    assert created.body == body
+    assert len(shown) == 1
+    assert shown[0].id == question_id
+    assert shown[0].product_definition_dimensions == ()
+    assert shown[0].admission.origin is PlanningQuestionOrigin.CONTROLLER_REQUIREMENT
+    assert shown[0].admission.controller_decision_id == decision.id
+    assert shown[0].admission.controller_invariant_ids == (
+        "planning_question_decision_completeness",
+    )
+    assert (
+        "Decision scope: product_requirement / DECISION_EXISTING_REPORT_HANDLING"
+        in clarification_output
+    )
+    assert any(
+        "Controller validation requires this user-owned decision" in line
+        for line in clarification_output
+    )
+    assert not any("d. Show Planner wording" in line for line in clarification_output)
+
+    invalid = store.load_turn(request().run_id, 1)
+    assert invalid.response_validation is not None
+    assert invalid.response_validation.failure_class is (
+        ResponseFailureClass.MISSING_USER_DECISION
+    )
+    assert invalid.response_validation.correction_paths == ()
+    assert {
+        (subject.kind.value, subject.identifier)
+        for subject in invalid.response_validation.issues[0].subjects
+    } == {
+        ("decision", decision.id),
+        ("question", question_id),
+    }
+
+    recovery_contract = executor.requests[1].submission_contract
+    assert recovery_contract is not None
+    recovery_schema = recovery_contract.parameters_schema()
+    question_definition = recovery_schema["$defs"]["PlanningQuestion"]
+    assert question_definition["properties"]["id"] == {
+        "const": question_id,
+        "type": "string",
+    }
+    assert question_definition["properties"]["decision_category"] == {
+        "const": "product_requirement",
+        "type": "string",
+    }
+    assert question_definition["properties"]["product_definition_dimensions"] == {
+        "maxItems": 0,
+        "type": "array",
+    }
+    option_definition = recovery_schema["$defs"]["PlanningOption"]
+    option_values = option_definition["properties"]["product_definition_values"]
+    assert option_values["items"] == {"$ref": "#/$defs/PlanningOptionValue"}
+    assert option_values["maxItems"] == 0
+    assert "minItems" not in option_values
+    assert '"question_id": "existing_report_handling"' in executor.requests[1].prompt
+    assert '"decision_id": "DECISION_EXISTING_REPORT_HANDLING"' in (
+        executor.requests[1].prompt
+    )
+    recovery_turn = store.load_turn(request().run_id, 2)
+    recovery_payload = recovery_turn.model_dump(mode="json")
+    assert recovery_payload["schema_version"] == 18
+    assert recovery_payload["question_admission"]["controller_decision_id"] == (
+        decision.id
+    )
+    schema_seventeen = deepcopy(recovery_payload)
+    schema_seventeen["schema_version"] = 17
+    with pytest.raises(
+        ValidationError,
+        match="legacy Planning turns cannot contain Controller decision binding",
+    ):
+        PlanningTurn.model_validate(schema_seventeen)
+
+
+def test_controller_bound_question_rejects_a_different_decision_identity() -> None:
+    question_id = "existing_report_handling"
+    original_id = "DECISION_EXISTING_REPORT_HANDLING"
+    changed = PlanningDecisionRecord(
+        id="DECISION_DIFFERENT_OUTPUT_POLICY",
+        category=PlanningDecisionCategory.PRODUCT_REQUIREMENT,
+        authority=PlanningDecisionAuthority.USER,
+        provenance=PlanningDecisionProvenance(
+            kind=PlanningDecisionProvenanceKind.RESOLVED_QUESTION,
+            source=question_id,
+        ),
+        summary="Replace an existing report.",
+        rationale="The question answer selected this output behavior.",
+    )
+    body = proposal_body().model_copy(
+        update={"decisions": (*proposal_body().decisions, changed)}
+    )
+
+    with pytest.raises(
+        PlanningError,
+        match=f"must preserve Controller-bound ID {original_id}",
+    ):
+        planning.validate_planning_clarity(
+            body,
+            source_request=request().source_request,
+            question_contracts={
+                question_id: planning._PlanningQuestionContract(
+                    category=PlanningDecisionCategory.PRODUCT_REQUIREMENT,
+                    owner=PlanningDecisionAuthority.USER,
+                    answer="Overwrite the report.",
+                    required_decision_id=original_id,
+                )
+            },
+        )
+
+
+def test_user_question_recovery_interrupts_model_owned_correction(
+    tmp_path: Path,
+) -> None:
+    question_id = "existing_report_handling"
+    decision = PlanningDecisionRecord(
+        id="DECISION_EXISTING_REPORT_HANDLING",
+        category=PlanningDecisionCategory.PRODUCT_REQUIREMENT,
+        authority=PlanningDecisionAuthority.USER,
+        provenance=PlanningDecisionProvenance(
+            kind=PlanningDecisionProvenanceKind.RESOLVED_QUESTION,
+            source=question_id,
+        ),
+        summary="Require --force before replacing an existing report.",
+        rationale="Existing-output behavior needs user authority.",
+    )
+    final_body = proposal_body().model_copy(
+        update={"decisions": (*proposal_body().decisions, decision)}
+    )
+    invalid_body = final_body.model_copy(update={"non_goals": ()})
+    initial_payload = json.loads(response(proposal_response(invalid_body)))
+    correction_base, _ = planning._normalize_planning_response_payload(initial_payload)
+    recovery_question = PlanningQuestion(
+        id=question_id,
+        text="What should happen when the output already exists?",
+        why="The answer determines whether replacement needs explicit consent.",
+        decision_category=PlanningDecisionCategory.PRODUCT_REQUIREMENT,
+        decision_owner=PlanningDecisionAuthority.USER,
+        missing_evidence=("No existing-output behavior was approved.",),
+        material_consequences=("The choice changes destructive CLI behavior.",),
+        options=(
+            PlanningOption(
+                id="overwrite",
+                label="Overwrite",
+                description="Replace it by default.",
+            ),
+            PlanningOption(
+                id="require_force",
+                label="Require --force",
+                description="Refuse unless the user opts in.",
+            ),
+        ),
+    )
+    executor = ScriptedAgentExecutor(
+        [
+            ScriptedAgentResponse(text="ignored", submission_payload=initial_payload),
+            ScriptedAgentResponse(
+                text="ignored",
+                submission_payload=json.loads(
+                    correction_response(
+                        correction_base,
+                        {"/proposal/non_goals": list(final_body.non_goals)},
+                    )
+                ),
+            ),
+            response(
+                PlanningModelResponse(
+                    kind=PlanningResponseKind.QUESTION,
+                    question=recovery_question,
+                )
+            ),
+            response(proposal_response(final_body)),
+        ]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(response_repair_limit=1),
+        clock=AdvancingClock(),
+    )
+
+    created = coordinator.start(
+        request(),
+        answer_question=lambda _question: "Require --force",
+    )
+
+    assert created is not None
+    assert len(executor.requests) == 4
+    first = store.load_turn(request().run_id, 1)
+    assert first.response_validation is not None
+    assert first.response_validation.correction_paths == ("/proposal/non_goals",)
+    second = store.load_turn(request().run_id, 2)
+    assert second.semantic_correction_outcome is SemanticCorrectionOutcome.IMPROVED
+    assert second.response_validation is not None
+    assert second.response_validation.failure_class is (
+        ResponseFailureClass.MISSING_USER_DECISION
+    )
+    assert second.response_validation.correction_paths == ()
+    assert store.load_turn(request().run_id, 3).question_admission is not None
 
 
 @pytest.mark.parametrize(
@@ -7613,7 +7899,7 @@ raise SystemExit(cli.main([]))
 
         assert not ProcessLeaseStore(tmp_path / "leases").inspect().processes
         legacy = turn.model_dump(mode="json")
-        assert legacy["schema_version"] == 17
+        assert legacy["schema_version"] == 18
         assert legacy["execution"]["invocation_lifecycle"]["schema_version"] == 5
         legacy["schema_version"] = 16
         assert PlanningTurn.model_validate(legacy).model_dump(mode="json") == legacy

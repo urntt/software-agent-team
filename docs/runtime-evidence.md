@@ -601,10 +601,21 @@ seconds. Approval revalidates that authority against the TeamPlan at the
 execution boundary.
 The bootstrap Planner cannot create Agents or change lifecycle state.
 
-Planning schema v17 persists Controller-owned admission beside every current
-question turn. The admission distinguishes a Planner-selected task suggestion
-from a Controller-required recovery, binds the exact ProductDefinition scope,
-and records the invariant IDs behind a required recovery. Model-authored
+Planning schema v18 lets a Controller-required admission bind one exact
+non-ProductDefinition decision ID. If model output claims `resolved_question`
+provenance for a question absent from the transcript, the validation issue names
+both that question and its user-owned decision and carries `missing_user_decision`
+authority. A question-only recovery schema freezes the question ID and category,
+requires empty ProductDefinition values, and records the decision binding beside
+the accepted question. It cannot be routed through model-owned proposal
+correction. The inverse case—an answered question omitted from a proposal—is
+still model-owned relation repair. Planning v2 through v17 remain readable
+without adding the new admission field or changing historical hashes.
+
+Planning schema v17 first persisted Controller-owned admission beside every
+current question turn. The admission distinguishes a Planner-selected task
+suggestion from a Controller-required recovery, binds the exact ProductDefinition
+scope, and records the invariant IDs behind a required recovery. Model-authored
 question prose never supplies this authority. Every ProductDefinition option in
 the current live response also supplies one exact value per declared dimension;
 selected values enter the in-memory transcript and proposal projection without
@@ -695,7 +706,10 @@ Before a question reaches the user, the controller checks its declared category
 against the fixed responsibility matrix and rejects autonomous implementation,
 scheduling, safety, or evidence-integrity questions. Before a proposal can be
 shown, persisted, or approved, the controller requires every answered question
-to map to one unchanged decision record and validates the complete
+to map to one unchanged decision record. A missing mapping for an actually
+answered question is model-owned correction; a user-owned decision that cites a
+question absent from the transcript instead returns to one Controller-bound
+question. The controller also validates the complete
 requirement-to-criterion-to-writer-to-downstream-read-only-verifier graph.
 For the current schema it also rejects missing product depth, a Planner-owned
 target user/workflow/maturity, an explicit-input statement that expands beyond
