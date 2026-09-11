@@ -147,13 +147,31 @@ legacy images, and foreign Docker resources fail closed or remain untouched.
 Consecutive-upgrade, idempotent-reactivation, rollback, and foreign-resource
 regressions exercise those ownership boundaries.
 
-The exact clean code candidate `0dc0af603a8368dfe61fdbf22362755025dfaf89`
-passed one canonical `make check` with 1,460 tests in 816.46 seconds. The report
-records zero cgroup/kernel OOM delta and no residual stage processes, process
-leases, sandbox containers, volumes, or gate-private test directory. A fresh
-managed upgrade and provider-backed ordinary-interface run that executes each
-new specialization remain pending; offline schema, lifecycle, and gate success
-do not establish those external boundaries.
+The exact clean development head
+`059960ed489c6b964a4b24b87b077357afca4dae` passed one canonical
+`make check` with 1,508 tests in 1,094.44 seconds. The report records
+315,928,576 bytes aggregate peak RSS, zero cgroup/kernel OOM delta, and no
+residual stage processes, process leases, sandbox containers, volumes, or
+gate-private test directory.
+
+A managed non-root bare-`sat` run on that exact head then completed the full
+ordinary interface with `deepseek/deepseek-flash`. Task admission passed 26 of
+26 checks and approved-plan admission passed 37 of 37. Planning reached a valid
+four-Agent overview through Controller-owned targeted correction without a
+user revision. The user then deliberately revised that valid plan to give the
+interactive no-argument workflow to a distinct Experience assessment Reviewer;
+the approved five-Agent graph included implementation, deterministic testing,
+general review, security assessment, and experience assessment.
+
+All five deterministic project gates passed. The three independent Reviewers
+submitted grounded typed artifacts on the same immutable output commit, all 13
+acceptance criteria passed, and the Controller delivered commit
+`4144b53f37a1d20c293be4016df40af2b03424c9`. Independent execution of the
+documented setup, no-argument start, test, and offline commands passed, including
+57 project tests, while the delivered Git workspace remained clean. All 15
+provider calls settled with no active, unpriced, or missing-usage call; no Agent
+used an arbitrary semantic-work timeout, and run-owned runtime resources were
+cleaned.
 
 The preceding managed non-root bare-`sat` Planning acceptance on `d94850e`
 used `deepseek/deepseek-v4-flash-vision-exp`, asked only the overwrite-policy
@@ -1962,9 +1980,7 @@ derived from the task.
 
 ## Not Yet Available or Completed
 
-- Provider-backed ordinary-interface evidence that materially different tasks
-  select and execute the security and experience specialization contracts;
-- Fresh installed-device evidence for task-admission/approved-plan remediation
+- Fresh WSL ordinary-user evidence for task-admission/approved-plan remediation
   and process-orphan recovery;
 - An independent-device live demonstration of the activated Adaptive Planning
   and Dynamic Team journey;
@@ -1993,10 +2009,12 @@ action succeeded after interruption.
 ## Current Validation Boundary
 
 Planning concision and question authority are implemented and have
-provider-backed pre-execution evidence. Task-derived specialization is
-implemented and has clean offline evidence on the current head, but it remains
-outside completed product acceptance until materially different ordinary-user
-requests select and execute the two new contracts through the managed runtime.
+provider-backed evidence. Task-derived specialization has clean offline and
+managed ordinary-interface evidence on the current head: Security and Experience
+contracts both executed, produced grounded typed artifacts, and contributed to
+an accepted delivery. This establishes the Linux managed-runtime boundary; it
+does not substitute for the separate fresh-WSL remediation condition or a
+multi-model live-switch experiment.
 
 The first release has no previous stable, so a genuine stable-to-newer-stable
 upgrade remains deferred until the next release rather than being simulated.
