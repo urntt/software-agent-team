@@ -120,10 +120,11 @@ for an all-boundary safety criterion and experience authority when one criterion
 is explicitly linked to both the primary workflow and usability expectations;
 an invalid generic assignment returns to targeted Planning correction before
 approval. The typed Agent graph—not a second prose description—determines the
-team shown for approval, and every Review task must remain inside its assigned
-criterion scope. SAT sends either inconsistency back to the Planner
-automatically; `r` is reserved for a user who actually wants to change the
-request.
+team shown for approval. The resolved `ModelRoutePlan` likewise determines the
+route count, mode, switch conditions, and per-Agent assignments instead of
+Planner prose. Every Review task must remain inside its assigned criterion
+scope. SAT sends an inconsistency back to the Planner automatically; `r` is
+reserved for a user who actually wants to change the request.
 
 The controller derives actual launch order from the approved dependency graph,
 enforces concurrency and shared-workspace safety, monitors provider activity and

@@ -119,6 +119,7 @@ from software_agent_team.teams import (
     AgentSpec,
     AgentSpecialization,
     ModelRoute,
+    ModelRoutePlan,
     ModelRoutingMode,
     PermissionProfile,
     PlanApprovalSource,
@@ -4035,6 +4036,42 @@ def _compile_team_topology_projection(
     return product_definition, decisions
 
 
+def _compile_model_route_projection(
+    decisions: Collection[PlanningDecisionRecord],
+    model_routes: ModelRoutePlan,
+) -> tuple[PlanningDecisionRecord, ...]:
+    """Project model-route decisions from the resolved Controller plan."""
+
+    primary_route_count = len(
+        {assignment.primary_route_id for assignment in model_routes.assignments}
+    )
+    switch_conditions = (
+        ", ".join(
+            condition.value for condition in model_routes.authorized_switch_conditions
+        )
+        or "none"
+    )
+    summary = (
+        "Controller-derived from the approved model route plan: "
+        f"runtime Agent assignments: {len(model_routes.assignments)}; authorized "
+        f"route count: {len(model_routes.routes)}; primary route count: "
+        f"{primary_route_count}; mode: {model_routes.mode.value}; authorized switch "
+        f"conditions: {switch_conditions}. Per-Agent assignments shown below are "
+        "the sole runtime model-routing authority."
+    )
+    rationale = (
+        "The Controller resolves every Agent from the user-authorized routing "
+        "policy, executable capability, and any approved per-Agent override. "
+        "Planner prose cannot create, remove, or switch a model route."
+    )
+    return tuple(
+        decision.model_copy(update={"summary": summary, "rationale": rationale})
+        if decision.category is PlanningDecisionCategory.MODEL_ROUTE
+        else decision
+        for decision in decisions
+    )
+
+
 def validate_planning_clarity(
     body: PlanningProposalBody,
     *,
@@ -6702,6 +6739,15 @@ def preview_adaptive_proposal(
         )
     except ModelRoutingError as error:
         raise PlanningError(str(error)) from error
+    if proposal.schema_version >= 19:
+        implementation_plan = implementation_plan.model_copy(
+            update={
+                "decisions": _compile_model_route_projection(
+                    implementation_plan.decisions,
+                    model_routes,
+                )
+            }
+        )
     assignments = {
         assignment.agent_id: assignment for assignment in model_routes.assignments
     }

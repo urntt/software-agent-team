@@ -4769,6 +4769,7 @@ def test_controller_projects_team_narrative_from_the_typed_agent_graph() -> None
     stale_cost = (
         "No specialist cost is expected because only the two stated Agents run."
     )
+    stale_route = "Use the default strict model for all three runtime Agents."
     definition = body.product_definition.model_copy(
         update={
             "impact": body.product_definition.impact.model_copy(
@@ -4779,6 +4780,10 @@ def test_controller_projects_team_narrative_from_the_typed_agent_graph() -> None
     decisions = tuple(
         decision.model_copy(update={"summary": stale, "rationale": stale})
         if decision.category is PlanningDecisionCategory.TEAM
+        else decision.model_copy(
+            update={"summary": stale_route, "rationale": stale_route}
+        )
+        if decision.category is PlanningDecisionCategory.MODEL_ROUTE
         else decision
         for decision in body.decisions
     )
@@ -4862,9 +4867,27 @@ def test_controller_projects_team_narrative_from_the_typed_agent_graph() -> None
         "capabilities, permissions, dependencies, outputs, and acceptance scopes. "
         "Per-Agent rationales below explain the task-specific composition."
     )
+    route_decision = next(
+        decision
+        for decision in preview.implementation_plan.decisions
+        if decision.category is PlanningDecisionCategory.MODEL_ROUTE
+    )
+    assert route_decision.summary == (
+        "Controller-derived from the approved model route plan: runtime Agent "
+        "assignments: 4; authorized route count: 1; primary route count: 1; "
+        "mode: strict; "
+        "authorized switch conditions: none. Per-Agent assignments shown below are "
+        "the sole runtime model-routing authority."
+    )
+    assert route_decision.rationale == (
+        "The Controller resolves every Agent from the user-authorized routing "
+        "policy, executable capability, and any approved per-Agent override. "
+        "Planner prose cannot create, remove, or switch a model route."
+    )
     overview = render_planning_overview(preview)
     assert stale not in overview
     assert stale_cost not in overview
+    assert stale_route not in overview
     assert expected in overview
     assert expected_cost in overview
     assert len(preview.team_plan.agents) == 4
@@ -4878,6 +4901,14 @@ def test_controller_projects_team_narrative_from_the_typed_agent_graph() -> None
             if decision.category is PlanningDecisionCategory.TEAM
         ).summary
         == stale
+    )
+    assert (
+        next(
+            decision
+            for decision in current.decisions
+            if decision.category is PlanningDecisionCategory.MODEL_ROUTE
+        ).summary
+        == stale_route
     )
 
 
@@ -5700,6 +5731,18 @@ def test_controller_resolves_visible_per_agent_model_routes_before_approval() ->
         "cache pricing unknown)"
     ) in overview
     assert "model routing: policy" in overview
+    route_decision = next(
+        decision
+        for decision in preview.implementation_plan.decisions
+        if decision.category is PlanningDecisionCategory.MODEL_ROUTE
+    )
+    assert route_decision.summary == (
+        "Controller-derived from the approved model route plan: runtime Agent "
+        "assignments: 3; authorized route count: 2; primary route count: 2; "
+        "mode: policy; "
+        "authorized switch conditions: provider_failure. Per-Agent assignments "
+        "shown below are the sole runtime model-routing authority."
+    )
 
 
 def test_user_can_override_one_agent_model_without_editing_plan_json() -> None:

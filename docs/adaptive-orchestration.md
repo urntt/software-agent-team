@@ -645,6 +645,13 @@ or a cost explanation that silently omits approved specialists. Exact task-wide
 budget and settled-call accounting remain Controller-owned. This projection
 changes no user requirement and requires no user revision.
 
+The resolved `ModelRoutePlan` is the corresponding authority for model routing.
+The Controller derives the approval decision's assignment count, route counts,
+routing mode, and switch conditions from that plan, while the exact per-Agent
+table displays the resolved primary and fallback routes. Raw Planner prose stays
+in the original proposal evidence but cannot contradict the approval overview or
+act as a second routing authority.
+
 After deriving non-overlapping Review scopes, the Controller also checks every
 Review-owned task against its owner's exact criterion set. Any out-of-scope
 criterion targets the complete affected task as a model-owned correction slot so
