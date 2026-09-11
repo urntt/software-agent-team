@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** freeze the `v0.2.0` second-stable candidate while `v0.1.2` remains the published stable
+**Current milestone:** maintain the published `v0.2.0` stable release and begin the next evidence-driven development batch
 
 **Last updated:** September 11, 2026
 
@@ -11,16 +11,20 @@ product, architecture, experiment, or roadmap; those decisions belong to
 
 ## Current Release
 
-The public `main` branch, immutable `v0.1.2` tag, GitHub Release, and release
-manifest identify source revision
-`64dcfc448fc229e4d03b4dd3722549ebeb09d2fb`, package version `0.1.2`, and Git
-archive digest
-`sha256:6baebe8610673e9b9795779c9f5965ef452f8bd03d065f3b37a93bdd4fa9543e`.
+The immutable `v0.2.0` tag, GitHub Release, package version, and release manifest
+identify source revision
+`4c0bdfcea6da0a6f3849c2b70a9e63ed2d5e098c` and Git archive digest
+`sha256:afeab5ec13d910c83ec06dbc64cfed491e4a84ee85725bbc8a5ff6ffaedf247f`.
 The exact clean revision passed the local canonical `make check` with Ruff
-formatting and lint checks plus 1,418 tests. Its exact-tag GitHub Actions run
-passed 1,417 tests with one expected root-only skip on the hosted non-root
-runner, cleaned its private test tree, and only then published the manifest and
-Release. The failed `v0.1.0` and `v0.1.1` tags remain immutable and unpublished.
+formatting and lint checks plus all 1,517 tests. Its exact-tag GitHub Actions run
+passed 1,515 tests with two explicit environment-dependent skips on the hosted
+non-root runner, retained the canonical gate artifact, reported no workflow
+annotations, and only then published the identity manifest and Release.
+
+The previous stable remains immutable `v0.1.2` at
+`64dcfc448fc229e4d03b4dd3722549ebeb09d2fb`, with Git archive digest
+`sha256:6baebe8610673e9b9795779c9f5965ef452f8bd03d065f3b37a93bdd4fa9543e`.
+The failed `v0.1.0` and `v0.1.1` tags remain immutable and unpublished.
 
 The product implementation at
 `654b1521a3bfd302b0491e420d2b93aaf0f11f0f` completed one managed, non-root,
@@ -62,15 +66,24 @@ were removed, while uv, Docker, and the shared quality image were preserved.
 Failed-activation rollback remains covered by real fault evidence whose three
 lifecycle-owner Git blobs are identical at `v0.1.2`.
 
+A later disposable non-root installation started from that genuine `v0.1.2`
+Release, discovered `v0.2.0` through `sat update --check`, and activated it
+through `sat update`. Exact release identity, schema-v9 configuration reading,
+byte-identical configuration and legacy state preservation, same-target no-op,
+active-run refusal, injected post-link-swap rollback, foreign OpenClaw
+isolation, secret-free export, full uninstall, and exact account/HOME/resource
+cleanup all passed. The scenario made no provider calls.
+
 ## Current Development Head
 
-The release scope since `v0.1.2` is frozen as candidate `v0.2.0`. The
-machine-readable impact ledger classifies task-derived Agent specialization and
-the unified multi-transport model-profile surface as minor changes; the Planning,
-runtime attribution, accounting, managed-resource, portable-lock, and release
-workflow changes are compatible fixes. Publication still requires the clean local
-candidate gate, immutable exact-tag workflow, and a real `v0.1.2`-to-`v0.2.0`
-managed upgrade. Until those boundaries pass, `v0.1.2` remains the latest stable.
+The implementation released as `v0.2.0` is frozen at the exact revision above;
+public `main` contains only post-release status documentation beyond that tag.
+The machine-readable impact ledger classified task-derived Agent specialization
+and the unified multi-transport model-profile surface as minor changes, while
+the Planning, runtime attribution, accounting, managed-resource, portable-lock,
+and release-workflow changes were compatible fixes. The local candidate gate,
+immutable exact-tag workflow, and genuine `v0.1.2`-to-`v0.2.0` managed upgrade
+have now satisfied the publication boundary.
 
 Configuration schema v10 now embeds a versioned, secret-free
 `ModelRuntimeProfile` in every saved `ModelProfile`. The frozen profile and its
@@ -95,10 +108,11 @@ provider smoke, Planning single-tool submission, and a dynamic tool loop with
 no fallback. These checks establish the provider integration boundary but are
 not a managed ordinary-user product campaign.
 
-The final pre-commit canonical gate completed doctor, format, lint, all 1,477
-tests, and cleanup in 840.33 seconds. Its report recorded 356,044,800 bytes peak
-aggregate RSS, no new cgroup or kernel OOM event, and no residual stage
-processes, process leases, sandbox containers, volumes, or private test tree.
+The final release-candidate canonical gate completed doctor, format, lint, all
+1,517 tests, and cleanup in 1,038.70 seconds. Its report recorded 316,174,336
+bytes peak aggregate RSS, no new cgroup or kernel OOM event, and no residual
+stage processes, process leases, sandbox containers, volumes, or private test
+tree.
 
 The current role-specialization implementation extends the line anchored by
 `c36090d543fe6bdd230c88d8de7684082733b1bb` through code candidate
@@ -2024,8 +2038,9 @@ an accepted delivery. This establishes the Linux managed-runtime boundary; it
 does not substitute for the separate fresh-WSL remediation condition or a
 multi-model live-switch experiment.
 
-The first release has no previous stable, so a genuine stable-to-newer-stable
-upgrade remains deferred until the next release rather than being simulated.
+A genuine previous-stable-to-newer-stable upgrade now exists for `v0.1.2` to
+`v0.2.0`; it used immutable published manifests and product update commands
+rather than simulated tags or fixture-only migration.
 
 Fixed-topology comparison remains in Phase 4 so it can serve as a controlled
 baseline rather than define the product's permanent role layout.
