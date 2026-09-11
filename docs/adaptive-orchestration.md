@@ -857,9 +857,15 @@ assigned criteria or advance lifecycle state by itself.
 Missing specialist coverage is a model-owned Planning relation defect. The
 diagnostic opens only the Agent collection when a required catalog Agent is
 absent and the affected criteria's `verification_agent_ids`; targeted correction
-must add or select the specialist and bind those criteria before the proposal can
-be shown for approval. An operator does not use plan revision to repair this
-Planner defect.
+must add or select the specialist before the proposal can be shown for approval.
+When the corrected graph contains exactly one Reviewer with the required
+acceptance authority, the Controller atomically projects that Reviewer into each
+affected criterion while preserving any non-Review verifier. The model is not
+asked to copy a new Agent ID across independent fields when the policy relation
+already has one deterministic answer. Zero or multiple matching specialists,
+unknown verifier IDs, and conflicting security/experience authority remain
+invalid. The raw correction and the explicit Controller normalization are both
+persisted. An operator does not use plan revision to repair this Planner defect.
 
 Task-specific quality remains semantic work rather than a claim made by the
 generic profile gates. Planning must turn every unqualified prohibition or

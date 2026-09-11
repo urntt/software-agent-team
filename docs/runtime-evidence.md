@@ -375,6 +375,13 @@ collection is immutable for that correction. Active profile-owned criterion IDs 
 part of the criterion vocabulary. When the Controller authorizes an identity-owning
 collection in the same correction, it deliberately does not freeze that vocabulary;
 otherwise a valid new definition and its relations could not be submitted atomically.
+For mandatory specialist Review ownership, that open vocabulary does not force
+the model to synchronize a newly chosen Agent ID across independent slots. After
+the corrected Agent graph is applied, the Controller projects a criterion to the
+matching Reviewer only when exactly one Reviewer has the already-required
+security or user-experience acceptance authority. It preserves known non-Review
+verifiers and records the projection as a normalization; zero matches, multiple
+matches, unknown IDs, and conflicting authorities remain invalid.
 The exact
 semantic correction schema requires a nonempty set of unique authorized handles
 and bounds it by the current slot count. Controller validation may atomically apply

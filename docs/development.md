@@ -204,6 +204,11 @@ valid repair, compiles non-overlapping Reviewer scopes, and reuses those exact
 scopes at runtime. Security coverage must be derived from the complete typed
 Review-boundary set; experience coverage must be derived from the criterion link
 shared by primary workflow and usability expectations, not keyword matching.
+Also cover one correction that adds both specialist Agents without repeating
+their new IDs in separate criterion slots: the Controller must project each
+criterion to the unique matching Review authority, preserve non-Review verifiers,
+and record the normalization. Zero and multiple matching specialists, unknown
+verifiers, and authority conflicts must still fail closed.
 Exercise each new specialized response through prompt composition, bound submission,
 grounding, artifact assembly, handoff, run-control transition, progress, and
 the approved-plan self-check. Missing packaged prompt modules, unknown or

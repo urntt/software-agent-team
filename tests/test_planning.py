@@ -5185,12 +5185,8 @@ def test_planning_repairs_missing_security_specialist_through_typed_slots(
             json.dumps(invalid_payload),
             correction_response(
                 correction_base,
-                {
-                    "/proposal/agents": valid_payload["proposal"]["agents"],
-                    criterion_path: valid_payload["proposal"]["acceptance_criteria"][2][
-                        "verification_agent_ids"
-                    ],
-                },
+                {"/proposal/agents": valid_payload["proposal"]["agents"]},
+                target_paths=(criterion_path, "/proposal/agents"),
             ),
         ]
     )
@@ -5219,11 +5215,275 @@ def test_planning_repairs_missing_security_specialist_through_typed_slots(
     assert store.load_turn(request().run_id, 2).semantic_correction_outcome == (
         "accepted"
     )
+    assert store.load_turn(request().run_id, 2).response_normalizations == (
+        "compiled proposal.acceptance_criteria[2].verification_agent_ids from "
+        "the unique security Review authority",
+    )
     approved = coordinator.approve(planning_request, created)
     assert compile_approved_review_scopes(approved) == {
         "quality_reviewer": ("AC_SCAN", "AC_REPORT"),
         "security_assessor": ("AC_SECURITY",),
     }
+
+
+def test_planning_projects_multiple_specialist_bindings_from_one_agent_correction(
+    tmp_path: Path,
+) -> None:
+    body = proposal_body()
+    assert body.product_definition is not None
+    security_criterion = ProposedCriterion(
+        id="AC_SECURITY",
+        description="No untrusted path can ever escape the selected root.",
+        verification="Probe every approved path-entry boundary.",
+        review_boundaries=tuple(ReviewBoundaryKind),
+        requirement_ids=("REQ_SECURITY",),
+        verification_agent_ids=("security_assessor",),
+    )
+    experience_criterion = ProposedCriterion(
+        id="AC_INTERACTION",
+        description="The interactive workflow is clear and recoverable.",
+        verification="Exercise the complete terminal workflow and its recovery.",
+        requirement_ids=("REQ_INTERACTION",),
+        verification_agent_ids=("experience_assessor",),
+    )
+    definition = body.product_definition.model_copy(
+        update={
+            "primary_workflow": body.product_definition.primary_workflow.model_copy(
+                update={"criterion_ids": ("AC_INTERACTION",)}
+            ),
+            "usability_expectations": (
+                body.product_definition.usability_expectations.model_copy(
+                    update={"criterion_ids": ("AC_INTERACTION",)}
+                )
+            ),
+        }
+    )
+    security_agent = ProposedAgent(
+        id="security_assessor",
+        label="Path Security Assessor",
+        responsibility="Assess untrusted path boundaries and residual risk.",
+        rationale="The request introduces an untrusted-input boundary.",
+        capability=AgentCapability.REVIEW,
+        specialization=AgentSpecialization.SECURITY_ASSESSMENT,
+        stage_id="verify",
+        dependencies=("cli_developer",),
+        workspace_scope="repository",
+        workload=AgentWorkload.ROUTINE,
+    )
+    experience_agent = ProposedAgent(
+        id="experience_assessor",
+        label="Workflow Experience Assessor",
+        responsibility="Assess terminal workflow outcome, friction, and recovery.",
+        rationale="The request includes an interactive end-user workflow.",
+        capability=AgentCapability.REVIEW,
+        specialization=AgentSpecialization.EXPERIENCE_ASSESSMENT,
+        stage_id="verify",
+        dependencies=("cli_developer",),
+        workspace_scope="repository",
+        workload=AgentWorkload.ROUTINE,
+    )
+    valid = body.model_copy(
+        update={
+            "product_definition": definition,
+            "requirements": (
+                *body.requirements,
+                "Contain every untrusted path.",
+                "Provide a clear interactive workflow.",
+            ),
+            "requirement_ids": (
+                *body.requirement_ids,
+                "REQ_SECURITY",
+                "REQ_INTERACTION",
+            ),
+            "acceptance_criteria": (
+                *body.acceptance_criteria,
+                security_criterion,
+                experience_criterion,
+            ),
+            "tasks": (
+                body.tasks[0].model_copy(
+                    update={
+                        "acceptance_criteria": (
+                            *body.tasks[0].acceptance_criteria,
+                            "AC_SECURITY",
+                            "AC_INTERACTION",
+                        )
+                    }
+                ),
+            ),
+            "agents": (*body.agents, security_agent, experience_agent),
+        }
+    )
+    invalid = valid.model_copy(
+        update={
+            "agents": body.agents,
+            "acceptance_criteria": (
+                *body.acceptance_criteria,
+                security_criterion.model_copy(
+                    update={"verification_agent_ids": ("quality_reviewer",)}
+                ),
+                experience_criterion.model_copy(
+                    update={"verification_agent_ids": ("quality_reviewer",)}
+                ),
+            ),
+        }
+    )
+    invalid_payload = json.loads(
+        response(
+            PlanningModelResponse(
+                kind=PlanningResponseKind.PROPOSAL,
+                proposal=invalid,
+            )
+        )
+    )
+    original_payload = deepcopy(invalid_payload)
+    valid_payload = json.loads(
+        response(
+            PlanningModelResponse(
+                kind=PlanningResponseKind.PROPOSAL,
+                proposal=valid,
+            )
+        )
+    )
+    source_request = (
+        f"{request().source_request} Treat every path as untrusted and provide "
+        "a clear interactive recovery workflow."
+    )
+    correction_base, _ = planning._normalize_planning_response_payload(
+        invalid_payload,
+        user_inputs=(source_request,),
+    )
+    executor = ScriptedAgentExecutor(
+        [
+            json.dumps(invalid_payload),
+            correction_response(
+                correction_base,
+                {"/proposal/agents": valid_payload["proposal"]["agents"]},
+                target_paths=(
+                    "/proposal/acceptance_criteria/2/verification_agent_ids",
+                    "/proposal/acceptance_criteria/3/verification_agent_ids",
+                    "/proposal/agents",
+                ),
+            ),
+        ]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(response_repair_limit=None),
+        clock=AdvancingClock(),
+    )
+
+    planning_request = request(source_request=source_request)
+    created = coordinator.start(
+        planning_request,
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+
+    assert created is not None
+    assert created.body == valid
+    assert len(executor.requests) == 2
+    assert invalid_payload == original_payload
+    final_turn = store.load_turn(request().run_id, 2)
+    assert final_turn.semantic_correction_outcome == "accepted"
+    assert final_turn.submission_payload == {
+        "replacements": [
+            {
+                "slot_handle": "slot_3",
+                "replacement_value": valid_payload["proposal"]["agents"],
+            }
+        ]
+    }
+    assert final_turn.response_normalizations == (
+        "compiled proposal.acceptance_criteria[2].verification_agent_ids from "
+        "the unique security Review authority",
+        "compiled proposal.acceptance_criteria[3].verification_agent_ids from "
+        "the unique user_experience Review authority",
+    )
+    approved = coordinator.approve(planning_request, created)
+    assert compile_approved_review_scopes(approved) == {
+        "quality_reviewer": ("AC_SCAN", "AC_REPORT"),
+        "security_assessor": ("AC_SECURITY",),
+        "experience_assessor": ("AC_INTERACTION",),
+    }
+
+
+@pytest.mark.parametrize("matching_specialist_count", [0, 2])
+def test_specialist_projection_requires_one_unique_matching_reviewer(
+    matching_specialist_count: int,
+) -> None:
+    body = proposal_body()
+    security_criterion = ProposedCriterion(
+        id="AC_SECURITY",
+        description="No untrusted path can ever escape the selected root.",
+        verification="Probe every approved path-entry boundary.",
+        review_boundaries=tuple(ReviewBoundaryKind),
+        requirement_ids=("REQ_SECURITY",),
+        verification_agent_ids=("quality_reviewer",),
+    )
+    security_agents = tuple(
+        ProposedAgent(
+            id=f"security_assessor_{index}",
+            label=f"Path Security Assessor {index}",
+            responsibility="Assess untrusted path boundaries and residual risk.",
+            rationale="The request introduces an untrusted-input boundary.",
+            capability=AgentCapability.REVIEW,
+            specialization=AgentSpecialization.SECURITY_ASSESSMENT,
+            stage_id="verify",
+            dependencies=("cli_developer",),
+            workspace_scope="repository",
+            workload=AgentWorkload.ROUTINE,
+        )
+        for index in range(1, matching_specialist_count + 1)
+    )
+    invalid = body.model_copy(
+        update={
+            "requirements": (*body.requirements, "Contain every untrusted path."),
+            "requirement_ids": (*body.requirement_ids, "REQ_SECURITY"),
+            "acceptance_criteria": (*body.acceptance_criteria, security_criterion),
+            "tasks": (
+                body.tasks[0].model_copy(
+                    update={
+                        "acceptance_criteria": (
+                            *body.tasks[0].acceptance_criteria,
+                            "AC_SECURITY",
+                        )
+                    }
+                ),
+            ),
+            "agents": (*body.agents, *security_agents),
+        }
+    )
+    payload = json.loads(
+        response(
+            PlanningModelResponse(
+                kind=PlanningResponseKind.PROPOSAL,
+                proposal=invalid,
+            )
+        )
+    )
+
+    normalized, normalizations = planning._normalize_planning_response_payload(
+        payload,
+        user_inputs=(request().source_request,),
+    )
+
+    assert normalized["proposal"]["acceptance_criteria"][2][
+        "verification_agent_ids"
+    ] == ["quality_reviewer"]
+    assert not any(
+        "unique security Review authority" in item for item in normalizations
+    )
+    parsed = PlanningModelResponse.model_validate(normalized)
+    assert parsed.proposal is not None
+    with pytest.raises(PlanningError, match="security acceptance authority"):
+        preview_adaptive_proposal(
+            request(),
+            proposal(body=parsed.proposal),
+            policy(),
+            created_at=FIXED_TIME,
+        )
 
 
 def test_planning_binds_review_task_corrections_to_each_compiled_scope(

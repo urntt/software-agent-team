@@ -1637,7 +1637,81 @@ def _normalize_planning_response_payload(
                 changes.append(
                     f"canonicalized proposal.agents[{agent_index}].workspace_scope"
                 )
+    changes.extend(_compile_unique_specialist_verifier_projection(proposal))
     return normalized, tuple(changes)
+
+
+def _compile_unique_specialist_verifier_projection(
+    proposal: dict[str, object],
+) -> tuple[str, ...]:
+    """Project mandatory Review ownership when one specialist uniquely satisfies it."""
+
+    raw_agents = proposal.get("agents")
+    raw_criteria = proposal.get("acceptance_criteria")
+    raw_definition = proposal.get("product_definition")
+    if (
+        not isinstance(raw_agents, list)
+        or not isinstance(raw_criteria, list)
+        or not isinstance(raw_definition, dict)
+        or not all(isinstance(item, dict) for item in raw_agents)
+        or not all(isinstance(item, dict) for item in raw_criteria)
+    ):
+        return ()
+    try:
+        agents = tuple(ProposedAgent.model_validate(item) for item in raw_agents)
+        criteria = tuple(
+            ProposedCriterion.model_validate(item) for item in raw_criteria
+        )
+        definition = ProductDefinition.model_validate(raw_definition)
+    except (ValidationError, ValueError):
+        return ()
+
+    reviewers = tuple(
+        agent for agent in agents if agent.capability is AgentCapability.REVIEW
+    )
+    agents_by_id = {agent.id: agent for agent in agents}
+    reviewer_ids = {agent.id for agent in reviewers}
+    changes: list[str] = []
+    for criterion_index, (raw_criterion, criterion) in enumerate(
+        zip(raw_criteria, criteria, strict=True)
+    ):
+        current_verifiers = raw_criterion.get("verification_agent_ids")
+        if (
+            not isinstance(current_verifiers, list)
+            or not all(isinstance(item, str) for item in current_verifiers)
+            or not set(current_verifiers).issubset(agents_by_id)
+        ):
+            continue
+        try:
+            required_authority = _specialized_review_authority(
+                criterion,
+                definition,
+            )
+        except ValueError:
+            continue
+        if required_authority is None:
+            continue
+        matching = tuple(
+            agent
+            for agent in reviewers
+            if specialization_contract(agent.specialization).acceptance_authority
+            is required_authority
+        )
+        if len(matching) != 1:
+            continue
+        expected_verifiers = [
+            agent_id for agent_id in current_verifiers if agent_id not in reviewer_ids
+        ]
+        expected_verifiers.append(matching[0].id)
+        if current_verifiers == expected_verifiers:
+            continue
+        raw_criterion["verification_agent_ids"] = expected_verifiers
+        changes.append(
+            "compiled proposal.acceptance_criteria"
+            f"[{criterion_index}].verification_agent_ids from the unique "
+            f"{required_authority.value} Review authority"
+        )
+    return tuple(changes)
 
 
 def _digest_text(value: str) -> str:
