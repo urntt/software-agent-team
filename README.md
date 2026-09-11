@@ -76,64 +76,24 @@ On first use, SAT guides you through:
 3. A plain-language description of what you want to build;
 4. Confirmation of the installed execution profile and a new project-directory
    name;
-5. Explicit task-wide USD/deadline authorization and a persisted task-admission
-   self-check before model-backed Planning;
-6. A bounded conversation containing only questions that can materially change
-   the result. When a short request leaves them material and unknown, SAT asks
-   about target users, the primary workflow, or whether the delivery is a
-   throwaway prototype, reusable local product, or releasable small product;
-   each focused question shows its exact decision scope and whether it was
-   selected by the Planner or required by Controller validation. Suggested
-   answers carry exact values for only that scope. Model-authored wording and
-   rationale remain available as advisory details, but cannot become a system
-   prerequisite or widen the answer's authority. If a proposal claims that a
-   user-owned decision came from a question that was never asked, the Controller
-   returns that exact decision to dialogue instead of repeatedly asking the model
-   to repair user authority;
-7. One overview that begins with the approved audience, killer workflow,
-   delivery maturity, usability/operational/delivery expectations, non-goals,
-   and their architecture, team, cost, and delivery effects, followed by
-   requirements, explicit assumptions,
-   requirement-to-evidence traceability, acceptance criteria, a compact count
-   of fixed controller-owned details separated from additional task constraints,
-   Agent work assignments with their controller-derived write or read-only
-   authority, proposed Agents, task-specific roles, versioned specializations,
-   dependencies, permissions, typed outputs, acceptance authority, the exact
-   non-overlapping criterion scope assigned to each Reviewer, explicit Review
-   entry obligations for absolute guarantees,
-   resolved model profiles and fallback authority, time authority and liveness
-   policy, concurrency, iterations, and budgets;
-8. An option to show or hide the complete fixed policy, execution-profile
-   constraints, and Review boundary definitions without changing the proposal
-   or calling a model; and
-9. Approval, an explicit natural-language revision request, a supported safe
-   edit, or cancellation before any execution Agent is created.
+5. One task-wide USD ceiling and an optional whole-run deadline, followed by a
+   pre-model self-check;
+6. A bounded conversation about only the product decisions that remain material,
+   then an overview of the proposed requirements, implementation, task-specific
+   Agent team, evidence, model routes, cost, and delivery boundaries; and
+7. Approval, a natural-language revision, a supported safe edit, or cancellation
+   before execution begins.
 
-After approval, SAT first persists a second self-check covering every approved
-route, Agent specialization/capability combination, packaged specialization
-prompt, permission, typed output, runtime, sandbox, workspace, and delivery
-boundary. It creates only the task-defined Agents in that exact plan after the
-required checks pass. Security and end-user-experience assessment use distinct
-typed contracts while remaining read-only; a task-specific label cannot grant
-either authority or expand tools. The Controller requires security authority
-for an all-boundary safety criterion and experience authority when one criterion
-is explicitly linked to both the primary workflow and usability expectations;
-an invalid generic assignment returns to targeted Planning correction before
-approval. The typed Agent graph—not a second prose description—determines the
-team shown for approval. The resolved `ModelRoutePlan` likewise determines the
-route count, mode, switch conditions, and per-Agent assignments instead of
-Planner prose. Every Review task must remain inside its assigned criterion
-scope. SAT sends an inconsistency back to the Planner automatically; `r` is
-reserved for a user who actually wants to change the request.
+After approval, SAT verifies the complete plan before creating its task-defined
+Agents. The Controller derives launch order, permissions, independent Review,
+model routes, revision, and termination from that approved plan. Inconsistencies
+return to targeted Planning correction; `r` is reserved for a user-requested
+change. On success, SAT reports the delivered directory and exact setup, run,
+and test commands. On failure, it preserves an auditable report instead of
+presenting unfinished work as successful.
 
-The controller derives actual launch order from the approved dependency graph,
-enforces concurrency and shared-workspace safety, monitors provider activity and
-any user-authorized whole-run deadline, records verified Git snapshots and
-quality evidence, and owns revision and termination decisions. On success, SAT reports the delivered
-directory and exact setup, run, and test commands. Every new terminal report
-also records the exact SAT release and source identity that controlled the run.
-On failure, SAT preserves an auditable report instead of presenting unfinished
-work as successful.
+The complete Planning, team, Review-scope, and execution contract is documented
+in the [adaptive orchestration specification](docs/adaptive-orchestration.md).
 
 While execution is active, the same terminal accepts optional slash commands:
 
@@ -192,76 +152,18 @@ Provider credentials remain in SAT's isolated OpenClaw state or in an
 explicitly trusted caller environment; they are not written to the repository,
 generated project, run evidence, model profiles, or SAT exports.
 
-Before asking for a project, SAT checks that its isolated runtime recognizes
-the bootstrap model. Task admission records the full local SAT version and
-source provenance. Managed installs check their current channel once in the
-foreground; only a newer stable SemVer produces the normal `sat update` prompt,
-and an unavailable release endpoint does not block the task. Source/package
-launches do not contact the managed updater. Before starting an Agent, the
-approved-plan preflight checks every model route authorized by the TeamPlan,
-with a local catalog/auth route for each. These checks do not generate content.
-An optional provider smoke check
-remains a separate, explicitly authorized action because it can incur usage.
-SAT announces the local inspection before waiting. A cold model-catalog check
-may use up to 90 seconds; that infrastructure boundary is separate from the
-30-second ordinary preflight-command limit and from model work. Product Agent
-calls have no fixed wall-clock duration. Before provider waiting begins, SAT
-observes a finite sequence of attributable OpenClaw initialization checkpoints
-in its private state. It captures a content-free baseline immediately before
-launch, so a session directory, index, binding, transcript header, or matching
-turn inherited from an earlier invocation is not current progress; reusing the
-same prompt requires a newly observed turn occurrence. During that pre-readiness
-interval, identity-bound CPU, fault, I/O, or complete process-topology changes
-renew only the initialization inactivity lease; they never create a readiness
-checkpoint or start provider waiting. Ninety seconds without either attributable
-process activity or checkpoint progress opens a visible final 15-second diagnostic
-window; continued inactivity stops only that invocation, while later activity
-recovers the same invocation. An unavailable
-or malformed initialization observer fails closed instead of leaving an
-unobservable process running. A session index or transcript that is exactly
-missing at open time is instead treated as “not published yet” and remains at
-the preceding checkpoint; SAT does not combine that result with a later path
-lookup that can race an atomic OpenClaw publish.
+Before model work, SAT checks its isolated runtime and every approved route
+without generating content. An optional provider smoke check is separate because
+it can incur usage. Product Agent calls have no fixed wall-clock duration: SAT
+distinguishes startup, active provider work, finalization, user-authorized
+deadlines, and cleanup, and it keeps partial work unaccepted. Use `sat cleanup`
+to inspect SAT-owned runtime state and `sat cleanup --orphans` to review a proven
+orphan before removal.
 
-Once the current turn or its private provider stream is attributable, OpenClaw
-retains its provider transport boundary and SAT watches content-free stream and
-tool-lifecycle signals. Tool activity is shown only as a Controller-classified
-action and target such as `testing quality checks (pytest)`; command arguments,
-tool output, and unknown executable names are never used as progress text.
-Repeated events remain in the audit journal, while unchanged checkpoint and
-budget blocks are not printed over and over. Trusted activity renews the provider
-lease regardless of total work time. Sustained silence first produces a visible
-warning and grace period. An attributable final assistant record transfers the invocation to a
-separate `finalizing_response` phase, so OpenClaw result serialization and exit
-cannot be mistaken for provider silence. Observable process output renews that
-60-second no-progress guard; a final 10-second diagnostic window precedes a
-typed finalization stall. Any stop then remains visibly `stopping` and
-`collecting_evidence` until the exact process outcome, output, evidence, and
-cleanup are known; only then is it `stopped` and terminal. SAT applies a
-whole-run deadline only when the user explicitly authorized one for that task.
-If catalog inspection expires, SAT reports that no provider request was made
-and does not create an Agent.
-
-If an upstream tool loop exits immediately after a completed tool result and
-before the required typed submission, SAT records that distinct incomplete
-state instead of reporting a normal semantic failure. A write-capable Agent may
-continue the same task and session only when repository identity, ancestry,
-approved path scope, and content-sensitive workspace progress all verify, the
-task budget and optional deadline still permit another call, and the user has
-not stopped it. An unchanged repeated state stops; partial work is never
-accepted, committed by the Controller, or allowed to bypass gates and Review.
-
-Every live OpenClaw subprocess launched by SAT also receives a private durable
-ownership lease. Startup distinguishes invocations owned by another live SAT
-process from an exact orphan left by a crashed process and from a stale PID;
-the identity includes Linux process start time, and recovery pins it with a
-Linux pidfd, so PID reuse cannot authorize termination. Inspect locally with
-`sat cleanup`. If startup reports a proven
-orphan, `sat cleanup --orphans` asks before stopping only that process group and
-removing only its exact SAT-owned sandbox session.
-
-See the [installation and configuration guide](docs/installation.md) for
-configuration paths, provider setup, saved defaults, and recovery boundaries.
+See the [runtime and evidence reference](docs/runtime-evidence.md) for lifecycle,
+attribution, continuation, process-ownership, and fail-closed details. See the
+[installation guide](docs/installation.md) for configuration paths, provider
+setup, saved defaults, and recovery commands.
 
 ## Update or Uninstall
 

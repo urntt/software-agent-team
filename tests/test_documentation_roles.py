@@ -18,6 +18,14 @@ def test_readme_remains_a_user_entrypoint_instead_of_a_status_ledger() -> None:
     assert "**Last updated:**" not in readme
     assert "fresh-account rehearsal" not in readme
     assert "provider-backed rehearsal" not in readme
+    assert "finalizing_response" not in readme
+    assert "pidfd" not in readme
+    assert "process start time" not in readme
+    assert "15-second diagnostic" not in readme
+    assert "60-second no-progress" not in readme
+    assert "10-second diagnostic" not in readme
+    assert "docs/runtime-evidence.md" in readme
+    assert "docs/adaptive-orchestration.md" in readme
 
 
 def test_user_and_maintainer_release_guides_have_distinct_entries() -> None:
