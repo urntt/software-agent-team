@@ -24,6 +24,7 @@ from software_agent_team.model_runtime import (
     runtime_profile_from_openclaw_configuration,
 )
 from software_agent_team.runtime_configuration import (
+    MODEL_INSPECTION_TIMEOUT_SECONDS,
     materialize_model_check_configuration,
 )
 from software_agent_team.teams import AgentCapability
@@ -110,42 +111,50 @@ def test_transport_profiles_compile_through_one_materializer(
     assert "must-not-be-persisted" not in destination.read_text(encoding="utf-8")
 
 
-def test_transport_matrix_validates_with_the_pinned_openclaw(
+@pytest.mark.parametrize(
+    ("api", "local"),
+    (
+        (ModelApi.OPENAI_COMPLETIONS, False),
+        (ModelApi.OPENAI_RESPONSES, False),
+        (ModelApi.ANTHROPIC_MESSAGES, False),
+        (ModelApi.OLLAMA, True),
+    ),
+)
+def test_transport_profile_validates_with_the_pinned_openclaw(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    api: ModelApi,
+    local: bool,
 ) -> None:
     monkeypatch.setenv("CUSTOM_API_KEY", "test-only")
     state = tmp_path / "state"
     state.mkdir()
     openclaw = REPOSITORY_ROOT / ".sat/openclaw/bin/openclaw"
-    for api, local in (
-        (ModelApi.OPENAI_COMPLETIONS, False),
-        (ModelApi.OPENAI_RESPONSES, False),
-        (ModelApi.ANTHROPIC_MESSAGES, False),
-        (ModelApi.OLLAMA, True),
-    ):
-        destination = tmp_path / f"{api.value}.json"
-        materialize_model_check_configuration(
-            destination,
-            profile=custom_profile(api, local=local),
-        )
-        result = subprocess.run(
-            [str(openclaw), "config", "validate", "--json"],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=30,
-            env={
-                **os.environ,
-                "HOME": str(tmp_path),
-                "OPENCLAW_STATE_DIR": str(state),
-                "OPENCLAW_CONFIG_PATH": str(destination),
-                "OPENCLAW_AGENT_DIR": "",
-                "OPENCLAW_OAUTH_DIR": str(state / "credentials"),
-            },
-        )
-        assert result.returncode == 0, result.stderr
-        assert json.loads(result.stdout)["valid"] is True
+    destination = tmp_path / f"{api.value}.json"
+    materialize_model_check_configuration(
+        destination,
+        profile=custom_profile(api, local=local),
+    )
+    result = subprocess.run(
+        [str(openclaw), "config", "validate", "--json"],
+        check=False,
+        capture_output=True,
+        text=True,
+        # This is a cold pinned-runtime compatibility check, not the ordinary
+        # task preflight. Reuse its registered infrastructure guard rather
+        # than inventing a shorter test-only wall-clock cutoff.
+        timeout=MODEL_INSPECTION_TIMEOUT_SECONDS,
+        env={
+            **os.environ,
+            "HOME": str(tmp_path),
+            "OPENCLAW_STATE_DIR": str(state),
+            "OPENCLAW_CONFIG_PATH": str(destination),
+            "OPENCLAW_AGENT_DIR": "",
+            "OPENCLAW_OAUTH_DIR": str(state / "credentials"),
+        },
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["valid"] is True
 
 
 def test_endpoint_policy_distinguishes_remote_and_local_services() -> None:

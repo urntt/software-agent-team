@@ -457,10 +457,14 @@ rather than adding another model-name branch.
 The pinned transport matrix must compile and pass the real OpenClaw config
 validator for `openai-completions`, `openai-responses`,
 `anthropic-messages`, and local `ollama`. The matrix deliberately does not make
-an external provider call. Separately test unknown transports, remote HTTP or
-private endpoints, missing credential references/values, missing tool
-capability, exact rollback, and secret exclusion. A provider-backed check is
-needed only for a reviewed live route and must verify the exact provider/model
+an external provider call. Each transport has a separate test identity so a
+runtime compatibility failure remains attributable. Because this is a cold
+pinned-runtime inspection rather than an ordinary task preflight, it reuses the
+registered 90-second model-inspection infrastructure guard instead of inventing
+a shorter test-only subprocess cutoff. Separately test unknown transports,
+remote HTTP or private endpoints, missing credential references/values, missing
+tool capability, exact rollback, and secret exclusion. A provider-backed check
+is needed only for a reviewed live route and must verify the exact provider/model
 telemetry for model inspection, provider smoke, single-submission Planning, and
 the dynamic tool loop.
 
