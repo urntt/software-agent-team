@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** `v0.1.2` is the first published stable release and its fresh managed lifecycle is validated
+**Current milestone:** freeze the `v0.2.0` second-stable candidate while `v0.1.2` remains the published stable
 
 **Last updated:** September 11, 2026
 
@@ -63,6 +63,14 @@ Failed-activation rollback remains covered by real fault evidence whose three
 lifecycle-owner Git blobs are identical at `v0.1.2`.
 
 ## Current Development Head
+
+The release scope since `v0.1.2` is frozen as candidate `v0.2.0`. The
+machine-readable impact ledger classifies task-derived Agent specialization and
+the unified multi-transport model-profile surface as minor changes; the Planning,
+runtime attribution, accounting, managed-resource, portable-lock, and release
+workflow changes are compatible fixes. Publication still requires the clean local
+candidate gate, immutable exact-tag workflow, and a real `v0.1.2`-to-`v0.2.0`
+managed upgrade. Until those boundaries pass, `v0.1.2` remains the latest stable.
 
 Configuration schema v10 now embeds a versioned, secret-free
 `ModelRuntimeProfile` in every saved `ModelProfile`. The frozen profile and its

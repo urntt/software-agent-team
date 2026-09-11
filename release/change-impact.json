@@ -1,12 +1,42 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.1.1",
-  "target_version": "0.1.2",
+  "baseline_version": "0.1.2",
+  "target_version": "0.2.0",
   "changes": [
     {
-      "id": "restore-restrictive-test-fixtures",
+      "id": "task-derived-agent-specialization",
+      "impact": "minor",
+      "summary": "Create task-specific Agent roles, capabilities, review assignments, and dependency waves from the approved plan"
+    },
+    {
+      "id": "unified-model-runtime-profiles",
+      "impact": "minor",
+      "summary": "Configure provider-native, OpenAI Completions, OpenAI Responses, Anthropic Messages, and Ollama routes through one validated profile contract"
+    },
+    {
+      "id": "planning-authority-and-correction",
       "impact": "patch",
-      "summary": "Restore deliberately restrictive test directory metadata so the exact-tag gate can clean its private pytest tree as a non-root runner"
+      "summary": "Keep user decisions, Controller policy, model corrections, overview topology, and approval authority distinct and fail closed"
+    },
+    {
+      "id": "runtime-attribution-and-accounting",
+      "impact": "patch",
+      "summary": "Bind executed submissions, finalization recovery, parallel accounting, and current versus legacy cache usage to durable evidence"
+    },
+    {
+      "id": "managed-upgrade-resource-ownership",
+      "impact": "patch",
+      "summary": "Bound retained managed releases and reclaim only attributable, unused SAT sandbox images while preserving rollback"
+    },
+    {
+      "id": "portable-offline-runtime-lock",
+      "impact": "patch",
+      "summary": "Exercise the portable Python registry lock in the no-network non-root runtime and preserve deterministic installation inputs"
+    },
+    {
+      "id": "release-artifact-node24",
+      "impact": "patch",
+      "summary": "Run canonical release-evidence upload through an exact Node 24 action revision without changing retention or permissions"
     }
   ]
 }
