@@ -30,6 +30,7 @@ from software_agent_team.openclaw_session_evidence import (
     inspect_openclaw_initialization,
     inspect_openclaw_session_activity,
 )
+from software_agent_team.submissions import ARTIFACT_SUBMISSION_PROTOCOL
 from software_agent_team.teams import AgentCapability
 
 SESSION_ID = "2b1dc5c2-d735-4722-a390-3d28e5854fc4"
@@ -617,6 +618,132 @@ def test_capture_preserves_deferred_exec_then_terminal_process_and_submission(
     assert captured.tool_calls[0].reported_status == "running"
     assert captured.tool_calls[0].exit_code is None
     assert captured.tool_calls[1].exit_code == 0
+
+
+def test_capture_preserves_bound_submission_plugin_receipt(tmp_path: Path) -> None:
+    invocation = request()
+    call = tool_call_record("bound-submission", command="unused")
+    call["message"]["content"][0].update(
+        {
+            "name": "sat_submit_artifact",
+            "arguments": {"artifact": {"summary": "complete"}},
+        }
+    )
+    result = tool_result_record("bound-submission", output="accepted")
+    result["message"].update(
+        {
+            "toolName": "sat_submit_artifact",
+            "details": {
+                "status": "completed",
+                "submission_status": "accepted",
+                "protocol": ARTIFACT_SUBMISSION_PROTOCOL,
+                "schema_sha256": "a" * 64,
+                "binding_sha256": "b" * 64,
+            },
+        }
+    )
+    write_session_state(
+        tmp_path,
+        invocation=invocation,
+        records=[
+            session_record(),
+            user_record(invocation.prompt),
+            call,
+            result,
+            assistant_record(),
+        ],
+    )
+
+    captured = capture(tmp_path, invocation)
+
+    receipt = captured.tool_calls[0].submission_receipt
+    assert receipt is not None
+    assert receipt.protocol == ARTIFACT_SUBMISSION_PROTOCOL
+    assert receipt.schema_sha256 == "a" * 64
+    assert receipt.binding_sha256 == "b" * 64
+
+
+@pytest.mark.parametrize(
+    "details",
+    [
+        {
+            "status": "completed",
+            "protocol": ARTIFACT_SUBMISSION_PROTOCOL,
+        },
+        {
+            "status": "completed",
+            "submission_status": "rejected",
+            "protocol": ARTIFACT_SUBMISSION_PROTOCOL,
+            "schema_sha256": "a" * 64,
+            "binding_sha256": "b" * 64,
+        },
+        {
+            "status": "completed",
+            "submission_status": "accepted",
+            "protocol": ARTIFACT_SUBMISSION_PROTOCOL,
+            "schema_sha256": "not-a-digest",
+            "binding_sha256": "b" * 64,
+        },
+    ],
+)
+def test_capture_rejects_incomplete_or_invalid_submission_receipt(
+    tmp_path: Path,
+    details: dict[str, object],
+) -> None:
+    invocation = request()
+    call = tool_call_record("bad-receipt", command="unused")
+    call["message"]["content"][0]["name"] = "sat_submit_artifact"
+    result = tool_result_record("bad-receipt", output="accepted")
+    result["message"].update(
+        {
+            "toolName": "sat_submit_artifact",
+            "details": details,
+        }
+    )
+    write_session_state(
+        tmp_path,
+        invocation=invocation,
+        records=[
+            session_record(),
+            user_record(invocation.prompt),
+            call,
+            result,
+            assistant_record(),
+        ],
+    )
+
+    with pytest.raises(OpenClawSessionEvidenceError, match="pinned schema"):
+        capture(tmp_path, invocation)
+
+
+def test_capture_rejects_submission_receipt_on_another_tool(tmp_path: Path) -> None:
+    invocation = request()
+    result = tool_result_record("wrong-tool", output="accepted")
+    result["message"]["details"].update(
+        {
+            "submission_status": "accepted",
+            "protocol": ARTIFACT_SUBMISSION_PROTOCOL,
+            "schema_sha256": "a" * 64,
+            "binding_sha256": "b" * 64,
+        }
+    )
+    write_session_state(
+        tmp_path,
+        invocation=invocation,
+        records=[
+            session_record(),
+            user_record(invocation.prompt),
+            tool_call_record("wrong-tool", command="pytest"),
+            result,
+            assistant_record(),
+        ],
+    )
+
+    with pytest.raises(
+        OpenClawSessionEvidenceError,
+        match="non-submission tool result claims",
+    ):
+        capture(tmp_path, invocation)
 
 
 def test_capture_uses_the_latest_matching_prompt_for_semantic_repair(

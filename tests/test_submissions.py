@@ -9,7 +9,10 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from software_agent_team.artifacts import AgentToolCallEvidence
+from software_agent_team.artifacts import (
+    AgentSubmissionReceiptEvidence,
+    AgentToolCallEvidence,
+)
 from software_agent_team.submissions import (
     ARTIFACT_SUBMISSION_ARGUMENT,
     ARTIFACT_SUBMISSION_PROTOCOL,
@@ -49,6 +52,9 @@ def tool_call(
     tool_name: str = "sat_submit_artifact",
     outcome: str = "succeeded",
     is_error: bool = False,
+    receipt: bool = False,
+    receipt_binding: str = BINDING,
+    receipt_schema_sha256: str | None = None,
 ) -> AgentToolCallEvidence:
     """Return attributable controller evidence for one submission call."""
 
@@ -63,6 +69,17 @@ def tool_call(
         output_sha256=hashlib.sha256(output).hexdigest(),
         output_bytes=len(output),
         output_excerpt=output.decode(),
+        submission_receipt=(
+            AgentSubmissionReceiptEvidence(
+                protocol=ARTIFACT_SUBMISSION_PROTOCOL,
+                submission_status="accepted",
+                schema_sha256=receipt_schema_sha256 or contract().schema_sha256,
+                binding_sha256=receipt_binding,
+                external_call_sha256=hashlib.sha256(external_id.encode()).hexdigest(),
+            )
+            if receipt
+            else None
+        ),
     )
 
 
@@ -282,7 +299,73 @@ def test_submission_capture_rejects_unbound_direct_or_double_envelope_arguments(
         )
         assert submission is None
         assert evidence.status is AgentSubmissionStatus.UNAUTHORIZED
-        assert evidence.diagnostic_code == "submission_binding_mismatch"
+        assert evidence.diagnostic_code == "submission_arguments_mismatch"
+
+
+def test_submission_capture_accepts_plugin_executed_arguments_with_bound_receipt() -> (
+    None
+):
+    recorded_payload = {"summary": "raw transport value"}
+    executed_payload = {"summary": "validated plugin value"}
+    call = tool_call(recorded_payload, receipt=True)
+
+    submission, evidence = validate_submission_capture(
+        contract(),
+        binding_sha256=BINDING,
+        capture=capture(executed_payload),
+        tool_calls=(call,),
+        tool_evidence_error=None,
+    )
+
+    assert submission is not None
+    assert submission.payload == executed_payload
+    assert evidence.status is AgentSubmissionStatus.ACCEPTED
+    assert evidence.payload_sha256 != call.arguments_sha256
+
+
+def test_submission_capture_rejects_transformed_arguments_with_wrong_receipt() -> None:
+    recorded_payload = {"summary": "raw transport value"}
+    executed_payload = {"summary": "validated plugin value"}
+
+    submission, evidence = validate_submission_capture(
+        contract(),
+        binding_sha256=BINDING,
+        capture=capture(executed_payload),
+        tool_calls=(
+            tool_call(
+                recorded_payload,
+                receipt=True,
+                receipt_binding="c" * 64,
+            ),
+        ),
+        tool_evidence_error=None,
+    )
+
+    assert submission is None
+    assert evidence.status is AgentSubmissionStatus.UNAUTHORIZED
+    assert evidence.diagnostic_code == "submission_receipt_mismatch"
+
+
+def test_submission_capture_rejects_wrong_receipt_even_when_arguments_match() -> None:
+    payload = {"summary": "complete"}
+
+    submission, evidence = validate_submission_capture(
+        contract(),
+        binding_sha256=BINDING,
+        capture=capture(payload),
+        tool_calls=(
+            tool_call(
+                payload,
+                receipt=True,
+                receipt_binding="c" * 64,
+            ),
+        ),
+        tool_evidence_error=None,
+    )
+
+    assert submission is None
+    assert evidence.status is AgentSubmissionStatus.UNAUTHORIZED
+    assert evidence.diagnostic_code == "submission_receipt_mismatch"
 
 
 @pytest.mark.parametrize(
@@ -410,15 +493,22 @@ def test_submission_capture_rejects_invalid_or_unverifiable_evidence(
 
 
 @pytest.mark.parametrize(
-    "file_capture",
+    ("file_capture", "expected_code"),
     [
-        capture({"summary": "complete"}, binding="c" * 64),
-        capture({"summary": "complete"}, schema_sha256="d" * 64),
-        capture({"summary": "different"}),
+        (
+            capture({"summary": "complete"}, binding="c" * 64),
+            "submission_binding_mismatch",
+        ),
+        (
+            capture({"summary": "complete"}, schema_sha256="d" * 64),
+            "submission_schema_mismatch",
+        ),
+        (capture({"summary": "different"}), "submission_arguments_mismatch"),
     ],
 )
 def test_submission_capture_rejects_binding_or_argument_mismatch(
     file_capture: SubmissionFileCapture,
+    expected_code: str,
 ) -> None:
     payload = {"summary": "complete"}
 
@@ -432,7 +522,7 @@ def test_submission_capture_rejects_binding_or_argument_mismatch(
 
     assert submission is None
     assert evidence.status is AgentSubmissionStatus.UNAUTHORIZED
-    assert evidence.diagnostic_code == "submission_binding_mismatch"
+    assert evidence.diagnostic_code == expected_code
 
 
 def test_capture_submission_file_requires_private_direct_regular_file(

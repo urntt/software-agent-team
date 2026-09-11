@@ -15,11 +15,13 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from software_agent_team.artifacts import (
+    AgentSubmissionReceiptEvidence,
     AgentToolCallEvidence,
     AgentToolCallOutcome,
     RuntimeToolRejection,
 )
 from software_agent_team.invocation_lifecycle import InitializationCheckpoint
+from software_agent_team.submissions import ARTIFACT_SUBMISSION_TOOL
 
 _MAX_INDEX_BYTES = 4 * 1024 * 1024
 _MAX_SESSION_BYTES = 16 * 1024 * 1024
@@ -1152,7 +1154,35 @@ def _extract_tool_calls(
             raise OpenClawSessionEvidenceError(
                 "OpenClaw tool result exceeds its evidence limit"
             )
+        receipt_keys = {
+            "submission_status",
+            "protocol",
+            "schema_sha256",
+            "binding_sha256",
+        }
+        receipt_binding_keys = {
+            "protocol",
+            "schema_sha256",
+            "binding_sha256",
+        }
+        receipt_fields_present = receipt_keys.intersection(details)
+        has_bound_receipt = bool(receipt_binding_keys.intersection(details))
+        if has_bound_receipt and tool_name != ARTIFACT_SUBMISSION_TOOL:
+            raise OpenClawSessionEvidenceError(
+                "non-submission tool result claims a submission receipt"
+            )
+        submission_receipt = None
         try:
+            if has_bound_receipt:
+                if receipt_fields_present != receipt_keys:
+                    raise ValueError("submission receipt is incomplete")
+                submission_receipt = AgentSubmissionReceiptEvidence(
+                    submission_status=details.get("submission_status"),
+                    protocol=details.get("protocol"),
+                    schema_sha256=details.get("schema_sha256"),
+                    binding_sha256=details.get("binding_sha256"),
+                    external_call_sha256=_sha256(external_id.encode("utf-8")),
+                )
             item = AgentToolCallEvidence(
                 id=f"tool-{index:03d}",
                 tool_name=tool_name,
@@ -1177,8 +1207,9 @@ def _extract_tool_calls(
                 output_excerpt=_output_excerpt(
                     output_bytes.decode("utf-8", errors="strict")
                 ),
+                submission_receipt=submission_receipt,
             )
-        except ValidationError as error:
+        except (ValueError, ValidationError) as error:
             raise OpenClawSessionEvidenceError(
                 "OpenClaw tool evidence violates the pinned schema"
             ) from error

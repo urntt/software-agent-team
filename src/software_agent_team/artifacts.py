@@ -31,12 +31,13 @@ from software_agent_team.response_corrections import (
 from software_agent_team.submissions import (
     ARTIFACT_SUBMISSION_PROTOCOL,
     ARTIFACT_SUBMISSION_PROTOCOL_V1,
+    ARTIFACT_SUBMISSION_TOOL,
     AgentSubmissionEvidence,
     AgentSubmissionStatus,
 )
 from software_agent_team.versioning import SoftwareVersionReport
 
-ARTIFACT_SCHEMA_VERSION = 13
+ARTIFACT_SCHEMA_VERSION = 14
 MINIMUM_READABLE_ARTIFACT_SCHEMA_VERSION = 2
 COMMIT_PATTERN = r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
 AGENT_ID_PATTERN = r"^[a-z][a-z0-9_]*$"
@@ -586,7 +587,7 @@ class HandoffEnvelope(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal[
-        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, ARTIFACT_SCHEMA_VERSION
+        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, ARTIFACT_SCHEMA_VERSION
     ] = ARTIFACT_SCHEMA_VERSION
     kind: Literal[ArtifactKind.HANDOFF_ENVELOPE] = ArtifactKind.HANDOFF_ENVELOPE
     run_id: str = Field(min_length=1, pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -651,7 +652,7 @@ class PhaseArtifact(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal[
-        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, ARTIFACT_SCHEMA_VERSION
+        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, ARTIFACT_SCHEMA_VERSION
     ] = ARTIFACT_SCHEMA_VERSION
     kind: ArtifactKind
     run_id: str = Field(min_length=1, pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -671,6 +672,18 @@ class IterationArtifact(PhaseArtifact):
     """Metadata shared by artifacts produced within one implementation pass."""
 
     iteration: int = Field(ge=1)
+
+
+class AgentSubmissionReceiptEvidence(BaseModel):
+    """Bound plugin receipt captured from one successful tool result."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    protocol: Literal[ARTIFACT_SUBMISSION_PROTOCOL]
+    submission_status: Literal["accepted"]
+    schema_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    binding_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    external_call_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
 class AgentToolCallEvidence(BaseModel):
@@ -694,6 +707,10 @@ class AgentToolCallEvidence(BaseModel):
     output_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     output_bytes: int = Field(ge=0, le=1_048_576)
     output_excerpt: str = Field(default="", max_length=4096)
+    submission_receipt: AgentSubmissionReceiptEvidence | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
 
     @field_validator("executable")
     @classmethod
@@ -757,6 +774,15 @@ class AgentToolCallEvidence(BaseModel):
             )
         if (self.tool_name == "exec") != (self.executable is not None):
             raise ValueError("only exec tool evidence requires an executable")
+        if self.submission_receipt is not None and (
+            self.tool_name != ARTIFACT_SUBMISSION_TOOL
+            or self.outcome is not AgentToolCallOutcome.SUCCEEDED
+            or self.is_error
+            or self.submission_receipt.external_call_sha256 != self.external_call_sha256
+        ):
+            raise ValueError(
+                "submission receipt requires its successful attributed tool call"
+            )
         return self
 
 
@@ -884,7 +910,7 @@ class AgentExecutionRecord(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal[
-        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, ARTIFACT_SCHEMA_VERSION
+        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, ARTIFACT_SCHEMA_VERSION
     ] = ARTIFACT_SCHEMA_VERSION
     kind: Literal[ArtifactKind.AGENT_EXECUTION_RECORD] = (
         ArtifactKind.AGENT_EXECUTION_RECORD
@@ -1054,6 +1080,10 @@ class AgentExecutionRecord(BaseModel):
         )
         if self.schema_version >= 13 and self.specialization is None:
             raise ValueError("current execution records require specialization")
+        if self.schema_version < 14 and any(
+            call.submission_receipt is not None for call in self.tool_calls
+        ):
+            raise ValueError("submission receipts require artifact schema 14")
         if self.finished_at < self.started_at:
             raise ValueError("execution finish time cannot precede start time")
         if (self.stage_timeout_seconds is None) != (
@@ -1119,6 +1149,25 @@ class AgentExecutionRecord(BaseModel):
                 if call.id == self.submission_evidence.tool_call_id
                 and call.tool_name == self.submission_evidence.tool_name
             )
+            receipt = (
+                None
+                if len(matching_submission_calls) != 1
+                else matching_submission_calls[0].submission_receipt
+            )
+            receipt_matches = (
+                receipt is not None
+                and receipt.protocol == self.submission_evidence.protocol
+                and receipt.schema_sha256 == self.submission_evidence.schema_sha256
+                and receipt.binding_sha256 == self.submission_evidence.binding_sha256
+                and receipt.external_call_sha256
+                == matching_submission_calls[0].external_call_sha256
+            )
+            recorded_arguments_match = (
+                len(matching_submission_calls) == 1
+                and matching_submission_calls[0].arguments_sha256
+                == self.submission_evidence.payload_sha256
+            )
+            receipt_is_consistent = receipt is None or receipt_matches
             if (
                 self.response_transport != expected_transport
                 or self.tool_evidence_status is not AgentToolEvidenceStatus.CAPTURED
@@ -1127,8 +1176,8 @@ class AgentExecutionRecord(BaseModel):
                 or matching_submission_calls[0].outcome
                 is not AgentToolCallOutcome.SUCCEEDED
                 or matching_submission_calls[0].is_error
-                or matching_submission_calls[0].arguments_sha256
-                != self.submission_evidence.payload_sha256
+                or not receipt_is_consistent
+                or not (recorded_arguments_match or receipt_matches)
             ):
                 raise ValueError(
                     "accepted submission evidence must bind the final successful "

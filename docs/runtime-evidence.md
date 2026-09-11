@@ -284,15 +284,22 @@ cannot discard the only payload before SAT records normalization or correction
 evidence. The SAT-owned OpenClaw plugin verifies the transport-schema file under a
 separate integrity digest, rejects any shape other than one object-valued `artifact`
 argument, and unwraps exactly once. A successful call exclusively writes one private
-envelope containing the inner semantic object and terminates the
-Agent turn. After the process exits, the controller requires exactly one
-successful final submission-tool call in the attributable session transcript
-and cross-checks its provider call identity and canonical arguments digest
-against the private envelope, invocation binding, semantic-schema digest, outer
-arguments digest, and inner semantic-object digest. A missing, duplicate, failed,
-non-final, malformed, unsafe, direct-object, double-envelope, or
-unattributable submission fails closed. The plugin neither writes the project
-workspace nor changes the Agent's permission profile.
+envelope containing the inner semantic object, returns a structured receipt, and
+terminates the Agent turn. After the process exits, the controller requires exactly
+one successful final submission-tool call in the attributable session transcript.
+It cross-checks the private envelope's invocation binding, semantic-schema digest,
+exact external call, outer arguments digest, and inner semantic-object digest.
+OpenClaw may normalize validated arguments between the model-authored session record
+and plugin execution, so these are retained as two separate canonical digests. They
+must be equal when no structured plugin receipt exists. A difference is accepted
+only when the successful tool result contains the current protocol, schema,
+invocation binding, and exact external call identity returned by the plugin that
+wrote the envelope. A partial, malformed, stale, contradictory, or cross-call
+receipt fails closed, as does a missing, duplicate, failed, non-final, unsafe,
+direct-object, double-envelope, or unattributable submission. Diagnostic evidence
+distinguishes protocol, binding, schema, call, receipt, and receipt-less argument
+mismatches. The plugin neither writes the project workspace nor changes the Agent's
+permission profile.
 
 Visible assistant text is retained as raw execution evidence but has no
 semantic authority for a typed Planning or runtime call. It may be empty,

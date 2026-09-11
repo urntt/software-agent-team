@@ -150,8 +150,11 @@ according to the [validation policy](#validation-policy), not commit count.
 `tests/test_submission_bridge.py` executes the production submission plugin with
 the pinned Node runtime, passes its actual output through session extraction and
 bound capture, and applies the resulting semantic correction. It covers envelope,
-slot identity, binding, failed-attempt, and terminal-order boundaries without
-external requests, including preceding deferred work and runtime rejections.
+slot identity, binding, failed-attempt, terminal-order, and pre-execution argument
+normalization boundaries without external requests, including preceding deferred
+work and runtime rejections. The normalization case preserves different raw-session
+and plugin-executed argument digests and requires the plugin's exact bound receipt;
+it does not replace either payload with a fabricated successful Controller result.
 Its simulated host session IO does not replace the separate
 real OpenClaw loopback gate or provider-backed product acceptance.
 

@@ -10,6 +10,7 @@ import json
 import re
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -35,7 +36,13 @@ from software_agent_team.submissions import (
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def capture_controller_correction(tmp_path: Path, request, payload):
+def capture_controller_correction(
+    tmp_path: Path,
+    request,
+    payload,
+    *,
+    recorded_payload=None,
+):
     """Capture a real terminal plugin result; prior work remains caller-owned."""
     pins = (ROOT / "configs/toolchain.sh").read_text()
     match = re.search(r'^task_node_version="([^"]+)"$', pins, re.MULTILINE)
@@ -75,6 +82,10 @@ def capture_controller_correction(tmp_path: Path, request, payload):
         },
     )
     observed = json.loads(completed.stdout)
+    if recorded_payload is not None:
+        observed["records"][0]["message"]["content"][0]["arguments"] = {
+            "artifact": recorded_payload
+        }
     session_id = "controller-bridge"
     sessions = tmp_path / "state/agents" / request.agent_id / "sessions"
     sessions.mkdir(parents=True)
@@ -106,6 +117,45 @@ def capture_controller_correction(tmp_path: Path, request, payload):
     assert captured is not None
     assert status.status is AgentSubmissionStatus.ACCEPTED
     return captured, status, evidence
+
+
+def test_production_submission_bridge_binds_plugin_executed_arguments(
+    tmp_path: Path,
+) -> None:
+    """OpenClaw may transform validated args without rewriting the raw turn."""
+
+    contract = AgentSubmissionContract.from_schema(
+        {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {"summary": {"type": "string"}},
+            "required": ["summary"],
+        },
+        purpose=AgentSubmissionPurpose.PLANNING_RESPONSE,
+    )
+    request = SimpleNamespace(
+        submission_contract=contract,
+        agent_id="planner",
+        session_key="transformed-arguments",
+        prompt="Submit the planning response.",
+    )
+    executed = {"summary": "validated plugin value"}
+    recorded = {"summary": "raw transport value"}
+
+    captured, status, evidence = capture_controller_correction(
+        tmp_path / "bridge",
+        request,
+        executed,
+        recorded_payload=recorded,
+    )
+
+    call = evidence.tool_calls[-1]
+    assert captured.payload == executed
+    assert status.status is AgentSubmissionStatus.ACCEPTED
+    assert status.payload_sha256 != call.arguments_sha256
+    assert call.submission_receipt is not None
+    assert call.submission_receipt.binding_sha256 == status.binding_sha256
+    assert call.submission_receipt.schema_sha256 == status.schema_sha256
 
 
 class CorrectedBody(BaseModel):

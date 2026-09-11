@@ -22,6 +22,7 @@ from software_agent_team.artifacts import (
     review_boundary_definition_map,
 )
 from software_agent_team.invocation_lifecycle import InvocationLifecycleEvidence
+from software_agent_team.submissions import ARTIFACT_SUBMISSION_PROTOCOL
 
 
 def valid_handoff_payload() -> dict[str, object]:
@@ -770,6 +771,72 @@ def test_execution_record_binds_typed_submission_to_final_tool_evidence() -> Non
     assert record.submission_evidence is not None
 
     payload["tool_calls"][0]["arguments_sha256"] = "0" * 64
+    with pytest.raises(ValidationError, match="final successful captured tool call"):
+        AgentExecutionRecord.model_validate(payload)
+
+
+def test_execution_record_persists_bound_plugin_receipt_for_transformed_arguments() -> (
+    None
+):
+    payload = valid_execution_payload()
+    payload.update(
+        {
+            "execution_status": "completed",
+            "response_contract": "semantic_body_v1",
+            "response_transport": "typed_submission_v2",
+            "submission_evidence": {
+                "protocol": ARTIFACT_SUBMISSION_PROTOCOL,
+                "purpose": "artifact",
+                "status": "accepted",
+                "tool_name": "sat_submit_artifact",
+                "schema_sha256": "a" * 64,
+                "binding_sha256": "b" * 64,
+                "tool_call_id": "tool-001",
+                "payload_sha256": "c" * 64,
+                "semantic_payload_sha256": "1" * 64,
+            },
+            "tool_evidence_status": "captured",
+            "session_transcript_sha256": "d" * 64,
+            "session_record_count": 4,
+            "tool_calls": [
+                {
+                    "id": "tool-001",
+                    "tool_name": "sat_submit_artifact",
+                    "external_call_sha256": "e" * 64,
+                    "arguments_sha256": "0" * 64,
+                    "outcome": "succeeded",
+                    "is_error": False,
+                    "reported_status": "completed",
+                    "output_sha256": "f" * 64,
+                    "output_bytes": 8,
+                    "output_excerpt": "accepted",
+                    "submission_receipt": {
+                        "protocol": ARTIFACT_SUBMISSION_PROTOCOL,
+                        "submission_status": "accepted",
+                        "schema_sha256": "a" * 64,
+                        "binding_sha256": "b" * 64,
+                        "external_call_sha256": "e" * 64,
+                    },
+                }
+            ],
+        }
+    )
+
+    record = AgentExecutionRecord.model_validate(payload)
+    restored = AgentExecutionRecord.model_validate_json(record.model_dump_json())
+
+    assert restored == record
+    assert restored.tool_calls[0].arguments_sha256 != (
+        restored.submission_evidence.payload_sha256
+    )
+    assert restored.tool_calls[0].submission_receipt is not None
+
+    prior_schema = deepcopy(payload)
+    prior_schema["schema_version"] = 13
+    with pytest.raises(ValidationError, match="receipts require artifact schema 14"):
+        AgentExecutionRecord.model_validate(prior_schema)
+
+    payload["tool_calls"][0]["submission_receipt"]["binding_sha256"] = "9" * 64
     with pytest.raises(ValidationError, match="final successful captured tool call"):
         AgentExecutionRecord.model_validate(payload)
 

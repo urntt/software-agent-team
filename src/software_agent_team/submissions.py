@@ -308,6 +308,7 @@ class SubmissionToolEvidence(Protocol):
     arguments_sha256: str
     outcome: object
     is_error: bool
+    submission_receipt: object | None
 
 
 def artifact_submission_plugin_path() -> Path:
@@ -574,23 +575,54 @@ def validate_submission_capture(
     expected_external_sha256 = hashlib.sha256(
         str(envelope.get("tool_call_id", "")).encode("utf-8")
     ).hexdigest()
-    authorized = (
-        envelope.get("protocol") == contract.protocol
-        and envelope.get("binding_sha256") == binding_sha256
-        and envelope.get("schema_sha256") == contract.schema_sha256
-        and expected_external_sha256 == call.external_call_sha256
-        and transport_arguments_sha256 == call.arguments_sha256
+    receipt = getattr(call, "submission_receipt", None)
+    receipt_matches = (
+        receipt is not None
+        and getattr(receipt, "submission_status", None) == "accepted"
+        and getattr(receipt, "protocol", None) == contract.protocol
+        and getattr(receipt, "binding_sha256", None) == binding_sha256
+        and getattr(receipt, "schema_sha256", None) == contract.schema_sha256
+        and getattr(receipt, "external_call_sha256", None) == call.external_call_sha256
     )
-    if not authorized:
+    diagnostic: tuple[str, str] | None = None
+    if envelope.get("protocol") != contract.protocol:
+        diagnostic = (
+            "submission_protocol_mismatch",
+            "submission protocol does not match the controller contract",
+        )
+    elif envelope.get("binding_sha256") != binding_sha256:
+        diagnostic = (
+            "submission_binding_mismatch",
+            "submission invocation binding does not match controller evidence",
+        )
+    elif envelope.get("schema_sha256") != contract.schema_sha256:
+        diagnostic = (
+            "submission_schema_mismatch",
+            "submission schema identity does not match controller evidence",
+        )
+    elif expected_external_sha256 != call.external_call_sha256:
+        diagnostic = (
+            "submission_call_mismatch",
+            "submission file does not identify the attributable tool call",
+        )
+    elif receipt is not None and not receipt_matches:
+        diagnostic = (
+            "submission_receipt_mismatch",
+            "plugin receipt does not bind the current controller invocation",
+        )
+    elif transport_arguments_sha256 != call.arguments_sha256 and receipt is None:
+        diagnostic = (
+            "submission_arguments_mismatch",
+            "executed arguments differ from session arguments without a bound "
+            "plugin receipt",
+        )
+    if diagnostic is not None:
         evidence = rejected_submission_evidence(
             contract,
             binding_sha256=binding_sha256,
             status=AgentSubmissionStatus.UNAUTHORIZED,
-            code="submission_binding_mismatch",
-            detail=(
-                "submission protocol, invocation, schema, call, or arguments binding "
-                "does not match controller evidence"
-            ),
+            code=diagnostic[0],
+            detail=diagnostic[1],
             tool_call_id=call.id,
             payload_sha256=transport_arguments_sha256,
         )
