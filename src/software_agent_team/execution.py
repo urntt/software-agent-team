@@ -577,13 +577,15 @@ def stable_agent_session_key(
     agent_id: str,
     iteration: int,
     expected_kind: ArtifactKind,
+    generation: int = 1,
 ) -> str:
     """Build one deterministic session key for a run-scoped Agent invocation."""
 
-    return (
+    base = (
         f"agent:{agent_id}:"
         f"sat-{run_id}-i{iteration}-{expected_kind.value.replace('_', '-')}"
     )
+    return base if generation == 1 else f"{base}-g{generation}"
 
 
 class AgentExecutionRequest(BaseModel):
@@ -600,6 +602,7 @@ class AgentExecutionRequest(BaseModel):
     run_id: str = Field(min_length=1, pattern=r"^[a-z0-9][a-z0-9_-]*$")
     team_id: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9_]*$")
     iteration: int = Field(ge=1)
+    session_generation: int = Field(default=1, ge=1)
     role: AgentRole | None = None
     agent_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     capability: AgentCapability
@@ -713,6 +716,7 @@ class AgentExecutionRequest(BaseModel):
             agent_id=self.agent_id,
             iteration=self.iteration,
             expected_kind=self.expected_kind,
+            generation=self.session_generation,
         )
 
 

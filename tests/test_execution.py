@@ -2894,6 +2894,19 @@ def test_dynamic_agent_identity_drives_command_session_and_telemetry() -> None:
     assert result.telemetry.role is None
 
 
+def test_session_generation_creates_a_distinct_invocation_identity() -> None:
+    original = request()
+    correction = original.model_copy(update={"session_generation": 2})
+
+    assert original.session_key.endswith("-implementation-plan")
+    assert correction.session_key == f"{original.session_key}-g2"
+    assert correction.agent_id == original.agent_id
+    assert correction.run_id == original.run_id
+
+    with pytest.raises(ValidationError, match="greater than or equal to 1"):
+        request(session_generation=0)
+
+
 def test_dynamic_agent_request_rejects_a_capability_output_mismatch() -> None:
     with pytest.raises(ValidationError, match="cannot produce test_report"):
         AgentExecutionRequest(

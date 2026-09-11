@@ -938,6 +938,7 @@ class WorkflowCoordinator:
                 else build_semantic_correction_request(
                     base_request,
                     correction_plan,
+                    session_generation=attempt,
                 )
             )
             assert context.budget_ledger is not None

@@ -139,6 +139,28 @@ def _expected_session_keys(
     )
 
 
+def _is_expected_session_generation(
+    session_key: str,
+    expected_base_sessions: frozenset[str],
+) -> bool:
+    """Match a base invocation or one deterministic correction generation."""
+
+    if session_key in expected_base_sessions:
+        return True
+    for base in expected_base_sessions:
+        prefix = f"{base}-g"
+        if not session_key.startswith(prefix):
+            continue
+        generation = session_key.removeprefix(prefix)
+        return (
+            generation.isascii()
+            and generation.isdecimal()
+            and not generation.startswith("0")
+            and int(generation) >= 2
+        )
+    return False
+
+
 def _owned_mount(
     value: object,
     *,
@@ -447,29 +469,24 @@ def cleanup_run_sandbox_containers(
         agents=agents,
     )
 
-    discovered_ids: set[str] = set()
-    for session_key in sorted(expected_sessions):
-        listed = _run_command(
-            [
-                sandbox_binary,
-                "container",
-                "ls",
-                "--all",
-                "--quiet",
-                "--filter",
-                "label=openclaw.sandbox=1",
-                "--filter",
-                f"label=openclaw.sessionKey={session_key}",
-            ],
-            runner=runner,
-            timeout_seconds=timeout_seconds,
-        )
-        if listed.returncode != 0:
-            raise SandboxCleanupError("Docker could not list run-scoped sandboxes")
-        discovered_ids.update(
-            line.strip() for line in listed.stdout.splitlines() if line.strip()
-        )
-    container_ids = tuple(sorted(discovered_ids))
+    listed = _run_command(
+        [
+            sandbox_binary,
+            "container",
+            "ls",
+            "--all",
+            "--quiet",
+            "--filter",
+            "label=openclaw.sandbox=1",
+        ],
+        runner=runner,
+        timeout_seconds=timeout_seconds,
+    )
+    if listed.returncode != 0:
+        raise SandboxCleanupError("Docker could not list run-scoped sandboxes")
+    container_ids = tuple(
+        sorted({line.strip() for line in listed.stdout.splitlines() if line.strip()})
+    )
     if any(_CONTAINER_ID.fullmatch(item) is None for item in container_ids):
         raise SandboxCleanupError("Docker returned an invalid container ID")
     if not container_ids:
@@ -501,7 +518,10 @@ def cleanup_run_sandbox_containers(
         if not isinstance(labels, dict):
             continue
         session_key = labels.get("openclaw.sessionKey")
-        if session_key not in expected_sessions:
+        if not isinstance(session_key, str) or not _is_expected_session_generation(
+            session_key,
+            expected_sessions,
+        ):
             continue
         container_id = item.get("Id")
         container_name = item.get("Name")

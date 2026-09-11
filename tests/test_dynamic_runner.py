@@ -1773,6 +1773,8 @@ def test_dynamic_writer_targeted_correction_keeps_timeout_and_git_evidence(
     ]
     assert len(writer_requests) == 2
     assert [request.timeout_seconds for request in writer_requests] == [71, 71]
+    assert [request.session_generation for request in writer_requests] == [1, 2]
+    assert writer_requests[0].session_key != writer_requests[1].session_key
     assert "TARGETED_SEMANTIC_CORRECTION_SLOTS_V3" in writer_requests[1].prompt
     assert "Do not regenerate or repeat that object" in writer_requests[1].prompt
     assert len(runner.execution_records) == 4
@@ -2262,6 +2264,8 @@ def test_reviewer_correction_continues_after_strict_sibling_reduction(
         request for request in executor.requests if request.agent_id == "reviewer"
     ]
     assert len(review_requests) == 3
+    assert [request.session_generation for request in review_requests] == [1, 2, 3]
+    assert len({request.session_key for request in review_requests}) == 3
     records = [
         runner.artifact_store.load(ref)
         for ref in runner.execution_records

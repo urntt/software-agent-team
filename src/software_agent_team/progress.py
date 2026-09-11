@@ -1378,8 +1378,9 @@ class TerminalProgressRenderer:
             usage = event.budget_usage
             self._print(
                 "  budget "
-                f"calls={usage.calls_completed}/{usage.calls_started} "
-                f"active={usage.active_calls} input={usage.input_tokens} "
+                f"calls_completed={usage.calls_completed} "
+                f"calls_started={usage.calls_started} "
+                f"calls_active={usage.active_calls} input={usage.input_tokens} "
                 f"output={usage.output_tokens} "
                 f"duration_ms={usage.agent_duration_ms} "
                 f"known_cost_usd={usage.known_estimated_cost_usd} "

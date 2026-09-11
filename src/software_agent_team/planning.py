@@ -8351,6 +8351,7 @@ class AdaptivePlanningCoordinator:
                 timeout_seconds=self.policy.planning_timeout_seconds,
                 model=request.model,
                 submission_contract=submission_contract,
+                session_generation=(attempt if correction_plan is not None else 1),
             )
             self._emit_activity(
                 activity_handler,

@@ -142,6 +142,41 @@ def test_continuation_oracle_requires_two_new_current_turns() -> None:
     )
 
 
+def test_correction_oracle_requires_a_fresh_second_session_generation() -> None:
+    sample = outcome("stream")
+    first = {
+        **sample,
+        "session_key": "agent:clarifier:sat-example-i1-clarification-record",
+        "initialization": {
+            "mode": "enforced",
+            "checkpoints": ["process_launched", "provider_stream"],
+        },
+    }
+    second = {
+        **first,
+        "session_key": "agent:clarifier:sat-example-i1-clarification-record-g2",
+    }
+    sample.update(
+        {
+            "scenario": "correction",
+            "requests_seen": 2,
+            "invocations": [first, second],
+        }
+    )
+
+    assert validate_matrix([sample], expected_scenarios=("correction",))["passed"]
+
+    invalid = deepcopy(sample)
+    invalid["invocations"][1]["session_key"] = invalid["invocations"][0]["session_key"]
+    result = validate_matrix([invalid], expected_scenarios=("correction",))
+
+    assert result["passed"] is False
+    assert any(
+        "distinct second session generation" in mismatch
+        for mismatch in result["scenarios"][0]["mismatches"]
+    )
+
+
 def test_cleanup_success_cannot_hide_a_failed_recovery_outcome() -> None:
     outcomes = valid_outcomes()
     recovery = outcomes[1]

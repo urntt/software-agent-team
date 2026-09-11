@@ -584,6 +584,7 @@ class DynamicAgentRunner:
                 request = build_semantic_correction_request(
                     base_request,
                     correction_plan,
+                    session_generation=attempt,
                 )
             else:
                 request = base_request

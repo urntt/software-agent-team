@@ -32,9 +32,9 @@ from software_agent_team.quality_gates import load_quality_gate_configuration
 from software_agent_team.runtime_configuration import materialize_run_configuration
 from software_agent_team.teams import AgentCapability, load_team_manifest
 
-MODEL = "deepseek/deepseek-v4-flash-vision-exp"
+MODEL = "deepseek/deepseek-flash"
 SCENARIOS = ("stream", "recovery", "disconnect", "hang")
-OPTIONAL_SCENARIOS = ("tool-rejection", "continuation")
+OPTIONAL_SCENARIOS = ("tool-rejection", "continuation", "correction")
 _EXPECTED_TERMINAL = {
     "stream": ("completed", "completed"),
     "recovery": ("completed", "completed"),
@@ -42,6 +42,7 @@ _EXPECTED_TERMINAL = {
     "hang": ("provider_stalled", "provider_stall"),
     "tool-rejection": ("completed", "completed"),
     "continuation": ("completed", "completed"),
+    "correction": ("completed", "completed"),
 }
 _TERMINAL_PHASES = ("stopping", "collecting_evidence", "stopped")
 _EXPECTED_RESPONSE = '{"status":"ok"}'
@@ -242,6 +243,39 @@ def validate_scenario_outcome(outcome: Mapping[str, object]) -> ScenarioValidati
                 )
         if requests_seen != 2:
             mismatches.append("continuation endpoint must observe exactly two requests")
+    elif scenario == "correction":
+        invocations = _sequence(outcome.get("invocations"))
+        if len(invocations) != 2:
+            mismatches.append("correction must record exactly two invocations")
+        else:
+            sessions = tuple(
+                _mapping(invocation).get("session_key") for invocation in invocations
+            )
+            if (
+                not all(isinstance(session, str) for session in sessions)
+                or sessions[0] == sessions[1]
+                or not str(sessions[1]).endswith("-g2")
+            ):
+                mismatches.append(
+                    "correction must use a distinct second session generation"
+                )
+            for index, invocation in enumerate(invocations, start=1):
+                item = _mapping(invocation)
+                if item.get("status") != "completed" or item.get("exit_code") != 0:
+                    mismatches.append(f"correction invocation {index} did not complete")
+                initialization = _mapping(item.get("initialization"))
+                if initialization.get("mode") != "enforced":
+                    mismatches.append(
+                        f"correction invocation {index} lacked enforced initialization"
+                    )
+                if not {"current_turn", "provider_stream"}.intersection(
+                    _sequence(initialization.get("checkpoints"))
+                ):
+                    mismatches.append(
+                        f"correction invocation {index} lacked attributable readiness"
+                    )
+        if requests_seen != 2:
+            mismatches.append("correction endpoint must observe exactly two requests")
 
     return ScenarioValidation(
         scenario=scenario,
@@ -347,6 +381,30 @@ def remove_sandbox_containers(
         "actions": actions,
         "container_ids_after_cleanup": after,
         "completed": not after and all(action["exit_code"] == 0 for action in actions),
+    }
+
+
+def remove_sandbox_sessions(
+    docker_binary: str,
+    session_keys: Sequence[str],
+) -> dict[str, object]:
+    """Remove an exact set of disposable validation sessions."""
+
+    cleanups = [
+        remove_sandbox_containers(docker_binary, session_key)
+        for session_key in dict.fromkeys(session_keys)
+    ]
+    return {
+        "session_keys": list(dict.fromkeys(session_keys)),
+        "sessions": cleanups,
+        "container_ids_after_cleanup": sorted(
+            {
+                container_id
+                for cleanup in cleanups
+                for container_id in cleanup["container_ids_after_cleanup"]
+            }
+        ),
+        "completed": all(cleanup["completed"] is True for cleanup in cleanups),
     }
 
 
@@ -599,6 +657,7 @@ def _serialize_invocation(
         "duration_ms": result.telemetry.duration_ms,
         "provider": result.telemetry.provider,
         "model": result.telemetry.model,
+        "session_key": result.telemetry.session_key,
         "usage": (
             None
             if result.telemetry.usage is None
@@ -699,8 +758,18 @@ def execute_scenario(
             timeout_seconds=0,
             model=MODEL,
         )
-        containers_before_launch = sandbox_container_ids(
-            docker_binary, request.session_key
+        requests = (
+            (request, request.model_copy(update={"session_generation": 2}))
+            if scenario == "correction"
+            else ((request, request) if scenario == "continuation" else (request,))
+        )
+        session_keys = tuple(item.session_key for item in requests)
+        containers_before_launch = sorted(
+            {
+                container_id
+                for session_key in dict.fromkeys(session_keys)
+                for container_id in sandbox_container_ids(docker_binary, session_key)
+            }
         )
         if containers_before_launch:
             raise RuntimeError(
@@ -729,8 +798,7 @@ def execute_scenario(
         invocations: list[dict[str, object]] = []
         current_activities: list[dict[str, object]] = []
         try:
-            invocation_count = 2 if scenario == "continuation" else 1
-            for _ in range(invocation_count):
+            for invocation_request in requests:
                 current_activities = []
                 activity_started = time.monotonic()
 
@@ -753,14 +821,15 @@ def execute_scenario(
                     ):
                         server.signal_controller_stall()
 
-                result = executor.execute(request, activity_handler=record_activity)
+                result = executor.execute(
+                    invocation_request,
+                    activity_handler=record_activity,
+                )
                 invocations.append(_serialize_invocation(result, current_activities))
                 if result.status.value != "completed":
                     break
         except Exception as error:  # pragma: no cover - exercised by the live tool
-            sandbox_cleanup = remove_sandbox_containers(
-                docker_binary, request.session_key
-            )
+            sandbox_cleanup = remove_sandbox_sessions(docker_binary, session_keys)
             return {
                 "scenario": scenario,
                 "status": "validation_exception",
@@ -778,7 +847,7 @@ def execute_scenario(
                 "sandbox_containers_before_launch": containers_before_launch,
                 "sandbox_cleanup": sandbox_cleanup,
             }
-        sandbox_cleanup = remove_sandbox_containers(docker_binary, request.session_key)
+        sandbox_cleanup = remove_sandbox_sessions(docker_binary, session_keys)
 
     final_invocation = invocations[-1]
     return {

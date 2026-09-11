@@ -686,8 +686,15 @@ def build_agent_execution_request(
 def build_semantic_correction_request(
     request: AgentExecutionRequest,
     plan: SemanticCorrectionPlan,
+    *,
+    session_generation: int,
 ) -> AgentExecutionRequest:
-    """Request replacements for only the controller-identified invalid fields."""
+    """Request replacements in a fresh session bound to the prior typed result."""
+
+    if session_generation <= request.session_generation:
+        raise AgentPromptError(
+            "semantic correction requires a newer OpenClaw session generation"
+        )
 
     contract = request.submission_contract
     if contract is None:
@@ -700,7 +707,8 @@ def build_semantic_correction_request(
                 "prompt": (
                     f"{request.prompt}"
                     f"{correction_prompt(plan, response_schema=response_schema)}"
-                )
+                ),
+                "session_generation": session_generation,
             }
         )
     response_schema = contract.parameters_schema()
@@ -717,6 +725,7 @@ def build_semantic_correction_request(
         update={
             "prompt": f"{request.prompt}{correction}",
             "submission_contract": correction_contract,
+            "session_generation": session_generation,
         }
     )
 

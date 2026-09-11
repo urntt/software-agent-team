@@ -453,6 +453,17 @@ call. Already bound slots are no longer model-editable. Staging does not publish
 an artifact: the completed object must still pass full semantic and evidence
 grounding checks before acceptance. Each invocation retains its submitted payload,
 diagnostic, exact binding normalizations, cost, and next request's base digest.
+Each targeted correction uses a new deterministic session generation. The
+Controller carries the prior response digest, issue fingerprint, immutable
+fields, candidate bindings, Agent identity, workspace, and route in the request
+and persisted chain; the correction therefore never depends on an earlier
+OpenClaw transcript remaining continuable after tool submission or context
+compaction. Session reuse is reserved for a separately verified upstream tool
+loop that ended before terminal submission.
+Run-scoped sandbox cleanup accepts the base session and its canonical `-gN`
+correction generations, but removal still requires an OpenClaw sandbox label and
+a bind mount inside the exact SAT-owned state or run workspace. It does not infer
+ownership from a session-like name alone.
 The same correction authority serves Planning and runtime Agents; user stops,
 USD/deadline authorization, and controlled-evaluation limits still take precedence.
 Dynamic invocation admission checks the same durable user-stop authority before

@@ -134,8 +134,6 @@ def test_cleanup_with_no_openclaw_containers_is_successful(tmp_path: Path) -> No
             "--quiet",
             "--filter",
             "label=openclaw.sandbox=1",
-            "--filter",
-            "label=openclaw.sessionKey=agent:planner:sat-sat-test-run-i1-implementation-plan",
         )
     ]
 
@@ -154,36 +152,57 @@ def test_cleanup_resolves_sessions_from_run_scoped_agent_specs(tmp_path: Path) -
         timeout_seconds=600,
         workspace_scope="repository",
     )
-    runner = ScriptedRunner([completed(), completed()])
+    container_id = "9" * 64
+    workspace = (tmp_path / "workspace").resolve()
+    correction_session = stable_agent_session_key(
+        run_id="sat-dynamic-run",
+        agent_id="cli_developer",
+        iteration=2,
+        expected_kind=ArtifactKind.WORK_RESULT,
+        generation=3,
+    )
+    runner = ScriptedRunner(
+        [
+            completed(f"{container_id}\n"),
+            completed(
+                json.dumps(
+                    [
+                        sandbox_record(
+                            container_id=container_id,
+                            session_key=correction_session,
+                            source=workspace,
+                        )
+                    ]
+                )
+            ),
+            completed(container_id),
+        ]
+    )
 
     result = cleanup_run_sandbox_containers(
         sandbox_binary="docker",
         run_id="sat-dynamic-run",
         openclaw_state_dir=(tmp_path / "state").resolve(),
-        workspace_dir=(tmp_path / "workspace").resolve(),
+        workspace_dir=workspace,
         iteration_limit=2,
         agents=(agent,),
         runner=runner,
     )
 
-    assert result.removed == ()
-    expected = {
-        stable_agent_session_key(
-            run_id="sat-dynamic-run",
-            agent_id="cli_developer",
-            iteration=iteration,
-            expected_kind=ArtifactKind.WORK_RESULT,
-        )
-        for iteration in (1, 2)
-    }
-    assert {
-        call[-1].removeprefix("label=openclaw.sessionKey=") for call in runner.calls
-    } == expected
+    assert [item.session_key for item in result.removed] == [correction_session]
+    assert runner.calls[-1] == (
+        "docker",
+        "container",
+        "rm",
+        "--force",
+        container_id,
+    )
 
 
 def test_cleanup_removes_only_the_exact_owned_run_container(tmp_path: Path) -> None:
     owned_id = "a" * 64
     unrelated_id = "b" * 64
+    malformed_generation_id = "8" * 64
     run_id = "sat-test-run"
     owned_session = stable_session_key(
         run_id=run_id,
@@ -210,11 +229,15 @@ def test_cleanup_removes_only_the_exact_owned_run_container(tmp_path: Path) -> N
             session_key=unrelated_session,
             source=tmp_path / "other-workspace",
         ),
+        sandbox_record(
+            container_id=malformed_generation_id,
+            session_key=f"{owned_session}-g01",
+            source=workspace,
+        ),
     ]
     runner = ScriptedRunner(
         [
-            completed(),
-            completed(f"{owned_id}\n{unrelated_id}\n"),
+            completed(f"{owned_id}\n{unrelated_id}\n{malformed_generation_id}\n"),
             completed(json.dumps(inspection)),
             completed(owned_id),
         ]

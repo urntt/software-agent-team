@@ -281,6 +281,16 @@ when code, usability evidence, or controlled experiments justify a replacement.
   persisted reproducibility dependency. During an invocation, the controller
   may validate the exact current session turn and persist only bounded,
   sanitized tool-call/result records plus transcript provenance.
+- A targeted semantic correction is a new invocation with a distinct OpenClaw
+  session generation. It receives the complete approved task context plus the
+  Controller-bound prior response digest, issue fingerprint, preserved fields,
+  and exact correction slots; it does not depend on continuing an upstream
+  conversation transcript. Only a verified incomplete tool loop may reuse the
+  same session, because that path resumes attributable workspace work rather
+  than correcting an already terminal semantic response.
+- Run cleanup recognizes those deterministic correction generations only when
+  the container also mounts the current SAT-owned state or workspace boundary;
+  another OpenClaw installation remains outside cleanup authority.
 - Execution Agents cannot spawn additional model calls. The controller is the sole
   authority for Agent invocation, accounting, and ordering.
 - A model-authored citation is not itself a user decision. Correcting an invalid

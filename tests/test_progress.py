@@ -532,6 +532,8 @@ def test_detailed_renderer_projects_agent_state_route_dependencies_and_budget(
     assert "specialization=product_implementation" in rendered
     assert "model=provider/model" in rendered
     assert "dependencies=schema_builder" in rendered
+    assert "calls_completed=1 calls_started=1 calls_active=0" in rendered
+    assert "calls=1/1" not in rendered
     assert "input=120 output=40" in rendered
 
 

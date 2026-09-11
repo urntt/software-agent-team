@@ -957,6 +957,8 @@ def test_workflow_corrects_one_invalid_semantic_field(tmp_path: Path) -> None:
         if "/plan/" in reference.path
     ]
     assert len(plan_records) == 2
+    assert [request.session_generation for request in executor.requests[:2]] == [1, 2]
+    assert executor.requests[0].session_key != executor.requests[1].session_key
     repair_prompt = executor.requests[1].prompt
     assert "TARGETED_SEMANTIC_CORRECTION_SLOTS_V3" in repair_prompt
     assert "Do not regenerate or repeat that object" in repair_prompt

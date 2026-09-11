@@ -132,7 +132,9 @@ published `stall_suspected`, leaving the declared diagnostic grace independent
 of host scheduling jitter. Every scenario has a machine-readable status,
 reason, phase, response, liveness, and cleanup oracle; any mismatch returns a
 non-zero exit status even when resource cleanup succeeds. Use the module entry
-point directly with `--output` to preserve a full JSON record:
+point directly with `--scenario continuation` to verify same-session upstream
+continuation or `--scenario correction` to verify a fresh correction generation.
+Use `--output` to preserve a full JSON record:
 
 ```bash
 uv run --frozen python -m software_agent_team.loopback_validation \
@@ -507,6 +509,11 @@ duplicate or unknown identity, omitted authorized slots, all-invalid/no-progress
 staging with a strictly smaller pending set. Exercise the dynamic runner's final
 grounding and ledger, not only the application helper. Partial bindings never
 publish an artifact; free-form siblings must not be retained without validation.
+Assert that every semantic-correction attempt uses a distinct session generation
+while retaining the same Controller-bound Agent, task, workspace, route, base
+response, and correction authority. Keep verified upstream-incomplete
+continuation on the original session. This boundary prevents an assistant-tail
+or auto-compacted OpenClaw transcript from becoming a correction prerequisite.
 Test cancel and interrupt recorded between calls: the shared invocation-admission
 check must prevent initial work, correction, fallback, and continuation alike,
 without creating another reservation or losing the previous invocation's evidence.

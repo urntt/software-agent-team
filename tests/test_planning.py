@@ -7321,6 +7321,8 @@ def test_invalid_complete_proposal_is_repaired_before_it_is_shown(
         and executor.requests[1].submission_contract.purpose
         is AgentSubmissionPurpose.SEMANTIC_CORRECTION
     )
+    assert [item.session_generation for item in executor.requests] == [1, 2]
+    assert executor.requests[0].session_key != executor.requests[1].session_key
     correction_schema = executor.requests[1].submission_contract.parameters_schema()
     assert set(correction_schema["properties"]) == {"replacements"}
     replacement_schema = correction_schema["properties"]["replacements"]
