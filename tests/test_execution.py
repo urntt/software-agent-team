@@ -16,7 +16,7 @@ import pytest
 from pydantic import ValidationError
 
 import software_agent_team.execution as execution
-from software_agent_team.artifacts import AgentRole, ArtifactKind
+from software_agent_team.artifacts import AgentExecutionRecord, AgentRole, ArtifactKind
 from software_agent_team.execution import (
     AgentExecutionActivity,
     AgentExecutionActivityKind,
@@ -1777,6 +1777,248 @@ def test_response_finalization_hang_has_distinct_typed_stop_and_cleanup(
         AgentExecutionActivityKind.INVOCATION_COLLECTING_EVIDENCE,
         AgentExecutionActivityKind.INVOCATION_STOPPED,
     ]
+
+
+def test_finalization_stall_recovers_bound_submission_terminal_usage_and_tools(
+    tmp_path: Path,
+) -> None:
+    semantic_payload = {"summary": "review complete"}
+    submission_contract = AgentSubmissionContract.from_schema(
+        {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {"summary": {"type": "string"}},
+            "required": ["summary"],
+        },
+        purpose=AgentSubmissionPurpose.ARTIFACT,
+    )
+    program = (
+        FAKE_OPENCLAW_SETUP
+        + f"""
+external_id = "terminal-submission"
+semantic_payload = {semantic_payload!r}
+output_path = Path(os.environ["SAT_ARTIFACT_SUBMISSION_OUTPUT_PATH"])
+output_path.write_text(json.dumps({{
+    "protocol": "{ARTIFACT_SUBMISSION_PROTOCOL}",
+    "binding_sha256": os.environ["SAT_ARTIFACT_SUBMISSION_BINDING_SHA256"],
+    "schema_sha256": os.environ["SAT_ARTIFACT_SUBMISSION_SCHEMA_SHA256"],
+    "tool_call_id": external_id,
+    "payload": semantic_payload,
+}}), encoding="utf-8")
+output_path.chmod(0o600)
+records.extend([
+    {{"type": "message", "message": {{
+        "role": "assistant",
+        "stopReason": "toolUse",
+        "content": [{{
+            "type": "toolCall",
+            "id": external_id,
+            "name": "sat_submit_artifact",
+            "arguments": {{"artifact": semantic_payload}},
+        }}],
+    }}}},
+    {{"type": "message", "message": {{
+        "role": "toolResult",
+        "toolCallId": external_id,
+        "toolName": "sat_submit_artifact",
+        "isError": False,
+        "content": [{{"type": "text", "text": "accepted"}}],
+        "details": {{"status": "completed"}},
+    }}}},
+    {{"type": "message", "message": {{
+        "role": "assistant",
+        "content": [{{"type": "text", "text": "submitted"}}],
+        "provider": "provider",
+        "model": "model",
+        "usage": {{
+            "input": 101,
+            "output": 37,
+            "cacheRead": 11,
+            "cacheWrite": 3,
+            "totalTokens": 152,
+        }},
+        "stopReason": "stop",
+    }}}},
+])
+write_records()
+time.sleep(30)
+"""
+    )
+    executor = live_liveness_executor(
+        tmp_path,
+        program,
+        process_grace_seconds=0.10,
+        response_finalization_policy=ResponseFinalizationPolicy(
+            no_progress_seconds=0.24,
+            stall_grace_seconds=0.08,
+            source="test response-finalization recovery contract",
+        ),
+    )
+
+    result = executor.execute(
+        request(
+            timeout_seconds=0,
+            model="provider/model",
+            submission_contract=submission_contract,
+        )
+    )
+
+    assert result.status is AgentExecutionStatus.COMPLETED
+    assert result.semantic_submission is not None
+    assert result.semantic_submission.payload == semantic_payload
+    assert result.submission_evidence is not None
+    assert result.submission_evidence.status is AgentSubmissionStatus.ACCEPTED
+    assert result.telemetry.exit_code != 0
+    assert result.telemetry.session_id == "liveness-session"
+    assert result.telemetry.provider == "provider"
+    assert result.telemetry.model == "provider/model"
+    assert result.telemetry.usage == AgentTokenUsage(
+        input_tokens=101,
+        output_tokens=37,
+        cache_read_tokens=11,
+        cache_write_tokens=3,
+        total_tokens=152,
+    )
+    assert result.telemetry.tool_evidence_status.value == "captured"
+    assert [call.tool_name for call in result.telemetry.tool_calls] == [
+        "sat_submit_artifact"
+    ]
+    lifecycle = result.telemetry.invocation_lifecycle
+    assert lifecycle is not None
+    assert lifecycle.shutdown.reason is (
+        InvocationStopReason.RESPONSE_FINALIZATION_STALL
+    )
+    assert lifecycle.shutdown.cleanup_completed
+    assert lifecycle.response_finalization is not None
+    assert lifecycle.response_finalization.stalled
+    record = AgentExecutionRecord(
+        run_id="task-manager-001",
+        team_id="function_specialized",
+        iteration=1,
+        stage="plan",
+        agent_id="planner",
+        capability="planning",
+        specialization="planning",
+        execution_status=result.status,
+        session_key=result.telemetry.session_key,
+        session_id=result.telemetry.session_id,
+        model=result.telemetry.model,
+        provider=result.telemetry.provider,
+        started_at=result.telemetry.started_at,
+        finished_at=result.telemetry.finished_at,
+        duration_ms=result.telemetry.duration_ms,
+        exit_code=result.telemetry.exit_code,
+        provider_liveness=result.telemetry.provider_liveness,
+        invocation_lifecycle=lifecycle,
+        input_tokens=result.telemetry.usage.input_tokens,
+        output_tokens=result.telemetry.usage.output_tokens,
+        stdout_path="iterations/01/executions/plan/planner-attempt-01.stdout.txt",
+        stderr_path="iterations/01/executions/plan/planner-attempt-01.stderr.txt",
+        stdout_sha256="a" * 64,
+        stderr_sha256="b" * 64,
+        response_contract="semantic_body_v1",
+        response_transport="typed_submission_v2",
+        submission_evidence=result.submission_evidence,
+        tool_evidence_status=result.telemetry.tool_evidence_status,
+        session_transcript_sha256=result.telemetry.session_transcript_sha256,
+        session_record_count=result.telemetry.session_record_count,
+        tool_calls=result.telemetry.tool_calls,
+        response_artifact={
+            "kind": "implementation_plan",
+            "path": "iterations/01/agents/planner/implementation-plan.json",
+            "sha256": "c" * 64,
+        },
+    )
+    assert record.error is None
+    assert record.exit_code != 0
+    assert record.invocation_lifecycle.shutdown.reason is (
+        InvocationStopReason.RESPONSE_FINALIZATION_STALL
+    )
+    with pytest.raises(
+        ValidationError,
+        match="recovered finalization requires a response artifact",
+    ):
+        AgentExecutionRecord.model_validate(
+            {
+                **record.model_dump(mode="json"),
+                "response_artifact": None,
+            }
+        )
+
+
+def test_finalization_stall_does_not_recover_an_unattributed_submission_file(
+    tmp_path: Path,
+) -> None:
+    submission_contract = AgentSubmissionContract.from_schema(
+        {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {"summary": {"type": "string"}},
+            "required": ["summary"],
+        },
+        purpose=AgentSubmissionPurpose.ARTIFACT,
+    )
+    program = (
+        FAKE_OPENCLAW_SETUP
+        + f"""
+output_path = Path(os.environ["SAT_ARTIFACT_SUBMISSION_OUTPUT_PATH"])
+output_path.write_text(json.dumps({{
+    "protocol": "{ARTIFACT_SUBMISSION_PROTOCOL}",
+    "binding_sha256": os.environ["SAT_ARTIFACT_SUBMISSION_BINDING_SHA256"],
+    "schema_sha256": os.environ["SAT_ARTIFACT_SUBMISSION_SCHEMA_SHA256"],
+    "tool_call_id": "missing-tool-call",
+    "payload": {{"summary": "must not be trusted"}},
+}}), encoding="utf-8")
+output_path.chmod(0o600)
+records.append({{"type": "message", "message": {{
+    "role": "assistant",
+    "content": [{{"type": "text", "text": "not submitted"}}],
+    "provider": "provider",
+    "model": "model",
+    "usage": {{"input": 7, "output": 3}},
+    "stopReason": "stop",
+}}}})
+write_records()
+time.sleep(30)
+"""
+    )
+    executor = live_liveness_executor(
+        tmp_path,
+        program,
+        process_grace_seconds=0.10,
+        response_finalization_policy=ResponseFinalizationPolicy(
+            no_progress_seconds=0.24,
+            stall_grace_seconds=0.08,
+            source="test response-finalization recovery contract",
+        ),
+    )
+
+    result = executor.execute(
+        request(
+            timeout_seconds=0,
+            model="provider/model",
+            submission_contract=submission_contract,
+        )
+    )
+
+    assert result.status is AgentExecutionStatus.RESPONSE_FINALIZATION_STALLED
+    assert result.semantic_submission is None
+    assert result.submission_evidence is not None
+    assert result.submission_evidence.status is AgentSubmissionStatus.UNAUTHORIZED
+    assert result.submission_evidence.diagnostic_code == (
+        "unattributed_submission_file"
+    )
+    assert result.telemetry.usage == AgentTokenUsage(
+        input_tokens=7,
+        output_tokens=3,
+        cache_read_tokens=0,
+        cache_write_tokens=0,
+    )
+    assert result.telemetry.tool_calls == ()
+    assert result.telemetry.invocation_lifecycle is not None
+    assert result.telemetry.invocation_lifecycle.shutdown.reason is (
+        InvocationStopReason.RESPONSE_FINALIZATION_STALL
+    )
 
 
 def test_missing_attributable_session_degrades_instead_of_guessing_stall(

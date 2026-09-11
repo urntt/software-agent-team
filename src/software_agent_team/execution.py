@@ -53,6 +53,7 @@ from software_agent_team.openclaw_session_evidence import (
     OpenClawSessionEvidenceError,
     OpenClawToolActivity,
     capture_openclaw_initialization_baseline,
+    capture_openclaw_terminal_response,
     capture_openclaw_tool_evidence,
     inspect_openclaw_initialization,
     inspect_openclaw_session_activity,
@@ -908,6 +909,16 @@ class AgentExecutionResult(BaseModel):
     def validate_result(self) -> Self:
         """Bind successful text or typed submission to the process outcome."""
 
+        lifecycle = self.telemetry.invocation_lifecycle
+        recovered_finalization = (
+            lifecycle is not None
+            and lifecycle.shutdown.reason
+            is InvocationStopReason.RESPONSE_FINALIZATION_STALL
+            and lifecycle.response_finalization is not None
+            and lifecycle.response_finalization.stalled
+            and self.telemetry.provider_liveness is not None
+            and self.telemetry.provider_liveness.terminal_response_observed
+        )
         if self.status is AgentExecutionStatus.COMPLETED:
             if self.response_text is None and self.semantic_submission is None:
                 raise ValueError(
@@ -916,9 +927,16 @@ class AgentExecutionResult(BaseModel):
                 )
             if self.error is not None:
                 raise ValueError("completed Agent execution cannot contain an error")
-            if self.telemetry.timed_out or self.telemetry.exit_code != 0:
+            if self.telemetry.timed_out or (
+                self.telemetry.exit_code != 0 and not recovered_finalization
+            ):
                 raise ValueError(
-                    "completed Agent execution requires a zero process exit"
+                    "completed Agent execution requires a zero process exit or "
+                    "an attributable finalization recovery"
+                )
+            if recovered_finalization and self.semantic_submission is None:
+                raise ValueError(
+                    "finalization recovery requires a typed semantic submission"
                 )
         else:
             if self.error is None:
@@ -2432,6 +2450,7 @@ class OpenClawSubprocessExecutor:
         )
         submission_binding_sha256: str | None = None
         submission_capture: SubmissionFileCapture | None = None
+        initialization_baseline: OpenClawInitializationBaseline | None = None
         with tempfile.TemporaryDirectory(prefix="sat-openclaw-") as temporary:
             temporary_path = Path(temporary)
             prompt_path = Path(temporary) / "prompt.md"
@@ -2504,7 +2523,12 @@ class OpenClawSubprocessExecutor:
                 )
             try:
                 if self.runner is None:
-                    completed, stop_reason, liveness = self._run_interruptible_process(
+                    (
+                        completed,
+                        stop_reason,
+                        liveness,
+                        initialization_baseline,
+                    ) = self._run_interruptible_process(
                         request,
                         command,
                         runtime_timeout_seconds=runtime_timeout_seconds,
@@ -2616,19 +2640,19 @@ class OpenClawSubprocessExecutor:
                 reason=stop_reason,
             )
         if stop_reason is InvocationStopReason.RESPONSE_FINALIZATION_STALL:
-            return self._finalize_lifecycle_result(
-                self._response_finalization_stalled_result(
-                    request=request,
-                    command=command,
-                    started_at=started_at,
-                    started_monotonic=started_monotonic,
-                    exit_code=completed.returncode,
-                    stdout=stdout,
-                    stderr=stderr,
-                    provider_liveness=liveness,
-                ),
+            return self._finalization_stall_result(
+                request=request,
+                command=command,
+                started_at=started_at,
+                started_monotonic=started_monotonic,
+                exit_code=completed.returncode,
+                stdout=stdout,
+                stderr=stderr,
+                provider_liveness=liveness,
                 lifecycle=lifecycle,
-                reason=stop_reason,
+                initialization_baseline=initialization_baseline,
+                submission_binding_sha256=submission_binding_sha256,
+                submission_capture=submission_capture,
             )
         if stop_reason in {
             InvocationStopReason.RUN_DEADLINE,
@@ -2973,6 +2997,7 @@ class OpenClawSubprocessExecutor:
         subprocess.CompletedProcess[str],
         InvocationStopReason | None,
         ProviderLivenessEvidence | None,
+        OpenClawInitializationBaseline | None,
     ]:
         """Run one process whose exact session may be interrupted by control input."""
 
@@ -3244,6 +3269,7 @@ class OpenClawSubprocessExecutor:
             ),
             lifecycle.stop_reason,
             None if liveness_monitor is None else liveness_monitor.evidence(),
+            initialization_baseline,
         )
 
     @staticmethod
@@ -3730,6 +3756,10 @@ class OpenClawSubprocessExecutor:
         stdout: str,
         stderr: str,
         provider_liveness: ProviderLivenessEvidence | None,
+        payload: _OpenClawResponse | None = None,
+        captured_tools: CapturedOpenClawToolEvidence | None = None,
+        tool_evidence_error: str | None = None,
+        submission_evidence: AgentSubmissionEvidence | None = None,
     ) -> AgentExecutionResult:
         telemetry = self._telemetry(
             request=request,
@@ -3740,6 +3770,9 @@ class OpenClawSubprocessExecutor:
             stdout=stdout,
             stderr=stderr,
             provider_liveness=provider_liveness,
+            payload=payload,
+            captured_tools=captured_tools,
+            tool_evidence_error=tool_evidence_error,
         )
         return AgentExecutionResult(
             status=AgentExecutionStatus.RESPONSE_FINALIZATION_STALLED,
@@ -3749,6 +3782,157 @@ class OpenClawSubprocessExecutor:
                 "diagnostic grace period"
             ),
             telemetry=telemetry,
+            submission_evidence=submission_evidence,
+        )
+
+    def _finalization_stall_result(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        command: tuple[str, ...],
+        started_at: datetime,
+        started_monotonic: float,
+        exit_code: int | None,
+        stdout: str,
+        stderr: str,
+        provider_liveness: ProviderLivenessEvidence | None,
+        lifecycle: _InvocationLifecycleRecorder,
+        initialization_baseline: OpenClawInitializationBaseline | None,
+        submission_binding_sha256: str | None,
+        submission_capture: SubmissionFileCapture | None,
+    ) -> AgentExecutionResult:
+        """Recover authoritative typed output while retaining wrapper failure."""
+
+        contract = request.submission_contract
+        state_dir = self._state_directory()
+        if (
+            contract is None
+            or state_dir is None
+            or submission_binding_sha256 is None
+            or submission_capture is None
+            or provider_liveness is None
+            or not provider_liveness.terminal_response_observed
+        ):
+            return self._finalize_lifecycle_result(
+                self._response_finalization_stalled_result(
+                    request=request,
+                    command=command,
+                    started_at=started_at,
+                    started_monotonic=started_monotonic,
+                    exit_code=exit_code,
+                    stdout=stdout,
+                    stderr=stderr,
+                    provider_liveness=provider_liveness,
+                ),
+                lifecycle=lifecycle,
+                reason=InvocationStopReason.RESPONSE_FINALIZATION_STALL,
+            )
+        try:
+            terminal = capture_openclaw_terminal_response(
+                state_dir=state_dir,
+                agent_id=request.agent_id,
+                session_key=request.session_key,
+                prompt=request.prompt,
+                baseline=initialization_baseline,
+            )
+        except OpenClawSessionEvidenceError as error:
+            result = self._response_finalization_stalled_result(
+                request=request,
+                command=command,
+                started_at=started_at,
+                started_monotonic=started_monotonic,
+                exit_code=exit_code,
+                stdout=stdout,
+                stderr=stderr,
+                provider_liveness=provider_liveness,
+                tool_evidence_error=str(error),
+            )
+            return self._finalize_lifecycle_result(
+                result,
+                lifecycle=lifecycle,
+                reason=InvocationStopReason.RESPONSE_FINALIZATION_STALL,
+            )
+
+        captured_tools = terminal.tool_evidence
+        semantic_submission, submission_evidence = validate_submission_capture(
+            contract,
+            binding_sha256=submission_binding_sha256,
+            capture=submission_capture,
+            tool_calls=captured_tools.tool_calls,
+            tool_evidence_error=None,
+        )
+        usage_values = (
+            terminal.input_tokens,
+            terminal.output_tokens,
+            terminal.cache_read_tokens,
+            terminal.cache_write_tokens,
+            terminal.reasoning_tokens,
+            terminal.total_tokens,
+        )
+        payload = _OpenClawResponse(
+            visible_texts=(),
+            session_id=terminal.session_id,
+            provider=terminal.provider,
+            model=_canonical_model_reference(
+                provider=terminal.provider,
+                model=terminal.model,
+            ),
+            usage=(
+                None
+                if all(value is None for value in usage_values)
+                else AgentTokenUsage(
+                    input_tokens=terminal.input_tokens,
+                    output_tokens=terminal.output_tokens,
+                    cache_read_tokens=terminal.cache_read_tokens,
+                    cache_write_tokens=terminal.cache_write_tokens,
+                    reasoning_tokens=terminal.reasoning_tokens,
+                    total_tokens=terminal.total_tokens,
+                )
+            ),
+        )
+        if semantic_submission is None:
+            result = self._response_finalization_stalled_result(
+                request=request,
+                command=command,
+                started_at=started_at,
+                started_monotonic=started_monotonic,
+                exit_code=exit_code,
+                stdout=stdout,
+                stderr=stderr,
+                provider_liveness=provider_liveness,
+                payload=payload,
+                captured_tools=captured_tools,
+                submission_evidence=submission_evidence,
+            )
+            return self._finalize_lifecycle_result(
+                result,
+                lifecycle=lifecycle,
+                reason=InvocationStopReason.RESPONSE_FINALIZATION_STALL,
+            )
+
+        telemetry = self._telemetry(
+            request=request,
+            command=command,
+            started_at=started_at,
+            started_monotonic=started_monotonic,
+            exit_code=exit_code,
+            stdout=stdout,
+            stderr=stderr,
+            payload=payload,
+            captured_tools=captured_tools,
+            provider_liveness=provider_liveness,
+        )
+        evidence = lifecycle.finalize(
+            reason=InvocationStopReason.RESPONSE_FINALIZATION_STALL,
+            telemetry=telemetry,
+            submission_evidence=submission_evidence,
+        )
+        telemetry = telemetry.model_copy(update={"invocation_lifecycle": evidence})
+        return AgentExecutionResult(
+            status=AgentExecutionStatus.COMPLETED,
+            telemetry=telemetry,
+            semantic_submission=semantic_submission,
+            submission_evidence=submission_evidence,
         )
 
     @staticmethod

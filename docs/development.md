@@ -552,6 +552,16 @@ exact-process cleanup, persisted Planning and execution evidence, and compact
 versus detailed progress. Register each changed threshold or polling constant in
 `decision_limits.py`; do not turn it into an Agent work budget.
 
+Finalization-recovery changes must cross the production submission and session
+readers, not only construct a successful executor result. Cover a fresh complete
+terminal turn with one uniquely bound final submission, its provider/model and
+split usage, the actual wrapper signal or exit, lifecycle cleanup, execution-record
+persistence, shared-ledger settlement, semantic grounding, and downstream handoff.
+Stale turns, incomplete or nonterminal transcripts, runtime rejections,
+unattributed files, duplicate or failed submissions, digest mismatches, and work
+after submission must remain fail closed. A provider-backed batch journey is the
+shared acceptance boundary, not a per-patch discovery loop.
+
 The `process_diagnostics` collector provides bounded, read-only Linux snapshots
 of an exact PID/start-time/group/UID identity. It reads only stat, status, I/O,
 and wait-channel fields; unavailable metrics remain null rather than zero.

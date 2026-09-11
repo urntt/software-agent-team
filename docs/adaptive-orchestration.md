@@ -1322,6 +1322,12 @@ launch, attributable initialization checkpoints, provider wait, tool activity,
 response finalization, stopping, evidence collection, exact-process cleanup,
 and terminal status. Initialization, provider inactivity, and post-response
 finalization have separate warning, recovery, and typed failure authorities.
+A wrapper finalization stall may still yield a semantic completion only when
+the exact fresh turn contains one terminal provider record and one uniquely
+bound final submission. That artifact follows the same response validation,
+grounding, handoff, accounting, and decision path, while the lifecycle and
+actual process outcome continue to report the wrapper stall. Every incomplete,
+stale, duplicate, failed, or unattributable case remains a typed failure.
 A confirmed stall preserves typed content-free
 evidence and may use only an already approved provider-failure fallback; total
 productive wall-clock time is not a stopping condition. Quality gates are shared once

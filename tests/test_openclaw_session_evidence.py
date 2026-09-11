@@ -25,6 +25,7 @@ from software_agent_team.openclaw_session_evidence import (
     OpenClawInvocationTerminalState,
     OpenClawSessionEvidenceError,
     capture_openclaw_initialization_baseline,
+    capture_openclaw_terminal_response,
     capture_openclaw_tool_evidence,
     inspect_openclaw_initialization,
     inspect_openclaw_session_activity,
@@ -160,6 +161,92 @@ def capture(root: Path, invocation: AgentExecutionRequest):
         session_id=SESSION_ID,
         prompt=invocation.prompt,
     )
+
+
+def terminal_record() -> dict[str, object]:
+    record = assistant_record("submitted")
+    record["message"].update(
+        {
+            "provider": "provider",
+            "model": "model",
+            "usage": {
+                "input": 10,
+                "output": 2,
+                "cacheRead": 1,
+                "cacheWrite": 0,
+                "totalTokens": 13,
+            },
+            "stopReason": "stop",
+        }
+    )
+    return record
+
+
+def test_terminal_response_recovery_requires_a_fresh_matching_turn(
+    tmp_path: Path,
+) -> None:
+    invocation = request()
+    records = [session_record(), user_record(invocation.prompt), terminal_record()]
+    write_session_state(tmp_path, invocation=invocation, records=records)
+    baseline = capture_openclaw_initialization_baseline(
+        state_dir=tmp_path,
+        agent_id=invocation.agent_id,
+        session_key=invocation.session_key,
+        prompt=invocation.prompt,
+    )
+
+    with pytest.raises(OpenClawSessionEvidenceError, match="not attributable"):
+        capture_openclaw_terminal_response(
+            state_dir=tmp_path,
+            agent_id=invocation.agent_id,
+            session_key=invocation.session_key,
+            prompt=invocation.prompt,
+            baseline=baseline,
+        )
+
+    records.extend([user_record(invocation.prompt), terminal_record()])
+    write_session_state(tmp_path, invocation=invocation, records=records)
+    recovered = capture_openclaw_terminal_response(
+        state_dir=tmp_path,
+        agent_id=invocation.agent_id,
+        session_key=invocation.session_key,
+        prompt=invocation.prompt,
+        baseline=baseline,
+    )
+
+    assert recovered.session_id == SESSION_ID
+    assert recovered.provider == "provider"
+    assert recovered.model == "model"
+    assert recovered.input_tokens == 10
+    assert recovered.output_tokens == 2
+    assert recovered.cache_read_tokens == 1
+    assert recovered.cache_write_tokens == 0
+    assert recovered.total_tokens == 13
+    assert recovered.tool_evidence.terminal_state is (
+        OpenClawInvocationTerminalState.ASSISTANT_RESPONSE
+    )
+
+
+def test_terminal_response_recovery_rejects_incomplete_or_nonterminal_turn(
+    tmp_path: Path,
+) -> None:
+    invocation = request()
+    pending = assistant_record("submitting")
+    pending["message"]["stopReason"] = "toolUse"
+    write_session_state(
+        tmp_path,
+        invocation=invocation,
+        records=[session_record(), user_record(invocation.prompt), pending],
+    )
+
+    with pytest.raises(OpenClawSessionEvidenceError):
+        capture_openclaw_terminal_response(
+            state_dir=tmp_path,
+            agent_id=invocation.agent_id,
+            session_key=invocation.session_key,
+            prompt=invocation.prompt,
+            baseline=None,
+        )
 
 
 def rejected_tool_record(external_id: str = "rejected-call") -> dict[str, object]:

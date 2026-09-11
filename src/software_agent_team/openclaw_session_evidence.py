@@ -59,6 +59,22 @@ class CapturedOpenClawToolEvidence:
 
 
 @dataclass(frozen=True)
+class CapturedOpenClawTerminalResponse:
+    """Identity-bound terminal metadata available before wrapper finalization."""
+
+    session_id: str
+    provider: str | None
+    model: str | None
+    input_tokens: int | None
+    output_tokens: int | None
+    cache_read_tokens: int | None
+    cache_write_tokens: int | None
+    reasoning_tokens: int | None
+    total_tokens: int | None
+    tool_evidence: CapturedOpenClawToolEvidence
+
+
+@dataclass(frozen=True)
 class OpenClawToolActivity:
     """Content-free tool identity safe for live activity classification."""
 
@@ -196,6 +212,8 @@ class _OpenClawSessionSnapshot:
     invocation_records: tuple[dict[str, object], ...] | None = None
     session_id: str | None = None
     matching_turn_count: int = 0
+    transcript_sha256: str | None = None
+    transcript_complete: bool = False
 
 
 def _sha256(value: bytes) -> str:
@@ -526,6 +544,8 @@ def _inspect_openclaw_session_snapshot(
         invocation_records=records[start:end],
         session_id=session_id,
         matching_turn_count=len(matches),
+        transcript_sha256=_sha256(transcript),
+        transcript_complete=transcript.endswith(b"\n"),
     )
 
 
@@ -1233,4 +1253,121 @@ def capture_openclaw_tool_evidence(
         tool_calls=_extract_tool_calls(execution_records),
         terminal_state=terminal_state,
         runtime_rejections=runtime_rejections,
+    )
+
+
+def capture_openclaw_terminal_response(
+    *,
+    state_dir: Path,
+    agent_id: str,
+    session_key: str,
+    prompt: str,
+    baseline: OpenClawInitializationBaseline | None,
+) -> CapturedOpenClawTerminalResponse:
+    """Recover one fresh terminal turn without trusting a wrapper result envelope."""
+
+    snapshot = _inspect_openclaw_session_snapshot(
+        state_dir=state_dir,
+        agent_id=agent_id,
+        session_key=session_key,
+        prompt=prompt,
+    )
+    if (
+        snapshot is None
+        or not _snapshot_is_new_for_invocation(snapshot, baseline)
+        or snapshot.observation.checkpoint is not InitializationCheckpoint.CURRENT_TURN
+        or snapshot.invocation_records is None
+        or snapshot.session_id is None
+        or snapshot.transcript_sha256 is None
+    ):
+        raise OpenClawSessionEvidenceError(
+            "OpenClaw terminal response is not attributable to this invocation"
+        )
+    if not snapshot.transcript_complete:
+        raise OpenClawSessionEvidenceError("OpenClaw terminal transcript is incomplete")
+    invocation = snapshot.invocation_records
+    execution_records, runtime_rejections = _classify_runtime_rejections(invocation)
+    terminal_state = _invocation_terminal_state(invocation)
+    if terminal_state is not OpenClawInvocationTerminalState.ASSISTANT_RESPONSE:
+        raise OpenClawSessionEvidenceError(
+            "OpenClaw invocation has no terminal assistant response"
+        )
+    last_message_index = max(
+        index
+        for index, record in enumerate(invocation)
+        if record.get("type") == "message"
+    )
+    if any(item.record_index == last_message_index for item in runtime_rejections):
+        raise OpenClawSessionEvidenceError(
+            "OpenClaw terminal response is a runtime rejection"
+        )
+    terminal_record = invocation[last_message_index]
+    terminal_message = terminal_record.get("message")
+    if not isinstance(terminal_message, dict) or terminal_message.get("role") != (
+        "assistant"
+    ):
+        raise OpenClawSessionEvidenceError(
+            "OpenClaw terminal response has an invalid message identity"
+        )
+    if terminal_message.get("stopReason") != "stop":
+        raise OpenClawSessionEvidenceError(
+            "OpenClaw terminal response did not finish with stop reason"
+        )
+
+    def optional_text(value: object, *, label: str) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str) or not value.strip() or len(value) > 500:
+            raise OpenClawSessionEvidenceError(f"OpenClaw terminal {label} is invalid")
+        return value.strip()
+
+    raw_usage = terminal_message.get("usage")
+    if raw_usage is not None and not isinstance(raw_usage, dict):
+        raise OpenClawSessionEvidenceError("OpenClaw terminal usage is invalid")
+
+    def usage_integer(*names: str) -> int | None:
+        if raw_usage is None:
+            return None
+        for name in names:
+            if name not in raw_usage:
+                continue
+            value = raw_usage[name]
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise OpenClawSessionEvidenceError(
+                    f"OpenClaw terminal usage field {name} is invalid"
+                )
+            return value
+        return None
+
+    usage_buckets = {
+        "input": usage_integer("input"),
+        "output": usage_integer("output"),
+        "cacheRead": usage_integer("cacheRead"),
+        "cacheWrite": usage_integer("cacheWrite"),
+    }
+    if raw_usage is not None and any(
+        value is not None for value in usage_buckets.values()
+    ):
+        for name in tuple(usage_buckets):
+            if name not in raw_usage:
+                usage_buckets[name] = 0
+
+    tool_evidence = CapturedOpenClawToolEvidence(
+        transcript_sha256=snapshot.transcript_sha256,
+        record_count=len(invocation),
+        tool_calls=_extract_tool_calls(execution_records),
+        terminal_state=terminal_state,
+        runtime_rejections=runtime_rejections,
+    )
+    return CapturedOpenClawTerminalResponse(
+        session_id=snapshot.session_id,
+        provider=optional_text(terminal_message.get("provider"), label="provider"),
+        model=optional_text(terminal_message.get("model"), label="model"),
+        input_tokens=usage_buckets["input"],
+        output_tokens=usage_buckets["output"],
+        cache_read_tokens=usage_buckets["cacheRead"],
+        cache_write_tokens=usage_buckets["cacheWrite"],
+        reasoning_tokens=usage_integer("reasoningTokens"),
+        total_tokens=usage_integer("total", "totalTokens"),
+        tool_evidence=tool_evidence,
     )

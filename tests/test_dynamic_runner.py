@@ -59,8 +59,13 @@ from software_agent_team.git_workspace import GitWorkspace, GitWorkspaceManager
 from software_agent_team.integrity import canonical_model_sha256
 from software_agent_team.invocation_lifecycle import (
     InitializationCheckpoint,
+    InitializationLivenessEvidence,
+    InvocationLifecycleEvidence,
+    InvocationLifecycleTransition,
     InvocationPhase,
+    InvocationShutdownEvidence,
     InvocationStopReason,
+    ResponseFinalizationEvidence,
 )
 from software_agent_team.model_costs import CachePricing
 from software_agent_team.model_metadata import ModelMetadataSource
@@ -441,6 +446,7 @@ class DynamicExecutor:
         provider_fail_once_for: str | None = None,
         provider_stall_once_for: str | None = None,
         initialization_stall_for: str | None = None,
+        recovered_finalization_for: str | None = None,
         zero_review_tool_calls_once: bool = False,
         invalid_review_selector_once: bool = False,
         invalid_review_response_once: bool = False,
@@ -460,6 +466,7 @@ class DynamicExecutor:
         self.provider_fail_once_for = provider_fail_once_for
         self.provider_stall_once_for = provider_stall_once_for
         self.initialization_stall_for = initialization_stall_for
+        self.recovered_finalization_for = recovered_finalization_for
         self.zero_review_tool_calls_once = zero_review_tool_calls_once
         self.invalid_review_selector_once = invalid_review_selector_once
         self.invalid_review_response_once = invalid_review_response_once
@@ -902,12 +909,141 @@ class DynamicExecutor:
                     response_text = json.dumps(submission_payload)
         else:  # pragma: no cover - the fixture owns the complete team
             raise AssertionError(f"unexpected Agent: {request.agent_id}")
+        recovered_finalization = self.recovered_finalization_for == request.agent_id
         self._emit_lifecycle_stop(
             request,
             activity_handler,
-            InvocationStopReason.COMPLETED,
+            (
+                InvocationStopReason.RESPONSE_FINALIZATION_STALL
+                if recovered_finalization
+                else InvocationStopReason.COMPLETED
+            ),
         )
-        return self._result(request, response_text, submission_payload)
+        result = self._result(request, response_text, submission_payload)
+        if recovered_finalization:
+            return self._recovered_finalization_result(result)
+        return result
+
+    @staticmethod
+    def _recovered_finalization_result(
+        result: AgentExecutionResult,
+    ) -> AgentExecutionResult:
+        """Project a recovered semantic result with the wrapper failure retained."""
+
+        assert result.semantic_submission is not None
+        assert result.submission_evidence is not None
+        tool_count = len(result.telemetry.tool_calls)
+        lifecycle = InvocationLifecycleEvidence(
+            transitions=(
+                InvocationLifecycleTransition(
+                    sequence=1,
+                    phase=InvocationPhase.LAUNCHED,
+                    elapsed_ms=0,
+                ),
+                InvocationLifecycleTransition(
+                    sequence=2,
+                    phase=InvocationPhase.INITIALIZING,
+                    elapsed_ms=1,
+                    initialization_checkpoint=InitializationCheckpoint.CURRENT_TURN,
+                ),
+                InvocationLifecycleTransition(
+                    sequence=3,
+                    phase=InvocationPhase.PROVIDER_WAIT,
+                    elapsed_ms=2,
+                    initialization_checkpoint=InitializationCheckpoint.CURRENT_TURN,
+                ),
+                InvocationLifecycleTransition(
+                    sequence=4,
+                    phase=InvocationPhase.FINALIZING_RESPONSE,
+                    elapsed_ms=3,
+                ),
+                InvocationLifecycleTransition(
+                    sequence=5,
+                    phase=InvocationPhase.STOPPING,
+                    elapsed_ms=60_003,
+                    stop_reason=InvocationStopReason.RESPONSE_FINALIZATION_STALL,
+                ),
+                InvocationLifecycleTransition(
+                    sequence=6,
+                    phase=InvocationPhase.COLLECTING_EVIDENCE,
+                    elapsed_ms=60_004,
+                    stop_reason=InvocationStopReason.RESPONSE_FINALIZATION_STALL,
+                ),
+                InvocationLifecycleTransition(
+                    sequence=7,
+                    phase=InvocationPhase.STOPPED,
+                    elapsed_ms=60_005,
+                    stop_reason=InvocationStopReason.RESPONSE_FINALIZATION_STALL,
+                ),
+            ),
+            initialization=InitializationLivenessEvidence(
+                mode="enforced",
+                policy_source="test recovered-finalization contract",
+                no_progress_seconds=90,
+                stall_grace_seconds=15,
+                checkpoints=(InitializationCheckpoint.CURRENT_TURN,),
+            ),
+            response_finalization=ResponseFinalizationEvidence(
+                mode="enforced",
+                policy_source="test recovered-finalization contract",
+                no_progress_seconds=60,
+                stall_grace_seconds=10,
+                terminal_response_observed=True,
+                stall_suspected_count=1,
+                maximum_no_progress_ms=60_000,
+                stalled=True,
+            ),
+            shutdown=InvocationShutdownEvidence(
+                reason=InvocationStopReason.RESPONSE_FINALIZATION_STALL,
+                shutdown_grace_seconds=35,
+                process_started=True,
+                process_group_targeted=True,
+                terminate_sent=True,
+                signal=15,
+                stdout_collected=True,
+                stderr_collected=True,
+                session_evidence_status="captured",
+                submission_evidence_status="accepted",
+                process_lease_released=True,
+                cleanup_completed=True,
+            ),
+        )
+        liveness = ProviderLivenessEvidence(
+            mode="enforced",
+            policy_source="test recovered-finalization contract",
+            silence_seconds=120,
+            stall_grace_seconds=30,
+            lease_started=True,
+            lease_start_source="current_turn",
+            session_observed=True,
+            provider_activity_observations=1,
+            tool_started_count=tool_count,
+            tool_completed_count=tool_count,
+            stall_suspected_count=0,
+            stall_recovered_count=0,
+            terminal_response_observed=True,
+        )
+        telemetry = result.telemetry.model_copy(
+            update={
+                "duration_ms": 60_005,
+                "exit_code": -15,
+                "usage": AgentTokenUsage(
+                    input_tokens=10,
+                    output_tokens=5,
+                    cache_read_tokens=7,
+                    cache_write_tokens=3,
+                    total_tokens=25,
+                ),
+                "provider_liveness": liveness,
+                "invocation_lifecycle": lifecycle,
+            }
+        )
+        return AgentExecutionResult(
+            status=AgentExecutionStatus.COMPLETED,
+            telemetry=telemetry,
+            semantic_submission=result.semantic_submission,
+            submission_evidence=result.submission_evidence,
+        )
 
     @staticmethod
     def _emit_lifecycle_start(
@@ -1385,6 +1521,74 @@ def test_dynamic_runner_executes_writer_then_parallel_quality_on_one_commit(
     usage = runner.budget_ledger.snapshot()
     assert usage.calls_started == usage.calls_completed == 3
     assert usage.active_calls == 0
+
+
+def test_recovered_finalization_reaches_review_handoff_and_settles_once(
+    tmp_path: Path,
+) -> None:
+    runner, team_plan, executor, quality_gate, _ = runtime(
+        tmp_path,
+        include_tester=False,
+        executor_options={"recovered_finalization_for": "reviewer"},
+    )
+
+    result = DagScheduler().execute(team_plan, runner)
+
+    assert result.status is ScheduleStatus.COMPLETED
+    assert quality_gate.calls == 1
+    assert [request.agent_id for request in executor.requests] == [
+        "builder",
+        "reviewer",
+    ]
+    review = runner.artifact_store.load(runner.outputs["reviewer"])
+    assert isinstance(review, ReviewReport)
+    handoffs = [runner.artifact_store.load(reference) for reference in runner.handoffs]
+    assert all(isinstance(item, HandoffEnvelope) for item in handoffs)
+    reviewer_handoff = next(
+        item
+        for item in handoffs
+        if isinstance(item, HandoffEnvelope) and item.source_agent_id == "reviewer"
+    )
+    assert isinstance(reviewer_handoff, HandoffEnvelope)
+    assert reviewer_handoff.status is HandoffStatus.COMPLETED
+
+    records = [
+        runner.artifact_store.load(reference) for reference in runner.execution_records
+    ]
+    reviewer_record = next(
+        record
+        for record in records
+        if isinstance(record, AgentExecutionRecord) and record.agent_id == "reviewer"
+    )
+    assert reviewer_record.execution_status is AgentExecutionStatus.COMPLETED
+    assert reviewer_record.exit_code == -15
+    assert reviewer_record.error is None
+    assert reviewer_record.response_artifact == runner.outputs["reviewer"]
+    assert reviewer_record.input_tokens == 10
+    assert reviewer_record.output_tokens == 5
+    assert reviewer_record.invocation_lifecycle is not None
+    assert reviewer_record.invocation_lifecycle.shutdown.reason is (
+        InvocationStopReason.RESPONSE_FINALIZATION_STALL
+    )
+    assert reviewer_record.invocation_lifecycle.shutdown.cleanup_completed
+    assert reviewer_record.submission_evidence is not None
+    assert reviewer_record.submission_evidence.status is (
+        AgentSubmissionStatus.ACCEPTED
+    )
+    usage = runner.budget_ledger.snapshot()
+    assert usage.calls_started == 2
+    assert usage.calls_completed == 2
+    assert usage.active_calls == 0
+    assert usage.input_tokens == 20
+    assert usage.output_tokens == 10
+    reviewer_call = next(
+        call
+        for call in runner.budget_ledger.call_records()
+        if call.agent_id == "reviewer"
+    )
+    assert reviewer_call.cache_usage is not None
+    assert reviewer_call.cache_usage.read_tokens == 7
+    assert reviewer_call.cache_usage.write_tokens == 3
 
 
 def test_dynamic_runner_preserves_quality_tasks_as_read_only_prompt_focus(

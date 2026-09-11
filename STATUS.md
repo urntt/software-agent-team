@@ -2,7 +2,7 @@
 
 **Current milestone:** `v0.1.2` is the first published stable release and its fresh managed lifecycle is validated
 
-**Last updated:** September 10, 2026
+**Last updated:** September 11, 2026
 
 This document records what the repository implements now, what evidence
 supports that claim, and what remains unavailable. It does not redefine the
@@ -519,6 +519,16 @@ Controller-only run,
 destination, route, authorization, and timestamp metadata, preventing execution-layer
 redaction from breaking exact prompt/session attribution. Dynamic Agent submission
 schemas remain exact inside the same explicit envelope.
+The execution adapter now also preserves a uniquely bound typed submission when
+OpenClaw has written a complete terminal current-turn record but later stalls
+while finalizing its result envelope. It recovers the attributable provider,
+model, split token/cache usage, sanitized tool chain, and semantic payload through
+the normal validation and handoff path while retaining the actual wrapper signal,
+`response_finalization_stall` lifecycle, and cleanup evidence. Production-shaped
+tests cover stale, incomplete, nonterminal, and unattributed negative cases plus
+dynamic Review grounding, artifact persistence, handoff, and unique ledger
+settlement. The captured provider failure replays through the new reader; one
+clean candidate gate and shared ordinary-user accepted delivery remain pending.
 Live Review progress now keeps attributable tool activity separate from grounded
 criterion coverage. Coverage remains explicitly `unverified` until a typed,
 Controller-grounded assessment is accepted; repeating a probe cannot be presented

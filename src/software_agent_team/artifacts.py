@@ -1046,6 +1046,12 @@ class AgentExecutionRecord(BaseModel):
     def validate_execution(self) -> Self:
         """Keep timing, exit, timeout, and response evidence coherent."""
 
+        recovered_finalization = (
+            self.execution_status is AgentExecutionStatus.COMPLETED
+            and self.invocation_lifecycle is not None
+            and self.invocation_lifecycle.shutdown.reason
+            is InvocationStopReason.RESPONSE_FINALIZATION_STALL
+        )
         if self.schema_version >= 13 and self.specialization is None:
             raise ValueError("current execution records require specialization")
         if self.finished_at < self.started_at:
@@ -1157,7 +1163,11 @@ class AgentExecutionRecord(BaseModel):
         else:
             if self.exit_code is None and self.error is None:
                 raise ValueError("executions without an exit code require an error")
-            if self.exit_code != 0 and self.error is None:
+            if (
+                self.exit_code != 0
+                and self.error is None
+                and not recovered_finalization
+            ):
                 raise ValueError("failed executions must record an error")
             if (
                 self.exit_code == 0
@@ -1167,6 +1177,14 @@ class AgentExecutionRecord(BaseModel):
                 raise ValueError("successful executions require a response artifact")
             if self.exit_code == 0 and self.error is None and self.model is None:
                 raise ValueError("successful executions require model metadata")
+            if recovered_finalization and self.model is None:
+                raise ValueError("recovered finalization requires model metadata")
+            if (
+                recovered_finalization
+                and self.error is None
+                and self.response_artifact is None
+            ):
+                raise ValueError("recovered finalization requires a response artifact")
         if self.execution_status is AgentExecutionStatus.TIMED_OUT:
             if not self.timed_out:
                 raise ValueError("typed timeout status requires timeout evidence")
@@ -1208,7 +1226,10 @@ class AgentExecutionRecord(BaseModel):
                     "execution-record schema does not match invocation-lifecycle schema"
                 )
             allowed_reasons = {
-                AgentExecutionStatus.COMPLETED: {InvocationStopReason.COMPLETED},
+                AgentExecutionStatus.COMPLETED: {
+                    InvocationStopReason.COMPLETED,
+                    InvocationStopReason.RESPONSE_FINALIZATION_STALL,
+                },
                 AgentExecutionStatus.PROCESS_FAILED: {
                     InvocationStopReason.PROCESS_FAILURE
                 },
@@ -1245,6 +1266,18 @@ class AgentExecutionRecord(BaseModel):
             if self.invocation_lifecycle.shutdown.reason not in allowed_reasons:
                 raise ValueError(
                     "invocation lifecycle reason does not match execution status"
+                )
+            if recovered_finalization and (
+                self.invocation_lifecycle.response_finalization is None
+                or not self.invocation_lifecycle.response_finalization.stalled
+                or self.provider_liveness is None
+                or not self.provider_liveness.terminal_response_observed
+                or self.submission_evidence is None
+                or self.submission_evidence.status is not AgentSubmissionStatus.ACCEPTED
+            ):
+                raise ValueError(
+                    "recovered finalization requires terminal, stall, and accepted "
+                    "submission evidence"
                 )
         if self.schema_version < 6 and (
             self.execution_status is AgentExecutionStatus.RESPONSE_FINALIZATION_STALLED

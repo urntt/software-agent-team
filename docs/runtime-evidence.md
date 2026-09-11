@@ -1332,6 +1332,21 @@ when investigating it rather than editing artifacts in place.
   typed `response_finalization_stall` and enters exact-process cleanup. A private
   stream that arrives before the session observer remains sufficient to enforce
   provider liveness; temporary observer ordering no longer disables the guard.
+- After that cleanup, a missing OpenClaw result envelope does not erase evidence
+  already durably owned by SAT. Recovery requires a complete fresh current turn,
+  a terminal assistant record with `stopReason=stop`, and exactly one final
+  successful `sat_submit_artifact` call whose invocation binding, schema, tool
+  identity, outer arguments digest, and inner semantic digest match the private
+  submission file. Only then does the semantic object re-enter the ordinary
+  validation, grounding, handoff, accounting, and delivery path. The recovered
+  execution retains the terminal provider/model/token/cache usage together with
+  the actual nonzero or signalled wrapper outcome and the
+  `response_finalization_stall` lifecycle. It is therefore semantic completion
+  with an abnormal wrapper outcome, not a rewritten normal process exit. A stale
+  turn, incomplete transcript, nonterminal record, runtime rejection, duplicate
+  or failed submission, post-submission work, digest mismatch, or degraded
+  attribution remains `response_finalization_stalled` and cannot publish an
+  artifact.
 - Before the first model call, SAT asks whether the user has a real whole-run
   deadline and recommends no deadline by default. When authorized, the exact
   deadline starts at resource authorization, covers Planning and execution, and
