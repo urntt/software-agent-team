@@ -457,9 +457,11 @@ object-valued argument and writes only its inner object to the private submissio
 file. A prompt instruction alone does not make that call mandatory. For a reviewed
 model compatibility route, bootstrap Planning forces the exact
 `sat_submit_artifact` choice because terminal submission is its only semantic action.
-A dynamic Agent instead receives `tool_choice=required`: each model step must call an
-authorized tool, but the Agent remains free to use work or evidence tools before its
-terminal submission. It leaves model inspection, provider smoke, and legacy
+A dynamic Agent instead retains the provider's normal completion choice, so work or
+evidence collection can end rather than being forced into another arbitrary tool
+call. The prompt requires the bound terminal submission and the Controller rejects
+missing, malformed, duplicate, or post-submission calls. It leaves model inspection,
+provider smoke, and legacy
 text-compatibility requests unchanged, because those requests do not expose an
 invocation binding. SAT gives dynamic Agents the exact AgentSpec-derived semantic JSON Schema
 inside the envelope. Planning uses a permissive object-only inner transport

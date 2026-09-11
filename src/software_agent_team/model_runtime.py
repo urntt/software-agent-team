@@ -459,18 +459,21 @@ def openclaw_agent_model_settings(
     if profile.disable_thinking:
         extra_body["thinking"] = {"type": "disabled"}
     if (
-        artifact_submission_mode is not None
+        artifact_submission_mode == "single_tool"
         and profile.artifact_submission_policy
         is ArtifactSubmissionPolicy.OPENAI_REQUIRED
     ):
-        extra_body["tool_choice"] = (
-            {
-                "type": "function",
-                "function": {"name": artifact_tool_name},
-            }
-            if artifact_submission_mode == "single_tool"
-            else "required"
-        )
+        # A bootstrap turn has no work tool to choose: its only semantic action
+        # is the bound submission, so forcing that exact function is safe.
+        # Dynamic Agents need a real completion choice after optional work or
+        # evidence tools. Forcing *some* tool on every turn can erase that
+        # completion signal and sustain an unproductive tool loop. Their prompt
+        # requests the terminal submission and the Controller still rejects a
+        # missing, malformed, duplicate, or post-submission call.
+        extra_body["tool_choice"] = {
+            "type": "function",
+            "function": {"name": artifact_tool_name},
+        }
     if extra_body:
         params["extra_body"] = extra_body
     return {"params": params} if params else None

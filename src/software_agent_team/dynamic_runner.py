@@ -984,6 +984,7 @@ class DynamicAgentRunner:
                         "correction, fallback, or failure"
                     ),
                     completed_tool_operations=len(result.telemetry.tool_calls),
+                    review_grounded=response_reference is not None,
                 ),
             )
             if persisted.budget_error is not None:
@@ -1401,7 +1402,13 @@ class DynamicAgentRunner:
             last_checkpoint = "Observed attributable provider stream activity"
         elif activity.kind is AgentExecutionActivityKind.TOOL_COMPLETED:
             last_checkpoint = (
-                f"Verified tool completion: {tool_action} {tool_target}{tool_detail}"
+                "Observed attributable tool completion; criterion coverage remains "
+                "unverified until typed assessment"
+                if agent.capability is AgentCapability.REVIEW
+                else (
+                    f"Verified tool completion: {tool_action} "
+                    f"{tool_target}{tool_detail}"
+                )
             )
         elif activity.kind in {
             AgentExecutionActivityKind.INVOCATION_FINALIZING_RESPONSE,
@@ -1442,6 +1449,14 @@ class DynamicAgentRunner:
                 "Let the Controller validate output and choose the next approved action"
             ),
         }[phase]
+        if agent.capability is AgentCapability.REVIEW and phase in {
+            InvocationPhase.PROVIDER_WAIT,
+            InvocationPhase.TOOL_ACTIVE,
+        }:
+            next_checkpoint = (
+                "Submit a grounded typed assessment when coverage is sufficient; "
+                "equivalent tool activity alone adds no criterion authority"
+            )
         self._emit_activity(
             agent,
             kind=kind,
@@ -1466,6 +1481,7 @@ class DynamicAgentRunner:
         last_verified_checkpoint: str | None,
         next_controller_checkpoint: str,
         completed_tool_operations: int,
+        review_grounded: bool = False,
     ) -> ProgressCheckpointSnapshot:
         """Freeze one safe task-progress projection from Controller-owned facts."""
 
@@ -1490,6 +1506,17 @@ class DynamicAgentRunner:
             "ready": "passed",
             "failed": "failed",
         }[quality_state]
+        review_criteria = (
+            self.review_scope_by_agent.get(agent.id, ())
+            if agent.capability is AgentCapability.REVIEW
+            else ()
+        )
+        if usage.active_calls:
+            cost_accounting_state = "active_unsettled"
+        elif usage.unpriced_calls or usage.unreported_token_calls:
+            cost_accounting_state = "terminal_incomplete"
+        else:
+            cost_accounting_state = "settled"
         return ProgressCheckpointSnapshot(
             approved_task_ids=assigned_task_ids,
             invocation_phase=phase,
@@ -1507,12 +1534,22 @@ class DynamicAgentRunner:
                 if agent.capability is AgentCapability.REVIEW
                 else "not_applicable"
             ),
+            review_criterion_ids=review_criteria,
+            review_coverage_state=(
+                "grounded"
+                if review_grounded and review_criteria
+                else "unverified"
+                if review_criteria
+                else "not_applicable"
+            ),
             known_estimated_cost_usd=usage.known_estimated_cost_usd,
             authorized_cost_usd=authorized,
             remaining_estimated_cost_usd=max(
                 0,
                 authorized - usage.known_estimated_cost_usd,
             ),
+            cost_accounting_state=cost_accounting_state,
+            unsettled_model_calls=usage.active_calls,
         )
 
     def _execute(

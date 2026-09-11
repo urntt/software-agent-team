@@ -643,6 +643,8 @@ def test_specialization_selects_prompt_and_typed_output_contract(
     assert f"specialization: {specialization.value}" in rendered
     assert module_text in rendered
     assert required_field in schema["required"]
+    assert "Tool activity is evidence collection, not criterion progress" in rendered
+    assert "additional equivalent probes add no authority" in rendered
 
 
 def test_security_specialization_persists_its_typed_assessment() -> None:

@@ -526,9 +526,21 @@ class ProgressCheckpointSnapshot(BaseModel):
         "changes_requested",
         "blocked",
     ]
+    review_criterion_ids: tuple[str, ...] = ()
+    review_coverage_state: Literal[
+        "not_applicable",
+        "unverified",
+        "grounded",
+    ] = "not_applicable"
     known_estimated_cost_usd: Decimal = Field(ge=0)
     authorized_cost_usd: Decimal = Field(gt=0)
     remaining_estimated_cost_usd: Decimal = Field(ge=0)
+    cost_accounting_state: Literal[
+        "settled",
+        "active_unsettled",
+        "terminal_incomplete",
+    ] = "settled"
+    unsettled_model_calls: int = Field(default=0, ge=0)
 
     @field_validator("approved_task_ids")
     @classmethod
@@ -537,6 +549,15 @@ class ProgressCheckpointSnapshot(BaseModel):
             re.fullmatch(r"TASK_[A-Z0-9_]+", value) is None for value in values
         ):
             raise ValueError("checkpoint task IDs must be unique canonical IDs")
+        return values
+
+    @field_validator("review_criterion_ids")
+    @classmethod
+    def require_review_criterion_ids(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        if len(values) != len(set(values)) or any(
+            re.fullmatch(r"[A-Z][A-Z0-9_]*", value) is None for value in values
+        ):
+            raise ValueError("checkpoint review criteria must be unique canonical IDs")
         return values
 
     @field_validator("last_verified_checkpoint", "next_controller_checkpoint")
@@ -552,6 +573,18 @@ class ProgressCheckpointSnapshot(BaseModel):
         )
         if self.remaining_estimated_cost_usd != expected:
             raise ValueError("checkpoint remaining cost must match known task spend")
+        if self.review_coverage_state == "not_applicable":
+            if self.review_criterion_ids:
+                raise ValueError(
+                    "non-Review checkpoints cannot claim criterion coverage"
+                )
+        elif not self.review_criterion_ids:
+            raise ValueError("Review coverage requires assigned criterion IDs")
+        if self.cost_accounting_state == "active_unsettled":
+            if self.unsettled_model_calls < 1:
+                raise ValueError("active cost accounting requires an unsettled call")
+        elif self.unsettled_model_calls:
+            raise ValueError("only active cost accounting may contain unsettled calls")
         return self
 
 
@@ -1293,11 +1326,31 @@ class TerminalProgressRenderer:
                 f"completed={checkpoint.last_verified_checkpoint}; "
                 f"next={checkpoint.next_controller_checkpoint}"
             )
+            if checkpoint.review_coverage_state != "not_applicable":
+                criteria = ",".join(checkpoint.review_criterion_ids)
+                self._print(
+                    "  review coverage "
+                    f"state={checkpoint.review_coverage_state} criteria={criteria}; "
+                    "tool activity alone does not establish criterion coverage"
+                )
+            if checkpoint.cost_accounting_state == "settled":
+                cost_detail = (
+                    f"${checkpoint.remaining_estimated_cost_usd:.6f} recorded remaining"
+                )
+            elif checkpoint.cost_accounting_state == "active_unsettled":
+                cost_detail = (
+                    f"{checkpoint.unsettled_model_calls} active model call(s) are "
+                    "unsettled; arithmetic headroom is not confirmed remaining budget"
+                )
+            else:
+                cost_detail = (
+                    "terminal provider usage is incomplete; arithmetic headroom is "
+                    "not confirmed remaining budget"
+                )
             self._print(
                 "  task budget "
-                f"${checkpoint.known_estimated_cost_usd:.6f} estimated / "
-                f"${checkpoint.authorized_cost_usd} authorized; "
-                f"${checkpoint.remaining_estimated_cost_usd:.6f} recorded remaining"
+                f"${checkpoint.known_estimated_cost_usd:.6f} settled estimate / "
+                f"${checkpoint.authorized_cost_usd} authorized; {cost_detail}"
             )
         if self.visibility is not RunEventVisibility.DETAILED:
             return

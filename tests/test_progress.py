@@ -49,6 +49,33 @@ def checkpoint(phase: InvocationPhase) -> ProgressCheckpointSnapshot:
     )
 
 
+def review_checkpoint(
+    *,
+    cost_accounting_state: str = "active_unsettled",
+    unsettled_model_calls: int = 1,
+) -> ProgressCheckpointSnapshot:
+    return ProgressCheckpointSnapshot(
+        approved_task_ids=("TASK_REVIEW",),
+        invocation_phase=InvocationPhase.PROVIDER_WAIT,
+        last_verified_checkpoint=(
+            "Observed attributable tool completion; criterion coverage remains "
+            "unverified until typed assessment"
+        ),
+        next_controller_checkpoint="Submit a grounded typed assessment",
+        completed_tool_operations=12,
+        git_state="verified",
+        gate_state="passed",
+        review_state="running",
+        review_criterion_ids=("AC_SECURITY",),
+        review_coverage_state="unverified",
+        known_estimated_cost_usd="0.25",
+        authorized_cost_usd="2",
+        remaining_estimated_cost_usd="1.75",
+        cost_accounting_state=cost_accounting_state,
+        unsettled_model_calls=unsettled_model_calls,
+    )
+
+
 @pytest.mark.parametrize("phase", tuple(InvocationPhase))
 @pytest.mark.parametrize(
     "kind",
@@ -615,6 +642,47 @@ def test_liveness_events_keep_stall_visible_and_stream_detail_optional(
     assert "provider stream activity" in detailed_output.getvalue()
 
 
+def test_standard_checkpoint_separates_review_activity_and_unsettled_cost(
+    tmp_path: Path,
+) -> None:
+    output = StringIO()
+    renderer = TerminalProgressRenderer(
+        output=output,
+        visibility=RunEventVisibility.STANDARD,
+    )
+    event_journal = journal(tmp_path, handler=renderer)
+    event_journal.append(
+        ProgressEvent(
+            kind=ProgressEventKind.AGENT_TOOL_ACTIVE,
+            message="Security Reviewer has an attributable tool operation active",
+            agent_id="security",
+            iteration=1,
+            attempt=1,
+            checkpoint=review_checkpoint(),
+        ),
+        lifecycle_revision=3,
+        phase=RunPhase.REVIEWING,
+    )
+
+    rendered = output.getvalue()
+    assert "review coverage state=unverified criteria=AC_SECURITY" in rendered
+    assert "tool activity alone does not establish criterion coverage" in rendered
+    assert "$0.250000 settled estimate / $2 authorized" in rendered
+    assert "1 active model call(s) are unsettled" in rendered
+    assert "not confirmed remaining budget" in rendered
+    assert "$1.750000 recorded remaining" not in rendered
+
+
+def test_checkpoint_rejects_inconsistent_cost_or_review_authority() -> None:
+    with pytest.raises(ValidationError, match="unsettled call"):
+        review_checkpoint(unsettled_model_calls=0)
+
+    payload = review_checkpoint().model_dump(mode="json")
+    payload["review_coverage_state"] = "not_applicable"
+    with pytest.raises(ValidationError, match="cannot claim criterion coverage"):
+        ProgressCheckpointSnapshot.model_validate(payload)
+
+
 def test_checkpoint_projection_is_hidden_in_compact_and_explained_in_standard(
     tmp_path: Path,
 ) -> None:
@@ -663,7 +731,7 @@ def test_checkpoint_projection_is_hidden_in_compact_and_explained_in_standard(
     assert "completed_tools=2" in rendered
     assert "Completed 2 attributable tool operations" in rendered
     assert "next=Observe completion of the active operation" in rendered
-    assert "$0.125000 estimated / $1.00 authorized" in rendered
+    assert "$0.125000 settled estimate / $1.00 authorized" in rendered
 
 
 def test_renderer_suppresses_repeated_checkpoint_details_but_keeps_real_events(

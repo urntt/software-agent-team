@@ -505,11 +505,12 @@ authority and may precede one final successful file-bound call; multiple success
 work after success, all-failed sequences, and binding mismatches still fail closed.
 The reviewed DeepSeek compatibility route now distinguishes two provider request
 contracts. Bootstrap Planning, whose only semantic action is terminal submission,
-forces the exact named submission function rather than relying on a prompt while
-the provider retains its default `auto` choice. Dynamic-team runtimes use
-`tool_choice=required`: every model step must select an authorized tool, while a
-writer or quality Agent can still use its capability tools before the terminal
-submission. Model inspection, provider smoke, and legacy text-compatibility
+forces the exact named submission function rather than relying on a prompt.
+Dynamic-team runtimes preserve the provider's normal completion choice: an Agent
+may use capability tools and then call the bound submission tool, while a missing
+or invalid terminal submission is rejected by the Controller. This prevents a
+required-any-tool setting from turning repeated evidence activity into an endless
+tool loop. Model inspection, provider smoke, and legacy text-compatibility
 configurations retain their original request behavior. Pinned-OpenClaw loopbacks
 observe both outbound choices, the work-tool-to-submission order, accepted v2
 envelopes, terminal one-request behavior, and exact sandbox cleanup. The
@@ -518,6 +519,12 @@ Controller-only run,
 destination, route, authorization, and timestamp metadata, preventing execution-layer
 redaction from breaking exact prompt/session attribution. Dynamic Agent submission
 schemas remain exact inside the same explicit envelope.
+Live Review progress now keeps attributable tool activity separate from grounded
+criterion coverage. Coverage remains explicitly `unverified` until a typed,
+Controller-grounded assessment is accepted; repeating a probe cannot be presented
+as improvement. Cost progress likewise reports settled estimates separately from
+active calls whose provider usage is not yet available, and never labels arithmetic
+headroom as confirmed remaining budget while such a call is active.
 The fixed compatibility workflow now converts an unexpected executor exception into
 an attributable failed execution before settling its call reservation. Missing token
 telemetry and cost remain unknown, the original exception survives in the terminal

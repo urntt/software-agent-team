@@ -537,7 +537,7 @@ def test_legacy_text_runtime_does_not_force_the_typed_submission_tool(
     assert "plugins" not in payload
 
 
-def test_dynamic_deepseek_runtime_requires_a_tool_without_forcing_submission(
+def test_dynamic_deepseek_runtime_preserves_a_terminal_completion_choice(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -572,7 +572,6 @@ def test_dynamic_deepseek_runtime_requires_a_tool_without_forcing_submission(
     settings = payload["agents"]["defaults"]["models"][DEEPSEEK_VISION_MODEL]
     assert settings["params"]["extra_body"] == {
         "thinking": {"type": "disabled"},
-        "tool_choice": "required",
     }
     agents = {item["id"]: item for item in payload["agents"]["list"]}
     assert "exec" not in agents["cli_developer"]["tools"]["deny"]
@@ -627,12 +626,9 @@ def test_dynamic_config_registers_compatibility_for_an_authorized_fallback(
     payload = json.loads(destination.read_text(encoding="utf-8"))
     registered = payload["models"]["providers"]["deepseek"]["models"]
     assert [model["id"] for model in registered] == ["deepseek-v4-flash-vision-exp"]
-    assert (
-        payload["agents"]["defaults"]["models"][DEEPSEEK_VISION_MODEL]["params"][
-            "extra_body"
-        ]["tool_choice"]
-        == "required"
-    )
+    assert payload["agents"]["defaults"]["models"][DEEPSEEK_VISION_MODEL]["params"][
+        "extra_body"
+    ] == {"thinking": {"type": "disabled"}}
     assert all(
         agent["model"] == {"primary": "provider/model", "fallbacks": []}
         for agent in payload["agents"]["list"]

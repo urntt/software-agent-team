@@ -2620,6 +2620,46 @@ def test_dynamic_runner_projects_tool_history_from_current_snapshot(
     assert events[1].message == "Builder completed testing quality checks (pytest)"
 
 
+def test_dynamic_reviewer_does_not_present_tool_activity_as_criterion_progress(
+    tmp_path: Path,
+) -> None:
+    runner, team_plan, _, _, _ = runtime(tmp_path)
+    events: list[ProgressEvent] = []
+    runner.activity_handler = events.append
+    agent = next(item for item in team_plan.agents if item.id == "reviewer")
+
+    runner._observe_execution_activity(
+        agent,
+        attempt=1,
+        activity=AgentExecutionActivity(
+            kind=AgentExecutionActivityKind.TOOL_COMPLETED,
+            agent_id=agent.id,
+            session_key="agent:reviewer:evidence-activity",
+            model=MODEL,
+            elapsed_ms=100,
+            active_tool_count=0,
+            completed_tool_count=12,
+            silence_seconds=120,
+            stall_grace_seconds=30,
+            policy_source="test provider contract",
+            tool_action_class=AgentToolActionClass.TESTING,
+            tool_target_class=AgentToolTargetClass.REVIEW_PROBE,
+            tool_detail="sat-probe-run",
+        ),
+    )
+
+    checkpoint = events[0].checkpoint
+    assert checkpoint is not None
+    assert checkpoint.review_criterion_ids == ("AC_REVIEW",)
+    assert checkpoint.review_coverage_state == "unverified"
+    assert "criterion coverage remains unverified" in (
+        checkpoint.last_verified_checkpoint
+    )
+    assert "equivalent tool activity alone adds no criterion authority" in (
+        checkpoint.next_controller_checkpoint
+    )
+
+
 def test_phase_snapshot_displays_current_count_before_tool_history_delta(
     tmp_path: Path,
 ) -> None:

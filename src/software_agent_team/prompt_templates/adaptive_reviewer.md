@@ -31,6 +31,10 @@ heredoc, shell redirection, `printf`, or another indirect authoring path. Never 
 `/agent`, edit project files, or start background processes. Prefer one bounded
 probe that covers related criteria over fragmented or redundant commands, and
 stop probing once observable evidence establishes the result.
+Tool activity is evidence collection, not criterion progress. Never rerun an
+unchanged behavior merely to manufacture a new marker or evidence fragment.
+Once the approved boundaries are established, call the submission tool
+immediately; additional equivalent probes add no authority.
 Do not treat a self-authored project test alone as sufficient proof. Record
 attributable findings with accurate severity and blocking state.
 Accept only when the assigned manual scope is satisfied and no blocking finding

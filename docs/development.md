@@ -467,13 +467,15 @@ the dynamic tool loop.
 A compatibility entry may also carry provider-native choices for the
 invocation-bound artifact protocol. Apply a named terminal-function choice only
 when submission is the invocation's sole semantic action. A dynamic team with work
-or evidence tools must use a compatible required-any-tool choice instead, so the
-provider cannot return plain text but also cannot force the terminal tool before
-work. Model inspection, provider smoke, and legacy text response paths receive no
-choice override. Test both outbound requests through the pinned OpenClaw: the
-bootstrap named choice, the dynamic work-tool-to-submission sequence, canonical
-single `artifact` envelope, terminal one-request behavior, and exact sandbox cleanup.
-Do not treat a prompt instruction as evidence that the provider must call a tool.
+or evidence tools must retain a real completion choice: forcing any tool on every
+turn can erase the completion signal and sustain redundant work. The prompt still
+requires the bound terminal submission, and its absence fails closed rather than
+being parsed from assistant text. Model inspection, provider smoke, and legacy text
+response paths receive no choice override. Test both outbound requests through the
+pinned OpenClaw: the bootstrap named choice, the dynamic work-tool-to-submission
+sequence, canonical single `artifact` envelope, terminal one-request behavior, and
+exact sandbox cleanup. Do not treat a prompt instruction as evidence that the
+provider called the submission tool.
 
 When changing targeted correction, test object-only capture followed by the exact
 Controller-owned per-slot semantic schema,

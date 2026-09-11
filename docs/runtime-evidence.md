@@ -271,8 +271,10 @@ semantic schema inside that argument. Planning and targeted semantic corrections
 expose an object-only inner transport schema while retaining the exact semantic-schema digest in the
 private binding. On reviewed compatibility routes whose API otherwise permits a
 plain assistant response, bootstrap Planning selects this exact named function at
-the provider boundary. Dynamic Agents instead use a required-any-authorized-tool
-choice, preserving their work/evidence tool loop before the terminal submission.
+the provider boundary. Dynamic Agents preserve the normal provider completion
+choice, allowing optional work/evidence tools to converge before the bound terminal
+submission. A missing submission remains a terminal protocol failure; assistant text
+never acquires semantic authority.
 The override is absent from non-generation model inspection, provider smoke, and
 legacy text-compatibility configurations, where no invocation-bound submission tool
 exists. This
@@ -1225,8 +1227,10 @@ when investigating it rather than editing artifacts in place.
   its variable reference; SAT's isolated auth profiles remain the other
   credential source. A reviewed named-function override may be activated only
   when bound artifact submission is the invocation's sole semantic action.
-  Dynamic multi-tool runtimes use required-any-tool semantics; neither override
-  may leak into model checks, provider smoke, or legacy text calls.
+  Dynamic multi-tool runtimes retain the provider's completion choice and rely
+  on Controller validation—not forced perpetual tool use—to require the bound
+  terminal artifact. The named override may not leak into model checks,
+  provider smoke, or legacy text calls.
 - Agent containers receive an explicit non-secret environment instead of the
   host process environment or provider credentials.
 - SAT's isolated OpenClaw host process owns model-provider access. Credentials
