@@ -182,6 +182,8 @@ class DynamicWorkflowExecutor:
         allow_single_verifier: bool = False,
         reported_model: str | None = "offline/test-model",
         report_usage: bool = True,
+        cache_read_tokens: int | None = 0,
+        cache_write_tokens: int | None = 0,
         developer_stderr: str = "",
         raise_for_role: AgentRole | None = None,
     ) -> None:
@@ -196,6 +198,8 @@ class DynamicWorkflowExecutor:
         self.commit_changes = commit_changes
         self.reported_model = reported_model
         self.report_usage = report_usage
+        self.cache_read_tokens = cache_read_tokens
+        self.cache_write_tokens = cache_write_tokens
         self.developer_stderr = developer_stderr
         self.raise_for_role = raise_for_role
         self.allow_single_verifier = allow_single_verifier
@@ -439,8 +443,8 @@ class DynamicWorkflowExecutor:
                     AgentTokenUsage(
                         input_tokens=10,
                         output_tokens=5,
-                        cache_read_tokens=0,
-                        cache_write_tokens=0,
+                        cache_read_tokens=self.cache_read_tokens,
+                        cache_write_tokens=self.cache_write_tokens,
                         total_tokens=15,
                     )
                     if self.report_usage
@@ -586,6 +590,7 @@ def test_offline_workflow_completes_with_parallel_independent_verification(
     assert "Agent calls: 4" in markdown
     assert "Complete-journey model calls: 4" in markdown
     assert "Cost by call, Agent, phase, and route" in markdown
+    assert "0 cache read / 0 cache write" in markdown
     assert "`implement`" in markdown
     assert "`primary / offline/test-model`" in markdown
     assert (run_directory / "budget-ledger.json").is_file()
@@ -626,6 +631,36 @@ def test_offline_workflow_completes_with_parallel_independent_verification(
     transitions = state["transitions"]
     assert isinstance(transitions, list)
     assert transitions[-1]["artifacts"][0]["path"] == "final-report.json"
+
+
+def test_workflow_report_preserves_current_unknown_cache_usage(tmp_path: Path) -> None:
+    source = initialize_source(tmp_path)
+    workspace = tmp_path / "workspaces" / task_brief().run_id
+    executor = DynamicWorkflowExecutor(
+        workspace,
+        cache_read_tokens=None,
+        cache_write_tokens=None,
+    )
+
+    outcome = coordinator(tmp_path, executor).execute(
+        task_brief(),
+        source_repository=source,
+    )
+
+    assert outcome.record.phase is RunPhase.COMPLETED
+    report = (
+        tmp_path / "runs" / task_brief().run_id / outcome.human_report_path
+    ).read_text(encoding="utf-8")
+    assert "unknown cache read / unknown cache write" in report
+    persisted = json.loads(
+        (tmp_path / "runs" / task_brief().run_id / "budget-ledger.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert all(
+        call["cache_usage"] == {"read_tokens": None, "write_tokens": None}
+        for call in persisted["calls"]
+    )
 
 
 def test_executor_exception_settles_parallel_call_and_preserves_root_error(

@@ -11,6 +11,7 @@ from software_agent_team.artifacts import (
     ARTIFACT_SCHEMA_VERSION,
     MINIMUM_READABLE_ARTIFACT_SCHEMA_VERSION,
 )
+from software_agent_team.budgets import BUDGET_SCHEMA_VERSION
 from software_agent_team.planning import PLANNING_SCHEMA_VERSION
 from software_agent_team.progress import (
     MINIMUM_READABLE_RUN_EVENT_SCHEMA_VERSION,
@@ -71,7 +72,11 @@ def test_registry_declares_only_intentional_historical_read_support() -> None:
             assert item.minimum_readable == 1
             assert item.current == item.maximum_readable == TEAM_PLAN_SCHEMA_VERSION
             continue
-        if family in {SchemaFamily.BUDGET, SchemaFamily.SELF_CHECK}:
+        if family is SchemaFamily.BUDGET:
+            assert item.minimum_readable == 1
+            assert item.current == item.maximum_readable == BUDGET_SCHEMA_VERSION
+            continue
+        if family is SchemaFamily.SELF_CHECK:
             assert item.minimum_readable == 1
             assert item.current == item.maximum_readable == 2
             continue

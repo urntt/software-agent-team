@@ -27,9 +27,9 @@ def _pricing_source(call: ModelCallCostRecord) -> str:
     return f"{primary}; cache: {call.cache_pricing.source.value}"
 
 
-def _cache_tokens(call: ModelCallCostRecord) -> str:
+def _cache_tokens(call: ModelCallCostRecord, *, ledger_schema_version: int) -> str:
     if call.cache_usage is None:
-        return "; cache not recorded (legacy)"
+        return f"; cache not recorded (legacy schema v{ledger_schema_version})"
     read = call.cache_usage.read_tokens
     write = call.cache_usage.write_tokens
     return (
@@ -176,7 +176,10 @@ def render_run_report(
                         and call.output_tokens is not None
                         else "not reported"
                     )
-                    + _cache_tokens(call)
+                    + _cache_tokens(
+                        call,
+                        ledger_schema_version=budget_ledger.schema_version,
+                    )
                     + f" | `{call.cost_source.value}` | "
                     + (
                         f"${call.cost_usd:.6f}"

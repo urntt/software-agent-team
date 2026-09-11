@@ -24,7 +24,7 @@ from software_agent_team.model_costs import (
 )
 from software_agent_team.model_metadata import ModelMetadataSource
 
-BUDGET_SCHEMA_VERSION = 2
+BUDGET_SCHEMA_VERSION = 3
 BUDGET_LEDGER_FILENAME = "budget-ledger.json"
 
 
@@ -159,7 +159,7 @@ class AgentBudget(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[1, BUDGET_SCHEMA_VERSION] = BUDGET_SCHEMA_VERSION
+    schema_version: Literal[1, 2, BUDGET_SCHEMA_VERSION] = BUDGET_SCHEMA_VERSION
     authority: BudgetAuthority = BudgetAuthority.CONTROLLED_EVALUATION
     max_calls: int | None = Field(default=None, ge=1, le=1_000_000)
     max_input_tokens: int | None = Field(default=None, ge=1, le=1_000_000_000)
@@ -268,7 +268,7 @@ class BudgetLedgerRecord(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[1, BUDGET_SCHEMA_VERSION] = BUDGET_SCHEMA_VERSION
+    schema_version: Literal[1, 2, BUDGET_SCHEMA_VERSION] = BUDGET_SCHEMA_VERSION
     budget: AgentBudget
     usage: AgentBudgetUsage
     calls: tuple[ModelCallCostRecord, ...]
@@ -277,6 +277,12 @@ class BudgetLedgerRecord(BaseModel):
     def validate_aggregate(self) -> Self:
         if self.usage.active_calls:
             raise ValueError("terminal budget ledger cannot contain active calls")
+        if self.schema_version >= 3 and any(
+            call.cache_usage is None for call in self.calls
+        ):
+            raise ValueError(
+                "budget schema v3 requires explicit cache usage, including unknown"
+            )
         if self.usage.calls_started != self.usage.calls_completed:
             raise ValueError("terminal budget ledger requires every call to complete")
         expected_sequences = tuple(range(1, len(self.calls) + 1))
@@ -441,7 +447,12 @@ class AgentBudgetLedger:
         duration_ms: int,
         cache_usage: CacheTokenUsage | None = None,
     ) -> AgentBudgetUsage:
-        """Price and record one terminal invocation, then enforce its authority."""
+        """Price and record one terminal invocation, then enforce its authority.
+
+        Every call completed by the current writer records the cache bucket even
+        when the provider supplied no counters.  Only persisted schema-v1/v2
+        evidence may omit it.
+        """
 
         if input_tokens is not None and input_tokens < 0:
             raise ValueError("reported input tokens cannot be negative")
@@ -449,6 +460,7 @@ class AgentBudgetLedger:
             raise ValueError("reported output tokens cannot be negative")
         if duration_ms < 0:
             raise ValueError("reported Agent duration cannot be negative")
+        recorded_cache_usage = CacheTokenUsage() if cache_usage is None else cache_usage
 
         with self._lock:
             active_reservation = self._active.get(reservation.sequence)
@@ -458,7 +470,7 @@ class AgentBudgetLedger:
             estimated_cost_usd = reservation.estimate_cost(
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
-                cache_usage=cache_usage,
+                cache_usage=recorded_cache_usage,
             )
             call_record = ModelCallCostRecord(
                 sequence=reservation.sequence,
@@ -475,7 +487,7 @@ class AgentBudgetLedger:
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 duration_ms=duration_ms,
-                cache_usage=cache_usage,
+                cache_usage=recorded_cache_usage,
                 cache_pricing=reservation.cache_pricing,
                 cost_source=(
                     ModelCostSource.UNKNOWN

@@ -46,6 +46,7 @@ from software_agent_team.budgets import (
     BudgetLedgerRecord,
 )
 from software_agent_team.integrity import canonical_model_sha256
+from software_agent_team.model_costs import CacheTokenUsage
 from software_agent_team.teams import (
     AgentCapability,
     AgentSpec,
@@ -1150,6 +1151,7 @@ def test_live_initialization_wait_survives_invocation_settlement_and_storage(tmp
     assert loaded.invocation_lifecycle.shutdown.cleanup_completed
     assert ledger.snapshot().calls_completed == 1
     assert ledger.snapshot().active_calls == 0
+    assert ledger.call_records()[0].cache_usage == CacheTokenUsage()
 
 
 def test_execution_outputs_are_write_once_and_stage_bound(tmp_path: Path) -> None:

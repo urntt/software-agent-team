@@ -9,6 +9,7 @@ import pytest
 from pydantic import ValidationError
 
 from software_agent_team.budgets import (
+    BUDGET_SCHEMA_VERSION,
     AgentBudget,
     AgentBudgetExceeded,
     AgentBudgetLedger,
@@ -196,6 +197,48 @@ def test_budget_ledger_preserves_unknown_usage_and_price() -> None:
     assert usage.unreported_token_calls == 1
     assert usage.known_estimated_cost_usd == 0
     assert usage.unpriced_calls == 1
+    call = ledger.call_records()[0]
+    assert call.cache_usage == CacheTokenUsage()
+    assert ledger.terminal_record().schema_version == BUDGET_SCHEMA_VERSION
+
+
+def test_current_budget_ledger_rejects_an_omitted_cache_usage_bucket() -> None:
+    ledger = AgentBudgetLedger(budget())
+    reservation = ledger.reserve_call("reviewer")
+    ledger.complete_call(
+        reservation,
+        input_tokens=None,
+        output_tokens=None,
+        duration_ms=25,
+    )
+    payload = ledger.terminal_record().model_dump(mode="json")
+    del payload["calls"][0]["cache_usage"]
+
+    with pytest.raises(ValidationError, match="requires explicit cache usage"):
+        type(ledger.terminal_record()).model_validate(payload)
+
+
+@pytest.mark.parametrize("schema_version", [1, 2])
+def test_legacy_budget_ledgers_preserve_absent_cache_usage_bytes(
+    schema_version: int,
+) -> None:
+    ledger = AgentBudgetLedger(budget())
+    reservation = ledger.reserve_call("reviewer")
+    ledger.complete_call(
+        reservation,
+        input_tokens=None,
+        output_tokens=None,
+        duration_ms=25,
+    )
+    payload = ledger.terminal_record().model_dump(mode="json")
+    payload["schema_version"] = schema_version
+    payload["budget"]["schema_version"] = schema_version
+    del payload["calls"][0]["cache_usage"]
+
+    restored = type(ledger.terminal_record()).model_validate(payload)
+
+    assert restored.calls[0].cache_usage is None
+    assert restored.model_dump(mode="json") == payload
 
 
 def test_budget_ledger_rejects_reusing_a_completed_reservation() -> None:

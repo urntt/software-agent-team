@@ -51,7 +51,7 @@ from software_agent_team.execution import (
 )
 from software_agent_team.integrity import canonical_model_sha256
 from software_agent_team.invocation_lifecycle import InvocationPhase
-from software_agent_team.model_costs import CachePricing
+from software_agent_team.model_costs import CachePricing, CacheTokenUsage
 from software_agent_team.model_metadata import ModelMetadataSource
 from software_agent_team.model_routing import ModelProfile, ModelRoutingPolicy
 from software_agent_team.planning import (
@@ -9379,6 +9379,7 @@ def test_planning_interruption_and_exception_settle_and_persist_before_propagati
     assert usage.active_calls == 0
     assert usage.unreported_token_calls == 1
     assert turn.execution.cost_record == ledger.call_records()[0]
+    assert turn.execution.cost_record.cache_usage == CacheTokenUsage()
     assert session.turn_head_sha256 == canonical_model_sha256(turn)
     assert turn.parsed_response is None
     if failure is RuntimeError:
