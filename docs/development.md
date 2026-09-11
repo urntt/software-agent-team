@@ -395,6 +395,12 @@ The image includes the exact `uv` pinned in `runtime/python/requirements.in`,
 a locked offline wheelhouse containing project setup and build dependencies,
 and a root-owned `uv` configuration that makes the wheelhouse the exclusive
 index while preserving the generated project's exact `uv sync --dev` argv.
+The runtime-image regression uses a committed portable lock containing public
+registry URLs and the real image `uv` behind `--network none`; when the image is
+available locally, it must complete the clean-copy setup, test, and start
+contract as an unrelated non-root user. A checkout without Docker or without a
+built image skips only this composed image check while retaining the static
+recipe and lock checks, so `make check` does not acquire a Docker prerequisite.
 The product quality profile copies clean committed files into
 fresh executable tmpfs scratch, then runs the exact generated setup, test, and
 start argv with network disabled. The source and container root remain

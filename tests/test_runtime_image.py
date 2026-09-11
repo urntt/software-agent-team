@@ -1,10 +1,18 @@
-"""Static reproducibility checks for the shared Python sandbox image recipe."""
+"""Reproducibility checks for the shared Python sandbox image."""
 
+import json
 import re
+import shutil
+import subprocess
 from pathlib import Path
+
+import pytest
 
 REPOSITORY_ROOT = Path(__file__).parents[1]
 RUNTIME_ROOT = REPOSITORY_ROOT / "runtime" / "python"
+VALIDATION_ROOT = REPOSITORY_ROOT / "profiles" / "python" / "validation"
+PORTABLE_LOCK = REPOSITORY_ROOT / "tests" / "fixtures" / "portable-registry.uv.lock"
+RUNTIME_IMAGE = "sat-python-quality:phase1-v7"
 PINNED_REQUIREMENT = re.compile(r"^[a-z0-9][a-z0-9._-]*==[^ ;]+(?: ; [a-z0-9_' .=]+)?$")
 
 
@@ -75,3 +83,170 @@ def test_runtime_dependency_lock_contains_only_exact_unique_versions() -> None:
     assert set(direct) <= set(locked)
     assert "hatchling==1.27.0" in locked
     assert "editables==0.5" in locked
+
+
+def test_runtime_image_consumes_a_portable_registry_lock_offline(
+    tmp_path: Path,
+) -> None:
+    """Exercise the exact command runner with real uv and the bundled wheels."""
+
+    docker = shutil.which("docker")
+    if docker is None:
+        pytest.skip(
+            "Docker is not installed; the static image contract remains covered"
+        )
+    inspected = subprocess.run(
+        [docker, "image", "inspect", "--format", "{{.Id}}", RUNTIME_IMAGE],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    if inspected.returncode != 0:
+        pytest.skip("the configured runtime image is not built in this checkout")
+    image_id = inspected.stdout.strip()
+    assert re.fullmatch(r"sha256:[0-9a-f]{64}", image_id)
+
+    project = tmp_path / "project"
+    project.mkdir(mode=0o755)
+    files = {
+        ".gitignore": ".venv/\n",
+        "README.md": """# Portable registry fixture
+
+## Installation
+
+`uv sync --dev`
+
+## Usage
+
+`uv run python -c pass`
+
+## Testing
+
+`uv run pytest`
+
+## Known limitations
+
+This fixture only validates the offline dependency boundary.
+""",
+        "pyproject.toml": """[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "markdown-link-auditor"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+dependencies = []
+
+[dependency-groups]
+dev = [
+  "pytest==8.4.2",
+  "ruff==0.12.8",
+]
+
+[tool.uv]
+package = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+""",
+        "sat-project.json": json.dumps(
+            {
+                "schema_version": 1,
+                "setup": ["uv", "sync", "--dev"],
+                "start": ["uv", "run", "python", "-c", "pass"],
+                "test": ["uv", "run", "pytest"],
+            }
+        ),
+        "src/markdown_link_auditor/__init__.py": '"""Fixture package."""\n',
+        "tests/test_fixture.py": "def test_fixture():\n    assert True\n",
+        "uv.lock": PORTABLE_LOCK.read_text(encoding="utf-8"),
+    }
+    for relative, content in files.items():
+        destination = project / relative
+        destination.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
+        destination.write_text(content, encoding="utf-8")
+        destination.chmod(0o644)
+
+    for arguments in (
+        ("init", "--quiet"),
+        ("config", "user.name", "urntt"),
+        ("config", "user.email", "urntts@gmail.com"),
+        ("add", "."),
+        ("commit", "--quiet", "-m", "test: initialize portable fixture"),
+    ):
+        subprocess.run(
+            ["git", "-C", str(project), *arguments],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+
+    # The container runs as an unrelated non-root identity. Make only this
+    # throwaway fixture world-readable so Git can verify the mounted commit.
+    for path in project.rglob("*"):
+        path.chmod(0o755 if path.is_dir() else 0o644)
+
+    validator = tmp_path / "validator"
+    validator.mkdir(mode=0o755)
+    for name in ("run.py", "run_commands.py"):
+        destination = validator / name
+        shutil.copyfile(VALIDATION_ROOT / name, destination)
+        destination.chmod(0o755)
+
+    completed = subprocess.run(
+        [
+            docker,
+            "run",
+            "--rm",
+            "--network",
+            "none",
+            "--read-only",
+            "--cap-drop",
+            "ALL",
+            "--security-opt",
+            "no-new-privileges",
+            "--pids-limit",
+            "128",
+            "--memory",
+            "768m",
+            "--cpus",
+            "1",
+            "--user",
+            "65532:65532",
+            "--tmpfs",
+            "/tmp:rw,nosuid,nodev,size=512m,mode=1777",
+            "--env",
+            "HOME=/tmp/home",
+            "--env",
+            "GIT_CONFIG_COUNT=1",
+            "--env",
+            "GIT_CONFIG_KEY_0=safe.directory",
+            "--env",
+            "GIT_CONFIG_VALUE_0=/project",
+            "--volume",
+            f"{project}:/project:ro",
+            "--volume",
+            f"{validator}:/validator:ro",
+            image_id,
+            "python",
+            "/validator/run_commands.py",
+            "--repository",
+            "/project",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=150,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout) == {
+        "setup": "passed",
+        "source": "committed_tracked_files",
+        "start": "exited_zero",
+        "test": "passed",
+        "workspace": "fresh_sandbox_scratch_copy",
+    }
