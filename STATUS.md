@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** prepare the compatible `v0.2.3` release while `v0.2.2` remains published stable
+**Current milestone:** validate the published `v0.2.3` state-lifecycle fixes on the affected WSL device
 
 **Last updated:** September 12, 2026
 
@@ -10,6 +10,23 @@ product, architecture, experiment, or roadmap; those decisions belong to
 [`VISION.md`](VISION.md).
 
 ## Current Release
+
+The immutable `v0.2.3` tag,
+[GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.2.3),
+package version, and release manifest identify source revision
+`56ec01ba0eb62d73d07d29ceeb4434b5b5e1e6b3` and Git archive digest
+`sha256:35136d8cd38ebbf3944981725f579b2d18d2d81cdb805514efe25c181f02fb4a`.
+The exact clean revision passed the local canonical `make check` with doctor,
+formatting, lint, all 1,613 tests, complete cleanup coverage, and no terminal
+resource residual. Exact-tag GitHub Actions
+[run 34698877186](https://github.com/urntt/software-agent-team/actions/runs/34698877186)
+passed 1,611 tests with two explicit environment-dependent skips on the hosted
+non-root runner, retained the canonical gate artifact, and published exactly
+one identity manifest asset. A fresh disposable non-root rehearsal then started
+from the genuine `v0.2.2` Release, discovered and activated `v0.2.3`, preserved
+configuration and legacy state, exercised no-op, refusal, rollback, channel,
+foreign-resource, export, and purge paths, and finished with no attributable
+resource residual or provider call.
 
 The immutable `v0.2.2` tag,
 [GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.2.2),
@@ -31,7 +48,7 @@ lifecycle check after 1,605 passes and two environment-dependent skips. No
 Release was created. The tag remains immutable and unpublished, and its version
 cannot be reused.
 
-The previous published stable remains immutable `v0.2.0` at
+The earlier published stable remains immutable `v0.2.0` at
 `4c0bdfcea6da0a6f3849c2b70a9e63ed2d5e098c`, with Git archive digest
 `sha256:afeab5ec13d910c83ec06dbc64cfed491e4a84ee85725bbc8a5ff6ffaedf247f`.
 The earlier stable `v0.1.2` remains immutable at
@@ -97,9 +114,10 @@ account/HOME/resource cleanup all passed. The scenario made no provider calls.
 
 ## Current Development Head
 
-The implementation released as `v0.2.2` is frozen at the exact revision above.
-The current checkout prepares `v0.2.3`, a compatible patch over `v0.2.2`, and
-adds a read-only, code-owned state-layout inspection shared
+The implementation released as `v0.2.3` is frozen at the exact revision above.
+Development `main` adds only this status synchronization after that tag. The
+release is a compatible patch over `v0.2.2` and adds a read-only, code-owned
+state-layout inspection shared
 by product startup, state creation, managed installation, and uninstallation.
 Startup now checks the root marker, every known category, ownership, access, and
 unknown top-level entries before changing permissions or reading provider
@@ -114,8 +132,11 @@ state outside the active state root. The installed candidate remains the final
 compatibility authority, and development targets retain that candidate-owned
 check. Product, self-check, CLI, managed-install, uninstall, and schema tests
 pass all 180 affected checks. The package, lock, and change-impact ledger
-identify the new candidate; the canonical repository gate, publication, and a
-fresh WSL rerun remain pending.
+identify `v0.2.3` over the `v0.2.2` baseline. The local and hosted canonical
+gates, exact-tag publication, fixed-revision development rehearsal, and genuine
+published-stable upgrade all passed. A fresh rerun on the affected WSL device
+remains the evidence boundary for its historical ownership mismatch and manual
+state recovery.
 
 The `v0.2.1` hosted failure observed a CLI exit of 130, a cancelled Planning
 session, and an interrupted turn, but the persisted invocation lifecycle was
