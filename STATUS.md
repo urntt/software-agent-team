@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** maintain the published `v0.2.0` stable release and begin the next evidence-driven development batch
+**Current milestone:** prepare the compatible `v0.2.1` review-fix release while `v0.2.0` remains the published stable
 
 **Last updated:** September 12, 2026
 
@@ -77,7 +77,9 @@ cleanup all passed. The scenario made no provider calls.
 ## Current Development Head
 
 The implementation released as `v0.2.0` is frozen at the exact revision above.
-The current checkout adds unreleased correctness fixes after the release:
+The current checkout prepares `v0.2.1`, a compatible patch over `v0.2.0`.
+The package, lock, and change-impact ledger identify the candidate; publication
+and exact-candidate release validation remain pending. The candidate contains:
 
 - Finalization recovery sums attributable assistant usage across the current
   invocation. Missing counters, compaction, and observed sanitizer omissions remain unknown;
@@ -117,7 +119,7 @@ remain separate from this successful gate and motivated the validation-superviso
 fix. This batch made no provider calls; the prior release evidence below does not
 establish a fresh provider-backed journey for this checkout.
 
-The machine-readable impact ledger classified task-derived Agent specialization
+The previous `v0.2.0` impact ledger classified task-derived Agent specialization
 and the unified multi-transport model-profile surface as minor changes, while
 the Planning, runtime attribution, accounting, managed-resource, portable-lock,
 and release-workflow changes were compatible fixes. The local candidate gate,
@@ -147,7 +149,7 @@ provider smoke, Planning single-tool submission, and a dynamic tool loop with
 no fallback. These checks establish the provider integration boundary but are
 not a managed ordinary-user product campaign.
 
-The final release-candidate canonical gate completed doctor, format, lint, all
+The `v0.2.0` release-candidate canonical gate completed doctor, format, lint, all
 1,517 tests, and cleanup in 1,038.70 seconds. Its report recorded 316,174,336
 bytes peak aggregate RSS, no new cgroup or kernel OOM event, and no residual
 stage processes, process leases, sandbox containers, volumes, or private test

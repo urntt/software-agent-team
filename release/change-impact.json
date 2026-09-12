@@ -1,42 +1,37 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.1.2",
-  "target_version": "0.2.0",
+  "baseline_version": "0.2.0",
+  "target_version": "0.2.1",
   "changes": [
     {
-      "id": "task-derived-agent-specialization",
-      "impact": "minor",
-      "summary": "Create task-specific Agent roles, capabilities, review assignments, and dependency waves from the approved plan"
-    },
-    {
-      "id": "unified-model-runtime-profiles",
-      "impact": "minor",
-      "summary": "Configure provider-native, OpenAI Completions, OpenAI Responses, Anthropic Messages, and Ollama routes through one validated profile contract"
-    },
-    {
-      "id": "planning-authority-and-correction",
+      "id": "recovered-invocation-usage",
       "impact": "patch",
-      "summary": "Keep user decisions, Controller policy, model corrections, overview topology, and approval authority distinct and fail closed"
+      "summary": "Sum all attributable assistant usage during finalization recovery and preserve unknown costs for incomplete or compacted evidence"
     },
     {
-      "id": "runtime-attribution-and-accounting",
+      "id": "positive-iteration-snapshots",
       "impact": "patch",
-      "summary": "Bind executed submissions, finalization recovery, parallel accounting, and current versus legacy cache usage to durable evidence"
+      "summary": "Accept every positive snapshot iteration while preserving controlled-evaluation limits"
     },
     {
-      "id": "managed-upgrade-resource-ownership",
+      "id": "completed-writer-chain-order",
       "impact": "patch",
-      "summary": "Bound retained managed releases and reclaim only attributable, unused SAT sandbox images while preserving rollback"
+      "summary": "Collect writer artifacts in actual scheduler completion order without weakening Git chain validation"
     },
     {
-      "id": "portable-offline-runtime-lock",
+      "id": "configuration-interruption-rollback",
       "impact": "patch",
-      "summary": "Exercise the portable Python registry lock in the no-network non-root runtime and preserve deterministic installation inputs"
+      "summary": "Reserve recovery storage before configuration changes and preserve previous state across failures and interruptions"
     },
     {
-      "id": "release-artifact-node24",
+      "id": "planning-revision-provenance",
       "impact": "patch",
-      "summary": "Run canonical release-evidence upload through an exact Node 24 action revision without changing retention or permissions"
+      "summary": "Retain verified user revision sources through later edits, restart, and approval"
+    },
+    {
+      "id": "canonical-gate-child-reaping",
+      "impact": "patch",
+      "summary": "Reap adopted children during validation stages while preserving command exit status and exact cleanup authority"
     }
   ]
 }
