@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.2.4",
-  "target_version": "0.2.5",
+  "baseline_version": "0.2.5",
+  "target_version": "0.2.6",
   "changes": [
     {
-      "id": "specialist-review-scope-correction",
+      "id": "planning-review-ownership-projection",
       "impact": "patch",
-      "summary": "Target specialist Review scope corrections at the security or experience entry collection while preserving validated shared report fields"
+      "summary": "Preserve valid Agents across incremental specialist corrections and compile Review task criterion bindings from each non-overlapping scope"
     }
   ]
 }

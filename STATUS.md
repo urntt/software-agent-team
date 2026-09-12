@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** validate the `v0.2.5` specialist Review correction release candidate
+**Current milestone:** validate the `v0.2.6` Planning Review ownership release candidate
 
 **Last updated:** September 12, 2026
 
@@ -11,18 +11,36 @@ product, architecture, experiment, or roadmap; those decisions belong to
 
 ## Current Release
 
-The `v0.2.5` release candidate keeps a specialist Review response recoverable
-when an evidence-selector correction exposes a second, distinct scope defect.
-Security scope mismatches now target only `surfaces`; experience scope
-mismatches target only `workflows`. The Controller preserves shared criterion
-assessments, findings, verdict, and summary, revalidates the complete merged
-artifact, and continues only when the prior typed defect disappeared. A
-production-shaped Dynamic Runner regression covers both specializations through
-an invalid selector, Controller-issued evidence binding, the newly exposed
-scope mismatch, a second targeted correction, and accepted artifact persistence.
-The runner, dynamic prompting, and response-correction suites pass all 138
-affected tests. Canonical release validation and a fresh ordinary-user journey
-remain pending.
+The `v0.2.6` release candidate keeps Planning specialist corrections monotonic
+across complete Agent-array replacements and compiles Review-owned task bindings
+from the same non-overlapping criterion scopes used at runtime. Previously valid
+writers and assigned Review Agents therefore remain present when another missing
+specialist is added in a later correction. A Review task that mixes its owner's
+criteria with known criteria assigned to another Reviewer is projected to its
+owned scope; a task with no owned criterion or an unknown criterion remains
+strictly invalid. Planning prompt, projection, correction, and fail-closed tests
+pass all 194 affected cases. The clean implementation revision
+`99f2e5e6910159f52fbb8ed220c25158e0d70482` passed the canonical gate with all
+1,621 tests and complete terminal cleanup. Exact release-candidate, hosted-tag,
+and fresh ordinary-user validation remain pending.
+
+The immutable `v0.2.5` tag,
+[GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.2.5),
+package version, and release manifest identify source revision
+`c2e0819fa54333a2cc9ea867bd6a6ced46ef7632` and Git archive digest
+`sha256:8307aa15c104652adc7588ebb541d474c6ddf707529381e0d6f435e816ec2bad`.
+It narrows specialist Review artifact corrections to the security `surfaces` or
+experience `workflows` entry collection while preserving validated shared
+report fields. The exact clean revision passed the local canonical gate with
+all 1,620 tests; exact-tag GitHub Actions
+[run 34717499535](https://github.com/urntt/software-agent-team/actions/runs/34717499535)
+passed 1,618 tests with two environment-dependent skips and published exactly
+one identity manifest asset. A fresh published `v0.2.4` to `v0.2.5` lifecycle
+passed upgrade, preservation, rollback, channel, export, uninstall, and exact
+cleanup checks. A separate provider-backed ordinary-user run passed install,
+upgrade, first-run configuration, provider check, second-start self-check, and
+task admission, then exposed the Planning ownership defect corrected by the
+current candidate before any execution Agent was created.
 
 The immutable `v0.2.4` tag,
 [GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.2.4),
@@ -160,10 +178,17 @@ account/HOME/resource cleanup all passed. The scenario made no provider calls.
 
 ## Current Development Head
 
-The current `v0.2.5` candidate adds the specialist Review correction described
-above as a compatible patch over the immutable `v0.2.4` release. Its focused
-tests pass; clean canonical, exact-tag hosted, and fresh ordinary-user evidence
+The current `v0.2.6` candidate adds the Planning Review ownership projections
+described above as a compatible patch over immutable `v0.2.5`. The 194-test
+Planning suite and the clean 1,621-test canonical gate pass at the implementation
+revision. The exact release head, hosted tag, and fresh ordinary-user journey
 remain pending.
+
+The implementation released as `v0.2.5` is frozen at the exact revision above.
+Its focused checks, canonical gate, exact-tag hosted publication, fixed-revision
+development rehearsal, and genuine published-stable upgrade passed. The first
+provider-backed ordinary-user journey then exposed the current Planning defect
+after task admission and before execution.
 
 The implementation released as `v0.2.4` is frozen at the exact revision above.
 That release is a compatible patch over `v0.2.3`. It adds an exact reviewed preset
