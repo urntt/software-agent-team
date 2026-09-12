@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** validate the DeepSeek first-run fix and prepare the next patch release
+**Current milestone:** validate the `v0.2.4` DeepSeek first-run release candidate
 
 **Last updated:** September 12, 2026
 
@@ -11,7 +11,7 @@ product, architecture, experiment, or roadmap; those decisions belong to
 
 ## Current Release
 
-Development HEAD now recognizes the pinned official DeepSeek plugin's exact
+The `v0.2.4` release candidate recognizes the pinned official DeepSeek plugin's exact
 `deepseek/deepseek-v4-flash` onboarding route as a reviewed preset. It freezes
 the plugin's provider/native identity, OpenAI-compatible transport, public
 endpoint, 1,000,000-token context, 384,000-token output limit, reasoning and
@@ -22,7 +22,9 @@ an unreviewed custom profile or creates a second environment-key requirement.
 Other provider/model pairs and custom endpoints still require explicit tool
 support and retain the existing fail-closed behavior.
 
-Focused model-profile, runtime-materialization, configuration, transaction, and
+The package, lock, and change-impact ledger identify `v0.2.4` as a compatible
+patch over `v0.2.3`. Focused model-profile, runtime-materialization,
+configuration, transaction, and
 CLI tests pass. A pinned OpenClaw local check using an isolated official-plugin
 state reports the exact route available without `DEEPSEEK_API_KEY` and without
 a provider request. Canonical release validation and a fresh WSL task-admission

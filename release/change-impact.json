@@ -1,17 +1,12 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.2.2",
-  "target_version": "0.2.3",
+  "baseline_version": "0.2.3",
+  "target_version": "0.2.4",
   "changes": [
     {
-      "id": "state-layout-readiness",
+      "id": "official-deepseek-onboarding-profile",
       "impact": "patch",
-      "summary": "Inspect the complete owned state layout before startup mutations and report exact ownership recovery instead of raw permission errors"
-    },
-    {
-      "id": "stable-schema-fast-preflight",
-      "impact": "patch",
-      "summary": "Reject manifest-known persisted schema incompatibility before cloning or application setup with bounded preservation guidance"
+      "summary": "Preserve isolated OpenClaw authentication for the exact official DeepSeek onboarding model while retaining custom-provider tool-capability checks"
     }
   ]
 }
