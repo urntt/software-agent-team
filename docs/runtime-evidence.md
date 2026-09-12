@@ -1336,10 +1336,19 @@ when investigating it rather than editing artifacts in place.
   that implicit boundary, including when it deliberately gives a slow model more
   time. Process and interpreter startup do not start the lease: it begins only
   after SAT attributes the exact current-turn checkpoint or the invocation's
-  private provider stream. Stream activity and completed attributable session
-  records then renew it. An active tool suspends the provider lease and remains subject to its
-  own tool-specific guard; SAT heartbeat text and process existence never renew
-  provider liveness.
+  private provider stream. Stream activity and progress-bearing attributable
+  session records then renew it. For pinned OpenClaw `process` poll and log
+  calls, SAT compares an opaque digest over bounded output and status fields.
+  The first running observation, changed output, and terminal status are
+  progress; an identical running result is not. Once that repeat is observed,
+  provider stream chunks used only to make another equivalent poll do not renew
+  the lease, and the poll itself does not suspend stall enforcement. Other
+  active tools still suspend the provider lease and remain subject to their
+  tool-specific guards. Materialized Agent configurations enable pinned
+  OpenClaw's native loop detector, using the runtime-owned detector set and
+  thresholds as an additional circuit breaker. SAT heartbeat text and process
+  existence never renew provider liveness. Tool output and the compared digest
+  are never retained in liveness telemetry.
 - Sustained silence first emits a persisted `suspected stalled` event naming the
   observed inactivity, policy source, interruption consequence, and grace period.
   SAT continues checking the private stream and attributable tool state during

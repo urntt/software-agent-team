@@ -117,7 +117,10 @@ records one user-approved USD ceiling and an optional whole-run deadline. Each
 provider invocation is protected by a separate renewable inactivity contract:
 trustworthy provider streaming, tool lifecycle/output, controller-verified
 artifact, or checkpoint activity renews the lease; SAT's own elapsed-time
-heartbeat and mere process existence do not. Before provider readiness, exact
+heartbeat and mere process existence do not. Repeated background-process polls
+with an identical running result remain inactivity; changed output or terminal
+status renews the lease. The generated OpenClaw configuration enables the
+pinned runtime's native loop detector as an additional circuit breaker. Before provider readiness, exact
 invocation-owned CPU, fault, I/O, or complete topology changes may renew only
 the separate initialization inactivity lease and cannot grant readiness. Sustained silence enters a visible
 suspected-stall probe and grace state before interruption and evidence cleanup.
@@ -1318,7 +1321,10 @@ prompts or hidden reasoning. The execution adapter additionally projects
 content-free provider stream and attributable tool lifecycle activity. A
 provider/model-aware renewable silence lease emits a policy-attributed warning,
 grace, recovery, or typed stall; Planning turn evidence preserves the same
-counters and never stores streamed response content as progress.
+counters and never stores streamed response content as progress. Opaque
+progress comparison prevents repeated identical running-process polls and the
+provider turns that request them from renewing that lease; changed output and a
+terminal process result remain renewable progress.
 
 ### Batch 3C: Dynamic Team Runtime
 

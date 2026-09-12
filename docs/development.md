@@ -612,10 +612,14 @@ records catalog locality and any configured provider request timeout; the
 execution adapter resolves those facts against the pinned OpenClaw first-event
 boundary. The lease starts from an attributable current-turn or provider-stream
 checkpoint, never subprocess startup. Tests for a liveness change must cover a
-long productive stream, sustained silence, activity during grace, an active tool, degraded attribution,
-provider-terminal handoff, renewable response finalization, finalization hang,
-exact-process cleanup, persisted Planning and execution evidence, and compact
-versus detailed progress. Register each changed threshold or polling constant in
+long productive stream, sustained silence, activity during grace, an active tool,
+repeated running `process` polls with identical output, running polls with new
+output, degraded attribution, provider-terminal handoff, renewable response
+finalization, finalization hang, exact-process cleanup, persisted Planning and
+execution evidence, and compact versus detailed progress. A runtime-configuration
+change must additionally use the pinned detector implementation to prove that
+the effective configuration warns and blocks a repeated no-progress poll.
+Register each changed threshold or polling constant in
 `decision_limits.py`; do not turn it into an Agent work budget.
 
 Finalization-recovery changes must cross the production submission and session
@@ -699,6 +703,10 @@ win a subsecond race merely to select the expected test branch.
 Streaming-renewal tests must accept either attributable lease-start source;
 test a specific source by controlling observer availability or publishing only
 that source, not by assuming session polling wins a short sleep before streaming.
+Raw stream activity associated with a repeated, identical running process poll
+must not renew provider liveness. The session reader may compare bounded opaque
+digests of progress-bearing result fields, but neither the digest input nor tool
+output may enter live activity, telemetry, or persisted liveness evidence.
 Any added phase, stop reason, or infrastructure threshold belongs in the one
 shared lifecycle or decision-limit registry rather than a parallel adapter.
 

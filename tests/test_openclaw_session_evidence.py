@@ -1137,6 +1137,7 @@ def test_activity_inspection_tracks_current_tool_lifecycle_without_content(
 
     assert active is not None
     assert active.trusted_record_count == 1
+    assert active.progress_record_count == 1
     assert active.tool_started_count == 1
     assert active.tool_completed_count == 0
     assert active.active_tool_count == 1
@@ -1161,6 +1162,7 @@ def test_activity_inspection_tracks_current_tool_lifecycle_without_content(
 
     assert completed is not None
     assert completed.trusted_record_count == 2
+    assert completed.progress_record_count == 2
     assert completed.tool_started_count == 1
     assert completed.tool_completed_count == 1
     assert completed.active_tool_count == 0
@@ -1184,9 +1186,123 @@ def test_activity_inspection_tracks_current_tool_lifecycle_without_content(
 
     assert terminal is not None
     assert terminal.trusted_record_count == 3
+    assert terminal.progress_record_count == 3
     assert terminal.active_tool_count == 0
     assert terminal.terminal_response_observed
     assert "SECRET_ACTIVITY_CONTENT" not in repr(terminal)
+
+
+def test_activity_inspection_qualifies_repeated_process_poll_progress(
+    tmp_path: Path,
+) -> None:
+    invocation = request(prompt="Do not retain SECRET_POLL_OUTPUT.")
+    records = [session_record(), user_record(invocation.prompt)]
+
+    def append_poll(
+        external_id: str,
+        output: str,
+        *,
+        status: str = "running",
+    ) -> None:
+        records.extend(
+            [
+                {
+                    "type": "message",
+                    "message": {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "toolCall",
+                                "id": external_id,
+                                "name": "process",
+                                "arguments": {
+                                    "action": "poll",
+                                    "sessionId": "quiet-process",
+                                    "timeout": 30_000,
+                                },
+                            }
+                        ],
+                    },
+                },
+                {
+                    "type": "message",
+                    "message": {
+                        "role": "toolResult",
+                        "toolCallId": external_id,
+                        "toolName": "process",
+                        "isError": False,
+                        "content": [{"type": "text", "text": output}],
+                        "details": {
+                            "status": status,
+                            "sessionId": "quiet-process",
+                            "aggregated": output,
+                            "idleMs": 30_000,
+                        },
+                    },
+                },
+            ]
+        )
+
+    append_poll("poll-1", "SECRET_POLL_OUTPUT")
+    append_poll("poll-2", "SECRET_POLL_OUTPUT")
+    transcript = write_session_state(
+        tmp_path,
+        invocation=invocation,
+        records=records,
+    )
+
+    repeated = inspect_openclaw_session_activity(
+        state_dir=tmp_path,
+        agent_id=invocation.agent_id,
+        session_key=invocation.session_key,
+        prompt=invocation.prompt,
+    )
+
+    assert repeated is not None
+    assert repeated.trusted_record_count == 4
+    assert repeated.progress_record_count == 1
+    assert repeated.repeating_no_progress_poll
+    assert "SECRET_POLL_OUTPUT" not in repr(repeated)
+
+    append_poll("poll-3", "SECRET_POLL_OUTPUT\nnew verified output")
+    transcript.write_text(
+        "\n".join(json.dumps(item) for item in records) + "\n",
+        encoding="utf-8",
+    )
+    progressed = inspect_openclaw_session_activity(
+        state_dir=tmp_path,
+        agent_id=invocation.agent_id,
+        session_key=invocation.session_key,
+        prompt=invocation.prompt,
+    )
+
+    assert progressed is not None
+    assert progressed.trusted_record_count == 6
+    assert progressed.progress_record_count == 2
+    assert not progressed.repeating_no_progress_poll
+    assert "SECRET_POLL_OUTPUT" not in repr(progressed)
+
+    append_poll(
+        "poll-4",
+        "SECRET_POLL_OUTPUT\nnew verified output",
+        status="completed",
+    )
+    transcript.write_text(
+        "\n".join(json.dumps(item) for item in records) + "\n",
+        encoding="utf-8",
+    )
+    terminal = inspect_openclaw_session_activity(
+        state_dir=tmp_path,
+        agent_id=invocation.agent_id,
+        session_key=invocation.session_key,
+        prompt=invocation.prompt,
+    )
+
+    assert terminal is not None
+    assert terminal.trusted_record_count == 8
+    assert terminal.progress_record_count == 3
+    assert not terminal.repeating_no_progress_poll
+    assert "SECRET_POLL_OUTPUT" not in repr(terminal)
 
 
 @pytest.mark.parametrize(

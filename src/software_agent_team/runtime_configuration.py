@@ -1068,7 +1068,14 @@ def materialize_run_configuration(
     # Round-trip through JSON so the caller-owned parsed template is not
     # accidentally mutated through shared nested values.
     payload: dict[str, Any] = json.loads(json.dumps(config))
+    tools = payload.setdefault("tools", {})
+    # Pinned OpenClaw ships content-aware loop detection disabled by default.
+    # SAT enables that runtime guard for every materialized invocation while
+    # retaining the pinned runtime's detector set and threshold authority.
+    tools["loopDetection"] = {"enabled": True}
     agents = payload["agents"]
+    for template_agent in agents["list"]:
+        template_agent.get("tools", {}).pop("loopDetection", None)
     defaults = agents["defaults"]
     defaults["repoRoot"] = str(resolved_workspace)
     defaults["skipBootstrap"] = True
@@ -1147,7 +1154,6 @@ def materialize_run_configuration(
                 }
             },
         }
-        tools = payload.setdefault("tools", {})
         sandbox_tools = tools.setdefault("sandbox", {}).setdefault("tools", {})
         sandbox_tools["alsoAllow"] = [ARTIFACT_SUBMISSION_TOOL]
     if bootstrap_capability is not None:

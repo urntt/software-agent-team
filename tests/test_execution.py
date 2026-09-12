@@ -1382,6 +1382,125 @@ finish()
     )
 
 
+def test_repeated_empty_process_polls_cannot_renew_provider_liveness(
+    tmp_path: Path,
+) -> None:
+    executor = live_liveness_executor(
+        tmp_path,
+        FAKE_OPENCLAW_SETUP
+        + r"""
+for index in range(20):
+    append_raw(f"private repeated-poll reasoning {index}")
+    tool_id = f"process-poll-{index}"
+    records.append({
+        "type": "message",
+        "message": {"role": "assistant", "content": [{
+            "type": "toolCall", "id": tool_id, "name": "process",
+            "arguments": {
+                "action": "poll", "sessionId": "quiet-process", "timeout": 30000
+            },
+        }]},
+    })
+    write_records()
+    time.sleep(0.01)
+    records.append({
+        "type": "message",
+        "message": {
+            "role": "toolResult", "toolCallId": tool_id, "toolName": "process",
+            "isError": False,
+            "content": [{"type": "text", "text": "private empty poll"}],
+            "details": {
+                "status": "running", "sessionId": "quiet-process",
+                "aggregated": "private empty poll", "idleMs": (index + 1) * 50000,
+            },
+        },
+    })
+    write_records()
+    time.sleep(0.04)
+time.sleep(30)
+""",
+    )
+    activities = []
+
+    result = executor.execute(
+        request(timeout_seconds=0, model="provider/model"),
+        activity_handler=activities.append,
+    )
+
+    assert result.status is AgentExecutionStatus.PROVIDER_STALLED
+    assert result.telemetry.duration_ms < 2_000
+    liveness = result.telemetry.provider_liveness
+    assert liveness is not None
+    assert liveness.stalled
+    assert liveness.provider_activity_observations >= 4
+    assert liveness.tool_completed_count >= 3
+    assert liveness.maximum_inactivity_ms >= 300
+    assert [
+        activity.kind
+        for activity in activities
+        if activity.kind
+        in {
+            AgentExecutionActivityKind.STALL_SUSPECTED,
+            AgentExecutionActivityKind.PROVIDER_STALLED,
+        }
+    ] == [
+        AgentExecutionActivityKind.STALL_SUSPECTED,
+        AgentExecutionActivityKind.PROVIDER_STALLED,
+    ]
+    assert "private repeated-poll reasoning" not in result.model_dump_json()
+    assert "private empty poll" not in result.model_dump_json()
+
+
+def test_process_poll_with_new_output_renews_provider_liveness(
+    tmp_path: Path,
+) -> None:
+    executor = live_liveness_executor(
+        tmp_path,
+        FAKE_OPENCLAW_SETUP
+        + r"""
+for index in range(7):
+    append_raw(f"private useful reasoning {index}")
+    tool_id = f"process-poll-{index}"
+    records.append({
+        "type": "message",
+        "message": {"role": "assistant", "content": [{
+            "type": "toolCall", "id": tool_id, "name": "process",
+            "arguments": {
+                "action": "poll", "sessionId": "productive-process", "timeout": 30000
+            },
+        }]},
+    })
+    write_records()
+    output = f"private output line {index}"
+    records.append({
+        "type": "message",
+        "message": {
+            "role": "toolResult", "toolCallId": tool_id, "toolName": "process",
+            "isError": False,
+            "content": [{"type": "text", "text": output}],
+            "details": {
+                "status": "running", "sessionId": "productive-process",
+                "aggregated": output, "idleMs": 0,
+            },
+        },
+    })
+    write_records()
+    time.sleep(0.08)
+finish()
+""",
+    )
+
+    result = executor.execute(request(timeout_seconds=0, model="provider/model"))
+
+    assert result.status is AgentExecutionStatus.COMPLETED
+    liveness = result.telemetry.provider_liveness
+    assert liveness is not None
+    assert not liveness.stalled
+    assert liveness.tool_completed_count == 7
+    assert liveness.maximum_inactivity_ms < 300
+    assert "private output line" not in result.model_dump_json()
+
+
 def test_coalesced_tool_history_does_not_repeat_provider_wait_phase(
     tmp_path: Path,
 ) -> None:

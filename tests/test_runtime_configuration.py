@@ -219,6 +219,7 @@ def test_materialized_config_binds_every_role_to_one_run_workspace(
     }
     assert "models" not in payload
     assert "plugins" not in payload
+    assert payload["tools"] == {"loopDetection": {"enabled": True}}
     assert defaults["sandbox"]["scope"] == "session"
     assert defaults["sandbox"]["docker"] == {
         "image": "sat-agent:phase1",
@@ -298,6 +299,7 @@ def test_materialized_config_contains_only_approved_run_scoped_agents(
         for agent in agents
     )
     assert all("sessions_spawn" in agent["tools"]["deny"] for agent in agents)
+    assert all("loopDetection" not in agent["tools"] for agent in agents)
     assert payload["plugins"]["enabled"] is True
     assert payload["plugins"]["slots"] == {"memory": "none"}
     assert payload["plugins"]["allow"] == ["sat-artifact-submission"]
@@ -309,6 +311,7 @@ def test_materialized_config_contains_only_approved_run_scoped_agents(
     assert Path(plugin_paths[0]).name == "artifact_submission"
     assert (Path(plugin_paths[0]) / "openclaw.plugin.json").is_file()
     assert payload["tools"]["sandbox"]["tools"]["alsoAllow"] == ["sat_submit_artifact"]
+    assert payload["tools"]["loopDetection"] == {"enabled": True}
     reviewer = next(agent for agent in agents if agent["id"] == "quality_reviewer")
     tester = next(agent for agent in agents if agent["id"] == "acceptance_tester")
     assert "exec" not in reviewer["tools"]["deny"]
@@ -425,6 +428,132 @@ console.log(JSON.stringify({baseline: inspect(baseline), actual: inspect(plugins
         "memory": {"enabled": False, "reason": "memory slot disabled"},
         "submission": {"enabled": True},
     }
+
+
+def test_materialized_config_enables_pinned_no_progress_loop_breaker(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    destination = tmp_path / "openclaw.runtime.json"
+    materialize_run_configuration(
+        OPENCLAW_TEMPLATE,
+        destination,
+        manifest=load_team_manifest(TEAM_CONFIG),
+        workspace=workspace,
+        sandbox_image="sat-agent:phase1",
+        sandbox_user="1000:1000",
+        team_plan=adaptive_team_plan(),
+    )
+    pins = (REPOSITORY_ROOT / "configs/toolchain.sh").read_text()
+    match = re.search(r'^task_node_version="([^"]+)"$', pins, re.MULTILINE)
+    assert match is not None
+    runtime = REPOSITORY_ROOT / ".sat/openclaw/tools" / f"node-v{match[1]}"
+    modules = [
+        path
+        for path in (runtime / "lib/node_modules/openclaw/dist").glob(
+            "tool-loop-detection-*.js"
+        )
+        if "function detectToolCallLoop(" in path.read_text()
+    ]
+    assert len(modules) == 1, "review loop-detection compatibility after an update"
+
+    result = subprocess.run(
+        [
+            str(runtime / "bin/node"),
+            "--input-type=module",
+            "-e",
+            """
+import fs from 'node:fs';
+const exports = await import(process.argv[1]);
+const detect = Object.values(exports).find(f => f.name === 'detectToolCallLoop');
+const record = Object.values(exports).find(f => f.name === 'recordToolCall');
+const recordOutcome = Object.values(exports).find(
+    f => f.name === 'recordToolCallOutcome');
+const config = JSON.parse(fs.readFileSync(process.argv[2], 'utf8')).tools.loopDetection;
+const state = {};
+const params = {action: 'poll', sessionId: 'quiet-process', timeout: 30000};
+const result = {
+    content: [{type: 'text', text: '(no new output)\\n\\nProcess still running.'}],
+    details: {status: 'running', sessionId: 'quiet-process', aggregated: ''},
+};
+let warning;
+let critical;
+for (let index = 0; index < 25; index += 1) {
+    const observed = detect(state, 'process', params, config);
+    if (observed.level === 'warning' && !warning) warning = observed;
+    if (observed.level === 'critical') {
+        critical = observed;
+        break;
+    }
+    const toolCallId = `poll-${index}`;
+    record(state, 'process', params, toolCallId, config);
+    recordOutcome(state, {
+        toolName: 'process', toolParams: params, toolCallId, result, config,
+    });
+}
+console.log(JSON.stringify({config, warning, critical}));
+""",
+            modules[0].as_uri(),
+            str(destination),
+        ],
+        env={"HOME": str(tmp_path)},
+        text=True,
+        capture_output=True,
+        check=True,
+        timeout=30,
+    )
+    observed = json.loads(result.stdout)
+    assert observed["config"] == {"enabled": True}
+    assert observed["warning"] == {
+        "stuck": True,
+        "level": "warning",
+        "detector": "known_poll_no_progress",
+        "count": 10,
+        "message": (
+            "WARNING: You have called process 10 times with identical arguments and "
+            "no progress. Stop polling and either (1) increase wait time between "
+            "checks, or (2) report the task as failed if the process is stuck."
+        ),
+        "warningKey": observed["warning"]["warningKey"],
+    }
+    assert observed["critical"]["level"] == "critical"
+    assert observed["critical"]["detector"] == "known_poll_no_progress"
+    assert observed["critical"]["count"] == 20
+
+
+def test_materialized_config_removes_agent_loop_detection_override(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    template = tmp_path / "openclaw.json5"
+    template_text = OPENCLAW_TEMPLATE.read_text(encoding="utf-8")
+    agent_offset = template_text.index('id: "generalist_developer"')
+    tools_offset = template_text.index("tools: {", agent_offset) + len("tools: {")
+    template.write_text(
+        template_text[:tools_offset]
+        + "\n          loopDetection: { enabled: false },"
+        + template_text[tools_offset:],
+        encoding="utf-8",
+    )
+    destination = tmp_path / "openclaw.runtime.json"
+
+    materialize_run_configuration(
+        template,
+        destination,
+        manifest=load_team_manifest(TEAM_CONFIG),
+        workspace=workspace,
+        sandbox_image="sat-agent:phase1",
+        sandbox_user="1000:1000",
+        team_plan=adaptive_team_plan(),
+    )
+
+    payload = json.loads(destination.read_text(encoding="utf-8"))
+    assert payload["tools"]["loopDetection"] == {"enabled": True}
+    assert all(
+        "loopDetection" not in agent["tools"] for agent in payload["agents"]["list"]
+    )
 
 
 def test_bootstrap_runtime_cannot_mix_with_an_approved_team(tmp_path: Path) -> None:

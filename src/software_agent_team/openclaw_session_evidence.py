@@ -184,9 +184,11 @@ class OpenClawSessionActivity:
     """Content-free liveness facts for the current OpenClaw invocation."""
 
     trusted_record_count: int
+    progress_record_count: int
     tool_started_count: int
     tool_completed_count: int
     active_tool_count: int
+    repeating_no_progress_poll: bool
     terminal_response_observed: bool
     started_tools: tuple[OpenClawToolActivity, ...] = ()
     completed_tools: tuple[OpenClawToolActivity, ...] = ()
@@ -654,9 +656,13 @@ def inspect_openclaw_session_activity(
 
     started: dict[str, OpenClawToolActivity] = {}
     started_names: dict[str, str] = {}
+    process_polls: dict[str, str] = {}
+    process_poll_outcomes: dict[str, str] = {}
     completed: set[str] = set()
     completed_tools: list[OpenClawToolActivity] = []
     trusted_records = 0
+    progress_records = 0
+    repeating_no_progress_poll = False
     last_message_role: object = "user"
     last_assistant_has_tool_call = False
     for record in invocation[1:]:
@@ -675,14 +681,19 @@ def inspect_openclaw_session_activity(
             # not a provider-final response.
             last_assistant_has_tool_call = message.get("stopReason") == "toolUse"
             if isinstance(content, str):
+                progress_records += 1
+                repeating_no_progress_poll = False
                 continue
             if not isinstance(content, list):
                 raise OpenClawSessionEvidenceError(
                     "OpenClaw assistant content is invalid"
                 )
+            has_tool_call = False
+            has_non_poll_tool_call = False
             for item in content:
                 if not isinstance(item, dict) or item.get("type") != "toolCall":
                     continue
+                has_tool_call = True
                 last_assistant_has_tool_call = True
                 external_id = item.get("id")
                 tool_name = item.get("name")
@@ -707,6 +718,17 @@ def inspect_openclaw_session_activity(
                     executable,
                     item.get("arguments"),
                 )
+                poll_identity = _process_poll_identity(
+                    tool_name,
+                    item.get("arguments"),
+                )
+                if poll_identity is None:
+                    has_non_poll_tool_call = True
+                else:
+                    process_polls[external_id] = poll_identity
+            if not has_tool_call or has_non_poll_tool_call:
+                progress_records += 1
+                repeating_no_progress_poll = False
         elif role == "toolResult":
             trusted_records += 1
             external_id = message.get("toolCallId")
@@ -725,6 +747,19 @@ def inspect_openclaw_session_activity(
                 )
             completed.add(external_id)
             completed_tools.append(activity)
+            poll_identity = process_polls.get(external_id)
+            poll_outcome = _running_process_poll_outcome(message)
+            if poll_identity is None or poll_outcome is None:
+                progress_records += 1
+                repeating_no_progress_poll = False
+            else:
+                previous_outcome = process_poll_outcomes.get(poll_identity)
+                process_poll_outcomes[poll_identity] = poll_outcome
+                if previous_outcome == poll_outcome:
+                    repeating_no_progress_poll = True
+                else:
+                    progress_records += 1
+                    repeating_no_progress_poll = False
 
     # Filtering a diagnostic must not make an earlier assistant message look
     # like the terminal response after a later runtime rejection.
@@ -736,9 +771,11 @@ def inspect_openclaw_session_activity(
             break
     return OpenClawSessionActivity(
         trusted_record_count=trusted_records,
+        progress_record_count=progress_records,
         tool_started_count=len(started),
         tool_completed_count=len(completed),
         active_tool_count=len(set(started) - completed),
+        repeating_no_progress_poll=repeating_no_progress_poll,
         terminal_response_observed=(
             last_message_role == "assistant"
             and not last_assistant_has_tool_call
@@ -747,6 +784,55 @@ def inspect_openclaw_session_activity(
         started_tools=tuple(started.values()),
         completed_tools=tuple(completed_tools),
     )
+
+
+def _process_poll_identity(tool_name: str, arguments: object) -> str | None:
+    """Return an opaque identity for one background-process observation."""
+
+    if tool_name != "process" or not isinstance(arguments, dict):
+        return None
+    action = arguments.get("action")
+    session_id = arguments.get("sessionId")
+    if action not in {"poll", "log"} or not isinstance(session_id, str):
+        return None
+    if not session_id or session_id.strip() != session_id:
+        return None
+    return hashlib.sha256(f"{action}\0{session_id}".encode()).hexdigest()
+
+
+def _running_process_poll_outcome(message: dict[str, object]) -> str | None:
+    """Hash progress-bearing fields for a running process without retaining output."""
+
+    details = message.get("details")
+    if not isinstance(details, dict) or details.get("status") != "running":
+        return None
+    progress_fields = {
+        key: details[key]
+        for key in (
+            "aggregated",
+            "tail",
+            "totalLines",
+            "totalChars",
+            "truncated",
+        )
+        if key in details
+    }
+    try:
+        canonical = json.dumps(
+            {
+                "content": message.get("content"),
+                "status": details["status"],
+                "progress": progress_fields,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    except (TypeError, ValueError, RecursionError) as error:
+        raise OpenClawSessionEvidenceError(
+            "OpenClaw process poll progress is not canonical JSON"
+        ) from error
+    return hashlib.sha256(canonical).hexdigest()
 
 
 def _canonical_arguments(arguments: object) -> bytes:

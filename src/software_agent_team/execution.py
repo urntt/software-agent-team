@@ -1934,13 +1934,15 @@ class _ProviderLivenessMonitor:
         self.last_activity: float | None = None
         self.lease_start_source: str | None = None
         self.last_provider_report = float("-inf")
-        self.previous_trusted_records = 0
+        self.previous_progress_records = 0
         self.previous_tool_started = 0
         self.previous_tool_completed = 0
         self.active_tool_count = 0
+        self.repeating_no_progress_poll = False
         self.raw_stream_observed = False
         self.session_observed = False
         self.provider_activity_observations = 0
+        self.qualified_provider_activity_observations = 0
         self.stall_suspected_count = 0
         self.stall_recovered_count = 0
         self.maximum_inactivity_ms = 0
@@ -1965,8 +1967,6 @@ class _ProviderLivenessMonitor:
             self._degrade("private provider-stream observer became unavailable", now)
             raw_activity = False
         if raw_activity:
-            trusted_activity = True
-            self._start_lease(now, source="provider_stream")
             self.raw_stream_observed = True
             self.provider_activity_observations += 1
 
@@ -1995,7 +1995,12 @@ class _ProviderLivenessMonitor:
                 # point is not provider silence.
                 self._start_lease(now, source="current_turn")
                 trusted_activity = True
-            if session.trusted_record_count > self.previous_trusted_records:
+            progress_delta = (
+                session.progress_record_count - self.previous_progress_records
+            )
+            if progress_delta < 0:
+                self._degrade("OpenClaw session progress moved backwards", now)
+            elif progress_delta > 0 and not session.repeating_no_progress_poll:
                 trusted_activity = True
             started_delta = session.tool_started_count - self.previous_tool_started
             completed_delta = (
@@ -2003,10 +2008,11 @@ class _ProviderLivenessMonitor:
             )
             started_tools = session.started_tools[self.previous_tool_started :]
             completed_tools = session.completed_tools[self.previous_tool_completed :]
-            self.previous_trusted_records = session.trusted_record_count
+            self.previous_progress_records = session.progress_record_count
             self.previous_tool_started = session.tool_started_count
             self.previous_tool_completed = session.tool_completed_count
             self.active_tool_count = session.active_tool_count
+            self.repeating_no_progress_poll = session.repeating_no_progress_poll
             if started_delta < 0 or completed_delta < 0:
                 self._degrade("OpenClaw session activity moved backwards", now)
             else:
@@ -2049,13 +2055,19 @@ class _ProviderLivenessMonitor:
                 trusted_activity = True
                 self.lifecycle.response_finalizing(now=now)
 
+        qualified_raw_activity = raw_activity and not self.repeating_no_progress_poll
+        if qualified_raw_activity:
+            trusted_activity = True
+            self.qualified_provider_activity_observations += 1
+            self._start_lease(now, source="provider_stream")
+
         if trusted_activity:
             self.last_activity = now
             if self.suspected:
                 self.suspected = False
                 self.stall_recovered_count += 1
                 self._emit(AgentExecutionActivityKind.STALL_RECOVERED, now)
-            if raw_activity and (
+            if qualified_raw_activity and (
                 self.provider_activity_observations == 1
                 or now - self.last_provider_report >= PROVIDER_ACTIVITY_REPORT_SECONDS
             ):
@@ -2065,7 +2077,7 @@ class _ProviderLivenessMonitor:
         if (
             not enforce_stall
             or self.degradation_reason is not None
-            or self.active_tool_count > 0
+            or (self.active_tool_count > 0 and not self.repeating_no_progress_poll)
             or self.terminal_response_observed
         ):
             return False
@@ -2133,7 +2145,8 @@ class _ProviderLivenessMonitor:
             model=self.request.model,
             elapsed_ms=max(0, round((now - self.started_monotonic) * 1000)),
             trusted_activity_count=(
-                self.provider_activity_observations + self.previous_trusted_records
+                self.qualified_provider_activity_observations
+                + self.previous_progress_records
             ),
             active_tool_count=self.active_tool_count,
             completed_tool_count=self.previous_tool_completed,
