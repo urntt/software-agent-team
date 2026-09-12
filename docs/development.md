@@ -542,6 +542,20 @@ the rejected commit, all calls settle once, and the source repository is unchang
 Mocked model submissions and quality commands in this test do not establish
 provider-backed revision acceptance.
 
+Snapshot validation accepts every positive integer iteration; any frozen
+evaluation limit belongs to Planning and evaluation policy, not the shared Git
+validator. Regressions must carry a user-task run through at least four actual
+Git revisions and their quality, Review, artifact, and budget boundaries, while
+preserving explicit evaluation-limit rejection.
+
+For multiple serial writers, collect WorkResults in the scheduler's observed
+completion order. Agent declaration order does not define writer commit ancestry.
+Test both declaration permutations through production Planning
+admission and the workflow using real Git commits; retain strict rejection of
+gaps, forks, duplicate ranges, and an endpoint that differs from the aggregate
+snapshot. Scripted provider content and quality commands do not replace these
+production state owners.
+
 When changing live progress, derive labels only from allow-listed tool identity.
 Tests must prove that unknown executable names, command arguments, output, paths,
 and secrets do not enter activity records or rendered summaries, and that

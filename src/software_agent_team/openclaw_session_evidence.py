@@ -62,7 +62,7 @@ class CapturedOpenClawToolEvidence:
 
 @dataclass(frozen=True)
 class CapturedOpenClawTerminalResponse:
-    """Identity-bound terminal metadata available before wrapper finalization."""
+    """Terminal identity and current-invocation usage before wrapper finalization."""
 
     session_id: str
     provider: str | None
@@ -1287,6 +1287,82 @@ def capture_openclaw_tool_evidence(
     )
 
 
+def _optional_usage_identity(value: object, *, label: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip() or len(value) > 500:
+        raise OpenClawSessionEvidenceError(f"OpenClaw usage {label} is invalid")
+    return value.strip()
+
+
+def _invocation_usage(
+    records: tuple[dict[str, object], ...],
+    *,
+    provider: str | None,
+    model: str | None,
+    runtime_rejections: tuple[RuntimeToolRejection, ...],
+) -> dict[str, int | None]:
+    """Sum disjoint assistant counters only when their coverage is attributable."""
+
+    fields = {
+        "input": ("input",),
+        "output": ("output",),
+        "cacheRead": ("cacheRead",),
+        "cacheWrite": ("cacheWrite",),
+        "reasoningTokens": ("reasoningTokens",),
+        "total": ("total", "totalTokens"),
+    }
+    totals: dict[str, int | None] = dict.fromkeys(fields, 0)
+    # Orphan runtime rejections mean the sanitizer removed an assistant call.
+    # Its billable usage cannot be reconstructed from the remaining transcript.
+    attributable = not runtime_rejections and provider is not None and model is not None
+    for record in records:
+        message = record.get("message") if record.get("type") == "message" else None
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        reported_provider = _optional_usage_identity(
+            message.get("provider"), label="provider"
+        )
+        reported_model = _optional_usage_identity(message.get("model"), label="model")
+        if reported_provider is None or reported_model is None:
+            attributable = False
+        elif (
+            provider is not None
+            and model is not None
+            and (
+                reported_provider != provider
+                or reported_model.removeprefix(f"{provider}/")
+                != model.removeprefix(f"{provider}/")
+            )
+        ):
+            raise OpenClawSessionEvidenceError(
+                "OpenClaw invocation usage attribution differs between assistants"
+            )
+        raw_usage = message.get("usage")
+        if raw_usage is not None and not isinstance(raw_usage, dict):
+            raise OpenClawSessionEvidenceError("OpenClaw assistant usage is invalid")
+        for field, aliases in fields.items():
+            value = None
+            if raw_usage is not None:
+                for alias in aliases:
+                    if alias in raw_usage:
+                        value = raw_usage[alias]
+                        break
+            if value is not None and (
+                isinstance(value, bool) or not isinstance(value, int) or value < 0
+            ):
+                raise OpenClawSessionEvidenceError(
+                    f"OpenClaw assistant usage field {field} is invalid"
+                )
+            previous = totals[field]
+            # Session messages are not the wrapper's normalized accumulator:
+            # missing per-message counters cannot use its zero-elision rule.
+            totals[field] = (
+                None if value is None or previous is None else previous + value
+            )
+    return totals if attributable else dict.fromkeys(fields)
+
+
 def capture_openclaw_terminal_response(
     *,
     state_dir: Path,
@@ -1345,43 +1421,16 @@ def capture_openclaw_terminal_response(
             "OpenClaw terminal response did not finish with stop reason"
         )
 
-    def optional_text(value: object, *, label: str) -> str | None:
-        if value is None:
-            return None
-        if not isinstance(value, str) or not value.strip() or len(value) > 500:
-            raise OpenClawSessionEvidenceError(f"OpenClaw terminal {label} is invalid")
-        return value.strip()
-
-    raw_usage = terminal_message.get("usage")
-    if raw_usage is not None and not isinstance(raw_usage, dict):
-        raise OpenClawSessionEvidenceError("OpenClaw terminal usage is invalid")
-
-    def usage_integer(*names: str) -> int | None:
-        if raw_usage is None:
-            return None
-        for name in names:
-            if name not in raw_usage:
-                continue
-            value = raw_usage[name]
-            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-                raise OpenClawSessionEvidenceError(
-                    f"OpenClaw terminal usage field {name} is invalid"
-                )
-            return value
-        return None
-
-    usage_buckets = {
-        "input": usage_integer("input"),
-        "output": usage_integer("output"),
-        "cacheRead": usage_integer("cacheRead"),
-        "cacheWrite": usage_integer("cacheWrite"),
-    }
-    if raw_usage is not None and any(
-        value is not None for value in usage_buckets.values()
-    ):
-        for name in tuple(usage_buckets):
-            if name not in raw_usage:
-                usage_buckets[name] = 0
+    provider = _optional_usage_identity(
+        terminal_message.get("provider"), label="provider"
+    )
+    model = _optional_usage_identity(terminal_message.get("model"), label="model")
+    usage_buckets = _invocation_usage(
+        invocation,
+        provider=provider,
+        model=model,
+        runtime_rejections=runtime_rejections,
+    )
 
     tool_evidence = CapturedOpenClawToolEvidence(
         transcript_sha256=snapshot.transcript_sha256,
@@ -1392,13 +1441,13 @@ def capture_openclaw_terminal_response(
     )
     return CapturedOpenClawTerminalResponse(
         session_id=snapshot.session_id,
-        provider=optional_text(terminal_message.get("provider"), label="provider"),
-        model=optional_text(terminal_message.get("model"), label="model"),
+        provider=provider,
+        model=model,
         input_tokens=usage_buckets["input"],
         output_tokens=usage_buckets["output"],
         cache_read_tokens=usage_buckets["cacheRead"],
         cache_write_tokens=usage_buckets["cacheWrite"],
-        reasoning_tokens=usage_integer("reasoningTokens"),
-        total_tokens=usage_integer("total", "totalTokens"),
+        reasoning_tokens=usage_buckets["reasoningTokens"],
+        total_tokens=usage_buckets["total"],
         tool_evidence=tool_evidence,
     )

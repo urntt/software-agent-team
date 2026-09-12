@@ -6572,8 +6572,9 @@ def preview_adaptive_proposal(
     policy: PlanningPolicy,
     *,
     created_at: datetime,
+    additional_user_inputs: Collection[str] = (),
 ) -> PlanningPreview:
-    """Compile and validate the exact authority that approval would create."""
+    """Compile approval authority using caller-verified user revision inputs."""
 
     if proposal.run_id != request.run_id:
         raise PlanningError("proposal belongs to a different Planning request")
@@ -6585,9 +6586,7 @@ def preview_adaptive_proposal(
         validate_planning_clarity(
             body,
             source_request=request.source_request,
-            additional_user_inputs=(
-                () if proposal.change_request is None else (proposal.change_request,)
-            ),
+            additional_user_inputs=additional_user_inputs,
             allowed_criterion_ids=profile_criterion_ids,
             require_current_decision_provenance=proposal.schema_version >= 8,
             allow_legacy_product_decision_links=proposal.schema_version < 8,
@@ -7604,6 +7603,42 @@ class PlanningStore:
             )
         return turn
 
+    def load_user_revision_inputs(
+        self, request: PlanningRequest, *, through_revision: int | None = None
+    ) -> tuple[str, ...]:
+        """Recover accepted user revisions from the verified, run-local history."""
+
+        session = self.load_session(request.run_id)
+        if canonical_model_sha256(request) != session.request_sha256:
+            raise PlanningIntegrityError("Planning request differs from its session")
+        inputs: list[str] = []
+        previous_source_turn = 0
+        latest = session.latest_proposal_revision or 0
+        if through_revision is not None:
+            latest = min(latest, through_revision)
+        for revision in range(1, latest + 1):
+            proposal = self.load_proposal(request.run_id, revision)
+            if proposal.source is not PlanningProposalSource.MODEL:
+                continue
+            assert proposal.source_turn_sequence is not None
+            source_sequence = proposal.source_turn_sequence
+            if not previous_source_turn < source_sequence <= session.turn_count:
+                raise PlanningIntegrityError("Planning proposal source order changed")
+            self._validate_proposal_source(proposal)
+            change_request = proposal.change_request
+            if change_request is not None:
+                if not any(
+                    self.load_turn(request.run_id, sequence).user_message
+                    == change_request
+                    for sequence in range(previous_source_turn + 1, source_sequence + 1)
+                ):
+                    raise PlanningIntegrityError(
+                        "Planning revision source does not match persisted user input"
+                    )
+                inputs.append(change_request)
+            previous_source_turn = source_sequence
+        return tuple(inputs)
+
     def append_turn(
         self,
         *,
@@ -7711,13 +7746,7 @@ class PlanningStore:
         )
         return turn
 
-    def append_proposal(self, proposal: PlanningProposal, *, now: datetime) -> None:
-        session = self.load_session(proposal.run_id)
-        expected = (session.latest_proposal_revision or 0) + 1
-        if proposal.revision != expected:
-            raise PlanningIntegrityError(
-                f"proposal revision must be {expected}, got {proposal.revision}"
-            )
+    def _validate_proposal_source(self, proposal: PlanningProposal) -> None:
         if proposal.source_turn_sequence is not None:
             turn = self.load_turn(proposal.run_id, proposal.source_turn_sequence)
             if (
@@ -7726,6 +7755,15 @@ class PlanningStore:
                 or turn.parsed_response.proposal != proposal.body
             ):
                 raise PlanningIntegrityError("proposal does not match its model turn")
+
+    def append_proposal(self, proposal: PlanningProposal, *, now: datetime) -> None:
+        session = self.load_session(proposal.run_id)
+        expected = (session.latest_proposal_revision or 0) + 1
+        if proposal.revision != expected:
+            raise PlanningIntegrityError(
+                f"proposal revision must be {expected}, got {proposal.revision}"
+            )
+        self._validate_proposal_source(proposal)
         self._write_once(
             self._directory(proposal.run_id)
             / "proposals"
@@ -8038,7 +8076,7 @@ class AdaptivePlanningCoordinator:
         answer_question: QuestionAnswerer,
         activity_handler: PlanningActivityHandler | None,
     ) -> PlanningProposal | None:
-
+        self._require_persisted_proposal(request, proposal)
         if (
             self.policy.max_proposal_revisions is not None
             and proposal.revision >= self.policy.max_proposal_revisions
@@ -8069,7 +8107,9 @@ class AdaptivePlanningCoordinator:
                     change_request=change_request,
                     body=response.proposal,
                 )
-                self._validate_preview(request, revision)
+                self._validate_preview(
+                    request, revision, additional_user_inputs=(change_request,)
+                )
                 self.store.append_proposal(revision, now=self.clock())
                 return revision
             assert response.question is not None
@@ -8112,6 +8152,7 @@ class AdaptivePlanningCoordinator:
     ) -> PlanningProposal:
         """Validate and persist one safe non-model proposal revision."""
 
+        self._require_persisted_proposal(request, proposal)
         if (
             self.policy.max_proposal_revisions is not None
             and proposal.revision >= self.policy.max_proposal_revisions
@@ -8122,6 +8163,31 @@ class AdaptivePlanningCoordinator:
         self.store.append_proposal(revision, now=self.clock())
         return revision
 
+    def _require_persisted_proposal(
+        self, request: PlanningRequest, proposal: PlanningProposal
+    ) -> None:
+        if proposal.run_id != request.run_id:
+            raise PlanningIntegrityError(
+                "proposal belongs to a different Planning request"
+            )
+        persisted = self.store.load_proposal(request.run_id, proposal.revision)
+        if persisted != proposal:
+            raise PlanningIntegrityError(
+                "Planning proposal differs from its stored revision"
+            )
+
+    def preview(
+        self,
+        request: PlanningRequest,
+        proposal: PlanningProposal,
+        *,
+        created_at: datetime | None = None,
+    ) -> PlanningPreview:
+        """Validate a stored revision against its complete user-input history."""
+
+        self._require_persisted_proposal(request, proposal)
+        return self._validate_preview(request, proposal, created_at=created_at)
+
     def approve(
         self,
         request: PlanningRequest,
@@ -8130,10 +8196,9 @@ class AdaptivePlanningCoordinator:
         """Freeze the exact validated TeamPlan only after explicit user approval."""
 
         approved_at = _utc(self.clock())
-        preview = preview_adaptive_proposal(
+        preview = self.preview(
             request,
             proposal,
-            self.policy,
             created_at=approved_at,
         )
         approval = PlanningApproval(
@@ -8161,13 +8226,22 @@ class AdaptivePlanningCoordinator:
         self,
         request: PlanningRequest,
         proposal: PlanningProposal,
+        *,
+        additional_user_inputs: Collection[str] = (),
+        created_at: datetime | None = None,
     ) -> PlanningPreview:
         try:
             return preview_adaptive_proposal(
                 request,
                 proposal,
                 self.policy,
-                created_at=proposal.created_at,
+                created_at=proposal.created_at if created_at is None else created_at,
+                additional_user_inputs=(
+                    *self.store.load_user_revision_inputs(
+                        request, through_revision=proposal.revision
+                    ),
+                    *additional_user_inputs,
+                ),
             )
         except (_PlanningContextInvariantError, _PlanningContextInvariantsError):
             raise
@@ -8289,6 +8363,11 @@ class AdaptivePlanningCoordinator:
         activity_handler: PlanningActivityHandler | None = None,
     ) -> _Invocation:
         question_contracts = self._question_contracts(transcript, current_proposal)
+        previous_user_revisions = self.store.load_user_revision_inputs(request)
+        additional_user_inputs = (
+            *previous_user_revisions,
+            *(() if change_request is None else (change_request,)),
+        )
         correction_plan: SemanticCorrectionPlan | None = None
         clarification_recovery: _PlanningClarificationRecovery | None = None
         seen_correction_fingerprints: set[str] = set()
@@ -8322,6 +8401,7 @@ class AdaptivePlanningCoordinator:
                 transcript=transcript,
                 current_proposal=current_proposal,
                 change_request=change_request,
+                previous_user_revisions=previous_user_revisions,
                 correction_plan=correction_plan,
                 clarification_recovery=clarification_recovery,
                 response_schema=response_schema,
@@ -8520,7 +8600,7 @@ class AdaptivePlanningCoordinator:
                             ),
                             user_inputs=(
                                 request.source_request,
-                                *(() if change_request is None else (change_request,)),
+                                *additional_user_inputs,
                             ),
                             question_answers={
                                 question_id: contract.answer
@@ -8623,9 +8703,7 @@ class AdaptivePlanningCoordinator:
                         validate_planning_clarity(
                             parsed.proposal,
                             source_request=request.source_request,
-                            additional_user_inputs=(
-                                () if change_request is None else (change_request,)
-                            ),
+                            additional_user_inputs=additional_user_inputs,
                             question_contracts=question_contracts,
                             allowed_criterion_ids=(
                                 criterion.id
@@ -8646,7 +8724,13 @@ class AdaptivePlanningCoordinator:
                             change_request=change_request,
                             body=parsed.proposal,
                         )
-                        self._validate_preview(request, candidate)
+                        self._validate_preview(
+                            request,
+                            candidate,
+                            additional_user_inputs=(
+                                () if change_request is None else (change_request,)
+                            ),
+                        )
                 except AgentArtifactResponseError as error:
                     validation_error = _safe_validation_detail(error)
                     response_validation = error.diagnostic
@@ -8983,6 +9067,7 @@ class AdaptivePlanningCoordinator:
         transcript: list[dict[str, object]],
         current_proposal: PlanningProposal | None,
         change_request: str | None,
+        previous_user_revisions: tuple[str, ...],
         correction_plan: SemanticCorrectionPlan | None,
         clarification_recovery: _PlanningClarificationRecovery | None,
         response_schema: dict[str, object],
@@ -8997,6 +9082,7 @@ class AdaptivePlanningCoordinator:
                 else _planning_proposal_body_for_model(current_proposal.body)
             ),
             "change_request": change_request,
+            "previous_user_revisions": previous_user_revisions,
             "required_clarification": (
                 None
                 if clarification_recovery is None
@@ -9448,12 +9534,7 @@ def run_interactive_planning(
 
     show_fixed_policy = False
     while True:
-        preview = preview_adaptive_proposal(
-            request,
-            proposal,
-            coordinator.policy,
-            created_at=proposal.created_at,
-        )
+        preview = coordinator.preview(request, proposal)
         write("")
         write(
             render_planning_overview(

@@ -1920,9 +1920,11 @@ def test_interactive_provider_failure_preserves_exact_state_and_user_config(
     assert "configuration saved" not in output
 
 
+@pytest.mark.parametrize("failure_type", (OSError, KeyboardInterrupt))
 def test_configuration_commit_failure_restores_both_authorities_exactly(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    failure_type: type[BaseException],
 ) -> None:
     user_path = tmp_path / "config" / "config.json"
     user_path.parent.mkdir()
@@ -1942,12 +1944,12 @@ def test_configuration_commit_failure_restores_both_authorities_exactly(
 
     def fail_candidate_activation(source: str | Path, target: str | Path) -> None:
         if Path(source) == staged_state and Path(target) == live_state:
-            raise OSError("injected candidate activation failure")
+            raise failure_type("injected candidate activation failure")
         real_replace(source, target)
 
     monkeypatch.setattr(cli.os, "replace", fail_candidate_activation)
 
-    with pytest.raises(OSError, match="candidate activation failure"):
+    with pytest.raises(failure_type, match="candidate activation failure"):
         cli._commit_configuration_transaction(
             ready_user_configuration(model="provider/new"),
             user_path=user_path,
@@ -1960,6 +1962,168 @@ def test_configuration_commit_failure_restores_both_authorities_exactly(
     assert (live_state / "openclaw.json").read_bytes() == b'{"original": true}\n'
     assert (live_state / "credential.db").read_bytes() == b"original-credential"
     assert not tuple(live_state.parent.glob(".openclaw.rollback-*"))
+
+
+@pytest.mark.parametrize(
+    ("failure_point", "existing"),
+    (
+        ("backup_allocation", True),
+        ("backup_allocation", False),
+        ("user_saved", True),
+        ("user_saved", False),
+        ("provider_backed_up", True),
+        ("provider_activated", True),
+        ("provider_activated", False),
+    ),
+)
+def test_configuration_transaction_restores_each_failure_boundary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_point: str,
+    existing: bool,
+) -> None:
+    user_path = tmp_path / "config.json"
+    live_state = tmp_path / "openclaw"
+    old_configuration = ready_user_configuration(model="provider/old")
+    if existing:
+        save_user_configuration(old_configuration, user_path)
+        user_path.chmod(0o640)
+        live_state.mkdir(mode=0o750)
+        (live_state / "openclaw.json").write_bytes(b'{"original": true}\n')
+        credential = live_state / "credential.db"
+        credential.write_bytes(b"original-credential")
+        credential.chmod(0o600)
+    previous_bytes = user_path.read_bytes() if existing else None
+    previous_live_inode = live_state.stat().st_ino if existing else None
+    original_replace = cli.os.replace
+    original_save = cli.save_user_configuration
+    original_mkdtemp = cli.tempfile.mkdtemp
+    injected = False
+
+    def allocate_backup(*args, **kwargs):
+        nonlocal injected
+        if failure_point == "backup_allocation" and ".rollback-" in kwargs.get(
+            "prefix", ""
+        ):
+            injected = True
+            raise OSError("injected backup allocation failure")
+        return original_mkdtemp(*args, **kwargs)
+
+    def save_then_interrupt(configuration, destination):
+        nonlocal injected
+        original_save(configuration, destination)
+        if failure_point == "user_saved":
+            injected = True
+            raise KeyboardInterrupt("injected after user configuration save")
+
+    with cli._staged_openclaw_state(live_state) as (staged, staged_config):
+        staged_config.write_bytes(b'{"candidate": true}\n')
+
+        def replace_then_interrupt(source, destination):
+            nonlocal injected
+            original_replace(source, destination)
+            if not injected and (
+                (failure_point == "provider_backed_up" and Path(source) == live_state)
+                or (failure_point == "provider_activated" and Path(source) == staged)
+            ):
+                injected = True
+                raise KeyboardInterrupt("injected after provider directory rename")
+
+        monkeypatch.setattr(cli.tempfile, "mkdtemp", allocate_backup)
+        monkeypatch.setattr(cli, "save_user_configuration", save_then_interrupt)
+        monkeypatch.setattr(cli.os, "replace", replace_then_interrupt)
+        failure_type = (
+            OSError if failure_point == "backup_allocation" else KeyboardInterrupt
+        )
+        with pytest.raises(failure_type, match="injected"):
+            cli._commit_configuration_transaction(
+                ready_user_configuration(model="provider/new"),
+                user_path=user_path,
+                live_openclaw_state=live_state,
+                staged_openclaw_state=staged,
+            )
+
+    assert injected
+    if existing:
+        assert user_path.read_bytes() == previous_bytes
+        assert user_path.stat().st_mode & 0o777 == 0o640
+        assert live_state.stat().st_ino == previous_live_inode
+        assert live_state.stat().st_mode & 0o777 == 0o750
+        assert (live_state / "openclaw.json").read_bytes() == b'{"original": true}\n'
+        assert (live_state / "credential.db").read_bytes() == b"original-credential"
+        assert (live_state / "credential.db").stat().st_mode & 0o777 == 0o600
+    else:
+        assert not user_path.exists()
+        assert not live_state.exists()
+    assert not tuple(tmp_path.glob(".openclaw.candidate-*"))
+    assert not tuple(tmp_path.glob(".openclaw.rollback-*"))
+
+
+def test_cli_configuration_interrupt_restores_saved_defaults(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    path = tmp_path / "config.json"
+    monkeypatch.setenv("SAT_CONFIG_PATH", str(path))
+    monkeypatch.setenv("SAT_STATE_ROOT", str(tmp_path / "state"))
+    monkeypatch.setattr(cli, "_inspect_selected_model", ready_model_inspection)
+    save_user_configuration(ready_user_configuration(model="provider/old"), path)
+    previous = path.read_bytes()
+    original_save = cli.save_user_configuration
+
+    def interrupted_save(configuration, destination):
+        original_save(configuration, destination)
+        raise KeyboardInterrupt("interrupted after save")
+
+    monkeypatch.setattr(cli, "save_user_configuration", interrupted_save)
+    assert main(["configure", "--non-interactive", "--model", "provider/new"]) == 130
+    assert path.read_bytes() == previous
+    assert "configuration saved" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("activated", (False, True))
+def test_failed_configuration_recovery_preserves_original_provider_backup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    activated: bool,
+) -> None:
+    user_path = tmp_path / "config.json"
+    save_user_configuration(ready_user_configuration(model="provider/old"), user_path)
+    previous = user_path.read_bytes()
+    live_state = tmp_path / "openclaw"
+    live_state.mkdir()
+    (live_state / "credential.db").write_bytes(b"original-credential")
+    original_replace = cli.os.replace
+
+    with cli._staged_openclaw_state(live_state) as (staged, _config):
+
+        def fail_activation_and_recovery(source, destination):
+            if Path(source) == staged:
+                if activated:
+                    original_replace(source, destination)
+                raise KeyboardInterrupt("interrupted candidate activation")
+            if Path(destination) in (live_state, staged):
+                raise OSError("original provider restore unavailable")
+            original_replace(source, destination)
+
+        monkeypatch.setattr(cli.os, "replace", fail_activation_and_recovery)
+        with pytest.raises(
+            cli.RuntimeConfigurationError, match="rollback was incomplete"
+        ) as failure:
+            cli._commit_configuration_transaction(
+                ready_user_configuration(model="provider/new"),
+                user_path=user_path,
+                live_openclaw_state=live_state,
+                staged_openclaw_state=staged,
+            )
+
+    backups = tuple(tmp_path.glob(".openclaw.rollback-*/original/credential.db"))
+    assert len(backups) == 1
+    assert backups[0].read_bytes() == b"original-credential"
+    assert str(backups[0].parent.parent) in str(failure.value)
+    assert user_path.read_bytes() == previous
+    assert live_state.exists() is activated
 
 
 def test_cli_configures_auditable_adaptive_model_profiles(

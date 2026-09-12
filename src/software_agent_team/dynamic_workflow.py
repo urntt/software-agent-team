@@ -488,16 +488,20 @@ class DynamicWorkflowCoordinator:
                 clock=self.clock,
             )
             snapshots: list[GitSnapshot] = []
+            completed_agents: list[str] = []
 
             def observe(
                 event: ScheduleEvent,
                 *,
                 current_runner: DynamicAgentRunner = runner,
                 current_snapshots: list[GitSnapshot] = snapshots,
+                current_completed_agents: list[str] = completed_agents,
                 current_input_commit: str = input_commit,
             ) -> None:
                 nonlocal record
                 agent = team_plan.get_agent(event.agent_id)
+                if event.kind is ScheduleEventKind.AGENT_COMPLETED:
+                    current_completed_agents.append(agent.id)
                 is_quality = agent.capability in {
                     AgentCapability.TESTING,
                     AgentCapability.REVIEW,
@@ -511,6 +515,7 @@ class DynamicWorkflowCoordinator:
                         team_plan,
                         current_runner.outputs,
                         {AgentCapability.IMPLEMENTATION, AgentCapability.INTEGRATION},
+                        agent_order=tuple(current_completed_agents),
                     )
                     snapshot = workspace_manager.verify_snapshot(
                         workspace,
@@ -691,6 +696,7 @@ class DynamicWorkflowCoordinator:
                 team_plan,
                 outputs,
                 {AgentCapability.IMPLEMENTATION, AgentCapability.INTEGRATION},
+                agent_order=schedule.completion_order,
             )
             test_references = self._references_for_capabilities(
                 team_plan,
@@ -866,15 +872,29 @@ class DynamicWorkflowCoordinator:
         team_plan: TeamPlan,
         outputs: Mapping[str, ArtifactReference],
         capabilities: set[AgentCapability],
+        *,
+        agent_order: tuple[str, ...] | None = None,
     ) -> tuple[ArtifactReference, ...]:
+        selected_ids = {
+            agent.id for agent in team_plan.agents if agent.capability in capabilities
+        }
+        ordered_ids = (
+            tuple(agent.id for agent in team_plan.agents)
+            if agent_order is None
+            else agent_order
+        )
+        if not selected_ids.issubset(ordered_ids):
+            raise DynamicWorkflowError(
+                "completed schedule omitted a required Agent completion"
+            )
         selected: list[ArtifactReference] = []
-        for agent in team_plan.agents:
-            if agent.capability not in capabilities:
+        for agent_id in ordered_ids:
+            if agent_id not in selected_ids:
                 continue
-            reference = outputs.get(agent.id)
+            reference = outputs.get(agent_id)
             if reference is None:
                 raise DynamicWorkflowError(
-                    f"completed schedule omitted output from Agent {agent.id}"
+                    f"completed schedule omitted output from Agent {agent_id}"
                 )
             selected.append(reference)
         return tuple(selected)

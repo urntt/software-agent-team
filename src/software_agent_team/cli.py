@@ -2471,59 +2471,71 @@ def _commit_configuration_transaction(
     previous_exists = user_path.is_file()
     previous_content = user_path.read_bytes() if previous_exists else None
     previous_mode = user_path.stat().st_mode & 0o777 if previous_exists else None
+    backup_root: Path | None = None
+    backup: Path | None = None
+    user_save_started = False
     try:
-        save_user_configuration(configuration, user_path)
-    except Exception:
-        _restore_user_configuration(
-            user_path,
-            existed=previous_exists,
-            content=previous_content,
-            mode=previous_mode,
-        )
-        raise
-    if staged_openclaw_state is None:
-        return
-
-    backup = Path(
-        tempfile.mkdtemp(
-            prefix=f".{live_openclaw_state.name}.rollback-",
-            dir=live_openclaw_state.parent,
-        )
-    )
-    backup.rmdir()
-    moved_live = False
-    try:
-        if live_openclaw_state.exists():
-            os.replace(live_openclaw_state, backup)
-            moved_live = True
-        os.replace(staged_openclaw_state, live_openclaw_state)
-    except Exception as commit_error:
-        rollback_errors: list[Exception] = []
-        if moved_live and backup.exists() and not live_openclaw_state.exists():
-            try:
-                os.replace(backup, live_openclaw_state)
-            except (
-                Exception
-            ) as error:  # pragma: no cover - catastrophic filesystem loss
-                rollback_errors.append(error)
-        try:
-            _restore_user_configuration(
-                user_path,
-                existed=previous_exists,
-                content=previous_content,
-                mode=previous_mode,
+        if staged_openclaw_state is not None:
+            # Reserve recovery storage before changing either authority. Keep the
+            # original directory at a distinct child so an empty reservation can
+            # never be mistaken for the previous provider state during rollback.
+            backup_root = Path(
+                tempfile.mkdtemp(
+                    prefix=f".{live_openclaw_state.name}.rollback-",
+                    dir=live_openclaw_state.parent,
+                )
             )
-        except Exception as error:  # pragma: no cover - catastrophic filesystem loss
-            rollback_errors.append(error)
+            backup = backup_root / "original"
+        user_save_started = True
+        save_user_configuration(configuration, user_path)
+        if staged_openclaw_state is not None:
+            assert backup is not None
+            if live_openclaw_state.exists():
+                os.replace(live_openclaw_state, backup)
+            os.replace(staged_openclaw_state, live_openclaw_state)
+    except BaseException as commit_error:
+        rollback_errors: list[BaseException] = []
+        if staged_openclaw_state is not None and backup is not None:
+            try:
+                # A signal may arrive after rename has taken effect but before
+                # Python updates a flag. The owned paths establish which moves
+                # completed, including activation of a first-time provider state.
+                if not staged_openclaw_state.exists() and live_openclaw_state.exists():
+                    os.replace(live_openclaw_state, staged_openclaw_state)
+                if backup.exists():
+                    os.replace(backup, live_openclaw_state)
+            except BaseException as error:  # pragma: no cover - recovery failure
+                rollback_errors.append(error)
+        if user_save_started:
+            try:
+                _restore_user_configuration(
+                    user_path,
+                    existed=previous_exists,
+                    content=previous_content,
+                    mode=previous_mode,
+                )
+            except BaseException as error:  # pragma: no cover - recovery failure
+                rollback_errors.append(error)
         if rollback_errors:
+            recovery_detail = (
+                f"; recovery storage was preserved at {backup_root}"
+                if backup_root is not None
+                else ""
+            )
             raise RuntimeConfigurationError(
                 "configuration commit failed and rollback was incomplete"
+                + recovery_detail
             ) from rollback_errors[0]
-        raise commit_error
-    else:
-        if backup.exists():
+        if backup_root is not None:
             try:
-                shutil.rmtree(backup)
+                backup_root.rmdir()
+            except OSError as error:  # recovered state remains authoritative
+                commit_error.add_note(f"empty recovery directory remains: {error}")
+        raise
+    else:
+        if backup_root is not None:
+            try:
+                shutil.rmtree(backup_root)
             except OSError as error:  # committed state remains authoritative
                 warnings.warn(
                     f"validated configuration committed, but its private rollback "

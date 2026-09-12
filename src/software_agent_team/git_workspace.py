@@ -551,8 +551,10 @@ class GitWorkspaceManager:
     ) -> GitSnapshot:
         """Verify and describe one clean descendant commit range."""
 
-        if not 1 <= iteration <= 3:
-            raise WorkspaceIntegrityError("snapshot iteration must be between 1 and 3")
+        if type(iteration) is not int or iteration < 1:
+            raise WorkspaceIntegrityError(
+                "snapshot iteration must be a positive integer"
+            )
         if not re.fullmatch(COMMIT_PATTERN, input_commit):
             raise WorkspaceIntegrityError("snapshot input commit is invalid")
         run_workspace = Path(workspace.workspace_path)

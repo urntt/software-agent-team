@@ -2,7 +2,7 @@
 
 **Current milestone:** maintain the published `v0.2.0` stable release and begin the next evidence-driven development batch
 
-**Last updated:** September 11, 2026
+**Last updated:** September 12, 2026
 
 This document records what the repository implements now, what evidence
 supports that claim, and what remains unavailable. It does not redefine the
@@ -76,8 +76,33 @@ cleanup all passed. The scenario made no provider calls.
 
 ## Current Development Head
 
-The implementation released as `v0.2.0` is frozen at the exact revision above;
-public `main` contains only post-release status documentation beyond that tag.
+The implementation released as `v0.2.0` is frozen at the exact revision above.
+The current checkout adds unreleased correctness fixes after the release:
+
+- Finalization recovery sums attributable assistant usage across the current
+  invocation. Missing counters and observed sanitizer omissions remain unknown;
+  conflicting model attribution is rejected, and the shared ledger prevents a
+  subsequent call after recovered cost exhausts the task ceiling.
+- Git snapshots accept every positive integer iteration. Ordinary product work
+  can reach a fourth or later revision, while controlled-evaluation limits stay
+  with their own budget policy.
+- Writer artifacts follow the scheduler's completion order, so a valid Agent
+  DAG has the same acceptance outcome regardless of array declaration order.
+  Disconnected, forked, duplicate, and mismatched commit chains remain invalid.
+- Planning validates retained user decisions against the verified persisted
+  revision history through further model revisions, structured edits, overview,
+  restart, and approval. Controller-generated edit descriptions do not become
+  user authority.
+- Configuration recovery storage is reserved before changing either authority.
+  Failed preparation and interrupted saves or directory moves restore previous
+  state; a secondary recovery failure preserves the original provider backup.
+
+Affected integration checks exercise real Git, production controllers,
+configuration files, process finalization, and the shared ledger. Model content
+and quality-command outcomes remain explicit external fixtures. The shared
+canonical gate for these fixes is pending; the prior release evidence below
+does not establish a fresh provider-backed journey for this checkout.
+
 The machine-readable impact ledger classified task-derived Agent specialization
 and the unified multi-transport model-profile surface as minor changes, while
 the Planning, runtime attribution, accounting, managed-resource, portable-lock,
@@ -2032,11 +2057,13 @@ action succeeded after interruption.
 
 Planning concision and question authority are implemented and have
 provider-backed evidence. Task-derived specialization has clean offline and
-managed ordinary-interface evidence on the current head: Security and Experience
+managed ordinary-interface evidence on the previously validated code: Security and Experience
 contracts both executed, produced grounded typed artifacts, and contributed to
 an accepted delivery. This establishes the Linux managed-runtime boundary; it
 does not substitute for the separate fresh-WSL remediation condition or a
-multi-model live-switch experiment.
+multi-model live-switch experiment. The unreleased correctness fixes listed
+above have their own affected integration checks and do not retroactively
+change the identity of that provider-backed evidence.
 
 A genuine previous-stable-to-newer-stable upgrade now exists for `v0.1.2` to
 `v0.2.0`; it used immutable published manifests and product update commands

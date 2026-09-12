@@ -250,6 +250,241 @@ def test_terminal_response_recovery_rejects_incomplete_or_nonterminal_turn(
         )
 
 
+def recover_terminal(root: Path, invocation: AgentExecutionRequest):
+    return capture_openclaw_terminal_response(
+        state_dir=root,
+        agent_id=invocation.agent_id,
+        session_key=invocation.session_key,
+        prompt=invocation.prompt,
+        baseline=None,
+    )
+
+
+def test_terminal_usage_accumulates_each_current_turn_assistant_once(
+    tmp_path: Path,
+) -> None:
+    invocation = request()
+    work = tool_call_record("work", command="pytest")
+    work["message"].update(
+        provider="provider",
+        model="provider/model",
+        usage={
+            "input": 1000,
+            "output": 200,
+            "cacheRead": 300,
+            "cacheWrite": 40,
+            "reasoningTokens": 11,
+            "totalTokens": 1540,
+        },
+    )
+    final = terminal_record()
+    final["message"]["usage"]["reasoningTokens"] = 1
+    write_session_state(
+        tmp_path,
+        invocation=invocation,
+        records=[
+            session_record(),
+            user_record("Prior invocation"),
+            terminal_record(),
+            user_record(invocation.prompt),
+            work,
+            tool_result_record("work", output="1 passed"),
+            final,
+            user_record("Later invocation"),
+            terminal_record(),
+        ],
+    )
+
+    recovered = recover_terminal(tmp_path, invocation)
+
+    assert recovered.input_tokens == 1010
+    assert recovered.output_tokens == 202
+    assert recovered.cache_read_tokens == 301
+    assert recovered.cache_write_tokens == 40
+    assert recovered.reasoning_tokens == 12
+    assert recovered.total_tokens == 1553
+    assert len(recovered.tool_evidence.tool_calls) == 1
+
+
+@pytest.mark.parametrize("usage", [None, {}, {"totalTokens": 100}])
+def test_terminal_usage_preserves_unknown_earlier_assistant_usage(
+    tmp_path: Path,
+    usage: object,
+) -> None:
+    invocation = request()
+    earlier = terminal_record()
+    earlier["message"]["usage"] = usage
+    write_session_state(
+        tmp_path,
+        invocation=invocation,
+        records=[
+            session_record(),
+            user_record(invocation.prompt),
+            earlier,
+            terminal_record(),
+        ],
+    )
+
+    recovered = recover_terminal(tmp_path, invocation)
+
+    assert recovered.input_tokens is None
+    assert recovered.output_tokens is None
+    assert recovered.cache_read_tokens is None
+    assert recovered.cache_write_tokens is None
+
+
+@pytest.mark.parametrize("field", ["input", "output", "cacheRead", "cacheWrite"])
+@pytest.mark.parametrize("value", [None, -1, True, "100", 1.5])
+def test_terminal_usage_checks_each_earlier_assistant_bucket(
+    tmp_path: Path,
+    field: str,
+    value: object,
+) -> None:
+    invocation = request()
+    earlier = terminal_record()
+    earlier["message"]["usage"][field] = value
+    write_session_state(
+        tmp_path,
+        invocation=invocation,
+        records=[
+            session_record(),
+            user_record(invocation.prompt),
+            earlier,
+            terminal_record(),
+        ],
+    )
+
+    if value is not None:
+        with pytest.raises(OpenClawSessionEvidenceError, match="usage field"):
+            recover_terminal(tmp_path, invocation)
+    else:
+        recovered = recover_terminal(tmp_path, invocation)
+        attribute = {
+            "input": "input_tokens",
+            "output": "output_tokens",
+            "cacheRead": "cache_read_tokens",
+            "cacheWrite": "cache_write_tokens",
+        }[field]
+        assert getattr(recovered, attribute) is None
+
+
+@pytest.mark.parametrize("field", ["provider", "model"])
+def test_terminal_usage_rejects_mixed_provider_or_model_attribution(
+    tmp_path: Path,
+    field: str,
+) -> None:
+    invocation = request()
+    earlier = terminal_record()
+    earlier["message"][field] = "other"
+    write_session_state(
+        tmp_path,
+        invocation=invocation,
+        records=[
+            session_record(),
+            user_record(invocation.prompt),
+            earlier,
+            terminal_record(),
+        ],
+    )
+
+    with pytest.raises(OpenClawSessionEvidenceError, match="usage attribution"):
+        recover_terminal(tmp_path, invocation)
+
+
+@pytest.mark.parametrize("usage", [[], "100", 100])
+def test_terminal_usage_rejects_malformed_earlier_usage(
+    tmp_path: Path,
+    usage: object,
+) -> None:
+    invocation = request()
+    earlier = terminal_record()
+    earlier["message"]["usage"] = usage
+    write_session_state(
+        tmp_path,
+        invocation=invocation,
+        records=[
+            session_record(),
+            user_record(invocation.prompt),
+            earlier,
+            terminal_record(),
+        ],
+    )
+
+    with pytest.raises(
+        OpenClawSessionEvidenceError, match="assistant usage is invalid"
+    ):
+        recover_terminal(tmp_path, invocation)
+
+
+@pytest.mark.parametrize("field", ["provider", "model"])
+@pytest.mark.parametrize("terminal", [False, True])
+def test_terminal_usage_preserves_unknown_provider_or_model_attribution(
+    tmp_path: Path,
+    field: str,
+    terminal: bool,
+) -> None:
+    invocation = request()
+    earlier, final = terminal_record(), terminal_record()
+    del (final if terminal else earlier)["message"][field]
+    write_session_state(
+        tmp_path,
+        invocation=invocation,
+        records=[session_record(), user_record(invocation.prompt), earlier, final],
+    )
+
+    recovered = recover_terminal(tmp_path, invocation)
+
+    assert recovered.input_tokens is None
+    assert recovered.output_tokens is None
+    assert recovered.cache_read_tokens is None
+    assert recovered.cache_write_tokens is None
+    assert recovered.total_tokens is None
+
+
+def test_terminal_recovery_rejects_a_runtime_rejection_terminal_record(
+    tmp_path: Path,
+) -> None:
+    invocation = request()
+    write_session_state(
+        tmp_path,
+        invocation=invocation,
+        records=[
+            session_record(),
+            user_record(invocation.prompt),
+            terminal_record(),
+            rejected_tool_record(),
+        ],
+    )
+
+    with pytest.raises(OpenClawSessionEvidenceError, match="no terminal assistant"):
+        recover_terminal(tmp_path, invocation)
+
+
+def test_terminal_recovery_retains_sanitizer_diagnostic_with_unknown_usage(
+    tmp_path: Path,
+) -> None:
+    invocation = request()
+    write_session_state(
+        tmp_path,
+        invocation=invocation,
+        records=[
+            session_record(),
+            user_record(invocation.prompt),
+            rejected_tool_record(),
+            terminal_record(),
+        ],
+    )
+
+    recovered = recover_terminal(tmp_path, invocation)
+
+    assert len(recovered.tool_evidence.runtime_rejections) == 1
+    assert recovered.input_tokens is None
+    assert recovered.output_tokens is None
+    assert recovered.cache_read_tokens is None
+    assert recovered.cache_write_tokens is None
+    assert recovered.total_tokens is None
+
+
 def rejected_tool_record(external_id: str = "rejected-call") -> dict[str, object]:
     return {
         "type": "message",

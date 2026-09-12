@@ -258,8 +258,11 @@ On the first configured run, SAT then:
    profile and checks its schema, endpoint policy, required capabilities, and
    exact local catalog/auth identity without generating content;
 5. Atomically commits the validated SAT profile and staged provider state. A
-   cancellation or failure discards the stage and preserves the previous files
-   byte for byte;
+   failure or cancellation before activation completes restores both previous
+   authorities, including their file bytes and permissions. Recovery storage is
+   reserved before either changes; interruption after a directory rename is
+   recovered from the actual owned paths. If recovery itself fails, SAT reports
+   the retained backup location rather than deleting the original provider state;
 6. Reports local readiness separately, then offers one explicit minimal provider
    smoke check, disabled by default because it can incur usage;
 7. Asks what the user wants to build;

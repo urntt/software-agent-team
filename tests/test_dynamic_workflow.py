@@ -28,6 +28,7 @@ from software_agent_team.artifacts import (
     ReviewFinding,
     ReviewSeverity,
     TaskBrief,
+    WorkResult,
 )
 from software_agent_team.budgets import (
     AgentBudget,
@@ -59,6 +60,7 @@ from software_agent_team.execution import (
     AgentExecutor,
     AgentTokenUsage,
 )
+from software_agent_team.git_workspace import GitSnapshot
 from software_agent_team.integrity import canonical_model_sha256
 from software_agent_team.invocation_lifecycle import (
     InitializationCheckpoint,
@@ -763,6 +765,227 @@ def load_report(
     return store, report
 
 
+def replace_semantic_payload(
+    result: AgentExecutionResult,
+    request: AgentExecutionRequest,
+    payload: dict[str, object],
+) -> AgentExecutionResult:
+    """Bind a scripted provider payload to its actual invocation contract."""
+
+    assert result.semantic_submission is not None
+    assert result.submission_evidence is not None
+    assert request.submission_contract is not None
+    raw = json.dumps(payload)
+    envelope_hash = canonical_json_sha256({"artifact": payload})
+    evidence = result.submission_evidence.model_copy(
+        update={
+            "payload_sha256": envelope_hash,
+            "semantic_payload_sha256": canonical_json_sha256(payload),
+            "binding_sha256": hashlib.sha256(
+                f"{request.session_key}\x00{request.submission_contract.schema_sha256}".encode()
+            ).hexdigest(),
+        }
+    )
+    calls = tuple(
+        call.model_copy(update={"arguments_sha256": envelope_hash})
+        if call.id == evidence.tool_call_id
+        else call
+        for call in result.telemetry.tool_calls
+    )
+    return result.model_copy(
+        update={
+            "response_text": raw,
+            "telemetry": result.telemetry.model_copy(
+                update={
+                    "agent_id": request.agent_id,
+                    "session_key": request.session_key,
+                    "stdout": raw,
+                    "tool_calls": calls,
+                }
+            ),
+            "semantic_submission": AgentSemanticSubmission(
+                payload=payload, evidence=evidence
+            ),
+            "submission_evidence": evidence,
+        }
+    )
+
+
+class TwoWriterExecutor(AdaptiveExecutor):
+    """Script two writers while retaining real Git, runner, and scheduler state."""
+
+    def __init__(self, workspace: Path) -> None:
+        super().__init__(workspace)
+        self.agent_order: list[str] = []
+
+    def execute(self, request, *, activity_handler=None):
+        self.agent_order.append(request.agent_id)
+        if request.agent_id != "finisher":
+            return super().execute(request, activity_handler=activity_handler)
+        result = super().execute(
+            request.model_copy(update={"agent_id": "builder"}),
+            activity_handler=activity_handler,
+        )
+        assert result.semantic_submission is not None
+        payload = dict(result.semantic_submission.payload)
+        payload["completed_tasks"] = ["TASK_FINISH"]
+        return replace_semantic_payload(result, request, payload)
+
+
+def approved_two_writer_proposal(
+    tmp_path: Path, *, reverse: bool
+) -> ApprovedPlanningResult:
+    """Admit and approve the same DAG through the production Planning flow."""
+
+    import test_planning as planning_fixture
+
+    original = approved_inputs(run_id="planning-writer-order")
+    body = planning_fixture.proposal_body()
+    # Reuse the complete proposal contract with the greeting task's exact IDs.
+    encoded = body.model_dump_json()
+    for previous, current in (
+        ("cli_developer", "builder"),
+        ("acceptance_tester", "tester"),
+        ("quality_reviewer", "reviewer"),
+        ("AC_SCAN", "AC_CODE"),
+        ("AC_REPORT", "AC_REVIEW"),
+    ):
+        encoded = encoded.replace(f'"{previous}"', f'"{current}"')
+    body = planning_fixture.PlanningProposalBody.model_validate_json(encoded)
+    builder, tester, reviewer = body.agents
+    finisher = builder.model_copy(
+        update={
+            "id": "finisher",
+            "label": "Finisher",
+            "responsibility": "Complete the usage documentation.",
+            "rationale": "A second serial writer integrates public documentation.",
+            "dependencies": ("builder",),
+        }
+    )
+    quality = tuple(
+        agent.model_copy(update={"dependencies": ("finisher",)})
+        for agent in (tester, reviewer)
+    )
+    definition = body.product_definition
+    assert definition is not None
+    body = body.model_copy(
+        update={
+            "title": original.task_brief.title,
+            "requirements": (
+                *original.task_brief.requirements,
+                "Document the greeting return type.",
+            ),
+            "non_goals": ("Remote greeting generation is out of scope.",),
+            "objective": original.implementation_plan.objective,
+            "approach": original.implementation_plan.approach,
+            "product_definition": definition.model_copy(
+                update={
+                    "primary_workflow": definition.primary_workflow.model_copy(
+                        update={
+                            "statement": "generates greetings",
+                            "source": "generates greetings",
+                        }
+                    )
+                }
+            ),
+            "acceptance_criteria": tuple(
+                ProposedCriterion(
+                    **criterion.model_dump(),
+                    requirement_ids=(body.requirement_ids[index],),
+                    verification_agent_ids=("tester",) if index == 0 else ("reviewer",),
+                )
+                for index, criterion in enumerate(
+                    original.task_brief.acceptance_criteria
+                )
+            ),
+            "tasks": (
+                *original.implementation_plan.tasks,
+                ProposedTask(
+                    id="TASK_FINISH",
+                    owner_agent_id="finisher",
+                    description="Document the greeting return type.",
+                    acceptance_criteria=("AC_REVIEW",),
+                    expected_paths=("README.md",),
+                    dependencies=("TASK_BUILD",),
+                ),
+            ),
+            "agents": (finisher, builder, *quality)
+            if reverse
+            else (builder, finisher, *quality),
+            "iteration_limit": 1,
+            "revision_enabled": False,
+        }
+    )
+    request = planning_fixture.request(
+        source_request=(
+            "Build a usable local product for developers that generates greetings."
+        )
+    ).model_copy(update={"model": MODEL})
+    executor = planning_fixture.ScriptedAgentExecutor(
+        [
+            planning_fixture.ScriptedAgentResponse(
+                text="Proposed a greeting implementation with two serial writers.",
+                submission_payload=planning_fixture.proposal_response(body).model_dump(
+                    mode="json"
+                ),
+            )
+        ]
+    )
+    planner = planning_fixture.AdaptivePlanningCoordinator(
+        executor=executor,
+        store=planning_fixture.PlanningStore(tmp_path / "planning"),
+        policy=planning_fixture.policy(),
+        clock=lambda: FIXED_TIME,
+    )
+    proposal = planner.start(
+        request, answer_question=lambda _: pytest.fail("unexpected clarification")
+    )
+    assert proposal is not None
+    assert len(executor.requests) == 1
+    return planner.approve(request, proposal)
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_writer_declaration_order_preserves_planning_to_workflow_acceptance(
+    tmp_path: Path, reverse: bool
+) -> None:
+    approved = approved_two_writer_proposal(tmp_path, reverse=reverse)
+    expected_writers = ("finisher", "builder") if reverse else ("builder", "finisher")
+    assert (
+        tuple(agent.id for agent in approved.team_plan.agents[:2]) == expected_writers
+    )
+    assert approved.team_plan.execution_waves() == (
+        ("builder",),
+        ("finisher",),
+        ("tester", "reviewer"),
+    )
+    source = initialize_source(tmp_path)
+    source_head = git(source, "rev-parse", "HEAD").stdout.strip()
+    workspace = tmp_path / "workspaces" / approved.task_brief.run_id
+    executor = TwoWriterExecutor(workspace)
+    gates = RecordingQualityGateFactory()
+
+    outcome = coordinator(tmp_path, approved, executor, gates).execute(
+        approved, source_repository=source
+    )
+    store, report = load_report(tmp_path, outcome, approved)
+
+    assert outcome.record.phase is RunPhase.COMPLETED, report.summary
+    assert executor.agent_order[:2] == ["builder", "finisher"]
+    assert gates.calls == [1]
+    iteration = store.load(report.iterations[0])
+    assert isinstance(iteration, IterationRecord)
+    works = tuple(store.load(reference) for reference in iteration.work_results)
+    assert all(isinstance(work, WorkResult) for work in works)
+    assert tuple(work.producer for work in works) == ("builder", "finisher")
+    assert works[0].input_commit == source_head
+    assert works[0].output_commit == works[1].input_commit
+    assert works[1].output_commit == report.final_commit
+    assert report.final_commit == git(workspace, "rev-parse", "HEAD").stdout.strip()
+    git(workspace, "merge-base", "--is-ancestor", source_head, report.final_commit)
+    assert git(source, "rev-parse", "HEAD").stdout.strip() == source_head
+
+
 def test_dynamic_workflow_accepts_one_iteration_with_live_lifecycle_order(
     tmp_path: Path,
 ) -> None:
@@ -1284,6 +1507,146 @@ def test_dynamic_workflow_revises_from_commit_bound_feedback_then_accepts(
     ][1]
     assert '"previous_iteration": 1' in second_builder.prompt
     assert '"id": "FINDING_DOCS"' in second_builder.prompt
+
+
+@pytest.mark.parametrize("last_iteration", [4, 6])
+def test_user_task_workflow_accepts_after_multiple_verified_revisions(
+    tmp_path: Path, last_iteration: int
+) -> None:
+    budget = AgentBudget(
+        authority=BudgetAuthority.USER_TASK, max_estimated_cost_usd="5"
+    )
+    approved = approved_inputs(
+        run_id="adaptive-later-revision",
+        iteration_limit=last_iteration,
+        run_budget=budget,
+    )
+    source = initialize_source(tmp_path)
+    source_head = git(source, "rev-parse", "HEAD").stdout.strip()
+    workspace = tmp_path / "workspaces" / approved.task_brief.run_id
+
+    class ResolvingExecutor(AdaptiveExecutor):
+        def execute(self, request, *, activity_handler=None):
+            if request.agent_id == "reviewer":
+                self.always_revise = self.counts.get("reviewer", 0) < last_iteration - 1
+            result = super().execute(request, activity_handler=activity_handler)
+            if request.agent_id != "reviewer" or not self.always_revise:
+                return result
+            assert result.semantic_submission is not None
+            payload = dict(result.semantic_submission.payload)
+            finding = payload["findings"][0]
+            # Resolve one independently identified finding per actual Git revision.
+            payload["findings"] = [
+                {
+                    **finding,
+                    "id": f"FINDING_DOCS_{index}",
+                    "description": f"Document greeting usage detail {index}.",
+                }
+                for index in range(self.counts["reviewer"], last_iteration)
+            ]
+            return replace_semantic_payload(result, request, payload)
+
+    executor = ResolvingExecutor(workspace)
+    gates = RecordingQualityGateFactory()
+    ledger = AgentBudgetLedger(budget)
+    outcome = coordinator(
+        tmp_path, approved, executor, gates, budget_ledger=ledger
+    ).execute(approved, source_repository=source)
+    store, report = load_report(tmp_path, outcome, approved)
+
+    assert outcome.record.phase is RunPhase.COMPLETED, report.summary
+    assert gates.calls == list(range(1, last_iteration + 1))
+    assert len(report.iterations) == last_iteration
+    expected_input = source_head
+    for number, reference in enumerate(report.iterations, start=1):
+        iteration = store.load(reference)
+        assert isinstance(iteration, IterationRecord)
+        assert iteration.iteration == number
+        assert iteration.input_commit == expected_input
+        git(
+            workspace,
+            "merge-base",
+            "--is-ancestor",
+            iteration.input_commit,
+            iteration.output_commit,
+        )
+        expected_input = iteration.output_commit
+        assert iteration.decision is (
+            IterationDecision.ACCEPT
+            if number == last_iteration
+            else IterationDecision.REVISE
+        )
+    assert report.final_commit == expected_input
+    assert ledger.snapshot().calls_completed == last_iteration * 3
+    assert ledger.snapshot().active_calls == 0
+    assert git(source, "rev-parse", "HEAD").stdout.strip() == source_head
+
+
+@pytest.mark.parametrize("defect", ["gap", "fork", "duplicate", "endpoint"])
+def test_writer_chain_rejects_incomplete_or_conflicting_ranges(
+    tmp_path: Path, defect: str
+) -> None:
+    approved = approved_two_writer_proposal(tmp_path, reverse=False)
+    (tmp_path / "run").mkdir()
+    store = ArtifactStore(
+        tmp_path / "run",
+        task_brief=approved.task_brief,
+        team_plan=approved.team_plan,
+    )
+    first = WorkResult(
+        run_id=approved.task_brief.run_id,
+        team_id=approved.team_plan.team_id,
+        producer="builder",
+        created_at=FIXED_TIME,
+        iteration=1,
+        input_commit="a" * 40,
+        output_commit="b" * 40,
+        summary="First writer range.",
+        completed_tasks=("TASK_BUILD",),
+        changed_files=("greeting.py",),
+    )
+    first_reference = store.write(first)
+    snapshot = GitSnapshot(
+        run_id=approved.task_brief.run_id,
+        iteration=1,
+        input_commit=first.input_commit,
+        output_commit="c" * 40,
+        commit_count=2,
+        changed_files=("greeting.py",),
+        recorded_at=FIXED_TIME,
+    )
+    if defect == "duplicate":
+        references = (first_reference, first_reference)
+    elif defect == "endpoint":
+        references = (first_reference,)
+    else:
+        second = first.model_copy(
+            update={
+                "producer": "finisher",
+                "completed_tasks": ("TASK_FINISH",),
+                "input_commit": "d" * 40 if defect == "gap" else "a" * 40,
+                "output_commit": "c" * 40,
+            }
+        )
+        references = (first_reference, store.write(second))
+
+    with pytest.raises(DynamicWorkflowError, match="chain"):
+        DynamicWorkflowCoordinator._validate_work_chain(store, references, snapshot)
+
+
+def test_controlled_evaluation_rejects_proposal_above_its_iteration_limit() -> None:
+    import test_planning as planning_fixture
+
+    body = planning_fixture.proposal_body().model_copy(update={"iteration_limit": 4})
+    policy = planning_fixture.policy(max_iterations=3)
+
+    with pytest.raises(planning_fixture.PlanningError, match="policy permits 3"):
+        planning_fixture.preview_adaptive_proposal(
+            planning_fixture.request(),
+            planning_fixture.proposal(body=body),
+            policy,
+            created_at=FIXED_TIME,
+        )
 
 
 @pytest.mark.parametrize("rewrite_from_seed", [False, True])

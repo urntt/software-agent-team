@@ -7020,6 +7020,264 @@ def test_store_rejects_unanchored_planning_evidence(tmp_path: Path) -> None:
         store.load_session(request().run_id)
 
 
+@pytest.mark.parametrize("revision_count", [1, 2])
+def test_user_revision_sources_survive_edits_recovery_and_approval(
+    tmp_path: Path, revision_count: int
+) -> None:
+    changes = (
+        "Keep scan results in memory only.",
+        "Never include source file contents in diagnostics.",
+    )[:revision_count]
+    bodies = [proposal_body()]
+    for index, change in enumerate(changes, start=1):
+        previous = bodies[-1]
+        bodies.append(
+            previous.model_copy(
+                update={
+                    "decisions": (
+                        *previous.decisions,
+                        PlanningDecisionRecord(
+                            id=f"DECISION_PRIVACY_{index}",
+                            category=PlanningDecisionCategory.PRIVACY_OR_DATA,
+                            authority=PlanningDecisionAuthority.USER,
+                            provenance=PlanningDecisionProvenance(
+                                kind=PlanningDecisionProvenanceKind.EXPLICIT_INPUT,
+                                source=change,
+                            ),
+                            summary=change,
+                            rationale=(
+                                "The user explicitly restricts scan data handling."
+                            ),
+                        ),
+                    ),
+                    "constraints": (*previous.constraints, change),
+                }
+            )
+        )
+    executor = ScriptedAgentExecutor(
+        [response(proposal_response(body)) for body in bodies]
+    )
+    planning_policy = policy(
+        response_repair_limit=0,
+        max_proposal_revisions=None,
+        model_routing=ModelRoutingPolicy(
+            mode=ModelRoutingMode.POLICY,
+            profiles=(
+                ModelProfile(
+                    id="default",
+                    model="provider/model",
+                    capabilities=tuple(AgentCapability),
+                ),
+                ModelProfile(
+                    id="quality",
+                    model="provider/quality",
+                    capabilities=(AgentCapability.REVIEW,),
+                ),
+            ),
+            default_profile_id="default",
+        ),
+    )
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=PlanningStore(tmp_path / "planning"),
+        policy=planning_policy,
+        clock=AdvancingClock(),
+    )
+    planning_request = request()
+    current = coordinator.start(
+        planning_request,
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+    assert current is not None
+    for change in changes:
+        current = coordinator.revise(
+            planning_request,
+            current,
+            change,
+            answer_question=lambda _question: pytest.fail("unexpected question"),
+        )
+        assert current is not None
+    for edit in (
+        StructuredPlanEdit(kind=StructuredEditKind.MAX_CONCURRENCY, value=1),
+        StructuredPlanEdit(
+            kind=StructuredEditKind.AGENT_MODEL,
+            agent_id="quality_reviewer",
+            value="quality",
+        ),
+    ):
+        current = coordinator.structured_edit(planning_request, current, edit)
+
+    recovered_store = PlanningStore(tmp_path / "planning")
+    recovered = AdaptivePlanningCoordinator(
+        executor=ScriptedAgentExecutor([]),
+        store=recovered_store,
+        policy=planning_policy,
+        clock=AdvancingClock(),
+    )
+    loaded_request = recovered_store.load_request(planning_request.run_id)
+    loaded_proposal = recovered_store.load_proposal(
+        planning_request.run_id, current.revision
+    )
+    preview = recovered.preview(loaded_request, loaded_proposal)
+    approved = recovered.approve(loaded_request, loaded_proposal)
+
+    assert current.revision == revision_count + 3
+    assert current.change_request == "Set quality_reviewer model profile to quality."
+    assert preview.team_plan.max_concurrency == 1
+    assert approved.team_plan.max_concurrency == 1
+    assignment = approved.team_plan.model_routes.get_assignment("quality_reviewer")
+    assert assignment.primary_route_id == "quality"
+    assert approved.approval.revision == current.revision
+    assert approved.approval.proposal_sha256 == canonical_model_sha256(loaded_proposal)
+    assert len(executor.requests) == revision_count + 1
+    for index, call in enumerate(executor.requests[1:], start=1):
+        context = json.loads(
+            call.prompt.split("PLANNING_CONTEXT_JSON\n", 1)[1].split(
+                "\n\nRESPONSE_SCHEMA_JSON", 1
+            )[0]
+        )
+        assert context["previous_user_revisions"] == list(changes[: index - 1])
+    session = recovered_store.load_session(planning_request.run_id)
+    assert session.status is PlanningSessionStatus.APPROVED
+    assert session.turn_count == revision_count + 1
+    assert session.approved_revision == current.revision
+    for index, change in enumerate(changes, start=1):
+        decision = next(
+            item
+            for item in approved.implementation_plan.decisions
+            if item.id == f"DECISION_PRIVACY_{index}"
+        )
+        assert decision.provenance is not None
+        assert decision.provenance.source == change
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "Publish scan results to an external service.",
+        "The user explicitly restricts scan data handling.",
+        "Set maximum concurrency to 1.",
+        "Upload source file contents for troubleshooting.",
+    ],
+)
+def test_revision_history_does_not_authorize_invented_or_unrelated_sources(
+    tmp_path: Path, source: str
+) -> None:
+    initial = proposal_body()
+    invalid = initial.model_copy(
+        update={
+            "decisions": (
+                *initial.decisions,
+                PlanningDecisionRecord(
+                    id="DECISION_UNAUTHORIZED_DATA_USE",
+                    category=PlanningDecisionCategory.PRIVACY_OR_DATA,
+                    authority=PlanningDecisionAuthority.USER,
+                    provenance=PlanningDecisionProvenance(
+                        kind=PlanningDecisionProvenanceKind.EXPLICIT_INPUT,
+                        source=source,
+                    ),
+                    summary=source,
+                    rationale="The user explicitly restricts scan data handling.",
+                ),
+            )
+        }
+    )
+    executor = ScriptedAgentExecutor(
+        [response(proposal_response(initial)), response(proposal_response(invalid))]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    other_request = request(
+        source_request="Upload source file contents for troubleshooting."
+    ).model_copy(update={"run_id": "sat-other-run"})
+    store.create(other_request)
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(response_repair_limit=0),
+        clock=AdvancingClock(),
+    )
+    planning_request = request()
+    first = coordinator.start(
+        planning_request,
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+    assert first is not None
+    edited = coordinator.structured_edit(
+        planning_request,
+        first,
+        StructuredPlanEdit(kind=StructuredEditKind.MAX_CONCURRENCY, value=1),
+    )
+
+    with pytest.raises(PlanningError, match="claims explicit user input"):
+        coordinator.revise(
+            planning_request,
+            edited,
+            "Make the title more descriptive.",
+            answer_question=lambda _question: pytest.fail("unexpected question"),
+        )
+
+    assert len(executor.requests) == 2
+    assert store.load_session(planning_request.run_id).latest_proposal_revision == 2
+    approved = coordinator.approve(planning_request, edited)
+    assert approved.approval.revision == 2
+    assert not any(
+        item.id == "DECISION_UNAUTHORIZED_DATA_USE"
+        for item in approved.implementation_plan.decisions
+    )
+
+
+def test_revision_history_rejects_changed_request_or_proposal_evidence(
+    tmp_path: Path,
+) -> None:
+    executor = ScriptedAgentExecutor(
+        [response(proposal_response()), response(proposal_response())]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(),
+        clock=AdvancingClock(),
+    )
+    planning_request = request()
+    first = coordinator.start(
+        planning_request,
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+    assert first is not None
+    second = coordinator.revise(
+        planning_request,
+        first,
+        "Keep the existing plan.",
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+    assert second is not None
+
+    with pytest.raises(PlanningError, match="request differs from its session"):
+        coordinator.preview(
+            planning_request.model_copy(
+                update={
+                    "source_request": "Publish scan results to an external service."
+                }
+            ),
+            second,
+        )
+    with pytest.raises(PlanningIntegrityError, match="stored revision"):
+        coordinator.approve(
+            planning_request,
+            second.model_copy(update={"change_request": "Forged permission."}),
+        )
+
+    path = store.root / planning_request.run_id / "proposals" / "002.json"
+    payload = json.loads(path.read_text())
+    payload["change_request"] = "Forged permission."
+    path.write_text(json.dumps(payload))
+    recovered_proposal = store.load_proposal(planning_request.run_id, second.revision)
+    with pytest.raises(PlanningError, match="does not match persisted user input"):
+        coordinator.approve(planning_request, recovered_proposal)
+    assert store.load_session(planning_request.run_id).approved_revision is None
+
+
 def test_dialogue_revision_structured_edit_and_approval_are_recoverable(
     tmp_path: Path,
 ) -> None:

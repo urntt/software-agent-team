@@ -245,6 +245,17 @@ decision with the original category and owner. Assumptions may reference only
 local implementation or scheduling decisions inside the approved boundary;
 they cannot substitute for a user authorization or Controller invariant.
 
+Direct-input validation uses the original request and every accepted user
+revision in the same persisted Planning session. The store verifies the
+session and turn hash chain, checks each model proposal against its source
+turn, and binds each revision request to a recorded user message. Model
+normalization, later revisions, the overview, safe edits, and approval all
+use that same history, including after process recovery. Controller-generated
+safe-edit descriptions, model prose, rejected proposals, and other sessions
+do not supply additional user authority. A retained source must still quote
+one contiguous user-input substring; combining revisions does not weaken the
+existing quotation or question-scope checks.
+
 Before team design, every current proposal also carries one `ProductDefinition`
 with six dimensions:
 

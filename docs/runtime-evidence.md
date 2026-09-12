@@ -1361,12 +1361,28 @@ when investigating it rather than editing artifacts in place.
   identity, outer arguments digest, and inner semantic digest match the private
   submission file. Only then does the semantic object re-enter the ordinary
   validation, grounding, handoff, accounting, and delivery path. The recovered
-  execution retains the terminal provider/model/token/cache usage together with
+  execution retains the terminal provider/model identity and sums each assistant
+  message's token/cache usage once within the exact current invocation. Historical
+  turns and later user turns are excluded; total and reasoning counters remain
+  separate telemetry and are never added to the four billing buckets. Every
+  assistant must identify the same provider/model. Conflicting attribution or
+  invalid counters reject recovery; missing identity makes aggregate usage
+  unknown. Missing per-message buckets remain unknown, even when another
+  assistant reports that bucket: the result envelope's zero-elision convention
+  does not establish zero usage in a session message. An orphan runtime rejection
+  indicates that the runtime sanitizer may have removed a billable assistant
+  message, so the surviving session cannot establish complete invocation usage.
+  Recovery retains that diagnostic and the bound semantic submission while
+  leaving usage and cost unknown. This accounting uses the captured session's
+  coverage; it does not reconstruct records removed upstream or overwrite a
+  normal result envelope's reported aggregate with a session sum. The same ledger
+  settles recovered usage once and blocks subsequent task calls after the ceiling
+  is reached or cost becomes unknown. These facts remain alongside
   the actual nonzero or signalled wrapper outcome and the
   `response_finalization_stall` lifecycle. It is therefore semantic completion
   with an abnormal wrapper outcome, not a rewritten normal process exit. A stale
-  turn, incomplete transcript, nonterminal record, runtime rejection, duplicate
-  or failed submission, post-submission work, digest mismatch, or degraded
+  turn, incomplete transcript, nonterminal record, terminal runtime rejection,
+  duplicate or failed submission, post-submission work, digest mismatch, or degraded
   attribution remains `response_finalization_stalled` and cannot publish an
   artifact.
 - Before the first model call, SAT asks whether the user has a real whole-run

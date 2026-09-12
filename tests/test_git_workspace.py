@@ -204,6 +204,40 @@ def test_progress_digest_distinguishes_clean_dirty_changed_and_committed_states(
     assert committed.state_sha256 != second.state_sha256
 
 
+@pytest.mark.parametrize("iteration", [4, 12, 1000])
+def test_snapshot_accepts_later_positive_iterations(
+    tmp_path: Path, iteration: int
+) -> None:
+    source = initialize_repository(tmp_path)
+    workspace_manager = manager(tmp_path / "workspaces")
+    workspace = workspace_manager.prepare("run-later", source_repository=source)
+    output = commit_change(Path(workspace.workspace_path))
+
+    snapshot = workspace_manager.verify_snapshot(
+        workspace, iteration=iteration, input_commit=workspace.base_commit
+    )
+
+    assert snapshot.iteration == iteration
+    assert snapshot.input_commit == workspace.base_commit
+    assert snapshot.output_commit == output
+    assert snapshot.commit_count == 1
+
+
+@pytest.mark.parametrize("iteration", [0, -1, True, False, 1.5, "4", None])
+def test_snapshot_rejects_invalid_iteration_numbers(
+    tmp_path: Path, iteration: object
+) -> None:
+    source = initialize_repository(tmp_path)
+    workspace_manager = manager(tmp_path / "workspaces")
+    workspace = workspace_manager.prepare("run-invalid", source_repository=source)
+    commit_change(Path(workspace.workspace_path))
+
+    with pytest.raises(WorkspaceIntegrityError, match="positive integer"):
+        workspace_manager.verify_snapshot(
+            workspace, iteration=iteration, input_commit=workspace.base_commit
+        )
+
+
 def test_work_result_must_match_verified_snapshot(tmp_path: Path) -> None:
     source = initialize_repository(tmp_path)
     workspace_manager = manager(tmp_path / "workspaces")

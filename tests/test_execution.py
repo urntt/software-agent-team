@@ -17,6 +17,13 @@ from pydantic import ValidationError
 
 import software_agent_team.execution as execution
 from software_agent_team.artifacts import AgentExecutionRecord, AgentRole, ArtifactKind
+from software_agent_team.budgets import (
+    AgentBudget,
+    AgentBudgetExceeded,
+    AgentBudgetLedger,
+    BudgetAuthority,
+    ModelPricing,
+)
 from software_agent_team.execution import (
     AgentExecutionActivity,
     AgentExecutionActivityKind,
@@ -43,6 +50,8 @@ from software_agent_team.invocation_lifecycle import (
     InvocationPhase,
     InvocationStopReason,
 )
+from software_agent_team.model_costs import CachePricing
+from software_agent_team.model_metadata import ModelMetadataSource
 from software_agent_team.process_lifecycle import ProcessLeaseStore
 from software_agent_team.submissions import (
     ARTIFACT_SUBMISSION_PROTOCOL,
@@ -1779,8 +1788,13 @@ def test_response_finalization_hang_has_distinct_typed_stop_and_cleanup(
     ]
 
 
+@pytest.mark.parametrize(
+    "usage_case",
+    ["complete", "missing_usage", "missing_cache", "missing_provider", "rejection"],
+)
 def test_finalization_stall_recovers_bound_submission_terminal_usage_and_tools(
     tmp_path: Path,
+    usage_case: str,
 ) -> None:
     semantic_payload = {"summary": "review complete"}
     submission_contract = AgentSubmissionContract.from_schema(
@@ -1810,6 +1824,12 @@ records.extend([
     {{"type": "message", "message": {{
         "role": "assistant",
         "stopReason": "toolUse",
+        "provider": "provider",
+        "model": "model",
+        "usage": {{
+            "input": 1000, "output": 200, "cacheRead": 300,
+            "cacheWrite": 40, "totalTokens": 1540,
+        }},
         "content": [{{
             "type": "toolCall",
             "id": external_id,
@@ -1831,15 +1851,28 @@ records.extend([
         "provider": "provider",
         "model": "model",
         "usage": {{
-            "input": 101,
-            "output": 37,
-            "cacheRead": 11,
-            "cacheWrite": 3,
-            "totalTokens": 152,
+            "input": 10,
+            "output": 2,
+            "cacheRead": 3,
+            "cacheWrite": 0,
+            "totalTokens": 15,
         }},
         "stopReason": "stop",
     }}}},
 ])
+usage_case = {usage_case!r}
+if usage_case == "missing_usage":
+    del records[2]["message"]["usage"]
+elif usage_case == "missing_cache":
+    del records[2]["message"]["usage"]["cacheRead"]
+elif usage_case == "missing_provider":
+    del records[2]["message"]["provider"]
+elif usage_case == "rejection":
+    records.insert(2, {{"type": "message", "message": {{
+        "role": "toolResult", "toolCallId": "sanitized-call",
+        "toolName": "missing_tool", "isError": True, "details": {{}},
+        "content": [{{"type": "text", "text": "Tool missing_tool not found"}}],
+    }}}})
 write_records()
 time.sleep(30)
 """
@@ -1855,6 +1888,27 @@ time.sleep(30)
         ),
     )
 
+    pricing = ModelPricing(
+        model="provider/model",
+        input_cost_per_million_usd=1,
+        output_cost_per_million_usd=1,
+        cache_pricing=CachePricing(
+            read_cost_per_million_usd=1,
+            write_cost_per_million_usd=1,
+            source=ModelMetadataSource.USER_SUPPLIED,
+            observed_at=STARTED,
+        ),
+    )
+    ledger = AgentBudgetLedger(
+        AgentBudget(authority=BudgetAuthority.USER_TASK, max_estimated_cost_usd="0.001")
+    )
+    reservation = ledger.reserve_call(
+        "planner",
+        run_id="task-manager-001",
+        stage="plan",
+        route_id="default",
+        pricing=pricing,
+    )
     result = executor.execute(
         request(
             timeout_seconds=0,
@@ -1872,13 +1926,41 @@ time.sleep(30)
     assert result.telemetry.session_id == "liveness-session"
     assert result.telemetry.provider == "provider"
     assert result.telemetry.model == "provider/model"
-    assert result.telemetry.usage == AgentTokenUsage(
-        input_tokens=101,
-        output_tokens=37,
-        cache_read_tokens=11,
-        cache_write_tokens=3,
-        total_tokens=152,
-    )
+    usage = result.telemetry.usage or AgentTokenUsage()
+    if usage_case in {"complete", "missing_cache"}:
+        assert usage == AgentTokenUsage(
+            input_tokens=1010,
+            output_tokens=202,
+            cache_read_tokens=303 if usage_case == "complete" else None,
+            cache_write_tokens=40,
+            total_tokens=1555,
+        )
+    else:
+        assert usage == AgentTokenUsage()
+    with pytest.raises(AgentBudgetExceeded):
+        ledger.complete_call(
+            reservation,
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            cache_usage=usage.cache_usage,
+            duration_ms=result.telemetry.duration_ms,
+        )
+    assert ledger.snapshot().calls_started == ledger.snapshot().calls_completed == 1
+    settled = ledger.call_records()[0]
+    if usage_case == "complete":
+        assert str(settled.cost_usd) == "0.001555"
+    else:
+        assert settled.cost_usd is None
+        assert ledger.snapshot().unpriced_calls == 1
+    with pytest.raises(AgentBudgetExceeded):
+        ledger.reserve_call(
+            "builder",
+            run_id="task-manager-001",
+            stage="build",
+            route_id="default",
+            pricing=pricing,
+        )
+    assert ledger.snapshot().calls_started == 1
     assert result.telemetry.tool_evidence_status.value == "captured"
     assert [call.tool_name for call in result.telemetry.tool_calls] == [
         "sat_submit_artifact"
@@ -1910,8 +1992,9 @@ time.sleep(30)
         exit_code=result.telemetry.exit_code,
         provider_liveness=result.telemetry.provider_liveness,
         invocation_lifecycle=lifecycle,
-        input_tokens=result.telemetry.usage.input_tokens,
-        output_tokens=result.telemetry.usage.output_tokens,
+        input_tokens=usage.input_tokens,
+        output_tokens=usage.output_tokens,
+        estimated_cost_usd=settled.cost_usd,
         stdout_path="iterations/01/executions/plan/planner-attempt-01.stdout.txt",
         stderr_path="iterations/01/executions/plan/planner-attempt-01.stderr.txt",
         stdout_sha256="a" * 64,
@@ -1923,14 +2006,22 @@ time.sleep(30)
         session_transcript_sha256=result.telemetry.session_transcript_sha256,
         session_record_count=result.telemetry.session_record_count,
         tool_calls=result.telemetry.tool_calls,
+        runtime_rejections=result.telemetry.runtime_rejections,
         response_artifact={
             "kind": "implementation_plan",
             "path": "iterations/01/agents/planner/implementation-plan.json",
             "sha256": "c" * 64,
         },
     )
+    record_path = tmp_path / "recovered-execution.json"
+    record_path.write_text(record.model_dump_json(), encoding="utf-8")
+    record = AgentExecutionRecord.model_validate_json(
+        record_path.read_text(encoding="utf-8")
+    )
     assert record.error is None
     assert record.exit_code != 0
+    assert record.estimated_cost_usd == settled.cost_usd
+    assert len(record.runtime_rejections) == (1 if usage_case == "rejection" else 0)
     assert record.invocation_lifecycle.shutdown.reason is (
         InvocationStopReason.RESPONSE_FINALIZATION_STALL
     )
@@ -2011,8 +2102,6 @@ time.sleep(30)
     assert result.telemetry.usage == AgentTokenUsage(
         input_tokens=7,
         output_tokens=3,
-        cache_read_tokens=0,
-        cache_write_tokens=0,
     )
     assert result.telemetry.tool_calls == ()
     assert result.telemetry.invocation_lifecycle is not None
