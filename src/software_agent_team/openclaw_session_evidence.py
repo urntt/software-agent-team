@@ -1317,6 +1317,10 @@ def _invocation_usage(
     # Its billable usage cannot be reconstructed from the remaining transcript.
     attributable = not runtime_rejections and provider is not None and model is not None
     for record in records:
+        if record.get("type") == "compaction":
+            # Compaction records lack billable usage and may survive a rotation
+            # that removed assistant messages from this invocation's transcript.
+            attributable = False
         message = record.get("message") if record.get("type") == "message" else None
         if not isinstance(message, dict) or message.get("role") != "assistant":
             continue

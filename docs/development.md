@@ -67,6 +67,31 @@ symlinks, ownership, base identity, or leaf shapes outside the gate-private
 namespace.
 Foreign shared pytest state is neither read as authority nor deleted.
 
+Diagnostic report schema v5 launches each stage through a dedicated, single-threaded
+child adopter. That launcher creates only the stage command; its other kernel-owned
+children are therefore adopted descendants of that command. It reaps each exited
+descendant during the stage, checking its exact PID, start time, parent, and zombie
+state before a nonblocking wait. This also covers a descendant that starts a new
+session and exits before the resource sampler sees it alive. The stage command's
+`Popen` remains its sole wait-status owner, and children of the calling supervisor
+remain outside this exclusive domain.
+
+The report retains the command argv and root identity separately from the launcher
+argv, identity, and return code. In-flight reap records include the child identity,
+time, and real exit status. A command outcome is unavailable when the launcher did
+not record it; a launcher failure never becomes an invented command exit status.
+The stage command has a separate process group. On interruption, the launcher can
+finish the root's TERM/KILL boundary and both orphan cleanup phases before the
+outer supervisor's derived shutdown window expires. That outer window also reserves
+one cleanup-grace interval for the launcher's terminal evidence handoff. If the
+launcher is forcibly lost before its terminal child inventory, coverage remains
+unavailable and private temporary data is retained for an attributed recovery;
+an empty sampled tree does not establish complete cleanup.
+Live children remaining after the command exits still fail the stage, with separate
+launcher and outer-supervisor cleanup evidence. Resource peaks describe sampled,
+attributable process trees; `peak_process_tree` is the RSS-peak tree, not a cgroup
+PID-capacity observation.
+
 Diagnostic report schema v3 distinguishes an attributable process-resource
 sample from a process that exits before `/proc` can be observed. It samples
 immediately after launch and reports typed `unavailable` plus `null` peaks when
@@ -75,14 +100,14 @@ numeric zero. Identity observations and nonzero RSS samples are counted
 separately, so a terminal zombie identity cannot masquerade as a resource
 sample. Each stage also records its own observation status and counts.
 Schema v2 introduced the private, non-credential ownership identity inherited
-by each stage's subprocesses. Linux process inventory uses
+by each stage's subprocesses. The outer Linux process inventory uses
 that identity together with a process-local child-subreaper boundary, process
 groups, live ancestry, and PID/start-time identities. A child that creates a
-new session is adopted by the supervisor when its parent exits, matched against
-the inherited identity, terminated by exact identity, and reaped. It therefore
-cannot disappear between topology samples or turn a leaking stage into a false
-success. If the kernel boundary is unavailable, the report says so and falls
-back to marker attribution. Terminal reports retain only a SHA-256 digest of
+new session can be matched against the inherited identity or its previously
+observed PID and start time for outer cleanup. The stage adopter supplies the
+exclusive wait ownership for short-lived descendants that never had a live sample.
+If its kernel subreaper boundary is unavailable, it records the failed prerequisite
+without launching the command. Terminal reports retain only a SHA-256 digest of
 the identity and never capture a process environment. While a private
 temporary tree is nonterminal, its mode-0700 report temporarily retains the
 opaque stage marker needed to avoid deleting storage from an active orphan;

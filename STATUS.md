@@ -80,7 +80,7 @@ The implementation released as `v0.2.0` is frozen at the exact revision above.
 The current checkout adds unreleased correctness fixes after the release:
 
 - Finalization recovery sums attributable assistant usage across the current
-  invocation. Missing counters and observed sanitizer omissions remain unknown;
+  invocation. Missing counters, compaction, and observed sanitizer omissions remain unknown;
   conflicting model attribution is rejected, and the shared ledger prevents a
   subsequent call after recovered cost exhausts the task ceiling.
 - Git snapshots accept every positive integer iteration. Ordinary product work
@@ -96,6 +96,10 @@ The current checkout adds unreleased correctness fixes after the release:
 - Configuration recovery storage is reserved before changing either authority.
   Failed preparation and interrupted saves or directory moves restore previous
   state; a secondary recovery failure preserves the original provider backup.
+- Canonical validation uses a dedicated stage adopter to reap short-lived
+  orphaned children while a stage runs. The command retains its own exit status;
+  launcher failures cannot supply a missing command outcome, and unrelated
+  callers retain ownership of their child-process wait status.
 
 Affected integration checks exercise real Git, production controllers,
 configuration files, process finalization, and the shared ledger. Model content

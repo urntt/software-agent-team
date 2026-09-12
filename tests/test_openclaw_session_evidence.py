@@ -306,6 +306,78 @@ def test_terminal_usage_accumulates_each_current_turn_assistant_once(
     assert len(recovered.tool_evidence.tool_calls) == 1
 
 
+@pytest.mark.parametrize("boundary", ["current", "historical", "later", "custom"])
+def test_terminal_usage_keeps_compaction_coverage_within_current_invocation(
+    tmp_path: Path,
+    boundary: str,
+) -> None:
+    invocation = request()
+    marker = {
+        "type": "compaction",
+        "id": "compaction-summary",
+        "firstKeptEntryId": "assistant-final",
+        "tokensBefore": 5000,
+        "summary": "Earlier context was summarized.",
+    }
+    records = [session_record()]
+    if boundary == "historical":
+        records.extend([user_record("Earlier request"), marker])
+    records.extend([user_record(invocation.prompt), terminal_record()])
+    if boundary == "current":
+        records.insert(-1, marker)
+    elif boundary == "later":
+        records.extend([user_record("Later request"), marker, terminal_record()])
+    elif boundary == "custom":
+        records.insert(-1, {"type": "custom", "customType": "compaction"})
+    write_session_state(tmp_path, invocation=invocation, records=records)
+
+    recovered = recover_terminal(tmp_path, invocation)
+
+    assert recovered.session_id == SESSION_ID
+    assert recovered.provider == "provider"
+    assert recovered.model == "model"
+    assert recovered.tool_evidence.terminal_state is (
+        OpenClawInvocationTerminalState.ASSISTANT_RESPONSE
+    )
+    expected = (None,) * 6 if boundary == "current" else (10, 2, 1, 0, None, 13)
+    assert (
+        recovered.input_tokens,
+        recovered.output_tokens,
+        recovered.cache_read_tokens,
+        recovered.cache_write_tokens,
+        recovered.reasoning_tokens,
+        recovered.total_tokens,
+    ) == expected
+
+
+def test_terminal_recovery_rejects_rotation_without_current_prompt(
+    tmp_path: Path,
+) -> None:
+    invocation = request()
+    successor_id = "successor-session"
+    header = session_record(successor_id)
+    header["parentSession"] = f"{SESSION_ID}.jsonl"
+    write_session_state(
+        tmp_path,
+        invocation=invocation,
+        session_id=successor_id,
+        records=[
+            header,
+            {
+                "type": "compaction",
+                "id": "compaction-summary",
+                "firstKeptEntryId": "assistant-final",
+                "tokensBefore": 5000,
+                "summary": "The prior request was summarized.",
+            },
+            terminal_record(),
+        ],
+    )
+
+    with pytest.raises(OpenClawSessionEvidenceError, match="not attributable"):
+        recover_terminal(tmp_path, invocation)
+
+
 @pytest.mark.parametrize("usage", [None, {}, {"totalTokens": 100}])
 def test_terminal_usage_preserves_unknown_earlier_assistant_usage(
     tmp_path: Path,

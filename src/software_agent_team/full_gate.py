@@ -30,7 +30,7 @@ from software_agent_team.process_lifecycle import (
     read_linux_process_identity,
 )
 
-FULL_GATE_SCHEMA_VERSION = 4
+FULL_GATE_SCHEMA_VERSION = 5
 DEFAULT_STAGE_TIMEOUT_SECONDS = 1_800.0
 DEFAULT_TERMINATION_GRACE_SECONDS = 5.0
 DEFAULT_SAMPLE_INTERVAL_SECONDS = 0.10
@@ -667,6 +667,7 @@ def _reap_adopted_zombies(
     root_pid: int,
     supervisor_pid: int,
     actions: list[str],
+    records: list[dict[str, Any]] | None = None,
 ) -> bool:
     """Reap only exact zombie descendants adopted by this subreaper."""
 
@@ -679,16 +680,191 @@ def _reap_adopted_zombies(
         ):
             continue
         current = _read_proc_snapshot(item.pid)
-        if current is None or current.start_time_ticks != item.start_time_ticks:
+        if (
+            current is None
+            or current.start_time_ticks != item.start_time_ticks
+            or current.parent_pid != supervisor_pid
+            or current.state != "Z"
+        ):
             continue
         try:
-            waited_pid, _ = os.waitpid(item.pid, os.WNOHANG)
+            waited_pid, wait_status = os.waitpid(item.pid, os.WNOHANG)
         except ChildProcessError:
             continue
         if waited_pid == item.pid:
             actions.append(f"reaped_pid:{item.pid}")
+            if records is not None:
+                return_code = os.waitstatus_to_exitcode(wait_status)
+                records.append(
+                    {
+                        "pid": item.pid,
+                        "start_time_ticks": item.start_time_ticks,
+                        "reaped_at": _utc_now(),
+                        "exit_code": return_code if return_code >= 0 else None,
+                        "signal": -return_code if return_code < 0 else None,
+                    }
+                )
             reaped = True
     return reaped
+
+
+def _adopter_children(adopter_pid: int) -> tuple[ProcessSnapshot, ...]:
+    """Read this single-threaded launcher's kernel-owned children, including zombies.
+
+    The launcher creates only the stage root. Every other direct child was
+    adopted from that stage, even if it exited before its ancestry was sampled.
+    This ownership rule must never be applied in the calling supervisor process.
+    """
+
+    children = Path(f"/proc/{adopter_pid}/task/{adopter_pid}/children")
+    identities = children.read_text(encoding="utf-8").split()
+    result = []
+    for identity in identities:
+        snapshot = _read_proc_snapshot(int(identity))
+        if snapshot is not None and snapshot.parent_pid == adopter_pid:
+            result.append(snapshot)
+    return tuple(result)
+
+
+def _run_stage_adopter(
+    argv: list[str], state_path: Path, *, grace_seconds: float, interval_seconds: float
+) -> int:
+    """Launch one command in an exclusive child-wait domain and audit its orphans."""
+
+    adopter_pid = os.getpid()
+    boundary = _set_child_subreaper()
+    state: dict[str, Any] = {
+        "status": "starting",
+        "argv": argv,
+        "identity": (
+            None
+            if (identity := _read_proc_snapshot(adopter_pid)) is None
+            else identity.as_json()
+        ),
+        "subreaper": boundary.as_json(),
+        "root_process": None,
+        "return_code": None,
+        "in_flight_reaping": [],
+        "residual_before_cleanup": [],
+        "cleanup": {"actions": [], "reaped": []},
+        "root_shutdown": [],
+        "residual_after_cleanup": [],
+    }
+    _atomic_write_json(state_path, state)
+    if not boundary.active:
+        state.update(status="failed", launch_error="child_subreaper_unavailable")
+        _atomic_write_json(state_path, state)
+        return 1
+
+    requested_signal: int | None = None
+
+    def remember_signal(signum: int, _frame: Any) -> None:
+        nonlocal requested_signal
+        requested_signal = signum
+
+    for signum in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(signum, remember_signal)
+    try:
+        process = subprocess.Popen(argv, start_new_session=True)
+    except OSError as error:
+        state.update(status="failed", launch_error=type(error).__name__)
+        _atomic_write_json(state_path, state)
+        return 1
+    root = _read_proc_snapshot(process.pid)
+    state["root_process"] = None if root is None else root.as_json()
+    state["status"] = "running"
+    _atomic_write_json(state_path, state)
+    in_flight_actions: list[str] = []
+    forwarded_signal: int | None = None
+    root_shutdown_deadline: float | None = None
+    root_killed = False
+    while True:
+        children = _adopter_children(adopter_pid)
+        if _reap_adopted_zombies(
+            children,
+            root_pid=process.pid,
+            supervisor_pid=adopter_pid,
+            actions=in_flight_actions,
+            records=state["in_flight_reaping"],
+        ):
+            _atomic_write_json(state_path, state)
+        # Popen remains the only wait-status consumer for the stage root.
+        return_code = process.poll()
+        if return_code is not None:
+            break
+        if requested_signal is not None and forwarded_signal != requested_signal:
+            with suppress(ProcessLookupError):
+                os.killpg(process.pid, requested_signal)
+            forwarded_signal = requested_signal
+            root_shutdown_deadline = time.monotonic() + grace_seconds
+            state["root_shutdown"].append(
+                {"signal": requested_signal, "sent_at": _utc_now()}
+            )
+            _atomic_write_json(state_path, state)
+        if (
+            root_shutdown_deadline is not None
+            and time.monotonic() >= root_shutdown_deadline
+            and not root_killed
+        ):
+            with suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGKILL)
+            root_killed = True
+            state["root_shutdown"].append(
+                {"signal": signal.SIGKILL, "sent_at": _utc_now()}
+            )
+            _atomic_write_json(state_path, state)
+        time.sleep(interval_seconds)
+
+    state["return_code"] = return_code
+    state["status"] = "cleaning"
+    children = _adopter_children(adopter_pid)
+    _reap_adopted_zombies(
+        children,
+        root_pid=process.pid,
+        supervisor_pid=adopter_pid,
+        actions=state["cleanup"]["actions"],
+        records=state["cleanup"]["reaped"],
+    )
+    residual = _adopter_children(adopter_pid)
+    state["residual_before_cleanup"] = [item.as_json() for item in residual]
+    _atomic_write_json(state_path, state)
+    for signum in (signal.SIGTERM, signal.SIGKILL):
+        deadline = time.monotonic() + grace_seconds
+        signalled: set[tuple[int, int]] = set()
+        while residual:
+            for item in residual:
+                key = (item.pid, item.start_time_ticks)
+                current = _read_proc_snapshot(item.pid)
+                if (
+                    key in signalled
+                    or current is None
+                    or current.start_time_ticks != item.start_time_ticks
+                    or current.parent_pid != adopter_pid
+                    or current.state == "Z"
+                ):
+                    continue
+                with suppress(ProcessLookupError):
+                    os.kill(item.pid, signum)
+                    signalled.add(key)
+                    state["cleanup"]["actions"].append(
+                        f"{signal.Signals(signum).name.lower()}_pid:{item.pid}"
+                    )
+            _reap_adopted_zombies(
+                residual,
+                root_pid=process.pid,
+                supervisor_pid=adopter_pid,
+                actions=state["cleanup"]["actions"],
+                records=state["cleanup"]["reaped"],
+            )
+            residual = _adopter_children(adopter_pid)
+            if not residual or not _sleep_before_deadline(deadline):
+                break
+    state["residual_after_cleanup"] = [item.as_json() for item in residual]
+    state["status"] = "completed" if not residual else "failed"
+    _atomic_write_json(state_path, state)
+    if return_code == 0 and not state["residual_before_cleanup"] and not residual:
+        return 0
+    return return_code if return_code > 0 else 1
 
 
 def _terminate_owned_processes(
@@ -1037,6 +1213,7 @@ class FullGateSupervisor:
             "failed",
             "deferred_live_process",
             "deferred_unknown_process_identity",
+            "deferred_incomplete_process_coverage",
         }
 
     def _recover_incomplete_reports(self) -> None:
@@ -1064,6 +1241,15 @@ class FullGateSupervisor:
                 )
             for stage_record in stage_records:
                 if not self._pending_private_temporary(stage_record):
+                    continue
+                if (
+                    stage_record.get("process", {})
+                    .get("cleanup_coverage", {})
+                    .get("status")
+                    == "unavailable"
+                ):
+                    # A dead launcher cannot retrospectively prove the identity
+                    # of every child it could have adopted before its forced exit.
                     continue
                 ownership = stage_record.get("process_ownership")
                 ownership = ownership if isinstance(ownership, dict) else {}
@@ -1212,11 +1398,23 @@ class FullGateSupervisor:
                 report_directory / PYTEST_STATE_FILENAME
             )
         tracked: dict[tuple[int, int], ProcessSnapshot] = {}
+        adopter_state_path = report_directory / f"{stage.name}-adopter.json"
+        launcher_argv = [
+            sys.executable,
+            "-m",
+            "software_agent_team.full_gate",
+            "--stage-adopter",
+            str(adopter_state_path),
+            str(self.termination_grace_seconds),
+            str(self.sample_interval_seconds),
+            *launch_argv,
+        ]
+        stage_record["launcher_argv"] = launcher_argv
         log_path = report_directory / f"{stage.name}.log"
         with log_path.open("wb") as log:
             try:
                 process = subprocess.Popen(
-                    launch_argv,
+                    launcher_argv,
                     cwd=self.repository_root,
                     env=environment,
                     stdout=subprocess.PIPE,
@@ -1249,6 +1447,11 @@ class FullGateSupervisor:
             selector = selectors.DefaultSelector()
             selector.register(process.stdout, selectors.EVENT_READ)
             started = time.monotonic()
+            # Allow the root's graceful stop, both orphan cleanup phases, and
+            # one final launcher handoff window before forcing its owner to exit.
+            adopter_shutdown_grace = (
+                4 * self.termination_grace_seconds + 2 * self.sample_interval_seconds
+            )
             termination: dict[str, Any] | None = None
             stage_record["resource_observation"]["status"] = "pending"
             tree = _owned_processes(
@@ -1279,6 +1482,7 @@ class FullGateSupervisor:
                     subreaper_active=subreaper_active,
                 )
                 self._record_resource_observation(report, stage_record, tree)
+                stage_record["adopter"] = _read_json_object(adopter_state_path)
                 if stage.name == "test":
                     report["pytest"] = _pytest_state(
                         report_directory / PYTEST_STATE_FILENAME
@@ -1287,7 +1491,7 @@ class FullGateSupervisor:
                     termination = _terminate_owned_processes(
                         process,
                         tracked,
-                        grace_seconds=self.termination_grace_seconds,
+                        grace_seconds=adopter_shutdown_grace,
                         stage_identity=stage_identity,
                         supervisor_pid=os.getpid(),
                         subreaper_active=subreaper_active,
@@ -1302,7 +1506,7 @@ class FullGateSupervisor:
                     termination = _terminate_owned_processes(
                         process,
                         tracked,
-                        grace_seconds=self.termination_grace_seconds,
+                        grace_seconds=adopter_shutdown_grace,
                         stage_identity=stage_identity,
                         supervisor_pid=os.getpid(),
                         subreaper_active=subreaper_active,
@@ -1311,6 +1515,69 @@ class FullGateSupervisor:
             selector.close()
             return_code = process.wait()
             self._active_process = None
+        adopter = _read_json_object(adopter_state_path)
+        stage_record["adopter"] = adopter
+        reported_identity = None if adopter is None else adopter.get("identity")
+        identity_matches = (
+            root_process is not None
+            and isinstance(reported_identity, dict)
+            and reported_identity.get("pid") == root_process.pid
+            and reported_identity.get("start_time_ticks")
+            == root_process.start_time_ticks
+            and adopter is not None
+            and adopter.get("argv") == launch_argv
+        )
+        command_return_code = (
+            adopter.get("return_code")
+            if identity_matches and adopter is not None
+            else None
+        )
+        if type(command_return_code) is not int:
+            command_return_code = None
+        stage_record["command_outcome"] = {
+            "status": "available" if command_return_code is not None else "unavailable",
+            "reason": (
+                None
+                if command_return_code is not None
+                else "adopter_evidence_missing"
+                if adopter is None
+                else "adopter_identity_mismatch"
+                if not identity_matches
+                else "command_not_started_or_terminal_outcome_missing"
+            ),
+        }
+        if identity_matches and adopter is not None:
+            # A launcher that exhausted its cleanup window still supplies exact
+            # child identities to the outer cleanup owner after it exits.
+            known_children = list(adopter.get("residual_after_cleanup", []))
+            if isinstance(adopter.get("root_process"), dict):
+                known_children.append(adopter["root_process"])
+            for evidence in known_children:
+                current = _read_proc_snapshot(evidence["pid"])
+                if (
+                    current is not None
+                    and current.start_time_ticks == evidence["start_time_ticks"]
+                ):
+                    tracked[(current.pid, current.start_time_ticks)] = current
+        cleanup_coverage_complete = (
+            identity_matches
+            and adopter is not None
+            and (
+                (
+                    adopter.get("status") in {"completed", "failed"}
+                    and command_return_code is not None
+                )
+                or (adopter.get("launch_error") and adopter.get("root_process") is None)
+            )
+        )
+        cleanup_coverage = {
+            "status": "complete" if cleanup_coverage_complete else "unavailable",
+            "reason": (
+                None
+                if cleanup_coverage_complete
+                else "adopter_stopped_without_a_terminal_child_inventory"
+            ),
+        }
         residual_before = _owned_processes(
             process.pid,
             process.pid,
@@ -1338,21 +1605,39 @@ class FullGateSupervisor:
             supervisor_pid=os.getpid(),
             subreaper_active=subreaper_active,
         )
+        if identity_matches and adopter is not None:
+            residual_cleanup["actions"].extend(
+                adopter.get("cleanup", {}).get("actions", [])
+            )
         stage_record["ended_at"] = _utc_now()
-        stage_record["exit_code"] = return_code if return_code >= 0 else None
-        stage_record["signal"] = -return_code if return_code < 0 else None
+        stage_record["exit_code"] = (
+            command_return_code
+            if command_return_code is not None and command_return_code >= 0
+            else None
+        )
+        stage_record["signal"] = (
+            -command_return_code
+            if command_return_code is not None and command_return_code < 0
+            else None
+        )
+        stage_record["launcher_return_code"] = return_code
         stage_record["process"] = {
             "root_pid": process.pid,
             "tracked_identity_count": len(tracked),
             "residual_before_cleanup": [item.as_json() for item in residual_before],
             "cleanup": residual_cleanup,
+            "cleanup_coverage": cleanup_coverage,
             "residual_after_cleanup": [item.as_json() for item in residual_after],
         }
         temporary_cleanup_ok = True
         if stage.private_temporary:
-            if residual_after:
+            if residual_after or not cleanup_coverage_complete:
                 stage_record["temporary_directory"]["cleanup"] = {
-                    "status": "deferred_live_process",
+                    "status": (
+                        "deferred_live_process"
+                        if residual_after
+                        else "deferred_incomplete_process_coverage"
+                    ),
                     "attempted_at": _utc_now(),
                     "error": None,
                     "residual": True,
@@ -1369,7 +1654,16 @@ class FullGateSupervisor:
             stage_record["status"] = StageStatus.INTERRUPTED.value
         elif stage_record["status"] == StageStatus.TIMED_OUT.value:
             pass
-        elif return_code == 0 and not residual_before and temporary_cleanup_ok:
+        elif (
+            return_code == 0
+            and command_return_code == 0
+            and identity_matches
+            and adopter is not None
+            and adopter.get("status") == "completed"
+            and not adopter.get("residual_after_cleanup")
+            and not residual_before
+            and temporary_cleanup_ok
+        ):
             stage_record["status"] = StageStatus.COMPLETED.value
         else:
             stage_record["status"] = StageStatus.FAILED.value
@@ -1457,6 +1751,7 @@ class FullGateSupervisor:
                     "residual_after_cleanup": item.get("process", {}).get(
                         "residual_after_cleanup", []
                     ),
+                    "cleanup_coverage": item.get("process", {}).get("cleanup_coverage"),
                 }
                 for item in stages
             ],
@@ -1523,7 +1818,19 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     """Run the canonical full gate and return its real terminal status."""
 
-    arguments = _parser().parse_args(argv)
+    raw_arguments = sys.argv[1:] if argv is None else argv
+    if raw_arguments and raw_arguments[0] == "--stage-adopter":
+        if len(raw_arguments) < 5:
+            raise ValueError(
+                "stage adopter requires its state path, timing, and command"
+            )
+        return _run_stage_adopter(
+            raw_arguments[4:],
+            Path(raw_arguments[1]),
+            grace_seconds=float(raw_arguments[2]),
+            interval_seconds=float(raw_arguments[3]),
+        )
+    arguments = _parser().parse_args(raw_arguments)
     repository_root = Path.cwd().resolve()
     evidence_root = (
         arguments.evidence_root.resolve()

@@ -108,7 +108,7 @@ def test_success_records_exact_commands_resources_and_terminal_inventory(
     assert exit_code == 0
     assert observer_error == []
     assert not observer.is_alive()
-    assert report["schema_version"] == 4
+    assert report["schema_version"] == 5
     assert report["status"] == FullGateStatus.COMPLETED.value
     assert report["process_attribution"] == {
         "mode": "subreaper_with_inherited_stage_identity",
@@ -200,6 +200,33 @@ def test_nonzero_stage_keeps_real_exit_and_marks_later_stages_skipped(
     assert report["stages"][0]["status"] == StageStatus.FAILED.value
     assert report["stages"][0]["exit_code"] == 7
     assert report["stages"][1]["status"] == StageStatus.SKIPPED.value
+
+
+def test_adopter_launch_failure_does_not_invent_a_command_exit_status(
+    tmp_path: Path,
+) -> None:
+    supervisor = FullGateSupervisor(
+        repository_root=tmp_path,
+        evidence_root=tmp_path / "evidence",
+        stages=(GateStage("missing-command", (str(tmp_path / "missing"),)),),
+        sample_interval_seconds=0.01,
+        output=io.BytesIO(),
+    )
+
+    exit_code, report_path = supervisor.run()
+    stage = json.loads(report_path.read_text())["stages"][0]
+
+    assert exit_code == 1
+    assert stage["status"] == StageStatus.FAILED.value
+    assert stage["launcher_return_code"] == 1
+    assert stage["adopter"]["launch_error"] == "FileNotFoundError"
+    assert stage["adopter"]["root_process"] is None
+    assert stage["exit_code"] is None
+    assert stage["signal"] is None
+    assert stage["command_outcome"] == {
+        "status": "unavailable",
+        "reason": "command_not_started_or_terminal_outcome_missing",
+    }
 
 
 def test_private_temporary_root_is_exact_isolated_and_removed(
@@ -372,22 +399,129 @@ def test_signal_exit_is_recorded_without_becoming_a_normal_exit(tmp_path: Path) 
 
 
 def test_hung_stage_is_bounded_and_records_cleanup(tmp_path: Path) -> None:
+    ready = tmp_path / "hanging-stage-ready"
     exit_code, report, _, _ = _run(
         tmp_path,
-        "import time; time.sleep(30)",
-        timeout=0.05,
+        f"import pathlib, time; pathlib.Path({str(ready)!r}).touch(); time.sleep(30)",
+        timeout=2,
         private_temporary=True,
     )
 
+    assert ready.exists(), "stage never reached its explicit hanging checkpoint"
     assert exit_code == 124
     assert report["status"] == FullGateStatus.FAILED.value
     stage = report["stages"][0]
     assert stage["status"] == StageStatus.TIMED_OUT.value
     assert "sigterm_process_group" in stage["process"]["cleanup"]["actions"]
     assert stage["process"]["residual_after_cleanup"] == []
+    assert stage["adopter"]["residual_after_cleanup"] == []
+    assert stage["process"]["cleanup_coverage"]["status"] == "complete"
     temporary = stage["temporary_directory"]
     assert temporary["cleanup"]["status"] == "completed"
     assert not (Path(temporary["base_path"]) / temporary["relative_path"]).exists()
+
+
+def test_timeout_before_adopter_start_retains_unknown_command_outcome(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_popen = subprocess.Popen
+
+    def stalled_launcher(argv, *args, **kwargs):
+        if "--stage-adopter" in argv:
+            argv = [sys.executable, "-c", "import time; time.sleep(30)"]
+        return original_popen(argv, *args, **kwargs)
+
+    monkeypatch.setattr(full_gate.subprocess, "Popen", stalled_launcher)
+    exit_code, report, _, _ = _run(
+        tmp_path,
+        "raise AssertionError('the stage command must not start')",
+        timeout=0.05,
+        private_temporary=True,
+    )
+
+    stage = report["stages"][0]
+    assert exit_code == 124
+    assert stage["adopter"] is None
+    assert stage["exit_code"] is None
+    assert stage["signal"] is None
+    assert stage["launcher_return_code"] == -signal.SIGTERM
+    assert stage["command_outcome"]["status"] == "unavailable"
+    assert stage["process"]["cleanup_coverage"]["status"] == "unavailable"
+    assert stage["temporary_directory"]["cleanup"]["status"] == (
+        "deferred_incomplete_process_coverage"
+    )
+
+
+def test_timeout_allows_adopter_to_kill_and_reap_term_resistant_descendants(
+    tmp_path: Path,
+) -> None:
+    ready = tmp_path / "resistant-stage-ready"
+    script = f"""
+import os, pathlib, signal, time
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+read_fd, write_fd = os.pipe()
+child = os.fork()
+if child == 0:
+    os.close(read_fd)
+    os.setsid()
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    os.write(write_fd, b'ready')
+    os.close(write_fd)
+    while True:
+        time.sleep(1)
+os.close(write_fd)
+assert os.read(read_fd, 5) == b'ready'
+os.close(read_fd)
+pathlib.Path({str(ready)!r}).touch()
+while True:
+    time.sleep(1)
+"""
+    exit_code, report, _, _ = _run(tmp_path, script, timeout=2, private_temporary=True)
+
+    assert ready.exists(), "root and descendant did not install their signal handlers"
+    stage = report["stages"][0]
+    assert exit_code == 124
+    assert stage["signal"] == signal.SIGKILL
+    assert stage["command_outcome"]["status"] == "available"
+    assert stage["process"]["cleanup_coverage"]["status"] == "complete"
+    assert stage["adopter"]["root_shutdown"][-1]["signal"] == signal.SIGKILL
+    assert len(stage["adopter"]["cleanup"]["reaped"]) == 1
+    assert stage["adopter"]["cleanup"]["reaped"][0]["signal"] == signal.SIGKILL
+    assert stage["adopter"]["residual_after_cleanup"] == []
+    assert stage["process"]["residual_after_cleanup"] == []
+    assert stage["temporary_directory"]["cleanup"]["status"] == "completed"
+
+
+def test_killed_adopter_does_not_claim_complete_cleanup_or_a_command_exit(
+    tmp_path: Path,
+) -> None:
+    script = f"""
+import json, os, pathlib, signal, time
+evidence = pathlib.Path({str(tmp_path / "evidence")!r})
+deadline = time.monotonic() + 5
+while True:
+    paths = list(evidence.glob('*/stage-1-adopter.json'))
+    if paths:
+        state = json.loads(paths[0].read_text())
+        root = state.get('root_process')
+        if root and root['pid'] == os.getpid():
+            break
+    assert time.monotonic() < deadline, 'adopter root identity was not published'
+    time.sleep(0.005)
+os.kill(os.getppid(), signal.SIGKILL)
+"""
+    exit_code, report, _, _ = _run(tmp_path, script, private_temporary=True)
+
+    stage = report["stages"][0]
+    assert exit_code == 1
+    assert stage["launcher_return_code"] == -signal.SIGKILL
+    assert stage["exit_code"] is None
+    assert stage["signal"] is None
+    assert stage["process"]["residual_after_cleanup"] == []
+    assert stage["process"]["cleanup_coverage"]["status"] == "unavailable"
+    assert stage["temporary_directory"]["cleanup"]["status"] == (
+        "deferred_incomplete_process_coverage"
+    )
 
 
 def test_cleanup_sleep_never_passes_a_crossed_deadline_to_sleep(
@@ -829,6 +963,8 @@ def test_detached_descendant_is_reported_and_exactly_cleaned(tmp_path: Path) -> 
     assert any(action.startswith("sigterm_pid:") for action in actions)
     assert any(action.startswith("reaped_pid:") for action in actions)
     assert stage["process"]["residual_after_cleanup"] == []
+    assert stage["adopter"]["residual_before_cleanup"]
+    assert stage["adopter"]["residual_after_cleanup"] == []
     assert stage["process_ownership"]["mechanism"] == "inherited_stage_identity"
     assert len(stage["process_ownership"]["identity_sha256"]) == 64
     assert "SAT_FULL_GATE_STAGE_ID" not in json.dumps(report)
@@ -851,6 +987,134 @@ def test_stage_identity_does_not_capture_an_unrelated_process(tmp_path: Path) ->
     finally:
         unrelated.kill()
         unrelated.wait(timeout=5)
+
+
+@pytest.mark.skipif(not Path("/proc").exists(), reason="Linux process evidence")
+@pytest.mark.parametrize("detached", [False, True])
+@pytest.mark.parametrize("stage_exit", [0, 37, -signal.SIGUSR1])
+def test_running_stage_reaps_short_lived_orphans_without_stealing_wait_status(
+    tmp_path: Path, detached: bool, stage_exit: int
+) -> None:
+    ready = tmp_path / "stage-ready"
+    foreign_ready = tmp_path / "foreign-ready"
+    children = tmp_path / "orphan-identities.jsonl"
+    foreign: list[subprocess.Popen[bytes]] = []
+    observer_errors: list[str] = []
+
+    def create_foreign_child() -> None:
+        child = subprocess.Popen(
+            [sys.executable, "-c", "raise SystemExit(23)"],
+            start_new_session=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        foreign.append(child)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            snapshot = full_gate._read_proc_snapshot(child.pid)
+            if snapshot is not None and snapshot.state == "Z":
+                return
+            time.sleep(0.005)
+        observer_errors.append("foreign child did not reach its unwaited exit")
+
+    def create_foreign_during_stage() -> None:
+        deadline = time.monotonic() + 5
+        while not ready.exists() and time.monotonic() < deadline:
+            time.sleep(0.005)
+        if not ready.exists():
+            observer_errors.append("stage did not publish its readiness checkpoint")
+        else:
+            create_foreign_child()
+        foreign_ready.touch()
+
+    create_foreign_child()
+    observer = threading.Thread(target=create_foreign_during_stage)
+    observer.start()
+    script = f"""
+import json, os, pathlib, signal, time
+ready = pathlib.Path({str(ready)!r})
+foreign_ready = pathlib.Path({str(foreign_ready)!r})
+identities = pathlib.Path({str(children)!r})
+ready.touch()
+deadline = time.monotonic() + 5
+while not foreign_ready.exists():
+    assert time.monotonic() < deadline, 'foreign child checkpoint timed out'
+    time.sleep(0.005)
+unwaited_child = os.fork()
+if unwaited_child == 0:
+    os._exit(19)
+for batch in range(2):
+    intermediate = os.fork()
+    if intermediate == 0:
+        orphan = os.fork()
+        if orphan != 0:
+            os._exit(0)
+        if {detached!r}:
+            os.setsid()
+        pid = os.getpid()
+        stat = pathlib.Path(f'/proc/{{pid}}/stat').read_text()
+        ticks = int(stat[stat.rfind(')') + 2:].split()[19])
+        with identities.open('a') as stream:
+            stream.write(json.dumps({{'pid': pid, 'start_time_ticks': ticks}}) + '\\n')
+            stream.flush()
+            os.fsync(stream.fileno())
+        os._exit(0)
+    os.waitpid(intermediate, 0)
+    deadline = time.monotonic() + 3
+    while True:
+        entries = identities.read_text().splitlines() if identities.exists() else []
+        if len(entries) > batch:
+            identity = json.loads(entries[batch])
+            if not pathlib.Path(f"/proc/{{identity['pid']}}").exists():
+                break
+        if time.monotonic() >= deadline:
+            raise SystemExit(91)
+        time.sleep(0.005)
+    print(f'reaped-during-stage:{{batch}}', flush=True)
+waited, status = os.waitpid(unwaited_child, 0)
+assert waited == unwaited_child and os.waitstatus_to_exitcode(status) == 19
+if {stage_exit} < 0:
+    os.kill(os.getpid(), -{stage_exit})
+raise SystemExit({stage_exit})
+"""
+    try:
+        exit_code, report, output, _ = _run(tmp_path, script, timeout=10)
+        observer.join(timeout=1)
+
+        assert observer_errors == []
+        assert not observer.is_alive()
+        assert [child.wait(timeout=5) for child in foreign] == [23, 23]
+        assert output.count(b"reaped-during-stage:") == 2
+        stage = report["stages"][0]
+        assert stage["exit_code"] == (stage_exit if stage_exit >= 0 else None)
+        assert stage["signal"] == (-stage_exit if stage_exit < 0 else None)
+        assert exit_code == (stage_exit if stage_exit >= 0 else 1)
+        reaped = stage["adopter"]["in_flight_reaping"]
+        assert len(reaped) == 2
+        assert all(item["exit_code"] == 0 for item in reaped)
+        assert {item["pid"] for item in reaped}.isdisjoint(
+            {child.pid for child in foreign}
+        )
+        assert stage["adopter"]["residual_after_cleanup"] == []
+    finally:
+        observer.join(timeout=6)
+        for child in foreign:
+            if child.poll() is None:
+                child.kill()
+            child.wait(timeout=5)
+        # Preserve exact test-owned cleanup when the unfixed supervisor leaves
+        # adopted zombies behind; never consume another child's wait status.
+        if children.exists():
+            for line in children.read_text().splitlines():
+                identity = json.loads(line)
+                snapshot = full_gate._read_proc_snapshot(identity["pid"])
+                if (
+                    snapshot is not None
+                    and snapshot.start_time_ticks == identity["start_time_ticks"]
+                    and snapshot.parent_pid == os.getpid()
+                    and snapshot.state == "Z"
+                ):
+                    os.waitpid(snapshot.pid, os.WNOHANG)
 
 
 def test_canonical_stage_order_uses_shell_free_commands(tmp_path: Path) -> None:

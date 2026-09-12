@@ -1373,7 +1373,13 @@ when investigating it rather than editing artifacts in place.
   indicates that the runtime sanitizer may have removed a billable assistant
   message, so the surviving session cannot establish complete invocation usage.
   Recovery retains that diagnostic and the bound semantic submission while
-  leaving usage and cost unknown. This accounting uses the captured session's
+  leaving usage and cost unknown. An exact `compaction` record within the current
+  invocation also makes aggregate usage unknown: its context summary does not
+  account for billable usage, and transcript rotation may have removed earlier
+  messages. Historical and later-turn markers do not affect the current call;
+  ordinary custom records do not establish compaction. A rotated transcript that
+  no longer contains the exact current prompt remains unattributable and cannot
+  recover a response. This accounting uses the captured session's
   coverage; it does not reconstruct records removed upstream or overwrite a
   normal result envelope's reported aggregate with a session sum. The same ledger
   settles recovered usage once and blocks subsequent task calls after the ceiling
