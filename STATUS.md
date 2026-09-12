@@ -104,8 +104,18 @@ The current checkout adds unreleased correctness fixes after the release:
 Affected integration checks exercise real Git, production controllers,
 configuration files, process finalization, and the shared ledger. Model content
 and quality-command outcomes remain explicit external fixtures. The shared
-canonical gate for these fixes is pending; the prior release evidence below
-does not establish a fresh provider-backed journey for this checkout.
+canonical gate passed on clean `561b79610b958f207797d43544c94da4a5421f4a`:
+**1,608 tests passed in 707.68 seconds**, with doctor, formatting, and lint also
+passing. The test-stage adopter reaped 389 children during execution. All stage
+cleanup coverage was complete, with no terminal process, temporary-directory,
+container, volume, or lease residuals. The report is
+`artifacts/generated/full-gate/20260912T064025.620266Z-9a130222b092/report.json`.
+
+An earlier candidate's gate had seven Git process-creation failures; an observed
+retry was stopped after identifying accumulating adopted zombies. Those outcomes
+remain separate from this successful gate and motivated the validation-supervisor
+fix. This batch made no provider calls; the prior release evidence below does not
+establish a fresh provider-backed journey for this checkout.
 
 The machine-readable impact ledger classified task-derived Agent specialization
 and the unified multi-transport model-profile surface as minor changes, while
