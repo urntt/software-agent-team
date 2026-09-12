@@ -115,6 +115,14 @@ class _ReviewEvidenceGroundingErrors(ValueError):
         self.errors = errors
 
 
+class _SpecializedReviewScopeError(ValueError):
+    """Locate a specialist-owned scope mismatch in its semantic entries."""
+
+    def __init__(self, detail: str, *, path: str) -> None:
+        super().__init__(detail)
+        self.path = path
+
+
 @dataclass(frozen=True)
 class ReviewToolEvidenceAttempt:
     """One integrity-checked attempt in a bounded Reviewer response chain."""
@@ -1762,6 +1770,17 @@ def _context_failure_diagnostic(
             issues=issues,
             correction_paths=tuple(sorted({item.path for item in grounding_errors})),
         )
+    if isinstance(error, _SpecializedReviewScopeError):
+        return diagnostic_from_invariant(
+            parsed.semantic_payload,
+            failure_class=ResponseFailureClass.SEMANTIC_CONTEXT,
+            authority=ResponseIssueAuthority.MODEL,
+            code="specialized_review_scope",
+            invariant_id="specialized_review_scope",
+            subjects=(),
+            message=detail,
+            paths=(error.path,),
+        )
     body = parsed.body
     failure_class = ResponseFailureClass.SEMANTIC_CONTEXT
     if isinstance(body, ImplementationPlanResponse):
@@ -2054,25 +2073,30 @@ def parse_dynamic_agent_response(
                     + (f" ({'; '.join(detail)})" if detail else "")
                 )
             specialized_scope: set[str] | None = None
+            specialized_path: str | None = None
             if isinstance(body, GroundedSecurityAssessmentResponse):
                 specialized_scope = {
                     criterion_id
                     for surface in body.surfaces
                     for criterion_id in surface.criterion_ids
                 }
+                specialized_path = "/surfaces"
             elif isinstance(body, GroundedExperienceAssessmentResponse):
                 specialized_scope = {
                     criterion_id
                     for workflow in body.workflows
                     for criterion_id in workflow.criterion_ids
                 }
+                specialized_path = "/workflows"
             if (
                 specialized_scope is not None
                 and specialized_scope != expected_review_scope
             ):
-                raise ValueError(
+                assert specialized_path is not None
+                raise _SpecializedReviewScopeError(
                     "specialized assessment entries must exactly cover assigned "
-                    "review scope"
+                    "review scope",
+                    path=specialized_path,
                 )
             criteria_by_id = {
                 criterion.id: criterion for criterion in task_brief.acceptance_criteria

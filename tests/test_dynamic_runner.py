@@ -449,6 +449,7 @@ class DynamicExecutor:
         recovered_finalization_for: str | None = None,
         zero_review_tool_calls_once: bool = False,
         invalid_review_selector_once: bool = False,
+        invalid_specialized_scope_after_selector_once: bool = False,
         invalid_review_response_once: bool = False,
         invalid_review_sibling_once: bool = False,
         invalid_review_evidence: bool = False,
@@ -469,6 +470,9 @@ class DynamicExecutor:
         self.recovered_finalization_for = recovered_finalization_for
         self.zero_review_tool_calls_once = zero_review_tool_calls_once
         self.invalid_review_selector_once = invalid_review_selector_once
+        self.invalid_specialized_scope_after_selector_once = (
+            invalid_specialized_scope_after_selector_once
+        )
         self.invalid_review_response_once = invalid_review_response_once
         self.invalid_review_sibling_once = invalid_review_sibling_once
         self.invalid_review_evidence = invalid_review_evidence
@@ -808,7 +812,62 @@ class DynamicExecutor:
                 ]
             response_text = json.dumps(valid_payload)
             submission_payload = valid_payload
-            if self.invalid_review_sibling_once:
+            if self.invalid_specialized_scope_after_selector_once:
+                if request.specialization is AgentSpecialization.SECURITY_ASSESSMENT:
+                    specialized_field = "surfaces"
+                elif (
+                    request.specialization is AgentSpecialization.EXPERIENCE_ASSESSMENT
+                ):
+                    specialized_field = "workflows"
+                else:  # pragma: no cover - fixture construction owns this boundary
+                    raise AssertionError("scope repair requires a Review specialist")
+                invalid_payload = json.loads(json.dumps(valid_payload))
+                assessments = invalid_payload["criterion_assessments"]
+                assert isinstance(assessments, list)
+                assessment = assessments[0]
+                assert isinstance(assessment, dict)
+                claims = assessment["tool_evidence"]
+                assert isinstance(claims, list)
+                claim = claims[0]
+                assert isinstance(claim, dict)
+                claim["observable"] = "fabricated-review-observation"
+                specialized_entries = invalid_payload[specialized_field]
+                assert isinstance(specialized_entries, list)
+                specialized_entry = specialized_entries[0]
+                assert isinstance(specialized_entry, dict)
+                specialized_entry["criterion_ids"] = ["AC_CODE"]
+                if count == 1:
+                    submission_payload = invalid_payload
+                    response_text = json.dumps(submission_payload)
+                elif count == 2:
+                    assert request.submission_contract is not None
+                    correction_schema = request.submission_contract.parameters_schema()
+                    replacement_variant = correction_schema["properties"][
+                        "replacements"
+                    ]["items"]["oneOf"][0]
+                    slot_handle = replacement_variant["properties"]["slot_handle"][
+                        "const"
+                    ]
+                    evidence_handles = replacement_variant["properties"][
+                        "replacement_value"
+                    ]["enum"]
+                    assert isinstance(evidence_handles, list) and evidence_handles
+                    submission_payload = {
+                        "replacements": [
+                            {
+                                "slot_handle": slot_handle,
+                                "replacement_value": evidence_handles[0],
+                            }
+                        ]
+                    }
+                    response_text = json.dumps(submission_payload)
+                else:
+                    response_text = semantic_correction_response(
+                        valid_payload,
+                        {f"/{specialized_field}": valid_payload[specialized_field]},
+                    )
+                    submission_payload = json.loads(response_text)
+            elif self.invalid_review_sibling_once:
                 invalid_payload = json.loads(json.dumps(valid_payload))
                 assessments = invalid_payload["criterion_assessments"]
                 assert isinstance(assessments, list)
@@ -1719,6 +1778,62 @@ def test_dynamic_runner_carries_specialization_through_runtime_and_handoff(
         and any(reference.kind is artifact_kind for reference in item.artifacts)
         for item in handoffs
     )
+
+
+@pytest.mark.parametrize(
+    ("specialization", "scope_path", "artifact_type"),
+    [
+        (
+            AgentSpecialization.SECURITY_ASSESSMENT,
+            "/surfaces",
+            SecurityAssessment,
+        ),
+        (
+            AgentSpecialization.EXPERIENCE_ASSESSMENT,
+            "/workflows",
+            ExperienceAssessment,
+        ),
+    ],
+)
+def test_specialized_review_scope_repair_follows_evidence_correction(
+    tmp_path: Path,
+    specialization: AgentSpecialization,
+    scope_path: str,
+    artifact_type: type[ReviewReport],
+) -> None:
+    runner, _, executor, _, _ = runtime(
+        tmp_path,
+        review_specialization=specialization,
+        executor_options={
+            "invalid_specialized_scope_after_selector_once": True,
+        },
+    )
+
+    result = DagScheduler().execute(runner.team_plan, runner)
+
+    assert result.status is ScheduleStatus.COMPLETED
+    review_requests = [
+        request for request in executor.requests if request.agent_id == "reviewer"
+    ]
+    assert len(review_requests) == 3
+    records = [
+        runner.artifact_store.load(reference)
+        for reference in runner.execution_records
+        if "/verify/reviewer-" in reference.path
+    ]
+    assert len(records) == 3
+    assert records[0].response_validation is not None
+    assert records[0].response_validation.correction_paths == (
+        "/criterion_assessments/0/tool_evidence/0/observable",
+    )
+    assert records[1].semantic_correction_outcome == "improved"
+    assert records[1].response_validation is not None
+    assert records[1].response_validation.correction_paths == (scope_path,)
+    assert records[2].semantic_correction_outcome == "accepted"
+    assert records[2].response_validation is None
+    review = runner.artifact_store.load(runner.outputs["reviewer"])
+    assert isinstance(review, artifact_type)
+    assert review.reviewed_criteria == ("AC_REVIEW",)
 
 
 def test_dynamic_runner_projects_long_artifact_summaries_without_failing_handoff(

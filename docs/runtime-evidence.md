@@ -210,7 +210,13 @@ selects the response schema from the approved `AgentSpec.specialization`, binds
 the resulting artifact to that same specialization in execution evidence, and
 requires the union of specialist criterion references to equal the assigned
 scope. A model cannot choose its own kind or convert a general Reviewer label
-into specialist acceptance authority.
+into specialist acceptance authority. If that union is invalid, the typed
+diagnostic grants correction authority only to the specialist collection:
+`surfaces` for a security assessment or `workflows` for an experience
+assessment. Shared criterion assessments, findings, verdict, and summary stay
+immutable. A specialist-scope defect exposed after an evidence-selector repair
+is therefore a distinct targetable failure rather than an uncorrectable broad
+Review error.
 
 For current Planning evidence, the Controller compiles Review scopes from the
 approved criterion graph. A criterion carrying all four Review boundaries must
