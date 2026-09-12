@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** prepare the compatible `v0.2.2` release while `v0.2.0` remains the published stable
+**Current milestone:** `v0.2.2` is the published stable release
 
 **Last updated:** September 12, 2026
 
@@ -11,15 +11,18 @@ product, architecture, experiment, or roadmap; those decisions belong to
 
 ## Current Release
 
-The immutable `v0.2.0` tag, GitHub Release, package version, and release manifest
-identify source revision
-`4c0bdfcea6da0a6f3849c2b70a9e63ed2d5e098c` and Git archive digest
-`sha256:afeab5ec13d910c83ec06dbc64cfed491e4a84ee85725bbc8a5ff6ffaedf247f`.
+The immutable `v0.2.2` tag,
+[GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.2.2),
+package version, and release manifest identify source revision
+`acb9e89c423f8711623e801d40808d21fee271b8` and Git archive digest
+`sha256:73a4b7335d01ab3eb74cd4e90aea9b079cf4913d85e614995045223cbcd02d5d`.
 The exact clean revision passed the local canonical `make check` with Ruff
-formatting and lint checks plus all 1,517 tests. Its exact-tag GitHub Actions run
-passed 1,515 tests with two explicit environment-dependent skips on the hosted
-non-root runner, retained the canonical gate artifact, reported no workflow
-annotations, and only then published the identity manifest and Release.
+formatting and lint checks plus all 1,608 tests. Its successful exact-tag GitHub
+Actions run passed 1,606 tests with two explicit environment-dependent skips on
+the hosted non-root runner, retained the canonical gate artifact, and then
+published exactly one identity manifest asset. An earlier workflow attempt on
+the same immutable tag completed the repository gate but timed out while
+creating the retained artifact; it published neither an artifact nor a Release.
 
 The immutable `v0.2.1` tag points to
 `b90b2634caa8b4a5360ed6bdc9b41d9c81ca4a2e`. Its local canonical gate passed
@@ -28,7 +31,10 @@ lifecycle check after 1,605 passes and two environment-dependent skips. No
 Release was created. The tag remains immutable and unpublished, and its version
 cannot be reused.
 
-The previous stable remains immutable `v0.1.2` at
+The previous published stable remains immutable `v0.2.0` at
+`4c0bdfcea6da0a6f3849c2b70a9e63ed2d5e098c`, with Git archive digest
+`sha256:afeab5ec13d910c83ec06dbc64cfed491e4a84ee85725bbc8a5ff6ffaedf247f`.
+The earlier stable `v0.1.2` remains immutable at
 `64dcfc448fc229e4d03b4dd3722549ebeb09d2fb`, with Git archive digest
 `sha256:6baebe8610673e9b9795779c9f5965ef452f8bd03d065f3b37a93bdd4fa9543e`.
 The failed `v0.1.0` and `v0.1.1` tags also remain immutable and unpublished.
@@ -81,13 +87,21 @@ active-run refusal, injected post-link-swap rollback, foreign OpenClaw
 isolation, secret-free export, full uninstall, and exact account/HOME/resource
 cleanup all passed. The scenario made no provider calls.
 
+A fresh disposable non-root installation then started from the genuine
+`v0.2.0` Release, discovered `v0.2.2` through `sat update --check`, and activated
+it through `sat update`. Exact release identity, byte-identical configuration
+and legacy state preservation, same-target and same-dev-ref no-ops, active-run
+refusal, injected post-link-swap rollback, a stable-to-dev-to-stable round trip,
+foreign OpenClaw isolation, secret-free export, full uninstall, and exact
+account/HOME/resource cleanup all passed. The scenario made no provider calls.
+
 ## Current Development Head
 
-The implementation released as `v0.2.0` is frozen at the exact revision above.
-The current checkout prepares `v0.2.2`, a compatible patch over the highest
-immutable version tag, `v0.2.1`; `v0.2.0` remains the published stable. The
-package, lock, and change-impact ledger identify the new candidate. Publication
-and exact-candidate release validation remain pending.
+The implementation released as `v0.2.2` is frozen at the exact revision above.
+Subsequent `main` changes are limited to this status update; the release tag and
+manifest remain bound to the tested source revision. The package, lock, and
+change-impact ledger identify `v0.2.2` as a compatible patch over the highest
+prior immutable version tag, `v0.2.1`.
 
 The `v0.2.1` hosted failure observed a CLI exit of 130, a cancelled Planning
 session, and an interrupted turn, but the persisted invocation lifecycle was
@@ -98,9 +112,11 @@ implementation includes lease acquisition in that path and releases only the
 lease whose full observed child identity matches the launched process. The
 controlled regression fails on the old implementation and passes ten
 consecutive runs on the current implementation; all 86 execution and process
-lifecycle module tests also pass. The clean canonical gate remains pending.
+lifecycle module tests also pass. The fixed source passed the clean local and
+hosted release gates described above before `v0.2.2` was published.
 
-The burned `v0.2.1` candidate also contains these compatible fixes:
+The `v0.2.2` release also contains these compatible fixes, first assembled in
+the burned `v0.2.1` candidate:
 
 - Finalization recovery sums attributable assistant usage across the current
   invocation. Missing counters, compaction, and observed sanitizer omissions remain unknown;
