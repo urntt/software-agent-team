@@ -79,7 +79,16 @@ cleanup all passed. The scenario made no provider calls.
 The implementation released as `v0.2.0` is frozen at the exact revision above.
 The current checkout prepares `v0.2.1`, a compatible patch over `v0.2.0`.
 The package, lock, and change-impact ledger identify the candidate; publication
-and exact-candidate release validation remain pending. The candidate contains:
+and exact-candidate release validation remain pending. The first versioned
+candidate `a257de432ff3f119323ee53b56f35320ecf640f6` passed 1,605 tests but failed
+three validation-fixture startup/timeout checks before their readiness
+checkpoints; cleanup remained complete. These failures block publication until
+the fixtures and the clean candidate pass their required gates. The fixtures
+shared a deadline that could expire while the separate adopter interpreter was
+still starting on constrained CI. Their bounded test allowance now covers that
+startup without changing the product's stage timeout, cleanup, or exit-status
+contracts; the three affected checks and all 38 full-gate tests pass. A new
+canonical gate remains pending. The candidate contains:
 
 - Finalization recovery sums attributable assistant usage across the current
   invocation. Missing counters, compaction, and observed sanitizer omissions remain unknown;
