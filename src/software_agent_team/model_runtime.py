@@ -231,6 +231,26 @@ def _native_runtime_profile(model: str) -> ModelRuntimeProfile:
 
 _MODEL_RUNTIME_PRESETS: Mapping[str, ModelRuntimeProfile] = MappingProxyType(
     {
+        "deepseek/deepseek-v4-flash": ModelRuntimeProfile(
+            source=ModelRuntimeProfileSource.SAT_PRESET,
+            provider_id="deepseek",
+            native_model_id="deepseek-v4-flash",
+            display_name="DeepSeek V4 Flash",
+            api=ModelApi.OPENAI_COMPLETIONS,
+            endpoint_kind=ModelEndpointKind.REMOTE,
+            base_url="https://api.deepseek.com",
+            credential_source=CredentialSource.OPENCLAW_AUTH,
+            input_modalities=("text",),
+            context_window_tokens=1_000_000,
+            max_output_tokens=384_000,
+            invocation_max_tokens=16_384,
+            reasoning=True,
+            disable_thinking=True,
+            supports_tools=True,
+            supports_streaming_usage=True,
+            supports_reasoning_effort=True,
+            artifact_submission_policy=ArtifactSubmissionPolicy.OPENAI_REQUIRED,
+        ),
         "deepseek/deepseek-v4-flash-vision-exp": ModelRuntimeProfile(
             source=ModelRuntimeProfileSource.SAT_PRESET,
             provider_id="deepseek",

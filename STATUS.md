@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** validate the published `v0.2.3` state-lifecycle fixes on the affected WSL device
+**Current milestone:** validate the DeepSeek first-run fix and prepare the next patch release
 
 **Last updated:** September 12, 2026
 
@@ -10,6 +10,23 @@ product, architecture, experiment, or roadmap; those decisions belong to
 [`VISION.md`](VISION.md).
 
 ## Current Release
+
+Development HEAD now recognizes the pinned official DeepSeek plugin's exact
+`deepseek/deepseek-v4-flash` onboarding route as a reviewed preset. It freezes
+the plugin's provider/native identity, OpenAI-compatible transport, public
+endpoint, 1,000,000-token context, 384,000-token output limit, reasoning and
+tool capabilities, while keeping the credential source in SAT's isolated
+OpenClaw auth store. The plugin-generated provider catalog may omit
+`compat.supportsTools`; that omission no longer converts this exact route into
+an unreviewed custom profile or creates a second environment-key requirement.
+Other provider/model pairs and custom endpoints still require explicit tool
+support and retain the existing fail-closed behavior.
+
+Focused model-profile, runtime-materialization, configuration, transaction, and
+CLI tests pass. A pinned OpenClaw local check using an isolated official-plugin
+state reports the exact route available without `DEEPSEEK_API_KEY` and without
+a provider request. Canonical release validation and a fresh WSL task-admission
+rerun remain pending.
 
 The immutable `v0.2.3` tag,
 [GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.2.3),
@@ -204,9 +221,10 @@ canonical digest carry provider-native identity, explicit OpenClaw transport,
 native/remote/local endpoint policy, credential reference, model limits, and
 capabilities through route resolution, TeamPlan persistence, startup
 inspection, provider smoke, Planning, dynamic execution, telemetry validation,
-prompts, and reports. Reviewed presets cover both the earlier DeepSeek Vision
-route and `deepseek/deepseek-flash`; custom endpoints no longer require a
-per-model Python branch or handwritten run configuration.
+prompts, and reports. Reviewed presets cover the earlier DeepSeek Vision route,
+`deepseek/deepseek-flash`, and the pinned official plugin's exact
+`deepseek/deepseek-v4-flash` onboarding route; custom endpoints no longer
+require a per-model Python branch or handwritten run configuration.
 
 First use, interactive reconfiguration, and non-interactive reconfiguration
 now share validate-before-save semantics. Interactive OpenClaw changes are made

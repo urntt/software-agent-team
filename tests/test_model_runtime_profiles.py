@@ -30,6 +30,7 @@ from software_agent_team.runtime_configuration import (
 from software_agent_team.teams import AgentCapability
 
 DEEPSEEK_FLASH_MODEL = "deepseek/deepseek-flash"
+DEEPSEEK_OFFICIAL_V4_FLASH_MODEL = "deepseek/deepseek-v4-flash"
 REPOSITORY_ROOT = Path(__file__).parents[1]
 
 
@@ -76,6 +77,86 @@ def test_deepseek_flash_is_a_complete_declarative_preset() -> None:
     assert (
         profile.artifact_submission_policy is ArtifactSubmissionPolicy.OPENAI_REQUIRED
     )
+
+
+def test_official_deepseek_v4_flash_is_an_openclaw_auth_preset() -> None:
+    profile = runtime_profile_for_model(DEEPSEEK_OFFICIAL_V4_FLASH_MODEL)
+
+    assert profile.source is ModelRuntimeProfileSource.SAT_PRESET
+    assert profile.provider_id == "deepseek"
+    assert profile.native_model_id == "deepseek-v4-flash"
+    assert profile.display_name == "DeepSeek V4 Flash"
+    assert profile.api is ModelApi.OPENAI_COMPLETIONS
+    assert profile.endpoint_kind is ModelEndpointKind.REMOTE
+    assert profile.base_url == "https://api.deepseek.com"
+    assert profile.credential_source is CredentialSource.OPENCLAW_AUTH
+    assert profile.credential_env is None
+    assert profile.input_modalities == ("text",)
+    assert profile.context_window_tokens == 1_000_000
+    assert profile.max_output_tokens == 384_000
+    assert profile.invocation_max_tokens == 16_384
+    assert profile.reasoning is True
+    assert profile.disable_thinking is True
+    assert profile.supports_tools is True
+    assert profile.supports_streaming_usage is True
+    assert profile.supports_reasoning_effort is True
+    assert (
+        profile.artifact_submission_policy is ArtifactSubmissionPolicy.OPENAI_REQUIRED
+    )
+
+
+def test_official_deepseek_v4_flash_profile_validates_with_pinned_openclaw(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    state = tmp_path / "state"
+    state.mkdir()
+    destination = tmp_path / "openclaw.json"
+    profile = ModelProfile(
+        id="default",
+        model=DEEPSEEK_OFFICIAL_V4_FLASH_MODEL,
+        capabilities=tuple(AgentCapability),
+    )
+
+    materialize_model_check_configuration(destination, profile=profile)
+
+    payload = json.loads(destination.read_text(encoding="utf-8"))
+    provider = payload["models"]["providers"]["deepseek"]
+    assert "apiKey" not in provider
+    assert provider["models"] == [
+        {
+            "id": "deepseek-v4-flash",
+            "name": "DeepSeek V4 Flash",
+            "reasoning": True,
+            "input": ["text"],
+            "contextWindow": 1_000_000,
+            "maxTokens": 384_000,
+            "compat": {
+                "supportsTools": True,
+                "supportsUsageInStreaming": True,
+                "supportsReasoningEffort": True,
+            },
+        }
+    ]
+    openclaw = REPOSITORY_ROOT / ".sat/openclaw/bin/openclaw"
+    result = subprocess.run(
+        [str(openclaw), "config", "validate", "--json"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=MODEL_INSPECTION_TIMEOUT_SECONDS,
+        env={
+            **os.environ,
+            "HOME": str(tmp_path),
+            "OPENCLAW_STATE_DIR": str(state),
+            "OPENCLAW_CONFIG_PATH": str(destination),
+            "OPENCLAW_AGENT_DIR": "",
+            "OPENCLAW_OAUTH_DIR": str(state / "credentials"),
+        },
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["valid"] is True
 
 
 @pytest.mark.parametrize(

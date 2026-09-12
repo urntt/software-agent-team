@@ -490,6 +490,13 @@ output, and compatibility metadata; do not add a credential value, mutable
 fallback, or guessed price. User-supplied custom routes use the same schema
 rather than adding another model-name branch.
 
+A preset may also supplement one exact official-plugin route when its catalog
+omits a capability field required by SAT. In that case the preset freezes only
+the reviewed route facts and keeps `openclaw_auth` as the credential source.
+Private-provider binding must preserve the preset, while every other configured
+provider/model pair still derives its sanitized metadata from the private
+OpenClaw configuration and fails closed when tool support is absent.
+
 The pinned transport matrix must compile and pass the real OpenClaw config
 validator for `openai-completions`, `openai-responses`,
 `anthropic-messages`, and local `ollama`. The matrix deliberately does not make

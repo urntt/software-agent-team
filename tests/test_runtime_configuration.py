@@ -46,6 +46,7 @@ REPOSITORY_ROOT = Path(__file__).parents[1]
 TEAM_CONFIG = REPOSITORY_ROOT / "configs" / "teams.json"
 OPENCLAW_TEMPLATE = REPOSITORY_ROOT / "configs" / "openclaw.example.json5"
 DEEPSEEK_VISION_MODEL = "deepseek/deepseek-v4-flash-vision-exp"
+DEEPSEEK_OFFICIAL_V4_FLASH_MODEL = "deepseek/deepseek-v4-flash"
 
 
 def runtime_preflight(**updates: object) -> RuntimePreflight:
@@ -509,6 +510,46 @@ def test_materialized_config_registers_the_pinned_deepseek_vision_model(
     }
     assert provider["apiKey"] == "${DEEPSEEK_API_KEY}"
     assert "must-not-be-persisted" not in destination.read_text(encoding="utf-8")
+
+
+def test_materialized_config_uses_openclaw_auth_for_official_deepseek_v4_flash(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    destination = tmp_path / "run" / "openclaw.runtime.json"
+
+    materialize_run_configuration(
+        OPENCLAW_TEMPLATE,
+        destination,
+        manifest=load_team_manifest(TEAM_CONFIG),
+        workspace=workspace,
+        sandbox_image="sat-agent:phase1",
+        sandbox_user="1000:1000",
+        model=DEEPSEEK_OFFICIAL_V4_FLASH_MODEL,
+        bootstrap_capability=AgentCapability.CLARIFICATION,
+    )
+
+    payload = json.loads(destination.read_text(encoding="utf-8"))
+    provider = payload["models"]["providers"]["deepseek"]
+    assert provider["baseUrl"] == "https://api.deepseek.com"
+    assert provider["api"] == "openai-completions"
+    assert "apiKey" not in provider
+    assert provider["models"][0]["id"] == "deepseek-v4-flash"
+    assert provider["models"][0]["compat"]["supportsTools"] is True
+    settings = payload["agents"]["defaults"]["models"][
+        DEEPSEEK_OFFICIAL_V4_FLASH_MODEL
+    ]["params"]
+    assert settings["maxTokens"] == 16_384
+    assert settings["extra_body"] == {
+        "thinking": {"type": "disabled"},
+        "tool_choice": {
+            "type": "function",
+            "function": {"name": "sat_submit_artifact"},
+        },
+    }
 
 
 def test_legacy_text_runtime_does_not_force_the_typed_submission_tool(

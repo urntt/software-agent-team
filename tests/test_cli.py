@@ -1806,6 +1806,179 @@ def test_explicit_provider_setup_refreshes_a_private_frozen_profile(
     )
 
 
+def test_official_deepseek_first_run_keeps_reviewed_profile_and_openclaw_auth(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    configuration_path = tmp_path / "config.json"
+    state_root = tmp_path / "state"
+    state_paths = cli.ProductStatePaths.below(state_root)
+    cli.ensure_product_state(state_paths)
+    monkeypatch.setenv("SAT_CONFIG_PATH", str(configuration_path))
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    answers = iter(("yes", "", "0.14", "0.28", "0.028", "0", "no"))
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+
+    def configure_candidate(
+        _binary: Path,
+        *,
+        state_dir: Path,
+        config_path: Path,
+    ) -> None:
+        payload = {
+            "auth": {
+                "profiles": {
+                    "deepseek:default": {
+                        "provider": "deepseek",
+                        "mode": "api_key",
+                    }
+                }
+            },
+            "agents": {
+                "defaults": {
+                    "model": {"primary": "deepseek/deepseek-v4-flash"},
+                }
+            },
+            "models": {
+                "mode": "merge",
+                "providers": {
+                    "deepseek": {
+                        "baseUrl": "https://api.deepseek.com",
+                        "api": "openai-completions",
+                        "models": [
+                            {
+                                "id": "deepseek-v4-flash",
+                                "name": "DeepSeek V4 Flash",
+                                "reasoning": True,
+                                "input": ["text"],
+                                "contextWindow": 1_000_000,
+                                "maxTokens": 384_000,
+                                "compat": {
+                                    "supportsReasoningEffort": True,
+                                    "supportsUsageInStreaming": True,
+                                    "maxTokensField": "max_tokens",
+                                },
+                            }
+                        ],
+                    }
+                },
+            },
+            "plugins": {"entries": {"deepseek": {"enabled": True}}},
+        }
+        config_path.write_text(json.dumps(payload), encoding="utf-8")
+        (state_dir / "credential.db").write_bytes(b"test-only-provider-credential")
+
+    monkeypatch.setattr(cli, "_run_openclaw_configuration", configure_candidate)
+    monkeypatch.setattr(
+        cli,
+        "_discover_openclaw_default_model",
+        lambda *_args, **_kwargs: "deepseek/deepseek-v4-flash",
+    )
+    inspected: list[ModelProfile] = []
+
+    def inspect_candidate(
+        _binary: Path,
+        profile: ModelProfile,
+        *,
+        config_path: Path,
+        **_kwargs: object,
+    ) -> OpenClawModelInspection:
+        inspected.append(profile)
+        payload = json.loads(config_path.read_text(encoding="utf-8"))
+        compat = payload["models"]["providers"]["deepseek"]["models"][0]["compat"]
+        assert "supportsTools" not in compat
+        assert "DEEPSEEK_API_KEY" not in os.environ
+        return OpenClawModelInspection(
+            model=profile.model,
+            runtime_profile_sha256=profile.runtime_profile_sha256,
+            available=True,
+            context_window_tokens=1_000_000,
+        )
+
+    monkeypatch.setattr(cli, "_inspect_selected_model", inspect_candidate)
+    monkeypatch.setattr(
+        cli,
+        "_run_provider_smoke",
+        lambda *_args, **_kwargs: pytest.fail("provider smoke was declined"),
+    )
+
+    configured, inspections = cli._ensure_product_configuration(state_paths)
+
+    assert configured.model == "deepseek/deepseek-v4-flash"
+    runtime = configured.default_model_profile.runtime_profile
+    assert runtime.source is cli.ModelRuntimeProfileSource.SAT_PRESET
+    assert runtime.credential_source is cli.CredentialSource.OPENCLAW_AUTH
+    assert runtime.credential_env is None
+    assert runtime.supports_tools is True
+    assert len(inspected) == 1
+    assert inspected[0].model == configured.model
+    assert inspected[0].runtime_profile == runtime
+    assert tuple(item.model for item in inspections) == (configured.model,)
+    assert (state_paths.openclaw / "credential.db").read_bytes() == (
+        b"test-only-provider-credential"
+    )
+    saved = configuration_path.read_text(encoding="utf-8")
+    assert "test-only-provider-credential" not in saved
+    assert "api_key" not in saved
+    assert not tuple(state_root.glob(".openclaw.candidate-*"))
+    assert not tuple(state_root.glob(".openclaw.rollback-*"))
+    output = capsys.readouterr().out
+    assert "Saved secret-free model configuration" in output
+    assert "Provider check completed" not in output
+
+
+def test_unreviewed_custom_provider_still_requires_explicit_tool_support(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = "custom-api-deepseek-com/deepseek-flash"
+    configuration = UserConfiguration(model=model)
+    config_path = tmp_path / "openclaw.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "models": {
+                    "providers": {
+                        "custom-api-deepseek-com": {
+                            "baseUrl": "https://api.deepseek.com",
+                            "api": "openai-completions",
+                            "models": [{"id": "deepseek-flash"}],
+                        }
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    bound = cli._bind_private_runtime_profiles(
+        configuration,
+        config_path=config_path,
+    )
+
+    runtime = bound.default_model_profile.runtime_profile
+    assert runtime.source is cli.ModelRuntimeProfileSource.PRIVATE_OPENCLAW_CONFIG
+    assert runtime.credential_source is cli.CredentialSource.OPENCLAW_AUTH
+    assert runtime.supports_tools is None
+    monkeypatch.setattr(
+        cli,
+        "_inspect_selected_model",
+        lambda *_args, **_kwargs: pytest.fail(
+            "missing tool support must fail before model inspection"
+        ),
+    )
+    with pytest.raises(
+        cli.RuntimeConfigurationError,
+        match="model profile does not declare required tool support",
+    ):
+        cli._inspect_model_configuration(
+            bound,
+            state_dir=tmp_path,
+            config_path=config_path,
+        )
+
+
 def test_custom_remote_profile_without_credential_fails_before_save(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

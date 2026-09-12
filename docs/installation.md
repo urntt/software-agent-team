@@ -408,9 +408,16 @@ sat configure
 sat configure --show
 ```
 
-An OpenClaw-native route or reviewed SAT preset needs only a model. For example,
-the current DeepSeek V4.1 Flash preset uses `DEEPSEEK_API_KEY` from the trusted
-caller environment:
+The pinned OpenClaw DeepSeek plugin currently selects
+`deepseek/deepseek-v4-flash` during guided setup. SAT reviews that exact route's
+transport and tool capability while leaving authentication in the isolated
+OpenClaw credential store, so the completed wizard does not also require a
+`DEEPSEEK_API_KEY` environment variable. This review does not extend to another
+DeepSeek model ID or a custom provider that happens to use the same endpoint.
+
+An OpenClaw-native route or reviewed SAT preset otherwise needs only a model.
+For example, the separate DeepSeek V4.1 Flash preset uses
+`DEEPSEEK_API_KEY` from the trusted caller environment:
 
 ```bash
 export DEEPSEEK_API_KEY='<provider key>'
