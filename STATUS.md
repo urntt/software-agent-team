@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** validate published `v0.2.4` on the affected WSL environment
+**Current milestone:** validate the `v0.2.5` specialist Review correction release candidate
 
 **Last updated:** September 12, 2026
 
@@ -10,6 +10,19 @@ product, architecture, experiment, or roadmap; those decisions belong to
 [`VISION.md`](VISION.md).
 
 ## Current Release
+
+The `v0.2.5` release candidate keeps a specialist Review response recoverable
+when an evidence-selector correction exposes a second, distinct scope defect.
+Security scope mismatches now target only `surfaces`; experience scope
+mismatches target only `workflows`. The Controller preserves shared criterion
+assessments, findings, verdict, and summary, revalidates the complete merged
+artifact, and continues only when the prior typed defect disappeared. A
+production-shaped Dynamic Runner regression covers both specializations through
+an invalid selector, Controller-issued evidence binding, the newly exposed
+scope mismatch, a second targeted correction, and accepted artifact persistence.
+The runner, dynamic prompting, and response-correction suites pass all 138
+affected tests. Canonical release validation and a fresh ordinary-user journey
+remain pending.
 
 The immutable `v0.2.4` tag,
 [GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.2.4),
@@ -147,9 +160,13 @@ account/HOME/resource cleanup all passed. The scenario made no provider calls.
 
 ## Current Development Head
 
+The current `v0.2.5` candidate adds the specialist Review correction described
+above as a compatible patch over the immutable `v0.2.4` release. Its focused
+tests pass; clean canonical, exact-tag hosted, and fresh ordinary-user evidence
+remain pending.
+
 The implementation released as `v0.2.4` is frozen at the exact revision above.
-Development `main` adds only this status synchronization after that tag. The
-release is a compatible patch over `v0.2.3`. It adds an exact reviewed preset
+That release is a compatible patch over `v0.2.3`. It adds an exact reviewed preset
 for the official `deepseek/deepseek-v4-flash` onboarding route and keeps its
 credential authority in SAT's isolated OpenClaw auth store. The preset owns the
 provider/native identity, transport, endpoint, context and output limits,

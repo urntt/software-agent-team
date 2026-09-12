@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.2.3",
-  "target_version": "0.2.4",
+  "baseline_version": "0.2.4",
+  "target_version": "0.2.5",
   "changes": [
     {
-      "id": "official-deepseek-onboarding-profile",
+      "id": "specialist-review-scope-correction",
       "impact": "patch",
-      "summary": "Preserve isolated OpenClaw authentication for the exact official DeepSeek onboarding model while retaining custom-provider tool-capability checks"
+      "summary": "Target specialist Review scope corrections at the security or experience entry collection while preserving validated shared report fields"
     }
   ]
 }
