@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.2.5",
-  "target_version": "0.2.6",
+  "baseline_version": "0.2.6",
+  "target_version": "0.2.7",
   "changes": [
     {
-      "id": "planning-review-ownership-projection",
+      "id": "process-poll-progress-liveness",
       "impact": "patch",
-      "summary": "Preserve valid Agents across incremental specialist corrections and compile Review task criterion bindings from each non-overlapping scope"
+      "summary": "Keep repeated background-process polls with identical running output from renewing provider liveness and enable the pinned runtime loop breaker"
     }
   ]
 }

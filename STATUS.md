@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** validate the `v0.2.6` Planning Review ownership release candidate
+**Current milestone:** validate the `v0.2.7` no-progress process-poll release candidate
 
 **Last updated:** September 12, 2026
 
@@ -11,18 +11,36 @@ product, architecture, experiment, or roadmap; those decisions belong to
 
 ## Current Release
 
-The `v0.2.6` release candidate keeps Planning specialist corrections monotonic
-across complete Agent-array replacements and compiles Review-owned task bindings
-from the same non-overlapping criterion scopes used at runtime. Previously valid
-writers and assigned Review Agents therefore remain present when another missing
-specialist is added in a later correction. A Review task that mixes its owner's
-criteria with known criteria assigned to another Reviewer is projected to its
-owned scope; a task with no owned criterion or an unknown criterion remains
-strictly invalid. Planning prompt, projection, correction, and fail-closed tests
-pass all 194 affected cases. The clean implementation revision
-`99f2e5e6910159f52fbb8ed220c25158e0d70482` passed the canonical gate with all
-1,621 tests and complete terminal cleanup. Exact release-candidate, hosted-tag,
-and fresh ordinary-user validation remain pending.
+The `v0.2.7` release candidate distinguishes background-process observation
+from verified progress. Pinned OpenClaw `process` poll and log results are
+compared through an opaque digest of bounded output and status fields. A first
+running observation, changed output, terminal result, or different tool action
+renews provider liveness; a repeated identical running result and provider
+stream activity used only to request another equivalent poll do not. The
+repeated poll also cannot suspend stall enforcement as an independently active
+tool. Materialized Agent configuration enables pinned OpenClaw's native
+tool-loop detector, while leaving its detector set and thresholds runtime-owned.
+Focused session, execution, configuration, Planning, and dynamic-runner checks
+pass all 489 affected cases at implementation revision
+`cf4a5fea79ce3fdf1df00de904a4f2e934b96840`. Exact release-candidate, canonical,
+hosted-tag, and fresh ordinary-user validation remain pending.
+
+The immutable `v0.2.6` tag,
+[GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.2.6),
+package version, and release manifest identify source revision
+`ae5c86c19c797afa8b9339c043a5fd8eb7ad74ad` and Git archive digest
+`sha256:3c6cd152ad1fab53270c339e8baba1d6d799fd98db2766d7861071dfafcc27ea`.
+It keeps Planning specialist corrections monotonic across complete Agent-array
+replacements and compiles Review-owned task bindings from each non-overlapping
+criterion scope. The exact clean candidate passed all 1,621 local tests;
+exact-tag GitHub Actions run 34722858123 passed 1,619 tests with two explicit
+environment-dependent skips and published one identity manifest asset. Fresh
+fixed-revision development and published `v0.2.5` to `v0.2.6` lifecycle
+rehearsals passed. A provider-backed ordinary-user journey then completed
+installation, upgrade, first and subsequent startup, official DeepSeek setup,
+Planning, approval, and live controls before exposing the repeated no-progress
+poll defect corrected by the current candidate. Its controlled failure and
+exact cleanup remain separate from successful acceptance.
 
 The immutable `v0.2.5` tag,
 [GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.2.5),
@@ -178,11 +196,19 @@ account/HOME/resource cleanup all passed. The scenario made no provider calls.
 
 ## Current Development Head
 
-The current `v0.2.6` candidate adds the Planning Review ownership projections
-described above as a compatible patch over immutable `v0.2.5`. The 194-test
-Planning suite and the clean 1,621-test canonical gate pass at the implementation
-revision. The exact release head, hosted tag, and fresh ordinary-user journey
+The current `v0.2.7` candidate adds progress-qualified background-process
+polling and enables pinned OpenClaw loop detection as a compatible patch over
+immutable `v0.2.6`. The 489 affected session, executor, runtime-configuration,
+Planning, and dynamic-runner tests pass at the implementation revision. The
+exact release head, canonical gate, hosted tag, and fresh ordinary-user journey
 remain pending.
+
+The implementation released as `v0.2.6` is frozen at the exact revision above.
+Its Planning ownership checks, canonical gate, exact-tag hosted publication,
+fixed-revision development rehearsal, and genuine published-stable upgrade
+passed. The first provider-backed ordinary-user journey reached dynamic
+implementation and live controls, then exposed the current background-process
+liveness defect.
 
 The implementation released as `v0.2.5` is frozen at the exact revision above.
 Its focused checks, canonical gate, exact-tag hosted publication, fixed-revision
