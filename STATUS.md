@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** harden persisted-state recovery after the published `v0.2.2` release
+**Current milestone:** prepare the compatible `v0.2.3` release while `v0.2.2` remains published stable
 
 **Last updated:** September 12, 2026
 
@@ -98,7 +98,8 @@ account/HOME/resource cleanup all passed. The scenario made no provider calls.
 ## Current Development Head
 
 The implementation released as `v0.2.2` is frozen at the exact revision above.
-The current checkout adds a read-only, code-owned state-layout inspection shared
+The current checkout prepares `v0.2.3`, a compatible patch over `v0.2.2`, and
+adds a read-only, code-owned state-layout inspection shared
 by product startup, state creation, managed installation, and uninstallation.
 Startup now checks the root marker, every known category, ownership, access, and
 unknown top-level entries before changing permissions or reading provider
@@ -112,9 +113,9 @@ runtime, or building its image. Diagnostics are bounded and direct preserved
 state outside the active state root. The installed candidate remains the final
 compatibility authority, and development targets retain that candidate-owned
 check. Product, self-check, CLI, managed-install, uninstall, and schema tests
-pass all 180 affected checks; the canonical repository gate and a fresh WSL
-rerun remain pending. The package and release ledger still identify the
-published `v0.2.2` release until this patch is frozen as a new candidate.
+pass all 180 affected checks. The package, lock, and change-impact ledger
+identify the new candidate; the canonical repository gate, publication, and a
+fresh WSL rerun remain pending.
 
 The `v0.2.1` hosted failure observed a CLI exit of 130, a cancelled Planning
 session, and an interrupted turn, but the persisted invocation lifecycle was

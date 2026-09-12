@@ -1,12 +1,17 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.2.1",
-  "target_version": "0.2.2",
+  "baseline_version": "0.2.2",
+  "target_version": "0.2.3",
   "changes": [
     {
-      "id": "sigint-lease-acquisition-lifecycle",
+      "id": "state-layout-readiness",
       "impact": "patch",
-      "summary": "Preserve the user-interrupt lifecycle and release the exact process lease when SIGINT arrives during post-launch lease acquisition"
+      "summary": "Inspect the complete owned state layout before startup mutations and report exact ownership recovery instead of raw permission errors"
+    },
+    {
+      "id": "stable-schema-fast-preflight",
+      "impact": "patch",
+      "summary": "Reject manifest-known persisted schema incompatibility before cloning or application setup with bounded preservation guidance"
     }
   ]
 }
