@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** prepare the compatible `v0.2.1` review-fix release while `v0.2.0` remains the published stable
+**Current milestone:** prepare the compatible `v0.2.2` release while `v0.2.0` remains the published stable
 
 **Last updated:** September 12, 2026
 
@@ -21,10 +21,17 @@ passed 1,515 tests with two explicit environment-dependent skips on the hosted
 non-root runner, retained the canonical gate artifact, reported no workflow
 annotations, and only then published the identity manifest and Release.
 
+The immutable `v0.2.1` tag points to
+`b90b2634caa8b4a5360ed6bdc9b41d9c81ca4a2e`. Its local canonical gate passed
+all 1,608 tests, but its exact-tag hosted gate failed one real CLI SIGINT
+lifecycle check after 1,605 passes and two environment-dependent skips. No
+Release was created. The tag remains immutable and unpublished, and its version
+cannot be reused.
+
 The previous stable remains immutable `v0.1.2` at
 `64dcfc448fc229e4d03b4dd3722549ebeb09d2fb`, with Git archive digest
 `sha256:6baebe8610673e9b9795779c9f5965ef452f8bd03d065f3b37a93bdd4fa9543e`.
-The failed `v0.1.0` and `v0.1.1` tags remain immutable and unpublished.
+The failed `v0.1.0` and `v0.1.1` tags also remain immutable and unpublished.
 
 The product implementation at
 `654b1521a3bfd302b0491e420d2b93aaf0f11f0f` completed one managed, non-root,
@@ -77,18 +84,23 @@ cleanup all passed. The scenario made no provider calls.
 ## Current Development Head
 
 The implementation released as `v0.2.0` is frozen at the exact revision above.
-The current checkout prepares `v0.2.1`, a compatible patch over `v0.2.0`.
-The package, lock, and change-impact ledger identify the candidate; publication
-and exact-candidate release validation remain pending. The first versioned
-candidate `a257de432ff3f119323ee53b56f35320ecf640f6` passed 1,605 tests but failed
-three validation-fixture startup/timeout checks before their readiness
-checkpoints; cleanup remained complete. These failures block publication until
-the fixtures and the clean candidate pass their required gates. The fixtures
-shared a deadline that could expire while the separate adopter interpreter was
-still starting on constrained CI. Their bounded test allowance now covers that
-startup without changing the product's stage timeout, cleanup, or exit-status
-contracts; the three affected checks and all 38 full-gate tests pass. A new
-canonical gate remains pending. The candidate contains:
+The current checkout prepares `v0.2.2`, a compatible patch over the highest
+immutable version tag, `v0.2.1`; `v0.2.0` remains the published stable. The
+package, lock, and change-impact ledger identify the new candidate. Publication
+and exact-candidate release validation remain pending.
+
+The `v0.2.1` hosted failure observed a CLI exit of 130, a cancelled Planning
+session, and an interrupted turn, but the persisted invocation lifecycle was
+missing. A SIGINT could arrive after the child process lease was durably
+published but before lease acquisition returned to the executor. That interval
+previously bypassed the executor's user-interrupt result path. The current
+implementation includes lease acquisition in that path and releases only the
+lease whose full observed child identity matches the launched process. The
+controlled regression fails on the old implementation and passes ten
+consecutive runs on the current implementation; all 86 execution and process
+lifecycle module tests also pass. The clean canonical gate remains pending.
+
+The burned `v0.2.1` candidate also contains these compatible fixes:
 
 - Finalization recovery sums attributable assistant usage across the current
   invocation. Missing counters, compaction, and observed sanitizer omissions remain unknown;
@@ -114,13 +126,13 @@ canonical gate remains pending. The candidate contains:
 
 Affected integration checks exercise real Git, production controllers,
 configuration files, process finalization, and the shared ledger. Model content
-and quality-command outcomes remain explicit external fixtures. The shared
-canonical gate passed on clean `561b79610b958f207797d43544c94da4a5421f4a`:
-**1,608 tests passed in 707.68 seconds**, with doctor, formatting, and lint also
-passing. The test-stage adopter reaped 389 children during execution. All stage
-cleanup coverage was complete, with no terminal process, temporary-directory,
-container, volume, or lease residuals. The report is
-`artifacts/generated/full-gate/20260912T064025.620266Z-9a130222b092/report.json`.
+and quality-command outcomes remain explicit external fixtures. The clean
+`v0.2.1` candidate `b90b2634caa8b4a5360ed6bdc9b41d9c81ca4a2e` passed the local
+canonical gate with **1,608 tests in 835.36 seconds**; doctor, formatting, lint,
+and cleanup also passed. The test-stage adopter reaped 389 children during
+execution. No terminal process, temporary-directory, container, volume, or
+lease residual remained. The report is
+`artifacts/generated/full-gate/20260912T080910.783407Z-dc3cbe89b35c/report.json`.
 
 An earlier candidate's gate had seven Git process-creation failures; an observed
 retry was stopped after identifying accumulating adopted zombies. Those outcomes

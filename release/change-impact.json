@@ -1,37 +1,12 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.2.0",
-  "target_version": "0.2.1",
+  "baseline_version": "0.2.1",
+  "target_version": "0.2.2",
   "changes": [
     {
-      "id": "recovered-invocation-usage",
+      "id": "sigint-lease-acquisition-lifecycle",
       "impact": "patch",
-      "summary": "Sum all attributable assistant usage during finalization recovery and preserve unknown costs for incomplete or compacted evidence"
-    },
-    {
-      "id": "positive-iteration-snapshots",
-      "impact": "patch",
-      "summary": "Accept every positive snapshot iteration while preserving controlled-evaluation limits"
-    },
-    {
-      "id": "completed-writer-chain-order",
-      "impact": "patch",
-      "summary": "Collect writer artifacts in actual scheduler completion order without weakening Git chain validation"
-    },
-    {
-      "id": "configuration-interruption-rollback",
-      "impact": "patch",
-      "summary": "Reserve recovery storage before configuration changes and preserve previous state across failures and interruptions"
-    },
-    {
-      "id": "planning-revision-provenance",
-      "impact": "patch",
-      "summary": "Retain verified user revision sources through later edits, restart, and approval"
-    },
-    {
-      "id": "canonical-gate-child-reaping",
-      "impact": "patch",
-      "summary": "Reap adopted children during validation stages while preserving command exit status and exact cleanup authority"
+      "summary": "Preserve the user-interrupt lifecycle and release the exact process lease when SIGINT arrives during post-launch lease acquisition"
     }
   ]
 }
