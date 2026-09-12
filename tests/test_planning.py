@@ -9657,6 +9657,7 @@ def test_real_cli_sigint_persists_planning_lifecycle_before_exit_130(
     listener.listen(1)
     listener.settimeout(20)
     address = listener.getsockname()
+    lease_checkpoint = tmp_path / "lease-acquire-entered"
     binary = tmp_path / "openclaw"
     binary.write_text(
         f"#!{sys.executable}\nimport socket, time\n"
@@ -9667,16 +9668,23 @@ def test_real_cli_sigint_persists_planning_lifecycle_before_exit_130(
     binary.chmod(0o700)
     script = f"""
 import runpy
+import time
 from pathlib import Path
 from software_agent_team import cli
 from software_agent_team.execution import OpenClawSubprocessExecutor
 from software_agent_team.process_lifecycle import ProcessLeaseStore
 fixtures = runpy.run_path({str(Path(__file__).resolve())!r})
 store = fixtures['PlanningStore'](Path({str(tmp_path / "planning")!r}))
+class DelayedProcessLeaseStore(ProcessLeaseStore):
+    def acquire(self, *args, **kwargs):
+        lease = super().acquire(*args, **kwargs)
+        Path({str(lease_checkpoint)!r}).write_text('entered', encoding='utf-8')
+        time.sleep(60)
+        return lease
 executor = OpenClawSubprocessExecutor(
     openclaw_binary=Path({str(binary)!r}), process_grace_seconds=1,
     liveness_poll_seconds=5,
-    process_lease_store=ProcessLeaseStore(Path({str(tmp_path / "leases")!r})),
+    process_lease_store=DelayedProcessLeaseStore(Path({str(tmp_path / "leases")!r})),
 )
 budget = fixtures['AgentBudget'](
     authority=fixtures['BudgetAuthority'].USER_TASK,
@@ -9719,6 +9727,14 @@ raise SystemExit(cli.main([]))
             raise
         with listener, connection:
             assert connection.recv(5) == b"ready"
+        deadline = time.monotonic() + 20
+        while not lease_checkpoint.exists():
+            if process.poll() is not None:
+                stdout, stderr = process.communicate()
+                pytest.fail(f"CLI exited before lease checkpoint: {stdout}\n{stderr}")
+            if time.monotonic() >= deadline:
+                pytest.fail("CLI did not enter process lease acquisition")
+            time.sleep(0.01)
         os.kill(process.pid, signal.SIGINT)
         stdout, stderr = process.communicate(timeout=20)
         assert process.returncode == 130, (stdout, stderr)

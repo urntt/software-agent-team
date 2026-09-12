@@ -3074,8 +3074,10 @@ class OpenClawSubprocessExecutor:
             activity_handler=activity_handler,
         )
         process_lease: InvocationProcessLease | None = None
-        if self.process_lease_store is not None:
-            try:
+        stdout = ""
+        stderr = ""
+        try:
+            if self.process_lease_store is not None:
                 process_lease = self.process_lease_store.acquire(
                     run_id=request.run_id,
                     agent_id=request.agent_id,
@@ -3083,21 +3085,9 @@ class OpenClawSubprocessExecutor:
                     child_pid=process.pid,
                     command=command,
                 )
-            except BaseException:
-                self._begin_stop(
-                    process,
-                    lifecycle,
-                    reason=InvocationStopReason.PROCESS_FAILURE,
-                    now=self.monotonic(),
-                )
-                self._await_process_stop(process, lifecycle)
-                raise
-        with self._process_lock:
-            self._active_processes[request.session_key] = (request, process)
-            self._active_lifecycles[request.session_key] = lifecycle
-        stdout = ""
-        stderr = ""
-        try:
+            with self._process_lock:
+                self._active_processes[request.session_key] = (request, process)
+                self._active_lifecycles[request.session_key] = lifecycle
             while True:
                 try:
                     stdout, stderr = process.communicate(
@@ -3250,10 +3240,13 @@ class OpenClawSubprocessExecutor:
                 self._active_processes.pop(request.session_key, None)
                 self._active_lifecycles.pop(request.session_key, None)
                 self._interrupt_requests.pop(request.session_key, None)
-            if process_lease is not None:
-                assert self.process_lease_store is not None
-                self.process_lease_store.release(process_lease)
-            lifecycle.mark_process_lease_released()
+            if self._release_process_lease(
+                request=request,
+                process=process,
+                acquired_lease=process_lease,
+                observed_child=diagnostic_identity,
+            ):
+                lifecycle.mark_process_lease_released()
             lifecycle.set_initialization_evidence(
                 initialization_monitor.finalize(self.monotonic())
             )
@@ -3329,6 +3322,46 @@ class OpenClawSubprocessExecutor:
             except (subprocess.TimeoutExpired, KeyboardInterrupt):
                 # Repeated Ctrl+C cannot abandon an owned child or renew grace.
                 continue
+
+    def _release_process_lease(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        process: subprocess.Popen[str],
+        acquired_lease: InvocationProcessLease | None,
+        observed_child: ProcessIdentity | None,
+    ) -> bool:
+        """Release the exact lease even if acquisition was interrupted after publish."""
+
+        store = self.process_lease_store
+        if store is None:
+            return True
+        if acquired_lease is not None:
+            store.release(acquired_lease)
+            return True
+        try:
+            candidates = [
+                item.lease
+                for item in store.inspect().processes
+                if item.lease.run_id == request.run_id
+                and item.lease.agent_id == request.agent_id
+                and item.lease.session_key == request.session_key
+                and item.lease.child.pid == process.pid
+            ]
+        except (OSError, ProcessLifecycleError):
+            return False
+        if not candidates:
+            return True
+        if observed_child is None:
+            return False
+        exact = [lease for lease in candidates if lease.child == observed_child]
+        if len(exact) != 1 or len(candidates) != 1:
+            return False
+        try:
+            store.release(exact[0])
+        except (OSError, ProcessLifecycleError):
+            return False
+        return True
 
     @staticmethod
     def _signal_process(process: subprocess.Popen[str]) -> None:
