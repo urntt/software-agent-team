@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 import software_agent_team.product as product
+import software_agent_team.state_layout as state_layout_module
 from software_agent_team.process_lifecycle import (
     InvocationProcessLease,
     ObservedInvocationProcess,
@@ -91,6 +92,9 @@ def test_startup_diagnostics_report_a_ready_local_environment(
     )
 
     assert diagnostics.ready
+    state = next(check for check in diagnostics.checks if check.id == "state")
+    assert state.state is DiagnosticState.READY
+    assert "will be initialized" in state.detail
     assert all(
         check.state is not DiagnosticState.ACTION_REQUIRED
         for check in diagnostics.checks
@@ -391,6 +395,82 @@ def test_product_state_refuses_to_adopt_an_unowned_nonempty_root(
 
     assert user_file.read_text(encoding="utf-8") == "keep\n"
     assert root.stat().st_mode & 0o777 == 0o755
+
+
+def test_product_state_reports_category_owner_before_permission_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = ProductStatePaths.below(tmp_path / "state")
+    ensure_product_state(paths)
+    original_lstat = Path.lstat
+    unexpected_uid = os.geteuid() + 1
+
+    def mismatched_openclaw_owner(path: Path):
+        metadata = original_lstat(path)
+        if path == paths.openclaw:
+            values = list(metadata)
+            values[4] = unexpected_uid
+            return os.stat_result(values)
+        return metadata
+
+    monkeypatch.setattr(Path, "lstat", mismatched_openclaw_owner)
+
+    observation = state_layout_module.inspect_state_layout(paths.root)
+    diagnostic = product._state_layout_diagnostic(paths.root)
+    with pytest.raises(ProductFlowError) as raised:
+        ensure_product_state(paths)
+
+    assert not observation.ready
+    assert diagnostic.state is DiagnosticState.ACTION_REQUIRED
+    assert diagnostic.action is not None
+    assert observation.problems[0].path == paths.openclaw
+    assert f"observed uid={unexpected_uid}" not in observation.problems[0].detail
+    assert f"belongs to uid {unexpected_uid}" in observation.problems[0].detail
+    assert "invoking user" in observation.problems[0].remediation
+    assert str(paths.openclaw) in str(raised.value)
+    assert "Operation not permitted" not in str(raised.value)
+
+
+def test_product_state_wraps_a_permission_change_after_observation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = ProductStatePaths.below(tmp_path / "state")
+    ensure_product_state(paths)
+    original_chmod = Path.chmod
+
+    def fail_openclaw_chmod(path: Path, mode: int) -> None:
+        if path == paths.openclaw:
+            raise PermissionError(1, "Operation not permitted", str(path))
+        original_chmod(path, mode)
+
+    monkeypatch.setattr(Path, "chmod", fail_openclaw_chmod)
+
+    with pytest.raises(ProductFlowError) as raised:
+        ensure_product_state(paths)
+
+    message = str(raised.value)
+    assert str(paths.openclaw) in message
+    assert f"uid {os.geteuid()}" in message
+    assert "operating-system administrator" in message
+
+
+def test_product_state_rejects_unknown_backup_inside_owned_root(
+    tmp_path: Path,
+) -> None:
+    paths = ProductStatePaths.below(tmp_path / "state")
+    ensure_product_state(paths)
+    backup = paths.root / "old-runs-backup"
+    backup.mkdir()
+
+    with pytest.raises(ProductFlowError) as raised:
+        ensure_product_state(paths)
+
+    message = str(raised.value)
+    assert "unknown lifecycle category: old-runs-backup" in message
+    assert "outside the SAT state root" in message
+    assert backup.is_dir()
 
 
 def test_product_run_id_is_independent_of_the_evaluation_fixture() -> None:

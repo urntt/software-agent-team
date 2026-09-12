@@ -20,10 +20,12 @@ from software_agent_team.process_lifecycle import (
     ProcessLeaseStore,
     ProcessLifecycleError,
 )
-from software_agent_team.product import STATE_MARKER_NAME, ProductStatePaths
+from software_agent_team.product import ProductStatePaths
 from software_agent_team.state_layout import (
     PRODUCT_STATE_CATEGORIES,
+    STATE_MARKER_NAME,
     StateLifecycleGroup,
+    inspect_state_layout,
 )
 
 
@@ -235,46 +237,14 @@ def preflight_uninstall_state(request: UninstallStateRequest) -> ProductStatePat
     paths = ProductStatePaths.below(request.state_root)
     if not _lexists(paths.root):
         return paths
-    _require_owned_real_directory(paths.root, label="SAT state root")
-    resolved_root = paths.root.resolve(strict=True)
-    if resolved_root != paths.root:
+    observation = inspect_state_layout(paths.root)
+    if not observation.ready:
+        first = observation.problems[0]
+        additional = len(observation.problems) - 1
+        suffix = f" ({additional} additional problem(s))" if additional else ""
+        raise UninstallStateError(f"{first.detail}{suffix}. {first.remediation}")
+    if paths.root.resolve(strict=True) != paths.root:
         raise UninstallStateError("SAT state root must be canonical")
-
-    marker = paths.root / STATE_MARKER_NAME
-    try:
-        marker_metadata = marker.lstat()
-        expected = f"software-agent-team-state-v1\nroot={resolved_root}\n"
-        content = marker.read_text(encoding="utf-8")
-    except (OSError, UnicodeError) as error:
-        raise UninstallStateError(
-            "SAT state ownership marker is unavailable"
-        ) from error
-    if (
-        stat.S_ISLNK(marker_metadata.st_mode)
-        or not stat.S_ISREG(marker_metadata.st_mode)
-        or marker_metadata.st_uid != os.geteuid()
-        or content != expected
-    ):
-        raise UninstallStateError("SAT state ownership marker is invalid")
-
-    known_names = {category.directory_name for category in PRODUCT_STATE_CATEGORIES}
-    try:
-        actual_names = {entry.name for entry in paths.root.iterdir()}
-    except OSError as error:
-        raise UninstallStateError("SAT state root cannot be listed") from error
-    unknown = actual_names - known_names - {STATE_MARKER_NAME}
-    if unknown:
-        raise UninstallStateError(
-            "SAT state contains an unknown lifecycle category: "
-            + ", ".join(sorted(unknown))
-        )
-    for category in PRODUCT_STATE_CATEGORIES:
-        path = getattr(paths, category.attribute)
-        if _lexists(path):
-            _require_owned_real_directory(
-                path,
-                label=f"SAT {category.directory_name} state",
-            )
     _validate_run_liveness(paths)
     _validate_process_liveness(paths)
     return paths

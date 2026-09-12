@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** `v0.2.2` is the published stable release
+**Current milestone:** harden persisted-state recovery after the published `v0.2.2` release
 
 **Last updated:** September 12, 2026
 
@@ -98,10 +98,23 @@ account/HOME/resource cleanup all passed. The scenario made no provider calls.
 ## Current Development Head
 
 The implementation released as `v0.2.2` is frozen at the exact revision above.
-Subsequent `main` changes are limited to this status update; the release tag and
-manifest remain bound to the tested source revision. The package, lock, and
-change-impact ledger identify `v0.2.2` as a compatible patch over the highest
-prior immutable version tag, `v0.2.1`.
+The current checkout adds a read-only, code-owned state-layout inspection shared
+by product startup, state creation, managed installation, and uninstallation.
+Startup now checks the root marker, every known category, ownership, access, and
+unknown top-level entries before changing permissions or reading provider
+configuration. An ownership failure reports the exact path and UIDs with a
+recovery action; an operating-system error that occurs after inspection is
+wrapped in the same product boundary instead of leaking a raw exception.
+
+Stable managed targets now use the verified release manifest to reject known
+persisted-schema incompatibility before cloning the candidate, installing its
+runtime, or building its image. Diagnostics are bounded and direct preserved
+state outside the active state root. The installed candidate remains the final
+compatibility authority, and development targets retain that candidate-owned
+check. Product, self-check, CLI, managed-install, uninstall, and schema tests
+pass all 180 affected checks; the canonical repository gate and a fresh WSL
+rerun remain pending. The package and release ledger still identify the
+published `v0.2.2` release until this patch is frozen as a new candidate.
 
 The `v0.2.1` hosted failure observed a CLI exit of 130, a cancelled Planning
 session, and an interrupted turn, but the persisted invocation lifecycle was

@@ -481,7 +481,7 @@ def test_uninstaller_refuses_to_purge_an_unowned_state_root(tmp_path: Path) -> N
     )
 
     assert completed.returncode == 1
-    assert "state ownership marker is unavailable" in completed.stderr
+    assert "existing state root is not owned by SAT" in completed.stderr
     assert configuration.is_file()
     assert (state / "runs/example/final-report.md").is_file()
     assert (checkout / ".venv").is_dir()

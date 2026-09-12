@@ -705,6 +705,7 @@ def test_cli_no_command_runs_the_guided_product_journey(
         "platform": ("Linux or WSL", "detected Linux"),
         "architecture": ("Supported architecture", "detected x86_64"),
         "identity": ("Unprivileged user", "uid=1000 gid=1000"),
+        "state": ("SAT state ownership", f"owned layout ready at {tmp_path / 'state'}"),
         "working_directory": ("Writable project parent", str(tmp_path)),
         "command_git": ("git command", "/usr/bin/git"),
         "command_docker": ("docker command", "/usr/bin/docker"),

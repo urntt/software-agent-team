@@ -84,9 +84,12 @@ The bootstrap:
    installed application;
 3. Resolves the latest published stable release to one SemVer, full source
    revision, tag, source-archive digest, and schema-support manifest;
-4. Clones that immutable target into SAT-owned version storage and runs all
+4. Uses that verified manifest and the code-owned state layout to reject any
+   already-known schema or ownership incompatibility before cloning, runtime
+   setup, or image construction;
+5. Clones that immutable target into SAT-owned version storage and runs all
    installation checks before changing the active application;
-5. Atomically activates the verified version through
+6. Atomically activates the verified version through
    `${XDG_DATA_HOME:-$HOME/.local/share}/software-agent-team/app`, records its
    provenance, and removes the temporary helper.
 
@@ -127,6 +130,17 @@ helper supplies the current transaction engine, but it still resolves and
 installs the requested immutable target and preserves the active installation
 until that target proves compatibility. Recovery never requires deleting a run
 lock, configuration, provider state, or prior release.
+
+If this early check reports that the advertised target cannot consume current
+persisted state, stop every SAT task first. Keep the old evidence by renaming
+the complete state root to a new, nonexistent sibling directory, or use a SAT
+release or explicit migration that can read it. A backup must remain outside
+the active state root: creating `old-runs-backup/` or another ad hoc child there
+makes the lifecycle incomplete and correctly blocks both startup and uninstall.
+The early manifest check can only reject an incompatibility it can already
+prove. The fully installed candidate still runs its own authoritative scanner
+before activation, so a future layout unknown to the bootstrap helper remains
+fail closed.
 
 If Docker, a download, or an offline check interrupts installation, correct the
 reported condition and rerun the same command. A lifecycle ownership marker
@@ -499,6 +513,15 @@ creates an exact ownership marker and refuses to adopt an existing unowned
 directory, so an override cannot make an arbitrary OpenClaw or user directory
 eligible for writes, export, or purge.
 
+Before changing permissions or reading provider configuration, startup checks
+the state root, ownership marker, every code-owned category, and any unknown
+top-level entry. A category owned by another UID is reported with its exact
+path and observed/expected UID instead of surfacing a raw `Operation not
+permitted` exception. Stop active SAT tasks and have the operating-system
+administrator restore that exact SAT path to the invoking user, then retry.
+SAT does not automatically change ownership, delete old evidence, or ignore an
+unknown category.
+
 SAT generates every run ID and internal path after confirmation. The model
 works only in the isolated workspace. A completed, accepted workspace is copied
 through a same-parent staging directory and published with Linux no-replace
@@ -565,7 +588,8 @@ no `--ref`, switching to the already active channel is a local no-op and
 
 Install, update, and channel switch use one transaction: validate lifecycle
 ownership, resolve an immutable target, show the current and target identities,
-obtain confirmation, hold the exclusive lifecycle lock, claim the immutable
+obtain confirmation, hold the exclusive lifecycle lock, apply the stable
+manifest's read-only fast preflight, claim the immutable
 final release path before creating path-bound Python or OpenClaw runtime files,
 and install and verify the complete application there. The verified candidate,
 not the older active updater, then runs its versioned read-only compatibility

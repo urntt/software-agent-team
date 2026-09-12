@@ -3455,7 +3455,6 @@ def _task_admission_checkpoint(
         model_inspections=model_inspections,
         source_request=planning_request.source_request,
         destination=destination,
-        state_root=state_paths.root,
         resource_authorization=resource_authorization,
     )
     store = TaskSelfCheckStore(state_paths.self_checks)

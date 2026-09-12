@@ -28,6 +28,7 @@ from software_agent_team.managed_install import (
     resolve_dev_target,
     stage_managed_target,
 )
+from software_agent_team.product import ProductStatePaths, ensure_product_state
 from software_agent_team.releases import git_archive_digest
 from software_agent_team.schema_compatibility import supported_schemas
 from software_agent_team.versioning import (
@@ -379,8 +380,9 @@ def test_same_source_provenance_switch_preserves_and_reuses_exact_targets(
     install_managed_target(first, install_paths)
     original = install_paths.application_link.resolve(strict=True)
     original_marker = (original / ".sat-managed-install").read_bytes()
-    install_paths.state_root.mkdir(parents=True, exist_ok=True)
-    sentinel = install_paths.state_root / "preserve.txt"
+    product_state = ProductStatePaths.below(install_paths.state_root)
+    ensure_product_state(product_state)
+    sentinel = product_state.openclaw / "preserve.txt"
     sentinel.write_text("user state must survive\n", encoding="utf-8")
 
     changed = install_managed_target(second, install_paths)
@@ -1162,3 +1164,109 @@ def test_unsupported_persisted_schema_blocks_before_activation(tmp_path: Path) -
 
     assert not install_paths.application_link.exists()
     assert not install_paths.installation_record.exists()
+
+
+def test_stable_manifest_rejects_known_incompatible_state_before_staging(
+    tmp_path: Path,
+) -> None:
+    repository, revision = prepare_repository(tmp_path)
+    install_paths = paths(tmp_path)
+    ensure_product_state(ProductStatePaths.below(install_paths.state_root))
+    run = install_paths.state_root / "runs/sat-20260824-legacy"
+    run.mkdir()
+    (run / "run.json").write_text(
+        json.dumps({"schema_version": 4, "phase": "completed"}),
+        encoding="utf-8",
+    )
+    for index in range(8):
+        artifact = run / f"iterations/01/executions/plan/legacy-{index}.json"
+        artifact.parent.mkdir(parents=True, exist_ok=True)
+        artifact.write_text(
+            json.dumps({"schema_version": 1, "kind": "legacy"}),
+            encoding="utf-8",
+        )
+    before = {
+        path.relative_to(install_paths.state_root): path.read_bytes()
+        for path in install_paths.state_root.rglob("*")
+        if path.is_file()
+    }
+    target = ManagedTarget(
+        channel=ManagedChannel.STABLE,
+        release_version="0.2.0",
+        source_revision=revision,
+        source_ref="v0.2.0",
+        repository_url=str(repository),
+        artifact_digest="sha256:" + "a" * 64,
+        schema_support=supported_schemas(),
+    )
+    commands: list[tuple[str, ...]] = []
+
+    with pytest.raises(ManagedInstallError) as raised:
+        install_managed_target(
+            target,
+            install_paths,
+            command_runner=lambda command, _cwd, _environment: commands.append(
+                tuple(command)
+            ),
+        )
+
+    message = str(raised.value)
+    assert "before application setup" in message
+    assert "run schema 4" in message
+    assert "artifact schema 1" in message
+    assert "6..6" in message
+    assert "2..14" in message
+    assert "additional problem(s) omitted" in message
+    assert "Do not create backup directories inside the SAT state root" in message
+    assert (
+        str(install_paths.state_root.with_name("software-agent-team-legacy")) in message
+    )
+    assert commands == []
+    assert not install_paths.versions_root.exists()
+    assert not install_paths.application_link.exists()
+    assert not install_paths.installation_record.exists()
+    assert before == {
+        path.relative_to(install_paths.state_root): path.read_bytes()
+        for path in install_paths.state_root.rglob("*")
+        if path.is_file()
+    }
+
+
+def test_stable_manifest_rejects_unknown_state_category_before_schema_scan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_paths = paths(tmp_path)
+    ensure_product_state(ProductStatePaths.below(install_paths.state_root))
+    backup = install_paths.state_root / "old-runs-backup"
+    backup.mkdir()
+    target = ManagedTarget(
+        channel=ManagedChannel.STABLE,
+        release_version="0.2.0",
+        source_revision="a" * 40,
+        source_ref="v0.2.0",
+        repository_url="https://example.invalid/software-agent-team.git",
+        artifact_digest="sha256:" + "b" * 64,
+        schema_support=supported_schemas(),
+    )
+    monkeypatch.setattr(
+        managed_install_module,
+        "inspect_persisted_schema_compatibility",
+        lambda **_kwargs: pytest.fail("schema scan must wait for a valid state layout"),
+    )
+    commands: list[tuple[str, ...]] = []
+
+    with pytest.raises(ManagedInstallError) as raised:
+        install_managed_target(
+            target,
+            install_paths,
+            command_runner=lambda command, _cwd, _environment: commands.append(
+                tuple(command)
+            ),
+        )
+
+    message = str(raised.value)
+    assert "unknown lifecycle category: old-runs-backup" in message
+    assert "outside the SAT state root" in message
+    assert commands == []
+    assert backup.is_dir()

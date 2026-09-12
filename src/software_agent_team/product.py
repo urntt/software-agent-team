@@ -33,13 +33,15 @@ from software_agent_team.sandbox_lifecycle import (
 )
 from software_agent_team.state_layout import (
     PRODUCT_STATE_CATEGORIES,
+    STATE_MARKER_NAME,
+    StateLayoutObservation,
+    inspect_state_layout,
     state_category_paths,
 )
 
 MINIMUM_FREE_BYTES = 1_073_741_824
 PROJECT_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 SUPPORTED_ARCHITECTURES = {"aarch64", "amd64", "arm64", "x86_64"}
-STATE_MARKER_NAME = ".sat-state-v1"
 AT_FDCWD = -100
 RENAME_NOREPLACE = 1
 PROJECT_MANIFEST_NAME = "sat-project.json"
@@ -186,7 +188,30 @@ class ProductStatePaths:
 def ensure_product_state(paths: ProductStatePaths) -> None:
     """Create private real directories for product-owned run state."""
 
-    root_existed = paths.root.exists() or paths.root.is_symlink()
+    observed = inspect_state_layout(paths.root)
+    if observed.initialized and not observed.ready:
+        raise ProductFlowError(_state_layout_failure(observed))
+    try:
+        _secure_product_state(paths, root_existed=observed.initialized)
+    except ProductFlowError:
+        raise
+    except OSError as error:
+        failure_path = Path(error.filename) if error.filename else paths.root
+        reason = error.strerror or type(error).__name__
+        raise ProductFlowError(
+            f"SAT state path could not be secured for uid {os.geteuid()}: "
+            f"{failure_path} ({reason}). Have the operating-system administrator "
+            "restore this exact SAT path to the invoking user, then retry."
+        ) from error
+
+
+def _secure_product_state(
+    paths: ProductStatePaths,
+    *,
+    root_existed: bool,
+) -> None:
+    """Create and normalize one layout after its read-only ownership check."""
+
     paths.root.mkdir(parents=True, exist_ok=True, mode=0o700)
     if paths.root.is_symlink() or not paths.root.is_dir():
         raise ProductFlowError(f"SAT state root must be a real directory: {paths.root}")
@@ -223,6 +248,43 @@ def ensure_product_state(paths: ProductStatePaths) -> None:
             raise ProductFlowError(
                 f"SAT state path escapes its root: {path}"
             ) from error
+
+
+def _state_layout_failure(observation: StateLayoutObservation) -> str:
+    """Render one bounded state failure with an executable recovery boundary."""
+
+    first = observation.problems[0]
+    additional = len(observation.problems) - 1
+    suffix = f" ({additional} additional problem(s))" if additional else ""
+    return f"{first.detail}{suffix}. {first.remediation}"
+
+
+def _state_layout_diagnostic(state_root: Path) -> DiagnosticCheck:
+    observation = inspect_state_layout(state_root)
+    if observation.ready:
+        detail = (
+            f"owned layout ready at {state_root}"
+            if observation.initialized
+            else f"new owned layout will be initialized at {state_root}"
+        )
+        return DiagnosticCheck(
+            id="state",
+            label="SAT state ownership",
+            state=DiagnosticState.READY,
+            detail=detail,
+        )
+    first = observation.problems[0]
+    additional = len(observation.problems) - 1
+    detail = first.detail
+    if additional:
+        detail += f"; {additional} additional problem(s)"
+    return DiagnosticCheck(
+        id="state",
+        label="SAT state ownership",
+        state=DiagnosticState.ACTION_REQUIRED,
+        detail=detail,
+        action=first.remediation,
+    )
 
 
 CommandRunner = Callable[[Sequence[str], float], subprocess.CompletedProcess[str]]
@@ -430,6 +492,7 @@ def inspect_startup_environment(
             action=(None if unprivileged else "Run SAT as a normal user, not root."),
         )
     )
+    checks.append(_state_layout_diagnostic(state_root))
 
     try:
         resolved_working_directory = working_directory.resolve(strict=True)

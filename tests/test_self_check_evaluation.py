@@ -24,6 +24,7 @@ from software_agent_team.schema_compatibility import (
     supported_schemas,
 )
 from software_agent_team.self_check import (
+    SelfCheckOwner,
     SelfCheckStatus,
     TaskModelMetadata,
     TaskResourceAuthorization,
@@ -72,6 +73,7 @@ def ready_diagnostics(tmp_path: Path) -> StartupDiagnostics:
         "platform": ("Linux or WSL", "detected Linux"),
         "architecture": ("Supported architecture", "detected x86_64"),
         "identity": ("Unprivileged user", "uid=1000 gid=1000"),
+        "state": ("SAT state ownership", f"owned layout ready at {tmp_path / 'state'}"),
         "working_directory": ("Writable project parent", str(tmp_path)),
         "command_git": ("git command", "/usr/bin/git"),
         "command_docker": ("docker command", "/usr/bin/docker"),
@@ -199,7 +201,6 @@ def admission_report(tmp_path: Path):
         model_inspections=(OpenClawModelInspection(model=MODEL, available=True),),
         source_request="Build a small link checker.",
         destination=tmp_path / "link-checker",
-        state_root=state,
         resource_authorization=resource_authorization(),
         checked_at=NOW,
     )
@@ -306,10 +307,13 @@ def test_task_admission_unifies_required_facts_and_allows_nonblocking_warnings(
 
     assert report.ready
     assert report.resource_authorization == resource_authorization()
+    state = next(item for item in report.checks if item.id == "application.state")
+    assert state.owner is SelfCheckOwner.SAT
     assert {item.id for item in report.checks} >= {
         "application.version",
         "application.schema",
         "application.update",
+        "application.state",
         "system.platform",
         "tool.docker",
         "runtime.sandbox_image",
@@ -340,7 +344,6 @@ def test_task_admission_unifies_required_facts_and_allows_nonblocking_warnings(
             ),
             "source_request": "Build a small link checker.",
             "destination": tmp_path / "another-link-checker",
-            "state_root": tmp_path / "state",
             "resource_authorization": resource_authorization(),
             "checked_at": NOW,
         }
@@ -373,7 +376,6 @@ def test_task_admission_blocks_incompatible_version_and_missing_authority(
         model_inspections=(OpenClawModelInspection(model=MODEL, available=True),),
         source_request="Build a small link checker.",
         destination=tmp_path / "link-checker",
-        state_root=state,
         resource_authorization=None,
         checked_at=NOW,
     )
@@ -404,7 +406,6 @@ def test_task_admission_turns_a_missing_required_probe_into_blocking_evidence(
         model_inspections=(OpenClawModelInspection(model=MODEL, available=True),),
         source_request="Build a small link checker.",
         destination=tmp_path / "link-checker",
-        state_root=state,
         resource_authorization=resource_authorization(),
         checked_at=NOW,
     )

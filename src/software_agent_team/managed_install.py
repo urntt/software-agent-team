@@ -28,8 +28,12 @@ from software_agent_team.releases import (
 )
 from software_agent_team.schema_compatibility import (
     CandidateCompatibilityEnvelope,
+    PersistedSchemaCompatibilityReport,
+    SchemaCompatibilityError,
     SchemaSupport,
+    inspect_persisted_schema_compatibility,
 )
+from software_agent_team.state_layout import inspect_state_layout
 from software_agent_team.user_configuration import user_configuration_path
 from software_agent_team.versioning import (
     InstallationRecord,
@@ -51,6 +55,7 @@ LATEST_RELEASE_API_ENVIRONMENT_VARIABLE = "SAT_RELEASE_API_URL"
 DEFAULT_MANAGED_DIRECTORY_NAME = "software-agent-team"
 CANDIDATE_COMPATIBILITY_TIMEOUT_SECONDS = 30
 MAX_CANDIDATE_COMPATIBILITY_OUTPUT_BYTES = 16 * 1024 * 1024
+MAX_RENDERED_STATE_PROBLEMS = 6
 SANDBOX_IMAGE_OWNER_LABEL = "software-agent-team.sandbox-image"
 SANDBOX_IMAGE_REFERENCE_LABEL = "software-agent-team.image-reference"
 SANDBOX_IMAGE_COMMAND_TIMEOUT_SECONDS = 30
@@ -425,6 +430,7 @@ def _stage_managed_target_locked(
 
     _require_managed_root(paths)
     _validate_managed_destination(paths)
+    _preflight_advertised_persisted_state(target, paths)
     paths.versions_root.mkdir(parents=True, exist_ok=True, mode=0o700)
     _require_real_directory(paths.versions_root, "managed versions root")
     stage = Path(tempfile.mkdtemp(prefix=".stage-", dir=paths.versions_root)).resolve()
@@ -727,8 +733,11 @@ def _activate_staged_application_locked(
     compatibility = envelope.compatibility
     if not compatibility.compatible:
         raise ManagedInstallError(
-            "candidate cannot read current persisted state: "
-            + "; ".join(compatibility.problems)
+            _render_schema_compatibility_failure(
+                compatibility,
+                paths=paths,
+                heading="candidate cannot read current persisted state",
+            )
         )
     if envelope.active_run_ids:
         raise ManagedInstallError(
@@ -868,6 +877,85 @@ def _inspect_state_with_candidate(
         raise ManagedInstallError(
             "verified candidate did not produce a valid state compatibility result"
         ) from error
+
+
+def _preflight_advertised_persisted_state(
+    target: ManagedTarget,
+    paths: ManagedInstallPaths,
+) -> None:
+    """Reject manifest-known state problems before cloning or application setup."""
+
+    if target.channel is not ManagedChannel.STABLE or target.schema_support is None:
+        return
+    layout = inspect_state_layout(paths.state_root)
+    if layout.ready:
+        try:
+            compatibility = inspect_persisted_schema_compatibility(
+                configuration_path=paths.configuration_path,
+                installation_record_path=paths.installation_record,
+                state_root=paths.state_root,
+                candidate_support=target.schema_support,
+            )
+        except SchemaCompatibilityError as error:
+            compatibility = PersistedSchemaCompatibilityReport(
+                compatible=False,
+                observations=(),
+                problems=(str(error),),
+            )
+    else:
+        compatibility = PersistedSchemaCompatibilityReport(
+            compatible=True,
+            observations=(),
+            problems=(),
+        )
+    if layout.ready and compatibility.compatible:
+        return
+
+    problems = [problem.detail for problem in layout.problems]
+    problems.extend(compatibility.problems)
+    remediations: list[str] = []
+    if layout.problems:
+        remediations.append(layout.problems[0].remediation)
+    if not compatibility.compatible:
+        legacy_example = paths.state_root.with_name(f"{paths.state_root.name}-legacy")
+        remediations.append(
+            "Stop every SAT task. To preserve incompatible state, rename the complete "
+            f"state root {paths.state_root} to a new sibling path outside that root "
+            f"(for example {legacy_example}), then rerun the installer. Do not create "
+            "backup directories inside the SAT state root. Alternatively, use a "
+            "compatible SAT release or an explicit supported migration."
+        )
+    raise ManagedInstallError(
+        "advertised target cannot consume current persisted state before application "
+        f"setup:\n{_render_bounded_state_problems(problems)}\n"
+        f"remediation: {' '.join(remediations)}"
+    )
+
+
+def _render_schema_compatibility_failure(
+    compatibility: PersistedSchemaCompatibilityReport,
+    *,
+    paths: ManagedInstallPaths,
+    heading: str,
+) -> str:
+    legacy_example = paths.state_root.with_name(f"{paths.state_root.name}-legacy")
+    return (
+        f"{heading}:\n"
+        f"{_render_bounded_state_problems(list(compatibility.problems))}\n"
+        "remediation: stop every SAT task; preserve incompatible state only outside "
+        f"{paths.state_root} (for example by renaming the complete root to the new "
+        f"sibling {legacy_example}), then use a compatible release, an explicit "
+        "supported migration, or rerun the installer with a new empty state root"
+    )
+
+
+def _render_bounded_state_problems(problems: list[str]) -> str:
+    visible = problems[:MAX_RENDERED_STATE_PROBLEMS]
+    lines = [f"- {problem}" for problem in visible]
+    hidden = len(problems) - len(visible)
+    if hidden:
+        lines.append(f"- {hidden} additional problem(s) omitted")
+    return "\n".join(lines)
 
 
 def _schema_support_identity(

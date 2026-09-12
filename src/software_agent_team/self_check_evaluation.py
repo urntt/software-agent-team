@@ -102,6 +102,7 @@ _STARTUP_CHECK_IDS = {
     "platform": ("system.platform", SelfCheckCategory.SYSTEM),
     "architecture": ("system.architecture", SelfCheckCategory.SYSTEM),
     "identity": ("system.identity", SelfCheckCategory.SYSTEM),
+    "state": ("application.state", SelfCheckCategory.APPLICATION),
     "working_directory": (
         "environment.working_directory",
         SelfCheckCategory.ENVIRONMENT,
@@ -126,6 +127,7 @@ _STARTUP_CHECK_IDS = {
 }
 
 _STARTUP_DEPENDENCIES = {
+    "application.state": ("application.schema",),
     "runtime.docker": ("tool.docker",),
     "runtime.sandbox_image": ("runtime.docker",),
     "runtime.sat_sandbox_resources": ("runtime.docker",),
@@ -144,7 +146,6 @@ def build_task_admission_report(
     model_inspections: tuple[OpenClawModelInspection, ...],
     source_request: str,
     destination: Path,
-    state_root: Path,
     resource_authorization: TaskResourceAuthorization | None,
     checked_at: datetime | None = None,
 ) -> TaskSelfCheckReport:
@@ -339,7 +340,11 @@ def build_task_admission_report(
                 check_id=check_id,
                 checkpoint=SelfCheckCheckpoint.TASK_ADMISSION,
                 category=category,
-                owner=SelfCheckOwner.HOST,
+                owner=(
+                    SelfCheckOwner.SAT
+                    if check_id == "application.state"
+                    else SelfCheckOwner.HOST
+                ),
                 dependencies=_STARTUP_DEPENDENCIES.get(check_id, ()),
                 observed_fact=f"{label}: {detail}",
                 evidence_kind="local_observation",
@@ -359,40 +364,6 @@ def build_task_admission_report(
                 ),
             )
         )
-
-    state_owned = (
-        state_root.is_absolute()
-        and state_root.is_dir()
-        and not state_root.is_symlink()
-        and os.access(state_root, os.W_OK | os.X_OK)
-    )
-    checks.append(
-        _result(
-            check_id="application.state",
-            checkpoint=SelfCheckCheckpoint.TASK_ADMISSION,
-            category=SelfCheckCategory.APPLICATION,
-            owner=SelfCheckOwner.SAT,
-            dependencies=("application.schema",),
-            observed_fact=f"private SAT state root ready={state_owned}: {state_root}",
-            evidence_kind="local_observation",
-            evidence_reference=str(state_root),
-            input_value={"path": str(state_root), "ready": state_owned},
-            checked_at=when,
-            status=SelfCheckStatus.PASS if state_owned else SelfCheckStatus.BLOCKED,
-            severity=(
-                SelfCheckSeverity.INFO if state_owned else SelfCheckSeverity.REQUIRED
-            ),
-            consequence=(
-                None if state_owned else "SAT cannot persist task evidence safely."
-            ),
-            remediation=(
-                None
-                if state_owned
-                else "Repair the SAT-owned state directory and run sat again."
-            ),
-            rerun_rule="Re-run when SAT state ownership or permissions change.",
-        )
-    )
 
     inspection_by_model = {item.model: item for item in model_inspections}
     model_check_ids: list[str] = []
