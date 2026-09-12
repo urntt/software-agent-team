@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** validate the `v0.2.4` DeepSeek first-run release candidate
+**Current milestone:** validate published `v0.2.4` on the affected WSL environment
 
 **Last updated:** September 12, 2026
 
@@ -11,7 +11,12 @@ product, architecture, experiment, or roadmap; those decisions belong to
 
 ## Current Release
 
-The `v0.2.4` release candidate recognizes the pinned official DeepSeek plugin's exact
+The immutable `v0.2.4` tag,
+[GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.2.4),
+package version, and release manifest identify source revision
+`8b93998160cf9f1c469d5b9475dcb5a0bdb77ce1` and Git archive digest
+`sha256:3f5e23a26b85720d683078ab52ce07167ac462c14fb65bcca670de9984bdb9a8`.
+This release recognizes the pinned official DeepSeek plugin's exact
 `deepseek/deepseek-v4-flash` onboarding route as a reviewed preset. It freezes
 the plugin's provider/native identity, OpenAI-compatible transport, public
 endpoint, 1,000,000-token context, 384,000-token output limit, reasoning and
@@ -24,11 +29,20 @@ support and retain the existing fail-closed behavior.
 
 The package, lock, and change-impact ledger identify `v0.2.4` as a compatible
 patch over `v0.2.3`. Focused model-profile, runtime-materialization,
-configuration, transaction, and
-CLI tests pass. A pinned OpenClaw local check using an isolated official-plugin
-state reports the exact route available without `DEEPSEEK_API_KEY` and without
-a provider request. Canonical release validation and a fresh WSL task-admission
-rerun remain pending.
+configuration, transaction, CLI, release, and documentation tests pass. A
+pinned OpenClaw local check using an isolated official-plugin state reports the
+exact route available without `DEEPSEEK_API_KEY` and without a provider
+request. The exact clean revision passed the local canonical `make check` with
+doctor, formatting, lint, all 1,618 tests, complete cleanup coverage, and no
+terminal resource residual. Exact-tag GitHub Actions
+[run 34708846766](https://github.com/urntt/software-agent-team/actions/runs/34708846766)
+passed 1,616 tests with two explicit environment-dependent skips, retained the
+canonical gate artifact, and published exactly one identity manifest asset. A
+fresh disposable non-root rehearsal started from the genuine `v0.2.3` Release,
+discovered and activated `v0.2.4`, preserved configuration and legacy state,
+exercised no-op, refusal, rollback, channel, foreign-resource, export, and purge
+paths, and finished with no attributable resource residual or provider call. A
+fresh task-admission rerun on the affected WSL environment remains pending.
 
 The immutable `v0.2.3` tag,
 [GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.2.3),
@@ -133,9 +147,20 @@ account/HOME/resource cleanup all passed. The scenario made no provider calls.
 
 ## Current Development Head
 
-The implementation released as `v0.2.3` is frozen at the exact revision above.
+The implementation released as `v0.2.4` is frozen at the exact revision above.
 Development `main` adds only this status synchronization after that tag. The
-release is a compatible patch over `v0.2.2` and adds a read-only, code-owned
+release is a compatible patch over `v0.2.3`. It adds an exact reviewed preset
+for the official `deepseek/deepseek-v4-flash` onboarding route and keeps its
+credential authority in SAT's isolated OpenClaw auth store. The preset owns the
+provider/native identity, transport, endpoint, context and output limits,
+reasoning, tool, and streaming facts. Other provider/model pairs and custom
+endpoints retain the explicit tool-support requirement. The focused checks,
+pinned OpenClaw local inspection, canonical gates, exact-tag publication,
+fixed-revision development rehearsal, and genuine published-stable upgrade all
+passed. A fresh task-admission rerun on the affected WSL device remains the
+validation boundary for the original first-run failure.
+
+The included `v0.2.3` changes add a read-only, code-owned
 state-layout inspection shared
 by product startup, state creation, managed installation, and uninstallation.
 Startup now checks the root marker, every known category, ownership, access, and
