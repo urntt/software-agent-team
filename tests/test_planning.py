@@ -566,6 +566,7 @@ def test_planner_contract_does_not_treat_provenance_as_semantic_relevance() -> N
     assert "a build instruction, product type" in contract
     assert "typed `agents` graph is the only team-topology owner" in contract
     assert "Every Review-owned task may reference only criteria" in contract
+    assert "existing Agent that already owns valid work" in contract
     assert "cannot be used as target users" in contract
     assert (
         "must leave `requirement_ids`, `criterion_ids`, and `decision_ids` empty"
@@ -5257,7 +5258,7 @@ def test_planning_repairs_missing_security_specialist_through_typed_slots(
     }
 
 
-def test_planning_projects_multiple_specialist_bindings_from_one_agent_correction(
+def test_planning_preserves_specialists_across_incremental_agent_corrections(
     tmp_path: Path,
 ) -> None:
     body = proposal_body()
@@ -5389,9 +5390,27 @@ def test_planning_projects_multiple_specialist_bindings_from_one_agent_correctio
             json.dumps(invalid_payload),
             correction_response(
                 correction_base,
-                {"/proposal/agents": valid_payload["proposal"]["agents"]},
+                {
+                    "/proposal/agents": [
+                        *valid_payload["proposal"]["agents"][:-2],
+                        valid_payload["proposal"]["agents"][-2],
+                    ]
+                },
                 target_paths=(
                     "/proposal/acceptance_criteria/2/verification_agent_ids",
+                    "/proposal/acceptance_criteria/3/verification_agent_ids",
+                    "/proposal/agents",
+                ),
+            ),
+            correction_response(
+                correction_base,
+                {
+                    "/proposal/agents": [
+                        *valid_payload["proposal"]["agents"][:-2],
+                        valid_payload["proposal"]["agents"][-1],
+                    ]
+                },
+                target_paths=(
                     "/proposal/acceptance_criteria/3/verification_agent_ids",
                     "/proposal/agents",
                 ),
@@ -5414,21 +5433,29 @@ def test_planning_projects_multiple_specialist_bindings_from_one_agent_correctio
 
     assert created is not None
     assert created.body == valid
-    assert len(executor.requests) == 2
+    assert len(executor.requests) == 3
     assert invalid_payload == original_payload
-    final_turn = store.load_turn(request().run_id, 2)
+    intermediate_turn = store.load_turn(request().run_id, 2)
+    assert intermediate_turn.semantic_correction_outcome == "improved"
+    assert intermediate_turn.response_normalizations == (
+        "compiled proposal.acceptance_criteria[2].verification_agent_ids from "
+        "the unique security Review authority",
+    )
+    final_turn = store.load_turn(request().run_id, 3)
     assert final_turn.semantic_correction_outcome == "accepted"
     assert final_turn.submission_payload == {
         "replacements": [
             {
-                "slot_handle": "slot_3",
-                "replacement_value": valid_payload["proposal"]["agents"],
+                "slot_handle": "slot_2",
+                "replacement_value": [
+                    *valid_payload["proposal"]["agents"][:-2],
+                    valid_payload["proposal"]["agents"][-1],
+                ],
             }
         ]
     }
     assert final_turn.response_normalizations == (
-        "compiled proposal.acceptance_criteria[2].verification_agent_ids from "
-        "the unique security Review authority",
+        "preserved existing valid Agents while adding missing Review authority",
         "compiled proposal.acceptance_criteria[3].verification_agent_ids from "
         "the unique user_experience Review authority",
     )
@@ -5580,7 +5607,7 @@ def test_planning_binds_review_task_corrections_to_each_compiled_scope(
             "tasks": (
                 valid.tasks[0],
                 general_task.model_copy(
-                    update={"acceptance_criteria": ("AC_REPORT", "AC_SECURITY")}
+                    update={"acceptance_criteria": ("AC_SECURITY",)}
                 ),
                 security_task.model_copy(
                     update={"acceptance_criteria": ("AC_REPORT",)}
@@ -5671,6 +5698,113 @@ def test_planning_binds_review_task_corrections_to_each_compiled_scope(
         assert "AC_UNKNOWN" not in acceptance["items"]["enum"]
     assert store.load_turn(request().run_id, 2).semantic_correction_outcome == (
         "accepted"
+    )
+
+
+def test_planning_projects_review_tasks_to_each_compiled_scope(tmp_path: Path) -> None:
+    body = proposal_body()
+    security_criterion = ProposedCriterion(
+        id="AC_SECURITY",
+        description="No untrusted path can ever escape the selected root.",
+        verification="Probe every approved path-entry boundary.",
+        review_boundaries=tuple(ReviewBoundaryKind),
+        requirement_ids=("REQ_SECURITY",),
+        verification_agent_ids=("security_assessor",),
+    )
+    security_agent = ProposedAgent(
+        id="security_assessor",
+        label="Path Security Assessor",
+        responsibility="Assess untrusted path boundaries and residual risk.",
+        rationale="The request introduces an untrusted-input boundary.",
+        capability=AgentCapability.REVIEW,
+        specialization=AgentSpecialization.SECURITY_ASSESSMENT,
+        stage_id="verify",
+        dependencies=("cli_developer",),
+        workspace_scope="repository",
+        workload=AgentWorkload.ROUTINE,
+    )
+    writer_task = body.tasks[0].model_copy(
+        update={
+            "acceptance_criteria": (
+                *body.tasks[0].acceptance_criteria,
+                "AC_SECURITY",
+            )
+        }
+    )
+    general_task = ProposedTask(
+        id="TASK_GENERAL_REVIEW",
+        owner_agent_id="quality_reviewer",
+        description="Review general reporting behavior.",
+        dependencies=("TASK_IMPLEMENT",),
+        acceptance_criteria=("AC_REPORT",),
+    )
+    security_task = ProposedTask(
+        id="TASK_SECURITY_REVIEW",
+        owner_agent_id="security_assessor",
+        description="Review every untrusted path boundary.",
+        dependencies=("TASK_IMPLEMENT",),
+        acceptance_criteria=("AC_SECURITY",),
+    )
+    valid = body.model_copy(
+        update={
+            "requirements": (*body.requirements, "Contain every untrusted path."),
+            "requirement_ids": (*body.requirement_ids, "REQ_SECURITY"),
+            "acceptance_criteria": (*body.acceptance_criteria, security_criterion),
+            "tasks": (writer_task, general_task, security_task),
+            "agents": (*body.agents, security_agent),
+        }
+    )
+    invalid = valid.model_copy(
+        update={
+            "tasks": (
+                writer_task,
+                general_task.model_copy(
+                    update={"acceptance_criteria": ("AC_REPORT", "AC_SECURITY")}
+                ),
+                security_task.model_copy(
+                    update={"acceptance_criteria": ("AC_SECURITY", "AC_REPORT")}
+                ),
+            )
+        }
+    )
+    executor = ScriptedAgentExecutor(
+        [
+            response(
+                PlanningModelResponse(
+                    kind=PlanningResponseKind.PROPOSAL,
+                    proposal=invalid,
+                )
+            )
+        ]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(response_repair_limit=0),
+        clock=AdvancingClock(),
+    )
+
+    created = coordinator.start(
+        request(
+            source_request=(
+                f"{request().source_request} Treat every path as untrusted and "
+                "never permit a root escape."
+            )
+        ),
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+
+    assert created is not None
+    assert created.body == valid
+    assert len(executor.requests) == 1
+    turn = store.load_turn(request().run_id, 1)
+    assert turn.response_validation is None
+    assert turn.response_normalizations[-2:] == (
+        "compiled proposal.tasks[1].acceptance_criteria from "
+        "quality_reviewer's Review scope",
+        "compiled proposal.tasks[2].acceptance_criteria from "
+        "security_assessor's Review scope",
     )
 
 

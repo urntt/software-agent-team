@@ -398,6 +398,16 @@ may perform only these bounded, semantics-preserving normalizations:
   collection, keep that vocabulary open so a new definition and its references
   remain atomically reachable. Assumptions use only retained Agent-autonomy
   decision IDs when decisions remain immutable;
+- When a correction is limited to adding missing specialist authority, preserve
+  existing writers, quality Agents with an assigned Review scope, and their
+  identities across complete `agents`-array replacements. This projection is
+  allowed only when the required authority has no existing matching specialist;
+  duplicate or conflicting specialists remain model-owned defects;
+- Compile each Review-owned task's known criterion bindings against its
+  non-overlapping Review scope. If at least one submitted binding is in scope,
+  remove bindings owned by another Reviewer and retain the in-scope focus. A
+  task containing no in-scope criterion, or any unknown criterion, remains
+  invalid and receives the bounded task correction contract;
 - Remove a schema-forbidden field only when removing it cannot grant or hide
   controller/evidence authority.
 
@@ -878,6 +888,12 @@ Missing specialist coverage is a model-owned Planning relation defect. The
 diagnostic opens only the Agent collection when a required catalog Agent is
 absent and the affected criteria's `verification_agent_ids`; targeted correction
 must add or select the specialist before the proposal can be shown for approval.
+Because that correction replaces the complete Agent collection, the Controller
+retains existing writers and Review Agents that already own a valid compiled
+scope when a later incremental submission adds another missing authority. This
+keeps an accepted security or experience assignment from disappearing while the
+other specialist is added. The raw replacement and this monotonic projection
+are both persisted.
 When the corrected graph contains exactly one Reviewer with the required
 acceptance authority, the Controller atomically projects that Reviewer into each
 affected criterion while preserving any non-Review verifier. The model is not
@@ -886,6 +902,13 @@ already has one deterministic answer. Zero or multiple matching specialists,
 unknown verifier IDs, and conflicting security/experience authority remain
 invalid. The raw correction and the explicit Controller normalization are both
 persisted. An operator does not use plan revision to repair this Planner defect.
+
+Review task focus is compiled from the same scopes. When a Review-owned task
+mixes at least one criterion from its owner with known criteria assigned to
+other Reviewers, the Controller removes the foreign bindings and records the
+projection. It does not invent task content: a task with no criterion in its
+owner's scope, or with an unknown criterion, remains invalid and must use the
+scope-bound task correction contract.
 
 Task-specific quality remains semantic work rather than a claim made by the
 generic profile gates. Planning must turn every unqualified prohibition or

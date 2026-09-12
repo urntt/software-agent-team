@@ -992,6 +992,7 @@ def _normalize_planning_response_payload(
 ) -> tuple[dict[str, object], tuple[str, ...]]:
     """Apply bounded semantic-preserving normalization before strict validation."""
 
+    profile_criterion_ids = tuple(profile_criterion_ids)
     normalized: dict[str, object] = json.loads(json.dumps(payload))
     changes: list[str] = []
     envelope_fields = {"kind", "question", "proposal"}
@@ -1639,6 +1640,12 @@ def _normalize_planning_response_payload(
                     f"canonicalized proposal.agents[{agent_index}].workspace_scope"
                 )
     changes.extend(_compile_unique_specialist_verifier_projection(proposal))
+    changes.extend(
+        _compile_review_task_scope_projection(
+            proposal,
+            profile_criterion_ids=profile_criterion_ids,
+        )
+    )
     return normalized, tuple(changes)
 
 
@@ -1713,6 +1720,196 @@ def _compile_unique_specialist_verifier_projection(
             f"{required_authority.value} Review authority"
         )
     return tuple(changes)
+
+
+def _compile_review_task_scope_projection(
+    proposal: dict[str, object],
+    *,
+    profile_criterion_ids: Collection[str] = (),
+) -> tuple[str, ...]:
+    """Remove known criterion bindings outside each compiled Review scope."""
+
+    raw_agents = proposal.get("agents")
+    raw_criteria = proposal.get("acceptance_criteria")
+    raw_definition = proposal.get("product_definition")
+    raw_tasks = proposal.get("tasks")
+    if (
+        not isinstance(raw_agents, list)
+        or not isinstance(raw_criteria, list)
+        or not isinstance(raw_tasks, list)
+        or not all(isinstance(item, dict) for item in raw_agents)
+        or not all(isinstance(item, dict) for item in raw_criteria)
+        or not all(isinstance(item, dict) for item in raw_tasks)
+    ):
+        return ()
+    try:
+        agents = tuple(ProposedAgent.model_validate(item) for item in raw_agents)
+        criteria = tuple(
+            ProposedCriterion.model_validate(item) for item in raw_criteria
+        )
+        definition = (
+            None
+            if raw_definition is None
+            else ProductDefinition.model_validate(raw_definition)
+        )
+        tasks = tuple(ProposedTask.model_validate(item) for item in raw_tasks)
+    except (ValidationError, ValueError):
+        return ()
+
+    scopes, _ = _resolve_review_scope_assignments(
+        criteria=criteria,
+        definition=definition,
+        agents=agents,
+        profile_criterion_ids=profile_criterion_ids,
+    )
+    known_criteria = {criterion.id for criterion in criteria} | set(
+        profile_criterion_ids
+    )
+    changes: list[str] = []
+    for task_index, (raw_task, task) in enumerate(zip(raw_tasks, tasks, strict=True)):
+        scope = scopes.get(task.owner_agent_id)
+        if scope is None:
+            continue
+        allowed = set(scope)
+        projected = [
+            criterion_id
+            for criterion_id in task.acceptance_criteria
+            if criterion_id not in known_criteria or criterion_id in allowed
+        ]
+        if not projected or projected == list(task.acceptance_criteria):
+            continue
+        raw_task["acceptance_criteria"] = projected
+        changes.append(
+            "compiled proposal.tasks"
+            f"[{task_index}].acceptance_criteria from {task.owner_agent_id}'s "
+            "Review scope"
+        )
+    return tuple(changes)
+
+
+def _preserve_agents_during_missing_specialist_correction(
+    payload: dict[str, object],
+    plan: SemanticCorrectionPlan,
+    *,
+    profile_criterion_ids: Collection[str] = (),
+) -> tuple[dict[str, object], tuple[str, ...]]:
+    """Keep already valid Agents while a correction adds missing specialists."""
+
+    agent_path = "/proposal/agents"
+    if agent_path not in plan.evidence.target_paths:
+        return payload, ()
+    model_issues = tuple(
+        issue
+        for issue in plan.diagnostic.issues
+        if issue.authority is ResponseIssueAuthority.MODEL
+    )
+    if not model_issues or any(
+        issue.invariant_id != "planning_criterion_specialist_required"
+        for issue in model_issues
+    ):
+        return payload, ()
+    required_authorities = {
+        AcceptanceAuthority(subject.identifier)
+        for issue in model_issues
+        for subject in issue.subjects
+        if subject.kind is ResponseIssueSubjectKind.CAPABILITY
+        and subject.identifier
+        in {
+            AcceptanceAuthority.SECURITY.value,
+            AcceptanceAuthority.USER_EXPERIENCE.value,
+        }
+    }
+    if not required_authorities:
+        return payload, ()
+
+    base_proposal = plan.base_payload.get("proposal")
+    corrected_proposal = payload.get("proposal")
+    if not isinstance(base_proposal, dict) or not isinstance(corrected_proposal, dict):
+        return payload, ()
+    raw_base_agents = base_proposal.get("agents")
+    raw_corrected_agents = corrected_proposal.get("agents")
+    raw_criteria = base_proposal.get("acceptance_criteria")
+    raw_definition = base_proposal.get("product_definition")
+    if (
+        not isinstance(raw_base_agents, list)
+        or not isinstance(raw_corrected_agents, list)
+        or not isinstance(raw_criteria, list)
+        or not all(isinstance(item, dict) for item in raw_base_agents)
+        or not all(isinstance(item, dict) for item in raw_corrected_agents)
+        or not all(isinstance(item, dict) for item in raw_criteria)
+    ):
+        return payload, ()
+    try:
+        base_agents = tuple(
+            ProposedAgent.model_validate(item) for item in raw_base_agents
+        )
+        corrected_agents = tuple(
+            ProposedAgent.model_validate(item) for item in raw_corrected_agents
+        )
+        criteria = tuple(
+            ProposedCriterion.model_validate(item) for item in raw_criteria
+        )
+        definition = (
+            None
+            if raw_definition is None
+            else ProductDefinition.model_validate(raw_definition)
+        )
+    except (ValidationError, ValueError):
+        return payload, ()
+    if len({agent.id for agent in base_agents}) != len(base_agents) or len(
+        {agent.id for agent in corrected_agents}
+    ) != len(corrected_agents):
+        return payload, ()
+    if any(
+        sum(
+            specialization_contract(agent.specialization).acceptance_authority
+            is authority
+            for agent in base_agents
+            if agent.capability is AgentCapability.REVIEW
+        )
+        != 0
+        for authority in required_authorities
+    ):
+        # Resolving duplicate matching specialists may require removing or
+        # changing an existing Agent, so this monotonic projection is not safe.
+        return payload, ()
+
+    review_scopes, _ = _resolve_review_scope_assignments(
+        criteria=criteria,
+        definition=definition,
+        agents=base_agents,
+        profile_criterion_ids=profile_criterion_ids,
+    )
+    preserved_ids = {
+        agent.id
+        for agent in base_agents
+        if agent.capability is not AgentCapability.REVIEW
+        or bool(review_scopes.get(agent.id))
+    }
+    preserved = [
+        deepcopy(raw_agent)
+        for raw_agent, agent in zip(raw_base_agents, base_agents, strict=True)
+        if agent.id in preserved_ids
+    ]
+    additions = [
+        deepcopy(raw_agent)
+        for raw_agent, agent in zip(
+            raw_corrected_agents,
+            corrected_agents,
+            strict=True,
+        )
+        if agent.id not in preserved_ids
+    ]
+    merged = [*preserved, *additions]
+    if merged == raw_corrected_agents:
+        return payload, ()
+    normalized = deepcopy(payload)
+    normalized_proposal = normalized.get("proposal")
+    assert isinstance(normalized_proposal, dict)
+    normalized_proposal["agents"] = merged
+    return normalized, (
+        "preserved existing valid Agents while adding missing Review authority",
+    )
 
 
 def _digest_text(value: str) -> str:
@@ -8588,8 +8785,21 @@ class AdaptivePlanningCoordinator:
                             payload,
                             correction_plan,
                         )
-                        payload = application.payload
-                        correction_binding_normalizations = application.normalizations
+                        (
+                            payload,
+                            specialist_preservation_normalizations,
+                        ) = _preserve_agents_during_missing_specialist_correction(
+                            application.payload,
+                            correction_plan,
+                            profile_criterion_ids=(
+                                criterion.id
+                                for criterion in self.policy.profile_acceptance_criteria
+                            ),
+                        )
+                        correction_binding_normalizations = (
+                            *application.normalizations,
+                            *specialist_preservation_normalizations,
+                        )
                         correction_applied = True
                     payload, initial_normalizations = (
                         _normalize_planning_response_payload(

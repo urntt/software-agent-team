@@ -163,6 +163,10 @@ Choose the next response by decision value:
   authorities. These specialist assignments become non-overlapping runtime
   Review scopes. Other criteria use one explicit Reviewer when named, otherwise
   the Controller assigns the unique general Reviewer or the sole Reviewer.
+  During a targeted correction for missing specialist coverage, retain every
+  existing Agent that already owns valid work or Review scope and add the
+  missing specialist. Do not omit unrelated valid Agents while replacing the
+  complete `agents` array.
 - A workspace scope is controller authority relative to the already-created
   project repository. Use `repository` for the whole project or a canonical
   `repository/path` for a narrower scope. Never repeat the destination/project
