@@ -399,8 +399,12 @@ may perform only these bounded, semantics-preserving normalizations:
   replacement schema permits only those exact IDs, including active
   profile-owned criteria. If the same correction may change an identity-owning
   collection, keep that vocabulary open so a new definition and its references
-  remain atomically reachable. Assumptions use only retained Agent-autonomy
-  decision IDs when decisions remain immutable;
+  remain atomically reachable. An unknown downstream ProductDefinition
+  reference grants authority only over its affected `requirement_ids`,
+  `criterion_ids`, or `decision_ids` array; the dimension's already-valid
+  disposition, exact user source, statement, and rationale remain immutable.
+  Assumptions use only retained Agent-autonomy decision IDs when decisions
+  remain immutable;
 - When a correction is limited to adding missing specialist authority, preserve
   existing writers, quality Agents with an assigned Review scope, and their
   identities across complete `agents`-array replacements. This projection is

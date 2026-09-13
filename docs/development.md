@@ -531,7 +531,9 @@ exact preservation of omitted slots, atomic rejection of unknown or duplicate
 handles, and complete post-application validation. For relation fields, assert that
 an immutable definition collection produces an exact canonical-ID enum, including
 profile-owned criteria, while a jointly corrected identity collection remains open
-to valid new IDs. A different diagnostic fingerprint is not by
+to valid new IDs. ProductDefinition reference repair must target only the affected
+ID arrays, preserve exact-source fields outside those slots, and surface any next
+independent invariant as progress. A different diagnostic fingerprint is not by
 itself improvement: regressions to a coarser type or shape in the same authority
 slot must stop. A strict reduction of independent typed sibling issues is progress
 and must narrow the next request to the remaining siblings; an unchanged remainder

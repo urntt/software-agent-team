@@ -2704,21 +2704,26 @@ def test_product_definition_correction_binds_immutable_reference_vocabularies(
     tmp_path: Path,
 ) -> None:
     initial_payload = json.loads(response(proposal_response()))
-    for dimension in ("target_users", "primary_workflow"):
-        initial_payload["proposal"]["product_definition"][dimension][
-            "requirement_ids"
-        ].append("REQ_GHOST")
+    reference_fields = {
+        "target_users": ("requirement_ids", "REQ_GHOST"),
+        "primary_workflow": ("criterion_ids", "AC_GHOST"),
+        "usability_expectations": ("decision_ids", "DECISION_GHOST"),
+    }
+    for dimension, (field, unknown_id) in reference_fields.items():
+        initial_payload["proposal"]["product_definition"][dimension][field].append(
+            unknown_id
+        )
     correction_base, _ = planning._normalize_planning_response_payload(
         initial_payload,
         user_inputs=(request().source_request,),
     )
-    corrected_dimensions = {}
-    for dimension in ("target_users", "primary_workflow"):
-        corrected = deepcopy(
-            correction_base["proposal"]["product_definition"][dimension]
+    valid_payload = json.loads(response(proposal_response()))
+    corrected_references = {
+        f"/proposal/product_definition/{dimension}/{field}": (
+            valid_payload["proposal"]["product_definition"][dimension][field]
         )
-        corrected["requirement_ids"].remove("REQ_GHOST")
-        corrected_dimensions[f"/proposal/product_definition/{dimension}"] = corrected
+        for dimension, (field, _unknown_id) in reference_fields.items()
+    }
     profile_criterion = AcceptanceCriterion(
         id="AC_PROFILE",
         description="The project satisfies the fixed execution contract.",
@@ -2727,7 +2732,7 @@ def test_product_definition_correction_binds_immutable_reference_vocabularies(
     executor = ScriptedAgentExecutor(
         [
             json.dumps(initial_payload),
-            correction_response(correction_base, corrected_dimensions),
+            correction_response(correction_base, corrected_references),
         ]
     )
     store = PlanningStore(tmp_path / "planning")
@@ -2748,11 +2753,13 @@ def test_product_definition_correction_binds_immutable_reference_vocabularies(
     )
 
     assert created is not None
+    assert created.body == proposal_body()
     rejected = store.load_turn(request().run_id, 1)
     assert rejected.response_validation is not None
     assert rejected.response_validation.correction_paths == (
-        "/proposal/product_definition/primary_workflow",
-        "/proposal/product_definition/target_users",
+        "/proposal/product_definition/primary_workflow/criterion_ids",
+        "/proposal/product_definition/target_users/requirement_ids",
+        "/proposal/product_definition/usability_expectations/decision_ids",
     )
     assert {issue.invariant_id for issue in rejected.response_validation.issues} == {
         "planning_product_definition_reference"
@@ -2773,16 +2780,121 @@ def test_product_definition_correction_binds_immutable_reference_vocabularies(
     expected_decisions = [
         decision["id"] for decision in correction_base["proposal"]["decisions"]
     ]
-    assert len(variants) == 2
-    for variant in variants:
-        properties = variant["properties"]["replacement_value"]["properties"]
-        assert properties["requirement_ids"]["items"]["enum"] == (expected_requirements)
-        assert "REQ_GHOST" not in properties["requirement_ids"]["items"]["enum"]
-        assert properties["criterion_ids"]["items"]["enum"] == expected_criteria
-        assert properties["decision_ids"]["items"]["enum"] == expected_decisions
+    assert len(variants) == 3
+    replacement_schemas = {
+        variant["properties"]["slot_handle"]["const"]: variant["properties"][
+            "replacement_value"
+        ]
+        for variant in variants
+    }
+    target_paths = rejected.response_validation.correction_paths
+    schemas_by_path = {
+        path: replacement_schemas[semantic_correction_slot_handle(target_paths, path)]
+        for path in target_paths
+    }
+    assert (
+        schemas_by_path["/proposal/product_definition/target_users/requirement_ids"][
+            "items"
+        ]["enum"]
+        == expected_requirements
+    )
+    assert (
+        "REQ_GHOST"
+        not in schemas_by_path[
+            "/proposal/product_definition/target_users/requirement_ids"
+        ]["items"]["enum"]
+    )
+    assert (
+        schemas_by_path["/proposal/product_definition/primary_workflow/criterion_ids"][
+            "items"
+        ]["enum"]
+        == expected_criteria
+    )
+    assert (
+        "AC_GHOST"
+        not in schemas_by_path[
+            "/proposal/product_definition/primary_workflow/criterion_ids"
+        ]["items"]["enum"]
+    )
+    assert (
+        schemas_by_path[
+            "/proposal/product_definition/usability_expectations/decision_ids"
+        ]["items"]["enum"]
+        == expected_decisions
+    )
+    assert (
+        "DECISION_GHOST"
+        not in schemas_by_path[
+            "/proposal/product_definition/usability_expectations/decision_ids"
+        ]["items"]["enum"]
+    )
+    assert all(schema["type"] == "array" for schema in schemas_by_path.values())
     assert store.load_turn(request().run_id, 2).semantic_correction_outcome == (
         "accepted"
     )
+
+
+def test_product_reference_correction_preserves_exact_source_and_advances(
+    tmp_path: Path,
+) -> None:
+    initial_payload = json.loads(response(proposal_response()))
+    product_definition = initial_payload["proposal"]["product_definition"]
+    exact_workflow = json.loads(json.dumps(product_definition["primary_workflow"]))
+    product_definition["primary_workflow"]["criterion_ids"].append("AC_GHOST")
+    initial_payload["proposal"]["acceptance_criteria"][0].update(
+        description="Files that differ in content must not be reported as duplicates.",
+        review_boundaries=[ReviewBoundaryKind.TOP_LEVEL_INPUT.value],
+    )
+    correction_base, _ = planning._normalize_planning_response_payload(
+        initial_payload,
+        user_inputs=(request().source_request,),
+    )
+    target_path = "/proposal/product_definition/primary_workflow/criterion_ids"
+    executor = ScriptedAgentExecutor(
+        [
+            json.dumps(initial_payload),
+            correction_response(
+                correction_base,
+                {target_path: exact_workflow["criterion_ids"]},
+            ),
+        ]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(response_repair_limit=1),
+        clock=AdvancingClock(),
+    )
+
+    with pytest.raises(PlanningError, match="must require top-level"):
+        coordinator.start(
+            request(),
+            answer_question=lambda _question: pytest.fail("unexpected question"),
+        )
+
+    first = store.load_turn(request().run_id, 1)
+    assert first.response_validation is not None
+    assert first.response_validation.correction_paths == (target_path,)
+    contract = executor.requests[1].submission_contract
+    assert contract is not None
+    replacement = contract.parameters_schema()["properties"]["replacements"]["items"][
+        "oneOf"
+    ][0]["properties"]["replacement_value"]
+    assert replacement["type"] == "array"
+    second = store.load_turn(request().run_id, 2)
+    assert second.semantic_correction_outcome == "improved"
+    assert second.response_validation is not None
+    assert second.response_validation.correction_paths == (
+        "/proposal/acceptance_criteria/0/review_boundaries",
+    )
+    assert second.response_validation.issues[0].invariant_id == (
+        "planning_criterion_review_boundaries"
+    )
+    assert correction_base["proposal"]["product_definition"]["primary_workflow"] == {
+        **exact_workflow,
+        "criterion_ids": [*exact_workflow["criterion_ids"], "AC_GHOST"],
+    }
 
 
 def test_direct_user_decision_rejects_unattributable_input_with_zero_repair_budget(

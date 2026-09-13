@@ -3560,15 +3560,22 @@ def _product_definition_dimension_invariant(
     unknown_decisions = set(item.decision_ids) - decision_ids
     if unknown_requirements or unknown_criteria or unknown_decisions:
         details = []
+        reference_paths = []
         if unknown_requirements:
             details.append("requirements " + ", ".join(sorted(unknown_requirements)))
+            reference_paths.append(f"{path}/requirement_ids")
         if unknown_criteria:
             details.append("criteria " + ", ".join(sorted(unknown_criteria)))
+            reference_paths.append(f"{path}/criterion_ids")
         if unknown_decisions:
             details.append("decisions " + ", ".join(sorted(unknown_decisions)))
-        return issue(
-            "planning_product_definition_reference",
-            f"{dimension.value} references unknown downstream " + "; ".join(details),
+            reference_paths.append(f"{path}/decision_ids")
+        return _PlanningInvariant(
+            invariant_id="planning_product_definition_reference",
+            message=(
+                f"{dimension.value} references unknown downstream " + "; ".join(details)
+            ),
+            paths=tuple(reference_paths),
         )
 
     if item.disposition is ProductDefinitionDisposition.EXPLICIT_INPUT:
