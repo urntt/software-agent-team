@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** validate the `v0.2.11` release candidate through a complete managed user journey
+**Current milestone:** publish and validate `v0.2.11` through a complete managed user journey
 
 **Last updated:** September 13, 2026
 
@@ -30,7 +30,17 @@ image record. Reconciliation revalidates the active candidate and captured
 parent graphs, stops at retained, tagged, container-referenced, or externally
 shared records, and uses only exact `docker image rm --no-prune` operations.
 Focused Planning, correction, CLI, install-script, and managed-install suites
-pass 362 tests. The canonical gate, immutable release, published stable upgrade,
+pass 362 tests. Exact public revision
+`13d7f157b0fe2ac71efcc01332702d93b3602a53` passed the local canonical gate
+with doctor, formatting, lint, and all 1,640 tests; every stage reported complete
+cleanup coverage, the kernel and cgroup OOM deltas were zero, and no terminal
+container, volume, process lease, stage process, or private temporary directory
+remained. A fresh non-root fixed-revision rehearsal installed immutable
+`v0.2.10`, activated this exact dev revision, and proved that the first unlocked
+target invocation removed both a four-record superseded prefix and a detached
+legacy root while preserving the 14-record candidate lineage and a foreign
+image. Same-ref activation, credential-free export, full uninstall, and fresh
+account cleanup also passed. The immutable release, published stable upgrade,
 and full provider-backed journey remain pending.
 
 The immutable `v0.2.10` tag,
@@ -275,10 +285,10 @@ account/HOME/resource cleanup all passed. The scenario made no provider calls.
 
 The current `v0.2.11` candidate fixes bounded direct-input decision summaries
 and target-side cleanup of Docker parent records left by an older updater as a
-compatible patch over immutable `v0.2.10`. Its focused 362-test validation
-passes. The canonical gate, fixed-revision managed rehearsal, exact release
-head, hosted tag, published upgrade, and fresh provider-backed ordinary-user
-journey remain pending.
+compatible patch over immutable `v0.2.10`. Its focused 362-test validation,
+1,640-test clean canonical gate, and fixed-revision managed image lifecycle
+rehearsal pass. The exact release head, hosted tag, published upgrade, and fresh
+provider-backed ordinary-user journey remain pending.
 
 The implementation released as `v0.2.8` is frozen at the exact revision above.
 Its Planning correction checks, canonical gate, exact-tag publication,

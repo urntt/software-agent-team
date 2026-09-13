@@ -11,7 +11,7 @@
     {
       "id": "managed-target-image-transition-reconciliation",
       "impact": "patch",
-      "summary": "Let a newly active target safely reconcile the exact Docker parent lineage left by an older updater"
+      "summary": "Let a newly active target safely reconcile both the current predecessor and detached Docker parent lineages left by older updaters"
     }
   ]
 }
