@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.2.7",
-  "target_version": "0.2.8",
+  "baseline_version": "0.2.8",
+  "target_version": "0.2.9",
   "changes": [
     {
-      "id": "planning-product-reference-correction-scope",
+      "id": "python-profile-interactive-start-input",
       "impact": "patch",
-      "summary": "Limit unknown ProductDefinition reference repair to the affected ID arrays while preserving validated exact-source fields"
+      "summary": "Keep stdin open during the bounded exact start probe so interactive CLIs are not misclassified as failed on synthetic EOF"
     }
   ]
 }

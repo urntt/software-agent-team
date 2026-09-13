@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** validate the `v0.2.8` Planning reference-correction release candidate
+**Current milestone:** validate the `v0.2.9` interactive-start release candidate
 
 **Last updated:** September 13, 2026
 
@@ -11,17 +11,37 @@ product, architecture, experiment, or roadmap; those decisions belong to
 
 ## Current Release
 
-The `v0.2.8` release candidate limits an unknown downstream
-ProductDefinition reference correction to the affected `requirement_ids`,
-`criterion_ids`, or `decision_ids` array. Valid disposition, exact user source,
-statement, rationale, and sibling references remain outside model authority.
-This lets a correction update identities changed by an earlier acceptance-plan
-repair without reopening an already satisfied verbatim-source invariant. The
-next independent invariant is then recorded as progress and receives its own
-targeted correction. Planning and shared response-correction checks pass all
-224 affected cases at implementation revision
-`bc6167e2d815d047db1857ca5f8338264b964558`. Exact release-candidate,
-canonical, hosted-tag, and fresh ordinary-user validation remain pending.
+The `v0.2.9` release candidate keeps a writable stdin pipe open only during the
+bounded exact start probe. An interactive generated CLI can therefore wait for
+input instead of receiving a synthetic EOF and exiting as an apparent startup
+failure. Setup and test commands retain closed stdin and must still exit zero;
+all start completion and timeout paths close the pipe and preserve the existing
+process-group cleanup. All 31 affected profile checks pass, and replaying the
+previous generated project now reports setup and test passed with start
+`running_after_grace`. The exact implementation revision
+`2a059a08b0d3efd78e3af1e99228cf3dc7313ec9` passed the canonical gate with all
+1,629 tests, complete cleanup coverage, no residual stage process, and no new
+OOM event. Exact release-head, fixed-development, hosted-tag, published-upgrade,
+and fresh ordinary-user validation remain pending.
+
+The immutable `v0.2.8` tag,
+[GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.2.8),
+package version, and release manifest identify source revision
+`703b1ac2dafe07e6b5ebe9b167a7d476f7bd7d29` and Git archive digest
+`sha256:87e59c4db75c64f1125f6bfcf8b60b0a6a737fcc6b184e4438cc6cdf4ff93042`.
+It limits ProductDefinition reference corrections to the affected ID array
+while preserving validated source fields and sibling references. The exact
+clean revision passed all 1,627 local tests; exact-tag GitHub Actions
+[run 34733073206](https://github.com/urntt/software-agent-team/actions/runs/34733073206)
+passed 1,625 tests with two environment-dependent skips and published exactly
+one identity manifest asset. Fresh fixed-revision development and published
+`v0.2.7` to `v0.2.8` lifecycle rehearsals passed. A provider-backed ordinary
+user journey then passed installation, upgrade, both startup paths, official
+DeepSeek configuration and check, Planning, live controls, and implementation.
+The generated interactive CLI exposed the exact-start stdin defect addressed
+by the current candidate. A later Experience Reviewer request also reached the
+declared provider-silence boundary and was stopped cleanly; its external cause
+remains unknown and requires an independent fresh retry.
 
 The immutable `v0.2.7` tag,
 [GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.2.7),
@@ -210,11 +230,18 @@ account/HOME/resource cleanup all passed. The scenario made no provider calls.
 
 ## Current Development Head
 
-The current `v0.2.8` candidate adds leaf-scoped ProductDefinition reference
-correction as a compatible patch over immutable `v0.2.7`. The 224 affected
-Planning and shared response-correction tests pass at the implementation
-revision. The exact release head, canonical gate, hosted tag, and fresh
-ordinary-user journey remain pending.
+The current `v0.2.9` candidate fixes exact-start input ownership as a compatible
+patch over immutable `v0.2.8`. All 31 affected profile checks, the prior
+generated-project replay, and the 1,629-test canonical gate pass at the exact
+implementation revision. The exact release head, fixed-development rehearsal,
+hosted tag, published upgrade, and fresh ordinary-user journey remain pending.
+
+The implementation released as `v0.2.8` is frozen at the exact revision above.
+Its Planning correction checks, canonical gate, exact-tag publication,
+fixed-revision development rehearsal, and genuine published-stable upgrade
+passed. The subsequent provider-backed ordinary-user journey reached the
+generated project's deterministic exact-command gate and exposed the current
+interactive-start input-ownership defect.
 
 The implementation released as `v0.2.7` is frozen at the exact revision above.
 Its no-progress process-poll checks, canonical gate, exact-tag hosted
