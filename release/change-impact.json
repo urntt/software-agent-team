@@ -1,12 +1,17 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.2.13",
-  "target_version": "0.2.14",
+  "baseline_version": "0.2.14",
+  "target_version": "0.2.15",
   "changes": [
     {
-      "id": "planning-decision-correction-candidates",
+      "id": "generated-project-reproducibility",
       "impact": "patch",
-      "summary": "Bind category/provenance authority repairs to Controller-validated atomic decision candidates"
+      "summary": "Require portable tracked project locks and reject setup-time delivery drift"
+    },
+    {
+      "id": "portable-lock-runtime-support",
+      "impact": "patch",
+      "summary": "Provide frozen public metadata and an offline portable-lock helper in the sandbox runtime"
     }
   ]
 }

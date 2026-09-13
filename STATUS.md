@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** prepare `v0.2.15` and complete a managed user journey
+**Current milestone:** release `v0.2.15` and complete a managed user journey
 
 **Last updated:** September 13, 2026
 
@@ -343,9 +343,15 @@ setup, then rejects every setup change to another committed file and every new
 file outside the committed ignore policy. The private wheelhouse may rewrite
 only the disposable scratch lock. Missing or ignored locks, inconsistent locks,
 unignored generated artifacts, inherited private index configuration, and
-restricted no-network runtime behavior are covered by 164 focused tests. The
-canonical gate, release version, hosted publication, published upgrade, and
-fresh complete provider-backed journey remain pending.
+restricted no-network runtime behavior are covered by 164 focused tests. Clean
+implementation revision `9f95b1dd4716a7246d3df5abe4d4b762c3927262`
+passed the canonical gate with all 1,656 tests in 789.98 seconds. The report
+records 342,597,632 bytes aggregate peak RSS, zero cgroup/kernel OOM delta, and
+no residual stage process, process lease, sandbox container, volume, or private
+test directory. The package, lock, and change-impact ledger identify `v0.2.15`
+as a compatible patch over `v0.2.14`; the exact release-head gate, hosted
+publication, published upgrade, and fresh complete provider-backed journey
+remain pending.
 
 The implementation released as `v0.2.12` made the last Planning correction
 complete and constrained specialist/dependency topology repair as a compatible
