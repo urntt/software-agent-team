@@ -702,6 +702,12 @@ explicit terminal reason showing that another implementation attempt would
 cross a run safety boundary or rely on compromised evidence; the deterministic
 controller maps that reason to the final termination category.
 
+Non-blocking findings describe residual issues that do not justify another
+implementation iteration. Because Review artifacts have no explicit resolution
+signal for those findings, the controller retains their descriptions across
+iterations and in every terminal report. Reviewer omission never counts as
+resolution; exact repeated descriptions are presented once.
+
 The workflow stops earlier when fixed acceptance checks pass, every configured
 manual criterion receives independent review, and no blocking review finding
 remains. It stops with a report when:

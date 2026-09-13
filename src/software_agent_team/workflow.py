@@ -38,6 +38,7 @@ from software_agent_team.artifacts import (
     TaskBrief,
     TestReport,
     WorkResult,
+    collect_unresolved_review_findings,
     resolve_acceptance_results,
 )
 from software_agent_team.assembly import (
@@ -201,6 +202,7 @@ class _WorkflowContext:
     command_evidence: list[CommandEvidence] = field(default_factory=list)
     last_test: TestReport | None = None
     last_review: ReviewReport | None = None
+    review_history: list[ReviewReport] = field(default_factory=list)
     last_iteration: IterationRecord | None = None
     execution_lock: Lock = field(default_factory=Lock, repr=False)
     budget_ledger: AgentBudgetLedger | None = field(default=None, repr=False)
@@ -618,6 +620,7 @@ class WorkflowCoordinator:
                 )
             context.last_test = test
             context.last_review = review
+            context.review_history.append(review)
 
             self._handoff(
                 context,
@@ -1354,10 +1357,8 @@ class WorkflowCoordinator:
             final_commit=record.current_commit,
             iterations=tuple(context.iteration_records),
             acceptance_results=resolve_acceptance_results(test, review),
-            unresolved_findings=tuple(
-                finding.description
-                for finding in review.findings
-                if not finding.blocking
+            unresolved_findings=collect_unresolved_review_findings(
+                context.review_history
             ),
             summary="The implementation passed deterministic gates and review.",
         )
@@ -1401,6 +1402,7 @@ class WorkflowCoordinator:
         detail: str,
     ) -> WorkflowOutcome:
         unresolved = [detail]
+        unresolved.extend(collect_unresolved_review_findings(context.review_history))
         if context.last_test is not None:
             unresolved.extend(context.last_test.blockers)
             unresolved.extend(context.last_test.findings)

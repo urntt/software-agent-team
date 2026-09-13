@@ -186,6 +186,7 @@ class DynamicWorkflowExecutor:
         cache_write_tokens: int | None = 0,
         developer_stderr: str = "",
         raise_for_role: AgentRole | None = None,
+        nonblocking_review_iterations: tuple[int, ...] = (),
     ) -> None:
         self.workspace = workspace
         self.review_verdicts = review_verdicts or {}
@@ -202,6 +203,7 @@ class DynamicWorkflowExecutor:
         self.cache_write_tokens = cache_write_tokens
         self.developer_stderr = developer_stderr
         self.raise_for_role = raise_for_role
+        self.nonblocking_review_iterations = frozenset(nonblocking_review_iterations)
         self.allow_single_verifier = allow_single_verifier
         self.requests: list[AgentExecutionRequest] = []
         self._counts: dict[AgentRole, int] = {}
@@ -398,6 +400,22 @@ class DynamicWorkflowExecutor:
                     ),
                     description=f"Iteration {request.iteration} needs correction.",
                     recommendation="Address the attributable issue.",
+                    criterion_ids=("AC_QUALITY",),
+                ),
+            )
+        if request.iteration in self.nonblocking_review_iterations:
+            findings = (
+                *findings,
+                ReviewFinding(
+                    id="FINDING_MISLEADING_HELPER",
+                    severity=ReviewSeverity.LOW,
+                    blocking=False,
+                    category="maintainability",
+                    description=(
+                        "An unused helper has a misleading documentation claim."
+                    ),
+                    recommendation="Remove the helper or document its actual owner.",
+                    path="app/main.py",
                     criterion_ids=("AC_QUALITY",),
                 ),
             )
@@ -953,6 +971,42 @@ def test_workflow_performs_exactly_one_evidence_driven_revision(
     assert first["decision"] == "revise"
     assert second["decision"] == "accept"
     assert second["resolved_finding_ids"] == ["FINDING_ITERATION_1"]
+
+
+def test_workflow_carries_an_omitted_nonblocking_finding_to_the_final_report(
+    tmp_path: Path,
+) -> None:
+    source = initialize_source(tmp_path)
+    workspace = tmp_path / "workspaces" / task_brief().run_id
+    executor = DynamicWorkflowExecutor(
+        workspace,
+        review_verdicts={1: ReviewVerdict.REVISE},
+        nonblocking_review_iterations=(1,),
+    )
+
+    outcome = coordinator(tmp_path, executor).execute(
+        task_brief(),
+        source_repository=source,
+    )
+    report = json.loads(
+        (tmp_path / "runs" / task_brief().run_id / "final-report.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert outcome.record.phase is RunPhase.COMPLETED
+    assert report["unresolved_findings"] == [
+        "An unused helper has a misleading documentation claim."
+    ]
+    second_review = json.loads(
+        (
+            tmp_path
+            / "runs"
+            / task_brief().run_id
+            / "iterations/02/agents/reviewer/review-report.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert second_review["findings"] == []
 
 
 def test_workflow_stops_on_a_terminal_reviewer_boundary(tmp_path: Path) -> None:

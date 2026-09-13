@@ -28,6 +28,7 @@ from software_agent_team.artifacts import (
     ReviewVerdict,
     TestReport,
     WorkResult,
+    collect_unresolved_review_findings,
     resolve_acceptance_results,
 )
 from software_agent_team.budgets import (
@@ -184,6 +185,7 @@ class _DynamicWorkflowContext:
     last_works: tuple[WorkResult, ...] = ()
     last_tests: tuple[TestReport, ...] = ()
     last_reviews: tuple[ReviewReport, ...] = ()
+    review_history: list[ReviewReport] = field(default_factory=list)
 
 
 class DynamicWorkflowCoordinator:
@@ -961,6 +963,19 @@ class DynamicWorkflowCoordinator:
         context.last_works = tuple(works) or context.last_works
         context.last_tests = tuple(tests) or context.last_tests
         context.last_reviews = tuple(reviews) or context.last_reviews
+        known_reviews = {
+            (review.producer, review.iteration, review.input_commit)
+            for review in context.review_history
+        }
+        for review in sorted(
+            reviews,
+            key=lambda item: (item.iteration, item.producer, item.input_commit),
+        ):
+            identity = (review.producer, review.iteration, review.input_commit)
+            if identity in known_reviews:
+                continue
+            context.review_history.append(review)
+            known_reviews.add(identity)
 
     @staticmethod
     def _decide(
@@ -1051,14 +1066,7 @@ class DynamicWorkflowCoordinator:
         limitations = _unique(
             [issue for work in context.last_works for issue in work.unresolved_issues]
         )
-        nonblocking = _unique(
-            [
-                finding.description
-                for review in reviews
-                for finding in review.findings
-                if not finding.blocking
-            ]
-        )
+        nonblocking = collect_unresolved_review_findings(context.review_history)
         report = FinalReport(
             run_id=record.run_id,
             team_id=record.team_id,
@@ -1113,6 +1121,7 @@ class DynamicWorkflowCoordinator:
         detail: str,
     ) -> DynamicWorkflowOutcome:
         unresolved = [detail]
+        unresolved.extend(collect_unresolved_review_findings(context.review_history))
         for test in context.last_tests:
             unresolved.extend(test.blockers)
             unresolved.extend(test.findings)
@@ -1206,7 +1215,9 @@ class DynamicWorkflowCoordinator:
             final_commit=record.current_commit,
             iterations=tuple(context.iteration_records),
             acceptance_results=(),
-            unresolved_findings=(),
+            unresolved_findings=collect_unresolved_review_findings(
+                context.review_history
+            ),
             known_limitations=(),
             summary=detail,
         )

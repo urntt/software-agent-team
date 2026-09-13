@@ -168,6 +168,13 @@ and labels the state pending re-verification. It does not rewrite the old
 finding as resolved or present its old observation as a fresh claim about the
 new commit.
 
+A non-blocking Review finding is an accepted residual issue, not revision
+feedback. Review artifacts do not currently expose an explicit resolution
+signal for that class of finding. The controller therefore carries every
+observed non-blocking finding into every terminal `FinalReport`, across all
+completed iterations, and collapses only exact repeated descriptions. A later
+Review omitting the finding is not evidence that the underlying issue changed.
+
 Reviewer evidence claims cross a separate grounding boundary. The response
 schema requires each criterion assessment to supply only small bounded
 observable result fragments. It forbids the model from supplying or predicting

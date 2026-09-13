@@ -1,7 +1,7 @@
 """Validated contracts for requests, phase artifacts, and Agent handoffs."""
 
 import re
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
@@ -2115,6 +2115,27 @@ class ExperienceAssessment(ReviewReport):
             label="experience assessment",
         )
         return self
+
+
+def collect_unresolved_review_findings(
+    reviews: Iterable[ReviewReport],
+) -> tuple[str, ...]:
+    """Carry every non-blocking Review finding into terminal evidence.
+
+    Review artifacts have no explicit resolution signal for non-blocking
+    findings. A later Review omitting one therefore cannot prove that it was
+    fixed. Preserve the first observed description across completed iterations
+    and collapse only exact repeats.
+    """
+
+    return tuple(
+        dict.fromkeys(
+            finding.description.strip()
+            for review in reviews
+            for finding in review.findings
+            if not finding.blocking and finding.description.strip()
+        )
+    )
 
 
 def resolve_acceptance_results(

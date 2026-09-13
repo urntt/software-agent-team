@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** release `v0.2.15` and complete a managed user journey
+**Current milestone:** prepare `v0.2.16` and complete a managed user journey
 
 **Last updated:** September 13, 2026
 
@@ -11,31 +11,30 @@ product, architecture, experiment, or roadmap; those decisions belong to
 
 ## Current Release
 
-The immutable `v0.2.14` tag,
-[GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.2.14),
+The immutable `v0.2.15` tag,
+[GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.2.15),
 package version, and release manifest identify source revision
-`7f6f2e138a3164b73107d4acf8021a92fc96118d`. It handles a Planning decision
-category/provenance authority mismatch through Controller-owned atomic
-candidates while preserving the validated decision model. The exact clean
-release head passed all 1,651 local tests; exact-tag GitHub Actions
-[run 34762410299](https://github.com/urntt/software-agent-team/actions/runs/34762410299)
-passed 1,649 tests with two environment-dependent skips and published exactly
-one identity manifest asset. A fresh non-root `v0.2.13` to `v0.2.14` lifecycle
+`5aac2d1b246353aaadf8a52e67c6d4bdeddda969`. It requires a portable tracked
+lock in every generated Python delivery, rejects setup-time delivery drift, and
+preserves direct predecessor image lineage across changed image references. The
+exact clean release head passed all 1,658 local tests; exact-tag GitHub Actions
+[run 34775991079](https://github.com/urntt/software-agent-team/actions/runs/34775991079)
+passed 1,655 tests with three environment-dependent skips and published exactly
+one identity manifest asset. A fresh non-root `v0.2.14` to `v0.2.15` lifecycle
 passed installation, upgrade discovery and activation, state preservation,
 same-target no-op, active-run refusal, fault-injected rollback, channel round
-trip, foreign OpenClaw isolation, credential-free export, full uninstall, and
-exact cleanup.
+trip, image reconciliation, foreign OpenClaw isolation, credential-free export,
+full uninstall, and exact cleanup.
 
-A separate fresh provider-backed `v0.2.14` journey passed installation, upgrade,
+A separate fresh provider-backed `v0.2.15` journey passed installation, upgrade,
 first-use configuration and provider checking, interrupted task input, repeat
-startup, task admission, Planning correction, approval, live controls, two
-implementation iterations, all deterministic gates, all independent Reviews,
-and 13 of 13 acceptance criteria. External setup then succeeded but generated
-an untracked `uv.lock`; the explicit delivery-metadata check failed before
-input-boundary acceptance, export, and uninstall. Cleanup completed with no
-attributable residual. The post-release development head below addresses the
-systemic generated-project lock and setup-drift contract rather than adding a
-task-specific requirement.
+startup, task admission, Planning approval, live controls, two implementation
+iterations, all deterministic gates, all independent Reviews, external setup,
+and the tracked-lock check. The first Review recorded a non-blocking source
+finding; the second implementation changed only the lock, but the final report
+dropped that finding when the second Review omitted it. Cleanup completed with
+no attributable residual. The post-release development head below fixes that
+cross-iteration terminal-evidence defect.
 
 The immutable `v0.2.13` tag,
 [GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.2.13),
@@ -332,6 +331,16 @@ foreign OpenClaw isolation, secret-free export, full uninstall, and exact
 account/HOME/resource cleanup all passed. The scenario made no provider calls.
 
 ## Current Development Head
+
+The post-`v0.2.15` Controller accumulates every verified Review across completed
+iterations. Since the current artifact contract has no explicit resolution
+signal for non-blocking findings, completed, failed, and user-cancelled terminal
+reports now retain every such description and collapse only exact repeats. A
+later Review omission cannot erase an observed residual issue. Fixed and
+adaptive workflow regressions reproduce both omission and repeated-report
+cases; all 118 artifact and workflow tests pass. The canonical gate, release
+version, hosted publication, published upgrade, and fresh complete
+provider-backed journey remain pending.
 
 The post-`v0.2.14` implementation requires every generated Python delivery to
 commit a bounded portable root `uv.lock`. The runtime image supplies an

@@ -26,6 +26,7 @@ from software_agent_team.artifacts import (
     IterationDecision,
     IterationRecord,
     ReviewFinding,
+    ReviewReport,
     ReviewSeverity,
     TaskBrief,
     WorkResult,
@@ -411,6 +412,7 @@ class AdaptiveExecutor:
         omit_builder_model: bool = False,
         timeout_second_review: bool = False,
         invalid_review_selectors: bool = False,
+        nonblocking_review_iterations: tuple[int, ...] = (),
     ) -> None:
         self.workspace = workspace
         self.revise_first = revise_first
@@ -418,6 +420,7 @@ class AdaptiveExecutor:
         self.omit_builder_model = omit_builder_model
         self.timeout_second_review = timeout_second_review
         self.invalid_review_selectors = invalid_review_selectors
+        self.nonblocking_review_iterations = frozenset(nonblocking_review_iterations)
         self.requests: list[AgentExecutionRequest] = []
         self.counts: dict[str, int] = {}
 
@@ -486,6 +489,26 @@ class AdaptiveExecutor:
                         stderr="review timed out",
                     ),
                 )
+            nonblocking_findings = (
+                (
+                    ReviewFinding(
+                        id="FINDING_MISLEADING_HELPER",
+                        severity=ReviewSeverity.LOW,
+                        blocking=False,
+                        category="maintainability",
+                        description=(
+                            "An unused helper has a misleading documentation claim."
+                        ),
+                        recommendation=(
+                            "Remove the helper or document its actual owner."
+                        ),
+                        path="greeting.py",
+                        criterion_ids=("AC_REVIEW",),
+                    ),
+                )
+                if request.iteration in self.nonblocking_review_iterations
+                else ()
+            )
             if self.always_revise or (self.revise_first and count == 1):
                 body = ReviewReportResponse(
                     verdict="revise",
@@ -515,6 +538,7 @@ class AdaptiveExecutor:
                             path="README.md",
                             criterion_ids=("AC_REVIEW",),
                         ),
+                        *nonblocking_findings,
                     ),
                     summary="One documentation blocker requires revision.",
                 ).model_dump_json()
@@ -536,6 +560,7 @@ class AdaptiveExecutor:
                             tool_evidence=(review_tool_claim(),),
                         ),
                     ),
+                    findings=nonblocking_findings,
                     summary="The final commit satisfies the review scope.",
                 ).model_dump_json()
         else:  # pragma: no cover - the fixture owns every Agent
@@ -1507,6 +1532,40 @@ def test_dynamic_workflow_revises_from_commit_bound_feedback_then_accepts(
     ][1]
     assert '"previous_iteration": 1' in second_builder.prompt
     assert '"id": "FINDING_DOCS"' in second_builder.prompt
+
+
+@pytest.mark.parametrize("review_iterations", [(1,), (1, 2)])
+def test_dynamic_workflow_carries_nonblocking_findings_across_iterations(
+    tmp_path: Path,
+    review_iterations: tuple[int, ...],
+) -> None:
+    approved = approved_inputs(run_id="adaptive-nonblocking", iteration_limit=2)
+    source = initialize_source(tmp_path)
+    executor = AdaptiveExecutor(
+        tmp_path / "workspaces" / approved.task_brief.run_id,
+        revise_first=True,
+        nonblocking_review_iterations=review_iterations,
+    )
+
+    outcome = coordinator(
+        tmp_path,
+        approved,
+        executor,
+        RecordingQualityGateFactory(),
+    ).execute(approved, source_repository=source)
+    store, report = load_report(tmp_path, outcome, approved)
+
+    assert outcome.record.phase is RunPhase.COMPLETED
+    assert report.unresolved_findings == (
+        "An unused helper has a misleading documentation claim.",
+    )
+    second = store.load(report.iterations[-1])
+    assert isinstance(second, IterationRecord)
+    assert second.resolved_finding_ids == ("FINDING_DOCS",)
+    second_review = store.load(second.review_reports[0])
+    assert isinstance(second_review, ReviewReport)
+    if review_iterations == (1,):
+        assert second_review.findings == ()
 
 
 @pytest.mark.parametrize("last_iteration", [4, 6])
