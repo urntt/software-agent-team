@@ -1,17 +1,12 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.2.11",
-  "target_version": "0.2.12",
+  "baseline_version": "0.2.12",
+  "target_version": "0.2.13",
   "changes": [
     {
-      "id": "planning-final-correction-completeness",
+      "id": "managed-pre-activation-reconciliation",
       "impact": "patch",
-      "summary": "Require the final Planning correction attempt to replace every remaining invalid slot before the Controller applies it"
-    },
-    {
-      "id": "planning-topology-correction-bounds",
-      "impact": "patch",
-      "summary": "Admit only the requested missing Review authority and bind complete acyclic implementation dependencies during topology correction"
+      "summary": "Treat a staged release with neither an application link nor an installation record as inactive during candidate self-checks"
     }
   ]
 }

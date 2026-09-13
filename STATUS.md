@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** publish and validate `v0.2.12` through a complete managed user journey
+**Current milestone:** publish and validate `v0.2.13` through a complete managed user journey
 
 **Last updated:** September 13, 2026
 
@@ -11,37 +11,34 @@ product, architecture, experiment, or roadmap; those decisions belong to
 
 ## Current Release
 
-The `v0.2.12` release candidate repairs two Planning correction defects exposed
-after published `v0.2.11`. On the final permitted semantic-correction attempt,
-the typed schema now requires one replacement for every remaining invalid slot,
-and the Controller independently rejects an omitted slot before applying any
-replacement. Earlier attempts may still converge incrementally when each
-submission strictly reduces the validated issue set. Exact-input provenance and
-resolved-question diagnostics also state the truthful replacement contract the
-Planner must satisfy.
+The `v0.2.13` release candidate treats a managed release as inactive during
+candidate self-checks when both its application link and installation record
+are still absent. This matches the first-install transaction boundary and
+prevents normal staged `validate-config` calls from reporting a broken-link
+cleanup warning before activation. A retained installation record with a
+missing link and every dangling link remain explicit lifecycle integrity
+errors. The directly affected regression set passes four tests, and the full
+managed-install, install-script, and CLI set passes all 135 tests. Exact
+candidate lifecycle, canonical gate, immutable publication, stable upgrade,
+and the complete provider-backed journey remain pending.
 
-Missing-specialist projection now admits only Review Agents with the exact
-required security or experience authority, discards unrelated topology from a
-complete-array replacement, and places each admitted specialist downstream of
-every retained implementation path while preserving valid existing references.
-When an otherwise-valid quality Agent alone lacks implementation coverage, the
-Controller offers one opaque candidate containing its current direct
-dependencies plus every missing implementation path. It withholds that local
-candidate if any added edge would form a cycle.
-
-Planning and semantic-correction focused checks pass 235 tests. Exact public
-implementation revision `a62f0e78336971b4abca732015bf2216fca2cea9`
-passed the local canonical gate with doctor, formatting, lint, and all 1,645
-tests. A fresh non-root provider-backed fixed-dev run completed 15 Planning
-invocations, one real user clarification, and both correction paths before
-converging to a valid five-Agent topology; an unrelated replacement Agent was
-discarded and every quality Agent covered the retained implementation path.
-A separate fresh fixed-dev lifecycle preserved the candidate/shared Docker
-lineage and a foreign image while reclaiming a four-record retired prefix and a
-detached legacy root, then passed same-ref no-op, credential-free export, full
-uninstall, and exact account cleanup. The exact release-head gate, immutable
-release, published stable upgrade, and full Planning-to-delivery journey remain
-pending.
+The immutable `v0.2.12` tag,
+[GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.2.12),
+package version, and release manifest identify source revision
+`4c67ea0f3924a261b93599a30abb8d6c3f205cc9` and Git archive digest
+`sha256:283d43bdbe74824037fd51dcd89ce364244b20720dbe2924aadd2dac536fde07`.
+It repairs final-attempt Planning correction completeness and constrains
+missing-specialist topology replacement to exact validated authority and
+acyclic implementation coverage. The exact clean release head passed all 1,645
+local tests; exact-tag GitHub Actions
+[run 34755838222](https://github.com/urntt/software-agent-team/actions/runs/34755838222)
+passed 1,643 tests with two environment-dependent skips and published exactly
+one identity manifest asset. A fresh non-root `v0.2.11` to `v0.2.12` lifecycle
+passed configuration and legacy-state preservation, same-target no-op,
+active-run refusal, fault-injected rollback, channel round trip, Docker image
+lineage reconciliation, foreign OpenClaw isolation, credential-free export,
+full uninstall, and exact resource cleanup. Its first staged install exposed
+the pre-activation warning addressed by the current candidate.
 
 The immutable `v0.2.11` tag,
 [GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.2.11),
