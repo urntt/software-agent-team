@@ -17,14 +17,27 @@ a complete Agent-array correction expresses a missing security specialist by
 changing that Reviewer under the same ID. It deconflicts the submitted typed
 specialist as one new Agent, prefers the single new ID already used by the
 affected criterion relations, and keeps ambiguous relations fail closed. The
-managed updater now captures the exact Docker parent lineage before and after a
-successful build, then removes only the untagged, container-free, unshared
-prefix attributable to the superseded fully-owned image. Active ancestry,
-foreign children, tagged images, and unattributed resources remain protected;
-failed activation applies the same bounded rule to the candidate lineage after
-restoring the prior tag. Focused Planning checks and all 40 managed-install
-tests pass. The clean canonical gate, fixed-revision managed rehearsal, release,
-published upgrade, and full provider-backed journey remain pending.
+managed updater captures the exact Docker parent lineage before and after a
+build, then removes only the untagged, container-free, unshared prefix
+attributable to the superseded fully-owned image. Every planned removal uses
+`docker image rm --no-prune` so Docker cannot recursively cross the verified
+boundary. Lineage capture also tolerates a missing terminal parent left by an
+older installer while retaining strict cycle, identity, and internal-gap
+checks. Active ancestry, foreign children, tagged images, and unattributed
+resources remain protected; failed activation applies the same bounded rule to
+the candidate lineage after restoring the prior tag.
+
+Focused Planning checks and all 41 managed-install tests pass. Exact clean
+revision `10e25f042bab6fd5652203b505658850a7844142` passed the canonical gate
+with doctor, formatting, lint, and all 1,633 tests; every stage reported complete
+cleanup coverage, no terminal process, container, volume, or temporary-directory
+residual remained, and the kernel and cgroup OOM deltas were zero. A fresh
+non-root fixed-revision rehearsal started from the published `v0.2.9`, activated
+this candidate, removed a deterministic four-record fully-owned predecessor
+prefix, preserved the complete 14-record candidate/shared lineage and a foreign
+image, exercised a same-ref no-op, exported state without credentials, and
+completed full uninstall and exact driver cleanup. The immutable release,
+published stable upgrade, and full provider-backed journey remain pending.
 
 The immutable `v0.2.9` tag,
 [GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.2.9),
@@ -251,11 +264,13 @@ account/HOME/resource cleanup all passed. The scenario made no provider calls.
 
 ## Current Development Head
 
-The current `v0.2.9` candidate fixes exact-start input ownership as a compatible
-patch over immutable `v0.2.8`. All 31 affected profile checks, the prior
-generated-project replay, and the 1,629-test canonical gate pass at the exact
-implementation revision. The exact release head, fixed-development rehearsal,
-hosted tag, published upgrade, and fresh ordinary-user journey remain pending.
+The current `v0.2.10` candidate fixes Planning specialist-ID convergence and
+bounded managed-image lineage cleanup as a compatible patch over immutable
+`v0.2.9`. Focused checks, the 1,633-test canonical gate at exact implementation
+revision `10e25f042bab6fd5652203b505658850a7844142`, and a fresh published-stable
+to fixed-development image-lifecycle rehearsal pass. The exact release head,
+hosted tag, published upgrade, and fresh provider-backed ordinary-user journey
+remain pending.
 
 The implementation released as `v0.2.8` is frozen at the exact revision above.
 Its Planning correction checks, canonical gate, exact-tag publication,
