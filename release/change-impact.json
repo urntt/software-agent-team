@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.2.15",
-  "target_version": "0.2.16",
+  "baseline_version": "0.2.16",
+  "target_version": "0.2.17",
   "changes": [
     {
-      "id": "review-finding-retention",
+      "id": "stable-record-correction-identity",
       "impact": "patch",
-      "summary": "Retain historical non-blocking Review findings when later iterations omit them"
+      "summary": "Preserve existing definition IDs and constrain related references during whole-record semantic correction"
     }
   ]
 }

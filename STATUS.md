@@ -339,8 +339,14 @@ and otherwise binds every relation to the existing canonical vocabulary. A
 production-coordinator regression reproduces the mixed security and experience
 criterion correction, verifies exact ID and reference schemas, and reaches an
 accepted proposal; a separate regression proves explicit ID repair remains
-available. All 240 Planning and response-correction tests pass. The clean
-canonical gate, release version, hosted publication, published upgrade, and a
+available. All 240 Planning and response-correction tests pass. Clean
+implementation revision `2b62dbe650f09928202864778a5375c870b8df71` passed
+the canonical gate with all 1,663 tests in 873.58 seconds. The report records
+428,408,832 bytes aggregate peak RSS, zero cgroup/kernel OOM delta, complete
+cleanup coverage, and no residual stage process, process lease, sandbox
+container, volume, or private test directory. The package, lock, and
+change-impact ledger identify `v0.2.17` as a compatible patch over `v0.2.16`;
+exact release-head validation, hosted publication, published upgrade, and a
 fresh complete provider-backed journey remain pending.
 
 The Controller released in `v0.2.16` accumulates every verified Review across
