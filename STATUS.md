@@ -20,7 +20,10 @@ correction now projects an identical field contract shared by several legal
 schema-union branches, including the exact length limit.
 
 The staged target now writes a revision-bound pre-build and post-build Docker
-lineage handoff inside the owned managed root. This lets the target complete
+lineage handoff inside the owned managed root. Its pre-build inventory also
+captures detached legacy roots only when they carry the exact SAT reference
+label and have no tag, container, child, or active-lineage membership. This
+lets the target complete
 safe predecessor cleanup on its first unlocked invocation even when the update
 was initiated by an older release that knew how to remove only the old final
 image record. Reconciliation revalidates the active candidate and captured

@@ -337,6 +337,7 @@ class SandboxImageIdentity:
     parent_image_id: str | None
     repository_tags: tuple[str, ...]
     owned: bool
+    reference_labeled: bool = False
 
 
 @dataclass(frozen=True)
@@ -362,6 +363,7 @@ class PersistedSandboxImageIdentity(BaseModel):
     )
     repository_tags: tuple[str, ...] = Field(default=(), max_length=100)
     owned: bool
+    reference_labeled: bool
 
     @field_validator("repository_tags")
     @classmethod
@@ -388,6 +390,7 @@ class PersistedSandboxImageIdentity(BaseModel):
             parent_image_id=identity.parent_image_id,
             repository_tags=identity.repository_tags,
             owned=identity.owned,
+            reference_labeled=identity.reference_labeled,
         )
 
     def to_runtime(self) -> SandboxImageIdentity:
@@ -396,7 +399,24 @@ class PersistedSandboxImageIdentity(BaseModel):
             parent_image_id=self.parent_image_id,
             repository_tags=self.repository_tags,
             owned=self.owned,
+            reference_labeled=self.reference_labeled,
         )
+
+
+class PersistedSandboxImageLineage(BaseModel):
+    """One exact legacy root and its locally available parent chain."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    root: PersistedSandboxImageIdentity
+    lineage: tuple[PersistedSandboxImageIdentity, ...] = Field(max_length=512)
+
+    @model_validator(mode="after")
+    def require_contiguous_lineage(self) -> PersistedSandboxImageLineage:
+        _require_persisted_lineage(self.root, self.lineage, "legacy")
+        if not self.root.reference_labeled:
+            raise ValueError("legacy sandbox root must carry the SAT reference label")
+        return self
 
 
 class PersistedSandboxImageTransition(BaseModel):
@@ -419,6 +439,10 @@ class PersistedSandboxImageTransition(BaseModel):
         default=(),
         max_length=512,
     )
+    legacy_orphan_lineages: tuple[PersistedSandboxImageLineage, ...] = Field(
+        default=(),
+        max_length=64,
+    )
 
     @field_validator("reference")
     @classmethod
@@ -433,30 +457,33 @@ class PersistedSandboxImageTransition(BaseModel):
 
     @model_validator(mode="after")
     def require_complete_captured_lineages(self) -> PersistedSandboxImageTransition:
-        self._validate_lineage(self.previous, self.previous_lineage, "previous")
-        self._validate_lineage(self.candidate, self.candidate_lineage, "candidate")
+        _require_persisted_lineage(self.previous, self.previous_lineage, "previous")
+        _require_persisted_lineage(self.candidate, self.candidate_lineage, "candidate")
         if self.candidate is not None and not self.candidate.owned:
             raise ValueError("candidate sandbox image must be attributable to SAT")
+        roots = tuple(item.root.image_id for item in self.legacy_orphan_lineages)
+        if len(roots) != len(set(roots)):
+            raise ValueError("legacy sandbox roots must be unique")
         return self
 
-    @staticmethod
-    def _validate_lineage(
-        root: PersistedSandboxImageIdentity | None,
-        lineage: tuple[PersistedSandboxImageIdentity, ...],
-        label: str,
-    ) -> None:
-        if root is None:
-            if lineage:
-                raise ValueError(f"{label} sandbox lineage has no root")
-            return
-        if not lineage or lineage[0] != root:
-            raise ValueError(f"{label} sandbox lineage root is invalid")
-        ids = tuple(identity.image_id for identity in lineage)
-        if len(ids) != len(set(ids)):
-            raise ValueError(f"{label} sandbox lineage contains a cycle")
-        for child, parent in pairwise(lineage):
-            if child.parent_image_id != parent.image_id:
-                raise ValueError(f"{label} sandbox lineage is discontinuous")
+
+def _require_persisted_lineage(
+    root: PersistedSandboxImageIdentity | None,
+    lineage: tuple[PersistedSandboxImageIdentity, ...],
+    label: str,
+) -> None:
+    if root is None:
+        if lineage:
+            raise ValueError(f"{label} sandbox lineage has no root")
+        return
+    if not lineage or lineage[0] != root:
+        raise ValueError(f"{label} sandbox lineage root is invalid")
+    ids = tuple(identity.image_id for identity in lineage)
+    if len(ids) != len(set(ids)):
+        raise ValueError(f"{label} sandbox lineage contains a cycle")
+    for child, parent in pairwise(lineage):
+        if child.parent_image_id != parent.image_id:
+            raise ValueError(f"{label} sandbox lineage is discontinuous")
 
 
 CommandRunner = Callable[[Sequence[str], Path | None, Mapping[str, str] | None], None]
@@ -1389,6 +1416,12 @@ def prepare_staged_sandbox_image_transition(
             expected_reference=reference,
         )
     )
+    legacy_orphan_lineages = _inspect_legacy_sandbox_image_lineages(
+        expected_reference=reference,
+        excluded_image_ids=frozenset(
+            identity.image_id for identity in previous_lineage
+        ),
+    )
     record = PersistedSandboxImageTransition(
         target_source_revision=marker.source_revision,
         reference=reference,
@@ -1400,6 +1433,16 @@ def prepare_staged_sandbox_image_transition(
         previous_lineage=tuple(
             PersistedSandboxImageIdentity.from_runtime(identity)
             for identity in previous_lineage
+        ),
+        legacy_orphan_lineages=tuple(
+            PersistedSandboxImageLineage(
+                root=PersistedSandboxImageIdentity.from_runtime(lineage[0]),
+                lineage=tuple(
+                    PersistedSandboxImageIdentity.from_runtime(identity)
+                    for identity in lineage
+                ),
+            )
+            for lineage in legacy_orphan_lineages
         ),
     )
     _write_sandbox_image_transition(
@@ -1454,7 +1497,7 @@ def finalize_staged_sandbox_image_transition(
         previous is None
         or not previous.owned
         or previous.image_id == candidate.image_id
-    ):
+    ) and not prepared.legacy_orphan_lineages:
         _remove_sandbox_image_transition(path)
         return
     completed = PersistedSandboxImageTransition.model_validate(
@@ -1515,30 +1558,39 @@ def reconcile_pending_sandbox_image_transition(project_root: Path) -> bool:
                     "active sandbox image lineage differs from its pending transition"
                 )
             previous = transition.previous
-            if previous is None or not previous.owned:
-                _remove_sandbox_image_transition(path)
-                return True
-            current_previous = _inspect_sandbox_image(
-                previous.image_id,
-                expected_reference=transition.reference,
+            retained_lineage = tuple(
+                item.to_runtime() for item in transition.candidate_lineage
             )
-            if current_previous is not None and (
-                not current_previous.owned
-                or current_previous.parent_image_id != previous.parent_image_id
-            ):
-                raise ManagedInstallError(
-                    "retired sandbox image differs from its pending transition"
+            complete = True
+            if previous is not None and previous.owned:
+                current_previous = _inspect_sandbox_image(
+                    previous.image_id,
+                    expected_reference=transition.reference,
                 )
-            complete = _remove_owned_unreferenced_lineage(
-                previous.to_runtime(),
-                expected_reference=transition.reference,
-                retired_lineage=tuple(
-                    item.to_runtime() for item in transition.previous_lineage
-                ),
-                retained_lineage=tuple(
-                    item.to_runtime() for item in transition.candidate_lineage
-                ),
-            )
+                if current_previous is not None and (
+                    not current_previous.owned
+                    or current_previous.parent_image_id != previous.parent_image_id
+                ):
+                    raise ManagedInstallError(
+                        "retired sandbox image differs from its pending transition"
+                    )
+                complete = _remove_attributable_unreferenced_lineage(
+                    previous.to_runtime(),
+                    expected_reference=transition.reference,
+                    retired_lineage=tuple(
+                        item.to_runtime() for item in transition.previous_lineage
+                    ),
+                    retained_lineage=retained_lineage,
+                )
+            for legacy in transition.legacy_orphan_lineages:
+                legacy_complete = _remove_attributable_unreferenced_lineage(
+                    legacy.root.to_runtime(),
+                    expected_reference=transition.reference,
+                    retired_lineage=tuple(item.to_runtime() for item in legacy.lineage),
+                    retained_lineage=retained_lineage,
+                    allow_reference_labeled_root=True,
+                )
+                complete = legacy_complete and complete
             current_candidate = _inspect_sandbox_image(transition.reference)
             if (
                 current_candidate is None
@@ -1759,15 +1811,14 @@ def _inspect_sandbox_image(
             "Docker returned malformed managed sandbox image metadata"
         )
     reference = selector if expected_reference is None else expected_reference
-    owned = (
-        labels.get(SANDBOX_IMAGE_OWNER_LABEL) == "true"
-        and labels.get(SANDBOX_IMAGE_REFERENCE_LABEL) == reference
-    )
+    reference_labeled = labels.get(SANDBOX_IMAGE_REFERENCE_LABEL) == reference
+    owned = labels.get(SANDBOX_IMAGE_OWNER_LABEL) == "true" and reference_labeled
     return SandboxImageIdentity(
         image_id=image_id,
         parent_image_id=raw_parent,
         repository_tags=tuple(raw_tags),
         owned=owned,
+        reference_labeled=reference_labeled,
     )
 
 
@@ -1832,6 +1883,40 @@ def _sandbox_image_inventory(
     return inventory
 
 
+def _inspect_legacy_sandbox_image_lineages(
+    *,
+    expected_reference: str,
+    excluded_image_ids: frozenset[str],
+) -> tuple[tuple[SandboxImageIdentity, ...], ...]:
+    """Capture detached legacy roots bearing SAT's exact image-reference label."""
+
+    inventory = _sandbox_image_inventory(expected_reference=expected_reference)
+    children: dict[str, set[str]] = {}
+    for identity in inventory.values():
+        if identity.parent_image_id is not None:
+            children.setdefault(identity.parent_image_id, set()).add(identity.image_id)
+    roots = tuple(
+        identity
+        for identity in sorted(inventory.values(), key=lambda item: item.image_id)
+        if identity.image_id not in excluded_image_ids
+        and identity.reference_labeled
+        and not identity.repository_tags
+        and not children.get(identity.image_id)
+        and not _image_has_container_references(identity.image_id)
+    )
+    if len(roots) > 64:
+        raise ManagedInstallError(
+            "too many legacy sandbox image roots require explicit recovery"
+        )
+    return tuple(
+        _inspect_sandbox_image_lineage(
+            root,
+            expected_reference=expected_reference,
+        )
+        for root in roots
+    )
+
+
 def _image_has_container_references(image_id: str) -> bool:
     completed = _docker_command(
         (
@@ -1847,16 +1932,19 @@ def _image_has_container_references(image_id: str) -> bool:
     return bool(completed.stdout.strip())
 
 
-def _remove_owned_unreferenced_lineage(
+def _remove_attributable_unreferenced_lineage(
     retired: SandboxImageIdentity,
     *,
     expected_reference: str,
     retired_lineage: tuple[SandboxImageIdentity, ...],
     retained_lineage: tuple[SandboxImageIdentity, ...],
+    allow_reference_labeled_root: bool = False,
 ) -> bool:
     """Remove the exact unshared prefix of one attributable image lineage."""
 
-    if not retired.owned:
+    if not retired.owned and not (
+        allow_reference_labeled_root and retired.reference_labeled
+    ):
         return True
     if not retired_lineage:
         retired_lineage = _inspect_sandbox_image_lineage(
@@ -1893,7 +1981,11 @@ def _remove_owned_unreferenced_lineage(
             continue
         if current.parent_image_id != captured.parent_image_id:
             raise ManagedInstallError("managed sandbox image lineage changed")
-        if current.image_id == retired.image_id and not current.owned:
+        if (
+            current.image_id == retired.image_id
+            and not current.owned
+            and not (allow_reference_labeled_root and current.reference_labeled)
+        ):
             break
         if current.image_id in retained_ids or current.repository_tags:
             break
@@ -1934,7 +2026,7 @@ def _cleanup_superseded_sandbox_image(
         or not previous.owned
     ):
         return
-    _remove_owned_unreferenced_lineage(
+    _remove_attributable_unreferenced_lineage(
         previous,
         expected_reference=transition.reference,
         retired_lineage=transition.previous_lineage,
@@ -1973,7 +2065,7 @@ def _restore_sandbox_image_transition(
     if transition.candidate.owned and (
         previous is None or transition.candidate.image_id != previous.image_id
     ):
-        _remove_owned_unreferenced_lineage(
+        _remove_attributable_unreferenced_lineage(
             transition.candidate,
             expected_reference=transition.reference,
             retired_lineage=transition.candidate_lineage,

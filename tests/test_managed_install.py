@@ -903,6 +903,10 @@ def test_active_target_reconciles_lineage_left_by_an_older_updater(
     shared_base_id = "sha256:" + "d" * 64
     candidate_id = "sha256:" + "e" * 64
     candidate_layer_id = "sha256:" + "f" * 64
+    legacy_root_id = "sha256:" + "2" * 64
+    legacy_parent_id = "sha256:" + "3" * 64
+    foreign_labeled_root_id = "sha256:" + "4" * 64
+    foreign_child_id = "sha256:" + "5" * 64
     parents = {
         previous_id: previous_label_id,
         previous_label_id: previous_layer_id,
@@ -910,8 +914,13 @@ def test_active_target_reconciles_lineage_left_by_an_older_updater(
         shared_base_id: None,
         candidate_id: candidate_layer_id,
         candidate_layer_id: shared_base_id,
+        legacy_root_id: legacy_parent_id,
+        legacy_parent_id: shared_base_id,
+        foreign_labeled_root_id: shared_base_id,
+        foreign_child_id: foreign_labeled_root_id,
     }
     current_tag = {"image_id": previous_id}
+    candidate_present = {"value": False}
     removed: list[str] = []
 
     def fake_docker(
@@ -920,7 +929,15 @@ def test_active_target_reconciles_lineage_left_by_an_older_updater(
         check: bool,
     ) -> subprocess.CompletedProcess[str]:
         if arguments[:2] == ("image", "ls"):
-            present = [image_id for image_id in parents if image_id not in removed]
+            present = [
+                image_id
+                for image_id in parents
+                if image_id not in removed
+                and (
+                    candidate_present["value"]
+                    or image_id not in {candidate_id, candidate_layer_id}
+                )
+            ]
             return subprocess.CompletedProcess(
                 arguments,
                 0,
@@ -930,7 +947,10 @@ def test_active_target_reconciles_lineage_left_by_an_older_updater(
         if arguments[:2] == ("image", "inspect"):
             selector = arguments[-1]
             image_id = current_tag["image_id"] if selector == reference else selector
-            if image_id in removed:
+            if image_id in removed or (
+                not candidate_present["value"]
+                and image_id in {candidate_id, candidate_layer_id}
+            ):
                 return subprocess.CompletedProcess(
                     arguments,
                     1,
@@ -943,13 +963,19 @@ def test_active_target_reconciles_lineage_left_by_an_older_updater(
                     managed_install_module.SANDBOX_IMAGE_OWNER_LABEL: "true",
                     managed_install_module.SANDBOX_IMAGE_REFERENCE_LABEL: reference,
                 }
-            elif image_id == previous_label_id:
+            elif image_id in {
+                previous_label_id,
+                legacy_root_id,
+                foreign_labeled_root_id,
+            }:
                 labels = {
                     managed_install_module.SANDBOX_IMAGE_REFERENCE_LABEL: reference
                 }
             tags = [reference] if image_id == current_tag["image_id"] else None
             if image_id == shared_base_id:
                 tags = ["python:3.12"]
+            elif image_id == foreign_child_id:
+                tags = ["foreign:keep"]
             return subprocess.CompletedProcess(
                 arguments,
                 0,
@@ -978,6 +1004,7 @@ def test_active_target_reconciles_lineage_left_by_an_older_updater(
         application_root=release,
         installation_record_path=install_paths.installation_record,
     )
+    candidate_present["value"] = True
     current_tag["image_id"] = candidate_id
     managed_install_module.finalize_staged_sandbox_image_transition(
         application_root=release,
@@ -996,10 +1023,18 @@ def test_active_target_reconciles_lineage_left_by_an_older_updater(
     removed.append(previous_id)
     assert managed_install_module.reconcile_pending_sandbox_image_transition(release)
 
-    assert removed == [previous_id, previous_label_id, previous_layer_id]
+    assert removed == [
+        previous_id,
+        previous_label_id,
+        previous_layer_id,
+        legacy_root_id,
+        legacy_parent_id,
+    ]
     assert candidate_id not in removed
     assert candidate_layer_id not in removed
     assert shared_base_id not in removed
+    assert foreign_labeled_root_id not in removed
+    assert foreign_child_id not in removed
     assert not transition_path.exists()
 
 

@@ -186,7 +186,10 @@ the identity manifest and publish; uploading diagnostics cannot waive a failure.
   same-channel switch remains a local no-op.
 - Install, update, and switch never change channels silently.
 - A staged target records the exact pre-build and post-build Docker image
-  lineages in the owned managed root. An updater that understands the current
+  lineages in the owned managed root. The same pre-build snapshot includes a
+  detached legacy root only when it bears the exact SAT image-reference label,
+  has no tag, container reference, or child, and is outside the active lineage.
+  An updater that understands the current
   lineage protocol reclaims the superseded prefix during activation. If an
   older updater can remove only the predecessor's final image record, the newly
   active target consumes its revision-bound handoff on the first unlocked SAT
