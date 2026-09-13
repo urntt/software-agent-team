@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.2.6",
-  "target_version": "0.2.7",
+  "baseline_version": "0.2.7",
+  "target_version": "0.2.8",
   "changes": [
     {
-      "id": "process-poll-progress-liveness",
+      "id": "planning-product-reference-correction-scope",
       "impact": "patch",
-      "summary": "Keep repeated background-process polls with identical running output from renewing provider liveness and enable the pinned runtime loop breaker"
+      "summary": "Limit unknown ProductDefinition reference repair to the affected ID arrays while preserving validated exact-source fields"
     }
   ]
 }

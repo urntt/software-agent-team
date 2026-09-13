@@ -1,8 +1,8 @@
 # Project Status
 
-**Current milestone:** validate the `v0.2.7` no-progress process-poll release candidate
+**Current milestone:** validate the `v0.2.8` Planning reference-correction release candidate
 
-**Last updated:** September 12, 2026
+**Last updated:** September 13, 2026
 
 This document records what the repository implements now, what evidence
 supports that claim, and what remains unavailable. It does not redefine the
@@ -11,19 +11,33 @@ product, architecture, experiment, or roadmap; those decisions belong to
 
 ## Current Release
 
-The `v0.2.7` release candidate distinguishes background-process observation
-from verified progress. Pinned OpenClaw `process` poll and log results are
-compared through an opaque digest of bounded output and status fields. A first
-running observation, changed output, terminal result, or different tool action
-renews provider liveness; a repeated identical running result and provider
-stream activity used only to request another equivalent poll do not. The
-repeated poll also cannot suspend stall enforcement as an independently active
-tool. Materialized Agent configuration enables pinned OpenClaw's native
-tool-loop detector, while leaving its detector set and thresholds runtime-owned.
-Focused session, execution, configuration, Planning, and dynamic-runner checks
-pass all 489 affected cases at implementation revision
-`cf4a5fea79ce3fdf1df00de904a4f2e934b96840`. Exact release-candidate, canonical,
-hosted-tag, and fresh ordinary-user validation remain pending.
+The `v0.2.8` release candidate limits an unknown downstream
+ProductDefinition reference correction to the affected `requirement_ids`,
+`criterion_ids`, or `decision_ids` array. Valid disposition, exact user source,
+statement, rationale, and sibling references remain outside model authority.
+This lets a correction update identities changed by an earlier acceptance-plan
+repair without reopening an already satisfied verbatim-source invariant. The
+next independent invariant is then recorded as progress and receives its own
+targeted correction. Planning and shared response-correction checks pass all
+224 affected cases at implementation revision
+`bc6167e2d815d047db1857ca5f8338264b964558`. Exact release-candidate,
+canonical, hosted-tag, and fresh ordinary-user validation remain pending.
+
+The immutable `v0.2.7` tag,
+[GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.2.7),
+package version, and release manifest identify source revision
+`df5dd17790b09efdfda768abb46604bdeed42cd3` and Git archive digest
+`sha256:4a93e006d7f9b3965eeb49ebf9b490171bba098ad24194894ad0ea7c3ffc6503`.
+It distinguishes repeated no-progress background-process polling from verified
+provider progress and enables the pinned runtime's native tool-loop detector.
+The exact clean revision passed all 1,626 local tests; exact-tag GitHub Actions
+[run 34729295174](https://github.com/urntt/software-agent-team/actions/runs/34729295174)
+passed 1,624 tests with two environment-dependent skips and published exactly
+one identity manifest asset. Fresh fixed-revision development and published
+`v0.2.6` to `v0.2.7` lifecycle rehearsals passed. A provider-backed ordinary
+user journey then passed install, upgrade, first-run configuration, provider
+check, second-start self-check, and task admission before exposing the
+ProductDefinition correction-scope defect addressed by the current candidate.
 
 The immutable `v0.2.6` tag,
 [GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.2.6),
@@ -196,12 +210,18 @@ account/HOME/resource cleanup all passed. The scenario made no provider calls.
 
 ## Current Development Head
 
-The current `v0.2.7` candidate adds progress-qualified background-process
-polling and enables pinned OpenClaw loop detection as a compatible patch over
-immutable `v0.2.6`. The 489 affected session, executor, runtime-configuration,
-Planning, and dynamic-runner tests pass at the implementation revision. The
-exact release head, canonical gate, hosted tag, and fresh ordinary-user journey
-remain pending.
+The current `v0.2.8` candidate adds leaf-scoped ProductDefinition reference
+correction as a compatible patch over immutable `v0.2.7`. The 224 affected
+Planning and shared response-correction tests pass at the implementation
+revision. The exact release head, canonical gate, hosted tag, and fresh
+ordinary-user journey remain pending.
+
+The implementation released as `v0.2.7` is frozen at the exact revision above.
+Its no-progress process-poll checks, canonical gate, exact-tag hosted
+publication, fixed-revision development rehearsal, and genuine
+published-stable upgrade passed. The subsequent provider-backed ordinary-user
+journey reached Planning corrections and exposed the current overly broad
+ProductDefinition reference-correction authority.
 
 The implementation released as `v0.2.6` is frozen at the exact revision above.
 Its Planning ownership checks, canonical gate, exact-tag hosted publication,
