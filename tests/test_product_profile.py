@@ -129,6 +129,10 @@ elif argv == ["run", "pytest"]:
 elif argv == ["run", "link-checker", "."]:
     if not (cwd / ".venv" / "ready").is_file():
         raise SystemExit(34)
+    if os.environ.get("FAKE_UV_WAIT_FOR_STDIN") == "1":
+        print("Enter file path: ", end="", file=sys.stderr, flush=True)
+        if sys.stdin.buffer.read(1) == b"":
+            raise SystemExit(36)
 else:
     raise SystemExit(35)
 """,
@@ -597,6 +601,65 @@ def test_exact_command_gate_uses_only_committed_files_in_fresh_scratch(
     assert len({call["cwd"] for call in calls}) == 1
     assert calls[0]["cwd"] != str(project)
     assert not (project / ".venv").exists()
+
+
+def test_exact_command_gate_keeps_interactive_start_stdin_open(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    write_valid_project(project)
+    commit_project(project)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    write_fake_uv(fake_bin)
+    log = tmp_path / "uv.jsonl"
+    environment = {
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "FAKE_UV_LOG": str(log),
+        "FAKE_UV_WAIT_FOR_STDIN": "1",
+    }
+
+    result = run_command_validator(project, environment=environment)
+
+    assert result.returncode == 0, result.stderr
+    summary = json.loads(result.stdout)
+    assert summary["start"] == "running_after_grace"
+    calls = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+    assert [call["argv"] for call in calls] == [
+        ["sync", "--dev"],
+        ["run", "pytest"],
+        ["run", "link-checker", "."],
+    ]
+
+
+def test_exact_command_gate_still_reports_an_immediate_start_failure(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    write_valid_project(project)
+    commit_project(project)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    write_fake_uv(fake_bin)
+    log = tmp_path / "uv.jsonl"
+    environment = {
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "FAKE_UV_LOG": str(log),
+        "FAKE_UV_FAIL": "run link-checker .",
+    }
+
+    result = run_command_validator(project, environment=environment)
+
+    assert result.returncode == 1
+    assert "start command failed (exit=32, timed_out=false)" in result.stderr
+    calls = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+    assert [call["argv"] for call in calls] == [
+        ["sync", "--dev"],
+        ["run", "pytest"],
+        ["run", "link-checker", "."],
+    ]
 
 
 def test_exact_command_gate_ignores_excluded_runtime_lock_in_source_workspace(

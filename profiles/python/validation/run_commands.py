@@ -123,6 +123,7 @@ def _run(
     *,
     cwd: Path,
     timeout_seconds: int,
+    keep_stdin_open: bool = False,
 ) -> CommandResult:
     with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
         try:
@@ -130,7 +131,7 @@ def _run(
                 argv,
                 cwd=cwd,
                 env=os.environ.copy(),
-                stdin=subprocess.DEVNULL,
+                stdin=subprocess.PIPE if keep_stdin_open else subprocess.DEVNULL,
                 stdout=stdout,
                 stderr=stderr,
                 start_new_session=True,
@@ -148,6 +149,8 @@ def _run(
         except subprocess.TimeoutExpired:
             timed_out = True
             _terminate(process)
+        if process.stdin is not None:
+            process.stdin.close()
         result = CommandResult(
             exit_code=None if timed_out else process.returncode,
             timed_out=timed_out,
@@ -180,6 +183,7 @@ def execute(repository: Path) -> None:
             commands.start,
             cwd=clean,
             timeout_seconds=START_GRACE_SECONDS,
+            keep_stdin_open=True,
         )
         if not start.timed_out:
             _require_success("start command", start)

@@ -84,6 +84,11 @@ directory cannot satisfy that check. The runtime image contains a locked
 offline wheelhouse for setup and build dependencies. That wheelhouse is
 ephemeral controller infrastructure: it may satisfy the clean-copy command
 gate, but its private path must never become generated-project metadata.
+Setup and test run with closed standard input and must exit successfully. The
+bounded start probe keeps its standard-input pipe open through the startup
+grace so an interactive CLI can wait for user input instead of receiving a
+synthetic EOF; a process still running after that grace is terminated through
+the same bounded process-group cleanup.
 
 The ordinary pytest gate
 uses the console entry point, matching the `uv run pytest` command delivered to
