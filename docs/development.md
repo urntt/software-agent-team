@@ -753,6 +753,13 @@ accepts and a nearest valid counterexample it must preserve. In particular,
 direct-product deduplication requires an exact ProductDefinition source, the
 matching semantic category, and no retained reference to the candidate decision;
 same-source privacy or risk decisions are not product-definition duplicates.
+If a provider submission nevertheless crosses two legal branches, correction
+tests must prove that every Controller-generated candidate preserves the other
+decision fields, satisfies the persisted decision model, and obeys all stable
+ProductDefinition or assumption references. Include both an unreferenced choice
+set and a conflicting-reference case where no candidate is offered. The model's
+correction schema must accept only candidate handles, never another free-form
+decision object for that diagnosed mismatch.
 
 The product profile and evaluation fixture share this dependency image, not a
 TaskBrief, seed, acceptance suite, environment contract, or delivery command.

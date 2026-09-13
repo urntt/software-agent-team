@@ -313,6 +313,17 @@ and Agent-owned categories with Agent provenance. It does not offer a Cartesian
 product of categories and provenance kinds that the controller would later have
 to reject.
 
+If transport still accepts a decision that crosses those atomic branches, the
+Controller does not ask the model to rewrite the record. It keeps the decision
+ID, summary, and rationale, derives a finite catalog of complete legal atoms,
+and filters their categories through any stable ProductDefinition or assumption
+reference already carried by the proposal. Every catalog value independently
+passes the persisted decision validator. The correction submission contains
+only a short candidate handle, which the Controller binds to the exact catalog
+value before revalidating the whole proposal. Conflicting references, an
+unavailable user-provenance source, or any other record error with no provably
+valid candidate stops this recovery instead of reopening a free-form record.
+
 Decision authority and quote authorship are different boundaries. An invalid
 model-authored `explicit_input.source` is a semantic citation defect, not proof
 that the user omitted a decision. When user input exists, correction may replace
@@ -424,6 +435,11 @@ may perform only these bounded, semantics-preserving normalizations:
   dependencies plus every missing implementation path. Do not offer this local
   repair when adding an edge would form a cycle; the broader graph remains a
   model-owned defect;
+- When one decision combines a category and provenance owned by different
+  authorities, bind only complete decision candidates that preserve its ID,
+  summary, and rationale. Stable ProductDefinition and assumption references
+  narrow the candidate category before exposure. The model selects a handle and
+  cannot rewrite the retained fields or submit another cross-authority pair;
 - Compile each Review-owned task's known criterion bindings against its
   non-overlapping Review scope. If at least one submitted binding is in scope,
   remove bindings owned by another Reviewer and retain the in-scope focus. A

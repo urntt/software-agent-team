@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** publish and validate `v0.2.13` through a complete managed user journey
+**Current milestone:** publish the Planning atomic-correction patch and complete a managed user journey
 
 **Last updated:** September 13, 2026
 
@@ -11,16 +11,38 @@ product, architecture, experiment, or roadmap; those decisions belong to
 
 ## Current Release
 
-The `v0.2.13` release candidate treats a managed release as inactive during
-candidate self-checks when both its application link and installation record
-are still absent. This matches the first-install transaction boundary and
-prevents normal staged `validate-config` calls from reporting a broken-link
-cleanup warning before activation. A retained installation record with a
-missing link and every dangling link remain explicit lifecycle integrity
-errors. The directly affected regression set passes four tests, and the full
-managed-install, install-script, and CLI set passes all 135 tests. Exact
-candidate lifecycle, canonical gate, immutable publication, stable upgrade,
-and the complete provider-backed journey remain pending.
+The current development candidate handles a decision category/provenance
+authority mismatch through Controller-owned atomic candidates. It preserves the
+decision ID, summary, and rationale, narrows categories through stable
+ProductDefinition and assumption references, validates every complete candidate
+against the persisted decision model, and exposes only short selection handles.
+Conflicting references or an unsupported user-provenance source do not reopen a
+free-form decision record. The affected Planning, correction, and documentation
+set passes all 241 tests. The exact archived `v0.2.13` provider payload now
+replays to one reference-bound `delivery` candidate and passes the original
+decision-model blocker after binding; the canonical gate, publication, and a
+fresh complete provider-backed journey remain pending.
+
+The immutable `v0.2.13` tag,
+[GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.2.13),
+package version, and release manifest identify source revision
+`0bc8cd7676b8c1c2299d6512d25921176a76dd4a` and Git archive digest
+`sha256:22532cedefedf35ca68951f38daa6f21e63bbd3b9644742a35036c04f0dc878b`.
+It removes the false pre-activation cleanup warning from a normal first install
+while retaining fail-closed missing-link and dangling-link checks. The exact
+clean release head passed all 1,648 local tests; exact-tag GitHub Actions
+[run 34758547029](https://github.com/urntt/software-agent-team/actions/runs/34758547029)
+passed 1,646 tests with two environment-dependent skips and published exactly
+one identity manifest asset. A fresh non-root `v0.2.12` to `v0.2.13` lifecycle
+passed configuration and state preservation, same-target no-op, active-run
+refusal, fault-injected rollback, channel round trip, Docker image
+reconciliation, foreign OpenClaw isolation, credential-free export, full
+uninstall, and exact cleanup. A separate fresh provider-backed journey passed
+installation, upgrade, first-use configuration and smoke checking, task-input
+interruption, repeat startup, and all 26 task-admission checks before a
+whole-record Planning correction crossed the otherwise-atomic decision branches.
+Both provider calls settled and all resources were cleaned; no runtime Agent,
+workspace, or delivery was created in that failed journey.
 
 The immutable `v0.2.12` tag,
 [GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.2.12),

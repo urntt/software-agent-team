@@ -361,6 +361,18 @@ class PlanningDecisionProvenance(BaseModel):
         return self
 
 
+_DECISION_PROVENANCE_AUTHORITY = {
+    PlanningDecisionProvenanceKind.EXPLICIT_INPUT: PlanningDecisionAuthority.USER,
+    PlanningDecisionProvenanceKind.RESOLVED_QUESTION: PlanningDecisionAuthority.USER,
+    PlanningDecisionProvenanceKind.PLANNER_RECOMMENDATION: (
+        PlanningDecisionAuthority.PLANNER_PROPOSAL
+    ),
+    PlanningDecisionProvenanceKind.AGENT_AUTONOMY: (
+        PlanningDecisionAuthority.AGENT_AUTONOMY
+    ),
+}
+
+
 _DECISION_AUTHORITY = {
     PlanningDecisionCategory.PRODUCT_REQUIREMENT: PlanningDecisionAuthority.USER,
     PlanningDecisionCategory.RISK_TRADEOFF: PlanningDecisionAuthority.USER,
@@ -2144,6 +2156,249 @@ def _bind_planning_dependency_correction_candidate(
     return attach_semantic_correction_candidates(plan, tuple(slots))
 
 
+_CURRENT_DECISION_WIRE_FIELDS = (
+    "id",
+    "category",
+    "provenance",
+    "summary",
+    "rationale",
+)
+
+
+def _planning_decision_reference_categories(
+    proposal: Mapping[str, object],
+    *,
+    decision_id: str,
+) -> tuple[PlanningDecisionCategory, ...] | None:
+    """Return categories already constrained by stable decision references."""
+
+    constrained: set[PlanningDecisionCategory] | None = None
+
+    def intersect(values: Collection[PlanningDecisionCategory]) -> None:
+        nonlocal constrained
+        candidate = set(values)
+        constrained = candidate if constrained is None else constrained & candidate
+
+    product_definition = proposal.get("product_definition")
+    if isinstance(product_definition, Mapping):
+        for dimension in ProductDefinitionDimension:
+            item = product_definition.get(dimension.value)
+            if not isinstance(item, Mapping):
+                continue
+            references = item.get("decision_ids")
+            if not isinstance(references, list) or decision_id not in references:
+                continue
+            disposition = item.get("disposition")
+            if disposition == ProductDefinitionDisposition.RESOLVED_QUESTION.value:
+                intersect((PlanningDecisionCategory.PRODUCT_REQUIREMENT,))
+            elif (
+                disposition == ProductDefinitionDisposition.PLANNER_RECOMMENDATION.value
+            ):
+                intersect((_PRODUCT_DIMENSION_DECISION_CATEGORY[dimension],))
+
+    assumption_decision_ids = proposal.get("assumption_decision_ids")
+    if (
+        isinstance(assumption_decision_ids, list)
+        and decision_id in assumption_decision_ids
+    ):
+        intersect(
+            tuple(
+                category
+                for category, authority in _DECISION_AUTHORITY.items()
+                if authority is PlanningDecisionAuthority.AGENT_AUTONOMY
+            )
+        )
+
+    if constrained is None:
+        return None
+    return tuple(
+        category for category in PlanningDecisionCategory if category in constrained
+    )
+
+
+def _planning_decision_authority_candidates(
+    plan: SemanticCorrectionPlan,
+    *,
+    target_path: str,
+) -> tuple[SemanticCorrectionCandidate, ...] | None:
+    """Compile valid atomic repairs for one category/provenance mismatch."""
+
+    match = re.fullmatch(r"/proposal/decisions/([0-9]+)", target_path)
+    if match is None:
+        return None
+    proposal = plan.base_payload.get("proposal")
+    decisions = None if not isinstance(proposal, Mapping) else proposal.get("decisions")
+    index = int(match.group(1))
+    if not isinstance(decisions, list) or index >= len(decisions):
+        return None
+    raw_decision = decisions[index]
+    if not isinstance(raw_decision, dict):
+        return None
+    allowed_fields = {*_CURRENT_DECISION_WIRE_FIELDS, "authority"}
+    if set(raw_decision) != allowed_fields:
+        return None
+    try:
+        category = PlanningDecisionCategory(raw_decision["category"])
+        provenance = PlanningDecisionProvenance.model_validate(
+            raw_decision["provenance"]
+        )
+    except (KeyError, TypeError, ValueError, ValidationError):
+        return None
+    category_authority = _DECISION_AUTHORITY[category]
+    provenance_authority = _DECISION_PROVENANCE_AUTHORITY[provenance.kind]
+    if (
+        category_authority is provenance_authority
+        or raw_decision.get("authority") != category_authority.value
+    ):
+        return None
+    issues = tuple(
+        issue for issue in plan.diagnostic.issues if issue.path == target_path
+    )
+    if (
+        len(issues) != 1
+        or issues[0].authority is not ResponseIssueAuthority.MODEL
+        or issues[0].code != "value_error"
+        or issues[0].invariant_id != "planning_decision_authority_provenance"
+    ):
+        return None
+
+    constrained = _planning_decision_reference_categories(
+        proposal,
+        decision_id=str(raw_decision["id"]),
+    )
+    if constrained is None:
+        compatible_with_existing = tuple(
+            candidate
+            for candidate, authority in _DECISION_AUTHORITY.items()
+            if authority is provenance_authority
+        )
+        candidate_categories = tuple(
+            dict.fromkeys((category, *compatible_with_existing))
+        )
+    else:
+        candidate_categories = tuple(
+            candidate
+            for candidate in (category, *constrained)
+            if candidate in constrained
+        )
+    if not candidate_categories:
+        return ()
+
+    existing_provenance = deepcopy(raw_decision["provenance"])
+    canonical_provenance = {
+        PlanningDecisionAuthority.PLANNER_PROPOSAL: {
+            "kind": PlanningDecisionProvenanceKind.PLANNER_RECOMMENDATION.value,
+            "source": "planner",
+        },
+        PlanningDecisionAuthority.AGENT_AUTONOMY: {
+            "kind": PlanningDecisionProvenanceKind.AGENT_AUTONOMY.value,
+            "source": "agent",
+        },
+    }
+    candidates: list[SemanticCorrectionCandidate] = []
+    seen_values: set[str] = set()
+    for candidate_category in candidate_categories:
+        candidate_authority = _DECISION_AUTHORITY[candidate_category]
+        provenance_values: list[object] = []
+        if candidate_authority is provenance_authority:
+            provenance_values.append(existing_provenance)
+        if candidate_authority in canonical_provenance:
+            provenance_values.append(canonical_provenance[candidate_authority])
+        for provenance_value in provenance_values:
+            wire_value = {
+                field: deepcopy(raw_decision[field])
+                for field in _CURRENT_DECISION_WIRE_FIELDS
+            }
+            wire_value["category"] = candidate_category.value
+            wire_value["provenance"] = deepcopy(provenance_value)
+            persisted_value = {
+                **wire_value,
+                "authority": candidate_authority.value,
+            }
+            try:
+                PlanningDecisionRecord.model_validate(persisted_value)
+            except ValidationError:
+                continue
+            identity = json.dumps(
+                wire_value,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            if identity in seen_values:
+                continue
+            seen_values.add(identity)
+            if (
+                candidate_category is category
+                and provenance_value != existing_provenance
+            ):
+                source = (
+                    f"preserve {category.value} category with canonical "
+                    f"{wire_value['provenance']['kind']} provenance"
+                )
+            elif provenance_value == existing_provenance:
+                source = (
+                    f"preserve {provenance.kind.value} provenance under "
+                    f"{candidate_category.value} category"
+                )
+            else:
+                source = (
+                    f"use reference-bound {candidate_category.value} category "
+                    f"with canonical {wire_value['provenance']['kind']} provenance"
+                )
+            candidates.append(
+                SemanticCorrectionCandidate(
+                    handle=f"candidate_{len(candidates) + 1}",
+                    replacement_value=wire_value,
+                    source=source,
+                )
+            )
+    return tuple(candidates)
+
+
+def _bind_planning_decision_authority_correction_candidates(
+    plan: SemanticCorrectionPlan | None,
+) -> SemanticCorrectionPlan | None:
+    """Bind atomic decision repairs without reopening valid record fields."""
+
+    if plan is None:
+        return None
+    slots_by_path = {slot.target_path: slot for slot in plan.candidate_slots}
+    for target_path in plan.evidence.target_paths:
+        if target_path in slots_by_path:
+            continue
+        candidates = _planning_decision_authority_candidates(
+            plan,
+            target_path=target_path,
+        )
+        if candidates is None:
+            continue
+        if not candidates:
+            return None
+        slots_by_path[target_path] = SemanticCorrectionCandidateSlot(
+            target_path=target_path,
+            candidates=candidates,
+        )
+    if len(slots_by_path) == len(plan.candidate_slots):
+        return plan
+    ordered_slots = tuple(
+        slots_by_path[path]
+        for path in plan.evidence.target_paths
+        if path in slots_by_path
+    )
+    return attach_semantic_correction_candidates(plan, ordered_slots)
+
+
+def _bind_planning_correction_candidates(
+    plan: SemanticCorrectionPlan | None,
+) -> SemanticCorrectionPlan | None:
+    """Attach every safe Controller-owned Planning correction vocabulary."""
+
+    return _bind_planning_decision_authority_correction_candidates(
+        _bind_planning_dependency_correction_candidate(plan)
+    )
+
+
 def _digest_text(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
 
@@ -2358,6 +2613,71 @@ def _planning_validation_diagnostic(
             paths=("/",),
         )
     diagnostic = diagnostic_from_validation_error(error, payload)
+    proposal = payload.get("proposal")
+    decisions = None if not isinstance(proposal, dict) else proposal.get("decisions")
+    authority_invariants: dict[str, _PlanningInvariant] = {}
+    if isinstance(decisions, list):
+        for issue in issues:
+            location = tuple(issue["loc"])
+            if (
+                len(location) != 3
+                or location[:2] != ("proposal", "decisions")
+                or not isinstance(location[2], int)
+                or location[2] >= len(decisions)
+                or not str(issue["type"]).startswith("value_error")
+            ):
+                continue
+            decision = decisions[location[2]]
+            if not isinstance(decision, dict):
+                continue
+            try:
+                category = PlanningDecisionCategory(decision.get("category"))
+                provenance = PlanningDecisionProvenance.model_validate(
+                    decision.get("provenance")
+                )
+            except (TypeError, ValueError, ValidationError):
+                continue
+            category_authority = _DECISION_AUTHORITY[category]
+            provenance_authority = _DECISION_PROVENANCE_AUTHORITY[provenance.kind]
+            decision_id = decision.get("id")
+            if (
+                category_authority is provenance_authority
+                or decision.get("authority") != category_authority.value
+                or not isinstance(decision_id, str)
+            ):
+                continue
+            path = f"/proposal/decisions/{location[2]}"
+            authority_invariants[path] = _PlanningInvariant(
+                invariant_id="planning_decision_authority_provenance",
+                message=(
+                    f"decision {decision_id} category {category.value} belongs to "
+                    f"{category_authority.value}, while {provenance.kind.value} "
+                    f"provenance belongs to {provenance_authority.value}"
+                ),
+                paths=(path,),
+                subjects=_planning_subjects(
+                    (ResponseIssueSubjectKind.DECISION, decision_id)
+                ),
+                failure_class=ResponseFailureClass.SEMANTIC_SCHEMA,
+            )
+    if authority_invariants:
+        diagnostic = diagnostic.model_copy(
+            update={
+                "issues": tuple(
+                    issue.model_copy(
+                        update={
+                            "invariant_id": invariant.invariant_id,
+                            "message": invariant.message,
+                            "subjects": invariant.subjects,
+                            "authority": invariant.authority,
+                        }
+                    )
+                    if (invariant := authority_invariants.get(issue.path)) is not None
+                    else issue
+                    for issue in diagnostic.issues
+                )
+            }
+        )
     if any(
         issue.path == "/question" or issue.path.startswith("/question/")
         for issue in diagnostic.issues
@@ -2672,20 +2992,9 @@ class PlanningDecisionRecord(BaseModel):
                 f"decision category {self.category.value} belongs to {expected.value}"
             )
         if self.provenance is not None:
-            expected_provenance_authority = {
-                PlanningDecisionProvenanceKind.EXPLICIT_INPUT: (
-                    PlanningDecisionAuthority.USER
-                ),
-                PlanningDecisionProvenanceKind.RESOLVED_QUESTION: (
-                    PlanningDecisionAuthority.USER
-                ),
-                PlanningDecisionProvenanceKind.PLANNER_RECOMMENDATION: (
-                    PlanningDecisionAuthority.PLANNER_PROPOSAL
-                ),
-                PlanningDecisionProvenanceKind.AGENT_AUTONOMY: (
-                    PlanningDecisionAuthority.AGENT_AUTONOMY
-                ),
-            }[self.provenance.kind]
+            expected_provenance_authority = _DECISION_PROVENANCE_AUTHORITY[
+                self.provenance.kind
+            ]
             if self.authority is not expected_provenance_authority:
                 raise ValueError(
                     f"{self.provenance.kind.value} provenance belongs to "
@@ -9291,12 +9600,10 @@ class AdaptivePlanningCoordinator:
                     )
                     if correction_plan is None:
                         if next_clarification_recovery is None and payload is not None:
-                            next_correction_plan = (
-                                _bind_planning_dependency_correction_candidate(
-                                    build_semantic_correction_plan(
-                                        payload,
-                                        response_validation,
-                                    )
+                            next_correction_plan = _bind_planning_correction_candidates(
+                                build_semantic_correction_plan(
+                                    payload,
+                                    response_validation,
                                 )
                             )
                         seen_correction_fingerprints.add(
@@ -9314,12 +9621,10 @@ class AdaptivePlanningCoordinator:
                             and next_clarification_recovery is None
                             and payload is not None
                         ):
-                            next_correction_plan = (
-                                _bind_planning_dependency_correction_candidate(
-                                    build_semantic_correction_plan(
-                                        payload,
-                                        response_validation,
-                                    )
+                            next_correction_plan = _bind_planning_correction_candidates(
+                                build_semantic_correction_plan(
+                                    payload,
+                                    response_validation,
                                 )
                             )
                             seen_correction_fingerprints.add(

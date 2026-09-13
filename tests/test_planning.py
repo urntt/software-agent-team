@@ -4468,6 +4468,198 @@ def test_current_decision_schema_exposes_source_but_not_derived_authority() -> N
             assert source_schema["maxLength"] == 2000
 
 
+def test_decision_authority_correction_binds_reference_safe_atomic_candidate(
+    tmp_path: Path,
+) -> None:
+    payload = json.loads(response(proposal_response()))
+    proposal_payload = payload["proposal"]
+    decision_index = next(
+        index
+        for index, decision in enumerate(proposal_payload["decisions"])
+        if decision["id"] == "DECISION_DELIVERY"
+    )
+    invalid_decision = proposal_payload["decisions"][decision_index]
+    invalid_decision["provenance"] = {
+        "kind": "explicit_input",
+        "source": "usable local product",
+    }
+    original = deepcopy(payload)
+    target_path = f"/proposal/decisions/{decision_index}"
+    executor = ScriptedAgentExecutor(
+        [
+            ScriptedAgentResponse(text="ignored", submission_payload=payload),
+            ScriptedAgentResponse(
+                text="ignored",
+                submission_payload={
+                    "replacements": [
+                        {
+                            "slot_handle": "slot_1",
+                            "replacement_value": "candidate_1",
+                        }
+                    ]
+                },
+            ),
+        ]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(response_repair_limit=None),
+        clock=AdvancingClock(),
+    )
+
+    created = coordinator.start(
+        request(),
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+
+    assert created is not None
+    assert payload == original
+    fixed = next(
+        decision
+        for decision in created.body.decisions
+        if decision.id == "DECISION_DELIVERY"
+    )
+    assert fixed.category is PlanningDecisionCategory.DELIVERY
+    assert fixed.provenance == PlanningDecisionProvenance(
+        kind=PlanningDecisionProvenanceKind.PLANNER_RECOMMENDATION,
+        source="planner",
+    )
+    assert fixed.summary == "usable local product"
+    first = store.load_turn(request().run_id, 1)
+    assert first.response_validation is not None
+    assert first.response_validation.correction_paths == (target_path,)
+    assert first.response_validation.issues[0].invariant_id == (
+        "planning_decision_authority_provenance"
+    )
+    assert first.response_validation.issues[0].subjects[0].identifier == (
+        "DECISION_DELIVERY"
+    )
+    assert first.validation_error == (
+        f"proposal.decisions.{decision_index}: Value error, "
+        "explicit_input provenance belongs to user"
+    )
+    correction = executor.requests[1]
+    target_text = correction.prompt.rsplit("TARGET_SLOTS_AND_ERRORS\n", 1)[1].split(
+        "\nCORRECTION_SCHEMA_JSON",
+        1,
+    )[0]
+    target_slots = json.loads(target_text)
+    assert target_slots[0]["candidate_catalog"] == [
+        {
+            "handle": "candidate_1",
+            "source": (
+                "preserve delivery category with canonical "
+                "planner_recommendation provenance"
+            ),
+            "exact_value": {
+                "id": "DECISION_DELIVERY",
+                "category": "delivery",
+                "provenance": {
+                    "kind": "planner_recommendation",
+                    "source": "planner",
+                },
+                "summary": "usable local product",
+                "rationale": "The request is for a local command-line tool.",
+            },
+        }
+    ]
+    contract = correction.submission_contract
+    assert contract is not None
+    replacement_schema = contract.parameters_schema()["properties"]["replacements"]
+    assert replacement_schema["items"]["oneOf"][0]["properties"][
+        "replacement_value"
+    ] == {"enum": ["candidate_1"], "type": "string"}
+    corrected = store.load_turn(request().run_id, 2)
+    assert corrected.semantic_correction_outcome == "accepted"
+    assert corrected.response_normalizations[:2] == (
+        f"bound controller evidence candidate candidate_1 to {target_path}",
+        (
+            f"compiled proposal.decisions[{decision_index}].authority "
+            "from category delivery"
+        ),
+    )
+
+
+def test_unreferenced_decision_authority_correction_offers_only_valid_atoms() -> None:
+    payload = json.loads(response(proposal_response()))
+    proposal_payload = payload["proposal"]
+    decision_index = next(
+        index
+        for index, decision in enumerate(proposal_payload["decisions"])
+        if decision["id"] == "DECISION_TEAM"
+    )
+    proposal_payload["decisions"][decision_index]["category"] = "product_requirement"
+    normalized, _ = planning._normalize_planning_response_payload(payload)
+    with pytest.raises(ValidationError) as captured:
+        PlanningModelResponse.model_validate(normalized)
+    diagnostic = planning._planning_validation_diagnostic(
+        captured.value,
+        normalized,
+    )
+    plan = planning.build_semantic_correction_plan(normalized, diagnostic)
+    assert plan is not None
+
+    bound = planning._bind_planning_correction_candidates(plan)
+
+    assert bound is not None
+    assert len(bound.candidate_slots) == 1
+    candidates = bound.candidate_slots[0].candidates
+    assert {candidate.replacement_value["category"] for candidate in candidates} == {
+        "acceptance_scope",
+        "delivery",
+        "resource_budget",
+        "team",
+        "model_route",
+    }
+    base_decision = normalized["proposal"]["decisions"][decision_index]
+    for candidate in candidates:
+        value = candidate.replacement_value
+        assert value["id"] == base_decision["id"]
+        assert value["summary"] == base_decision["summary"]
+        assert value["rationale"] == base_decision["rationale"]
+        assert value["provenance"] == {
+            "kind": "planner_recommendation",
+            "source": "planner",
+        }
+        category = PlanningDecisionCategory(value["category"])
+        PlanningDecisionRecord.model_validate(
+            {
+                **value,
+                "authority": planning._DECISION_AUTHORITY[category].value,
+            }
+        )
+
+
+def test_conflicting_decision_references_withhold_atomic_candidates() -> None:
+    payload = json.loads(response(proposal_response()))
+    proposal_payload = payload["proposal"]
+    decision_index = next(
+        index
+        for index, decision in enumerate(proposal_payload["decisions"])
+        if decision["id"] == "DECISION_DELIVERY"
+    )
+    proposal_payload["decisions"][decision_index]["provenance"] = {
+        "kind": "explicit_input",
+        "source": "usable local product",
+    }
+    proposal_payload["product_definition"]["usability_expectations"]["decision_ids"] = [
+        "DECISION_DELIVERY"
+    ]
+    normalized, _ = planning._normalize_planning_response_payload(payload)
+    with pytest.raises(ValidationError) as captured:
+        PlanningModelResponse.model_validate(normalized)
+    diagnostic = planning._planning_validation_diagnostic(
+        captured.value,
+        normalized,
+    )
+    plan = planning.build_semantic_correction_plan(normalized, diagnostic)
+    assert plan is not None
+
+    assert planning._bind_planning_correction_candidates(plan) is None
+
+
 def test_response_normalizer_compiles_question_owner_from_category() -> None:
     payload = product_intent_question_response().model_dump(mode="json")
     payload["question"].pop("decision_owner")
