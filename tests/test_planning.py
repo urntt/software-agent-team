@@ -5721,6 +5721,269 @@ def test_planning_deconflicts_in_place_specialist_addition_and_new_reference(
     }
 
 
+def test_specialist_correction_discards_unrelated_replacement_topology(
+    tmp_path: Path,
+) -> None:
+    body = proposal_body()
+    security_criterion = ProposedCriterion(
+        id="AC_SECURITY",
+        description="No untrusted path can ever escape the selected root.",
+        verification="Probe every approved path-entry boundary.",
+        review_boundaries=tuple(ReviewBoundaryKind),
+        requirement_ids=("REQ_SECURITY",),
+        verification_agent_ids=("quality_reviewer",),
+    )
+    invalid = body.model_copy(
+        update={
+            "requirements": (*body.requirements, "Contain every untrusted path."),
+            "requirement_ids": (*body.requirement_ids, "REQ_SECURITY"),
+            "acceptance_criteria": (*body.acceptance_criteria, security_criterion),
+            "tasks": (
+                body.tasks[0].model_copy(
+                    update={
+                        "acceptance_criteria": (
+                            *body.tasks[0].acceptance_criteria,
+                            "AC_SECURITY",
+                        )
+                    }
+                ),
+            ),
+        }
+    )
+    invalid_payload = json.loads(
+        response(
+            PlanningModelResponse(
+                kind=PlanningResponseKind.PROPOSAL,
+                proposal=invalid,
+            )
+        )
+    )
+    source_request = (
+        f"{request().source_request} Treat every path as untrusted and never "
+        "permit a root escape."
+    )
+    correction_base, _ = planning._normalize_planning_response_payload(
+        invalid_payload,
+        user_inputs=(source_request,),
+    )
+    original_implementer = deepcopy(correction_base["proposal"]["agents"][0])
+    test_author = deepcopy(original_implementer)
+    test_author.update(
+        id="test_author",
+        label="Test and Docs Author",
+        responsibility="Write tests and documentation in a second implementation path.",
+        rationale="The replacement response proposed an unrelated second writer.",
+        dependencies=["cli_developer"],
+    )
+    original_reviewer = deepcopy(correction_base["proposal"]["agents"][-1])
+    security_reviewer = deepcopy(original_reviewer)
+    security_reviewer.update(
+        id="security_reviewer",
+        label="Security Reviewer",
+        responsibility="Independently review every untrusted path boundary.",
+        rationale="The security criterion requires specialist acceptance authority.",
+        specialization="security_assessment",
+        dependencies=["test_author"],
+    )
+    general_reviewer = deepcopy(original_reviewer)
+    general_reviewer.update(
+        id="general_reviewer",
+        label="Replacement General Reviewer",
+        dependencies=["test_author"],
+    )
+    criterion_path = "/proposal/acceptance_criteria/2/verification_agent_ids"
+    executor = ScriptedAgentExecutor(
+        [
+            json.dumps(invalid_payload),
+            correction_response(
+                correction_base,
+                {
+                    criterion_path: ["security_reviewer"],
+                    "/proposal/agents": [
+                        original_implementer,
+                        test_author,
+                        security_reviewer,
+                        general_reviewer,
+                    ],
+                },
+                target_paths=(criterion_path, "/proposal/agents"),
+            ),
+        ]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(response_repair_limit=None),
+        clock=AdvancingClock(),
+    )
+
+    created = coordinator.start(
+        request(source_request=source_request),
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+
+    assert created is not None
+    assert [agent.id for agent in created.body.agents] == [
+        *(agent.id for agent in body.agents),
+        "security_reviewer",
+    ]
+    assert created.body.agents[-1].dependencies == ("cli_developer",)
+    assert created.body.acceptance_criteria[-1].verification_agent_ids == (
+        "security_reviewer",
+    )
+    corrected = store.load_turn(request().run_id, 2)
+    assert corrected.semantic_correction_outcome == "accepted"
+    assert corrected.response_normalizations == (
+        "compiled added security Review Agent dependencies from existing "
+        "implementation paths",
+        "preserved existing valid Agents while adding missing Review authority",
+    )
+
+
+def test_quality_dependency_correction_binds_the_complete_additive_relation(
+    tmp_path: Path,
+) -> None:
+    body = proposal_body()
+    primary_writer = body.agents[0].model_copy(
+        update={"workspace_scope": "repository/src"}
+    )
+    docs_writer = ProposedAgent(
+        id="docs_developer",
+        label="Documentation Developer",
+        responsibility="Implement the documented user workflow.",
+        rationale="Documentation has a separate non-overlapping write scope.",
+        capability=AgentCapability.IMPLEMENTATION,
+        specialization=AgentSpecialization.PRODUCT_IMPLEMENTATION,
+        stage_id="implement",
+        workspace_scope="repository/docs",
+        workload=AgentWorkload.ROUTINE,
+    )
+    quality_agents = tuple(
+        agent.model_copy(update={"dependencies": (primary_writer.id, docs_writer.id)})
+        for agent in body.agents[1:]
+    )
+    valid = PlanningProposalBody.model_validate(
+        body.model_copy(
+            update={
+                "agents": (primary_writer, docs_writer, *quality_agents),
+                "tasks": (
+                    body.tasks[0].model_copy(
+                        update={
+                            "acceptance_criteria": ("AC_SCAN",),
+                            "expected_paths": ("src",),
+                        }
+                    ),
+                    ProposedTask(
+                        id="TASK_DOCUMENT",
+                        owner_agent_id=docs_writer.id,
+                        description="Implement documentation for the reported result.",
+                        acceptance_criteria=("AC_REPORT",),
+                        expected_paths=("docs",),
+                    ),
+                ),
+            }
+        ).model_dump(mode="json")
+    )
+    valid_payload = json.loads(response(proposal_response(valid)))
+    invalid_payload = deepcopy(valid_payload)
+    invalid_payload["proposal"]["agents"][3]["dependencies"] = [primary_writer.id]
+    target_path = "/proposal/agents/3/dependencies"
+    executor = ScriptedAgentExecutor(
+        [
+            json.dumps(invalid_payload),
+            ScriptedAgentResponse(
+                text="ignored",
+                submission_payload={
+                    "replacements": [
+                        {
+                            "slot_handle": "slot_1",
+                            "replacement_value": "candidate_1",
+                        }
+                    ]
+                },
+            ),
+        ]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(response_repair_limit=None),
+        clock=AdvancingClock(),
+    )
+
+    created = coordinator.start(
+        request(),
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+
+    assert created is not None
+    assert created.body == valid
+    first = store.load_turn(request().run_id, 1)
+    assert first.response_validation is not None
+    assert first.response_validation.correction_paths == (target_path,)
+    assert first.response_validation.issues[0].invariant_id == (
+        "planning_quality_dependency_coverage"
+    )
+    correction = executor.requests[1]
+    target_text = correction.prompt.rsplit("TARGET_SLOTS_AND_ERRORS\n", 1)[1].split(
+        "\nCORRECTION_SCHEMA_JSON",
+        1,
+    )[0]
+    target_slots = json.loads(target_text)
+    assert target_slots[0]["candidate_catalog"] == [
+        {
+            "handle": "candidate_1",
+            "source": (
+                "controller-required additive dependency closure for quality_reviewer"
+            ),
+            "exact_value": [primary_writer.id, docs_writer.id],
+        }
+    ]
+    contract = correction.submission_contract
+    assert contract is not None
+    value_schema = contract.parameters_schema()["properties"]["replacements"]["items"][
+        "oneOf"
+    ][0]["properties"]["replacement_value"]
+    assert value_schema == {"enum": ["candidate_1"], "type": "string"}
+    corrected = store.load_turn(request().run_id, 2)
+    assert corrected.semantic_correction_outcome == "accepted"
+    assert (
+        f"bound controller evidence candidate candidate_1 to {target_path}"
+        in corrected.response_normalizations
+    )
+
+
+def test_quality_dependency_correction_does_not_offer_a_cyclic_leaf_repair(
+    tmp_path: Path,
+) -> None:
+    invalid_payload = json.loads(response(proposal_response()))
+    invalid_payload["proposal"]["agents"][0]["dependencies"] = ["quality_reviewer"]
+    invalid_payload["proposal"]["agents"][2]["dependencies"] = []
+    executor = ScriptedAgentExecutor([json.dumps(invalid_payload)])
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(response_repair_limit=None),
+        clock=AdvancingClock(),
+    )
+
+    with pytest.raises(PlanningError, match="every quality Agent must depend"):
+        coordinator.start(
+            request(),
+            answer_question=lambda _question: pytest.fail("unexpected question"),
+        )
+
+    assert len(executor.requests) == 1
+    first = store.load_turn(request().run_id, 1)
+    assert first.response_validation is not None
+    assert first.response_validation.issues[0].invariant_id == (
+        "planning_quality_dependency_coverage"
+    )
+
+
 def test_planning_preserves_specialists_across_incremental_agent_corrections(
     tmp_path: Path,
 ) -> None:

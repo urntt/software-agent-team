@@ -86,11 +86,14 @@ from software_agent_team.response_corrections import (
     ResponseIssueSubject,
     ResponseIssueSubjectKind,
     ResponseValidationDiagnostic,
+    SemanticCorrectionCandidate,
+    SemanticCorrectionCandidateSlot,
     SemanticCorrectionOutcome,
     SemanticCorrectionPlan,
     SemanticCorrectionRequestEvidence,
     SemanticCorrectionSubmissionError,
     apply_semantic_correction_with_evidence,
+    attach_semantic_correction_candidates,
     build_semantic_correction_plan,
     correction_outcome,
     correction_prompt,
@@ -1904,22 +1907,71 @@ def _preserve_agents_during_missing_specialist_correction(
     base_by_id = dict(
         zip((agent.id for agent in base_agents), raw_base_agents, strict=True)
     )
+    implementation_ids = tuple(
+        agent.id
+        for agent in base_agents
+        if agent.capability
+        in {AgentCapability.IMPLEMENTATION, AgentCapability.INTEGRATION}
+    )
     corrected_ids = {agent.id for agent in corrected_agents}
-    used_ids = {agent.id for agent in base_agents}
+    used_ids = set(preserved_ids)
     additions: list[dict[str, object]] = []
     normalizations: list[str] = []
+
+    def specialist_addition(
+        raw_agent: dict[str, object],
+        agent: ProposedAgent,
+        *,
+        specialist_id: str,
+        authority: AcceptanceAuthority,
+    ) -> dict[str, object]:
+        addition = deepcopy(raw_agent)
+        addition["id"] = specialist_id
+        dependencies = list(
+            dict.fromkeys(
+                dependency
+                for dependency in agent.dependencies
+                if dependency in preserved_ids and dependency != specialist_id
+            )
+        )
+        dependencies.extend(
+            implementation_id
+            for implementation_id in implementation_ids
+            if implementation_id != specialist_id
+            and implementation_id not in dependencies
+        )
+        if dependencies != list(agent.dependencies):
+            addition["dependencies"] = dependencies
+            normalizations.append(
+                f"compiled added {authority.value} Review Agent dependencies "
+                "from existing implementation paths"
+            )
+        return addition
+
     for raw_agent, agent in zip(
         raw_corrected_agents,
         corrected_agents,
         strict=True,
     ):
+        authority = specialization_contract(agent.specialization).acceptance_authority
         if agent.id not in preserved_ids:
-            additions.append(deepcopy(raw_agent))
+            if (
+                agent.capability is not AgentCapability.REVIEW
+                or authority not in required_authorities
+            ):
+                continue
+            additions.append(
+                specialist_addition(
+                    raw_agent,
+                    agent,
+                    specialist_id=agent.id,
+                    authority=authority,
+                )
+            )
             used_ids.add(agent.id)
             continue
         if raw_agent == base_by_id[agent.id]:
             continue
-        authority = specialization_contract(agent.specialization).acceptance_authority
         if (
             agent.capability is not AgentCapability.REVIEW
             or authority not in required_authorities
@@ -1963,9 +2015,14 @@ def _preserve_agents_during_missing_specialist_correction(
         while specialist_id in used_ids:
             specialist_id = f"{preferred_id}_{suffix}"
             suffix += 1
-        addition = deepcopy(raw_agent)
-        addition["id"] = specialist_id
-        additions.append(addition)
+        additions.append(
+            specialist_addition(
+                raw_agent,
+                agent,
+                specialist_id=specialist_id,
+                authority=authority,
+            )
+        )
         used_ids.add(specialist_id)
         normalizations.append(
             f"deconflicted added {authority.value} Review authority from Agent "
@@ -1982,6 +2039,109 @@ def _preserve_agents_during_missing_specialist_correction(
         "preserved existing valid Agents while adding missing Review authority"
     )
     return normalized, tuple(normalizations)
+
+
+def _bind_planning_dependency_correction_candidate(
+    plan: SemanticCorrectionPlan | None,
+) -> SemanticCorrectionPlan | None:
+    """Bind the unique additive repair for a quality dependency relation."""
+
+    if plan is None:
+        return None
+    issues = tuple(
+        issue
+        for issue in plan.diagnostic.issues
+        if issue.invariant_id == "planning_quality_dependency_coverage"
+        and issue.path in plan.evidence.target_paths
+    )
+    if not issues:
+        return plan
+    proposal = plan.base_payload.get("proposal")
+    raw_agents = None if not isinstance(proposal, dict) else proposal.get("agents")
+    if not isinstance(raw_agents, list):
+        return None
+    try:
+        agents = tuple(ProposedAgent.model_validate(item) for item in raw_agents)
+    except ValidationError:
+        return None
+    agent_ids = tuple(agent.id for agent in agents)
+    if len(agent_ids) != len(set(agent_ids)):
+        return None
+    dependencies = {agent.id: agent.dependencies for agent in agents}
+    known_ids = set(agent_ids)
+    if any(not set(values).issubset(known_ids) for values in dependencies.values()):
+        return None
+    implementation_ids = {
+        agent.id
+        for agent in agents
+        if agent.capability
+        in {AgentCapability.IMPLEMENTATION, AgentCapability.INTEGRATION}
+    }
+
+    def transitively_depends(agent_id: str, target: str) -> bool:
+        pending = list(dependencies[agent_id])
+        seen: set[str] = set()
+        while pending:
+            current = pending.pop()
+            if current == target:
+                return True
+            if current not in seen:
+                seen.add(current)
+                pending.extend(dependencies[current])
+        return False
+
+    slots: list[SemanticCorrectionCandidateSlot] = []
+    for issue in sorted(issues, key=lambda item: item.path):
+        match = re.fullmatch(r"/proposal/agents/([0-9]+)/dependencies", issue.path)
+        if match is None:
+            return None
+        index = int(match.group(1))
+        if index >= len(agents):
+            return None
+        quality_agent = agents[index]
+        if quality_agent.capability not in {
+            AgentCapability.TESTING,
+            AgentCapability.REVIEW,
+        }:
+            return None
+        missing = tuple(
+            sorted(
+                implementation_id
+                for implementation_id in implementation_ids
+                if not transitively_depends(quality_agent.id, implementation_id)
+            )
+        )
+        issue_agent_ids = {
+            subject.identifier
+            for subject in issue.subjects
+            if subject.kind is ResponseIssueSubjectKind.AGENT
+        }
+        if not missing or issue_agent_ids != {quality_agent.id, *missing}:
+            return None
+        if any(
+            transitively_depends(implementation_id, quality_agent.id)
+            for implementation_id in missing
+        ):
+            # This leaf cannot be repaired without creating a cycle. A broader
+            # Agent-graph correction needs a separate validator-owned target.
+            return None
+        replacement = list(dict.fromkeys((*quality_agent.dependencies, *missing)))
+        slots.append(
+            SemanticCorrectionCandidateSlot(
+                target_path=issue.path,
+                candidates=(
+                    SemanticCorrectionCandidate(
+                        handle="candidate_1",
+                        replacement_value=replacement,
+                        source=(
+                            "controller-required additive dependency closure for "
+                            f"{quality_agent.id}"
+                        ),
+                    ),
+                ),
+            )
+        )
+    return attach_semantic_correction_candidates(plan, tuple(slots))
 
 
 def _digest_text(value: str) -> str:
@@ -9131,9 +9291,13 @@ class AdaptivePlanningCoordinator:
                     )
                     if correction_plan is None:
                         if next_clarification_recovery is None and payload is not None:
-                            next_correction_plan = build_semantic_correction_plan(
-                                payload,
-                                response_validation,
+                            next_correction_plan = (
+                                _bind_planning_dependency_correction_candidate(
+                                    build_semantic_correction_plan(
+                                        payload,
+                                        response_validation,
+                                    )
+                                )
                             )
                         seen_correction_fingerprints.add(
                             response_validation.fingerprint
@@ -9150,9 +9314,13 @@ class AdaptivePlanningCoordinator:
                             and next_clarification_recovery is None
                             and payload is not None
                         ):
-                            next_correction_plan = build_semantic_correction_plan(
-                                payload,
-                                response_validation,
+                            next_correction_plan = (
+                                _bind_planning_dependency_correction_candidate(
+                                    build_semantic_correction_plan(
+                                        payload,
+                                        response_validation,
+                                    )
+                                )
                             )
                             seen_correction_fingerprints.add(
                                 response_validation.fingerprint

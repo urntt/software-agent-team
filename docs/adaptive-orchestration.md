@@ -414,7 +414,16 @@ may perform only these bounded, semantics-preserving normalizations:
   existing writers, quality Agents with an assigned Review scope, and their
   identities across complete `agents`-array replacements. This projection is
   allowed only when the required authority has no existing matching specialist;
-  duplicate or conflicting specialists remain model-owned defects;
+  admit only Review definitions carrying the exact missing authority, discard
+  unrelated topology introduced by the replacement, and compile each admitted
+  specialist's dependencies from surviving valid references plus every retained
+  implementation path. Duplicate or conflicting specialists remain model-owned
+  defects;
+- When one quality Agent is missing otherwise-valid dependency coverage, bind
+  one Controller-owned correction candidate containing its current direct
+  dependencies plus every missing implementation path. Do not offer this local
+  repair when adding an edge would form a cycle; the broader graph remains a
+  model-owned defect;
 - Compile each Review-owned task's known criterion bindings against its
   non-overlapping Review scope. If at least one submitted binding is in scope,
   remove bindings owned by another Reviewer and retain the in-scope focus. A
@@ -916,7 +925,11 @@ Because that correction replaces the complete Agent collection, the Controller
 retains existing writers and Review Agents that already own a valid compiled
 scope when a later incremental submission adds another missing authority. This
 keeps an accepted security or experience assignment from disappearing while the
-other specialist is added. The raw replacement and this monotonic projection
+other specialist is added. Only definitions with the exact missing Review
+authority are eligible additions; unrelated writers, integrations, or general
+Reviewers in the replacement are discarded. An admitted specialist retains
+valid dependencies on preserved Agents and is placed downstream of every
+retained implementation path. The raw replacement and this monotonic projection
 are both persisted.
 If a complete-array replacement expresses an addition by changing one retained
 Agent into the required specialist under the same ID, the Controller preserves
@@ -933,6 +946,14 @@ already has one deterministic answer. Zero or multiple matching specialists,
 unknown verifier IDs, and conflicting security/experience authority remain
 invalid. The raw correction and the explicit Controller normalization are both
 persisted. An operator does not use plan revision to repair this Planner defect.
+
+If an otherwise-valid quality Agent omits one or more implementation paths, the
+Controller exposes a single opaque correction candidate for that exact
+dependency slot. Its bound value preserves current direct dependencies and adds
+the complete missing implementation closure. The model can select the candidate
+but cannot rewrite its contents. The Controller withholds the candidate when the
+addition would create a cycle, so a local correction cannot conceal a broader
+graph defect.
 
 Review task focus is compiled from the same scopes. When a Review-owned task
 mixes at least one criterion from its owner with known criteria assigned to
