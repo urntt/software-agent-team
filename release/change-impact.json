@@ -1,17 +1,17 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.2.9",
-  "target_version": "0.2.10",
+  "baseline_version": "0.2.10",
+  "target_version": "0.2.11",
   "changes": [
     {
-      "id": "planning-specialist-id-collision-convergence",
+      "id": "planning-long-direct-input-summary-correction",
       "impact": "patch",
-      "summary": "Preserve valid Agents while deconflicting an in-place missing-specialist definition into the single new verifier identity used by affected criteria"
+      "summary": "Preserve complete direct-input provenance while correcting an overlong decision summary to a schema-bounded contiguous excerpt"
     },
     {
-      "id": "managed-sandbox-image-lineage-cleanup",
+      "id": "managed-target-image-transition-reconciliation",
       "impact": "patch",
-      "summary": "Capture Docker parent provenance and remove only the exact unshared lineage superseded by a successful managed activation or failed candidate"
+      "summary": "Let a newly active target safely reconcile the exact Docker parent lineage left by an older updater"
     }
   ]
 }
