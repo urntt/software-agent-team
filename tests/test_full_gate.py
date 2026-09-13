@@ -1019,7 +1019,7 @@ def test_running_stage_reaps_short_lived_orphans_without_stealing_wait_status(
             stderr=subprocess.DEVNULL,
         )
         foreign.append(child)
-        deadline = time.monotonic() + 5
+        deadline = time.monotonic() + SYNTHETIC_STAGE_TIMEOUT_SECONDS
         while time.monotonic() < deadline:
             snapshot = full_gate._read_proc_snapshot(child.pid)
             if snapshot is not None and snapshot.state == "Z":
@@ -1028,7 +1028,24 @@ def test_running_stage_reaps_short_lived_orphans_without_stealing_wait_status(
         observer_errors.append("foreign child did not reach its unwaited exit")
 
     def create_foreign_during_stage() -> None:
-        deadline = time.monotonic() + 5
+        stage_start_deadline = time.monotonic() + SYNTHETIC_STAGE_TIMEOUT_SECONDS
+        while time.monotonic() < stage_start_deadline:
+            reports = tuple((tmp_path / "evidence").glob("*/report.json"))
+            if reports:
+                try:
+                    pending = json.loads(reports[0].read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    pass
+                else:
+                    if pending["stages"][0]["status"] == StageStatus.RUNNING.value:
+                        break
+            time.sleep(0.005)
+        else:
+            observer_errors.append("supervisor did not publish the running stage")
+            foreign_ready.touch()
+            return
+
+        deadline = time.monotonic() + SYNTHETIC_STAGE_TIMEOUT_SECONDS
         while not ready.exists() and time.monotonic() < deadline:
             time.sleep(0.005)
         if not ready.exists():
@@ -1046,7 +1063,7 @@ ready = pathlib.Path({str(ready)!r})
 foreign_ready = pathlib.Path({str(foreign_ready)!r})
 identities = pathlib.Path({str(children)!r})
 ready.touch()
-deadline = time.monotonic() + 5
+deadline = time.monotonic() + {SYNTHETIC_STAGE_TIMEOUT_SECONDS}
 while not foreign_ready.exists():
     assert time.monotonic() < deadline, 'foreign child checkpoint timed out'
     time.sleep(0.005)
@@ -1088,7 +1105,9 @@ if {stage_exit} < 0:
 raise SystemExit({stage_exit})
 """
     try:
-        exit_code, report, output, _ = _run(tmp_path, script, timeout=10)
+        exit_code, report, output, _ = _run(
+            tmp_path, script, timeout=SYNTHETIC_STAGE_TIMEOUT_SECONDS
+        )
         observer.join(timeout=1)
 
         assert observer_errors == []
@@ -1107,7 +1126,7 @@ raise SystemExit({stage_exit})
         )
         assert stage["adopter"]["residual_after_cleanup"] == []
     finally:
-        observer.join(timeout=6)
+        observer.join(timeout=SYNTHETIC_STAGE_TIMEOUT_SECONDS + 1)
         for child in foreign:
             if child.poll() is None:
                 child.kill()
