@@ -101,6 +101,7 @@ from software_agent_team.response_corrections import (
     ResponseFailureClass,
     ResponseIssueAuthority,
     SemanticCorrectionOutcome,
+    correction_value_schema,
     semantic_correction_slot_handle,
 )
 from software_agent_team.submissions import AgentSubmissionPurpose
@@ -4151,6 +4152,77 @@ def test_response_normalizer_removes_current_direct_product_duplicate() -> None:
         "removed redundant direct-input decision DECISION_DUPLICATE_MATURITY "
         "from proposal.decisions[0]",
     )
+
+
+def test_long_direct_input_keeps_a_bounded_grounded_decision_summary() -> None:
+    payload = proposal_response().model_dump(mode="json")
+    source = " ".join(f"requirement-{index:03d}" for index in range(40))
+    assert len(source) > planning.MAX_PLANNING_DECISION_SUMMARY_CHARACTERS
+    summary = source[: source.rfind(" ", 0, 400)]
+    payload["proposal"]["decisions"].append(
+        {
+            "id": "DECISION_LONG_PRIVACY_INPUT",
+            "category": "privacy_or_data",
+            "authority": "user",
+            "provenance": {"kind": "explicit_input", "source": source},
+            "summary": summary,
+            "rationale": "Preserve the user's full direct-input provenance.",
+        }
+    )
+
+    normalized, changes = planning._normalize_planning_response_payload(payload)
+    parsed = PlanningModelResponse.model_validate(normalized)
+    assert parsed.proposal is not None
+    decision = parsed.proposal.decisions[-1]
+    assert decision.provenance is not None
+    assert decision.provenance.source == source
+    assert decision.summary == summary
+    assert not any(
+        "summary from exact direct-input source" in change for change in changes
+    )
+
+    planning._validate_decision_provenance(
+        parsed.proposal,
+        normalized_inputs=(planning._normalized_evidence_text(source),),
+        require_current_provenance=True,
+    )
+
+
+def test_planning_correction_schema_exposes_decision_summary_limit() -> None:
+    assert correction_value_schema(
+        planning._planning_response_schema(),
+        "/proposal/decisions/0/summary",
+    ) == {
+        "maxLength": 500,
+        "minLength": 1,
+        "title": "Summary",
+        "type": "string",
+    }
+
+
+def test_long_direct_input_rejects_an_ungrounded_bounded_summary() -> None:
+    source = " ".join(f"requirement-{index:03d}" for index in range(40))
+    decision = PlanningDecisionRecord(
+        id="DECISION_LONG_PRIVACY_INPUT",
+        category=PlanningDecisionCategory.PRIVACY_OR_DATA,
+        authority=PlanningDecisionAuthority.USER,
+        provenance=PlanningDecisionProvenance(
+            kind=PlanningDecisionProvenanceKind.EXPLICIT_INPUT,
+            source=source,
+        ),
+        summary="A short paraphrase that is not present in the direct input.",
+        rationale="Preserve the user's full direct-input provenance.",
+    )
+
+    with pytest.raises(
+        planning._PlanningContextInvariantError,
+        match="contiguous direct-input excerpt of at most 500 characters",
+    ):
+        planning._validate_decision_provenance(
+            proposal_body().model_copy(update={"decisions": (decision,)}),
+            normalized_inputs=(planning._normalized_evidence_text(source),),
+            require_current_provenance=True,
+        )
 
 
 def test_response_normalizer_preserves_same_source_independent_user_decision() -> None:

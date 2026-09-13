@@ -25,6 +25,7 @@ from software_agent_team.response_corrections import (
     build_semantic_correction_plan,
     correction_outcome,
     correction_prompt,
+    correction_value_schema,
     deterministically_remove_forbidden_fields,
     diagnostic_from_invariant,
     diagnostic_from_message,
@@ -400,6 +401,56 @@ def test_correction_prompt_projects_each_target_value_schema() -> None:
     ]
     assert replacement_schema["minItems"] == 1
     assert replacement_schema["maxItems"] == 1
+
+
+def test_schema_projection_accepts_identical_union_field_contracts() -> None:
+    response_schema = {
+        "oneOf": [
+            {
+                "type": "object",
+                "properties": {
+                    "summary": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 500,
+                    }
+                },
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "summary": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 500,
+                    }
+                },
+            },
+        ]
+    }
+
+    assert correction_value_schema(response_schema, "/summary") == {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 500,
+    }
+
+
+def test_schema_projection_rejects_conflicting_union_field_contracts() -> None:
+    response_schema = {
+        "oneOf": [
+            {
+                "type": "object",
+                "properties": {"summary": {"type": "string", "maxLength": 500}},
+            },
+            {
+                "type": "object",
+                "properties": {"summary": {"type": "string", "maxLength": 200}},
+            },
+        ]
+    }
+
+    assert correction_value_schema(response_schema, "/summary") is None
 
 
 def test_controller_candidate_handles_replace_exact_values_without_model_bytes() -> (

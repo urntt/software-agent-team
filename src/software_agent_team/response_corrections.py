@@ -852,7 +852,7 @@ def _schema_container_for_part(
     part: str,
     root: Mapping[str, JsonValue],
 ) -> Mapping[str, JsonValue] | None:
-    """Select the unique local schema branch that owns one path segment."""
+    """Select a local schema branch with one unambiguous path-segment contract."""
 
     current = schema
     visited: set[str] = set()
@@ -882,6 +882,25 @@ def _schema_container_for_part(
                 matching.append(candidate)
         if len(matching) == 1:
             return matching[0]
+        if len(matching) > 1:
+            child_schemas: list[Mapping[str, JsonValue]] = []
+            for candidate in matching:
+                properties = candidate.get("properties")
+                child = (
+                    properties.get(part)
+                    if isinstance(properties, Mapping) and part in properties
+                    else candidate.get("items")
+                )
+                if not isinstance(child, Mapping):
+                    return None
+                child_schemas.append(child)
+            expanded = [
+                _expand_local_schema_refs(dict(child), root=root)
+                for child in child_schemas
+            ]
+            if all(child == expanded[0] for child in expanded[1:]):
+                return matching[0]
+            return None
     return current
 
 

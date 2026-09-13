@@ -137,6 +137,7 @@ PLANNING_TEMPLATE = Path(__file__).with_name("prompt_templates") / "adaptive_pla
 MAX_PLANNING_EVIDENCE_CHARACTERS = 1_000_000
 MAX_RESPONSE_NORMALIZATIONS = 100
 MAX_RESPONSE_NORMALIZATION_CHARACTERS = 200
+MAX_PLANNING_DECISION_SUMMARY_CHARACTERS = 500
 
 
 class PlanningError(RuntimeError):
@@ -1414,6 +1415,8 @@ def _normalize_planning_response_payload(
                 and effective_provenance.get("kind")
                 == PlanningDecisionProvenanceKind.EXPLICIT_INPUT.value
                 and isinstance(effective_provenance.get("source"), str)
+                and len(effective_provenance["source"])
+                <= MAX_PLANNING_DECISION_SUMMARY_CHARACTERS
                 and decision.get("summary") != effective_provenance["source"]
             ):
                 decision["summary"] = effective_provenance["source"]
@@ -2483,7 +2486,10 @@ class PlanningDecisionRecord(BaseModel):
             "only so schema-v2 through schema-v7 evidence remains readable."
         ),
     )
-    summary: str = Field(min_length=1, max_length=500)
+    summary: str = Field(
+        min_length=1,
+        max_length=MAX_PLANNING_DECISION_SUMMARY_CHARACTERS,
+    )
     rationale: str = Field(min_length=1, max_length=500)
     question_id: str | None = Field(
         default=None,
@@ -3544,13 +3550,14 @@ def _validate_decision_provenance(
         if (
             provenance.kind is PlanningDecisionProvenanceKind.EXPLICIT_INPUT
             and _normalized_evidence_text(decision.summary)
-            != _normalized_evidence_text(provenance.source)
+            not in _normalized_evidence_text(provenance.source)
         ):
             raise _planning_context_invariant(
                 "planning_decision_explicit_summary",
                 (
-                    f"decision {decision.id} must preserve its exact direct-input "
-                    "source as the user-owned summary"
+                    f"decision {decision.id} summary must be one contiguous "
+                    "direct-input excerpt of at most "
+                    f"{MAX_PLANNING_DECISION_SUMMARY_CHARACTERS} characters"
                 ),
                 paths=(f"/proposal/decisions/{decision_index}/summary",),
                 subjects=_planning_subjects(
