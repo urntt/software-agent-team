@@ -1,22 +1,12 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.2.14",
-  "target_version": "0.2.15",
+  "baseline_version": "0.2.15",
+  "target_version": "0.2.16",
   "changes": [
     {
-      "id": "generated-project-reproducibility",
+      "id": "review-finding-retention",
       "impact": "patch",
-      "summary": "Require portable tracked project locks and reject setup-time delivery drift"
-    },
-    {
-      "id": "portable-lock-runtime-support",
-      "impact": "patch",
-      "summary": "Provide frozen public metadata and an offline portable-lock helper in the sandbox runtime"
-    },
-    {
-      "id": "changed-image-reference-lifecycle",
-      "impact": "patch",
-      "summary": "Preserve rollback image lineages and reconcile detached predecessor resources across image-reference changes"
+      "summary": "Retain historical non-blocking Review findings when later iterations omit them"
     }
   ]
 }

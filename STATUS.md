@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** prepare `v0.2.16` and complete a managed user journey
+**Current milestone:** release `v0.2.16` and complete a managed user journey
 
 **Last updated:** September 13, 2026
 
@@ -338,9 +338,15 @@ signal for non-blocking findings, completed, failed, and user-cancelled terminal
 reports now retain every such description and collapse only exact repeats. A
 later Review omission cannot erase an observed residual issue. Fixed and
 adaptive workflow regressions reproduce both omission and repeated-report
-cases; all 118 artifact and workflow tests pass. The canonical gate, release
-version, hosted publication, published upgrade, and fresh complete
-provider-backed journey remain pending.
+cases; all 118 artifact and workflow tests pass. Clean implementation revision
+`d2a5601e1d74b025b32756cdfdc1c2208f79f488` passed the canonical gate with all
+1,661 tests in 636.49 seconds. The report records 402,006,016 bytes aggregate
+peak RSS, zero cgroup/kernel OOM delta, complete cleanup coverage, and no
+residual stage process, process lease, sandbox container, volume, or private
+test directory. The package, lock, and change-impact ledger identify `v0.2.16`
+as a compatible patch over `v0.2.15`; exact release-head validation, hosted
+publication, published upgrade, and a fresh complete provider-backed journey
+remain pending.
 
 The post-`v0.2.14` implementation requires every generated Python delivery to
 commit a bounded portable root `uv.lock`. The runtime image supplies an
