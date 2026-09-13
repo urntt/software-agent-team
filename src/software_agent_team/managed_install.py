@@ -331,6 +331,7 @@ class SandboxImageIdentity:
     """One locally inspected image and its deletion-safety facts."""
 
     image_id: str
+    parent_image_id: str | None
     repository_tags: tuple[str, ...]
     owned: bool
 
@@ -341,7 +342,9 @@ class SandboxImageTransition:
 
     reference: str
     previous: SandboxImageIdentity | None
+    previous_lineage: tuple[SandboxImageIdentity, ...]
     candidate: SandboxImageIdentity
+    candidate_lineage: tuple[SandboxImageIdentity, ...]
 
 
 CommandRunner = Callable[[Sequence[str], Path | None, Mapping[str, str] | None], None]
@@ -438,6 +441,7 @@ def _stage_managed_target_locked(
     runner = command_runner or _run_command
     sandbox_image_reference: str | None = None
     previous_sandbox_image: SandboxImageIdentity | None = None
+    previous_sandbox_lineage: tuple[SandboxImageIdentity, ...] = ()
     sandbox_image_transition: SandboxImageTransition | None = None
     try:
         runner(("git", "init", "-b", "sat-managed", str(stage)), None, None)
@@ -539,6 +543,11 @@ def _stage_managed_target_locked(
         sandbox_image_reference = _configured_sandbox_image(final_path)
         if sandbox_image_reference is not None:
             previous_sandbox_image = _inspect_sandbox_image(sandbox_image_reference)
+            if previous_sandbox_image is not None:
+                previous_sandbox_lineage = _inspect_sandbox_image_lineage(
+                    previous_sandbox_image,
+                    expected_reference=sandbox_image_reference,
+                )
         runner(
             (str(final_path / "scripts" / "install.sh"),),
             final_path,
@@ -553,7 +562,12 @@ def _stage_managed_target_locked(
             sandbox_image_transition = SandboxImageTransition(
                 reference=sandbox_image_reference,
                 previous=previous_sandbox_image,
+                previous_lineage=previous_sandbox_lineage,
                 candidate=candidate_image,
+                candidate_lineage=_inspect_sandbox_image_lineage(
+                    candidate_image,
+                    expected_reference=sandbox_image_reference,
+                ),
             )
         _validate_staged_application(final_path, marker)
         schema_support = target.schema_support or _read_staged_schema_support(
@@ -580,7 +594,12 @@ def _stage_managed_target_locked(
                         SandboxImageTransition(
                             reference=sandbox_image_reference,
                             previous=previous_sandbox_image,
+                            previous_lineage=previous_sandbox_lineage,
                             candidate=current_image,
+                            candidate_lineage=_inspect_sandbox_image_lineage(
+                                current_image,
+                                expected_reference=sandbox_image_reference,
+                            ),
                         )
                     )
             except ManagedInstallError as restore_error:
@@ -1279,7 +1298,7 @@ def _inspect_sandbox_image(
     """Inspect one exact image without treating a missing image as owned."""
 
     completed = _docker_command(
-        ("image", "inspect", "--format", "{{json .}}", selector),
+        ("image", "inspect", selector),
         check=False,
     )
     if completed.returncode != 0:
@@ -1288,11 +1307,19 @@ def _inspect_sandbox_image(
             return None
         raise ManagedInstallError("managed sandbox image inspection failed")
     try:
-        payload = json.loads(completed.stdout)
+        raw_payload = json.loads(completed.stdout)
+        if (
+            not isinstance(raw_payload, list)
+            or len(raw_payload) != 1
+            or not isinstance(raw_payload[0], dict)
+        ):
+            raise TypeError
+        payload = raw_payload[0]
         image_id = payload["Id"]
         config = payload["Config"]
         labels = config.get("Labels") or {}
         raw_tags = payload.get("RepoTags") or []
+        raw_parent = payload.get("Parent") or None
     except (AttributeError, KeyError, TypeError, json.JSONDecodeError) as error:
         raise ManagedInstallError(
             "Docker returned malformed managed sandbox image metadata"
@@ -1303,6 +1330,13 @@ def _inspect_sandbox_image(
         or not isinstance(labels, dict)
         or not isinstance(raw_tags, list)
         or any(not isinstance(tag, str) for tag in raw_tags)
+        or (
+            raw_parent is not None
+            and (
+                not isinstance(raw_parent, str)
+                or _SANDBOX_IMAGE_ID_PATTERN.fullmatch(raw_parent) is None
+            )
+        )
     ):
         raise ManagedInstallError(
             "Docker returned malformed managed sandbox image metadata"
@@ -1314,9 +1348,66 @@ def _inspect_sandbox_image(
     )
     return SandboxImageIdentity(
         image_id=image_id,
+        parent_image_id=raw_parent,
         repository_tags=tuple(raw_tags),
         owned=owned,
     )
+
+
+def _inspect_sandbox_image_lineage(
+    image: SandboxImageIdentity,
+    *,
+    expected_reference: str,
+) -> tuple[SandboxImageIdentity, ...]:
+    """Capture the exact immutable parent chain rooted at one image."""
+
+    lineage = [image]
+    seen = {image.image_id}
+    parent_id = image.parent_image_id
+    while parent_id is not None:
+        if parent_id in seen:
+            raise ManagedInstallError("managed sandbox image lineage contains a cycle")
+        parent = _inspect_sandbox_image(
+            parent_id,
+            expected_reference=expected_reference,
+        )
+        if parent is None:
+            raise ManagedInstallError("managed sandbox image lineage is incomplete")
+        lineage.append(parent)
+        seen.add(parent.image_id)
+        parent_id = parent.parent_image_id
+    return tuple(lineage)
+
+
+def _sandbox_image_inventory(
+    *,
+    expected_reference: str,
+    required_image_ids: Sequence[str] = (),
+) -> dict[str, SandboxImageIdentity]:
+    """Inspect all local image records needed to prove child relationships."""
+
+    completed = _docker_command(
+        ("image", "ls", "--all", "--no-trunc", "--quiet"),
+        check=True,
+    )
+    listed_ids = tuple(line for line in completed.stdout.splitlines() if line)
+    invalid_ids = tuple(
+        image_id
+        for image_id in listed_ids
+        if _SANDBOX_IMAGE_ID_PATTERN.fullmatch(image_id) is None
+    )
+    if invalid_ids:
+        raise ManagedInstallError("Docker returned an invalid sandbox image inventory")
+    selectors = tuple(dict.fromkeys((*listed_ids, *required_image_ids)))
+    inventory: dict[str, SandboxImageIdentity] = {}
+    for image_id in selectors:
+        identity = _inspect_sandbox_image(
+            image_id,
+            expected_reference=expected_reference,
+        )
+        if identity is not None:
+            inventory[identity.image_id] = identity
+    return inventory
 
 
 def _image_has_container_references(image_id: str) -> bool:
@@ -1334,22 +1425,77 @@ def _image_has_container_references(image_id: str) -> bool:
     return bool(completed.stdout.strip())
 
 
-def _remove_owned_unreferenced_image(
-    image_id: str,
+def _remove_owned_unreferenced_lineage(
+    retired: SandboxImageIdentity,
     *,
     expected_reference: str,
+    retired_lineage: tuple[SandboxImageIdentity, ...],
+    retained_lineage: tuple[SandboxImageIdentity, ...],
 ) -> None:
-    """Remove one proven SAT image only when no tag or container retains it."""
+    """Remove the exact unshared prefix of one attributable image lineage."""
 
-    identity = _inspect_sandbox_image(
-        image_id,
-        expected_reference=expected_reference,
+    if not retired.owned:
+        return
+    if not retired_lineage:
+        retired_lineage = _inspect_sandbox_image_lineage(
+            retired,
+            expected_reference=expected_reference,
+        )
+    if retired_lineage[0].image_id != retired.image_id:
+        raise ManagedInstallError("managed sandbox image lineage root is invalid")
+    for index, captured in enumerate(retired_lineage):
+        expected_parent = (
+            retired_lineage[index + 1].image_id
+            if index + 1 < len(retired_lineage)
+            else None
+        )
+        if captured.parent_image_id != expected_parent:
+            raise ManagedInstallError("managed sandbox image lineage is invalid")
+
+    retained_ids = {identity.image_id for identity in retained_lineage}
+    required_ids = tuple(
+        identity.image_id for identity in (*retired_lineage, *retained_lineage)
     )
-    if identity is None or not identity.owned:
-        return
-    if identity.repository_tags or _image_has_container_references(image_id):
-        return
-    _docker_command(("image", "rm", image_id), check=True)
+    inventory = _sandbox_image_inventory(
+        expected_reference=expected_reference,
+        required_image_ids=required_ids,
+    )
+    children: dict[str, set[str]] = {}
+    for identity in inventory.values():
+        if identity.parent_image_id is not None:
+            children.setdefault(identity.parent_image_id, set()).add(identity.image_id)
+
+    removal_ids: list[str] = []
+    scheduled_descendants: set[str] = set()
+    for captured in retired_lineage:
+        current = inventory.get(captured.image_id)
+        if current is None:
+            scheduled_descendants.add(captured.image_id)
+            continue
+        if current.parent_image_id != captured.parent_image_id:
+            raise ManagedInstallError("managed sandbox image lineage changed")
+        if current.image_id == retired.image_id and not current.owned:
+            break
+        if current.image_id in retained_ids or current.repository_tags:
+            break
+        if _image_has_container_references(current.image_id):
+            break
+        external_children = (
+            children.get(current.image_id, set()) - scheduled_descendants
+        )
+        if external_children:
+            break
+        removal_ids.append(current.image_id)
+        scheduled_descendants.add(current.image_id)
+
+    for image_id in removal_ids:
+        # Reclamation happens after the candidate has become authoritative. A
+        # no-force deletion can still lose a race to a new Docker reference;
+        # stop at that boundary instead of turning a safe activation into an
+        # impossible rollback after an earlier lineage record was removed.
+        completed = _docker_command(("image", "rm", image_id), check=False)
+        if completed.returncode != 0:
+            break
 
 
 def _cleanup_superseded_sandbox_image(
@@ -1364,9 +1510,11 @@ def _cleanup_superseded_sandbox_image(
         or not previous.owned
     ):
         return
-    _remove_owned_unreferenced_image(
-        previous.image_id,
+    _remove_owned_unreferenced_lineage(
+        previous,
         expected_reference=transition.reference,
+        retired_lineage=transition.previous_lineage,
+        retained_lineage=transition.candidate_lineage,
     )
 
 
@@ -1398,9 +1546,11 @@ def _restore_sandbox_image_transition(
     if transition.candidate.owned and (
         previous is None or transition.candidate.image_id != previous.image_id
     ):
-        _remove_owned_unreferenced_image(
-            transition.candidate.image_id,
+        _remove_owned_unreferenced_lineage(
+            transition.candidate,
             expected_reference=transition.reference,
+            retired_lineage=transition.candidate_lineage,
+            retained_lineage=transition.previous_lineage,
         )
 
 

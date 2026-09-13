@@ -601,11 +601,20 @@ def test_successful_activation_removes_only_attributable_dangling_image(
         check: bool,
     ) -> subprocess.CompletedProcess[str]:
         commands.append(arguments)
+        if arguments[:2] == ("image", "ls"):
+            return subprocess.CompletedProcess(
+                arguments,
+                0,
+                f"{previous_id}\n{candidate_id}\n",
+                "",
+            )
         if arguments[:2] == ("image", "inspect"):
-            assert arguments[-1] == previous_id
+            image_id = arguments[-1]
+            assert image_id in {previous_id, candidate_id}
             payload = {
-                "Id": previous_id,
-                "RepoTags": None,
+                "Id": image_id,
+                "Parent": "",
+                "RepoTags": [reference] if image_id == candidate_id else None,
                 "Config": {
                     "Labels": {
                         managed_install_module.SANDBOX_IMAGE_OWNER_LABEL: "true",
@@ -613,11 +622,16 @@ def test_successful_activation_removes_only_attributable_dangling_image(
                     }
                 },
             }
-            return subprocess.CompletedProcess(arguments, 0, json.dumps(payload), "")
+            return subprocess.CompletedProcess(
+                arguments,
+                0,
+                json.dumps([payload]),
+                "",
+            )
         if arguments[:2] == ("container", "ls"):
             return subprocess.CompletedProcess(arguments, 0, "", "")
         if arguments[:2] == ("image", "rm"):
-            assert check is True
+            assert check is False
             return subprocess.CompletedProcess(arguments, 0, previous_id + "\n", "")
         raise AssertionError(f"unexpected Docker command: {arguments}")
 
@@ -626,13 +640,31 @@ def test_successful_activation_removes_only_attributable_dangling_image(
         reference=reference,
         previous=managed_install_module.SandboxImageIdentity(
             image_id=previous_id,
+            parent_image_id=None,
             repository_tags=(reference,),
             owned=True,
         ),
+        previous_lineage=(
+            managed_install_module.SandboxImageIdentity(
+                image_id=previous_id,
+                parent_image_id=None,
+                repository_tags=(reference,),
+                owned=True,
+            ),
+        ),
         candidate=managed_install_module.SandboxImageIdentity(
             image_id=candidate_id,
+            parent_image_id=None,
             repository_tags=(reference,),
             owned=True,
+        ),
+        candidate_lineage=(
+            managed_install_module.SandboxImageIdentity(
+                image_id=candidate_id,
+                parent_image_id=None,
+                repository_tags=(reference,),
+                owned=True,
+            ),
         ),
     )
 
@@ -652,17 +684,213 @@ def test_successful_activation_preserves_unattributed_previous_image(
         reference="sat-python-quality:phase1-v6",
         previous=managed_install_module.SandboxImageIdentity(
             image_id="sha256:" + "a" * 64,
+            parent_image_id=None,
             repository_tags=(),
             owned=False,
         ),
+        previous_lineage=(),
         candidate=managed_install_module.SandboxImageIdentity(
             image_id="sha256:" + "b" * 64,
+            parent_image_id=None,
             repository_tags=("sat-python-quality:phase1-v6",),
             owned=True,
+        ),
+        candidate_lineage=(),
+    )
+
+    managed_install_module._cleanup_superseded_sandbox_image(transition)
+
+
+def test_successful_activation_removes_exact_superseded_image_lineage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reference = "sat-python-quality:phase1-v6"
+    previous_id = "sha256:" + "a" * 64
+    previous_label_id = "sha256:" + "b" * 64
+    previous_layer_id = "sha256:" + "c" * 64
+    shared_base_id = "sha256:" + "d" * 64
+    candidate_id = "sha256:" + "e" * 64
+    candidate_layer_id = "sha256:" + "f" * 64
+    parents = {
+        previous_id: previous_label_id,
+        previous_label_id: previous_layer_id,
+        previous_layer_id: shared_base_id,
+        shared_base_id: None,
+        candidate_id: candidate_layer_id,
+        candidate_layer_id: shared_base_id,
+    }
+    tags = {candidate_id: [reference], shared_base_id: ["python:3.12"]}
+    removed: list[str] = []
+
+    def identity(image_id: str) -> managed_install_module.SandboxImageIdentity:
+        return managed_install_module.SandboxImageIdentity(
+            image_id=image_id,
+            parent_image_id=parents[image_id],
+            repository_tags=tuple(tags.get(image_id, ())),
+            owned=image_id in {previous_id, candidate_id},
+        )
+
+    def fake_docker(
+        arguments: tuple[str, ...],
+        *,
+        check: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        if arguments[:2] == ("image", "ls"):
+            return subprocess.CompletedProcess(
+                arguments,
+                0,
+                "\n".join(parents) + "\n",
+                "",
+            )
+        if arguments[:2] == ("image", "inspect"):
+            image_id = arguments[-1]
+            labels = {}
+            if image_id in {previous_id, candidate_id}:
+                labels = {
+                    managed_install_module.SANDBOX_IMAGE_OWNER_LABEL: "true",
+                    managed_install_module.SANDBOX_IMAGE_REFERENCE_LABEL: reference,
+                }
+            elif image_id == previous_label_id:
+                labels = {
+                    managed_install_module.SANDBOX_IMAGE_REFERENCE_LABEL: reference,
+                }
+            return subprocess.CompletedProcess(
+                arguments,
+                0,
+                json.dumps(
+                    [
+                        {
+                            "Id": image_id,
+                            "Parent": parents[image_id] or "",
+                            "RepoTags": tags.get(image_id),
+                            "Config": {"Labels": labels},
+                        }
+                    ]
+                ),
+                "",
+            )
+        if arguments[:2] == ("container", "ls"):
+            return subprocess.CompletedProcess(arguments, 0, "", "")
+        if arguments[:2] == ("image", "rm"):
+            assert check is False
+            removed.append(arguments[2])
+            return subprocess.CompletedProcess(arguments, 0, arguments[2] + "\n", "")
+        raise AssertionError(f"unexpected Docker command: {arguments}")
+
+    monkeypatch.setattr(managed_install_module, "_docker_command", fake_docker)
+    transition = managed_install_module.SandboxImageTransition(
+        reference=reference,
+        previous=identity(previous_id),
+        previous_lineage=tuple(
+            identity(image_id)
+            for image_id in (
+                previous_id,
+                previous_label_id,
+                previous_layer_id,
+                shared_base_id,
+            )
+        ),
+        candidate=identity(candidate_id),
+        candidate_lineage=tuple(
+            identity(image_id)
+            for image_id in (candidate_id, candidate_layer_id, shared_base_id)
         ),
     )
 
     managed_install_module._cleanup_superseded_sandbox_image(transition)
+
+    assert removed == [previous_id, previous_label_id, previous_layer_id]
+
+
+def test_successful_activation_stops_lineage_cleanup_at_foreign_child(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reference = "sat-python-quality:phase1-v6"
+    previous_id = "sha256:" + "a" * 64
+    previous_parent_id = "sha256:" + "b" * 64
+    shared_base_id = "sha256:" + "c" * 64
+    candidate_id = "sha256:" + "d" * 64
+    foreign_id = "sha256:" + "e" * 64
+    parents = {
+        previous_id: previous_parent_id,
+        previous_parent_id: shared_base_id,
+        shared_base_id: None,
+        candidate_id: shared_base_id,
+        foreign_id: previous_parent_id,
+    }
+    tags = {candidate_id: [reference], foreign_id: ["foreign:keep"]}
+    removed: list[str] = []
+
+    def identity(image_id: str) -> managed_install_module.SandboxImageIdentity:
+        return managed_install_module.SandboxImageIdentity(
+            image_id=image_id,
+            parent_image_id=parents[image_id],
+            repository_tags=tuple(tags.get(image_id, ())),
+            owned=image_id in {previous_id, candidate_id},
+        )
+
+    def fake_docker(
+        arguments: tuple[str, ...],
+        *,
+        check: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        if arguments[:2] == ("image", "ls"):
+            return subprocess.CompletedProcess(
+                arguments,
+                0,
+                "\n".join(parents) + "\n",
+                "",
+            )
+        if arguments[:2] == ("image", "inspect"):
+            image_id = arguments[-1]
+            labels = (
+                {
+                    managed_install_module.SANDBOX_IMAGE_OWNER_LABEL: "true",
+                    managed_install_module.SANDBOX_IMAGE_REFERENCE_LABEL: reference,
+                }
+                if image_id in {previous_id, candidate_id}
+                else {}
+            )
+            return subprocess.CompletedProcess(
+                arguments,
+                0,
+                json.dumps(
+                    [
+                        {
+                            "Id": image_id,
+                            "Parent": parents[image_id] or "",
+                            "RepoTags": tags.get(image_id),
+                            "Config": {"Labels": labels},
+                        }
+                    ]
+                ),
+                "",
+            )
+        if arguments[:2] == ("container", "ls"):
+            return subprocess.CompletedProcess(arguments, 0, "", "")
+        if arguments[:2] == ("image", "rm"):
+            assert check is False
+            removed.append(arguments[2])
+            return subprocess.CompletedProcess(arguments, 0, arguments[2] + "\n", "")
+        raise AssertionError(f"unexpected Docker command: {arguments}")
+
+    monkeypatch.setattr(managed_install_module, "_docker_command", fake_docker)
+    transition = managed_install_module.SandboxImageTransition(
+        reference=reference,
+        previous=identity(previous_id),
+        previous_lineage=tuple(
+            identity(image_id)
+            for image_id in (previous_id, previous_parent_id, shared_base_id)
+        ),
+        candidate=identity(candidate_id),
+        candidate_lineage=tuple(
+            identity(image_id) for image_id in (candidate_id, shared_base_id)
+        ),
+    )
+
+    managed_install_module._cleanup_superseded_sandbox_image(transition)
+
+    assert removed == [previous_id]
 
 
 def test_failed_activation_restores_previous_image_tag_and_removes_candidate(
@@ -677,16 +905,21 @@ def test_failed_activation_restores_previous_image_tag_and_removes_candidate(
     def identity_payload(image_id: str) -> str:
         tags = [reference] if current_tag["image_id"] == image_id else None
         return json.dumps(
-            {
-                "Id": image_id,
-                "RepoTags": tags,
-                "Config": {
-                    "Labels": {
-                        managed_install_module.SANDBOX_IMAGE_OWNER_LABEL: "true",
-                        managed_install_module.SANDBOX_IMAGE_REFERENCE_LABEL: reference,
-                    }
-                },
-            }
+            [
+                {
+                    "Id": image_id,
+                    "Parent": "",
+                    "RepoTags": tags,
+                    "Config": {
+                        "Labels": {
+                            managed_install_module.SANDBOX_IMAGE_OWNER_LABEL: "true",
+                            managed_install_module.SANDBOX_IMAGE_REFERENCE_LABEL: (
+                                reference
+                            ),
+                        }
+                    },
+                }
+            ]
         )
 
     def fake_docker(
@@ -694,6 +927,13 @@ def test_failed_activation_restores_previous_image_tag_and_removes_candidate(
         *,
         check: bool,
     ) -> subprocess.CompletedProcess[str]:
+        if arguments[:2] == ("image", "ls"):
+            return subprocess.CompletedProcess(
+                arguments,
+                0,
+                "\n".join(sorted({previous_id, candidate_id} - removed)) + "\n",
+                "",
+            )
         if arguments[:2] == ("image", "inspect"):
             selector = arguments[-1]
             image_id = current_tag["image_id"] if selector == reference else selector
@@ -718,7 +958,7 @@ def test_failed_activation_restores_previous_image_tag_and_removes_candidate(
         if arguments[:2] == ("container", "ls"):
             return subprocess.CompletedProcess(arguments, 0, "", "")
         if arguments[:2] == ("image", "rm"):
-            assert check is True
+            assert check is False
             removed.add(arguments[2])
             return subprocess.CompletedProcess(arguments, 0, "", "")
         raise AssertionError(f"unexpected Docker command: {arguments}")
@@ -728,13 +968,31 @@ def test_failed_activation_restores_previous_image_tag_and_removes_candidate(
         reference=reference,
         previous=managed_install_module.SandboxImageIdentity(
             image_id=previous_id,
+            parent_image_id=None,
             repository_tags=(reference,),
             owned=True,
         ),
+        previous_lineage=(
+            managed_install_module.SandboxImageIdentity(
+                image_id=previous_id,
+                parent_image_id=None,
+                repository_tags=(reference,),
+                owned=True,
+            ),
+        ),
         candidate=managed_install_module.SandboxImageIdentity(
             image_id=candidate_id,
+            parent_image_id=None,
             repository_tags=(reference,),
             owned=True,
+        ),
+        candidate_lineage=(
+            managed_install_module.SandboxImageIdentity(
+                image_id=candidate_id,
+                parent_image_id=None,
+                repository_tags=(reference,),
+                owned=True,
+            ),
         ),
     )
 
