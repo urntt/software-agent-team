@@ -624,18 +624,22 @@ failed candidate stops
 before activation. If activation itself fails, the previous link, record, and
 sandbox-image tag are restored. A successful change retains the active
 application and one direct predecessor, then removes only older direct version
-directories whose managed marker proves ownership. It removes the superseded
-sandbox image only when both SAT labels match the configured reference and the
-exact image has neither a remaining tag nor a container reference. The stage
-records that image's immutable parent chain before the build and the candidate's
-chain afterward. Cleanup then removes only the exact untagged prefix unique to
-the superseded fully-owned image, stopping before any candidate ancestor, tag,
-container reference, or child outside that recorded removal chain. Each exact
-removal disables Docker's recursive parent pruning, so the daemon cannot cross
-the verified plan boundary. An older installation whose legacy parent metadata
-already ends at a missing image record can still upgrade: capture stops at that
-absent boundary and never invents or deletes the missing history. This also
-removes legacy-builder label and command intermediates without a broad prune.
+directories whose managed marker proves ownership. The target records the
+active predecessor and candidate image references independently before it
+changes Docker state. When both releases use one mutable reference, it removes
+the superseded image only when both SAT labels match that reference and the
+exact image has neither a remaining tag nor a container reference. When the
+reference changes, the tagged predecessor lineage remains available to the
+retained rollback application; only detached legacy roots carrying the exact
+old reference are eligible for cleanup. The stage records each relevant
+immutable parent chain before the build and the candidate chain afterward.
+Cleanup stops before any retained ancestry, tag, container reference, or child
+outside the recorded removal chain. Each exact removal disables Docker's
+recursive parent pruning, so the daemon cannot cross the verified plan
+boundary. An older installation whose legacy parent metadata already ends at a
+missing image record can still upgrade: capture stops at that absent boundary
+and never invents or deletes the missing history. This also removes attributable
+legacy-builder label and command intermediates without a broad prune.
 Unattributable roots, shared ancestors, and foreign Docker resources remain
 untouched. Failed activation applies the same rule in reverse after restoring
 the previous tag. User configuration and isolated provider state are not

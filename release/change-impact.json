@@ -12,6 +12,11 @@
       "id": "portable-lock-runtime-support",
       "impact": "patch",
       "summary": "Provide frozen public metadata and an offline portable-lock helper in the sandbox runtime"
+    },
+    {
+      "id": "changed-image-reference-lifecycle",
+      "impact": "patch",
+      "summary": "Preserve rollback image lineages and reconcile detached predecessor resources across image-reference changes"
     }
   ]
 }

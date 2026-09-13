@@ -1103,6 +1103,10 @@ def test_active_target_reconciles_lineage_left_by_an_older_updater(
     assert transition_path.is_file()
     assert transition_path.stat().st_mode & 0o777 == 0o600
     assert transition_path.parent == install_paths.managed_root
+    persisted = managed_install_module._load_sandbox_image_transition(transition_path)
+    assert persisted is not None
+    assert persisted.previous_reference == reference
+    assert persisted.resolved_previous_reference == reference
 
     # SAT v0.2.9 removed only the retired final record after activation. The
     # target release must consume its own persisted handoff on first use.
@@ -1122,6 +1126,196 @@ def test_active_target_reconciles_lineage_left_by_an_older_updater(
     assert foreign_labeled_root_id not in removed
     assert foreign_child_id not in removed
     assert not transition_path.exists()
+
+
+def test_target_reconciles_old_reference_orphans_and_keeps_rollback_image(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_paths = paths(tmp_path)
+    mark_managed_root(install_paths)
+    old_reference = "sat-python-quality:phase1-v7"
+    candidate_reference = "sat-python-quality:phase1-v8"
+    previous_release = install_paths.versions_root / "0.2.14-test"
+    candidate_release = install_paths.versions_root / "0.2.15-test"
+    for release, reference, revision in (
+        (previous_release, old_reference, "1" * 40),
+        (candidate_release, candidate_reference, "2" * 40),
+    ):
+        (release / "configs").mkdir(parents=True)
+        (release / "configs/product-policy.json").write_text(
+            json.dumps({"sandbox": {"image": reference}}),
+            encoding="utf-8",
+        )
+        marker = ManagedApplicationMarker(
+            application_link=str(install_paths.application_link),
+            channel=ManagedChannel.DEV,
+            release_version=release.name.removesuffix("-test"),
+            source_revision=revision,
+            source_ref=revision,
+            repository_url="https://example.invalid/software-agent-team.git",
+            artifact_digest=None,
+        )
+        (release / managed_install_module.MANAGED_MARKER_NAME).write_text(
+            marker.model_dump_json(),
+            encoding="utf-8",
+        )
+    install_paths.application_link.parent.mkdir(parents=True, exist_ok=True)
+    install_paths.application_link.symlink_to(previous_release)
+
+    previous_id = "sha256:" + "a" * 64
+    previous_parent_id = "sha256:" + "b" * 64
+    shared_base_id = "sha256:" + "c" * 64
+    candidate_id = "sha256:" + "d" * 64
+    candidate_parent_id = "sha256:" + "e" * 64
+    legacy_root_id = "sha256:" + "f" * 64
+    legacy_parent_id = "sha256:" + "3" * 64
+    foreign_labeled_root_id = "sha256:" + "4" * 64
+    foreign_child_id = "sha256:" + "5" * 64
+    parents = {
+        previous_id: previous_parent_id,
+        previous_parent_id: shared_base_id,
+        candidate_id: candidate_parent_id,
+        candidate_parent_id: shared_base_id,
+        legacy_root_id: legacy_parent_id,
+        legacy_parent_id: shared_base_id,
+        foreign_labeled_root_id: shared_base_id,
+        foreign_child_id: foreign_labeled_root_id,
+        shared_base_id: None,
+    }
+    removed: list[str] = []
+
+    def fake_docker(
+        arguments: tuple[str, ...],
+        *,
+        check: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        if arguments[:2] == ("image", "ls"):
+            present = [image_id for image_id in parents if image_id not in removed]
+            return subprocess.CompletedProcess(
+                arguments,
+                0,
+                "\n".join(present) + "\n",
+                "",
+            )
+        if arguments[:2] == ("image", "inspect"):
+            selector = arguments[-1]
+            selector_ids = {
+                old_reference: previous_id,
+                candidate_reference: candidate_id,
+            }
+            image_id = selector_ids.get(selector, selector)
+            if image_id in removed:
+                return subprocess.CompletedProcess(
+                    arguments,
+                    1,
+                    "",
+                    "Error response from daemon: No such image",
+                )
+            labels = {}
+            if image_id == previous_id:
+                labels = {
+                    managed_install_module.SANDBOX_IMAGE_OWNER_LABEL: "true",
+                    managed_install_module.SANDBOX_IMAGE_REFERENCE_LABEL: (
+                        old_reference
+                    ),
+                }
+            elif image_id == candidate_id:
+                labels = {
+                    managed_install_module.SANDBOX_IMAGE_OWNER_LABEL: "true",
+                    managed_install_module.SANDBOX_IMAGE_REFERENCE_LABEL: (
+                        candidate_reference
+                    ),
+                }
+            elif image_id in {legacy_root_id, foreign_labeled_root_id}:
+                labels = {
+                    managed_install_module.SANDBOX_IMAGE_REFERENCE_LABEL: (
+                        old_reference
+                    )
+                }
+            tags = None
+            if image_id == previous_id:
+                tags = [old_reference]
+            elif image_id == candidate_id:
+                tags = [candidate_reference]
+            elif image_id == shared_base_id:
+                tags = ["python:3.12"]
+            elif image_id == foreign_child_id:
+                tags = ["foreign:keep"]
+            return subprocess.CompletedProcess(
+                arguments,
+                0,
+                json.dumps(
+                    [
+                        {
+                            "Id": image_id,
+                            "Parent": parents[image_id] or "",
+                            "RepoTags": tags,
+                            "Config": {"Labels": labels},
+                        }
+                    ]
+                ),
+                "",
+            )
+        if arguments[:2] == ("container", "ls"):
+            return subprocess.CompletedProcess(arguments, 0, "", "")
+        if arguments[:3] == ("image", "rm", "--no-prune"):
+            assert check is False
+            removed.append(arguments[3])
+            return subprocess.CompletedProcess(arguments, 0, arguments[3] + "\n", "")
+        raise AssertionError(f"unexpected Docker command: {arguments}")
+
+    monkeypatch.setattr(managed_install_module, "_docker_command", fake_docker)
+    managed_install_module.prepare_staged_sandbox_image_transition(
+        application_root=candidate_release,
+        installation_record_path=install_paths.installation_record,
+    )
+    managed_install_module.finalize_staged_sandbox_image_transition(
+        application_root=candidate_release,
+        installation_record_path=install_paths.installation_record,
+    )
+    transition_path = managed_install_module._sandbox_image_transition_path(
+        install_paths.managed_root,
+        "2" * 40,
+    )
+    transition = managed_install_module._load_sandbox_image_transition(transition_path)
+    assert transition is not None
+    assert transition.previous_reference == old_reference
+    assert transition.reference == candidate_reference
+    assert transition.previous is not None
+    assert transition.previous.image_id == previous_id
+    assert [item.root.image_id for item in transition.legacy_orphan_lineages] == [
+        legacy_root_id
+    ]
+
+    install_paths.application_link.unlink()
+    install_paths.application_link.symlink_to(candidate_release)
+    assert managed_install_module.reconcile_pending_sandbox_image_transition(
+        candidate_release
+    )
+
+    assert removed == [legacy_root_id, legacy_parent_id]
+    assert previous_id not in removed
+    assert previous_parent_id not in removed
+    assert candidate_id not in removed
+    assert candidate_parent_id not in removed
+    assert foreign_labeled_root_id not in removed
+    assert foreign_child_id not in removed
+    assert not transition_path.exists()
+
+
+def test_legacy_transition_without_previous_reference_reads_as_same_reference() -> None:
+    reference = "sat-python-quality:phase1-v7"
+    transition = managed_install_module.PersistedSandboxImageTransition.model_validate(
+        {
+            "schema_version": 1,
+            "target_source_revision": "1" * 40,
+            "reference": reference,
+        }
+    )
+
+    assert transition.previous_reference is None
+    assert transition.resolved_previous_reference == reference
 
 
 def test_target_defers_pending_image_reconciliation_while_update_lock_is_held(

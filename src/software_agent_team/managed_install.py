@@ -420,7 +420,7 @@ class PersistedSandboxImageLineage(BaseModel):
 
 
 class PersistedSandboxImageTransition(BaseModel):
-    """Target-authored handoff for cleanup after an older updater exits."""
+    """Target-authored image handoff for cleanup after an older updater exits."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -428,6 +428,7 @@ class PersistedSandboxImageTransition(BaseModel):
         SANDBOX_IMAGE_TRANSITION_SCHEMA_VERSION
     )
     target_source_revision: str = Field(pattern=r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
+    previous_reference: str | None = Field(default=None, min_length=1, max_length=4_096)
     reference: str = Field(min_length=1, max_length=4_096)
     previous: PersistedSandboxImageIdentity | None = None
     previous_lineage: tuple[PersistedSandboxImageIdentity, ...] = Field(
@@ -444,9 +445,11 @@ class PersistedSandboxImageTransition(BaseModel):
         max_length=64,
     )
 
-    @field_validator("reference")
+    @field_validator("previous_reference", "reference")
     @classmethod
-    def require_safe_reference(cls, value: str) -> str:
+    def require_safe_reference(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
         if (
             value != value.strip()
             or value.startswith("-")
@@ -454,6 +457,12 @@ class PersistedSandboxImageTransition(BaseModel):
         ):
             raise ValueError("sandbox image reference is invalid")
         return value
+
+    @property
+    def resolved_previous_reference(self) -> str:
+        """Read legacy handoffs as same-reference transitions."""
+
+        return self.previous_reference or self.reference
 
     @model_validator(mode="after")
     def require_complete_captured_lineages(self) -> PersistedSandboxImageTransition:
@@ -1387,6 +1396,33 @@ def _configured_sandbox_image(application: Path) -> str | None:
     return image
 
 
+def _active_predecessor_sandbox_image_reference(
+    *,
+    candidate_root: Path,
+    managed_root: Path,
+    root_marker: ManagedRootMarker,
+    candidate_reference: str,
+) -> str:
+    """Resolve the active release's image without trusting the staged policy."""
+
+    application_link = Path(root_marker.application_link)
+    if not application_link.exists() and not application_link.is_symlink():
+        return candidate_reference
+    try:
+        active_root = application_link.resolve(strict=True)
+    except OSError as error:
+        raise ManagedInstallError("managed application link is broken") from error
+    if active_root == candidate_root:
+        return candidate_reference
+    active_lifecycle = _active_managed_lifecycle(active_root)
+    if active_lifecycle is None or active_lifecycle[0] != managed_root:
+        raise ManagedInstallError(
+            "staged sandbox image transition has no attributable predecessor"
+        )
+    active_reference = _configured_sandbox_image(active_root)
+    return candidate_reference if active_reference is None else active_reference
+
+
 def prepare_staged_sandbox_image_transition(
     *,
     application_root: Path,
@@ -1407,23 +1443,30 @@ def prepare_staged_sandbox_image_transition(
     reference = _configured_sandbox_image(root)
     if reference is None:
         return
-    previous = _inspect_sandbox_image(reference)
+    previous_reference = _active_predecessor_sandbox_image_reference(
+        candidate_root=root,
+        managed_root=managed_root,
+        root_marker=root_marker,
+        candidate_reference=reference,
+    )
+    previous = _inspect_sandbox_image(previous_reference)
     previous_lineage = (
         ()
         if previous is None
         else _inspect_sandbox_image_lineage(
             previous,
-            expected_reference=reference,
+            expected_reference=previous_reference,
         )
     )
     legacy_orphan_lineages = _inspect_legacy_sandbox_image_lineages(
-        expected_reference=reference,
+        expected_reference=previous_reference,
         excluded_image_ids=frozenset(
             identity.image_id for identity in previous_lineage
         ),
     )
     record = PersistedSandboxImageTransition(
         target_source_revision=marker.source_revision,
+        previous_reference=previous_reference,
         reference=reference,
         previous=(
             None
@@ -1514,7 +1557,7 @@ def finalize_staged_sandbox_image_transition(
 
 
 def reconcile_pending_sandbox_image_transition(project_root: Path) -> bool:
-    """Retire a proven predecessor lineage once the target release is active."""
+    """Reconcile proven predecessor image resources after target activation."""
 
     lifecycle = _active_managed_lifecycle(project_root)
     if lifecycle is None:
@@ -1561,11 +1604,12 @@ def reconcile_pending_sandbox_image_transition(project_root: Path) -> bool:
             retained_lineage = tuple(
                 item.to_runtime() for item in transition.candidate_lineage
             )
+            previous_reference = transition.resolved_previous_reference
             complete = True
             if previous is not None and previous.owned:
                 current_previous = _inspect_sandbox_image(
                     previous.image_id,
-                    expected_reference=transition.reference,
+                    expected_reference=previous_reference,
                 )
                 if current_previous is not None and (
                     not current_previous.owned
@@ -1574,18 +1618,40 @@ def reconcile_pending_sandbox_image_transition(project_root: Path) -> bool:
                     raise ManagedInstallError(
                         "retired sandbox image differs from its pending transition"
                     )
-                complete = _remove_attributable_unreferenced_lineage(
-                    previous.to_runtime(),
-                    expected_reference=transition.reference,
-                    retired_lineage=tuple(
-                        item.to_runtime() for item in transition.previous_lineage
-                    ),
-                    retained_lineage=retained_lineage,
-                )
+                if previous_reference == transition.reference:
+                    complete = _remove_attributable_unreferenced_lineage(
+                        previous.to_runtime(),
+                        expected_reference=previous_reference,
+                        retired_lineage=tuple(
+                            item.to_runtime() for item in transition.previous_lineage
+                        ),
+                        retained_lineage=retained_lineage,
+                    )
+                elif current_previous is None:
+                    raise ManagedInstallError(
+                        "rollback sandbox image disappeared after activation"
+                    )
+                else:
+                    if previous_reference not in current_previous.repository_tags:
+                        raise ManagedInstallError(
+                            "rollback sandbox image reference disappeared after "
+                            "activation"
+                        )
+                    retained_lineage = tuple(
+                        dict.fromkeys(
+                            (
+                                *retained_lineage,
+                                *(
+                                    item.to_runtime()
+                                    for item in transition.previous_lineage
+                                ),
+                            )
+                        )
+                    )
             for legacy in transition.legacy_orphan_lineages:
                 legacy_complete = _remove_attributable_unreferenced_lineage(
                     legacy.root.to_runtime(),
-                    expected_reference=transition.reference,
+                    expected_reference=previous_reference,
                     retired_lineage=tuple(item.to_runtime() for item in legacy.lineage),
                     retained_lineage=retained_lineage,
                     allow_reference_labeled_root=True,
