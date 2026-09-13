@@ -1,12 +1,17 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.2.8",
-  "target_version": "0.2.9",
+  "baseline_version": "0.2.9",
+  "target_version": "0.2.10",
   "changes": [
     {
-      "id": "python-profile-interactive-start-input",
+      "id": "planning-specialist-id-collision-convergence",
       "impact": "patch",
-      "summary": "Keep stdin open during the bounded exact start probe so interactive CLIs are not misclassified as failed on synthetic EOF"
+      "summary": "Preserve valid Agents while deconflicting an in-place missing-specialist definition into the single new verifier identity used by affected criteria"
+    },
+    {
+      "id": "managed-sandbox-image-lineage-cleanup",
+      "impact": "patch",
+      "summary": "Capture Docker parent provenance and remove only the exact unshared lineage superseded by a successful managed activation or failed candidate"
     }
   ]
 }

@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** validate the next patch candidate through a complete managed user journey
+**Current milestone:** validate the `v0.2.10` release candidate through a complete managed user journey
 
 **Last updated:** September 13, 2026
 
@@ -11,7 +11,7 @@ product, architecture, experiment, or roadmap; those decisions belong to
 
 ## Current Release
 
-The next patch candidate repairs two defects exposed by the published `v0.2.9`
+The `v0.2.10` release candidate repairs two defects exposed by the published `v0.2.9`
 ordinary-user journey. Planning now preserves an existing general Reviewer when
 a complete Agent-array correction expresses a missing security specialist by
 changing that Reviewer under the same ID. It deconflicts the submitted typed
