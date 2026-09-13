@@ -1626,6 +1626,11 @@ def _active_managed_lifecycle(
         raise ManagedInstallError(
             "managed release is not a direct entry in its versions root"
         )
+    installation_record = Path(root_marker.installation_record)
+    if not application_link.exists() and not application_link.is_symlink():
+        if not installation_record.exists() and not installation_record.is_symlink():
+            return None
+        raise ManagedInstallError("managed application link is missing")
     try:
         active_root = application_link.resolve(strict=True)
     except OSError as error:

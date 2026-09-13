@@ -867,6 +867,92 @@ def test_successful_activation_removes_exact_superseded_image_lineage(
     assert removed == [previous_id, previous_label_id, previous_layer_id]
 
 
+def test_staged_target_without_activation_authority_skips_image_reconciliation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_paths = paths(tmp_path)
+    mark_managed_root(install_paths)
+    release = install_paths.versions_root / "0.2.12-staged"
+    release.mkdir(parents=True)
+    marker = ManagedApplicationMarker(
+        application_link=str(install_paths.application_link),
+        channel=ManagedChannel.DEV,
+        release_version="0.2.12",
+        source_revision="1" * 40,
+        source_ref="main",
+        repository_url="https://example.invalid/software-agent-team.git",
+        artifact_digest=None,
+    )
+    (release / managed_install_module.MANAGED_MARKER_NAME).write_text(
+        marker.model_dump_json(),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        managed_install_module,
+        "_docker_command",
+        lambda *_args, **_kwargs: pytest.fail(
+            "an inactive staged target must not inspect Docker"
+        ),
+    )
+
+    assert managed_install_module.reconcile_pending_sandbox_image_transition(release)
+
+
+def test_missing_application_link_with_installation_record_fails_closed(
+    tmp_path: Path,
+) -> None:
+    install_paths = paths(tmp_path)
+    mark_managed_root(install_paths)
+    release = install_paths.versions_root / "0.2.12-recorded"
+    release.mkdir(parents=True)
+    marker = ManagedApplicationMarker(
+        application_link=str(install_paths.application_link),
+        channel=ManagedChannel.DEV,
+        release_version="0.2.12",
+        source_revision="1" * 40,
+        source_ref="main",
+        repository_url="https://example.invalid/software-agent-team.git",
+        artifact_digest=None,
+    )
+    (release / managed_install_module.MANAGED_MARKER_NAME).write_text(
+        marker.model_dump_json(),
+        encoding="utf-8",
+    )
+    install_paths.installation_record.parent.mkdir(parents=True, exist_ok=True)
+    install_paths.installation_record.write_text("{}\n", encoding="utf-8")
+
+    with pytest.raises(ManagedInstallError, match="application link is missing"):
+        managed_install_module.reconcile_pending_sandbox_image_transition(release)
+
+
+def test_dangling_application_link_fails_closed_before_activation(
+    tmp_path: Path,
+) -> None:
+    install_paths = paths(tmp_path)
+    mark_managed_root(install_paths)
+    release = install_paths.versions_root / "0.2.12-dangling"
+    release.mkdir(parents=True)
+    marker = ManagedApplicationMarker(
+        application_link=str(install_paths.application_link),
+        channel=ManagedChannel.DEV,
+        release_version="0.2.12",
+        source_revision="1" * 40,
+        source_ref="main",
+        repository_url="https://example.invalid/software-agent-team.git",
+        artifact_digest=None,
+    )
+    (release / managed_install_module.MANAGED_MARKER_NAME).write_text(
+        marker.model_dump_json(),
+        encoding="utf-8",
+    )
+    install_paths.application_link.parent.mkdir(parents=True, exist_ok=True)
+    install_paths.application_link.symlink_to(tmp_path / "missing-release")
+
+    with pytest.raises(ManagedInstallError, match="application link is broken"):
+        managed_install_module.reconcile_pending_sandbox_image_transition(release)
+
+
 def test_active_target_reconciles_lineage_left_by_an_older_updater(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

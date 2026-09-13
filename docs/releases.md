@@ -185,6 +185,11 @@ the identity manifest and publish; uploading diagnostics cannot waive a failure.
   dev ref can retarget an installation already on dev; omitting the ref on a
   same-channel switch remains a local no-op.
 - Install, update, and switch never change channels silently.
+- A staged candidate is inactive while both its application link and
+  installation record are absent. Candidate self-checks therefore skip pending
+  image reconciliation until activation grants both authorities. A missing
+  link with a retained installation record, or any dangling link, remains a
+  lifecycle integrity error.
 - A staged target records the exact pre-build and post-build Docker image
   lineages in the owned managed root. The same pre-build snapshot includes a
   detached legacy root only when it bears the exact SAT image-reference label,
