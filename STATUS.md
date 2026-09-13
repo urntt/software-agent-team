@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** publish the Planning atomic-correction patch and complete a managed user journey
+**Current milestone:** release `v0.2.14` and complete a managed user journey
 
 **Last updated:** September 13, 2026
 
@@ -11,7 +11,7 @@ product, architecture, experiment, or roadmap; those decisions belong to
 
 ## Current Release
 
-The current development candidate handles a decision category/provenance
+The `v0.2.14` release candidate handles a decision category/provenance
 authority mismatch through Controller-owned atomic candidates. It preserves the
 decision ID, summary, and rationale, narrows categories through stable
 ProductDefinition and assumption references, validates every complete candidate
@@ -20,8 +20,12 @@ Conflicting references or an unsupported user-provenance source do not reopen a
 free-form decision record. The affected Planning, correction, and documentation
 set passes all 241 tests. The exact archived `v0.2.13` provider payload now
 replays to one reference-bound `delivery` candidate and passes the original
-decision-model blocker after binding; the canonical gate, publication, and a
-fresh complete provider-backed journey remain pending.
+decision-model blocker after binding. Clean implementation revision
+`5d05abdfdf50cb4567ecdfd7a8787b4e16bd89b8` passed the canonical gate with all
+1,651 tests, complete cleanup coverage, no residual resources, and no new OOM.
+The package, lock, and change-impact ledger identify `v0.2.14` as a compatible
+patch over `v0.2.13`; the exact release-head gate, publication, and a fresh
+complete provider-backed journey remain pending.
 
 The immutable `v0.2.13` tag,
 [GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.2.13),

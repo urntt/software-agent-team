@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.2.12",
-  "target_version": "0.2.13",
+  "baseline_version": "0.2.13",
+  "target_version": "0.2.14",
   "changes": [
     {
-      "id": "managed-pre-activation-reconciliation",
+      "id": "planning-decision-correction-candidates",
       "impact": "patch",
-      "summary": "Treat a staged release with neither an application link nor an installation record as inactive during candidate self-checks"
+      "summary": "Bind category/provenance authority repairs to Controller-validated atomic decision candidates"
     }
   ]
 }
