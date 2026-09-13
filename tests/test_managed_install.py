@@ -630,7 +630,7 @@ def test_successful_activation_removes_only_attributable_dangling_image(
             )
         if arguments[:2] == ("container", "ls"):
             return subprocess.CompletedProcess(arguments, 0, "", "")
-        if arguments[:2] == ("image", "rm"):
+        if arguments[:3] == ("image", "rm", "--no-prune"):
             assert check is False
             return subprocess.CompletedProcess(arguments, 0, previous_id + "\n", "")
         raise AssertionError(f"unexpected Docker command: {arguments}")
@@ -670,7 +670,7 @@ def test_successful_activation_removes_only_attributable_dangling_image(
 
     managed_install_module._cleanup_superseded_sandbox_image(transition)
 
-    assert ("image", "rm", previous_id) in commands
+    assert ("image", "rm", "--no-prune", previous_id) in commands
 
 
 def test_successful_activation_preserves_unattributed_previous_image(
@@ -699,6 +699,71 @@ def test_successful_activation_preserves_unattributed_previous_image(
     )
 
     managed_install_module._cleanup_superseded_sandbox_image(transition)
+
+
+def test_lineage_capture_stops_at_missing_legacy_parent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reference = "sat-python-quality:phase1-v6"
+    root_id = "sha256:" + "a" * 64
+    parent_id = "sha256:" + "b" * 64
+    missing_id = "sha256:" + "c" * 64
+
+    def fake_docker(
+        arguments: tuple[str, ...],
+        *,
+        check: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        assert arguments[:2] == ("image", "inspect")
+        image_id = arguments[-1]
+        if image_id == missing_id:
+            assert check is False
+            return subprocess.CompletedProcess(
+                arguments,
+                1,
+                "",
+                "Error response from daemon: No such image",
+            )
+        parents = {root_id: parent_id, parent_id: missing_id}
+        return subprocess.CompletedProcess(
+            arguments,
+            0,
+            json.dumps(
+                [
+                    {
+                        "Id": image_id,
+                        "Parent": parents[image_id],
+                        "RepoTags": [reference] if image_id == root_id else None,
+                        "Config": {
+                            "Labels": {
+                                managed_install_module.SANDBOX_IMAGE_OWNER_LABEL: (
+                                    "true"
+                                ),
+                                managed_install_module.SANDBOX_IMAGE_REFERENCE_LABEL: (
+                                    reference
+                                ),
+                            }
+                        },
+                    }
+                ]
+            ),
+            "",
+        )
+
+    monkeypatch.setattr(managed_install_module, "_docker_command", fake_docker)
+    root = managed_install_module._inspect_sandbox_image(
+        root_id,
+        expected_reference=reference,
+    )
+    assert root is not None
+
+    lineage = managed_install_module._inspect_sandbox_image_lineage(
+        root,
+        expected_reference=reference,
+    )
+
+    assert [identity.image_id for identity in lineage] == [root_id, parent_id]
+    assert lineage[-1].parent_image_id == missing_id
 
 
 def test_successful_activation_removes_exact_superseded_image_lineage(
@@ -771,10 +836,10 @@ def test_successful_activation_removes_exact_superseded_image_lineage(
             )
         if arguments[:2] == ("container", "ls"):
             return subprocess.CompletedProcess(arguments, 0, "", "")
-        if arguments[:2] == ("image", "rm"):
+        if arguments[:3] == ("image", "rm", "--no-prune"):
             assert check is False
-            removed.append(arguments[2])
-            return subprocess.CompletedProcess(arguments, 0, arguments[2] + "\n", "")
+            removed.append(arguments[3])
+            return subprocess.CompletedProcess(arguments, 0, arguments[3] + "\n", "")
         raise AssertionError(f"unexpected Docker command: {arguments}")
 
     monkeypatch.setattr(managed_install_module, "_docker_command", fake_docker)
@@ -868,10 +933,10 @@ def test_successful_activation_stops_lineage_cleanup_at_foreign_child(
             )
         if arguments[:2] == ("container", "ls"):
             return subprocess.CompletedProcess(arguments, 0, "", "")
-        if arguments[:2] == ("image", "rm"):
+        if arguments[:3] == ("image", "rm", "--no-prune"):
             assert check is False
-            removed.append(arguments[2])
-            return subprocess.CompletedProcess(arguments, 0, arguments[2] + "\n", "")
+            removed.append(arguments[3])
+            return subprocess.CompletedProcess(arguments, 0, arguments[3] + "\n", "")
         raise AssertionError(f"unexpected Docker command: {arguments}")
 
     monkeypatch.setattr(managed_install_module, "_docker_command", fake_docker)
@@ -957,9 +1022,9 @@ def test_failed_activation_restores_previous_image_tag_and_removes_candidate(
             return subprocess.CompletedProcess(arguments, 0, "", "")
         if arguments[:2] == ("container", "ls"):
             return subprocess.CompletedProcess(arguments, 0, "", "")
-        if arguments[:2] == ("image", "rm"):
+        if arguments[:3] == ("image", "rm", "--no-prune"):
             assert check is False
-            removed.add(arguments[2])
+            removed.add(arguments[3])
             return subprocess.CompletedProcess(arguments, 0, "", "")
         raise AssertionError(f"unexpected Docker command: {arguments}")
 

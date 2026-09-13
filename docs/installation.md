@@ -630,7 +630,11 @@ exact image has neither a remaining tag nor a container reference. The stage
 records that image's immutable parent chain before the build and the candidate's
 chain afterward. Cleanup then removes only the exact untagged prefix unique to
 the superseded fully-owned image, stopping before any candidate ancestor, tag,
-container reference, or child outside that recorded removal chain. This also
+container reference, or child outside that recorded removal chain. Each exact
+removal disables Docker's recursive parent pruning, so the daemon cannot cross
+the verified plan boundary. An older installation whose legacy parent metadata
+already ends at a missing image record can still upgrade: capture stops at that
+absent boundary and never invents or deletes the missing history. This also
 removes legacy-builder label and command intermediates without a broad prune.
 Unattributable roots, shared ancestors, and foreign Docker resources remain
 untouched. Failed activation applies the same rule in reverse after restoring

@@ -1359,7 +1359,7 @@ def _inspect_sandbox_image_lineage(
     *,
     expected_reference: str,
 ) -> tuple[SandboxImageIdentity, ...]:
-    """Capture the exact immutable parent chain rooted at one image."""
+    """Capture the locally available immutable parent chain rooted at one image."""
 
     lineage = [image]
     seen = {image.image_id}
@@ -1372,7 +1372,12 @@ def _inspect_sandbox_image_lineage(
             expected_reference=expected_reference,
         )
         if parent is None:
-            raise ManagedInstallError("managed sandbox image lineage is incomplete")
+            # Older SAT releases removed images without Docker's --no-prune
+            # boundary. The daemon can therefore retain a runnable child whose
+            # legacy Parent metadata names an image record that no longer
+            # exists. Treat that absent record as the end of attributable
+            # history; never invent or delete beyond it.
+            break
         lineage.append(parent)
         seen.add(parent.image_id)
         parent_id = parent.parent_image_id
@@ -1443,12 +1448,8 @@ def _remove_owned_unreferenced_lineage(
         )
     if retired_lineage[0].image_id != retired.image_id:
         raise ManagedInstallError("managed sandbox image lineage root is invalid")
-    for index, captured in enumerate(retired_lineage):
-        expected_parent = (
-            retired_lineage[index + 1].image_id
-            if index + 1 < len(retired_lineage)
-            else None
-        )
+    for index, captured in enumerate(retired_lineage[:-1]):
+        expected_parent = retired_lineage[index + 1].image_id
         if captured.parent_image_id != expected_parent:
             raise ManagedInstallError("managed sandbox image lineage is invalid")
 
@@ -1493,7 +1494,10 @@ def _remove_owned_unreferenced_lineage(
         # no-force deletion can still lose a race to a new Docker reference;
         # stop at that boundary instead of turning a safe activation into an
         # impossible rollback after an earlier lineage record was removed.
-        completed = _docker_command(("image", "rm", image_id), check=False)
+        completed = _docker_command(
+            ("image", "rm", "--no-prune", image_id),
+            check=False,
+        )
         if completed.returncode != 0:
             break
 
@@ -1542,7 +1546,10 @@ def _restore_sandbox_image_transition(
                 check=True,
             )
     elif current is not None and current.image_id == transition.candidate.image_id:
-        _docker_command(("image", "rm", transition.reference), check=True)
+        _docker_command(
+            ("image", "rm", "--no-prune", transition.reference),
+            check=True,
+        )
     if transition.candidate.owned and (
         previous is None or transition.candidate.image_id != previous.image_id
     ):
