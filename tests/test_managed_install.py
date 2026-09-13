@@ -867,6 +867,183 @@ def test_successful_activation_removes_exact_superseded_image_lineage(
     assert removed == [previous_id, previous_label_id, previous_layer_id]
 
 
+def test_active_target_reconciles_lineage_left_by_an_older_updater(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_paths = paths(tmp_path)
+    mark_managed_root(install_paths)
+    release = install_paths.versions_root / "0.2.11-test"
+    (release / "configs").mkdir(parents=True)
+    reference = "sat-python-quality:phase1-v6"
+    (release / "configs/product-policy.json").write_text(
+        json.dumps({"sandbox": {"image": reference}}),
+        encoding="utf-8",
+    )
+    revision = "1" * 40
+    marker = ManagedApplicationMarker(
+        application_link=str(install_paths.application_link),
+        channel=ManagedChannel.DEV,
+        release_version="0.2.11",
+        source_revision=revision,
+        source_ref="main",
+        repository_url="https://example.invalid/software-agent-team.git",
+        artifact_digest=None,
+    )
+    (release / managed_install_module.MANAGED_MARKER_NAME).write_text(
+        marker.model_dump_json(),
+        encoding="utf-8",
+    )
+    install_paths.application_link.parent.mkdir(parents=True, exist_ok=True)
+    install_paths.application_link.symlink_to(release)
+
+    previous_id = "sha256:" + "a" * 64
+    previous_label_id = "sha256:" + "b" * 64
+    previous_layer_id = "sha256:" + "c" * 64
+    shared_base_id = "sha256:" + "d" * 64
+    candidate_id = "sha256:" + "e" * 64
+    candidate_layer_id = "sha256:" + "f" * 64
+    parents = {
+        previous_id: previous_label_id,
+        previous_label_id: previous_layer_id,
+        previous_layer_id: shared_base_id,
+        shared_base_id: None,
+        candidate_id: candidate_layer_id,
+        candidate_layer_id: shared_base_id,
+    }
+    current_tag = {"image_id": previous_id}
+    removed: list[str] = []
+
+    def fake_docker(
+        arguments: tuple[str, ...],
+        *,
+        check: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        if arguments[:2] == ("image", "ls"):
+            present = [image_id for image_id in parents if image_id not in removed]
+            return subprocess.CompletedProcess(
+                arguments,
+                0,
+                "\n".join(present) + "\n",
+                "",
+            )
+        if arguments[:2] == ("image", "inspect"):
+            selector = arguments[-1]
+            image_id = current_tag["image_id"] if selector == reference else selector
+            if image_id in removed:
+                return subprocess.CompletedProcess(
+                    arguments,
+                    1,
+                    "",
+                    "Error response from daemon: No such image",
+                )
+            labels = {}
+            if image_id in {previous_id, candidate_id}:
+                labels = {
+                    managed_install_module.SANDBOX_IMAGE_OWNER_LABEL: "true",
+                    managed_install_module.SANDBOX_IMAGE_REFERENCE_LABEL: reference,
+                }
+            elif image_id == previous_label_id:
+                labels = {
+                    managed_install_module.SANDBOX_IMAGE_REFERENCE_LABEL: reference
+                }
+            tags = [reference] if image_id == current_tag["image_id"] else None
+            if image_id == shared_base_id:
+                tags = ["python:3.12"]
+            return subprocess.CompletedProcess(
+                arguments,
+                0,
+                json.dumps(
+                    [
+                        {
+                            "Id": image_id,
+                            "Parent": parents[image_id] or "",
+                            "RepoTags": tags,
+                            "Config": {"Labels": labels},
+                        }
+                    ]
+                ),
+                "",
+            )
+        if arguments[:2] == ("container", "ls"):
+            return subprocess.CompletedProcess(arguments, 0, "", "")
+        if arguments[:3] == ("image", "rm", "--no-prune"):
+            assert check is False
+            removed.append(arguments[3])
+            return subprocess.CompletedProcess(arguments, 0, arguments[3] + "\n", "")
+        raise AssertionError(f"unexpected Docker command: {arguments}")
+
+    monkeypatch.setattr(managed_install_module, "_docker_command", fake_docker)
+    managed_install_module.prepare_staged_sandbox_image_transition(
+        application_root=release,
+        installation_record_path=install_paths.installation_record,
+    )
+    current_tag["image_id"] = candidate_id
+    managed_install_module.finalize_staged_sandbox_image_transition(
+        application_root=release,
+        installation_record_path=install_paths.installation_record,
+    )
+    transition_path = managed_install_module._sandbox_image_transition_path(
+        install_paths.managed_root,
+        revision,
+    )
+    assert transition_path.is_file()
+    assert transition_path.stat().st_mode & 0o777 == 0o600
+    assert transition_path.parent == install_paths.managed_root
+
+    # SAT v0.2.9 removed only the retired final record after activation. The
+    # target release must consume its own persisted handoff on first use.
+    removed.append(previous_id)
+    assert managed_install_module.reconcile_pending_sandbox_image_transition(release)
+
+    assert removed == [previous_id, previous_label_id, previous_layer_id]
+    assert candidate_id not in removed
+    assert candidate_layer_id not in removed
+    assert shared_base_id not in removed
+    assert not transition_path.exists()
+
+
+def test_target_defers_pending_image_reconciliation_while_update_lock_is_held(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_paths = paths(tmp_path)
+    mark_managed_root(install_paths)
+    marker = ManagedApplicationMarker(
+        application_link=str(install_paths.application_link),
+        channel=ManagedChannel.DEV,
+        release_version="0.2.11",
+        source_revision="1" * 40,
+        source_ref="main",
+        repository_url="https://example.invalid/software-agent-team.git",
+        artifact_digest=None,
+    )
+    root_marker = managed_install_module.load_managed_root_marker(
+        install_paths.managed_root / MANAGED_ROOT_MARKER_NAME
+    )
+    lifecycle = (install_paths.managed_root, root_marker, marker)
+    monkeypatch.setattr(
+        managed_install_module,
+        "_active_managed_lifecycle",
+        lambda _project_root: lifecycle,
+    )
+    monkeypatch.setattr(
+        managed_install_module,
+        "_docker_command",
+        lambda *_args, **_kwargs: pytest.fail(
+            "Docker must not be inspected while activation owns the update lock"
+        ),
+    )
+
+    with managed_install_module._lifecycle_file_lock(
+        install_paths.lock,
+        shared=False,
+    ):
+        assert not managed_install_module.reconcile_pending_sandbox_image_transition(
+            tmp_path
+        )
+
+
 def test_successful_activation_stops_lineage_cleanup_at_foreign_child(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

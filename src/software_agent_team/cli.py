@@ -47,9 +47,13 @@ from software_agent_team.dynamic_workflow import (
 from software_agent_team.execution import OpenClawSubprocessExecutor
 from software_agent_team.git_workspace import GitWorkspace, GitWorkspaceManager
 from software_agent_team.managed_install import (
+    ManagedInstallError,
     ManagedInstallPaths,
+    finalize_staged_sandbox_image_transition,
     install_managed_target,
     managed_foreground_task_lease,
+    prepare_staged_sandbox_image_transition,
+    reconcile_pending_sandbox_image_transition,
     resolve_dev_target,
     target_from_stable_release,
 )
@@ -1597,6 +1601,20 @@ def _inspect_candidate_managed_state(args: argparse.Namespace) -> int:
         state_root=args.state_root,
     )
     print(envelope.model_dump_json())
+    return 0
+
+
+def _record_managed_image_transition(args: argparse.Namespace) -> int:
+    """Capture one target-owned Docker transition around its managed build."""
+
+    operation = {
+        "prepare": prepare_staged_sandbox_image_transition,
+        "finalize": finalize_staged_sandbox_image_transition,
+    }[args.phase]
+    operation(
+        application_root=PROJECT_ROOT,
+        installation_record_path=args.installation_record_path,
+    )
     return 0
 
 
@@ -3990,6 +4008,18 @@ def build_parser() -> argparse.ArgumentParser:
     candidate_compatibility.add_argument("--state-root", required=True, type=Path)
     candidate_compatibility.set_defaults(handler=_inspect_candidate_managed_state)
 
+    image_transition = commands.add_parser(
+        "_managed-image-transition",
+        help=argparse.SUPPRESS,
+    )
+    image_transition.add_argument("phase", choices=("prepare", "finalize"))
+    image_transition.add_argument(
+        "--installation-record-path",
+        required=True,
+        type=Path,
+    )
+    image_transition.set_defaults(handler=_record_managed_image_transition)
+
     configure = commands.add_parser(
         "configure",
         help="Create or replace secret-free model and advanced run defaults.",
@@ -4354,6 +4384,18 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     args = build_parser().parse_args(argv)
     try:
+        if args.command not in {
+            "_managed-install",
+            "_managed-state-compatibility",
+            "_managed-image-transition",
+        }:
+            try:
+                reconcile_pending_sandbox_image_transition(PROJECT_ROOT)
+            except ManagedInstallError as error:
+                print(
+                    f"warning: pending sandbox image cleanup was deferred: {error}",
+                    file=sys.stderr,
+                )
         if args.version:
             print(render_short_version(_software_version_report()))
             return 0

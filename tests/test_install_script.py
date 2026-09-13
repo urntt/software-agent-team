@@ -173,7 +173,10 @@ set -euo pipefail
 printf '%s\n' "$*" >> "${FAKE_UV_LOG:?}"
 if [[ "$*" == "sync --locked" ]]; then
   mkdir -p .venv/bin
-  printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > .venv/bin/sat
+  printf '%s\n' \
+    '#!/usr/bin/env bash' \
+    'printf "sat %s\\n" "$*" >> "${FAKE_UV_LOG:?}"' \
+    'exit 0' > .venv/bin/sat
   chmod 755 .venv/bin/sat
 elif [[ "${1:-}" == "run" && "${2:-}" == "--frozen" && \
         "${3:-}" == "python" && "${4:-}" == "-c" ]]; then
@@ -208,6 +211,9 @@ fi
         "HOME": str(home),
         "UV_BIN": str(fake_bin / "uv"),
         "OPENCLAW_PREFIX": str(existing_openclaw),
+        "SAT_INSTALL_METADATA_PATH": str(
+            home / ".local/state/software-agent-team/installation.json"
+        ),
         "SAT_BIN_DIR": str(install_bin),
         "FAKE_EXISTING_OPENCLAW_LOG": str(tmp_path / "existing-openclaw.log"),
         "FAKE_UV_LOG": str(uv_log),
@@ -309,8 +315,10 @@ def test_managed_installer_leaves_the_next_action_to_the_bootstrap(
     assert all(line.startswith("managed=unset ") for line in docker_calls)
     uv_calls = uv_log.read_text(encoding="utf-8")
     assert "run --frozen sat validate-config" in uv_calls
+    assert "sat _managed-image-transition prepare" in uv_calls
+    assert "sat _managed-image-transition finalize" in uv_calls
     assert "ruff" not in uv_calls
-    assert "pytest" not in uv_calls
+    assert "run --frozen pytest" not in uv_calls
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="installer supports Linux/WSL")

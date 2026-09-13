@@ -185,6 +185,15 @@ the identity manifest and publish; uploading diagnostics cannot waive a failure.
   dev ref can retarget an installation already on dev; omitting the ref on a
   same-channel switch remains a local no-op.
 - Install, update, and switch never change channels silently.
+- A staged target records the exact pre-build and post-build Docker image
+  lineages in the owned managed root. An updater that understands the current
+  lineage protocol reclaims the superseded prefix during activation. If an
+  older updater can remove only the predecessor's final image record, the newly
+  active target consumes its revision-bound handoff on the first unlocked SAT
+  invocation. It revalidates the active image, both parent graphs, tags,
+  container references, and external children before using exact
+  `docker image rm --no-prune` operations. A busy lifecycle lock or transient
+  container reference leaves the handoff for a later invocation.
 - Managed version directories are private identity-addressed storage, not an
   interface for deriving the active source revision. The full immutable marker
   determines new placement, so stable/dev or explicit-ref changes at the same

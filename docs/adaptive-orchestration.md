@@ -241,9 +241,11 @@ and attributable decision records. Every current decision has typed provenance:
 an exact direct user-input substring, one resolved question ID, `planner`, or
 `agent`. The model supplies the semantic category and provenance; the controller
 compiles authority from the category instead of asking the model to repeat a
-deterministically known field. For direct input, the controller also projects
-the exact source into the user-owned summary so a Planner paraphrase cannot be
-misattributed to the user. Every answered question resolves exactly one
+deterministically known field. For direct input within the 500-character
+summary bound, the controller also projects the exact source into the
+user-owned summary so a Planner paraphrase cannot be misattributed to the user.
+A longer source remains complete in provenance while its summary must be one
+bounded contiguous excerpt of that source. Every answered question resolves exactly one
 decision with the original category and owner. Assumptions may reference only
 local implementation or scheduling decisions inside the approved boundary;
 they cannot substitute for a user authorization or Controller invariant.
@@ -316,7 +318,10 @@ model-authored `explicit_input.source` is a semantic citation defect, not proof
 that the user omitted a decision. When user input exists, correction may replace
 only that source leaf with a contiguous quote from the immutable input; category,
 provenance kind, authority, and unrelated proposal fields are not replacement
-targets. The existing compiler derives the summary from the corrected quote.
+targets. The existing compiler derives the summary from a corrected quote when
+it fits the summary bound. Targeted correction exposes the exact summary schema,
+including its maximum length, and a longer source requires a bounded contiguous
+excerpt rather than a paraphrase.
 All independently invalid decision quotes are reported together. Invented quotes
 remain invalid and repeated non-improvement stops. Missing user input, missing
 decision provenance, and unanswered question authority are not model-correctable

@@ -11,6 +11,7 @@ task_uninstall_target="$task_root/scripts/uninstall.sh"
 task_uninstall_link="$task_bin_dir/sat-uninstall"
 task_managed_install="${SAT_MANAGED_INSTALL:-0}"
 task_install_stage_only="${SAT_INSTALL_STAGE_ONLY:-0}"
+task_install_metadata_path="${SAT_INSTALL_METADATA_PATH:-}"
 unset SAT_MANAGED_INSTALL SAT_INSTALL_STAGE_ONLY
 
 fail() {
@@ -133,6 +134,9 @@ if [[ "$task_managed_install" == "1" ]]; then
   [[ -f "$task_root/.sat-managed-install" && \
     ! -L "$task_root/.sat-managed-install" ]] || \
     fail "managed installation marker is missing"
+  [[ "$task_install_metadata_path" == /* && \
+    "$task_install_metadata_path" != "/" ]] || \
+    fail "managed installation metadata path must be specific and absolute"
 fi
 [[ "$task_bin_dir" == /* && "$task_bin_dir" != "/" ]] || \
   fail "SAT_BIN_DIR must be a specific absolute directory"
@@ -173,6 +177,11 @@ task_image="$(
 [[ -n "$task_image" && "$task_image" != -* && "$task_image" != *[$'\t\r\n ']* ]] || \
   fail "run policy contains an invalid Docker image reference"
 
+if [[ "$task_managed_install" == "1" ]]; then
+  "$task_sat_target" _managed-image-transition prepare \
+    --installation-record-path "$task_install_metadata_path"
+fi
+
 if ! docker build \
     --pull=false \
     --label software-agent-team.sandbox-image=true \
@@ -184,6 +193,10 @@ fi
 task_image_id="$(docker image inspect --format '{{.Id}}' "$task_image")"
 [[ "$task_image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || \
   fail "Docker returned an invalid product image ID"
+if [[ "$task_managed_install" == "1" ]]; then
+  "$task_sat_target" _managed-image-transition finalize \
+    --installation-record-path "$task_install_metadata_path"
+fi
 probe_runtime_image
 
 "$task_uv_bin" run --frozen sat validate-config >/dev/null

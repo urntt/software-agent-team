@@ -14,11 +14,12 @@ from collections.abc import Callable, Mapping, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from itertools import pairwise
 from pathlib import Path
 from typing import Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from software_agent_team.integrity import canonical_model_sha256
 from software_agent_team.paths import user_state_root
@@ -59,6 +60,8 @@ MAX_RENDERED_STATE_PROBLEMS = 6
 SANDBOX_IMAGE_OWNER_LABEL = "software-agent-team.sandbox-image"
 SANDBOX_IMAGE_REFERENCE_LABEL = "software-agent-team.image-reference"
 SANDBOX_IMAGE_COMMAND_TIMEOUT_SECONDS = 30
+SANDBOX_IMAGE_TRANSITION_SCHEMA_VERSION = 1
+SANDBOX_IMAGE_TRANSITION_FILE_PREFIX = ".sat-sandbox-image-transition-"
 _SOURCE_REF_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$")
 _SOURCE_REVISION_PATTERN = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
 _SANDBOX_IMAGE_ID_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -345,6 +348,115 @@ class SandboxImageTransition:
     previous_lineage: tuple[SandboxImageIdentity, ...]
     candidate: SandboxImageIdentity
     candidate_lineage: tuple[SandboxImageIdentity, ...]
+
+
+class PersistedSandboxImageIdentity(BaseModel):
+    """Immutable Docker identity captured before a managed tag transition."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    image_id: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    parent_image_id: str | None = Field(
+        default=None,
+        pattern=r"^sha256:[0-9a-f]{64}$",
+    )
+    repository_tags: tuple[str, ...] = Field(default=(), max_length=100)
+    owned: bool
+
+    @field_validator("repository_tags")
+    @classmethod
+    def require_safe_unique_tags(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        if len(values) != len(set(values)):
+            raise ValueError("sandbox image repository tags must be unique")
+        if any(
+            not value
+            or len(value) > 4_096
+            or value != value.strip()
+            or any(ord(character) < 32 for character in value)
+            for value in values
+        ):
+            raise ValueError("sandbox image repository tags must be bounded text")
+        return values
+
+    @classmethod
+    def from_runtime(
+        cls,
+        identity: SandboxImageIdentity,
+    ) -> PersistedSandboxImageIdentity:
+        return cls(
+            image_id=identity.image_id,
+            parent_image_id=identity.parent_image_id,
+            repository_tags=identity.repository_tags,
+            owned=identity.owned,
+        )
+
+    def to_runtime(self) -> SandboxImageIdentity:
+        return SandboxImageIdentity(
+            image_id=self.image_id,
+            parent_image_id=self.parent_image_id,
+            repository_tags=self.repository_tags,
+            owned=self.owned,
+        )
+
+
+class PersistedSandboxImageTransition(BaseModel):
+    """Target-authored handoff for cleanup after an older updater exits."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[SANDBOX_IMAGE_TRANSITION_SCHEMA_VERSION] = (
+        SANDBOX_IMAGE_TRANSITION_SCHEMA_VERSION
+    )
+    target_source_revision: str = Field(pattern=r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
+    reference: str = Field(min_length=1, max_length=4_096)
+    previous: PersistedSandboxImageIdentity | None = None
+    previous_lineage: tuple[PersistedSandboxImageIdentity, ...] = Field(
+        default=(),
+        max_length=512,
+    )
+    candidate: PersistedSandboxImageIdentity | None = None
+    candidate_lineage: tuple[PersistedSandboxImageIdentity, ...] = Field(
+        default=(),
+        max_length=512,
+    )
+
+    @field_validator("reference")
+    @classmethod
+    def require_safe_reference(cls, value: str) -> str:
+        if (
+            value != value.strip()
+            or value.startswith("-")
+            or any(character.isspace() or ord(character) < 32 for character in value)
+        ):
+            raise ValueError("sandbox image reference is invalid")
+        return value
+
+    @model_validator(mode="after")
+    def require_complete_captured_lineages(self) -> PersistedSandboxImageTransition:
+        self._validate_lineage(self.previous, self.previous_lineage, "previous")
+        self._validate_lineage(self.candidate, self.candidate_lineage, "candidate")
+        if self.candidate is not None and not self.candidate.owned:
+            raise ValueError("candidate sandbox image must be attributable to SAT")
+        return self
+
+    @staticmethod
+    def _validate_lineage(
+        root: PersistedSandboxImageIdentity | None,
+        lineage: tuple[PersistedSandboxImageIdentity, ...],
+        label: str,
+    ) -> None:
+        if root is None:
+            if lineage:
+                raise ValueError(f"{label} sandbox lineage has no root")
+            return
+        if not lineage or lineage[0] != root:
+            raise ValueError(f"{label} sandbox lineage root is invalid")
+        ids = tuple(identity.image_id for identity in lineage)
+        if len(ids) != len(set(ids)):
+            raise ValueError(f"{label} sandbox lineage contains a cycle")
+        for child, parent in pairwise(lineage):
+            if child.parent_image_id != parent.image_id:
+                raise ValueError(f"{label} sandbox lineage is discontinuous")
 
 
 CommandRunner = Callable[[Sequence[str], Path | None, Mapping[str, str] | None], None]
@@ -682,26 +794,7 @@ def managed_foreground_task_lease(project_root: Path):
         return
     release_marker = load_managed_marker(release_marker_path)
     application_link = Path(release_marker.application_link)
-    root_candidates = (
-        application_link.parent,
-        application_link.parent / f".{application_link.name}.sat-managed",
-    )
-    roots: list[tuple[Path, ManagedRootMarker]] = []
-    for candidate in root_candidates:
-        marker_path = candidate / MANAGED_ROOT_MARKER_NAME
-        if not marker_path.exists() and not marker_path.is_symlink():
-            continue
-        marker = load_managed_root_marker(marker_path)
-        if (
-            Path(marker.managed_root) == candidate
-            and Path(marker.application_link) == application_link
-        ):
-            roots.append((candidate, marker))
-    if len(roots) != 1:
-        raise ManagedInstallError(
-            "managed release does not resolve to one owned lifecycle root"
-        )
-    managed_root, root_marker = roots[0]
+    managed_root, root_marker = _managed_root_for_release(release_marker)
     versions_root = Path(root_marker.versions_root).resolve(strict=True)
     if root.parent != versions_root:
         raise ManagedInstallError(
@@ -1267,6 +1360,330 @@ def _configured_sandbox_image(application: Path) -> str | None:
     return image
 
 
+def prepare_staged_sandbox_image_transition(
+    *,
+    application_root: Path,
+    installation_record_path: Path,
+) -> None:
+    """Persist the exact pre-build image lineage for an older active updater."""
+
+    root = application_root.resolve(strict=True)
+    marker = load_managed_marker(root / MANAGED_MARKER_NAME)
+    managed_root, root_marker = _managed_root_for_release(marker)
+    if Path(root_marker.installation_record) != _specific_absolute_path(
+        installation_record_path,
+        label="installation record",
+    ):
+        raise ManagedInstallError(
+            "managed sandbox image transition targets another installation record"
+        )
+    reference = _configured_sandbox_image(root)
+    if reference is None:
+        return
+    previous = _inspect_sandbox_image(reference)
+    previous_lineage = (
+        ()
+        if previous is None
+        else _inspect_sandbox_image_lineage(
+            previous,
+            expected_reference=reference,
+        )
+    )
+    record = PersistedSandboxImageTransition(
+        target_source_revision=marker.source_revision,
+        reference=reference,
+        previous=(
+            None
+            if previous is None
+            else PersistedSandboxImageIdentity.from_runtime(previous)
+        ),
+        previous_lineage=tuple(
+            PersistedSandboxImageIdentity.from_runtime(identity)
+            for identity in previous_lineage
+        ),
+    )
+    _write_sandbox_image_transition(
+        _sandbox_image_transition_path(
+            managed_root,
+            marker.source_revision,
+        ),
+        record,
+    )
+
+
+def finalize_staged_sandbox_image_transition(
+    *,
+    application_root: Path,
+    installation_record_path: Path,
+) -> None:
+    """Bind a prepared handoff to the image produced by the staged target."""
+
+    root = application_root.resolve(strict=True)
+    marker = load_managed_marker(root / MANAGED_MARKER_NAME)
+    managed_root, root_marker = _managed_root_for_release(marker)
+    if Path(root_marker.installation_record) != _specific_absolute_path(
+        installation_record_path,
+        label="installation record",
+    ):
+        raise ManagedInstallError(
+            "managed sandbox image transition targets another installation record"
+        )
+    path = _sandbox_image_transition_path(
+        managed_root,
+        marker.source_revision,
+    )
+    prepared = _load_sandbox_image_transition(path)
+    if prepared is None:
+        raise ManagedInstallError("managed sandbox image transition was not prepared")
+    if prepared.target_source_revision != marker.source_revision:
+        raise ManagedInstallError("managed sandbox image transition target changed")
+    reference = _configured_sandbox_image(root)
+    if reference is None or prepared.reference != reference:
+        raise ManagedInstallError("managed sandbox image transition reference changed")
+    candidate = _inspect_sandbox_image(reference)
+    if candidate is None or not candidate.owned:
+        raise ManagedInstallError(
+            "managed installer did not produce an attributable sandbox image"
+        )
+    candidate_lineage = _inspect_sandbox_image_lineage(
+        candidate,
+        expected_reference=reference,
+    )
+    previous = prepared.previous
+    if (
+        previous is None
+        or not previous.owned
+        or previous.image_id == candidate.image_id
+    ):
+        _remove_sandbox_image_transition(path)
+        return
+    completed = PersistedSandboxImageTransition.model_validate(
+        {
+            **prepared.model_dump(mode="python"),
+            "candidate": PersistedSandboxImageIdentity.from_runtime(candidate),
+            "candidate_lineage": tuple(
+                PersistedSandboxImageIdentity.from_runtime(identity)
+                for identity in candidate_lineage
+            ),
+        }
+    )
+    _write_sandbox_image_transition(path, completed)
+
+
+def reconcile_pending_sandbox_image_transition(project_root: Path) -> bool:
+    """Retire a proven predecessor lineage once the target release is active."""
+
+    lifecycle = _active_managed_lifecycle(project_root)
+    if lifecycle is None:
+        return True
+    managed_root, _root_marker, release_marker = lifecycle
+    try:
+        with _lifecycle_file_lock(managed_root / "update.lock", shared=False):
+            current_lifecycle = _active_managed_lifecycle(project_root)
+            if current_lifecycle != lifecycle:
+                return False
+            path = _sandbox_image_transition_path(
+                managed_root,
+                release_marker.source_revision,
+            )
+            transition = _load_sandbox_image_transition(path)
+            if transition is None:
+                return True
+            if transition.target_source_revision != release_marker.source_revision:
+                raise ManagedInstallError(
+                    "managed sandbox image transition belongs to another release"
+                )
+            if transition.candidate is None:
+                return False
+            candidate = _inspect_sandbox_image(transition.reference)
+            if (
+                candidate is None
+                or not candidate.owned
+                or candidate.image_id != transition.candidate.image_id
+            ):
+                raise ManagedInstallError(
+                    "active sandbox image differs from its pending transition"
+                )
+            candidate_lineage = _inspect_sandbox_image_lineage(
+                candidate,
+                expected_reference=transition.reference,
+            )
+            if _lineage_structure(candidate_lineage) != _lineage_structure(
+                tuple(item.to_runtime() for item in transition.candidate_lineage)
+            ):
+                raise ManagedInstallError(
+                    "active sandbox image lineage differs from its pending transition"
+                )
+            previous = transition.previous
+            if previous is None or not previous.owned:
+                _remove_sandbox_image_transition(path)
+                return True
+            current_previous = _inspect_sandbox_image(
+                previous.image_id,
+                expected_reference=transition.reference,
+            )
+            if current_previous is not None and (
+                not current_previous.owned
+                or current_previous.parent_image_id != previous.parent_image_id
+            ):
+                raise ManagedInstallError(
+                    "retired sandbox image differs from its pending transition"
+                )
+            complete = _remove_owned_unreferenced_lineage(
+                previous.to_runtime(),
+                expected_reference=transition.reference,
+                retired_lineage=tuple(
+                    item.to_runtime() for item in transition.previous_lineage
+                ),
+                retained_lineage=tuple(
+                    item.to_runtime() for item in transition.candidate_lineage
+                ),
+            )
+            current_candidate = _inspect_sandbox_image(transition.reference)
+            if (
+                current_candidate is None
+                or not current_candidate.owned
+                or current_candidate.image_id != transition.candidate.image_id
+            ):
+                raise ManagedInstallError(
+                    "active sandbox image changed during predecessor cleanup"
+                )
+            if complete:
+                _remove_sandbox_image_transition(path)
+            return complete
+    except ManagedInstallError as error:
+        if str(error) == "a SAT task, managed install, or update is active":
+            return False
+        raise
+
+
+def _active_managed_lifecycle(
+    project_root: Path,
+) -> tuple[Path, ManagedRootMarker, ManagedApplicationMarker] | None:
+    """Resolve one active managed release without trusting ambient path overrides."""
+
+    root = project_root.resolve(strict=True)
+    release_marker_path = root / MANAGED_MARKER_NAME
+    if not release_marker_path.exists() and not release_marker_path.is_symlink():
+        return None
+    release_marker = load_managed_marker(release_marker_path)
+    application_link = Path(release_marker.application_link)
+    managed_root, root_marker = _managed_root_for_release(release_marker)
+    versions_root = Path(root_marker.versions_root).resolve(strict=True)
+    if root.parent != versions_root:
+        raise ManagedInstallError(
+            "managed release is not a direct entry in its versions root"
+        )
+    try:
+        active_root = application_link.resolve(strict=True)
+    except OSError as error:
+        raise ManagedInstallError("managed application link is broken") from error
+    if active_root != root:
+        return None
+    return managed_root, root_marker, release_marker
+
+
+def _managed_root_for_release(
+    release_marker: ManagedApplicationMarker,
+) -> tuple[Path, ManagedRootMarker]:
+    """Resolve the one lifecycle root named by a release marker."""
+
+    application_link = Path(release_marker.application_link)
+    roots: list[tuple[Path, ManagedRootMarker]] = []
+    for candidate in (
+        application_link.parent,
+        application_link.parent / f".{application_link.name}.sat-managed",
+    ):
+        marker_path = candidate / MANAGED_ROOT_MARKER_NAME
+        if not marker_path.exists() and not marker_path.is_symlink():
+            continue
+        marker = load_managed_root_marker(marker_path)
+        if (
+            Path(marker.managed_root) == candidate
+            and Path(marker.application_link) == application_link
+        ):
+            roots.append((candidate, marker))
+    if len(roots) != 1:
+        raise ManagedInstallError(
+            "managed release does not resolve to one owned lifecycle root"
+        )
+    return roots[0]
+
+
+def _sandbox_image_transition_path(
+    managed_root: Path,
+    source_revision: str,
+) -> Path:
+    if _SOURCE_REVISION_PATTERN.fullmatch(source_revision) is None:
+        raise ManagedInstallError("sandbox image transition revision is invalid")
+    root = _specific_absolute_path(managed_root, label="managed root")
+    return root / (f"{SANDBOX_IMAGE_TRANSITION_FILE_PREFIX}{source_revision}.json")
+
+
+def _specific_absolute_path(path: Path, *, label: str) -> Path:
+    expanded = path.expanduser()
+    if (
+        not expanded.is_absolute()
+        or expanded == Path(expanded.anchor)
+        or Path(os.path.normpath(expanded)) != expanded
+    ):
+        raise ManagedInstallError(f"{label} path must be specific and absolute")
+    return expanded
+
+
+def _write_sandbox_image_transition(
+    path: Path,
+    transition: PersistedSandboxImageTransition,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    _require_real_directory(path.parent, "installation record directory")
+    if path.is_symlink() or (path.exists() and not path.is_file()):
+        raise ManagedInstallError("sandbox image transition must be a regular file")
+    content = (
+        json.dumps(transition.model_dump(mode="json"), indent=2, sort_keys=True) + "\n"
+    ).encode()
+    temporary = path.parent / f".{path.name}.{uuid4().hex}.tmp"
+    try:
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "wb") as output:
+            output.write(content)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, path)
+        path.chmod(0o600)
+        _fsync_directory(path.parent)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _load_sandbox_image_transition(
+    path: Path,
+) -> PersistedSandboxImageTransition | None:
+    if not path.exists() and not path.is_symlink():
+        return None
+    if path.is_symlink() or not path.is_file():
+        raise ManagedInstallError("sandbox image transition is invalid")
+    try:
+        return PersistedSandboxImageTransition.model_validate_json(
+            path.read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError) as error:
+        raise ManagedInstallError("sandbox image transition is invalid") from error
+
+
+def _remove_sandbox_image_transition(path: Path) -> None:
+    if path.is_symlink() or (path.exists() and not path.is_file()):
+        raise ManagedInstallError("sandbox image transition is invalid")
+    path.unlink(missing_ok=True)
+    _fsync_directory(path.parent)
+
+
+def _lineage_structure(
+    lineage: Sequence[SandboxImageIdentity],
+) -> tuple[tuple[str, str | None], ...]:
+    return tuple((identity.image_id, identity.parent_image_id) for identity in lineage)
+
+
 def _docker_command(
     arguments: Sequence[str],
     *,
@@ -1436,11 +1853,11 @@ def _remove_owned_unreferenced_lineage(
     expected_reference: str,
     retired_lineage: tuple[SandboxImageIdentity, ...],
     retained_lineage: tuple[SandboxImageIdentity, ...],
-) -> None:
+) -> bool:
     """Remove the exact unshared prefix of one attributable image lineage."""
 
     if not retired.owned:
-        return
+        return True
     if not retired_lineage:
         retired_lineage = _inspect_sandbox_image_lineage(
             retired,
@@ -1468,6 +1885,7 @@ def _remove_owned_unreferenced_lineage(
 
     removal_ids: list[str] = []
     scheduled_descendants: set[str] = set()
+    complete = True
     for captured in retired_lineage:
         current = inventory.get(captured.image_id)
         if current is None:
@@ -1480,6 +1898,7 @@ def _remove_owned_unreferenced_lineage(
         if current.image_id in retained_ids or current.repository_tags:
             break
         if _image_has_container_references(current.image_id):
+            complete = False
             break
         external_children = (
             children.get(current.image_id, set()) - scheduled_descendants
@@ -1499,7 +1918,8 @@ def _remove_owned_unreferenced_lineage(
             check=False,
         )
         if completed.returncode != 0:
-            break
+            return False
+    return complete
 
 
 def _cleanup_superseded_sandbox_image(
