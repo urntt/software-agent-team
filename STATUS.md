@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** release `v0.2.16` and complete a managed user journey
+**Current milestone:** release `v0.2.17` and complete a managed user journey
 
 **Last updated:** September 13, 2026
 
@@ -11,30 +11,30 @@ product, architecture, experiment, or roadmap; those decisions belong to
 
 ## Current Release
 
-The immutable `v0.2.15` tag,
-[GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.2.15),
+The immutable `v0.2.16` tag,
+[GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.2.16),
 package version, and release manifest identify source revision
-`5aac2d1b246353aaadf8a52e67c6d4bdeddda969`. It requires a portable tracked
-lock in every generated Python delivery, rejects setup-time delivery drift, and
-preserves direct predecessor image lineage across changed image references. The
-exact clean release head passed all 1,658 local tests; exact-tag GitHub Actions
-[run 34775991079](https://github.com/urntt/software-agent-team/actions/runs/34775991079)
-passed 1,655 tests with three environment-dependent skips and published exactly
-one identity manifest asset. A fresh non-root `v0.2.14` to `v0.2.15` lifecycle
+`a24f64298236f2a7fdd648e20b84ca68b2a25a13` and Git archive digest
+`sha256:4206bbb41b580c4a5a7db23ea77706c885fc6e0e53b73a6858ed0b584e5da71f`.
+It preserves verified non-blocking Review findings across later iterations. The
+exact clean release head passed all 1,661 local tests; exact-tag GitHub Actions
+[run 34783374494](https://github.com/urntt/software-agent-team/actions/runs/34783374494)
+passed 1,658 tests with three environment-dependent skips and published exactly
+one identity manifest asset. A fresh non-root `v0.2.15` to `v0.2.16` lifecycle
 passed installation, upgrade discovery and activation, state preservation,
 same-target no-op, active-run refusal, fault-injected rollback, channel round
 trip, image reconciliation, foreign OpenClaw isolation, credential-free export,
 full uninstall, and exact cleanup.
 
-A separate fresh provider-backed `v0.2.15` journey passed installation, upgrade,
+A separate fresh provider-backed `v0.2.16` journey passed installation, upgrade,
 first-use configuration and provider checking, interrupted task input, repeat
-startup, task admission, Planning approval, live controls, two implementation
-iterations, all deterministic gates, all independent Reviews, external setup,
-and the tracked-lock check. The first Review recorded a non-blocking source
-finding; the second implementation changed only the lock, but the final report
-dropped that finding when the second Review omitted it. Cleanup completed with
-no attributable residual. The post-release development head below fixes that
-cross-iteration terminal-evidence defect.
+startup, and all task-admission checks. Planning then attempted a whole-record
+criterion correction while also repairing two ProductDefinition references.
+The correction schema left the criterion ID vocabulary open, so the submitted
+references named new IDs that had no definition and bounded convergence stopped.
+All calls settled and exact cleanup completed before any runtime Agent, workspace,
+or delivery was created. The post-release development head below fixes that
+criterion identity and reference-projection defect.
 
 The immutable `v0.2.13` tag,
 [GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.2.13),
@@ -332,8 +332,19 @@ account/HOME/resource cleanup all passed. The scenario made no provider calls.
 
 ## Current Development Head
 
-The post-`v0.2.15` Controller accumulates every verified Review across completed
-iterations. Since the current artifact contract has no explicit resolution
+The post-`v0.2.16` correction compiler treats a whole existing definition record
+as content authority while preserving its stable ID. It reopens identity only
+when the defining collection or the record's `/id` field is explicitly targeted,
+and otherwise binds every relation to the existing canonical vocabulary. A
+production-coordinator regression reproduces the mixed security and experience
+criterion correction, verifies exact ID and reference schemas, and reaches an
+accepted proposal; a separate regression proves explicit ID repair remains
+available. All 240 Planning and response-correction tests pass. The clean
+canonical gate, release version, hosted publication, published upgrade, and a
+fresh complete provider-backed journey remain pending.
+
+The Controller released in `v0.2.16` accumulates every verified Review across
+completed iterations. Since the current artifact contract has no explicit resolution
 signal for non-blocking findings, completed, failed, and user-cancelled terminal
 reports now retain every such description and collapse only exact repeats. A
 later Review omission cannot erase an observed residual issue. Fixed and
@@ -344,9 +355,8 @@ cases; all 118 artifact and workflow tests pass. Clean implementation revision
 peak RSS, zero cgroup/kernel OOM delta, complete cleanup coverage, and no
 residual stage process, process lease, sandbox container, volume, or private
 test directory. The package, lock, and change-impact ledger identify `v0.2.16`
-as a compatible patch over `v0.2.15`; exact release-head validation, hosted
-publication, published upgrade, and a fresh complete provider-backed journey
-remain pending.
+as a compatible patch over `v0.2.15`; its exact release-head validation, hosted
+publication, and published upgrade passed as recorded above.
 
 The post-`v0.2.14` implementation requires every generated Python delivery to
 commit a bounded portable root `uv.lock`. The runtime image supplies an

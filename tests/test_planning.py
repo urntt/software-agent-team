@@ -3036,6 +3036,161 @@ def test_product_reference_correction_preserves_exact_source_and_advances(
     }
 
 
+def test_whole_criterion_correction_freezes_identity_and_reference_vocabulary(
+    tmp_path: Path,
+) -> None:
+    body = proposal_body()
+    definition = body.product_definition
+    assert definition is not None
+    invalid = body.model_copy(
+        update={
+            "product_definition": definition.model_copy(
+                update={
+                    "primary_workflow": definition.primary_workflow.model_copy(
+                        update={"criterion_ids": ("AC_SCAN",)}
+                    ),
+                    "usability_expectations": (
+                        definition.usability_expectations.model_copy(
+                            update={"criterion_ids": ("AC_REPORT", "AC_SCAN")}
+                        )
+                    ),
+                }
+            ),
+            "acceptance_criteria": (
+                body.acceptance_criteria[0].model_copy(
+                    update={"review_boundaries": tuple(ReviewBoundaryKind)}
+                ),
+                body.acceptance_criteria[1],
+            ),
+        }
+    )
+    invalid_payload = json.loads(response(proposal_response(invalid)))
+    correction_base, _ = planning._normalize_planning_response_payload(
+        invalid_payload,
+        user_inputs=(request().source_request,),
+    )
+    valid_payload = json.loads(response(proposal_response(body)))
+    target_paths = (
+        "/proposal/acceptance_criteria/0",
+        "/proposal/product_definition/primary_workflow/criterion_ids",
+        "/proposal/product_definition/usability_expectations/criterion_ids",
+    )
+    executor = ScriptedAgentExecutor(
+        [
+            json.dumps(invalid_payload),
+            correction_response(
+                correction_base,
+                {
+                    target_paths[0]: valid_payload["proposal"]["acceptance_criteria"][
+                        0
+                    ],
+                    target_paths[1]: valid_payload["proposal"]["product_definition"][
+                        "primary_workflow"
+                    ]["criterion_ids"],
+                    target_paths[2]: valid_payload["proposal"]["product_definition"][
+                        "usability_expectations"
+                    ]["criterion_ids"],
+                },
+                target_paths=target_paths,
+            ),
+        ]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(response_repair_limit=1),
+        clock=AdvancingClock(),
+    )
+
+    created = coordinator.start(
+        request(),
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+
+    assert created is not None
+    assert created.body == body
+    first = store.load_turn(request().run_id, 1)
+    assert first.response_validation is not None
+    assert first.response_validation.correction_paths == target_paths
+    assert {issue.invariant_id for issue in first.response_validation.issues} == {
+        "planning_criterion_review_authority_conflict"
+    }
+    contract = executor.requests[1].submission_contract
+    assert contract is not None
+    variants = contract.parameters_schema()["properties"]["replacements"]["items"][
+        "oneOf"
+    ]
+    schemas_by_path = {
+        path: variant["properties"]["replacement_value"]
+        for path, variant in zip(target_paths, variants, strict=True)
+    }
+    stable_identity = schemas_by_path[target_paths[0]]["allOf"][1]
+    assert stable_identity["properties"]["id"] == {
+        "const": "AC_SCAN",
+        "type": "string",
+    }
+    assert stable_identity["required"] == ["id"]
+    expected_ids = ["AC_SCAN", "AC_REPORT"]
+    assert schemas_by_path[target_paths[1]]["items"]["enum"] == expected_ids
+    assert schemas_by_path[target_paths[2]]["items"]["enum"] == expected_ids
+    assert "AC_CLI_JSON" not in json.dumps(schemas_by_path, sort_keys=True)
+    assert "AC_INTERACTIVE" not in json.dumps(schemas_by_path, sort_keys=True)
+    assert store.load_turn(request().run_id, 2).semantic_correction_outcome == (
+        "accepted"
+    )
+
+
+def test_explicit_criterion_id_correction_keeps_identity_repair_open(
+    tmp_path: Path,
+) -> None:
+    invalid_payload = json.loads(response(proposal_response()))
+    invalid_payload["proposal"]["acceptance_criteria"][0]["id"] = "ac_scan"
+    correction_base, _ = planning._normalize_planning_response_payload(
+        invalid_payload,
+        user_inputs=(request().source_request,),
+    )
+    target_path = "/proposal/acceptance_criteria/0/id"
+    executor = ScriptedAgentExecutor(
+        [
+            json.dumps(invalid_payload),
+            correction_response(
+                correction_base,
+                {target_path: "AC_SCAN"},
+                target_paths=(target_path,),
+            ),
+        ]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(response_repair_limit=1),
+        clock=AdvancingClock(),
+    )
+
+    created = coordinator.start(
+        request(),
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+
+    assert created is not None
+    assert created.body == proposal_body()
+    first = store.load_turn(request().run_id, 1)
+    assert first.response_validation is not None
+    assert first.response_validation.correction_paths == (target_path,)
+    contract = executor.requests[1].submission_contract
+    assert contract is not None
+    replacement_schema = contract.parameters_schema()["properties"]["replacements"][
+        "items"
+    ]["oneOf"][0]["properties"]["replacement_value"]
+    assert replacement_schema["pattern"] == r"^[A-Z][A-Z0-9_-]*$"
+    assert "const" not in replacement_schema
+    assert store.load_turn(request().run_id, 2).semantic_correction_outcome == (
+        "accepted"
+    )
+
+
 def test_direct_user_decision_rejects_unattributable_input_with_zero_repair_budget(
     tmp_path: Path,
 ) -> None:

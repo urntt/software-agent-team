@@ -5865,7 +5865,7 @@ def _planning_response_schema_for_correction(
             if not target_path.startswith(prefix):
                 continue
             suffix = target_path[len(prefix) :].split("/")
-            if len(suffix) == 1 or (len(suffix) > 1 and suffix[1] == "id"):
+            if len(suffix) > 1 and suffix[1] == "id":
                 return True
         return False
 
@@ -5890,8 +5890,9 @@ def _planning_response_schema_for_correction(
         if isinstance(requirement_ids, list)
         else record_ids("requirements")
     )
+    proposal_criterion_ids = record_ids("acceptance_criteria")
     stable_criterion_ids = list(
-        dict.fromkeys((*record_ids("acceptance_criteria"), *profile_criterion_ids))
+        dict.fromkeys((*proposal_criterion_ids, *profile_criterion_ids))
     )
     stable_decision_ids = record_ids("decisions")
     stable_agent_ids = record_ids("agents")
@@ -5945,6 +5946,35 @@ def _planning_response_schema_for_correction(
             )
         field_schema["enum"] = allowed_ids
 
+    def bind_record_ids(
+        collection_name: str,
+        definition_name: str,
+        stable_ids: list[str],
+    ) -> None:
+        collection_schema = definition_properties("PlanningProposalBody").get(
+            collection_name
+        )
+        definition = definitions.get(definition_name)
+        if not isinstance(collection_schema, dict) or not isinstance(definition, dict):
+            raise PlanningError(
+                "Planning response schema has no stable identity contract for "
+                f"{collection_name}"
+            )
+        collection_schema["prefixItems"] = [
+            {
+                "$ref": f"#/$defs/{definition_name}",
+                "properties": {
+                    "id": {
+                        "const": identifier,
+                        "type": "string",
+                    }
+                },
+                "required": ["id"],
+                "type": "object",
+            }
+            for identifier in stable_ids
+        ]
+
     if not identity_owner_is_mutable("/proposal/requirements"):
         for definition_name in (
             "ProductDefinitionStatement",
@@ -5995,6 +6025,25 @@ def _planning_response_schema_for_correction(
         bind_scalar("ProposedTask", "owner_agent_id", stable_agent_ids)
     if not identity_owner_is_mutable("/proposal/tasks"):
         bind_array_items("ProposedTask", "dependencies", stable_task_ids)
+
+    stable_identity_collections = (
+        (
+            "requirements",
+            "ProposedRequirement",
+            stable_requirement_ids,
+        ),
+        (
+            "acceptance_criteria",
+            "ProposedCriterion",
+            proposal_criterion_ids,
+        ),
+        ("decisions", "PlanningDecisionRecord", stable_decision_ids),
+        ("agents", "ProposedAgent", stable_agent_ids),
+        ("tasks", "ProposedTask", stable_task_ids),
+    )
+    for collection_name, definition_name, stable_ids in stable_identity_collections:
+        if not identity_owner_is_mutable(f"/proposal/{collection_name}"):
+            bind_record_ids(collection_name, definition_name, stable_ids)
 
     review_task_paths = {
         issue.path
