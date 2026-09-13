@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** validate the `v0.2.9` interactive-start release candidate
+**Current milestone:** validate the next patch candidate through a complete managed user journey
 
 **Last updated:** September 13, 2026
 
@@ -11,18 +11,39 @@ product, architecture, experiment, or roadmap; those decisions belong to
 
 ## Current Release
 
-The `v0.2.9` release candidate keeps a writable stdin pipe open only during the
-bounded exact start probe. An interactive generated CLI can therefore wait for
-input instead of receiving a synthetic EOF and exiting as an apparent startup
-failure. Setup and test commands retain closed stdin and must still exit zero;
-all start completion and timeout paths close the pipe and preserve the existing
-process-group cleanup. All 31 affected profile checks pass, and replaying the
-previous generated project now reports setup and test passed with start
-`running_after_grace`. The exact implementation revision
-`2a059a08b0d3efd78e3af1e99228cf3dc7313ec9` passed the canonical gate with all
-1,629 tests, complete cleanup coverage, no residual stage process, and no new
-OOM event. Exact release-head, fixed-development, hosted-tag, published-upgrade,
-and fresh ordinary-user validation remain pending.
+The next patch candidate repairs two defects exposed by the published `v0.2.9`
+ordinary-user journey. Planning now preserves an existing general Reviewer when
+a complete Agent-array correction expresses a missing security specialist by
+changing that Reviewer under the same ID. It deconflicts the submitted typed
+specialist as one new Agent, prefers the single new ID already used by the
+affected criterion relations, and keeps ambiguous relations fail closed. The
+managed updater now captures the exact Docker parent lineage before and after a
+successful build, then removes only the untagged, container-free, unshared
+prefix attributable to the superseded fully-owned image. Active ancestry,
+foreign children, tagged images, and unattributed resources remain protected;
+failed activation applies the same bounded rule to the candidate lineage after
+restoring the prior tag. Focused Planning checks and all 40 managed-install
+tests pass. The clean canonical gate, fixed-revision managed rehearsal, release,
+published upgrade, and full provider-backed journey remain pending.
+
+The immutable `v0.2.9` tag,
+[GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.2.9),
+package version, and release manifest identify source revision
+`51a1a06e88fda0855b5678977a16d9fa289cd8f6` and Git archive digest
+`sha256:9c990dedea7a9f0b4bc808258eb8c1f9627d05c2c8eeb11296739d382113dc67`.
+It keeps a writable stdin pipe open only during the bounded exact start probe so
+interactive generated CLIs are not rejected on synthetic EOF. The exact clean
+revision passed all 1,629 local tests; exact-tag GitHub Actions
+[run 34737613363](https://github.com/urntt/software-agent-team/actions/runs/34737613363)
+passed 1,627 tests with two environment-dependent skips and published exactly
+one identity manifest asset. Fresh fixed-revision development and published
+`v0.2.8` to `v0.2.9` lifecycle rehearsals passed. A separate provider-backed
+ordinary-user journey passed install, upgrade, first-run configuration and
+provider check, repeat startup, and task admission before exposing the Planning
+specialist-ID correction loop addressed by the current candidate. The same
+journey also confirmed that successful legacy Docker builds left attributable
+superseded parent chains, motivating the bounded lineage cleanup in this
+candidate.
 
 The immutable `v0.2.8` tag,
 [GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.2.8),
