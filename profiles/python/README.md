@@ -54,23 +54,21 @@ Testing, but the document must show the exact shell form of every manifest
 command.
 
 The validated setup contract also protects the first-use repository state.
-The root `.venv` must be ignored. A root `uv.lock` must either be a bounded
-regular file in the proposed Git delivery or be explicitly and effectively
-ignored, so running the documented setup command does not silently introduce
-unexplained local state. The task-independent seed supplies the ignore policy;
-a generated project may instead force-add and commit a lock when its
-implementation and tests establish that as the reproducible choice. Every lock
-tracked by Git is validated even when an ignore rule also matches it. An
-effectively ignored untracked lock created by setup or sandbox tooling is
-runtime residue outside the delivery, so its contents do not make the accepted
-snapshot pass or fail. A delivered lock must be
-portable with the delivered repository: its TOML must not contain absolute or
-Windows drive paths, `file:` sources, parent-directory references, missing
-project-relative artifacts, symlinked local sources, or a registry/path that
-exists only in SAT's private offline wheelhouse. Remote registries and archives
-must use remote URLs. The validator asks Git to confirm that explicit ignore
-rules remain effective after applying later patterns or negations, and parses a
-delivered lock before any same-image setup command can mask a host-local source.
+The root `.venv` must be ignored, while a bounded regular root `uv.lock` must be
+committed as dependency-resolution metadata. The task-independent seed supplies
+both policies. The lock must be portable with the delivered repository: its
+TOML must not contain absolute or Windows drive paths, `file:` sources,
+parent-directory references, missing project-relative artifacts, symlinked
+local sources, or a registry/path that exists only in SAT's private offline
+wheelhouse. Remote registries and archives must use remote URLs. The validator
+parses the committed lock before any same-image setup command can mask a
+host-local source. Writers use the immutable `sat-project-lock` helper after
+sandbox setup or test commands; its frozen public metadata cache can refresh
+the portable form without network access. The clean-copy command gate first
+checks lock consistency against that neutral public cache, then verifies that
+setup changes no other committed file and creates only artifacts covered by
+committed `.gitignore` rules. The private wheelhouse may rewrite only the
+disposable scratch copy of the lock while resolving the exact setup command.
 
 ## Evidence Boundary
 
@@ -84,7 +82,10 @@ directory cannot satisfy that check. The runtime image contains a locked
 offline wheelhouse for setup and build dependencies. That wheelhouse is
 ephemeral controller infrastructure: it may satisfy the clean-copy command
 gate, but its private path must never become generated-project metadata.
-Setup and test run with closed standard input and must exit successfully. The
+After setup, the gate compares every other committed file with its pre-setup
+digest and executable bit and rejects every new file that is not covered by the
+committed ignore policy. Setup and test run with closed standard input and must
+exit successfully. The
 bounded start probe keeps its standard-input pipe open through the startup
 grace so an interactive CLI can wait for user input instead of receiving a
 synthetic EOF; a process still running after that grace is terminated through

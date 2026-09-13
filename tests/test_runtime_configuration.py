@@ -1311,7 +1311,15 @@ def test_preflight_executes_explicit_commands_without_provider_call(
         "--workdir",
         "/workspace",
     ]
-    assert calls[7] == [
+    assert calls[6][-2:] == ["sat-probe-run", "--self-test"]
+    assert calls[7][0:4] == [
+        "/bin/docker",
+        "exec",
+        "--workdir",
+        "/workspace",
+    ]
+    assert calls[7][-2:] == ["sat-project-lock", "--self-test"]
+    assert calls[8] == [
         "/bin/docker",
         "container",
         "inspect",
@@ -1319,7 +1327,7 @@ def test_preflight_executes_explicit_commands_without_provider_call(
         "{{json .State}}",
         probe_name,
     ]
-    assert calls[8] == [
+    assert calls[9] == [
         "/bin/docker",
         "container",
         "rm",
@@ -1334,7 +1342,7 @@ def test_preflight_executes_explicit_commands_without_provider_call(
     assert result.model_error is None
     assert result.command_timeout_seconds == 30
     assert result.model_inspection_timeout_seconds == 90
-    assert timeouts == [30, 30, 90, 30, 30, 30, 30, 30, 30]
+    assert timeouts == [30, 30, 90, 30, 30, 30, 30, 30, 30, 30]
     assert os.environ["OPENCLAW_STATE_DIR"] == str(original_state)
     assert os.environ["OPENCLAW_CONFIG_PATH"] == str(original_state / "openclaw.json")
     assert os.environ["OPENCLAW_AGENT_DIR"] == str(original_state / "agent")
@@ -1611,8 +1619,23 @@ def test_runtime_probe_attempts_cleanup_after_docker_start_failure(
     assert calls[1][1:4] == ["container", "rm", "--force"]
 
 
+@pytest.mark.parametrize(
+    ("failed_helper", "expected_error"),
+    (
+        (
+            "sat-probe-run",
+            "sandbox probe could not execute the Reviewer probe runner (exit_code=126)",
+        ),
+        (
+            "sat-project-lock",
+            "sandbox probe could not verify the portable lock helper (exit_code=126)",
+        ),
+    ),
+)
 def test_runtime_probe_rejects_a_running_container_without_tool_execution(
     monkeypatch: pytest.MonkeyPatch,
+    failed_helper: str,
+    expected_error: str,
 ) -> None:
     calls: list[list[str]] = []
 
@@ -1628,7 +1651,7 @@ def test_runtime_probe_rejects_a_running_container_without_tool_execution(
         if argv[1] == "run":
             return Result(stdout="b" * 64)
         if argv[1] == "exec":
-            return Result(returncode=126)
+            return Result(returncode=126 if argv[-2] == failed_helper else 0)
         if argv[1:3] == ["container", "inspect"]:
             return Result(
                 stdout=json.dumps(
@@ -1652,9 +1675,7 @@ def test_runtime_probe_rejects_a_running_container_without_tool_execution(
     )
 
     assert not probe.ready
-    assert probe.error == (
-        "sandbox probe could not execute the Reviewer probe runner (exit_code=126)"
-    )
+    assert probe.error == expected_error
     assert calls[-1][1:4] == ["container", "rm", "--force"]
 
 

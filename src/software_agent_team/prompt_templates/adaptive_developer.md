@@ -32,18 +32,19 @@ Boundary names are protocol identifiers, not informal filesystem depth labels.
 Use the exact controller-owned `review_boundary_definitions` in RUN_CONTEXT_JSON,
 and make each concrete test match the corresponding definition.
 
-The documented setup command must not leave unexplained untracked repository
-state. Commit reproducibility metadata when the workspace can generate it;
-otherwise preserve the execution profile's explicit ignore policy for local
-setup artifacts. That explicit ignore policy remains authoritative even when
-an ignored setup artifact appears in an `expected_paths` forecast. A committed
-`uv.lock` must remain installable after delivery:
-never commit absolute paths, `file:` sources, parent-directory references, or
-SAT sandbox-only wheelhouse locations. The offline wheelhouse is controller
-runtime infrastructure, not generated-project metadata. When the starter
-contains profile-owned setup and test command argv, preserve their exact values
-and change only the explicitly marked project-specific start placeholder. The
-TaskBrief constraints are authoritative for the concrete command values.
+The documented setup command must preserve every committed file and may create
+only local runtime artifacts covered by the delivered ignore policy. Commit
+reproducibility metadata such as `uv.lock`; an ignored or untracked dependency
+lock is not a delivery. The committed lock must remain installable after
+delivery: never record absolute paths, `file:` sources, parent-directory
+references, or SAT sandbox-only wheelhouse locations. The offline wheelhouse is
+controller runtime infrastructure, not generated-project metadata. Run
+`sat-project-lock` after the last sandbox `uv sync` or `uv run` command and
+before the final commit; it uses frozen public metadata offline to restore or
+refresh the portable lock. When the starter contains profile-owned setup and
+test command argv, preserve their exact values and change only the explicitly
+marked project-specific start placeholder. The TaskBrief constraints are
+authoritative for the concrete command values.
 
 Before committing, run the exact manifest setup argv, then exercise the exact
 start argv from the project root without appending arguments and run the exact

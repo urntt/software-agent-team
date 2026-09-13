@@ -12,7 +12,7 @@ REPOSITORY_ROOT = Path(__file__).parents[1]
 RUNTIME_ROOT = REPOSITORY_ROOT / "runtime" / "python"
 VALIDATION_ROOT = REPOSITORY_ROOT / "profiles" / "python" / "validation"
 PORTABLE_LOCK = REPOSITORY_ROOT / "tests" / "fixtures" / "portable-registry.uv.lock"
-RUNTIME_IMAGE = "sat-python-quality:phase1-v7"
+RUNTIME_IMAGE = "sat-python-quality:phase1-v8"
 PINNED_REQUIREMENT = re.compile(r"^[a-z0-9][a-z0-9._-]*==[^ ;]+(?: ; [a-z0-9_' .=]+)?$")
 
 
@@ -38,19 +38,23 @@ def test_runtime_image_uses_content_pinned_base_and_dependency_lock() -> None:
         dockerfile
     )
     assert "COPY uv-offline.toml /opt/software-agent-team/uv-offline.toml" in dockerfile
+    assert "COPY warm_public_uv_cache.py /tmp/warm_public_uv_cache.py" in dockerfile
     assert "pip install --no-cache-dir --requirement" in dockerfile
+    assert "UV_CACHE_DIR=/opt/software-agent-team/uv-public-cache" in dockerfile
     assert "pip download --no-cache-dir --only-binary=:all:" in dockerfile
     assert "UV_CACHE_DIR=/tmp/uv-cache" in dockerfile
     assert "UV_CONFIG_FILE=/opt/software-agent-team/uv-offline.toml" in dockerfile
     assert "requirements.lock colorama==0.4.6" in dockerfile
     assert "COPY sat_probe_write.py /usr/local/bin/sat-probe-write" in dockerfile
     assert "COPY sat_probe_run.py /usr/local/bin/sat-probe-run" in dockerfile
+    assert "COPY sat_project_lock.py /usr/local/bin/sat-project-lock" in dockerfile
     assert "chown 0:0 /usr/local/bin/sat-probe-write /usr/local/bin/sat-probe-run" in (
         dockerfile
     )
     assert "chmod 0555 /usr/local/bin/sat-probe-write /usr/local/bin/sat-probe-run" in (
         dockerfile
     )
+    assert "/usr/local/bin/sat-project-lock" in dockerfile
     assert 'CMD ["sleep", "infinity"]' in dockerfile
 
     uv_configuration = (RUNTIME_ROOT / "uv-offline.toml").read_text(encoding="utf-8")
@@ -72,6 +76,78 @@ def test_runtime_image_uses_content_pinned_base_and_dependency_lock() -> None:
     assert "os.O_NOFOLLOW" in runner
     assert "start_new_session=True" in runner
     assert "resource.RLIMIT_FSIZE" in runner
+
+    lock_helper = (RUNTIME_ROOT / "sat_project_lock.py").read_text(encoding="utf-8")
+    assert lock_helper.startswith("#!/usr/local/bin/python\n")
+    assert 'PUBLIC_CACHE = Path("/opt/software-agent-team/uv-public-cache")' in (
+        lock_helper
+    )
+    assert '"UV_CONFIG_FILE": "/dev/null"' in lock_helper
+    assert '"UV_DEFAULT_INDEX": "https://pypi.org/simple"' in lock_helper
+    assert '"UV_OFFLINE": "1"' in lock_helper
+
+
+def test_runtime_image_can_refresh_a_portable_lock_offline(tmp_path: Path) -> None:
+    """The writer helper can update project metadata without private sources."""
+
+    docker = shutil.which("docker")
+    if docker is None:
+        pytest.skip("Docker is not installed; static helper checks remain covered")
+    inspected = subprocess.run(
+        [docker, "image", "inspect", "--format", "{{.Id}}", RUNTIME_IMAGE],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    if inspected.returncode != 0:
+        pytest.skip("the configured runtime image is not built in this checkout")
+
+    project = tmp_path / "project"
+    shutil.copytree(REPOSITORY_ROOT / "profiles" / "python" / "seed", project)
+    pyproject = (project / "pyproject.toml").read_text(encoding="utf-8")
+    (project / "pyproject.toml").write_text(
+        pyproject.replace('name = "generated-project"', 'name = "lock-probe"'),
+        encoding="utf-8",
+    )
+    for path in (project, *project.rglob("*")):
+        if not path.is_symlink():
+            path.chmod(0o777 if path.is_dir() else 0o666)
+
+    completed = subprocess.run(
+        [
+            docker,
+            "run",
+            "--rm",
+            "--network",
+            "none",
+            "--read-only",
+            "--cap-drop",
+            "ALL",
+            "--security-opt",
+            "no-new-privileges",
+            "--user",
+            "65532:65532",
+            "--tmpfs",
+            "/tmp:rw,nosuid,nodev,size=256m,mode=1777",
+            "--volume",
+            f"{project}:/project",
+            "--workdir",
+            "/project",
+            inspected.stdout.strip(),
+            "sat-project-lock",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    lock = (project / "uv.lock").read_text(encoding="utf-8")
+    assert 'name = "lock-probe"' in lock
+    assert 'registry = "https://pypi.org/simple"' in lock
+    assert "/opt/software-agent-team" not in lock
 
 
 def test_runtime_dependency_lock_contains_only_exact_unique_versions() -> None:

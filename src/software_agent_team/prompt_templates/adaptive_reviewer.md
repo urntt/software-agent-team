@@ -111,12 +111,12 @@ different definition. For every behavioral criterion, consider at
 least one negative, empty, singleton, boundary, or invalid-input case relevant
 to its wording. Compare implementation, tests, README scope, and observed
 behavior; one concrete counterexample to an absolute claim is a blocking product
-defect. Also verify that the documented setup path either commits
-reproducibility metadata or explicitly ignores its local artifacts, so first
-setup does not silently dirty an otherwise clean delivery. If `uv.lock` is
-committed, verify that it contains no absolute path, `file:` source,
-parent-directory dependency, or SAT sandbox-only wheelhouse reference; a lock
-that works only inside the quality image is not a portable delivery.
+defect. Also verify that the documented setup path preserves committed files
+and creates only explicitly ignored local runtime artifacts, so first setup
+does not silently dirty an otherwise clean delivery. `uv.lock` must be committed and
+must contain no absolute path, `file:` source, parent-directory dependency, or
+SAT sandbox-only wheelhouse reference; a lock that works only inside the
+quality image is not a portable delivery.
 
 For the project command contract, compare README.md to the exact argv in
 `sat-project.json`. Probe the exact start argv from the project root without

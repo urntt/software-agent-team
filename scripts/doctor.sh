@@ -84,6 +84,10 @@ fi
   fail "product contract template is missing"
 [[ -f profiles/python/validation/run.py ]] || \
   fail "product contract validator is missing"
+[[ -f profiles/python/validation/run_commands.py ]] || \
+  fail "product command validator is missing"
+[[ -f profiles/python/seed/uv.lock ]] || \
+  fail "product source dependency lock is missing"
 [[ -f runtime/python/Dockerfile ]] || fail "Python runtime Dockerfile is missing"
 [[ -f runtime/python/requirements.in ]] || \
   fail "Python runtime dependency input is missing"
@@ -91,6 +95,10 @@ fi
   fail "Python runtime dependency lock is missing"
 [[ -f runtime/python/uv-offline.toml ]] || \
   fail "Python runtime uv configuration is missing"
+[[ -f runtime/python/sat_project_lock.py ]] || \
+  fail "portable lock helper is missing"
+[[ -f runtime/python/warm_public_uv_cache.py ]] || \
+  fail "public uv cache builder is missing"
 [[ -f benchmarks/task_manager/benchmark.json ]] || \
   fail "benchmark manifest is missing"
 [[ -f benchmarks/task_manager/task-brief.json ]] || \

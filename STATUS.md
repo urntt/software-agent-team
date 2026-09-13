@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** release `v0.2.14` and complete a managed user journey
+**Current milestone:** prepare `v0.2.15` and complete a managed user journey
 
 **Last updated:** September 13, 2026
 
@@ -11,21 +11,31 @@ product, architecture, experiment, or roadmap; those decisions belong to
 
 ## Current Release
 
-The `v0.2.14` release candidate handles a decision category/provenance
-authority mismatch through Controller-owned atomic candidates. It preserves the
-decision ID, summary, and rationale, narrows categories through stable
-ProductDefinition and assumption references, validates every complete candidate
-against the persisted decision model, and exposes only short selection handles.
-Conflicting references or an unsupported user-provenance source do not reopen a
-free-form decision record. The affected Planning, correction, and documentation
-set passes all 241 tests. The exact archived `v0.2.13` provider payload now
-replays to one reference-bound `delivery` candidate and passes the original
-decision-model blocker after binding. Clean implementation revision
-`5d05abdfdf50cb4567ecdfd7a8787b4e16bd89b8` passed the canonical gate with all
-1,651 tests, complete cleanup coverage, no residual resources, and no new OOM.
-The package, lock, and change-impact ledger identify `v0.2.14` as a compatible
-patch over `v0.2.13`; the exact release-head gate, publication, and a fresh
-complete provider-backed journey remain pending.
+The immutable `v0.2.14` tag,
+[GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.2.14),
+package version, and release manifest identify source revision
+`7f6f2e138a3164b73107d4acf8021a92fc96118d`. It handles a Planning decision
+category/provenance authority mismatch through Controller-owned atomic
+candidates while preserving the validated decision model. The exact clean
+release head passed all 1,651 local tests; exact-tag GitHub Actions
+[run 34762410299](https://github.com/urntt/software-agent-team/actions/runs/34762410299)
+passed 1,649 tests with two environment-dependent skips and published exactly
+one identity manifest asset. A fresh non-root `v0.2.13` to `v0.2.14` lifecycle
+passed installation, upgrade discovery and activation, state preservation,
+same-target no-op, active-run refusal, fault-injected rollback, channel round
+trip, foreign OpenClaw isolation, credential-free export, full uninstall, and
+exact cleanup.
+
+A separate fresh provider-backed `v0.2.14` journey passed installation, upgrade,
+first-use configuration and provider checking, interrupted task input, repeat
+startup, task admission, Planning correction, approval, live controls, two
+implementation iterations, all deterministic gates, all independent Reviews,
+and 13 of 13 acceptance criteria. External setup then succeeded but generated
+an untracked `uv.lock`; the explicit delivery-metadata check failed before
+input-boundary acceptance, export, and uninstall. Cleanup completed with no
+attributable residual. The post-release development head below addresses the
+systemic generated-project lock and setup-drift contract rather than adding a
+task-specific requirement.
 
 The immutable `v0.2.13` tag,
 [GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.2.13),
@@ -323,12 +333,26 @@ account/HOME/resource cleanup all passed. The scenario made no provider calls.
 
 ## Current Development Head
 
-The current `v0.2.12` candidate makes the last Planning correction complete and
-constrains specialist/dependency topology repair as a compatible patch over
-immutable `v0.2.11`. Its 235 focused tests, 1,645-test clean implementation
-gate, fresh provider-backed Planning convergence, and fixed-revision managed
-image lifecycle pass. The exact release-head gate, hosted tag, published
-upgrade, and fresh provider-backed Planning-to-delivery journey remain pending.
+The post-`v0.2.14` implementation requires every generated Python delivery to
+commit a bounded portable root `uv.lock`. The runtime image supplies an
+immutable `sat-project-lock` writer backed by frozen public registry metadata;
+it clears inherited `UV_*` configuration and refreshes or checks the portable
+lock offline. Installation and repeat-start preflight execute a real restricted
+self-test of that path. The exact-command gate checks lock consistency before
+setup, then rejects every setup change to another committed file and every new
+file outside the committed ignore policy. The private wheelhouse may rewrite
+only the disposable scratch lock. Missing or ignored locks, inconsistent locks,
+unignored generated artifacts, inherited private index configuration, and
+restricted no-network runtime behavior are covered by 164 focused tests. The
+canonical gate, release version, hosted publication, published upgrade, and
+fresh complete provider-backed journey remain pending.
+
+The implementation released as `v0.2.12` made the last Planning correction
+complete and constrained specialist/dependency topology repair as a compatible
+patch over immutable `v0.2.11`. Its focused and clean gates, exact-tag hosted
+publication, published upgrade, and fresh provider-backed Planning convergence
+passed. A later journey exposed the pre-activation warning addressed by
+`v0.2.13`.
 
 The implementation released as `v0.2.8` is frozen at the exact revision above.
 Its Planning correction checks, canonical gate, exact-tag publication,

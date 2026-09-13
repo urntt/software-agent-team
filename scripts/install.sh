@@ -81,6 +81,12 @@ probe_runtime_image() {
       sat-probe-run --self-test; then
     fail "sandbox runtime could not execute the Reviewer probe runner"
   fi
+  if ! docker exec \
+      --workdir /workspace \
+      "$task_probe_name" \
+      sat-project-lock --self-test; then
+    fail "sandbox runtime could not verify the portable lock helper"
+  fi
   if ! docker container rm --force "$task_probe_name" >/dev/null; then
     fail "sandbox runtime probe container could not be removed"
   fi
@@ -118,14 +124,22 @@ done
   fail "product contract template is missing"
 [[ -f "$task_root/profiles/python/validation/run.py" ]] || \
   fail "product contract validator is missing"
+[[ -f "$task_root/profiles/python/validation/run_commands.py" ]] || \
+  fail "product command validator is missing"
 [[ -f "$task_root/profiles/python/seed/pyproject.toml" ]] || \
   fail "product source seed is missing"
+[[ -f "$task_root/profiles/python/seed/uv.lock" ]] || \
+  fail "product source dependency lock is missing"
 [[ -f "$task_root/runtime/python/Dockerfile" ]] || \
   fail "Python runtime Dockerfile is missing"
 [[ -f "$task_root/runtime/python/requirements.lock" ]] || \
   fail "Python runtime dependency lock is missing"
 [[ -f "$task_root/runtime/python/uv-offline.toml" ]] || \
   fail "Python runtime uv configuration is missing"
+[[ -f "$task_root/runtime/python/sat_project_lock.py" ]] || \
+  fail "portable lock helper is missing"
+[[ -f "$task_root/runtime/python/warm_public_uv_cache.py" ]] || \
+  fail "public uv cache builder is missing"
 [[ -f "$task_root/scripts/openclaw-environment.sh" && \
   ! -L "$task_root/scripts/openclaw-environment.sh" ]] || \
   fail "OpenClaw environment boundary is missing"

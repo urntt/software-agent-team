@@ -144,7 +144,7 @@ Dockerfile change:
 
 ```bash
 docker build \
-  --tag sat-python-quality:phase1-v7 \
+  --tag sat-python-quality:phase1-v8 \
   runtime/python
 ```
 

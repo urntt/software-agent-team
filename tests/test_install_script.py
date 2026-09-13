@@ -38,9 +38,12 @@ def prepare_checkout(tmp_path: Path) -> Path:
         "profiles/python/validation/run.py",
         "profiles/python/validation/run_commands.py",
         "profiles/python/seed/pyproject.toml",
+        "profiles/python/seed/uv.lock",
         "runtime/python/Dockerfile",
         "runtime/python/requirements.lock",
+        "runtime/python/sat_project_lock.py",
         "runtime/python/uv-offline.toml",
+        "runtime/python/warm_public_uv_cache.py",
         "pyproject.toml",
         "uv.lock",
     ):
@@ -146,6 +149,10 @@ case "${1:-}" in
     ;;
   exec)
     [[ "${FAKE_DOCKER_PROBE_EXEC_FAIL:-0}" != "1" ]] || exit 1
+    if [[ "${FAKE_DOCKER_LOCK_PROBE_FAIL:-0}" == "1" && \
+          "$*" == *"sat-project-lock"* ]]; then
+      exit 1
+    fi
     ;;
   container)
     case "${2:-}" in
@@ -180,7 +187,7 @@ if [[ "$*" == "sync --locked" ]]; then
   chmod 755 .venv/bin/sat
 elif [[ "${1:-}" == "run" && "${2:-}" == "--frozen" && \
         "${3:-}" == "python" && "${4:-}" == "-c" ]]; then
-  echo sat-python-quality:phase1-v7
+  echo sat-python-quality:phase1-v8
 elif [[ "${1:-}" == "run" && "${2:-}" == "--frozen" && \
         "${3:-}" == "python" && "${4:-}" == "-" ]]; then
   cat >/dev/null
@@ -275,8 +282,8 @@ def test_installer_prepares_cli_image_and_checks_idempotently(tmp_path: Path) ->
     assert "info" in docker_calls
     assert (
         "build --pull=false --label software-agent-team.sandbox-image=true "
-        "--label software-agent-team.image-reference=sat-python-quality:phase1-v7 "
-        "--tag sat-python-quality:phase1-v7 runtime/python"
+        "--label software-agent-team.image-reference=sat-python-quality:phase1-v8 "
+        "--tag sat-python-quality:phase1-v8 runtime/python"
     ) in docker_calls
     assert "image inspect --format {{.Id}}" in docker_calls
     assert "run --detach --name sat-install-probe-" in docker_calls
@@ -285,6 +292,7 @@ def test_installer_prepares_cli_image_and_checks_idempotently(tmp_path: Path) ->
     assert "--ulimit nproc" not in docker_calls
     assert "exec --workdir /workspace sat-install-probe-" in docker_calls
     assert "sat-probe-run --self-test" in docker_calls
+    assert "sat-project-lock --self-test" in docker_calls
     assert "container inspect --format {{.State.Running}}" in docker_calls
     assert "container rm --force sat-install-probe-" in docker_calls
     uv_calls = uv_log.read_text(encoding="utf-8")
@@ -389,6 +397,22 @@ def test_installer_rejects_a_container_that_cannot_execute_tool_helpers(
 
     assert completed.returncode == 1
     assert "could not execute the Reviewer probe runner" in completed.stderr
+    assert not (install_bin / "sat").exists()
+    assert "container rm --force sat-install-probe-" in docker_log.read_text(
+        encoding="utf-8"
+    )
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="installer supports Linux/WSL")
+def test_installer_rejects_a_missing_portable_lock_cache(tmp_path: Path) -> None:
+    checkout = prepare_checkout(tmp_path)
+    environment, install_bin, _, docker_log = fake_environment(tmp_path, checkout)
+    environment["FAKE_DOCKER_LOCK_PROBE_FAIL"] = "1"
+
+    completed = run_installer(checkout, environment)
+
+    assert completed.returncode == 1
+    assert "could not verify the portable lock helper" in completed.stderr
     assert not (install_bin / "sat").exists()
     assert "container rm --force sat-install-probe-" in docker_log.read_text(
         encoding="utf-8"

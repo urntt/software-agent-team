@@ -26,7 +26,7 @@ def write_valid_project(root: Path) -> None:
         capture_output=True,
         text=True,
     )
-    (root / ".gitignore").write_text(".venv/\nuv.lock\n", encoding="utf-8")
+    (root / ".gitignore").write_text(".venv/\n", encoding="utf-8")
     (root / "README.md").write_text(
         """# Link Checker
 
@@ -50,6 +50,13 @@ Local files only.
     )
     (root / "pyproject.toml").write_text(
         "[project]\nname='link-checker'\n", encoding="utf-8"
+    )
+    (root / "uv.lock").write_text("version = 1\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "-C", str(root), "add", "uv.lock"],
+        check=True,
+        capture_output=True,
+        text=True,
     )
     (root / "sat-project.json").write_text(
         json.dumps(
@@ -115,14 +122,29 @@ cwd = Path.cwd()
 argv = sys.argv[1:]
 log = Path(os.environ["FAKE_UV_LOG"])
 with log.open("a", encoding="utf-8") as handle:
-    handle.write(json.dumps({"argv": argv, "cwd": str(cwd)}) + "\\n")
+    handle.write(
+        json.dumps(
+            {
+                "argv": argv,
+                "cwd": str(cwd),
+                "uv_config_file": os.environ.get("UV_CONFIG_FILE"),
+                "uv_default_index": os.environ.get("UV_DEFAULT_INDEX"),
+                "uv_index_url": os.environ.get("UV_INDEX_URL"),
+            }
+        )
+        + "\\n"
+    )
 if (cwd / ".git").exists() or (cwd / "local-only.txt").exists():
     raise SystemExit(31)
 if os.environ.get("FAKE_UV_FAIL") == " ".join(argv):
     raise SystemExit(32)
-if argv == ["sync", "--dev"]:
+if argv == ["lock", "--check", "--offline"]:
+    pass
+elif argv == ["sync", "--dev"]:
     (cwd / ".venv").mkdir()
     (cwd / ".venv" / "ready").write_text("ready", encoding="utf-8")
+    if os.environ.get("FAKE_UV_CREATE_UNIGNORED") == "1":
+        (cwd / "generated.json").write_text("{}\\n", encoding="utf-8")
 elif argv == ["run", "pytest"]:
     if not (cwd / ".venv" / "ready").is_file():
         raise SystemExit(33)
@@ -170,7 +192,7 @@ def test_product_profile_is_separate_from_the_task_manager_evaluation() -> None:
 
     assert configuration.policy.id == "product_python_v1"
     assert configuration.manifest.id == "python_product_v1"
-    assert configuration.policy.sandbox.image == "sat-python-quality:phase1-v7"
+    assert configuration.policy.sandbox.image == "sat-python-quality:phase1-v8"
     assert configuration.policy.limits.total_timeout_seconds == 420
     serialized = json.dumps(
         {
@@ -298,16 +320,25 @@ def test_product_contract_requires_each_exact_manifest_command(
     assert "missing exact command guidance for: start" in result.stderr
 
 
-def test_product_contract_requires_clean_setup_artifact_policy(
+def test_product_contract_requires_a_committed_uv_lock(
     tmp_path: Path,
 ) -> None:
     write_valid_project(tmp_path)
-    (tmp_path / ".gitignore").write_text(".venv/\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "rm", "--cached", "--force", "uv.lock"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    (tmp_path / "uv.lock").unlink()
+    (tmp_path / ".gitignore").write_text(".venv/\nuv.lock\n", encoding="utf-8")
 
     result = run_validator(tmp_path)
 
     assert result.returncode == 1
-    assert "uv.lock must be committed or explicitly excluded" in result.stderr
+    assert (
+        "uv.lock must be committed as dependency-resolution metadata" in result.stderr
+    )
 
 
 def test_product_contract_accepts_a_present_bounded_uv_lock(
@@ -470,6 +501,7 @@ def test_product_contract_rejects_a_symlinked_uv_lock(tmp_path: Path) -> None:
     (tmp_path / ".gitignore").write_text(".venv/\n", encoding="utf-8")
     outside = tmp_path / "outside.lock"
     outside.write_text("version = 1\n", encoding="utf-8")
+    (tmp_path / "uv.lock").unlink()
     (tmp_path / "uv.lock").symlink_to(outside)
 
     result = run_validator(tmp_path)
@@ -489,15 +521,22 @@ def test_product_contract_rejects_an_oversized_uv_lock(tmp_path: Path) -> None:
     assert "uv.lock is too large" in result.stderr
 
 
-def test_product_contract_ignores_untracked_excluded_runtime_lock(
+def test_product_contract_rejects_an_untracked_excluded_runtime_lock(
     tmp_path: Path,
 ) -> None:
-    """Sandbox-only setup residue is not part of the proposed Git delivery."""
+    """An ignored lock cannot stand in for committed resolution metadata."""
 
     project = tmp_path / "project"
     project.mkdir()
     write_valid_project(project)
     commit_project(project)
+    subprocess.run(
+        ["git", "-C", str(project), "rm", "--cached", "--force", "uv.lock"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    (project / ".gitignore").write_text(".venv/\nuv.lock\n", encoding="utf-8")
     (project / "uv.lock").write_text(
         'version = 1\nwheels = [{ path = "/opt/software-agent-team/wheels" }]\n',
         encoding="utf-8",
@@ -505,13 +544,10 @@ def test_product_contract_ignores_untracked_excluded_runtime_lock(
 
     result = run_validator(project)
 
-    assert result.returncode == 0, result.stderr
-    tracked = subprocess.run(
-        ["git", "-C", str(project), "ls-files", "--error-unmatch", "uv.lock"],
-        check=False,
-        capture_output=True,
+    assert result.returncode == 1
+    assert (
+        "uv.lock must be committed as dependency-resolution metadata" in result.stderr
     )
-    assert tracked.returncode == 1
 
 
 def test_product_contract_validates_ignored_lock_when_forced_into_delivery(
@@ -549,19 +585,19 @@ def test_product_contract_requires_the_setup_environment_to_be_ignored(
     assert "root .venv setup directory" in result.stderr
 
 
-def test_product_contract_rejects_a_negated_setup_ignore_rule(
+def test_product_contract_rejects_a_negated_venv_ignore_rule(
     tmp_path: Path,
 ) -> None:
     write_valid_project(tmp_path)
     (tmp_path / ".gitignore").write_text(
-        ".venv/\nuv.lock\n!uv.lock\n",
+        ".venv/\n!.venv/\n",
         encoding="utf-8",
     )
 
     result = run_validator(tmp_path)
 
     assert result.returncode == 1
-    assert ".gitignore must effectively exclude uv.lock" in result.stderr
+    assert ".gitignore must effectively exclude root .venv" in result.stderr
 
 
 def test_exact_command_gate_uses_only_committed_files_in_fresh_scratch(
@@ -579,6 +615,7 @@ def test_exact_command_gate_uses_only_committed_files_in_fresh_scratch(
     environment = {
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "FAKE_UV_LOG": str(log),
+        "UV_INDEX_URL": "https://private.invalid/simple",
     }
 
     result = run_command_validator(project, environment=environment)
@@ -594,9 +631,19 @@ def test_exact_command_gate_uses_only_committed_files_in_fresh_scratch(
     }
     calls = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
     assert [call["argv"] for call in calls] == [
+        ["lock", "--check", "--offline"],
         ["sync", "--dev"],
         ["run", "pytest"],
         ["run", "link-checker", "."],
+    ]
+    assert calls[0]["uv_config_file"] == "/dev/null"
+    assert calls[0]["uv_default_index"] == "https://pypi.org/simple"
+    assert calls[0]["uv_index_url"] is None
+    assert [call["uv_config_file"] for call in calls] == [
+        "/dev/null",
+        None,
+        None,
+        None,
     ]
     assert len({call["cwd"] for call in calls}) == 1
     assert calls[0]["cwd"] != str(project)
@@ -627,6 +674,7 @@ def test_exact_command_gate_keeps_interactive_start_stdin_open(
     assert summary["start"] == "running_after_grace"
     calls = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
     assert [call["argv"] for call in calls] == [
+        ["lock", "--check", "--offline"],
         ["sync", "--dev"],
         ["run", "pytest"],
         ["run", "link-checker", "."],
@@ -656,23 +704,25 @@ def test_exact_command_gate_still_reports_an_immediate_start_failure(
     assert "start command failed (exit=32, timed_out=false)" in result.stderr
     calls = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
     assert [call["argv"] for call in calls] == [
+        ["lock", "--check", "--offline"],
         ["sync", "--dev"],
         ["run", "pytest"],
         ["run", "link-checker", "."],
     ]
 
 
-def test_exact_command_gate_ignores_excluded_runtime_lock_in_source_workspace(
+def test_exact_command_gate_ignores_excluded_runtime_artifact_in_source_workspace(
     tmp_path: Path,
 ) -> None:
     project = tmp_path / "project"
     project.mkdir()
     write_valid_project(project)
-    commit_project(project)
-    (project / "uv.lock").write_text(
-        'version = 1\nwheels = [{ path = "/opt/software-agent-team/wheels" }]\n',
+    (project / ".gitignore").write_text(
+        ".venv/\n.local-setup-cache\n",
         encoding="utf-8",
     )
+    commit_project(project)
+    (project / ".local-setup-cache").write_text("runtime only\n", encoding="utf-8")
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     write_fake_uv(fake_bin)
@@ -686,6 +736,51 @@ def test_exact_command_gate_ignores_excluded_runtime_lock_in_source_workspace(
 
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout)["source"] == "committed_tracked_files"
+
+
+def test_exact_command_gate_rejects_an_inconsistent_committed_lock(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    write_valid_project(project)
+    commit_project(project)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    write_fake_uv(fake_bin)
+    environment = {
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "FAKE_UV_LOG": str(tmp_path / "uv.jsonl"),
+        "FAKE_UV_FAIL": "lock --check --offline",
+    }
+
+    result = run_command_validator(project, environment=environment)
+
+    assert result.returncode == 1
+    assert "portable lock consistency check failed" in result.stderr
+
+
+def test_exact_command_gate_rejects_unignored_setup_artifacts(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    write_valid_project(project)
+    commit_project(project)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    write_fake_uv(fake_bin)
+    environment = {
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "FAKE_UV_LOG": str(tmp_path / "uv.jsonl"),
+        "FAKE_UV_CREATE_UNIGNORED": "1",
+    }
+
+    result = run_command_validator(project, environment=environment)
+
+    assert result.returncode == 1
+    assert "setup command generated unignored repository artifacts" in result.stderr
+    assert "generated.json" in result.stderr
 
 
 def test_exact_command_gate_reports_setup_failure_without_running_later_commands(
@@ -710,7 +805,10 @@ def test_exact_command_gate_reports_setup_failure_without_running_later_commands
     assert result.returncode == 1
     assert "setup command failed" in result.stderr
     calls = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
-    assert [call["argv"] for call in calls] == [["sync", "--dev"]]
+    assert [call["argv"] for call in calls] == [
+        ["lock", "--check", "--offline"],
+        ["sync", "--dev"],
+    ]
 
 
 def test_exact_command_gate_rejects_modified_tracked_files(tmp_path: Path) -> None:

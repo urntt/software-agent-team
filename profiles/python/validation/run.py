@@ -80,16 +80,10 @@ def require_setup_artifact_policy(repository: Path) -> None:
         fail(".gitignore must exclude the root .venv setup directory")
     require_effective_ignore(repository, ".venv/.sat-setup-probe", "root .venv")
     lock = repository / "uv.lock"
-    lock_present = lock.exists() or lock.is_symlink()
-    lock_tracked = is_git_tracked(repository, "uv.lock")
-    lock_ignored = is_effectively_ignored(repository, "uv.lock", "uv.lock")
-    if lock_tracked or (lock_present and not lock_ignored):
-        content = require_regular_file(lock, "uv.lock", max_bytes=MAX_LOCK_BYTES)
-        require_portable_uv_lock(repository, content)
-    elif not rules.intersection({"uv.lock", "/uv.lock"}):
-        fail("uv.lock must be committed or explicitly excluded by .gitignore")
-    else:
-        require_effective_ignore(repository, "uv.lock", "uv.lock")
+    if not is_git_tracked(repository, "uv.lock"):
+        fail("uv.lock must be committed as dependency-resolution metadata")
+    content = require_regular_file(lock, "uv.lock", max_bytes=MAX_LOCK_BYTES)
+    require_portable_uv_lock(repository, content)
 
 
 def _require_portable_local_reference(

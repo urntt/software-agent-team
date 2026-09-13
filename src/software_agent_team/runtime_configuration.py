@@ -874,6 +874,22 @@ def probe_sandbox_runtime(
                 timeout=timeout_seconds,
                 env=environment,
             )
+            lock_tool_check = subprocess.run(
+                [
+                    resolved_sandbox,
+                    "exec",
+                    "--workdir",
+                    "/workspace",
+                    container_name,
+                    "sat-project-lock",
+                    "--self-test",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=timeout_seconds,
+                env=environment,
+            )
             inspected = subprocess.run(
                 [
                     resolved_sandbox,
@@ -903,13 +919,19 @@ def probe_sandbox_runtime(
                     if not isinstance(state, dict):
                         error_detail = "Docker returned invalid sandbox probe state"
                     elif state.get("Running") is True:
-                        if tool_check.returncode == 0:
-                            ready = True
-                        else:
+                        if tool_check.returncode != 0:
                             error_detail = (
                                 "sandbox probe could not execute the Reviewer "
                                 f"probe runner (exit_code={tool_check.returncode})"
                             )
+                        elif lock_tool_check.returncode != 0:
+                            error_detail = (
+                                "sandbox probe could not verify the portable "
+                                "lock helper "
+                                f"(exit_code={lock_tool_check.returncode})"
+                            )
+                        else:
+                            ready = True
                     else:
                         status = str(state.get("Status") or "unknown")
                         exit_code = state.get("ExitCode")

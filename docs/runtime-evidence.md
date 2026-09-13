@@ -1115,18 +1115,19 @@ when investigating it rather than editing artifacts in place.
 
 - The source checkout must be clean, safe to materialize, and define local Git
   `user.name` and `user.email` values for the isolated clone.
-- A generated Python project must ignore its root setup environment and must
-  either contain a bounded regular `uv.lock` in the accepted clean snapshot or
-  explicitly ignore that local lock artifact. Every lock tracked in the
-  proposed Git delivery is parsed before setup even when an ignore pattern also
-  matches it, and must not contain absolute or Windows-drive paths, `file:`
-  sources, parent-directory references, missing or symlinked project-local
-  artifacts, or SAT's private offline-wheelhouse location. An effectively
-  ignored untracked lock is runtime residue outside the delivery and is neither
-  parsed nor copied into clean scratch. This contract prevents the exact
-  documented setup command from silently dirtying first-use Git state and
-  prevents same-image setup from masking non-portable delivery metadata; it does
-  not claim that an ignored lock provides dependency reproducibility.
+- A generated Python project must ignore its root setup environment and commit
+  a bounded regular root `uv.lock` in the accepted clean snapshot. The lock is
+  parsed before setup and must not contain absolute or Windows-drive paths,
+  `file:` sources, parent-directory references, missing or symlinked
+  project-local artifacts, or SAT's private offline-wheelhouse location. After
+  setup, the clean-copy gate checks lock consistency offline against frozen
+  public metadata, compares every other committed file with its original digest
+  and executable bit, and rejects new files outside the committed ignore policy.
+  The private wheelhouse may adapt only the disposable scratch lock. Writers use
+  the immutable `sat-project-lock` helper after sandbox commands to refresh the
+  portable committed form. This prevents first use from leaving unexplained
+  repository state and prevents same-image setup from masking non-portable
+  delivery metadata.
 - Every run workspace is a self-contained clone with no remote and a detached
   HEAD. The Agent can commit inside its container without access to source Git
   metadata.

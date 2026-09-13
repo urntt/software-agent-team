@@ -1050,13 +1050,12 @@ attributable and is not
 relabeled as a controller deterministic gate. Documentation may state only the
 boundary established by the implementation and evidence. The generated-project
 contract separately checks that the README shows each exact manifest command,
-that documented first setup does not leave an unexplained root virtual
-environment or lock file in an otherwise clean delivery, and that every lock in
-the proposed Git delivery contains no host- or sandbox-only dependency source.
-An effectively ignored untracked lock is setup/runtime residue outside that
-delivery and is neither parsed as product metadata nor copied into validation
-scratch. A deterministic gate
-copies clean committed files into fresh scratch, then executes exact setup,
+that documented first setup creates only explicitly ignored local runtime
+artifacts and uses a committed portable root lock with no host- or sandbox-only
+dependency source. Writers refresh that lock through the immutable offline
+`sat-project-lock` helper after sandbox commands. A deterministic gate checks
+the lock against frozen public metadata, copies clean committed files into fresh
+scratch, then executes exact setup,
 test, and start argv through the runtime's offline wheelhouse. Its start argv
 must work from the project root without appended arguments. Independent Review
 probes task-specific runtime behavior that this generic contract cannot infer.

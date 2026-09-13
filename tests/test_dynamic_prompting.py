@@ -387,18 +387,19 @@ def test_dynamic_prompt_is_compiled_from_the_approved_agent_spec() -> None:
         rendered.split()
     )
     assert "unqualified prohibition" in rendered
-    assert "profile-owned setup and test command" in rendered
-    assert "TaskBrief constraints are authoritative" in rendered
-    assert "documented setup command" in rendered
-    assert "explicit ignore policy" in rendered
-    assert "without appending arguments" in rendered
-    assert "clean-workspace pytest entrypoint" in rendered
-    assert "pytest's import path" in rendered
-    assert "exact shell form" in rendered
+    compact = " ".join(rendered.split())
+    assert "profile-owned setup and test command" in compact
+    assert "TaskBrief constraints are authoritative" in compact
+    assert "documented setup command" in compact
+    assert "ignored or untracked dependency lock is not a delivery" in compact
+    assert "without appending arguments" in compact
+    assert "clean-workspace pytest entrypoint" in compact
+    assert "pytest's import path" in compact
+    assert "exact shell form" in compact
 
 
 def test_dynamic_prompt_treats_expected_paths_as_non_binding_forecasts() -> None:
-    """A planned ignored lock path must not become an implementation obligation."""
+    """A planned path does not create an obligation independently of the profile."""
 
     plan = implementation_plan()
     task = plan.tasks[0].model_copy(
@@ -429,7 +430,7 @@ def test_dynamic_prompt_treats_expected_paths_as_non_binding_forecasts() -> None
     assert (
         "Do not create, modify, or track a path solely because it is listed" in rendered
     )
-    assert "explicit ignore policy remains authoritative" in rendered
+    assert "ignored or untracked dependency lock is not a delivery" in rendered
 
 
 def test_upstream_continuation_preserves_identity_and_recovery_context() -> None:
