@@ -348,9 +348,23 @@ implementation revision `9f95b1dd4716a7246d3df5abe4d4b762c3927262`
 passed the canonical gate with all 1,656 tests in 789.98 seconds. The report
 records 342,597,632 bytes aggregate peak RSS, zero cgroup/kernel OOM delta, and
 no residual stage process, process lease, sandbox container, volume, or private
+test directory.
+
+The current implementation also records the active predecessor and candidate
+sandbox-image references independently during managed staging. A changed-image
+reference now retains the tagged direct predecessor lineage required by the
+rollback application while reclaiming only exact detached legacy roots carrying
+the old reference. Legacy same-reference handoffs retain their existing cleanup
+behavior and schema-one records remain readable. Managed lifecycle and related
+CLI, install, uninstall, update, and release checks passed all 179 affected
+tests. Clean implementation revision
+`d8d338bbac5842261de16a55da5d9f0611615968` passed the canonical gate with all
+1,658 tests in 642.22 seconds. Its report records 373,215,232 bytes aggregate
+peak RSS, zero cgroup and kernel OOM delta, complete cleanup coverage, and no
+residual stage process, process lease, sandbox container, volume, or private
 test directory. The package, lock, and change-impact ledger identify `v0.2.15`
-as a compatible patch over `v0.2.14`; the exact release-head gate, hosted
-publication, published upgrade, and fresh complete provider-backed journey
+as a compatible patch over `v0.2.14`; exact release-head validation, hosted
+publication, published upgrade, and a fresh complete provider-backed journey
 remain pending.
 
 The implementation released as `v0.2.12` made the last Planning correction
