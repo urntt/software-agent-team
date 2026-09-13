@@ -1,17 +1,17 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.2.10",
-  "target_version": "0.2.11",
+  "baseline_version": "0.2.11",
+  "target_version": "0.2.12",
   "changes": [
     {
-      "id": "planning-long-direct-input-summary-correction",
+      "id": "planning-final-correction-completeness",
       "impact": "patch",
-      "summary": "Preserve complete direct-input provenance while correcting an overlong decision summary to a schema-bounded contiguous excerpt"
+      "summary": "Require the final Planning correction attempt to replace every remaining invalid slot before the Controller applies it"
     },
     {
-      "id": "managed-target-image-transition-reconciliation",
+      "id": "planning-topology-correction-bounds",
       "impact": "patch",
-      "summary": "Let a newly active target safely reconcile both the current predecessor and detached Docker parent lineages left by older updaters"
+      "summary": "Admit only the requested missing Review authority and bind complete acyclic implementation dependencies during topology correction"
     }
   ]
 }

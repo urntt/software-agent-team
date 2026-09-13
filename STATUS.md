@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** publish and validate `v0.2.11` through a complete managed user journey
+**Current milestone:** publish and validate `v0.2.12` through a complete managed user journey
 
 **Last updated:** September 13, 2026
 
@@ -11,37 +11,54 @@ product, architecture, experiment, or roadmap; those decisions belong to
 
 ## Current Release
 
-The `v0.2.11` release candidate repairs two defects exposed by the published
-`v0.2.10` ordinary-user journey. Planning keeps the complete direct user input
-in typed provenance but accepts only a bounded contiguous excerpt when that
-source exceeds the 500-character decision-summary limit. Re-normalization no
-longer overwrites a valid correction with the overlong source, and targeted
-correction now projects an identical field contract shared by several legal
-schema-union branches, including the exact length limit.
+The `v0.2.12` release candidate repairs two Planning correction defects exposed
+after published `v0.2.11`. On the final permitted semantic-correction attempt,
+the typed schema now requires one replacement for every remaining invalid slot,
+and the Controller independently rejects an omitted slot before applying any
+replacement. Earlier attempts may still converge incrementally when each
+submission strictly reduces the validated issue set. Exact-input provenance and
+resolved-question diagnostics also state the truthful replacement contract the
+Planner must satisfy.
 
-The staged target now writes a revision-bound pre-build and post-build Docker
-lineage handoff inside the owned managed root. Its pre-build inventory also
-captures detached legacy roots only when they carry the exact SAT reference
-label and have no tag, container, child, or active-lineage membership. This
-lets the target complete
-safe predecessor cleanup on its first unlocked invocation even when the update
-was initiated by an older release that knew how to remove only the old final
-image record. Reconciliation revalidates the active candidate and captured
-parent graphs, stops at retained, tagged, container-referenced, or externally
-shared records, and uses only exact `docker image rm --no-prune` operations.
-Focused Planning, correction, CLI, install-script, and managed-install suites
-pass 362 tests. Exact public revision
-`13d7f157b0fe2ac71efcc01332702d93b3602a53` passed the local canonical gate
-with doctor, formatting, lint, and all 1,640 tests; every stage reported complete
-cleanup coverage, the kernel and cgroup OOM deltas were zero, and no terminal
-container, volume, process lease, stage process, or private temporary directory
-remained. A fresh non-root fixed-revision rehearsal installed immutable
-`v0.2.10`, activated this exact dev revision, and proved that the first unlocked
-target invocation removed both a four-record superseded prefix and a detached
-legacy root while preserving the 14-record candidate lineage and a foreign
-image. Same-ref activation, credential-free export, full uninstall, and fresh
-account cleanup also passed. The immutable release, published stable upgrade,
-and full provider-backed journey remain pending.
+Missing-specialist projection now admits only Review Agents with the exact
+required security or experience authority, discards unrelated topology from a
+complete-array replacement, and places each admitted specialist downstream of
+every retained implementation path while preserving valid existing references.
+When an otherwise-valid quality Agent alone lacks implementation coverage, the
+Controller offers one opaque candidate containing its current direct
+dependencies plus every missing implementation path. It withholds that local
+candidate if any added edge would form a cycle.
+
+Planning and semantic-correction focused checks pass 235 tests. Exact public
+implementation revision `a62f0e78336971b4abca732015bf2216fca2cea9`
+passed the local canonical gate with doctor, formatting, lint, and all 1,645
+tests. A fresh non-root provider-backed fixed-dev run completed 15 Planning
+invocations, one real user clarification, and both correction paths before
+converging to a valid five-Agent topology; an unrelated replacement Agent was
+discarded and every quality Agent covered the retained implementation path.
+A separate fresh fixed-dev lifecycle preserved the candidate/shared Docker
+lineage and a foreign image while reclaiming a four-record retired prefix and a
+detached legacy root, then passed same-ref no-op, credential-free export, full
+uninstall, and exact account cleanup. The exact release-head gate, immutable
+release, published stable upgrade, and full Planning-to-delivery journey remain
+pending.
+
+The immutable `v0.2.11` tag,
+[GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.2.11),
+package version, and release manifest identify source revision
+`7aeebd8686c15a3d8dc6193674f2584b1628c66f` and Git archive digest
+`sha256:7d1dae6d1302369cf6d680fb84a523c9d9fc5161aef3862ab08883145f3a9237`.
+It bounds direct-input decision summaries and lets a newly activated target
+reconcile Docker parent lineages left by an older updater. The exact clean
+release head passed all 1,640 local tests; exact-tag GitHub Actions
+[run 34749060028](https://github.com/urntt/software-agent-team/actions/runs/34749060028)
+passed 1,638 tests with two environment-dependent skips and published exactly
+one identity manifest asset. A fresh non-root `v0.2.10` to `v0.2.11` lifecycle
+passed configuration and legacy-state preservation, no-op, active-run refusal,
+fault-injected rollback, channel round trip, foreign OpenClaw isolation,
+credential-free export, full uninstall, and exact resource cleanup. A later
+provider-backed journey exposed the final-correction completeness defect now
+addressed by the current candidate.
 
 The immutable `v0.2.10` tag,
 [GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.2.10),
@@ -283,12 +300,12 @@ account/HOME/resource cleanup all passed. The scenario made no provider calls.
 
 ## Current Development Head
 
-The current `v0.2.11` candidate fixes bounded direct-input decision summaries
-and target-side cleanup of Docker parent records left by an older updater as a
-compatible patch over immutable `v0.2.10`. Its focused 362-test validation,
-1,640-test clean canonical gate, and fixed-revision managed image lifecycle
-rehearsal pass. The exact release head, hosted tag, published upgrade, and fresh
-provider-backed ordinary-user journey remain pending.
+The current `v0.2.12` candidate makes the last Planning correction complete and
+constrains specialist/dependency topology repair as a compatible patch over
+immutable `v0.2.11`. Its 235 focused tests, 1,645-test clean implementation
+gate, fresh provider-backed Planning convergence, and fixed-revision managed
+image lifecycle pass. The exact release-head gate, hosted tag, published
+upgrade, and fresh provider-backed Planning-to-delivery journey remain pending.
 
 The implementation released as `v0.2.8` is frozen at the exact revision above.
 Its Planning correction checks, canonical gate, exact-tag publication,
