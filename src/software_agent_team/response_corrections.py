@@ -364,6 +364,7 @@ class SemanticCorrectionPlan:
     diagnostic: ResponseValidationDiagnostic
     evidence: SemanticCorrectionRequestEvidence
     candidate_slots: tuple[SemanticCorrectionCandidateSlot, ...] = ()
+    require_all_targets: bool = False
 
 
 @dataclass(frozen=True)
@@ -773,6 +774,23 @@ def attach_semantic_correction_candidates(
         diagnostic=plan.diagnostic,
         evidence=plan.evidence,
         candidate_slots=slots,
+        require_all_targets=plan.require_all_targets,
+    )
+
+
+def require_all_semantic_correction_targets(
+    plan: SemanticCorrectionPlan,
+) -> SemanticCorrectionPlan:
+    """Require a final bounded correction to cover every remaining target."""
+
+    if plan.require_all_targets:
+        return plan
+    return SemanticCorrectionPlan(
+        base_payload=plan.base_payload,
+        diagnostic=plan.diagnostic,
+        evidence=plan.evidence,
+        candidate_slots=plan.candidate_slots,
+        require_all_targets=True,
     )
 
 
@@ -820,7 +838,9 @@ def semantic_correction_schema(
         "type": "array",
         "title": "Replacements",
         "items": {"oneOf": replacement_variants},
-        "minItems": 1,
+        "minItems": (
+            len(plan.evidence.target_paths) if plan.require_all_targets else 1
+        ),
         "maxItems": len(plan.evidence.target_paths),
     }
     return schema
@@ -1039,18 +1059,29 @@ def correction_prompt(
             "submission ends this invocation."
         )
     )
+    coverage_instruction = (
+        "This is the final bounded correction attempt. Submit exactly one record "
+        "for every listed slot; omitting any slot makes the submission invalid. "
+        if plan.require_all_targets
+        else (
+            "Provide one or more records for authorized slots; include every slot "
+            "you can correct. "
+            "Omitted slots keep their exact prior values and the controller "
+            "revalidates the complete object before deciding whether another "
+            "targeted correction is useful. "
+        )
+    )
     return (
         "\n\nTARGETED_SEMANTIC_CORRECTION_SLOTS_V3\n"
         "This correction contract supersedes the earlier FINAL_RESPONSE_CONTRACT "
         "for this invocation. "
         "The prior semantic JSON object was parsed and retained by the controller. "
         "Do not regenerate or repeat that object. Submit only an object matching "
-        "CORRECTION_SCHEMA_JSON. Provide one or more `slot_handle` and "
-        "`replacement_value` records for authorized slots; include every slot you "
-        "can correct, and do not invent a value merely to cover a slot. Record order "
-        "has no meaning. Omitted slots keep their exact prior values and the "
-        "controller revalidates the complete object before deciding whether another "
-        "targeted correction is useful. Return only the supplied short request-local "
+        "CORRECTION_SCHEMA_JSON. Provide `slot_handle` and `replacement_value` "
+        "records for authorized slots. "
+        f"{coverage_instruction}"
+        "Do not invent a value merely to cover a slot. Record order has no meaning. "
+        "Return only the supplied short request-local "
         "slot IDs, not target paths. The controller owns the invocation binding, "
         "response identity, and path bindings. "
         "All other fields are immutable and will be preserved by the controller. "
@@ -1106,6 +1137,19 @@ def apply_semantic_correction_with_evidence(
             "semantic correction includes a slot outside controller authority",
             plan=plan,
         )
+    if plan.require_all_targets:
+        missing_handles = set(expected_handles) - submitted_handles
+        if missing_handles:
+            missing_paths = tuple(
+                path
+                for handle, path in expected_handles.items()
+                if handle in missing_handles
+            )
+            raise SemanticCorrectionSubmissionError(
+                "final bounded semantic correction must cover every authorized slot",
+                plan=plan,
+                paths=missing_paths,
+            )
 
     candidate_slots = {slot.target_path: slot for slot in plan.candidate_slots}
     resolved_values: dict[str, JsonValue] = {}

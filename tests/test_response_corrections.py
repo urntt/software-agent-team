@@ -30,6 +30,7 @@ from software_agent_team.response_corrections import (
     diagnostic_from_invariant,
     diagnostic_from_message,
     diagnostic_from_validation_error,
+    require_all_semantic_correction_targets,
     semantic_correction_schema,
     semantic_correction_slot_handle,
     semantic_payload_sha256,
@@ -177,6 +178,46 @@ def test_correction_applies_an_authorized_subset_and_preserves_omitted_targets()
         "preserved": "keep",
     }
     assert plan.base_payload == payload
+
+
+def test_final_bounded_correction_requires_every_remaining_target() -> None:
+    payload: dict[str, object] = {
+        "summary": "",
+        "tasks": [],
+        "preserved": "keep",
+    }
+    plan = build_semantic_correction_plan(payload, diagnostic(payload))
+    assert plan is not None
+    final_plan = require_all_semantic_correction_targets(plan)
+
+    replacements_schema = semantic_correction_schema(final_plan)["properties"][
+        "replacements"
+    ]
+    assert replacements_schema["minItems"] == 2
+    assert replacements_schema["maxItems"] == 2
+    assert "final bounded correction attempt" in correction_prompt(final_plan)
+
+    with pytest.raises(
+        SemanticCorrectionSubmissionError,
+        match="must cover every authorized slot",
+    ):
+        apply_semantic_correction(
+            correction_submission(final_plan, {"/summary": "valid"}),
+            final_plan,
+        )
+
+    corrected = apply_semantic_correction(
+        correction_submission(
+            final_plan,
+            {"/summary": "valid", "/tasks": ["TASK_ONE"]},
+        ),
+        final_plan,
+    )
+    assert corrected == {
+        "summary": "valid",
+        "tasks": ["TASK_ONE"],
+        "preserved": "keep",
+    }
 
 
 def test_correction_rejects_duplicate_unknown_and_positional_payloads() -> None:

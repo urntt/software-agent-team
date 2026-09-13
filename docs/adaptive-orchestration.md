@@ -445,6 +445,18 @@ eligible only for digest-bound correction of the exact typed fields identified
 by validation; the model never regenerates the complete retained object or
 selects the fields it may replace.
 
+A correction with another permitted attempt may submit a strict subset of the
+remaining slots, and the Controller continues only after the validated issue
+set decreases. On the final permitted attempt, the semantic schema requires one
+replacement for every remaining slot and the Controller independently rejects
+an omitted slot before merging any value. This keeps incremental convergence
+available without accepting a partial submission that cannot be revalidated
+within the authorized repair budget. Product-definition diagnostics also state
+that an exact-input statement must preserve its contiguous source verbatim and
+that a `resolved_question` disposition cannot be repaired by inventing a user
+question or decision; the replacement must use an existing admitted question or
+a truthful alternative disposition.
+
 Reviewer evidence selection is corrected at the same minimum-authority
 boundary. Evidence validation collects all independently invalid selectors in
 one pass and assigns each a stable grounding invariant, its criterion subject,

@@ -942,6 +942,144 @@ def test_planning_repairs_schema_then_all_invalid_product_dimensions_together(
     assert third.parsed_response == proposal_response()
     assert '"value_schema"' in executor.requests[1].prompt
     assert "one contiguous verbatim substring" in executor.requests[2].prompt
+    final_replacements = executor.requests[2].submission_contract
+    assert final_replacements is not None
+    final_replacements_schema = final_replacements.parameters_schema()["properties"][
+        "replacements"
+    ]
+    assert final_replacements_schema["minItems"] == 5
+    assert final_replacements_schema["maxItems"] == 5
+    assert "final bounded correction attempt" in executor.requests[2].prompt
+
+
+def test_planning_final_bounded_correction_requires_all_slots_and_converges(
+    tmp_path: Path,
+) -> None:
+    valid_body = proposal_body()
+    valid_definition = valid_body.product_definition
+    assert valid_definition is not None
+    invalid_definition = valid_definition.model_copy(
+        update={
+            "target_users": valid_definition.target_users.model_copy(
+                update={"statement": "developers who use a terminal"}
+            ),
+            "primary_workflow": valid_definition.primary_workflow.model_copy(
+                update={"statement": "scan Markdown files for broken links"}
+            ),
+            "usability_expectations": (
+                valid_definition.usability_expectations.model_copy(
+                    update={
+                        "disposition": ProductDefinitionDisposition.RESOLVED_QUESTION,
+                        "source": "not_material",
+                        "decision_ids": (),
+                    }
+                )
+            ),
+        }
+    )
+    initial = proposal_response(
+        valid_body.model_copy(update={"product_definition": invalid_definition})
+    ).model_dump(mode="json")
+    executor = ScriptedAgentExecutor(
+        [
+            ScriptedAgentResponse(text="ignored", submission_payload=initial),
+            ScriptedAgentResponse(
+                text="ignored",
+                submission_payload={
+                    "replacements": [
+                        {
+                            "slot_handle": "slot_1",
+                            "replacement_value": initial["proposal"]["decisions"],
+                        }
+                    ]
+                },
+            ),
+        ]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(response_repair_limit=1),
+        clock=AdvancingClock(),
+    )
+
+    with pytest.raises(
+        PlanningError,
+        match="must cover every authorized slot",
+    ):
+        coordinator.start(
+            request(),
+            answer_question=lambda _question: pytest.fail("unexpected question"),
+        )
+
+    rejected = store.load_turn(request().run_id, 1)
+    assert rejected.response_validation is not None
+    assert rejected.response_validation.correction_paths == (
+        "/proposal/decisions",
+        "/proposal/product_definition/primary_workflow",
+        "/proposal/product_definition/target_users",
+        "/proposal/product_definition/usability_expectations",
+    )
+    assert "do not invent one" in rejected.response_validation.issues[-1].message
+    contract = executor.requests[1].submission_contract
+    assert contract is not None
+    replacements_schema = contract.parameters_schema()["properties"]["replacements"]
+    assert replacements_schema["minItems"] == 4
+    assert replacements_schema["maxItems"] == 4
+    correction = store.load_turn(request().run_id, 2)
+    assert correction.semantic_correction_outcome == "invalid_submission"
+    assert correction.validation_error == (
+        "final bounded semantic correction must cover every authorized slot"
+    )
+
+    target_paths = rejected.response_validation.correction_paths
+    complete_replacements = {
+        "/proposal/decisions": initial["proposal"]["decisions"],
+        "/proposal/product_definition/primary_workflow": (
+            valid_definition.primary_workflow.model_dump(mode="json")
+        ),
+        "/proposal/product_definition/target_users": (
+            valid_definition.target_users.model_dump(mode="json")
+        ),
+        "/proposal/product_definition/usability_expectations": (
+            valid_definition.usability_expectations.model_dump(mode="json")
+        ),
+    }
+    complete_executor = ScriptedAgentExecutor(
+        [
+            ScriptedAgentResponse(text="ignored", submission_payload=initial),
+            ScriptedAgentResponse(
+                text="ignored",
+                submission_payload=json.loads(
+                    correction_response(
+                        initial,
+                        complete_replacements,
+                        target_paths=target_paths,
+                    )
+                ),
+            ),
+        ]
+    )
+    complete_store = PlanningStore(tmp_path / "complete-planning")
+    complete_coordinator = AdaptivePlanningCoordinator(
+        executor=complete_executor,
+        store=complete_store,
+        policy=policy(response_repair_limit=1),
+        clock=AdvancingClock(),
+    )
+
+    created = complete_coordinator.start(
+        request(),
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+
+    assert created is not None
+    assert created.body == valid_body
+    assert (
+        complete_store.load_turn(request().run_id, 2).semantic_correction_outcome
+        == "accepted"
+    )
 
 
 def test_planning_replays_legacy_direct_decisions_through_reachable_slots(

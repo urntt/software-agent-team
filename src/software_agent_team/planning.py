@@ -98,6 +98,7 @@ from software_agent_team.response_corrections import (
     diagnostic_from_invariant,
     diagnostic_from_transport,
     diagnostic_from_validation_error,
+    require_all_semantic_correction_targets,
     semantic_correction_schema,
 )
 from software_agent_team.responses import (
@@ -3699,7 +3700,11 @@ def _product_definition_dimension_invariant(
                 "planning_product_question_source",
                 (
                     f"{dimension.value} must reference one user-owned product "
-                    "question decision and cite its ID"
+                    "question decision and cite its ID. If no admitted user "
+                    "question exists, do not invent one: change the dimension to "
+                    "explicit_input with identical verbatim source and statement "
+                    "when the user supplied it, or to planner_recommendation with "
+                    "source 'planner' and a corresponding Planner decision."
                 ),
                 related_paths=("/proposal/decisions",),
             )
@@ -9221,7 +9226,14 @@ class AdaptivePlanningCoordinator:
                     f"Planning response remained invalid: {validation_error}"
                 )
             semantic_corrections += 1
-            correction_plan = next_correction_plan
+            correction_plan = (
+                require_all_semantic_correction_targets(next_correction_plan)
+                if (
+                    self.policy.response_repair_limit is not None
+                    and semantic_corrections == self.policy.response_repair_limit
+                )
+                else next_correction_plan
+            )
             self._emit_activity(
                 activity_handler,
                 PlanningActivity(
