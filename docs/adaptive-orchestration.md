@@ -901,6 +901,13 @@ scope when a later incremental submission adds another missing authority. This
 keeps an accepted security or experience assignment from disappearing while the
 other specialist is added. The raw replacement and this monotonic projection
 are both persisted.
+If a complete-array replacement expresses an addition by changing one retained
+Agent into the required specialist under the same ID, the Controller preserves
+the accepted Agent and treats the explicit specialist definition as a new
+collision-free Agent. It prefers the single new ID already referenced by the
+affected criteria; otherwise it allocates a deterministic opaque specialist ID
+and lets the unique-owner projection bind the criteria. Multiple candidate IDs
+or multiple matching specialist definitions remain invalid.
 When the corrected graph contains exactly one Reviewer with the required
 acceptance authority, the Controller atomically projects that Reviewer into each
 affected criterion while preserving any non-Review verifier. The model is not

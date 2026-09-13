@@ -1829,14 +1829,17 @@ def _preserve_agents_during_missing_specialist_correction(
     raw_base_agents = base_proposal.get("agents")
     raw_corrected_agents = corrected_proposal.get("agents")
     raw_criteria = base_proposal.get("acceptance_criteria")
+    raw_corrected_criteria = corrected_proposal.get("acceptance_criteria")
     raw_definition = base_proposal.get("product_definition")
     if (
         not isinstance(raw_base_agents, list)
         or not isinstance(raw_corrected_agents, list)
         or not isinstance(raw_criteria, list)
+        or not isinstance(raw_corrected_criteria, list)
         or not all(isinstance(item, dict) for item in raw_base_agents)
         or not all(isinstance(item, dict) for item in raw_corrected_agents)
         or not all(isinstance(item, dict) for item in raw_criteria)
+        or not all(isinstance(item, dict) for item in raw_corrected_criteria)
     ):
         return payload, ()
     try:
@@ -1848,6 +1851,9 @@ def _preserve_agents_during_missing_specialist_correction(
         )
         criteria = tuple(
             ProposedCriterion.model_validate(item) for item in raw_criteria
+        )
+        corrected_criteria = tuple(
+            ProposedCriterion.model_validate(item) for item in raw_corrected_criteria
         )
         definition = (
             None
@@ -1891,15 +1897,76 @@ def _preserve_agents_during_missing_specialist_correction(
         for raw_agent, agent in zip(raw_base_agents, base_agents, strict=True)
         if agent.id in preserved_ids
     ]
-    additions = [
-        deepcopy(raw_agent)
-        for raw_agent, agent in zip(
-            raw_corrected_agents,
-            corrected_agents,
-            strict=True,
+    base_by_id = dict(
+        zip((agent.id for agent in base_agents), raw_base_agents, strict=True)
+    )
+    corrected_ids = {agent.id for agent in corrected_agents}
+    used_ids = {agent.id for agent in base_agents}
+    additions: list[dict[str, object]] = []
+    normalizations: list[str] = []
+    for raw_agent, agent in zip(
+        raw_corrected_agents,
+        corrected_agents,
+        strict=True,
+    ):
+        if agent.id not in preserved_ids:
+            additions.append(deepcopy(raw_agent))
+            used_ids.add(agent.id)
+            continue
+        if raw_agent == base_by_id[agent.id]:
+            continue
+        authority = specialization_contract(agent.specialization).acceptance_authority
+        if (
+            agent.capability is not AgentCapability.REVIEW
+            or authority not in required_authorities
+        ):
+            continue
+
+        # A full-array correction sometimes expresses an addition by changing a
+        # retained Agent in place. Preserve that Agent's accepted work and turn
+        # the unambiguous specialist definition into a collision-free addition.
+        # Prefer the one new ID already used by the affected criterion relations;
+        # otherwise allocate a deterministic opaque ID and let the unique-owner
+        # projection bind the criteria below.
+        referenced_new_ids_list: list[str] = []
+        for criterion in corrected_criteria:
+            try:
+                criterion_authority = _specialized_review_authority(
+                    criterion,
+                    definition,
+                )
+            except ValueError:
+                continue
+            if criterion_authority is not authority:
+                continue
+            referenced_new_ids_list.extend(
+                verifier_id
+                for verifier_id in criterion.verification_agent_ids
+                if verifier_id not in corrected_ids and verifier_id not in used_ids
+            )
+        referenced_new_ids = tuple(dict.fromkeys(referenced_new_ids_list))
+        preferred_id = (
+            referenced_new_ids[0]
+            if len(referenced_new_ids) == 1
+            else (
+                "security_reviewer"
+                if authority is AcceptanceAuthority.SECURITY
+                else "experience_reviewer"
+            )
         )
-        if agent.id not in preserved_ids
-    ]
+        specialist_id = preferred_id
+        suffix = 2
+        while specialist_id in used_ids:
+            specialist_id = f"{preferred_id}_{suffix}"
+            suffix += 1
+        addition = deepcopy(raw_agent)
+        addition["id"] = specialist_id
+        additions.append(addition)
+        used_ids.add(specialist_id)
+        normalizations.append(
+            f"deconflicted added {authority.value} Review authority from Agent "
+            f"{agent.id} as {specialist_id}"
+        )
     merged = [*preserved, *additions]
     if merged == raw_corrected_agents:
         return payload, ()
@@ -1907,9 +1974,10 @@ def _preserve_agents_during_missing_specialist_correction(
     normalized_proposal = normalized.get("proposal")
     assert isinstance(normalized_proposal, dict)
     normalized_proposal["agents"] = merged
-    return normalized, (
-        "preserved existing valid Agents while adding missing Review authority",
+    normalizations.append(
+        "preserved existing valid Agents while adding missing Review authority"
     )
+    return normalized, tuple(normalizations)
 
 
 def _digest_text(value: str) -> str:

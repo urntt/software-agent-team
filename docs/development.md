@@ -237,7 +237,11 @@ shared by primary workflow and usability expectations, not keyword matching.
 Also cover one correction that adds both specialist Agents without repeating
 their new IDs in separate criterion slots: the Controller must project each
 criterion to the unique matching Review authority, preserve non-Review verifiers,
-and record the normalization. Zero and multiple matching specialists, unknown
+and record the normalization. Reproduce the complete-array form that changes a
+retained Reviewer into a specialist while the criteria use one new ID; the
+Controller must preserve the original Reviewer, deconflict the specialist under
+that relational ID, and converge in the same correction. Zero and multiple
+matching specialists, unknown
 verifiers, and authority conflicts must still fail closed.
 Exercise each new specialized response through prompt composition, bound submission,
 grounding, artifact assembly, handoff, run-control transition, progress, and

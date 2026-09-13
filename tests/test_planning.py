@@ -5370,6 +5370,147 @@ def test_planning_repairs_missing_security_specialist_through_typed_slots(
     }
 
 
+def test_planning_deconflicts_in_place_specialist_addition_and_new_reference(
+    tmp_path: Path,
+) -> None:
+    body = proposal_body()
+    security_criterion = ProposedCriterion(
+        id="AC_SECURITY",
+        description="No untrusted path can ever escape the selected root.",
+        verification="Probe every approved path-entry boundary.",
+        review_boundaries=tuple(ReviewBoundaryKind),
+        requirement_ids=("REQ_SECURITY",),
+        verification_agent_ids=("quality_reviewer",),
+    )
+    security_error_criterion = ProposedCriterion(
+        id="AC_SECURITY_ERROR",
+        description="Malformed untrusted paths fail without exposing host data.",
+        verification="Probe malformed input across every approved boundary.",
+        review_boundaries=tuple(ReviewBoundaryKind),
+        requirement_ids=("REQ_SECURITY_ERROR",),
+        verification_agent_ids=("quality_reviewer",),
+    )
+    invalid = body.model_copy(
+        update={
+            "requirements": (
+                *body.requirements,
+                "Contain every untrusted path.",
+                "Reject malformed untrusted paths safely.",
+            ),
+            "requirement_ids": (
+                *body.requirement_ids,
+                "REQ_SECURITY",
+                "REQ_SECURITY_ERROR",
+            ),
+            "acceptance_criteria": (
+                *body.acceptance_criteria,
+                security_criterion,
+                security_error_criterion,
+            ),
+            "tasks": (
+                body.tasks[0].model_copy(
+                    update={
+                        "acceptance_criteria": (
+                            *body.tasks[0].acceptance_criteria,
+                            "AC_SECURITY",
+                            "AC_SECURITY_ERROR",
+                        )
+                    }
+                ),
+            ),
+        }
+    )
+    invalid_payload = json.loads(
+        response(
+            PlanningModelResponse(
+                kind=PlanningResponseKind.PROPOSAL,
+                proposal=invalid,
+            )
+        )
+    )
+    source_request = (
+        f"{request().source_request} Treat every path as untrusted and never "
+        "permit a root escape."
+    )
+    correction_base, _ = planning._normalize_planning_response_payload(
+        invalid_payload,
+        profile_criterion_ids=(),
+        user_inputs=(source_request,),
+    )
+    corrected_agents = deepcopy(correction_base["proposal"]["agents"])
+    corrected_reviewer = corrected_agents[-1]
+    corrected_reviewer.update(
+        {
+            "label": "Deterministic and Security Reviewer",
+            "responsibility": (
+                "Independently assess every untrusted path boundary and the "
+                "remaining general acceptance criteria."
+            ),
+            "rationale": (
+                "The request introduces an untrusted-input boundary requiring "
+                "security acceptance authority."
+            ),
+            "specialization": "security_assessment",
+        }
+    )
+    criterion_path = "/proposal/acceptance_criteria/2/verification_agent_ids"
+    error_criterion_path = "/proposal/acceptance_criteria/3/verification_agent_ids"
+    executor = ScriptedAgentExecutor(
+        [
+            json.dumps(invalid_payload),
+            correction_response(
+                correction_base,
+                {
+                    criterion_path: ["security_reviewer"],
+                    error_criterion_path: ["security_reviewer"],
+                    "/proposal/agents": corrected_agents,
+                },
+                target_paths=(
+                    criterion_path,
+                    error_criterion_path,
+                    "/proposal/agents",
+                ),
+            ),
+        ]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(response_repair_limit=None),
+        clock=AdvancingClock(),
+    )
+
+    planning_request = request(source_request=source_request)
+    created = coordinator.start(
+        planning_request,
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+
+    assert created is not None
+    assert [agent.id for agent in created.body.agents] == [
+        *(agent.id for agent in body.agents),
+        "security_reviewer",
+    ]
+    assert created.body.agents[-1].specialization is (
+        AgentSpecialization.SECURITY_ASSESSMENT
+    )
+    assert all(
+        criterion.verification_agent_ids == ("security_reviewer",)
+        for criterion in created.body.acceptance_criteria[-2:]
+    )
+    assert store.load_turn(request().run_id, 2).response_normalizations == (
+        "deconflicted added security Review authority from Agent "
+        "quality_reviewer as security_reviewer",
+        "preserved existing valid Agents while adding missing Review authority",
+    )
+    approved = coordinator.approve(planning_request, created)
+    assert compile_approved_review_scopes(approved) == {
+        "quality_reviewer": ("AC_SCAN", "AC_REPORT"),
+        "security_reviewer": ("AC_SECURITY", "AC_SECURITY_ERROR"),
+    }
+
+
 def test_planning_preserves_specialists_across_incremental_agent_corrections(
     tmp_path: Path,
 ) -> None:

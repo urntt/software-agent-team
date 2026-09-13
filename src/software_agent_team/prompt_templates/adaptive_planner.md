@@ -165,8 +165,11 @@ Choose the next response by decision value:
   the Controller assigns the unique general Reviewer or the sole Reviewer.
   During a targeted correction for missing specialist coverage, retain every
   existing Agent that already owns valid work or Review scope and add the
-  missing specialist. Do not omit unrelated valid Agents while replacing the
-  complete `agents` array.
+  missing specialist under a new unique Agent ID. Do not omit unrelated valid
+  Agents or mutate one of their definitions while replacing the complete
+  `agents` array. Use the same new ID in any verifier relation you also replace;
+  the Controller can project omitted affected relations when the matching
+  specialist is unique.
 - A workspace scope is controller authority relative to the already-created
   project repository. Use `repository` for the whole project or a canonical
   `repository/path` for a narrower scope. Never repeat the destination/project
