@@ -358,7 +358,11 @@ consume, while each caller projects its own remediation. Startup asks the user t
 make a state root usable; uninstall asks the user to make the existing one
 removable and no longer suggests selecting another state root.
 
-The suite passes 1,686/1,686 tests in 700.12 seconds. The canonical gate is pending: an attempt on this host completed doctor, format-check and lint with exit 0, then lost its test stage to host memory pressure rather than to a product failure.
+Clean implementation revision `e0e446da65e4d71444f7470736b94c9f0544abf4` passed
+the canonical gate with all 1,686 tests in 874.96 seconds. The report records
+four stages at exit 0, 307,957,760 bytes aggregate peak RSS, no kernel OOM
+delta, complete cleanup coverage for every stage, and no residual stage process,
+process lease, sandbox container, volume, or private test directory.
 
 The `v0.2.18` execution adapter classifies a missing typed submission as
 `upstream_incomplete` when the exact attributable turn contains tool calls and
