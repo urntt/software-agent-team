@@ -494,6 +494,56 @@ def test_schema_projection_rejects_conflicting_union_field_contracts() -> None:
     assert correction_value_schema(response_schema, "/summary") is None
 
 
+def test_schema_projection_makes_an_exact_closed_tuple_model_readable() -> None:
+    first = {
+        "type": "object",
+        "properties": {"id": {"type": "string", "const": "TASK_ONE"}},
+        "required": ["id"],
+    }
+    second = {
+        "type": "object",
+        "properties": {"id": {"type": "string", "const": "TASK_TWO"}},
+        "required": ["id"],
+    }
+    response_schema = {
+        "type": "object",
+        "properties": {
+            "tasks": {
+                "type": "array",
+                "items": False,
+                "prefixItems": [first, second],
+                "minItems": 2,
+                "maxItems": 2,
+            }
+        },
+    }
+
+    projected = correction_value_schema(response_schema, "/tasks")
+
+    assert projected is not None
+    assert projected["prefixItems"] == [first, second]
+    assert projected["items"] == {"anyOf": [first, second]}
+
+
+def test_schema_projection_keeps_a_reachable_closed_tuple_tail_closed() -> None:
+    response_schema = {
+        "type": "object",
+        "properties": {
+            "values": {
+                "type": "array",
+                "items": False,
+                "prefixItems": [{"type": "string"}],
+                "maxItems": 2,
+            }
+        },
+    }
+
+    projected = correction_value_schema(response_schema, "/values")
+
+    assert projected is not None
+    assert projected["items"] is False
+
+
 def test_controller_candidate_handles_replace_exact_values_without_model_bytes() -> (
     None
 ):

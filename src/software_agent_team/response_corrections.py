@@ -971,6 +971,39 @@ def _expand_local_schema_refs(
     }
 
 
+def _make_closed_tuple_items_model_readable(value: JsonValue) -> JsonValue:
+    """Replace an unreachable closed-tuple tail marker with useful item guidance.
+
+    In JSON Schema 2020-12, ``items: false`` beside ``prefixItems`` rejects only
+    elements after the positional prefix. When ``maxItems`` already prevents
+    such a tail, replacing that boolean with the union of the positional item
+    schemas is validation-equivalent. The explicit item shapes prevent a model
+    from interpreting the prominent boolean as the value requested for every
+    array element.
+    """
+
+    if isinstance(value, list):
+        return [_make_closed_tuple_items_model_readable(item) for item in value]
+    if not isinstance(value, Mapping):
+        return value
+    projected: dict[str, JsonValue] = {
+        str(key): _make_closed_tuple_items_model_readable(item)
+        for key, item in value.items()
+    }
+    prefix_items = projected.get("prefixItems")
+    max_items = projected.get("maxItems")
+    if (
+        projected.get("items") is False
+        and isinstance(prefix_items, list)
+        and prefix_items
+        and isinstance(max_items, int)
+        and not isinstance(max_items, bool)
+        and max_items <= len(prefix_items)
+    ):
+        projected["items"] = {"anyOf": deepcopy(prefix_items)}
+    return projected
+
+
 def correction_value_schema(
     response_schema: Mapping[str, JsonValue],
     target_path: str,
@@ -999,7 +1032,8 @@ def correction_value_schema(
             return None
         current = candidate
     expanded = _expand_local_schema_refs(dict(current), root=response_schema)
-    return dict(expanded) if isinstance(expanded, Mapping) else None
+    projected = _make_closed_tuple_items_model_readable(expanded)
+    return dict(projected) if isinstance(projected, Mapping) else None
 
 
 def correction_prompt(

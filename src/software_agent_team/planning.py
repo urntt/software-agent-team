@@ -6348,7 +6348,7 @@ def _planning_response_schema_for_correction(
         if any(issue.path == "/proposal/tasks" for issue in writer_coverage_issues):
             tasks_schema.update(
                 {
-                    "items": False,
+                    "items": {"anyOf": deepcopy(task_items)},
                     "minItems": len(tasks),
                     "maxItems": len(tasks),
                     "allOf": [

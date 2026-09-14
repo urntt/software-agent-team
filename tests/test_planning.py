@@ -9686,10 +9686,15 @@ def test_writer_coverage_correction_preserves_multiple_writer_choice(
     replacement = contract.parameters_schema()["properties"]["replacements"]["items"][
         "oneOf"
     ][0]["properties"]["replacement_value"]
+    positional_items = replacement["prefixItems"]
     assert [
-        item["properties"]["owner_agent_id"]["const"]
-        for item in replacement["prefixItems"]
-    ] == [primary_writer.id, second_writer.id]
+        item["properties"]["owner_agent_id"]["const"] for item in positional_items
+    ] == [
+        primary_writer.id,
+        second_writer.id,
+    ]
+    assert replacement["items"] == {"anyOf": positional_items}
+    assert '"items": false' not in executor.requests[1].prompt
     assert replacement["allOf"][0]["contains"]["properties"]["owner_agent_id"][
         "enum"
     ] == [primary_writer.id, second_writer.id]

@@ -17,6 +17,11 @@
       "id": "bounded-provider-error-detail",
       "impact": "patch",
       "summary": "Report structured provider failure details without reflecting credentials or untrusted terminal output"
+    },
+    {
+      "id": "model-readable-positional-corrections",
+      "impact": "patch",
+      "summary": "Render fixed-length positional correction arrays with explicit object item shapes while retaining their exact tuple constraints"
     }
   ]
 }

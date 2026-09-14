@@ -369,9 +369,20 @@ The affected runtime, configuration, CLI, and subprocess suite passes 157 tests.
 One local six-profile policy configuration validated and saved all routes with
 no credential value. Free-tier provider smoke succeeded for 3.1 Flash Lite,
 3.5 Flash Lite, and 3.5 through 3.7 Flash. The first 3.8 attempt returned a
-structured HTTP 503 availability error; a later bounded retry succeeded. These
-working-tree checks do not replace a clean canonical gate, exact release
-publication, published lifecycle, or a complete provider-backed delivery.
+structured HTTP 503 availability error; a later bounded retry succeeded.
+
+A fresh `v0.2.20` candidate journey then completed install, fixed-revision
+upgrade, both startup paths, six-route configuration, provider checking, task
+input interruption, and all 41 admission checks. Its fourth Planning turn
+exposed a fixed-length task-correction schema whose `items: false` tail marker
+was copied as four boolean task values. The Controller rejected those values and
+the journey stopped before approval or execution. The current correction schema
+retains every positional task shape, ID, owner, and exact length while also
+rendering the permitted object shapes through `items`; the same projection is
+applied defensively to any bounded closed tuple used as a correction value.
+Planning, correction, and production submission-bridge coverage passes all 260
+focused tests, including preservation of a reachable closed tail and removal of
+the misleading marker from the complete correction prompt.
 
 The prior development batch closed four correction and lifecycle defects found by
 the 2026-09-14 review and by replaying archived Planning failures.
@@ -404,10 +415,8 @@ four stages at exit 0, 307,957,760 bytes aggregate peak RSS, no kernel OOM
 delta, complete cleanup coverage for every stage, and no residual stage process,
 process lease, sandbox container, volume, or private test directory.
 
-The package and change-impact ledger prepare these compatible fixes as
-`v0.2.19` over `v0.2.18`. Exact release-head validation, immutable publication,
-published lifecycle validation, and a fresh complete provider-backed journey
-remain pending.
+That correction and lifecycle batch shipped as `v0.2.19` over `v0.2.18` after
+exact release-head validation and published lifecycle verification.
 
 The `v0.2.18` execution adapter classifies a missing typed submission as
 `upstream_incomplete` when the exact attributable turn contains tool calls and

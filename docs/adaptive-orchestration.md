@@ -484,6 +484,12 @@ collection immutable, every existing record slot is pinned to its current ID.
 Scope projections that rebuild a collection's slots, such as Review-task scope or
 writer criterion coverage, re-apply that binding instead of replacing it, so no
 untargeted record is released by the order in which projections run.
+For a fixed-length positional collection, the correction contract keeps those
+exact positional schemas but replaces an unreachable `items: false` tail marker
+with the union of the permitted object shapes. The two forms have identical JSON
+Schema validation semantics when `maxItems` ends at the positional prefix, while
+the latter gives model routes an explicit item shape instead of a misleading
+boolean value. The Controller still revalidates the complete corrected proposal.
 
 A correction with another permitted attempt may submit a strict subset of the
 remaining slots, and the Controller continues only after the validated issue
