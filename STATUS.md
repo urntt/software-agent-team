@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** release `v0.2.18` and complete a managed user journey
+**Current milestone:** validate `v0.2.18` through a complete managed user journey
 
 **Last updated:** September 14, 2026
 
@@ -11,33 +11,31 @@ product, architecture, experiment, or roadmap; those decisions belong to
 
 ## Current Release
 
-The immutable `v0.2.17` tag,
-[GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.2.17),
+The immutable `v0.2.18` tag,
+[GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.2.18),
 package version, and release manifest identify source revision
-`067def39c204e66ba0754f210db5153e21208425` and Git archive digest
-`sha256:ffac275025639a0c65cb83dce0c77dc09091bf730cb6f517f720c303dc598969`.
-It preserves existing definition IDs during whole-record correction unless identity
-itself is targeted. The exact clean release head passed all 1,663 local tests;
-exact-tag GitHub Actions
-[run 34788426298](https://github.com/urntt/software-agent-team/actions/runs/34788426298)
-passed 1,660 tests with three environment-dependent skips and published exactly
-one identity manifest asset. A fresh non-root `v0.2.16` to `v0.2.17` lifecycle
+`388aca442fa5bb38c4866c8fb1796947f82c5de6` and Git archive digest
+`sha256:abaf5ee77639997d2da8718d8627240ce26f97313e0c1c394903cf41a04ddeb0`.
+It lets a write-capable Agent with attributable tool progress use the existing
+bounded continuation when its terminal response omits the required typed
+submission. The exact clean release head passed all 1,665 local tests; exact-tag
+GitHub Actions
+[run 34793125611](https://github.com/urntt/software-agent-team/actions/runs/34793125611)
+passed 1,662 tests with three environment-dependent skips and published exactly
+one identity manifest asset. A fresh non-root `v0.2.17` to `v0.2.18` lifecycle
 passed installation, upgrade discovery and activation, state preservation,
-same-target no-op, active-run refusal, fault-injected rollback, channel round
-trip, image reconciliation, foreign OpenClaw isolation, credential-free export,
-full uninstall, and exact cleanup.
+same-target and same-development-ref no-ops, active-run refusal, fault-injected
+rollback, channel round trip, image reconciliation, foreign OpenClaw isolation,
+credential-free export, full uninstall, and exact cleanup.
 
-Two fresh provider-backed `v0.2.17` journeys passed installation, upgrade,
-first-use configuration and provider checking, interrupted task input, repeat
-startup, and all task-admission checks. The first stopped during Planning when a
-correction produced provider output without attributable session or submission-tool
-evidence. The second completed six attributable Planning turns, approval, and
-runtime controls, then stopped after the Implementation Agent made 33 attributable
-tool calls and emitted a terminal assistant response without the required typed
-submission. Both failures remained fail closed, settled every call once, created no
-delivery, and completed exact fresh-account cleanup. The post-release development
-head below repairs the controllable Implementation recovery gap; the intermittent
-Planning evidence absence remains unclassified.
+An additional fresh provider-backed rehearsal installed `v0.2.17`, upgraded to
+`v0.2.18`, completed first-use DeepSeek configuration and provider checking,
+handled interrupted task input, passed repeat-startup self-checks and all 26 task
+admission checks, and was intentionally cancelled after the first Planning
+invocation was queued. Exact fresh-account cleanup completed, but that partial
+rehearsal does not establish Planning, execution, acceptance, export, or delivery.
+The intermittent Planning evidence absence observed on `v0.2.17` therefore remains
+unclassified, and a fresh complete provider-backed journey remains pending.
 
 The immutable `v0.2.13` tag,
 [GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.2.13),
@@ -335,7 +333,7 @@ account/HOME/resource cleanup all passed. The scenario made no provider calls.
 
 ## Current Development Head
 
-The post-`v0.2.17` execution adapter classifies a missing typed submission as
+The `v0.2.18` execution adapter classifies a missing typed submission as
 `upstream_incomplete` when the exact attributable turn contains tool calls and
 ends either on a paired tool result or on a later assistant response. Assistant
 text remains non-authoritative. A write-capable Agent can use the existing
@@ -344,11 +342,13 @@ scope, and a previously unseen content-sensitive state are verified; it retains
 the same task, workspace, session, route, permission, budget, and deadline.
 Zero-tool prose, unverifiable evidence, no progress, repeated state, exhausted
 authority, and user stop remain bounded failures. Execution, dynamic-runner,
-artifact, dynamic-workflow, and workflow modules pass all 256 tests at clean
+artifact, dynamic-workflow, and workflow modules pass all 256 focused tests at
 implementation revision `853c4d8fec2ba4fb62d7fc2c26ea97fc7ce52da6`.
 The package, lock, and change-impact ledger identify `v0.2.18` as a compatible
-patch over `v0.2.17`; exact release-head validation, hosted publication,
-published upgrade, and a fresh complete provider-backed journey remain pending.
+patch over `v0.2.17`; exact local and hosted release-head validation, immutable
+publication, and the published stable lifecycle all pass at release revision
+`388aca442fa5bb38c4866c8fb1796947f82c5de6`. A fresh complete provider-backed
+journey remains pending.
 
 The Controller released in `v0.2.16` accumulates every verified Review across
 completed iterations. Since the current artifact contract has no explicit resolution
