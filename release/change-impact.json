@@ -22,6 +22,11 @@
       "id": "model-readable-positional-corrections",
       "impact": "patch",
       "summary": "Render fixed-length positional correction arrays with explicit object item shapes while retaining their exact tuple constraints"
+    },
+    {
+      "id": "typed-product-definition-corrections",
+      "impact": "patch",
+      "summary": "Bind category-compatible ProductDefinition decision repairs to exact candidates and decode structured correction values only under their target schema"
     }
   ]
 }

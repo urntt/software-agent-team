@@ -156,6 +156,162 @@ def test_correction_uses_short_request_local_slot_ids_for_provider_values() -> N
         )
 
 
+def test_correction_decodes_a_serialized_object_only_for_an_object_contract() -> None:
+    """A loose one-shot transport may preserve one extra JSON encoding layer."""
+
+    path = "/proposal/product_definition/operational_expectations"
+    original = {
+        "disposition": "planner_recommendation",
+        "source": "planner",
+        "rationale": "The original rationale.",
+        "statement": "The original statement.",
+        "decision_ids": ["DECISION_WRONG"],
+    }
+    payload: dict[str, object] = {
+        "proposal": {"product_definition": {"operational_expectations": original}}
+    }
+    report = diagnostic_from_invariant(
+        payload,
+        failure_class=ResponseFailureClass.SEMANTIC_CONTEXT,
+        authority=ResponseIssueAuthority.MODEL,
+        code="planning_context",
+        invariant_id="planning_product_recommendation_category",
+        subjects=(),
+        message="use a category-compatible Planner decision",
+        paths=(path,),
+    )
+    plan = build_semantic_correction_plan(payload, report)
+    assert plan is not None
+    response_schema = {
+        "type": "object",
+        "properties": {
+            "proposal": {
+                "type": "object",
+                "properties": {
+                    "product_definition": {
+                        "type": "object",
+                        "properties": {
+                            "operational_expectations": {
+                                "type": "object",
+                                "additionalProperties": False,
+                                "properties": {
+                                    "disposition": {"type": "string"},
+                                    "source": {"type": "string"},
+                                    "rationale": {"type": "string"},
+                                    "statement": {"type": "string"},
+                                    "decision_ids": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                    },
+                                },
+                                "required": [
+                                    "disposition",
+                                    "source",
+                                    "rationale",
+                                    "statement",
+                                ],
+                            }
+                        },
+                    }
+                },
+            }
+        },
+    }
+    replacement = {
+        **original,
+        "rationale": "The corrected rationale.",
+        "statement": "The corrected statement.",
+        "decision_ids": ["DECISION_ALLOWED"],
+    }
+
+    application = apply_semantic_correction_with_evidence(
+        correction_submission(plan, {path: json.dumps(replacement)}),
+        plan,
+        response_schema=response_schema,
+    )
+
+    corrected_proposal = application.payload["proposal"]
+    assert isinstance(corrected_proposal, dict)
+    corrected_definition = corrected_proposal["product_definition"]
+    assert isinstance(corrected_definition, dict)
+    assert corrected_definition["operational_expectations"] == replacement
+    assert application.normalizations == (
+        "decoded JSON-serialized object correction value for " + path,
+    )
+
+
+@pytest.mark.parametrize(
+    "replacement",
+    [
+        "not JSON",
+        '{"statement":"first","statement":"second"}',
+        '["wrong root type"]',
+    ],
+)
+def test_correction_does_not_decode_invalid_serialized_object_values(
+    replacement: str,
+) -> None:
+    path = "/item"
+    payload: dict[str, object] = {"item": {"statement": "old"}}
+    plan = build_semantic_correction_plan(
+        payload,
+        diagnostic_from_invariant(
+            payload,
+            failure_class=ResponseFailureClass.SEMANTIC_CONTEXT,
+            authority=ResponseIssueAuthority.MODEL,
+            code="context",
+            invariant_id="context",
+            subjects=(),
+            message="replace the object",
+            paths=(path,),
+        ),
+    )
+    assert plan is not None
+
+    application = apply_semantic_correction_with_evidence(
+        correction_submission(plan, {path: replacement}),
+        plan,
+        response_schema={
+            "type": "object",
+            "properties": {"item": {"type": "object"}},
+        },
+    )
+
+    assert application.payload == {"item": replacement}
+    assert application.normalizations == ()
+
+
+def test_correction_preserves_a_json_looking_literal_string() -> None:
+    payload: dict[str, object] = {"summary": "bad"}
+    plan = build_semantic_correction_plan(
+        payload,
+        diagnostic_from_invariant(
+            payload,
+            failure_class=ResponseFailureClass.SEMANTIC_SCHEMA,
+            authority=ResponseIssueAuthority.MODEL,
+            code="summary",
+            invariant_id="summary",
+            subjects=(),
+            message="replace the summary",
+            paths=("/summary",),
+        ),
+    )
+    assert plan is not None
+    literal = '{"this":"is still text"}'
+
+    application = apply_semantic_correction_with_evidence(
+        correction_submission(plan, {"/summary": literal}),
+        plan,
+        response_schema={
+            "type": "object",
+            "properties": {"summary": {"type": "string"}},
+        },
+    )
+
+    assert application.payload == {"summary": literal}
+    assert application.normalizations == ()
+
+
 def test_correction_applies_an_authorized_subset_and_preserves_omitted_targets() -> (
     None
 ):

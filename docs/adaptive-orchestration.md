@@ -440,6 +440,12 @@ may perform only these bounded, semantics-preserving normalizations:
   summary, and rationale. Stable ProductDefinition and assumption references
   narrow the candidate category before exposure. The model selects a handle and
   cannot rewrite the retained fields or submit another cross-authority pair;
+- When a Planner-recommended ProductDefinition dimension cites a decision with
+  the wrong authority or category, preserve the complete dimension and expose
+  only candidate handles whose bound value replaces `decision_ids` with an
+  existing Planner decision from that dimension's required category. If no such
+  decision exists, do not offer a local correction that cannot satisfy the
+  unchanged validator;
 - Compile each Review-owned task's known criterion bindings against its
   non-overlapping Review scope. If at least one submitted binding is in scope,
   remove bindings owned by another Reviewer and retain the in-scope focus. A
@@ -555,14 +561,19 @@ missing, malformed, duplicate, or post-submission calls. It leaves model inspect
 provider smoke, and legacy
 text-compatibility requests unchanged, because those requests do not expose an
 invocation binding. SAT gives dynamic Agents the exact AgentSpec-derived semantic JSON Schema
-inside the envelope. Planning uses a permissive object-only inner transport
-schema for an initial question or proposal so every syntactically structured
-response reaches the Controller's exact semantic validator; the private envelope
-still binds the exact Planning semantic-schema digest. A targeted Planning
-correction instead exposes its exact request-local slot replacement schema at
-both the submission and Controller boundaries. This allows deterministic forbidden-field
-normalization and targeted semantic correction to operate after transport without
-trusting invalid content. SAT gives every invocation a fresh controller binding, then
+inside the envelope. Planning and targeted correction use a permissive
+object-only inner transport schema so every syntactically structured response
+reaches the Controller's exact semantic validator without an upstream retry
+claiming Controller authority; the private envelope still binds the exact
+semantic-schema digest. The prompt exposes each correction slot's exact value
+schema, and the Controller enforces it after capture. If that schema permits only
+an object or array and the captured replacement contains exactly one strict JSON
+encoding of the matching container, the Controller removes that extra encoding
+layer before validation. Duplicate keys, non-standard constants, an oversized
+value, a mismatched root type, or a JSON-looking value for a string slot is not
+decoded. This allows deterministic forbidden-field normalization and targeted
+semantic correction to operate after transport without trusting invalid content.
+SAT gives every invocation a fresh controller binding, then
 requires the private envelope to match the final successful attributable tool call.
 The v2 evidence binds the canonical outer tool-arguments digest separately from the
 inner semantic-object digest. A direct object, a second `artifact` envelope, or any

@@ -39,6 +39,7 @@ from software_agent_team.artifacts import (
     ProductDefinitionBasis,
     ProductDefinitionDimension,
     ProductDefinitionDisposition,
+    ProductDefinitionStatement,
     ProviderLivenessEvidence,
     ReviewBoundaryKind,
     RuntimeRejectionEvidence,
@@ -2184,6 +2185,124 @@ def _bind_planning_dependency_correction_candidate(
     return attach_semantic_correction_candidates(plan, tuple(slots))
 
 
+def _planning_product_recommendation_decision_candidates(
+    plan: SemanticCorrectionPlan,
+    *,
+    target_path: str,
+) -> tuple[SemanticCorrectionCandidate, ...] | None:
+    """Compile exact decision-link repairs for one recommended product dimension."""
+
+    match = re.fullmatch(
+        r"/proposal/product_definition/([a-z_]+)",
+        target_path,
+    )
+    if match is None:
+        return None
+    try:
+        dimension = ProductDefinitionDimension(match.group(1))
+    except ValueError:
+        return None
+    issues = tuple(
+        issue for issue in plan.diagnostic.issues if issue.path == target_path
+    )
+    if (
+        len(issues) != 1
+        or issues[0].authority is not ResponseIssueAuthority.MODEL
+        or issues[0].invariant_id
+        not in {
+            "planning_product_recommendation_authority",
+            "planning_product_recommendation_category",
+        }
+    ):
+        return None
+    proposal = plan.base_payload.get("proposal")
+    definition = (
+        None
+        if not isinstance(proposal, Mapping)
+        else proposal.get("product_definition")
+    )
+    raw_item = (
+        None if not isinstance(definition, Mapping) else definition.get(dimension.value)
+    )
+    decisions = None if not isinstance(proposal, Mapping) else proposal.get("decisions")
+    if not isinstance(raw_item, dict) or not isinstance(decisions, list):
+        return None
+    try:
+        item = ProductDefinitionStatement.model_validate(raw_item)
+        parsed_decisions = tuple(
+            PlanningDecisionRecord.model_validate(value) for value in decisions
+        )
+    except ValidationError:
+        return None
+    if item.disposition is not ProductDefinitionDisposition.PLANNER_RECOMMENDATION:
+        return None
+    expected_category = _PRODUCT_DIMENSION_DECISION_CATEGORY[dimension]
+    eligible_ids = tuple(
+        decision.id
+        for decision in parsed_decisions
+        if decision.authority is PlanningDecisionAuthority.PLANNER_PROPOSAL
+        and decision.category is expected_category
+    )
+    if not eligible_ids:
+        return ()
+    retained_ids = tuple(
+        decision_id for decision_id in item.decision_ids if decision_id in eligible_ids
+    )
+    candidate_id_sets = (retained_ids,) if retained_ids else tuple(
+        (decision_id,) for decision_id in eligible_ids
+    )
+    candidates: list[SemanticCorrectionCandidate] = []
+    for decision_ids in candidate_id_sets:
+        replacement = deepcopy(raw_item)
+        replacement["decision_ids"] = list(decision_ids)
+        candidates.append(
+            SemanticCorrectionCandidate(
+                handle=f"candidate_{len(candidates) + 1}",
+                replacement_value=replacement,
+                source=(
+                    "controller-validated "
+                    f"{expected_category.value} Planner decision link"
+                ),
+            )
+        )
+    return tuple(candidates)
+
+
+def _bind_planning_product_recommendation_correction_candidates(
+    plan: SemanticCorrectionPlan | None,
+) -> SemanticCorrectionPlan | None:
+    """Bind category-compatible product recommendation repairs to short handles."""
+
+    if plan is None:
+        return None
+    slots_by_path = {slot.target_path: slot for slot in plan.candidate_slots}
+    for target_path in plan.evidence.target_paths:
+        if target_path in slots_by_path:
+            continue
+        candidates = _planning_product_recommendation_decision_candidates(
+            plan,
+            target_path=target_path,
+        )
+        if candidates is None:
+            continue
+        if not candidates:
+            return None
+        slots_by_path[target_path] = SemanticCorrectionCandidateSlot(
+            target_path=target_path,
+            candidates=candidates,
+        )
+    if len(slots_by_path) == len(plan.candidate_slots):
+        return plan
+    return attach_semantic_correction_candidates(
+        plan,
+        tuple(
+            slots_by_path[path]
+            for path in plan.evidence.target_paths
+            if path in slots_by_path
+        ),
+    )
+
+
 _CURRENT_DECISION_WIRE_FIELDS = (
     "id",
     "category",
@@ -2423,7 +2542,9 @@ def _bind_planning_correction_candidates(
     """Attach every safe Controller-owned Planning correction vocabulary."""
 
     return _bind_planning_decision_authority_correction_candidates(
-        _bind_planning_dependency_correction_candidate(plan)
+        _bind_planning_product_recommendation_correction_candidates(
+            _bind_planning_dependency_correction_candidate(plan)
+        )
     )
 
 
@@ -9457,6 +9578,7 @@ class AdaptivePlanningCoordinator:
                         application = apply_semantic_correction_with_evidence(
                             payload,
                             correction_plan,
+                            response_schema=response_schema,
                         )
                         (
                             payload,

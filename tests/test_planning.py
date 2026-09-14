@@ -901,14 +901,10 @@ def test_planning_repairs_schema_then_all_invalid_product_dimensions_together(
                                 )
                             ),
                             "/proposal/product_definition/usability_expectations": (
-                                valid_definition.usability_expectations.model_dump(
-                                    mode="json"
-                                )
+                                "candidate_1"
                             ),
                             "/proposal/product_definition/operational_expectations": (
-                                valid_definition.operational_expectations.model_dump(
-                                    mode="json"
-                                )
+                                "candidate_1"
                             ),
                             "/proposal/product_definition/delivery_maturity": (
                                 valid_definition.delivery_maturity.model_dump(
@@ -963,6 +959,66 @@ def test_planning_repairs_schema_then_all_invalid_product_dimensions_together(
     assert final_replacements_schema["minItems"] == 5
     assert final_replacements_schema["maxItems"] == 5
     assert "final bounded correction attempt" in executor.requests[2].prompt
+
+
+def test_planning_binds_product_recommendation_category_to_exact_candidates(
+    tmp_path: Path,
+) -> None:
+    """A contextual link repair must not ask the model to rebuild the object."""
+
+    initial = json.loads(response(proposal_response()))
+    path = "/proposal/product_definition/operational_expectations"
+    initial["proposal"]["product_definition"]["operational_expectations"][
+        "decision_ids"
+    ] = ["DECISION_DELIVERY"]
+    correction_base, _ = planning._normalize_planning_response_payload(
+        initial,
+        user_inputs=(request().source_request,),
+    )
+    executor = ScriptedAgentExecutor(
+        [
+            json.dumps(initial),
+            correction_response(correction_base, {path: "candidate_1"}),
+        ]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(response_repair_limit=1),
+        clock=AdvancingClock(),
+    )
+
+    created = coordinator.start(
+        request(),
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+
+    assert created is not None
+    assert created.body == proposal_body()
+    rejected = store.load_turn(request().run_id, 1)
+    assert rejected.response_validation is not None
+    assert rejected.response_validation.correction_paths == (path,)
+    assert {issue.invariant_id for issue in rejected.response_validation.issues} == {
+        "planning_product_recommendation_category"
+    }
+    contract = executor.requests[1].submission_contract
+    assert contract is not None
+    variant = contract.parameters_schema()["properties"]["replacements"]["items"][
+        "oneOf"
+    ][0]
+    assert variant["properties"]["replacement_value"] == {
+        "type": "string",
+        "enum": ["candidate_1"],
+    }
+    assert "controller-validated acceptance_scope Planner decision link" in (
+        executor.requests[1].prompt
+    )
+    corrected = store.load_turn(request().run_id, 2)
+    assert corrected.semantic_correction_outcome == "accepted"
+    assert corrected.response_normalizations == (
+        "bound controller evidence candidate candidate_1 to " + path,
+    )
 
 
 def test_planning_final_bounded_correction_requires_all_slots_and_converges(

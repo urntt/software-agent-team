@@ -22,6 +22,7 @@ from pydantic import (
 
 CORRECTION_SCHEMA_VERSION = 2
 MAX_CORRECTION_FIELDS = 64
+MAX_SERIALIZED_CORRECTION_VALUE_BYTES = 512 * 1024
 
 
 class ResponseFailureClass(StrEnum):
@@ -1141,15 +1142,102 @@ def correction_prompt(
 def apply_semantic_correction(
     submission_payload: dict[str, object],
     plan: SemanticCorrectionPlan,
+    *,
+    response_schema: Mapping[str, JsonValue] | None = None,
 ) -> dict[str, object]:
     """Apply exactly the authorized replacements to a copied base payload."""
 
-    return apply_semantic_correction_with_evidence(submission_payload, plan).payload
+    return apply_semantic_correction_with_evidence(
+        submission_payload,
+        plan,
+        response_schema=response_schema,
+    ).payload
+
+
+def _structured_schema_root_types(
+    schema: Mapping[str, JsonValue],
+) -> frozenset[str]:
+    """Return structured root types only when a schema excludes scalar values."""
+
+    declared = schema.get("type")
+    if isinstance(declared, str):
+        return (
+            frozenset((declared,))
+            if declared in {"array", "object"}
+            else frozenset()
+        )
+    if isinstance(declared, list):
+        values = {
+            value for value in declared if isinstance(value, str)
+        }
+        if values and values.issubset({"array", "object"}):
+            return frozenset(values)
+        return frozenset()
+    for keyword in ("oneOf", "anyOf"):
+        branches = schema.get(keyword)
+        if not isinstance(branches, list) or not branches:
+            continue
+        branch_types: set[str] = set()
+        for branch in branches:
+            if not isinstance(branch, Mapping):
+                return frozenset()
+            current = _structured_schema_root_types(branch)
+            if not current:
+                return frozenset()
+            branch_types.update(current)
+        return frozenset(branch_types)
+    return frozenset()
+
+
+def _reject_duplicate_correction_keys(
+    pairs: list[tuple[str, object]],
+) -> dict[str, object]:
+    """Reject lossy duplicate keys while decoding one structured replacement."""
+
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON object key: {key}")
+        result[key] = value
+    return result
+
+
+def _decode_serialized_structured_replacement(
+    value: JsonValue,
+    *,
+    value_schema: Mapping[str, JsonValue] | None,
+) -> tuple[JsonValue, str | None]:
+    """Decode one JSON-serialized container only under an exact typed contract."""
+
+    if not isinstance(value, str) or value_schema is None:
+        return value, None
+    expected_types = _structured_schema_root_types(value_schema)
+    if not expected_types or len(value.encode("utf-8")) > (
+        MAX_SERIALIZED_CORRECTION_VALUE_BYTES
+    ):
+        return value, None
+    try:
+        decoded = json.loads(
+            value,
+            object_pairs_hook=_reject_duplicate_correction_keys,
+            parse_constant=lambda name: (_ for _ in ()).throw(
+                ValueError(f"non-standard JSON constant: {name}")
+            ),
+        )
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return value, None
+    if isinstance(decoded, dict) and "object" in expected_types:
+        return decoded, "object"
+    if isinstance(decoded, list) and "array" in expected_types:
+        return decoded, "array"
+    return value, None
 
 
 def apply_semantic_correction_with_evidence(
     submission_payload: dict[str, object],
     plan: SemanticCorrectionPlan,
+    *,
+    response_schema: Mapping[str, JsonValue] | None = None,
 ) -> SemanticCorrectionApplication:
     """Apply replacements and record every controller-owned candidate binding."""
 
@@ -1197,7 +1285,21 @@ def apply_semantic_correction_with_evidence(
         submitted_value = submitted_by_handle[handle]
         candidate_slot = candidate_slots.get(path)
         if candidate_slot is None:
-            resolved_values[path] = submitted_value
+            value_schema = (
+                None
+                if response_schema is None
+                else correction_value_schema(response_schema, path)
+            )
+            resolved_value, decoded_type = _decode_serialized_structured_replacement(
+                submitted_value,
+                value_schema=value_schema,
+            )
+            resolved_values[path] = resolved_value
+            if decoded_type is not None:
+                normalizations.append(
+                    "decoded JSON-serialized "
+                    f"{decoded_type} correction value for {path}"
+                )
             continue
         candidates = {item.handle: item for item in candidate_slot.candidates}
         if not isinstance(submitted_value, str) or submitted_value not in candidates:

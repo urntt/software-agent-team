@@ -384,6 +384,26 @@ Planning, correction, and production submission-bridge coverage passes all 260
 focused tests, including preservation of a reachable closed tail and removal of
 the misleading marker from the complete correction prompt.
 
+A second fresh candidate journey on exact `19b642c4f463b48e5a09f9e46ba5f918de30af35`
+again passed install, fixed-revision upgrade, both startup paths, free-tier
+provider checking, task-input interruption, six-route configuration, and all 41
+admission checks. Planning asked and accepted one `target_users` clarification.
+Its next proposal cited a delivery decision from the operational-expectations
+dimension, then encoded the whole object correction as a JSON string while
+retaining the same incompatible decision ID. The Controller rejected the value
+before approval or execution; both provider invocations completed at confirmed
+zero price, with no quota, 429, 503, timeout, or paid-tier use.
+
+The current development head now compiles wrong-authority or wrong-category
+Planner recommendation links into Controller-owned candidates that preserve the
+dimension and bind only existing decisions from its required category. The model
+selects a short handle instead of rebuilding the object. At the shared correction
+boundary, a free-form value encoded one extra time is decoded only when its exact
+target schema exclusively requires an object or array; duplicate keys,
+non-standard constants, oversized values, wrong roots, and JSON-looking literal
+strings remain unnormalized. All 407 Planning, correction, dynamic-runner,
+dynamic-prompting, workflow, and submission-bridge focused tests pass.
+
 The prior development batch closed four correction and lifecycle defects found by
 the 2026-09-14 review and by replaying archived Planning failures.
 

@@ -106,6 +106,7 @@ from software_agent_team.response_corrections import (
     correction_outcome,
 )
 from software_agent_team.responses import (
+    RESPONSE_BODY_MODELS,
     AgentArtifactResponseError,
     AgentResponseBody,
     GroundedReviewReportResponse,
@@ -1019,6 +1020,16 @@ class WorkflowCoordinator:
                             corrected_payload = apply_semantic_correction(
                                 envelope,
                                 correction_plan,
+                                response_schema=(
+                                    None
+                                    if (
+                                        response_model := RESPONSE_BODY_MODELS.get(
+                                            request.expected_kind
+                                        )
+                                    )
+                                    is None
+                                    else response_model.model_json_schema()
+                                ),
                             )
                             parse_result = result.model_copy(
                                 update={

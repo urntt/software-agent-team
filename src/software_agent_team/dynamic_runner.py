@@ -754,6 +754,14 @@ class DynamicAgentRunner:
                             application = apply_semantic_correction_with_evidence(
                                 result.semantic_submission.payload,
                                 correction_plan,
+                                response_schema=(
+                                    None
+                                    if base_request.submission_contract is None
+                                    else (
+                                        base_request.submission_contract
+                                        .parameters_schema()
+                                    )
+                                ),
                             )
                             controller_semantic_payload = application.payload
                             correction_binding_normalizations = (
