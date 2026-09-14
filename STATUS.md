@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** release `v0.2.19` and complete a managed user journey
+**Current milestone:** release `v0.2.20` and complete a managed user journey
 
 **Last updated:** September 14, 2026
 
@@ -10,6 +10,21 @@ product, architecture, experiment, or roadmap; those decisions belong to
 [`VISION.md`](VISION.md).
 
 ## Current Release
+
+The immutable `v0.2.19` tag,
+[GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.2.19),
+package version, and release manifest identify source revision
+`a90fb1426554cf2f98066a37e4949458cfd9fccc` and Git archive digest
+`sha256:f8ba508a0af15f30def9d4bbfe5707cc160f1042a9bb96d4e63b4006e103661d`.
+Exact-tag GitHub Actions
+[run 34884770667](https://github.com/urntt/software-agent-team/actions/runs/34884770667)
+passed 1,683 tests with three environment-dependent skips and published exactly
+one identity manifest asset. A fresh non-root `v0.2.18` to `v0.2.19` lifecycle
+passed installation, upgrade discovery and activation, state preservation,
+same-target and channel checks, rollback, foreign OpenClaw isolation, export,
+full uninstall, and exact cleanup. A separate provider-backed journey reached
+the exact configured route check, then timed out before Planning; it did not
+produce a completed delivery.
 
 The immutable `v0.2.18` tag,
 [GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.2.18),
@@ -333,7 +348,32 @@ account/HOME/resource cleanup all passed. The scenario made no provider calls.
 
 ## Current Development Head
 
-The current development head closes four correction and lifecycle defects found by
+The current development head supervises each provider smoke check with a Linux
+child-subreaper, inherited opaque ownership marker, UID and PID/start-time
+revalidation, and pidfd signalling. A timeout now terminates a detached
+session leader and reports the 180-second boundary; a command that exits while
+leaving a descendant also fails after exact cleanup. Non-zero provider results
+prefer a nested JSON code, status, and bounded message, remove the configured
+environment credential, strip control characters, and never reflect
+unstructured stdout or stderr.
+
+Six exact stable Gemini Flash routes supplement the pinned OpenClaw catalog:
+Gemini 3.1 Flash Lite, 3.5 Flash Lite, and 3.5 through 3.8 Flash. Every route
+uses the native Google Generative AI transport, an environment credential
+reference, the provider-documented 1,048,576-token context and 65,536-token
+output limits, tool support, and a shared `medium` thinking setting for provider
+smoke, Planning, and dynamic Agents. No model alias or unlisted Google route is
+inferred.
+
+The affected runtime, configuration, CLI, and subprocess suite passes 157 tests.
+One local six-profile policy configuration validated and saved all routes with
+no credential value. Free-tier provider smoke succeeded for 3.1 Flash Lite,
+3.5 Flash Lite, and 3.5 through 3.7 Flash. The first 3.8 attempt returned a
+structured HTTP 503 availability error; a later bounded retry succeeded. These
+working-tree checks do not replace a clean canonical gate, exact release
+publication, published lifecycle, or a complete provider-backed delivery.
+
+The prior development batch closed four correction and lifecycle defects found by
 the 2026-09-14 review and by replaying archived Planning failures.
 
 Record identity in a correction response schema now has exactly one owner. A

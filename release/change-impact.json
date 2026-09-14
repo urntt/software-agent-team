@@ -1,22 +1,22 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.2.18",
-  "target_version": "0.2.19",
+  "baseline_version": "0.2.19",
+  "target_version": "0.2.20",
   "changes": [
     {
-      "id": "planning-record-identity-pinning",
+      "id": "bounded-provider-smoke-processes",
       "impact": "patch",
-      "summary": "Preserve every immutable Planning record identity when task-scope projections rebuild correction slots"
+      "summary": "Supervise provider smoke checks with inherited process ownership and clean detached descendants after timeout or exit"
     },
     {
-      "id": "planning-submission-evidence-recovery",
+      "id": "stable-gemini-flash-presets",
       "impact": "patch",
-      "summary": "Persist and reissue once a Planning turn that produced no attributable typed submission"
+      "summary": "Add exact Google Generative AI profiles and supported thinking settings for six stable Gemini Flash models"
     },
     {
-      "id": "operation-specific-state-remediation",
+      "id": "bounded-provider-error-detail",
       "impact": "patch",
-      "summary": "Render state-layout recovery guidance for the caller's startup or uninstall operation"
+      "summary": "Report structured provider failure details without reflecting credentials or untrusted terminal output"
     }
   ]
 }
