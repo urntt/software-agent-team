@@ -42,6 +42,9 @@ from software_agent_team.budgets import (
 from software_agent_team.execution import (
     AgentExecutionActivity,
     AgentExecutionActivityKind,
+    AgentExecutionRequest,
+    AgentExecutionResult,
+    AgentExecutionStatus,
     AgentExecutionTelemetry,
     AgentTokenUsage,
     AgentToolActionClass,
@@ -100,11 +103,21 @@ from software_agent_team.planning import (
 from software_agent_team.response_corrections import (
     ResponseFailureClass,
     ResponseIssueAuthority,
+    ResponseIssueSubject,
+    ResponseIssueSubjectKind,
+    ResponseValidationDiagnostic,
+    ResponseValidationIssue,
     SemanticCorrectionOutcome,
+    SemanticCorrectionPlan,
+    SemanticCorrectionRequestEvidence,
     correction_value_schema,
     semantic_correction_slot_handle,
 )
-from software_agent_team.submissions import AgentSubmissionPurpose
+from software_agent_team.submissions import (
+    AgentSubmissionPurpose,
+    AgentSubmissionStatus,
+    rejected_submission_evidence,
+)
 from software_agent_team.teams import (
     AgentCapability,
     AgentSpecialization,
@@ -11112,3 +11125,372 @@ def test_ordinary_user_can_answer_revise_edit_and_approve_without_json(
     assert "controller may now create only the Agents shown above" in rendered
     assert not any("JSON" in line for line in output)
     assert prompts[-1] == "Review choice: "
+
+
+def correction_plan_for(
+    payload: dict[str, object],
+    issues: tuple[ResponseValidationIssue, ...],
+) -> SemanticCorrectionPlan:
+    """Build one controller-owned correction plan over an exact base payload."""
+
+    digest = hashlib.sha256(
+        json.dumps(payload, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    target_paths = tuple(sorted({issue.path for issue in issues}))
+    return SemanticCorrectionPlan(
+        base_payload=payload,
+        diagnostic=ResponseValidationDiagnostic(
+            failure_class=ResponseFailureClass.SEMANTIC_CONTEXT,
+            response_sha256=digest,
+            issues=issues,
+            correction_paths=target_paths,
+        ),
+        evidence=SemanticCorrectionRequestEvidence(
+            base_response_sha256=digest,
+            issue_fingerprint=digest,
+            target_paths=target_paths,
+            preserved_top_level_paths=(),
+        ),
+    )
+
+
+def review_task_scope_issue(path: str, *, invariant_id: str) -> ResponseValidationIssue:
+    """Return one Review-task scope defect located on an exact task record."""
+
+    return ResponseValidationIssue(
+        path=path,
+        code="planning_semantic_invariant",
+        invariant_id=invariant_id,
+        subjects=(
+            ResponseIssueSubject(
+                kind=ResponseIssueSubjectKind.AGENT,
+                identifier="quality_reviewer",
+            ),
+            ResponseIssueSubject(
+                kind=ResponseIssueSubjectKind.TASK,
+                identifier="TASK_REVIEW",
+            ),
+        ),
+        message="Review task claims criteria outside its compiled Review scope",
+        authority=ResponseIssueAuthority.MODEL,
+    )
+
+
+def rendered_task_identities(plan: SemanticCorrectionPlan) -> list[str | None]:
+    """Project the task identity constant each rendered slot still contracts."""
+
+    schema = planning._planning_response_schema_for_correction(plan)
+    collection = schema["$defs"]["PlanningProposalBody"]["properties"]["tasks"]
+    identities: list[str | None] = []
+    for item in collection.get("prefixItems", []):
+        properties = item.get("properties") or {}
+        identity = properties.get("id") or {}
+        identities.append(identity.get("const"))
+    return identities
+
+
+def review_scope_correction_payload() -> dict[str, object]:
+    """Return one proposal whose Review task can carry a scope correction."""
+
+    payload = proposal_response().model_dump(mode="json")
+    payload["proposal"]["tasks"].append(
+        quality_task_payload(acceptance_criteria=["AC_SCAN", "AC_REPORT"])
+    )
+    return payload
+
+
+@pytest.mark.parametrize(
+    "invariant_id",
+    ["planning_task_owner_scope", "planning_review_task_scope"],
+)
+def test_task_identity_contract_does_not_depend_on_the_correction_invariant(
+    invariant_id: str,
+) -> None:
+    """Record identity has one owner; scope projections must not release it."""
+
+    payload = review_scope_correction_payload()
+    stable_ids = [task["id"] for task in payload["proposal"]["tasks"]]
+    plan = correction_plan_for(
+        payload,
+        (review_task_scope_issue("/proposal/tasks/1", invariant_id=invariant_id),),
+    )
+
+    assert rendered_task_identities(plan) == stable_ids
+
+
+def test_review_scope_projection_keeps_untargeted_task_identity() -> None:
+    """The untargeted writer task keeps its identity during a scope correction."""
+
+    payload = review_scope_correction_payload()
+    plan = correction_plan_for(
+        payload,
+        (
+            review_task_scope_issue(
+                "/proposal/tasks/1",
+                invariant_id="planning_review_task_scope",
+            ),
+        ),
+    )
+
+    schema = planning._planning_response_schema_for_correction(plan)
+    collection = schema["$defs"]["PlanningProposalBody"]["properties"]["tasks"]
+    untargeted = collection["prefixItems"][0]
+
+    assert untargeted["properties"]["id"] == {
+        "const": "TASK_IMPLEMENT",
+        "type": "string",
+    }
+    assert "id" in untargeted["required"]
+
+
+def test_combined_scope_projections_preserve_identity_in_either_order() -> None:
+    """Review scope and writer coverage must agree on every task identity."""
+
+    payload = review_scope_correction_payload()
+    stable_ids = [task["id"] for task in payload["proposal"]["tasks"]]
+    coverage_issue = ResponseValidationIssue(
+        path="/proposal/tasks/0/acceptance_criteria",
+        code="planning_semantic_invariant",
+        invariant_id="planning_writer_criterion_coverage",
+        subjects=(
+            ResponseIssueSubject(
+                kind=ResponseIssueSubjectKind.CRITERION,
+                identifier="AC_SCAN",
+            ),
+        ),
+        message="writer tasks do not cover proposal acceptance criteria",
+        authority=ResponseIssueAuthority.MODEL,
+    )
+    review_issue = review_task_scope_issue(
+        "/proposal/tasks/1",
+        invariant_id="planning_review_task_scope",
+    )
+
+    review_only = correction_plan_for(payload, (review_issue,))
+    combined = correction_plan_for(payload, (review_issue, coverage_issue))
+
+    assert rendered_task_identities(review_only) == stable_ids
+    assert rendered_task_identities(combined) == stable_ids
+
+
+class EvidencelessThenScriptedExecutor:
+    """Return one invocation without attributable tool evidence, then the script."""
+
+    def __init__(
+        self,
+        responses: list[object],
+        *,
+        failures: int = 1,
+        code: str = "tool_evidence_unavailable",
+    ) -> None:
+        self._scripted = ScriptedAgentExecutor(responses)
+        self._remaining_failures = failures
+        self._code = code
+        self.evidenceless_calls = 0
+
+    @property
+    def requests(self) -> list[AgentExecutionRequest]:
+        return self._scripted.requests
+
+    def execute(
+        self,
+        request: AgentExecutionRequest,
+        *,
+        activity_handler: object = None,
+    ) -> AgentExecutionResult:
+        if self._remaining_failures <= 0:
+            return self._scripted.execute(
+                request,
+                activity_handler=activity_handler,
+            )
+        self._remaining_failures -= 1
+        self.evidenceless_calls += 1
+        self._scripted.requests.append(request)
+        assert request.submission_contract is not None
+        evidence = rejected_submission_evidence(
+            request.submission_contract,
+            binding_sha256=hashlib.sha256(b"binding").hexdigest(),
+            status=AgentSubmissionStatus.UNAUTHORIZED,
+            code=self._code,
+            detail="submission cannot be attributed because tool evidence is invalid",
+        )
+        return AgentExecutionResult(
+            status=AgentExecutionStatus.INVALID_RESPONSE,
+            error=f"typed artifact submission rejected: {self._code}",
+            telemetry=AgentExecutionTelemetry(
+                role=None,
+                agent_id=request.agent_id,
+                capability=request.capability,
+                specialization=request.specialization,
+                session_key=request.session_key,
+                command=("fake-agent", request.agent_id),
+                started_at=FIXED_TIME,
+                finished_at=FIXED_TIME,
+                duration_ms=1_200,
+                exit_code=0,
+                stdout="",
+                stderr="",
+                session_id=f"session-{request.agent_id}",
+            ),
+            submission_evidence=evidence,
+        )
+
+
+def test_unattributable_tool_evidence_is_recovered_once_then_accepted(
+    tmp_path: Path,
+) -> None:
+    """A turn that produced no typed submission is reissued exactly once."""
+
+    executor = EvidencelessThenScriptedExecutor([response(proposal_response())])
+    store = PlanningStore(tmp_path / "planning")
+    activities: list[PlanningActivity] = []
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(),
+        clock=AdvancingClock(),
+    )
+
+    created = coordinator.start(
+        request(),
+        answer_question=lambda _question: pytest.fail("unexpected user question"),
+        activity_handler=activities.append,
+    )
+
+    assert created is not None
+    assert executor.evidenceless_calls == 1
+    assert len(executor.requests) == 2
+    recovery_kinds = [
+        activity.kind
+        for activity in activities
+        if activity.kind is PlanningActivityKind.SUBMISSION_EVIDENCE_RECOVERY
+    ]
+    assert recovery_kinds == [PlanningActivityKind.SUBMISSION_EVIDENCE_RECOVERY]
+    failed_turn = store.load_turn(request().run_id, 1)
+    assert failed_turn.validation_error is not None
+    assert "tool_evidence_unavailable" in failed_turn.validation_error
+    assert failed_turn.parsed_response is None
+
+
+def test_repeated_unattributable_tool_evidence_still_fails_closed(
+    tmp_path: Path,
+) -> None:
+    """Recovery is bounded; a second evidence-less turn terminates Planning."""
+
+    executor = EvidencelessThenScriptedExecutor(
+        [response(proposal_response())],
+        failures=2,
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(),
+        clock=AdvancingClock(),
+    )
+
+    with pytest.raises(PlanningError, match="tool_evidence_unavailable"):
+        coordinator.start(
+            request(),
+            answer_question=lambda _question: pytest.fail("unexpected user question"),
+        )
+
+    assert executor.evidenceless_calls == 2
+    second_turn = store.load_turn(request().run_id, 2)
+    assert second_turn.parsed_response is None
+    assert second_turn.execution.status is AgentExecutionStatus.INVALID_RESPONSE
+    assert store.load_session(request().run_id).status is PlanningSessionStatus.FAILED
+
+
+def test_rejected_submission_content_is_never_reissued_as_evidence_recovery(
+    tmp_path: Path,
+) -> None:
+    """A submission that exists but is invalid stays fail-closed without a retry."""
+
+    executor = EvidencelessThenScriptedExecutor(
+        [response(proposal_response())],
+        code="invalid_submission_envelope",
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(),
+        clock=AdvancingClock(),
+    )
+
+    with pytest.raises(PlanningError, match="invalid_submission_envelope"):
+        coordinator.start(
+            request(),
+            answer_question=lambda _question: pytest.fail("unexpected user question"),
+        )
+
+    assert executor.evidenceless_calls == 1
+    assert len(executor.requests) == 1
+
+
+def test_criterion_split_correction_binds_every_downstream_reference() -> None:
+    """Replay of the split-criterion failure: downstream slots stay bound.
+
+    A correction that authorizes one whole acceptance-criterion record together
+    with the ProductDefinition statements referencing it must still constrain
+    those references to criterion IDs the proposal actually declares.
+    """
+
+    payload = proposal_response().model_dump(mode="json")
+    definition = payload["proposal"]["product_definition"]
+    definition["primary_workflow"]["criterion_ids"] = ["AC_SCAN"]
+    stable_ids = [
+        criterion["id"] for criterion in payload["proposal"]["acceptance_criteria"]
+    ]
+    reference_paths = (
+        "/proposal/product_definition/primary_workflow/criterion_ids",
+        "/proposal/product_definition/usability_expectations/criterion_ids",
+    )
+    reference_issues = [
+        ResponseValidationIssue(
+            path=path,
+            code="planning_semantic_invariant",
+            invariant_id="planning_product_definition_reference",
+            subjects=(
+                ResponseIssueSubject(
+                    kind=ResponseIssueSubjectKind.CRITERION,
+                    identifier="AC_REPORT",
+                ),
+            ),
+            message="references unknown downstream criteria",
+            authority=ResponseIssueAuthority.MODEL,
+        )
+        for path in reference_paths
+    ]
+    issues = (
+        *reference_issues,
+        ResponseValidationIssue(
+            path="/proposal/acceptance_criteria/1",
+            code="planning_semantic_invariant",
+            invariant_id="planning_criterion_authority_split",
+            subjects=(
+                ResponseIssueSubject(
+                    kind=ResponseIssueSubjectKind.CRITERION,
+                    identifier="AC_REPORT",
+                ),
+            ),
+            message="criterion mixes security and experience acceptance authority",
+            authority=ResponseIssueAuthority.MODEL,
+        ),
+    )
+    plan = correction_plan_for(payload, issues)
+
+    schema = planning._planning_response_schema_for_correction(plan)
+
+    for path in reference_paths:
+        value_schema = correction_value_schema(schema, path)
+        assert value_schema is not None
+        assert value_schema["items"]["enum"] == stable_ids
+        assert "AC_CLI_JSON" not in value_schema["items"]["enum"]
+    criteria = schema["$defs"]["PlanningProposalBody"]["properties"][
+        "acceptance_criteria"
+    ]
+    assert [
+        item["properties"]["id"]["const"] for item in criteria["prefixItems"]
+    ] == stable_ids

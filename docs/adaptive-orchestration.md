@@ -470,6 +470,21 @@ eligible only for digest-bound correction of the exact typed fields identified
 by validation; the model never regenerates the complete retained object or
 selects the fields it may replace.
 
+An invocation can also end without producing any attributable typed submission:
+the submission tool was never called, or its session and tool evidence could not
+be bound to that invocation. Nothing is accepted in that case, so the Controller
+reissues the identical request at most once before failing closed. The failed
+turn is still persisted in full with its execution status, usage and cost, and it
+does not consume the semantic-correction budget. A submission that exists but is
+rejected is never reissued this way, and assistant text never substitutes for a
+typed submission.
+
+Record identity has exactly one owner. Whenever a correction leaves an identity
+collection immutable, every existing record slot is pinned to its current ID.
+Scope projections that rebuild a collection's slots, such as Review-task scope or
+writer criterion coverage, re-apply that binding instead of replacing it, so no
+untargeted record is released by the order in which projections run.
+
 A correction with another permitted attempt may submit a strict subset of the
 remaining slots, and the Controller continues only after the validated issue
 set decreases. On the final permitted attempt, the semantic schema requires one

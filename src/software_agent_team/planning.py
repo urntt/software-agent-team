@@ -137,6 +137,22 @@ from software_agent_team.teams import (
 
 PLANNING_SCHEMA_VERSION = 20
 MINIMUM_READABLE_PLANNING_SCHEMA_VERSION = 2
+
+# One invocation may fail to produce any attributable typed submission even after
+# the provider streamed output: the submission tool was never called, or its
+# session/tool evidence could not be bound to this invocation. Nothing is accepted
+# in that case, so the identical request may be issued again a bounded number of
+# times. Raw assistant text still never substitutes for a typed submission, and a
+# submission that exists but is rejected stays fail-closed.
+SUBMISSION_EVIDENCE_RECOVERY_LIMIT = 1
+RECOVERABLE_SUBMISSION_EVIDENCE_CODES = frozenset(
+    {
+        "tool_evidence_unavailable",
+        "submission_missing",
+        "upstream_incomplete_after_tool_result",
+        "upstream_incomplete_after_terminal_response",
+    }
+)
 PLANNING_TEMPLATE = Path(__file__).with_name("prompt_templates") / "adaptive_planner.md"
 MAX_PLANNING_EVIDENCE_CHARACTERS = 1_000_000
 MAX_RESPONSE_NORMALIZATIONS = 100
@@ -472,6 +488,7 @@ class PlanningActivityKind(StrEnum):
     RESPONSE_RECEIVED = "response_received"
     BUDGET_UPDATED = "budget_updated"
     CORRECTION_SCHEDULED = "correction_scheduled"
+    SUBMISSION_EVIDENCE_RECOVERY = "submission_evidence_recovery"
     CLARIFICATION_SCHEDULED = "clarification_scheduled"
     RESPONSE_VALIDATED = "response_validated"
 
@@ -745,6 +762,17 @@ class TerminalPlanningProgress:
             self._print(
                 "↻ Planning response has targeted model-owned fields; "
                 f"requesting correction attempt {attempt_label}"
+            )
+        elif activity.kind is PlanningActivityKind.SUBMISSION_EVIDENCE_RECOVERY:
+            next_attempt = activity.attempt + 1
+            attempt_label = (
+                str(next_attempt)
+                if activity.maximum_attempts is None
+                else f"{next_attempt}/{activity.maximum_attempts}"
+            )
+            self._print(
+                "↻ Planning response produced no attributable typed submission; "
+                f"reissuing the same request once as attempt {attempt_label}"
             )
         elif activity.kind is PlanningActivityKind.CLARIFICATION_SCHEDULED:
             dimension = (
@@ -5946,6 +5974,46 @@ def _planning_response_schema_for_correction(
             )
         field_schema["enum"] = allowed_ids
 
+    def pin_record_identity(
+        item: dict[str, object],
+        identifier: str,
+    ) -> dict[str, object]:
+        """Bind one record slot to its stable ID without dropping its contract.
+
+        Record identity has exactly one owner. Scope projections that rebuild a
+        collection's ``prefixItems`` re-apply this binding instead of replacing
+        it, so a later writer cannot silently release an untargeted record.
+        """
+
+        properties = item.get("properties")
+        if not isinstance(properties, dict):
+            properties = {}
+            item["properties"] = properties
+        properties["id"] = {"const": identifier, "type": "string"}
+        required = item.get("required")
+        if isinstance(required, list):
+            if "id" not in required:
+                required.append("id")
+        else:
+            item["required"] = ["id"]
+        item.setdefault("type", "object")
+        return item
+
+    def pin_collection_identities(
+        items: list[dict[str, object]],
+        stable_ids: list[str],
+    ) -> list[dict[str, object]]:
+        """Re-apply stable identity across one rebuilt record collection."""
+
+        if len(items) != len(stable_ids):
+            raise PlanningError(
+                "Planning response schema record projection lost its identity alignment"
+            )
+        return [
+            pin_record_identity(item, identifier)
+            for item, identifier in zip(items, stable_ids, strict=True)
+        ]
+
     def bind_record_ids(
         collection_name: str,
         definition_name: str,
@@ -5961,17 +6029,7 @@ def _planning_response_schema_for_correction(
                 f"{collection_name}"
             )
         collection_schema["prefixItems"] = [
-            {
-                "$ref": f"#/$defs/{definition_name}",
-                "properties": {
-                    "id": {
-                        "const": identifier,
-                        "type": "string",
-                    }
-                },
-                "required": ["id"],
-                "type": "object",
-            }
+            pin_record_identity({"$ref": f"#/$defs/{definition_name}"}, identifier)
             for identifier in stable_ids
         ]
 
@@ -6154,6 +6212,8 @@ def _planning_response_schema_for_correction(
         tasks_schema = definition_properties("PlanningProposalBody").get("tasks")
         if not isinstance(tasks_schema, dict):
             raise PlanningError("Planning response schema has no task collection")
+        if not identity_owner_is_mutable("/proposal/tasks"):
+            task_items = pin_collection_identities(task_items, stable_task_ids)
         tasks_schema["prefixItems"] = task_items
 
     writer_coverage_issues = tuple(
@@ -6282,6 +6342,8 @@ def _planning_response_schema_for_correction(
         tasks_schema = definition_properties("PlanningProposalBody").get("tasks")
         if not isinstance(tasks_schema, dict):
             raise PlanningError("Planning response schema has no task collection")
+        if not identity_owner_is_mutable("/proposal/tasks"):
+            task_items = pin_collection_identities(task_items, stable_task_ids)
         tasks_schema["prefixItems"] = task_items
         if any(issue.path == "/proposal/tasks" for issue in writer_coverage_issues):
             tasks_schema.update(
@@ -8461,6 +8523,7 @@ class PlanningStore:
         budget_usage: AgentBudgetUsage | None = None,
         budget_error: str | None = None,
         cost_record: ModelCallCostRecord | None = None,
+        evidence_recovery_scheduled: bool = False,
     ) -> PlanningTurn:
         session = self.load_session(run_id)
         if session.status in {
@@ -8536,9 +8599,13 @@ class PlanningStore:
                     "status": (
                         PlanningSessionStatus.CANCELLED
                         if result.status is AgentExecutionStatus.INTERRUPTED
-                        else PlanningSessionStatus.FAILED
-                        if result.status is not AgentExecutionStatus.COMPLETED
                         else PlanningSessionStatus.CLARIFYING
+                        if result.status is AgentExecutionStatus.COMPLETED
+                        # A turn that produced no attributable typed submission is
+                        # persisted in full, but it does not end the dialogue while
+                        # the controller reissues the identical request.
+                        or evidence_recovery_scheduled
+                        else PlanningSessionStatus.FAILED
                     ),
                     "updated_at": _utc(now),
                     "turn_count": sequence,
@@ -9180,6 +9247,7 @@ class AdaptivePlanningCoordinator:
             else self.policy.response_repair_limit + 1
         )
         attempt = 1
+        evidence_recoveries = 0
         while True:
             base_response_schema = (
                 _planning_response_schema()
@@ -9681,6 +9749,16 @@ class AdaptivePlanningCoordinator:
                             )
                 elif parsed is not None and correction_plan is not None:
                     current_correction_outcome = SemanticCorrectionOutcome.ACCEPTED
+            evidence_recovery_scheduled = (
+                execution_exception is None
+                and result.status is not AgentExecutionStatus.COMPLETED
+                and result.status is not AgentExecutionStatus.INTERRUPTED
+                and budget_error is None
+                and result.submission_evidence is not None
+                and result.submission_evidence.diagnostic_code
+                in RECOVERABLE_SUBMISSION_EVIDENCE_CODES
+                and evidence_recoveries < SUBMISSION_EVIDENCE_RECOVERY_LIMIT
+            )
             turn = self.store.append_turn(
                 run_id=request.run_id,
                 user_message=user_message,
@@ -9701,12 +9779,30 @@ class AdaptivePlanningCoordinator:
                 budget_usage=budget_usage,
                 budget_error=budget_error,
                 cost_record=cost_record,
+                evidence_recovery_scheduled=evidence_recovery_scheduled,
             )
             if execution_exception is not None:
                 raise execution_exception
             if result.status is AgentExecutionStatus.INTERRUPTED:
                 raise KeyboardInterrupt
             if result.status is not AgentExecutionStatus.COMPLETED:
+                if evidence_recovery_scheduled:
+                    # Nothing was accepted, so the identical request is reissued
+                    # without consuming the semantic-correction budget. The failed
+                    # invocation, its usage and its cost are already settled in the
+                    # persisted turn above.
+                    evidence_recoveries += 1
+                    self._emit_activity(
+                        activity_handler,
+                        PlanningActivity(
+                            kind=PlanningActivityKind.SUBMISSION_EVIDENCE_RECOVERY,
+                            attempt=attempt,
+                            maximum_attempts=maximum_attempts,
+                            model=request.model,
+                        ),
+                    )
+                    attempt += 1
+                    continue
                 raise PlanningError(result.error or "Planning invocation failed")
             if budget_error is not None:
                 raise PlanningError(budget_error)
