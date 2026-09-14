@@ -14,6 +14,7 @@ from software_agent_team.product import (
 )
 from software_agent_team.state_layout import (
     PRODUCT_STATE_CATEGORIES,
+    STATE_MARKER_NAME,
     StateLifecycleGroup,
 )
 from software_agent_team.uninstall_state import (
@@ -195,6 +196,31 @@ def test_unknown_category_blocks_before_selected_deletion(tmp_path: Path) -> Non
     assert config.is_file()
     assert unknown.is_dir()
     assert (paths.self_checks / "finished/0001.json").is_file()
+
+
+def test_uninstall_preflight_states_a_removal_step_not_a_first_run_choice(
+    tmp_path: Path,
+) -> None:
+    """An uninstall that cannot prove ownership must not offer a new state root."""
+
+    paths, config = prepare_state(tmp_path)
+    (paths.root / STATE_MARKER_NAME).unlink()
+    request = request_for(
+        paths,
+        config,
+        config_policy=UninstallPolicy.PURGE,
+        data_policy=UninstallPolicy.PURGE,
+        provider_policy=UninstallPolicy.PURGE,
+    )
+
+    with pytest.raises(UninstallStateError) as failure:
+        preflight_uninstall_state(request)
+
+    message = str(failure.value)
+    assert f"existing state root is not owned by SAT: {paths.root}" in message
+    assert "SAT_STATE_ROOT" not in message
+    assert "run uninstall again" in message
+    assert (paths.runs / "finished/run.json").is_file()
 
 
 def test_symbolic_run_entry_is_never_followed_during_liveness_check(

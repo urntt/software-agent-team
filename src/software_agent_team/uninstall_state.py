@@ -24,7 +24,9 @@ from software_agent_team.product import ProductStatePaths
 from software_agent_team.state_layout import (
     PRODUCT_STATE_CATEGORIES,
     STATE_MARKER_NAME,
+    StateLayoutOperation,
     StateLifecycleGroup,
+    describe_state_layout_failure,
     inspect_state_layout,
 )
 
@@ -239,10 +241,11 @@ def preflight_uninstall_state(request: UninstallStateRequest) -> ProductStatePat
         return paths
     observation = inspect_state_layout(paths.root)
     if not observation.ready:
-        first = observation.problems[0]
-        additional = len(observation.problems) - 1
-        suffix = f" ({additional} additional problem(s))" if additional else ""
-        raise UninstallStateError(f"{first.detail}{suffix}. {first.remediation}")
+        detail, remediation = describe_state_layout_failure(
+            observation,
+            operation=StateLayoutOperation.UNINSTALL,
+        )
+        raise UninstallStateError(f"{detail}. {remediation}")
     if paths.root.resolve(strict=True) != paths.root:
         raise UninstallStateError("SAT state root must be canonical")
     _validate_run_liveness(paths)

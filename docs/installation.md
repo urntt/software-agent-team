@@ -730,8 +730,15 @@ marker before export or purge.
 
 One code-owned state-category manifest defines every SAT state directory and
 whether it belongs to generated data, isolated provider state, or ephemeral
-lifecycle state. Product state creation, export, purge, and completeness tests
-all consume that manifest. The uninstaller performs a read-only validation of
+lifecycle state. One inspector decides whether a layout is safe to consume, and
+each caller projects its own next step from that decision: startup asks you to
+make a state root usable, while uninstall asks you to make the existing one
+removable. An uninstall that cannot prove ownership therefore reports how to
+remove or restore that exact directory, and never suggests selecting another
+`SAT_STATE_ROOT`.
+
+Product state creation, export, purge, and completeness tests all consume that
+manifest. The uninstaller performs a read-only validation of
 the complete manifest and process/run liveness before compatibility repair or
 deletion. `--purge-data` therefore includes self-check evidence, while inactive
 process leases are never exported and are removed with the application. When

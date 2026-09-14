@@ -19,6 +19,144 @@ class StateLifecycleGroup(StrEnum):
     EPHEMERAL = "ephemeral"
 
 
+class StateLayoutOperation(StrEnum):
+    """The caller operation one layout problem must be remediated for.
+
+    Layout inspection has exactly one owner, but its callers want opposite
+    outcomes: a first run needs a usable state root, an uninstall needs the
+    existing one removed. Remediation is therefore projected per operation
+    instead of being stored once with the problem.
+    """
+
+    FIRST_RUN = "first_run"
+    UNINSTALL = "uninstall"
+
+
+class StateLayoutProblemKind(StrEnum):
+    """Machine-decidable reason one SAT state layout is unsafe to consume."""
+
+    ROOT_NOT_SPECIFIC = "root_not_specific"
+    ROOT_UNREADABLE = "root_unreadable"
+    ROOT_NOT_DIRECTORY = "root_not_directory"
+    ROOT_UNRESOLVABLE = "root_unresolvable"
+    ROOT_UNLISTABLE = "root_unlistable"
+    OWNERSHIP_FOREIGN = "ownership_foreign"
+    ACCESS_DENIED = "access_denied"
+    MARKER_MISSING = "marker_missing"
+    MARKER_UNAVAILABLE = "marker_unavailable"
+    MARKER_INVALID = "marker_invalid"
+    UNKNOWN_CATEGORY = "unknown_category"
+    CATEGORY_UNREADABLE = "category_unreadable"
+    CATEGORY_NOT_DIRECTORY = "category_not_directory"
+
+
+_FIRST_RUN_REMEDIATIONS: dict[StateLayoutProblemKind, str] = {
+    StateLayoutProblemKind.ROOT_NOT_SPECIFIC: (
+        "Select a specific absolute SAT state root and retry."
+    ),
+    StateLayoutProblemKind.ROOT_UNREADABLE: (
+        "Restore access to this exact path, then run SAT again."
+    ),
+    StateLayoutProblemKind.ROOT_NOT_DIRECTORY: (
+        "Select a real SAT state directory; do not redirect it through a symbolic link."
+    ),
+    StateLayoutProblemKind.ROOT_UNRESOLVABLE: (
+        "Restore access to this exact path, then run SAT again."
+    ),
+    StateLayoutProblemKind.ROOT_UNLISTABLE: (
+        "Restore access to this exact path, then run SAT again."
+    ),
+    StateLayoutProblemKind.OWNERSHIP_FOREIGN: (
+        "Have the operating-system administrator restore this exact SAT path to "
+        "the invoking user, then retry."
+    ),
+    StateLayoutProblemKind.ACCESS_DENIED: (
+        "Restore invoking-user write and search access to this exact SAT path, "
+        "then retry."
+    ),
+    StateLayoutProblemKind.MARKER_MISSING: (
+        "Select a new empty SAT_STATE_ROOT, or restore the complete matching "
+        "SAT-owned state root, then retry."
+    ),
+    StateLayoutProblemKind.MARKER_UNAVAILABLE: (
+        "Restore the matching SAT state marker, or select a new empty "
+        "SAT_STATE_ROOT, then retry."
+    ),
+    StateLayoutProblemKind.MARKER_INVALID: (
+        "Restore the matching invoking-user-owned SAT marker, or select a new "
+        "empty SAT_STATE_ROOT, then retry."
+    ),
+    StateLayoutProblemKind.UNKNOWN_CATEGORY: (
+        "Stop every SAT task, then move this entry to a new path outside the "
+        "SAT state root before retrying: {path}"
+    ),
+    StateLayoutProblemKind.CATEGORY_UNREADABLE: (
+        "Restore access to this exact path, then run SAT again."
+    ),
+    StateLayoutProblemKind.CATEGORY_NOT_DIRECTORY: (
+        "Restore this category as a real directory inside the SAT state root, "
+        "then retry."
+    ),
+}
+
+_UNINSTALL_REMEDIATIONS: dict[StateLayoutProblemKind, str] = {
+    StateLayoutProblemKind.ROOT_NOT_SPECIFIC: (
+        "Point SAT_STATE_ROOT at the specific absolute state root to remove, "
+        "then run uninstall again."
+    ),
+    StateLayoutProblemKind.ROOT_UNREADABLE: (
+        "Restore access to this exact path, then run uninstall again."
+    ),
+    StateLayoutProblemKind.ROOT_NOT_DIRECTORY: (
+        "SAT removes only a real state directory; remove or relocate this path "
+        "yourself."
+    ),
+    StateLayoutProblemKind.ROOT_UNRESOLVABLE: (
+        "Restore access to this exact path, then run uninstall again."
+    ),
+    StateLayoutProblemKind.ROOT_UNLISTABLE: (
+        "Restore access to this exact path, then run uninstall again."
+    ),
+    StateLayoutProblemKind.OWNERSHIP_FOREIGN: (
+        "Have the operating-system administrator restore this exact SAT path to "
+        "the invoking user, or remove it as its owner, then run uninstall again."
+    ),
+    StateLayoutProblemKind.ACCESS_DENIED: (
+        "Restore invoking-user write and search access to this exact SAT path, "
+        "then run uninstall again."
+    ),
+    StateLayoutProblemKind.MARKER_MISSING: (
+        "SAT does not remove a state root it cannot prove it owns. Remove this "
+        "directory yourself if it is not SAT state, or restore its SAT marker, "
+        "then run uninstall again."
+    ),
+    StateLayoutProblemKind.MARKER_UNAVAILABLE: (
+        "Restore the matching SAT state marker, or remove this directory "
+        "yourself, then run uninstall again."
+    ),
+    StateLayoutProblemKind.MARKER_INVALID: (
+        "Restore the matching invoking-user-owned SAT marker, or remove this "
+        "directory yourself, then run uninstall again."
+    ),
+    StateLayoutProblemKind.UNKNOWN_CATEGORY: (
+        "Stop every SAT task, then move this entry to a new path outside the "
+        "SAT state root before running uninstall again: {path}"
+    ),
+    StateLayoutProblemKind.CATEGORY_UNREADABLE: (
+        "Restore access to this exact path, then run uninstall again."
+    ),
+    StateLayoutProblemKind.CATEGORY_NOT_DIRECTORY: (
+        "Restore this category as a real directory inside the SAT state root, "
+        "or remove it yourself, then run uninstall again."
+    ),
+}
+
+_REMEDIATIONS: dict[StateLayoutOperation, dict[StateLayoutProblemKind, str]] = {
+    StateLayoutOperation.FIRST_RUN: _FIRST_RUN_REMEDIATIONS,
+    StateLayoutOperation.UNINSTALL: _UNINSTALL_REMEDIATIONS,
+}
+
+
 @dataclass(frozen=True)
 class ProductStateCategory:
     """One owned state directory and its export/removal semantics."""
@@ -38,8 +176,13 @@ class StateLayoutProblem:
     """One exact reason an existing SAT state layout is unsafe to consume."""
 
     path: Path
+    kind: StateLayoutProblemKind
     detail: str
-    remediation: str
+
+    def remediation(self, operation: StateLayoutOperation) -> str:
+        """Project this problem's next step for one caller operation."""
+
+        return _REMEDIATIONS[operation][self.kind].format(path=self.path)
 
 
 @dataclass(frozen=True)
@@ -54,6 +197,20 @@ class StateLayoutObservation:
     @property
     def ready(self) -> bool:
         return not self.problems
+
+
+def describe_state_layout_failure(
+    observation: StateLayoutObservation,
+    *,
+    operation: StateLayoutOperation,
+    separator: str = " ({count} additional problem(s))",
+) -> tuple[str, str]:
+    """Return one bounded failure detail and its operation-specific next step."""
+
+    first = observation.problems[0]
+    additional = len(observation.problems) - 1
+    suffix = separator.format(count=additional) if additional else ""
+    return f"{first.detail}{suffix}", first.remediation(operation)
 
 
 PRODUCT_STATE_CATEGORIES = (
@@ -124,8 +281,8 @@ def inspect_state_layout(
         problems.append(
             StateLayoutProblem(
                 path=root,
+                kind=StateLayoutProblemKind.ROOT_NOT_SPECIFIC,
                 detail="SAT state root must be a specific absolute path",
-                remediation="Select a specific absolute SAT state root and retry.",
             )
         )
         return StateLayoutObservation(
@@ -148,8 +305,8 @@ def inspect_state_layout(
         problems.append(
             StateLayoutProblem(
                 path=root,
+                kind=StateLayoutProblemKind.ROOT_UNREADABLE,
                 detail=f"SAT state root cannot be inspected: {root}",
-                remediation="Restore access to this exact path, then run SAT again.",
             )
         )
         return StateLayoutObservation(
@@ -162,11 +319,8 @@ def inspect_state_layout(
         problems.append(
             StateLayoutProblem(
                 path=root,
+                kind=StateLayoutProblemKind.ROOT_NOT_DIRECTORY,
                 detail=f"SAT state root is not a real directory: {root}",
-                remediation=(
-                    "Select a real SAT state directory; do not redirect it through a "
-                    "symbolic link."
-                ),
             )
         )
         return StateLayoutObservation(
@@ -190,8 +344,8 @@ def inspect_state_layout(
         problems.append(
             StateLayoutProblem(
                 path=root,
+                kind=StateLayoutProblemKind.ROOT_UNRESOLVABLE,
                 detail=f"SAT state root cannot be resolved: {root}",
-                remediation="Restore access to this exact path, then run SAT again.",
             )
         )
 
@@ -203,29 +357,21 @@ def inspect_state_layout(
         problems.append(
             StateLayoutProblem(
                 path=root,
+                kind=StateLayoutProblemKind.MARKER_MISSING,
                 detail=f"existing state root is not owned by SAT: {root}",
-                remediation=(
-                    "Select a new empty SAT_STATE_ROOT, or restore the complete "
-                    "matching SAT-owned state root, then retry."
-                ),
             )
         )
     except OSError:
         problems.append(
             StateLayoutProblem(
                 path=marker,
+                kind=StateLayoutProblemKind.MARKER_UNAVAILABLE,
                 detail=f"SAT state ownership marker is unavailable: {marker}",
-                remediation=(
-                    "Restore the matching SAT state marker, or select a new empty "
-                    "SAT_STATE_ROOT, then retry."
-                ),
             )
         )
     else:
         marker_valid = (
-            stat.S_ISREG(marker_metadata.st_mode)
-            and not stat.S_ISLNK(marker_metadata.st_mode)
-            and marker_metadata.st_uid == uid
+            stat.S_ISREG(marker_metadata.st_mode) and marker_metadata.st_uid == uid
         )
         try:
             marker_content = marker.read_text(encoding="utf-8")
@@ -235,14 +381,11 @@ def inspect_state_layout(
             problems.append(
                 StateLayoutProblem(
                     path=marker,
+                    kind=StateLayoutProblemKind.MARKER_INVALID,
                     detail=(
                         "SAT state ownership marker is invalid "
                         f"(observed uid={marker_metadata.st_uid}, expected uid={uid}): "
                         f"{marker}"
-                    ),
-                    remediation=(
-                        "Restore the matching invoking-user-owned SAT marker, or "
-                        "select a new empty SAT_STATE_ROOT, then retry."
                     ),
                 )
             )
@@ -255,8 +398,8 @@ def inspect_state_layout(
         problems.append(
             StateLayoutProblem(
                 path=root,
+                kind=StateLayoutProblemKind.ROOT_UNLISTABLE,
                 detail=f"SAT state root cannot be listed: {root}",
-                remediation="Restore access to this exact path, then run SAT again.",
             )
         )
     for entry in sorted(entries, key=lambda item: item.name):
@@ -265,13 +408,10 @@ def inspect_state_layout(
         problems.append(
             StateLayoutProblem(
                 path=entry,
+                kind=StateLayoutProblemKind.UNKNOWN_CATEGORY,
                 detail=(
                     "SAT state contains an unknown lifecycle category: "
                     f"{entry.name} ({entry})"
-                ),
-                remediation=(
-                    "Stop every SAT task, then move this entry to a new path outside "
-                    f"the SAT state root before retrying: {entry}"
                 ),
             )
         )
@@ -286,12 +426,10 @@ def inspect_state_layout(
             problems.append(
                 StateLayoutProblem(
                     path=path,
+                    kind=StateLayoutProblemKind.CATEGORY_UNREADABLE,
                     detail=(
                         f"SAT {category.directory_name} state cannot be inspected: "
                         f"{path}"
-                    ),
-                    remediation=(
-                        "Restore access to this exact path, then run SAT again."
                     ),
                 )
             )
@@ -300,13 +438,10 @@ def inspect_state_layout(
             problems.append(
                 StateLayoutProblem(
                     path=path,
+                    kind=StateLayoutProblemKind.CATEGORY_NOT_DIRECTORY,
                     detail=(
                         f"SAT {category.directory_name} state must be a real "
                         f"directory: {path}"
-                    ),
-                    remediation=(
-                        "Restore this category as a real directory inside the SAT "
-                        "state root, then retry."
                     ),
                 )
             )
@@ -339,13 +474,10 @@ def _append_owner_or_access_problem(
         problems.append(
             StateLayoutProblem(
                 path=path,
+                kind=StateLayoutProblemKind.OWNERSHIP_FOREIGN,
                 detail=(
                     f"{label} belongs to uid {metadata.st_uid}; invoking uid is "
                     f"{invoking_uid}: {path}"
-                ),
-                remediation=(
-                    "Have the operating-system administrator restore this exact SAT "
-                    "path to the invoking user, then retry."
                 ),
             )
         )
@@ -353,13 +485,10 @@ def _append_owner_or_access_problem(
         problems.append(
             StateLayoutProblem(
                 path=path,
+                kind=StateLayoutProblemKind.ACCESS_DENIED,
                 detail=(
                     f"{label} is not writable and searchable by uid {invoking_uid}: "
                     f"{path}"
-                ),
-                remediation=(
-                    "Restore invoking-user write and search access to this exact SAT "
-                    "path, then retry."
                 ),
             )
         )

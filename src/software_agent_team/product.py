@@ -35,6 +35,8 @@ from software_agent_team.state_layout import (
     PRODUCT_STATE_CATEGORIES,
     STATE_MARKER_NAME,
     StateLayoutObservation,
+    StateLayoutOperation,
+    describe_state_layout_failure,
     inspect_state_layout,
     state_category_paths,
 )
@@ -253,10 +255,11 @@ def _secure_product_state(
 def _state_layout_failure(observation: StateLayoutObservation) -> str:
     """Render one bounded state failure with an executable recovery boundary."""
 
-    first = observation.problems[0]
-    additional = len(observation.problems) - 1
-    suffix = f" ({additional} additional problem(s))" if additional else ""
-    return f"{first.detail}{suffix}. {first.remediation}"
+    detail, remediation = describe_state_layout_failure(
+        observation,
+        operation=StateLayoutOperation.FIRST_RUN,
+    )
+    return f"{detail}. {remediation}"
 
 
 def _state_layout_diagnostic(state_root: Path) -> DiagnosticCheck:
@@ -273,17 +276,17 @@ def _state_layout_diagnostic(state_root: Path) -> DiagnosticCheck:
             state=DiagnosticState.READY,
             detail=detail,
         )
-    first = observation.problems[0]
-    additional = len(observation.problems) - 1
-    detail = first.detail
-    if additional:
-        detail += f"; {additional} additional problem(s)"
+    detail, remediation = describe_state_layout_failure(
+        observation,
+        operation=StateLayoutOperation.FIRST_RUN,
+        separator="; {count} additional problem(s)",
+    )
     return DiagnosticCheck(
         id="state",
         label="SAT state ownership",
         state=DiagnosticState.ACTION_REQUIRED,
         detail=detail,
-        action=first.remediation,
+        action=remediation,
     )
 
 

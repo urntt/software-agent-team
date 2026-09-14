@@ -427,7 +427,9 @@ def test_product_state_reports_category_owner_before_permission_mutation(
     assert observation.problems[0].path == paths.openclaw
     assert f"observed uid={unexpected_uid}" not in observation.problems[0].detail
     assert f"belongs to uid {unexpected_uid}" in observation.problems[0].detail
-    assert "invoking user" in observation.problems[0].remediation
+    assert "invoking user" in observation.problems[0].remediation(
+        state_layout_module.StateLayoutOperation.FIRST_RUN
+    )
     assert str(paths.openclaw) in str(raised.value)
     assert "Operation not permitted" not in str(raised.value)
 

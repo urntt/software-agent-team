@@ -34,7 +34,10 @@ from software_agent_team.schema_compatibility import (
     SchemaSupport,
     inspect_persisted_schema_compatibility,
 )
-from software_agent_team.state_layout import inspect_state_layout
+from software_agent_team.state_layout import (
+    StateLayoutOperation,
+    inspect_state_layout,
+)
 from software_agent_team.user_configuration import user_configuration_path
 from software_agent_team.versioning import (
     InstallationRecord,
@@ -1063,7 +1066,9 @@ def _preflight_advertised_persisted_state(
     problems.extend(compatibility.problems)
     remediations: list[str] = []
     if layout.problems:
-        remediations.append(layout.problems[0].remediation)
+        remediations.append(
+            layout.problems[0].remediation(StateLayoutOperation.FIRST_RUN)
+        )
     if not compatibility.compatible:
         legacy_example = paths.state_root.with_name(f"{paths.state_root.name}-legacy")
         remediations.append(
