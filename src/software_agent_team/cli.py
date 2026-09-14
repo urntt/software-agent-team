@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -30,6 +31,11 @@ from software_agent_team.artifacts import (
     parse_phase_artifact,
 )
 from software_agent_team.benchmark_seed import prepare_benchmark_seed
+from software_agent_team.bounded_process import (
+    BoundedProcessError,
+    BoundedProcessTimeoutError,
+    run_bounded_process,
+)
 from software_agent_team.budgets import (
     AgentBudget,
     AgentBudgetLedger,
@@ -67,6 +73,7 @@ from software_agent_team.model_runtime import (
     ModelEndpointKind,
     ModelRuntimeProfile,
     ModelRuntimeProfileSource,
+    openclaw_invocation_thinking_level,
     runtime_profile_for_model,
     runtime_profile_from_openclaw_configuration,
 )
@@ -2645,6 +2652,105 @@ def _render_model_inspection_start(profile_count: int) -> None:
     )
 
 
+_PROVIDER_SMOKE_DETAIL_MAX_CHARACTERS = 600
+_PROVIDER_SMOKE_PARSE_MAX_CHARACTERS = 16_384
+_ANSI_ESCAPE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))")
+
+
+def _first_json_object(value: str) -> dict[str, object] | None:
+    decoder = json.JSONDecoder()
+    for index, character in enumerate(value):
+        if character != "{":
+            continue
+        try:
+            payload, _ = decoder.raw_decode(value[index:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            return payload
+    return None
+
+
+def _provider_error_fields(
+    payload: dict[str, object],
+    *,
+    depth: int = 0,
+) -> tuple[object | None, object | None, str | None] | None:
+    if depth > 2:
+        return None
+    error = payload.get("error")
+    if not isinstance(error, dict):
+        return None
+    code = error.get("code")
+    status = error.get("status")
+    message = error.get("message")
+    if isinstance(message, str):
+        nested = _first_json_object(message)
+        if nested is not None:
+            nested_fields = _provider_error_fields(nested, depth=depth + 1)
+            if nested_fields is not None:
+                return nested_fields
+    return code, status, message if isinstance(message, str) else None
+
+
+def _sanitize_provider_smoke_detail(
+    value: str,
+    *,
+    credential_value: str | None,
+) -> str:
+    if credential_value:
+        value = value.replace(credential_value, "[credential]")
+    value = _ANSI_ESCAPE.sub("", value)
+    value = "".join(
+        character if ord(character) >= 32 and ord(character) != 127 else " "
+        for character in value
+    )
+    if credential_value:
+        value = value.replace(credential_value, "[credential]")
+    value = " ".join(value.split())
+    return value[:_PROVIDER_SMOKE_DETAIL_MAX_CHARACTERS].rstrip()
+
+
+def _provider_smoke_failure_detail(
+    result: subprocess.CompletedProcess[str],
+    *,
+    profile: ModelProfile,
+) -> str | None:
+    """Extract one bounded provider failure without reflecting credentials."""
+
+    credential_env = profile.runtime_profile.credential_env
+    credential_value = os.environ.get(credential_env) if credential_env else None
+    combined = "\n".join(
+        value for value in (result.stderr, result.stdout) if isinstance(value, str)
+    )
+    if credential_value:
+        combined = combined.replace(credential_value, "[credential]")
+    combined = combined[-_PROVIDER_SMOKE_PARSE_MAX_CHARACTERS:]
+    payload = _first_json_object(combined)
+    fields = _provider_error_fields(payload) if payload is not None else None
+    if fields is not None:
+        code, status, message = fields
+        labels: list[str] = []
+        if isinstance(code, int) and 100 <= code <= 599:
+            labels.append(f"HTTP {code}")
+        if isinstance(status, str) and re.fullmatch(r"[A-Z][A-Z0-9_ -]{0,63}", status):
+            labels.append(status)
+        structured = " ".join(labels)
+        can_redact_provider_message = (
+            profile.runtime_profile.credential_source is CredentialSource.NONE
+            or bool(credential_value)
+        )
+        if message and can_redact_provider_message:
+            structured = f"{structured}: {message}" if structured else message
+        detail = _sanitize_provider_smoke_detail(
+            structured,
+            credential_value=credential_value,
+        )
+        if detail:
+            return detail
+    return None
+
+
 def _run_provider_smoke(
     openclaw_binary: Path,
     model: str | ModelProfile,
@@ -2663,44 +2769,64 @@ def _run_provider_smoke(
             capabilities=tuple(AgentCapability),
         )
     )
+    command = [
+        str(openclaw_binary),
+        "infer",
+        "model",
+        "run",
+        "--local",
+        "--model",
+        profile.model,
+    ]
+    thinking_level = openclaw_invocation_thinking_level(profile.runtime_profile)
+    if thinking_level is not None:
+        command.extend(["--thinking", thinking_level])
+    command.extend(
+        [
+            "--prompt",
+            'Reply with exactly: {"status":"ok"}',
+            "--json",
+        ]
+    )
     with _effective_model_configuration(
         profile=profile,
         configured_path=config_path,
     ) as effective_config:
         try:
-            result = subprocess.run(
-                [
-                    str(openclaw_binary),
-                    "infer",
-                    "model",
-                    "run",
-                    "--local",
-                    "--model",
-                    profile.model,
-                    "--prompt",
-                    'Reply with exactly: {"status":"ok"}',
-                    "--json",
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-                stdin=subprocess.DEVNULL,
-                timeout=180,
-                env={
+            result = run_bounded_process(
+                command,
+                timeout_seconds=180,
+                termination_grace_seconds=5,
+                environment={
                     **os.environ,
                     **isolated_openclaw_environment(
                         state_dir=state_dir,
                         config_path=effective_config,
                     ),
                 },
-                shell=False,
             )
+        except BoundedProcessTimeoutError as error:
+            raise RuntimeConfigurationError(
+                "the provider smoke check timed out after "
+                f"{error.timeout_seconds:g} seconds; SAT stopped its provider "
+                "processes. Check provider availability and network access, then "
+                "retry with `sat configure`"
+            ) from error
+        except BoundedProcessError as error:
+            raise RuntimeConfigurationError(
+                "the provider smoke check could not establish a clean process "
+                "boundary; run `sat cleanup`, then retry with `sat configure`"
+            ) from error
         except (OSError, subprocess.SubprocessError) as error:
             raise RuntimeConfigurationError(
                 "the provider smoke check could not run"
             ) from error
     if result.returncode != 0:
-        raise RuntimeConfigurationError("the provider smoke check failed")
+        message = f"the provider smoke check failed for {profile.model}"
+        detail = _provider_smoke_failure_detail(result, profile=profile)
+        if detail is not None:
+            message = f"{message}: {detail}"
+        raise RuntimeConfigurationError(message)
     try:
         payload = json.loads(result.stdout)
     except json.JSONDecodeError as error:

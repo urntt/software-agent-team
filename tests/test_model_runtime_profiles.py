@@ -20,6 +20,7 @@ from software_agent_team.model_runtime import (
     ModelEndpointKind,
     ModelRuntimeProfile,
     ModelRuntimeProfileSource,
+    openclaw_invocation_thinking_level,
     runtime_profile_for_model,
     runtime_profile_from_openclaw_configuration,
 )
@@ -31,12 +32,34 @@ from software_agent_team.teams import AgentCapability
 
 DEEPSEEK_FLASH_MODEL = "deepseek/deepseek-flash"
 DEEPSEEK_OFFICIAL_V4_FLASH_MODEL = "deepseek/deepseek-v4-flash"
+GEMINI_FLASH_MODELS = (
+    (
+        "google/gemini-3.1-flash-lite",
+        "gemini-3.1-flash-lite",
+        "Gemini 3.1 Flash Lite",
+    ),
+    (
+        "google/gemini-3.5-flash-lite",
+        "gemini-3.5-flash-lite",
+        "Gemini 3.5 Flash Lite",
+    ),
+    ("google/gemini-3.5-flash", "gemini-3.5-flash", "Gemini 3.5 Flash"),
+    ("google/gemini-3.6-flash", "gemini-3.6-flash", "Gemini 3.6 Flash"),
+    ("google/gemini-3.7-flash", "gemini-3.7-flash", "Gemini 3.7 Flash"),
+    ("google/gemini-3.8-flash", "gemini-3.8-flash", "Gemini 3.8 Flash"),
+)
 REPOSITORY_ROOT = Path(__file__).parents[1]
 
 
 def custom_profile(api: ModelApi, *, local: bool = False) -> ModelProfile:
     endpoint_kind = ModelEndpointKind.LOCAL if local else ModelEndpointKind.REMOTE
-    base_url = "http://127.0.0.1:11434" if local else "https://models.example/v1"
+    base_url = (
+        "http://127.0.0.1:11434"
+        if local
+        else "https://generativelanguage.googleapis.com/v1beta"
+        if api is ModelApi.GOOGLE_GENERATIVE_AI
+        else "https://models.example/v1"
+    )
     return ModelProfile(
         id="default",
         model="custom/example-model",
@@ -77,6 +100,36 @@ def test_deepseek_flash_is_a_complete_declarative_preset() -> None:
     assert (
         profile.artifact_submission_policy is ArtifactSubmissionPolicy.OPENAI_REQUIRED
     )
+
+
+@pytest.mark.parametrize(("model", "native_model", "display_name"), GEMINI_FLASH_MODELS)
+def test_stable_gemini_flash_is_a_complete_declarative_preset(
+    model: str,
+    native_model: str,
+    display_name: str,
+) -> None:
+    profile = runtime_profile_for_model(model)
+
+    assert profile.source is ModelRuntimeProfileSource.SAT_PRESET
+    assert profile.provider_id == "google"
+    assert profile.native_model_id == native_model
+    assert profile.display_name == display_name
+    assert profile.api is ModelApi.GOOGLE_GENERATIVE_AI
+    assert profile.endpoint_kind is ModelEndpointKind.REMOTE
+    assert profile.base_url == "https://generativelanguage.googleapis.com/v1beta"
+    assert profile.credential_source is CredentialSource.ENVIRONMENT
+    assert profile.credential_env == "GEMINI_API_KEY"
+    assert profile.input_modalities == ("text", "image")
+    assert profile.context_window_tokens == 1_048_576
+    assert profile.max_output_tokens == 65_536
+    assert profile.invocation_max_tokens == 16_384
+    assert profile.reasoning is True
+    assert profile.supports_tools is True
+    assert profile.supports_reasoning_effort is True
+    assert (
+        profile.artifact_submission_policy is ArtifactSubmissionPolicy.RUNTIME_DEFAULT
+    )
+    assert openclaw_invocation_thinking_level(profile) == "medium"
 
 
 def test_official_deepseek_v4_flash_is_an_openclaw_auth_preset() -> None:
@@ -159,12 +212,96 @@ def test_official_deepseek_v4_flash_profile_validates_with_pinned_openclaw(
     assert json.loads(result.stdout)["valid"] is True
 
 
+def test_gemini_38_flash_profile_is_available_in_pinned_openclaw(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model, native_model, display_name = GEMINI_FLASH_MODELS[-1]
+    monkeypatch.setenv("GEMINI_API_KEY", "test-only")
+    state = tmp_path / "state"
+    state.mkdir()
+    destination = tmp_path / "openclaw.json"
+    profile = ModelProfile(
+        id="default",
+        model=model,
+        capabilities=tuple(AgentCapability),
+    )
+
+    materialize_model_check_configuration(destination, profile=profile)
+
+    payload = json.loads(destination.read_text(encoding="utf-8"))
+    provider = payload["models"]["providers"]["google"]
+    assert provider == {
+        "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+        "api": "google-generative-ai",
+        "apiKey": "${GEMINI_API_KEY}",
+        "models": [
+            {
+                "id": native_model,
+                "name": display_name,
+                "reasoning": True,
+                "input": ["text", "image"],
+                "contextWindow": 1_048_576,
+                "maxTokens": 65_536,
+                "compat": {
+                    "supportsTools": True,
+                    "supportsReasoningEffort": True,
+                },
+            }
+        ],
+    }
+    assert payload["agents"]["defaults"]["models"][model] == {
+        "params": {"maxTokens": 16_384, "thinking": "medium"}
+    }
+    assert "test-only" not in destination.read_text(encoding="utf-8")
+
+    openclaw = REPOSITORY_ROOT / ".sat/openclaw/bin/openclaw"
+    environment = {
+        **os.environ,
+        "HOME": str(tmp_path),
+        "OPENCLAW_STATE_DIR": str(state),
+        "OPENCLAW_CONFIG_PATH": str(destination),
+        "OPENCLAW_AGENT_DIR": "",
+        "OPENCLAW_OAUTH_DIR": str(state / "credentials"),
+    }
+    validation = subprocess.run(
+        [str(openclaw), "config", "validate", "--json"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=MODEL_INSPECTION_TIMEOUT_SECONDS,
+        env=environment,
+    )
+    assert validation.returncode == 0, validation.stderr
+    assert json.loads(validation.stdout)["valid"] is True
+
+    listing = subprocess.run(
+        [str(openclaw), "models", "list", "--json"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=MODEL_INSPECTION_TIMEOUT_SECONDS,
+        env=environment,
+    )
+    assert listing.returncode == 0, listing.stderr
+    matches = [
+        item
+        for item in json.loads(listing.stdout)["models"]
+        if item.get("key") == model
+    ]
+    assert len(matches) == 1
+    assert matches[0]["available"] is True
+    assert matches[0]["contextWindow"] == 1_048_576
+    assert matches[0]["input"] == "text+image"
+
+
 @pytest.mark.parametrize(
     ("api", "local"),
     (
         (ModelApi.OPENAI_COMPLETIONS, False),
         (ModelApi.OPENAI_RESPONSES, False),
         (ModelApi.ANTHROPIC_MESSAGES, False),
+        (ModelApi.GOOGLE_GENERATIVE_AI, False),
         (ModelApi.OLLAMA, True),
     ),
 )
@@ -198,6 +335,7 @@ def test_transport_profiles_compile_through_one_materializer(
         (ModelApi.OPENAI_COMPLETIONS, False),
         (ModelApi.OPENAI_RESPONSES, False),
         (ModelApi.ANTHROPIC_MESSAGES, False),
+        (ModelApi.GOOGLE_GENERATIVE_AI, False),
         (ModelApi.OLLAMA, True),
     ),
 )

@@ -35,7 +35,11 @@ from software_agent_team.runtime_configuration import (
     SandboxImageInspection,
 )
 from software_agent_team.schema_compatibility import supported_schemas
-from software_agent_team.teams import AgentCapability, ModelRoutingMode
+from software_agent_team.teams import (
+    AgentCapability,
+    ModelRoutingMode,
+    ModelSwitchCondition,
+)
 from software_agent_team.updates import (
     ForegroundUpdateObservation,
     ForegroundUpdateStatus,
@@ -2362,6 +2366,120 @@ def test_cli_configures_auditable_adaptive_model_profiles(
     assert "provider_failure" in output
 
 
+def test_cli_configures_the_reviewed_gemini_free_tier_ladder(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "config.json"
+    monkeypatch.setenv("SAT_CONFIG_PATH", str(path))
+    monkeypatch.setenv("SAT_STATE_ROOT", str(tmp_path / "state"))
+    monkeypatch.setenv("GEMINI_API_KEY", "test-only-gemini-key")
+
+    def inspect(
+        _binary: Path,
+        model: str | ModelProfile,
+        **_kwargs: object,
+    ) -> OpenClawModelInspection:
+        profile = (
+            model
+            if isinstance(model, ModelProfile)
+            else ModelProfile(
+                id="default",
+                model=model,
+                capabilities=tuple(AgentCapability),
+            )
+        )
+        return OpenClawModelInspection(
+            model=profile.model,
+            runtime_profile_sha256=profile.runtime_profile_sha256,
+            available=True,
+            context_window_tokens=profile.runtime_profile.context_window_tokens,
+        )
+
+    monkeypatch.setattr(cli, "_inspect_selected_model", inspect)
+    assert (
+        main(
+            [
+                "configure",
+                "--non-interactive",
+                "--model",
+                "google/gemini-3.5-flash-lite",
+                "--input-cost-per-million-usd",
+                "0",
+                "--output-cost-per-million-usd",
+                "0",
+                "--profile-cache-pricing",
+                "default=0,0",
+            ]
+        )
+        == 0
+    )
+
+    profiles = (
+        ("reserve", "google/gemini-3.1-flash-lite", "20"),
+        ("routine", "google/gemini-3.5-flash", "30"),
+        ("test", "google/gemini-3.6-flash", "40"),
+        ("review", "google/gemini-3.7-flash", "50"),
+        ("build", "google/gemini-3.8-flash", "60"),
+    )
+    arguments = ["configure", "--non-interactive"]
+    for profile_id, model, priority in profiles:
+        arguments.extend(("--add-model-profile", f"{profile_id}={model}"))
+        arguments.extend(("--profile-priority", f"{profile_id}={priority}"))
+        arguments.extend(("--profile-pricing", f"{profile_id}=0,0"))
+        arguments.extend(("--profile-cache-pricing", f"{profile_id}=0,0"))
+    arguments.extend(
+        (
+            "--profile-priority",
+            "default=10",
+            "--routing-mode",
+            "policy",
+            "--route-capability",
+            "implementation=build",
+            "--route-capability",
+            "integration=routine",
+            "--route-capability",
+            "testing=test",
+            "--route-capability",
+            "review=review",
+            "--allow-provider-switch",
+        )
+    )
+    assert main(arguments) == 0
+
+    configured = load_user_configuration(path)
+    assert configured is not None
+    assert configured.model == "google/gemini-3.5-flash-lite"
+    assert configured.routing_mode.value == "policy"
+    assert [profile.id for profile in configured.model_profiles] == [
+        "default",
+        "reserve",
+        "routine",
+        "test",
+        "review",
+        "build",
+    ]
+    assert all(
+        profile.runtime_profile.credential_env == "GEMINI_API_KEY"
+        and profile.input_cost_per_million_usd == 0
+        and profile.output_cost_per_million_usd == 0
+        and profile.cache_pricing is not None
+        and profile.cache_pricing.read_cost_per_million_usd == 0
+        and profile.cache_pricing.write_cost_per_million_usd == 0
+        for profile in configured.model_profiles
+    )
+    assert configured.capability_profile_overrides == {
+        AgentCapability.IMPLEMENTATION: "build",
+        AgentCapability.INTEGRATION: "routine",
+        AgentCapability.TESTING: "test",
+        AgentCapability.REVIEW: "review",
+    }
+    assert configured.authorized_switch_conditions == (
+        ModelSwitchCondition.PROVIDER_FAILURE,
+    )
+    assert "test-only-gemini-key" not in path.read_text(encoding="utf-8")
+
+
 def test_cli_can_return_adaptive_routing_to_one_strict_profile(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2879,7 +2997,7 @@ def test_provider_smoke_uses_the_selected_model_without_exposing_output(
             ),
         )
 
-    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    monkeypatch.setattr(cli, "run_bounded_process", fake_run)
 
     state = tmp_path / "sat-openclaw-state"
     state.mkdir()
@@ -2895,15 +3013,20 @@ def test_provider_smoke_uses_the_selected_model_without_exposing_output(
     argv = observed["argv"]
     assert argv[0] == "/opt/openclaw"
     assert argv[argv.index("--model") + 1] == "provider/model"
-    assert observed["kwargs"]["shell"] is False
-    assert observed["kwargs"]["capture_output"] is True
-    assert observed["kwargs"]["env"]["OPENCLAW_STATE_DIR"] == str(state)
-    effective_config = Path(observed["kwargs"]["env"]["OPENCLAW_CONFIG_PATH"])
+    assert "--thinking" not in argv
+    assert observed["kwargs"]["timeout_seconds"] == 180
+    assert observed["kwargs"]["termination_grace_seconds"] == 5
+    assert observed["kwargs"]["environment"]["OPENCLAW_STATE_DIR"] == str(state)
+    effective_config = Path(observed["kwargs"]["environment"]["OPENCLAW_CONFIG_PATH"])
     assert effective_config != config
-    assert observed["kwargs"]["env"]["OPENCLAW_AGENT_DIR"] == ""
-    assert observed["kwargs"]["env"]["OPENCLAW_GATEWAY_URL"] == ""
-    assert observed["kwargs"]["env"]["OPENCLAW_OAUTH_DIR"] == str(state / "credentials")
-    assert observed["kwargs"]["env"]["OPENAI_API_KEY"] == "trusted-provider-key"
+    assert observed["kwargs"]["environment"]["OPENCLAW_AGENT_DIR"] == ""
+    assert observed["kwargs"]["environment"]["OPENCLAW_GATEWAY_URL"] == ""
+    assert observed["kwargs"]["environment"]["OPENCLAW_OAUTH_DIR"] == str(
+        state / "credentials"
+    )
+    assert observed["kwargs"]["environment"]["OPENAI_API_KEY"] == (
+        "trusted-provider-key"
+    )
 
 
 def test_provider_smoke_registers_the_deepseek_vision_compatibility_model(
@@ -2914,7 +3037,7 @@ def test_provider_smoke_registers_the_deepseek_vision_compatibility_model(
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
 
     def fake_run(argv: list[str], **kwargs: object) -> SimpleNamespace:
-        effective_path = Path(kwargs["env"]["OPENCLAW_CONFIG_PATH"])
+        effective_path = Path(kwargs["environment"]["OPENCLAW_CONFIG_PATH"])
         observed["argv"] = argv
         observed["effective_path"] = effective_path
         observed["payload"] = json.loads(effective_path.read_text(encoding="utf-8"))
@@ -2930,7 +3053,7 @@ def test_provider_smoke_registers_the_deepseek_vision_compatibility_model(
             ),
         )
 
-    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    monkeypatch.setattr(cli, "run_bounded_process", fake_run)
     state = tmp_path / "state"
     state.mkdir()
     configured_path = state / "openclaw.json"
@@ -2954,6 +3077,73 @@ def test_provider_smoke_registers_the_deepseek_vision_compatibility_model(
     assert observed["argv"][observed["argv"].index("--model") + 1] == (
         "deepseek/deepseek-v4-flash-vision-exp"
     )
+    assert "--thinking" not in observed["argv"]
+
+
+@pytest.mark.parametrize(
+    "native_model",
+    (
+        "gemini-3.1-flash-lite",
+        "gemini-3.5-flash-lite",
+        "gemini-3.5-flash",
+        "gemini-3.6-flash",
+        "gemini-3.7-flash",
+        "gemini-3.8-flash",
+    ),
+)
+def test_provider_smoke_uses_supported_gemini_thinking_level(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    native_model: str,
+) -> None:
+    observed: dict[str, object] = {}
+    monkeypatch.setenv("GEMINI_API_KEY", "trusted-gemini-key")
+
+    def fake_run(argv: list[str], **kwargs: object) -> SimpleNamespace:
+        effective_path = Path(kwargs["environment"]["OPENCLAW_CONFIG_PATH"])
+        observed["argv"] = argv
+        observed["environment"] = kwargs["environment"]
+        observed["payload"] = json.loads(effective_path.read_text(encoding="utf-8"))
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "ok": True,
+                    "provider": "google",
+                    "model": native_model,
+                    "outputs": [{"text": '{"status":"ok"}'}],
+                }
+            ),
+        )
+
+    monkeypatch.setattr(cli, "run_bounded_process", fake_run)
+    state = tmp_path / "state"
+    state.mkdir()
+    configured_path = state / "openclaw.json"
+    configured_path.write_text("{}", encoding="utf-8")
+
+    cli._run_provider_smoke(
+        Path("/opt/openclaw"),
+        f"google/{native_model}",
+        state_dir=state,
+        config_path=configured_path,
+    )
+
+    argv = observed["argv"]
+    assert argv[argv.index("--model") + 1] == f"google/{native_model}"
+    assert argv[argv.index("--thinking") + 1] == "medium"
+    payload = observed["payload"]
+    provider = payload["models"]["providers"]["google"]
+    assert provider["apiKey"] == "${GEMINI_API_KEY}"
+    assert provider["models"][0]["id"] == native_model
+    assert (
+        payload["agents"]["defaults"]["models"][f"google/{native_model}"]["params"][
+            "thinking"
+        ]
+        == "medium"
+    )
+    assert observed["environment"]["GEMINI_API_KEY"] == "trusted-gemini-key"
+    assert "trusted-gemini-key" not in json.dumps(payload)
 
 
 def test_provider_smoke_rejects_silent_route_fallback(
@@ -2961,8 +3151,8 @@ def test_provider_smoke_rejects_silent_route_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        cli.subprocess,
-        "run",
+        cli,
+        "run_bounded_process",
         lambda *_args, **_kwargs: SimpleNamespace(
             returncode=0,
             stdout=json.dumps(
@@ -2990,6 +3180,234 @@ def test_provider_smoke_rejects_silent_route_fallback(
             state_dir=state,
             config_path=config,
         )
+
+
+def test_provider_smoke_reports_a_sanitized_nested_provider_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "trusted-gemini-key")
+    nested = json.dumps(
+        {
+            "error": {
+                "code": 503,
+                "status": "UNAVAILABLE",
+                "message": "This model is currently experiencing high demand.",
+            }
+        },
+        indent=2,
+    )
+    outer = json.dumps(
+        {
+            "error": {
+                "message": nested,
+                "code": 503,
+                "status": "Service Unavailable",
+            }
+        }
+    )
+    monkeypatch.setattr(
+        cli,
+        "run_bounded_process",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=1,
+            stdout="",
+            stderr=f"Error: provider failed: {outer}.\n",
+        ),
+    )
+    state = tmp_path / "state"
+    state.mkdir()
+    config = state / "openclaw.json"
+    config.write_text("{}", encoding="utf-8")
+
+    with pytest.raises(cli.RuntimeConfigurationError) as captured:
+        cli._run_provider_smoke(
+            Path("/opt/openclaw"),
+            "google/gemini-3.8-flash",
+            state_dir=state,
+            config_path=config,
+        )
+
+    assert str(captured.value) == (
+        "the provider smoke check failed for google/gemini-3.8-flash: "
+        "HTTP 503 UNAVAILABLE: This model is currently experiencing high demand."
+    )
+
+
+def test_provider_smoke_does_not_reflect_unstructured_output_or_the_credential(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    credential = "trusted-gemini-key"
+    monkeypatch.setenv("GEMINI_API_KEY", credential)
+    monkeypatch.setattr(
+        cli,
+        "run_bounded_process",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=1,
+            stdout="",
+            stderr=(
+                "\x1b[31mrequest rejected for trusted-\x1b[0mgemini-key\n\x00"
+                + "x" * 2000
+            ),
+        ),
+    )
+    state = tmp_path / "state"
+    state.mkdir()
+    config = state / "openclaw.json"
+    config.write_text("{}", encoding="utf-8")
+
+    with pytest.raises(cli.RuntimeConfigurationError) as captured:
+        cli._run_provider_smoke(
+            Path("/opt/openclaw"),
+            "google/gemini-3.8-flash",
+            state_dir=state,
+            config_path=config,
+        )
+
+    message = str(captured.value)
+    assert credential not in message
+    assert "request rejected" not in message
+    assert message == "the provider smoke check failed for google/gemini-3.8-flash"
+
+
+def test_provider_smoke_bounds_and_redacts_a_structured_provider_message(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    credential = "trusted-gemini-key"
+    monkeypatch.setenv("GEMINI_API_KEY", credential)
+    nested = json.dumps(
+        {
+            "error": {
+                "code": 429,
+                "status": "RESOURCE_EXHAUSTED",
+                "message": (
+                    "credential trusted-\x1b[31mgemini-key was rejected " + "x" * 2000
+                ),
+            }
+        }
+    )
+    monkeypatch.setattr(
+        cli,
+        "run_bounded_process",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=1,
+            stdout=nested,
+            stderr="",
+        ),
+    )
+    state = tmp_path / "state"
+    state.mkdir()
+    config = state / "openclaw.json"
+    config.write_text("{}", encoding="utf-8")
+
+    with pytest.raises(cli.RuntimeConfigurationError) as captured:
+        cli._run_provider_smoke(
+            Path("/opt/openclaw"),
+            "google/gemini-3.8-flash",
+            state_dir=state,
+            config_path=config,
+        )
+
+    message = str(captured.value)
+    detail = message.removeprefix(
+        "the provider smoke check failed for google/gemini-3.8-flash: "
+    )
+    assert detail.startswith("HTTP 429 RESOURCE_EXHAUSTED: credential [credential]")
+    assert credential not in detail
+    assert "\x1b" not in detail
+    assert len(detail) <= 600
+
+
+def test_provider_smoke_keeps_a_generic_failure_when_no_detail_exists(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        cli,
+        "run_bounded_process",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=1,
+            stdout="",
+            stderr="",
+        ),
+    )
+    state = tmp_path / "state"
+    state.mkdir()
+    config = state / "openclaw.json"
+    config.write_text("{}", encoding="utf-8")
+
+    with pytest.raises(cli.RuntimeConfigurationError) as captured:
+        cli._run_provider_smoke(
+            Path("/opt/openclaw"),
+            "provider/model",
+            state_dir=state,
+            config_path=config,
+        )
+
+    assert str(captured.value) == ("the provider smoke check failed for provider/model")
+
+
+def test_provider_smoke_reports_a_clean_bounded_timeout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    timeout = cli.BoundedProcessTimeoutError(180)
+    monkeypatch.setattr(
+        cli,
+        "run_bounded_process",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(timeout),
+    )
+    state = tmp_path / "state"
+    state.mkdir()
+    config = state / "openclaw.json"
+    config.write_text("{}", encoding="utf-8")
+
+    with pytest.raises(cli.RuntimeConfigurationError) as captured:
+        cli._run_provider_smoke(
+            Path("/opt/openclaw"),
+            "provider/model",
+            state_dir=state,
+            config_path=config,
+        )
+
+    assert str(captured.value) == (
+        "the provider smoke check timed out after 180 seconds; SAT stopped its "
+        "provider processes. Check provider availability and network access, then "
+        "retry with `sat configure`"
+    )
+    assert captured.value.__cause__ is timeout
+
+
+def test_provider_smoke_reports_an_unproven_process_boundary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    boundary_error = cli.BoundedProcessError("unsafe")
+    monkeypatch.setattr(
+        cli,
+        "run_bounded_process",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(boundary_error),
+    )
+    state = tmp_path / "state"
+    state.mkdir()
+    config = state / "openclaw.json"
+    config.write_text("{}", encoding="utf-8")
+
+    with pytest.raises(cli.RuntimeConfigurationError) as captured:
+        cli._run_provider_smoke(
+            Path("/opt/openclaw"),
+            "provider/model",
+            state_dir=state,
+            config_path=config,
+        )
+
+    assert str(captured.value) == (
+        "the provider smoke check could not establish a clean process boundary; "
+        "run `sat cleanup`, then retry with `sat configure`"
+    )
+    assert captured.value.__cause__ is boundary_error
 
 
 def test_model_inspection_materializes_compatibility_without_persistent_config(

@@ -47,6 +47,7 @@ TEAM_CONFIG = REPOSITORY_ROOT / "configs" / "teams.json"
 OPENCLAW_TEMPLATE = REPOSITORY_ROOT / "configs" / "openclaw.example.json5"
 DEEPSEEK_VISION_MODEL = "deepseek/deepseek-v4-flash-vision-exp"
 DEEPSEEK_OFFICIAL_V4_FLASH_MODEL = "deepseek/deepseek-v4-flash"
+GEMINI_38_FLASH_MODEL = "google/gemini-3.8-flash"
 
 
 def runtime_preflight(**updates: object) -> RuntimePreflight:
@@ -679,6 +680,37 @@ def test_materialized_config_uses_openclaw_auth_for_official_deepseek_v4_flash(
             "function": {"name": "sat_submit_artifact"},
         },
     }
+
+
+def test_materialized_config_uses_supported_gemini_thinking_level(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "must-not-be-persisted")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    destination = tmp_path / "run" / "openclaw.runtime.json"
+
+    materialize_run_configuration(
+        OPENCLAW_TEMPLATE,
+        destination,
+        manifest=load_team_manifest(TEAM_CONFIG),
+        workspace=workspace,
+        sandbox_image="sat-agent:phase1",
+        sandbox_user="1000:1000",
+        model=GEMINI_38_FLASH_MODEL,
+        bootstrap_capability=AgentCapability.CLARIFICATION,
+    )
+
+    payload = json.loads(destination.read_text(encoding="utf-8"))
+    provider = payload["models"]["providers"]["google"]
+    assert provider["baseUrl"] == ("https://generativelanguage.googleapis.com/v1beta")
+    assert provider["api"] == "google-generative-ai"
+    assert provider["apiKey"] == "${GEMINI_API_KEY}"
+    assert provider["models"][0]["id"] == "gemini-3.8-flash"
+    settings = payload["agents"]["defaults"]["models"][GEMINI_38_FLASH_MODEL]
+    assert settings["params"] == {"maxTokens": 16_384, "thinking": "medium"}
+    assert "must-not-be-persisted" not in destination.read_text(encoding="utf-8")
 
 
 def test_legacy_text_runtime_does_not_force_the_typed_submission_tool(

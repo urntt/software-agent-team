@@ -491,12 +491,35 @@ user configuration and provider state. Non-interactive configuration uses the
 same profile compiler and validation boundary before its atomic user-config
 replace.
 
+`src/software_agent_team/bounded_process.py` owns the short-lived provider-smoke
+subprocess boundary. It requires a single-threaded controller with no existing
+children, then combines an inherited opaque identity with a Linux child
+subreaper, UID and PID/start-time revalidation, and pidfd signalling so a timed-out
+descendant cannot escape by creating a new process group or session. The
+identity and child environments are never persisted. Tests must cover both timeout
+cleanup of a detached descendant and rejection of a child left behind after an
+otherwise successful root command.
+Non-zero OpenClaw results pass through the CLI's bounded failure projection. It
+prefers a nested provider JSON error, removes the exact credential selected by
+the runtime profile, strips control characters, and caps the displayed detail.
+Do not expose raw provider stdout or stderr as a shortcut for diagnostics.
+
 A reviewed preset for an exact model absent from the pinned OpenClaw catalog
 must remain narrow, versioned in Git, secret-free, and covered by materialization
 plus exact-availability tests. Record only verified routing, modality, context,
 output, and compatibility metadata; do not add a credential value, mutable
 fallback, or guessed price. User-supplied custom routes use the same schema
 rather than adding another model-name branch.
+
+An explicitly reasoning profile that supports configurable reasoning effort and
+does not disable thinking compiles to OpenClaw's portable `medium` level. The
+same helper supplies the provider-smoke `--thinking` flag and the per-model Agent
+setting, so a one-shot check cannot exercise a different reasoning contract from
+Planning or dynamic execution. The reviewed stable Gemini Flash presets for
+3.1 Flash Lite, 3.5 Flash Lite, and 3.5 through 3.8 Flash share this verified
+Google transport contract. Gemini 3.7 and 3.8 reject the pinned OpenClaw
+one-shot default of `minimal`, so the shared setting is required for those exact
+routes rather than inferred from a provider prefix.
 
 A preset may also supplement one exact official-plugin route when its catalog
 omits a capability field required by SAT. In that case the preset freezes only
@@ -507,12 +530,12 @@ OpenClaw configuration and fails closed when tool support is absent.
 
 The pinned transport matrix must compile and pass the real OpenClaw config
 validator for `openai-completions`, `openai-responses`,
-`anthropic-messages`, and local `ollama`. The matrix deliberately does not make
-an external provider call. Each transport has a separate test identity so a
-runtime compatibility failure remains attributable. Because this is a cold
-pinned-runtime inspection rather than an ordinary task preflight, it reuses the
-registered 90-second model-inspection infrastructure guard instead of inventing
-a shorter test-only subprocess cutoff. Separately test unknown transports,
+`anthropic-messages`, `google-generative-ai`, and local `ollama`. The matrix
+deliberately does not make an external provider call. Each transport has a
+separate test identity so a runtime compatibility failure remains attributable.
+Because this is a cold pinned-runtime inspection rather than an ordinary task
+preflight, it reuses the registered 90-second model-inspection infrastructure
+guard instead of inventing a shorter test-only subprocess cutoff. Separately test unknown transports,
 remote HTTP or private endpoints, missing credential references/values, missing
 tool capability, exact rollback, and secret exclusion. A provider-backed check
 is needed only for a reviewed live route and must verify the exact provider/model

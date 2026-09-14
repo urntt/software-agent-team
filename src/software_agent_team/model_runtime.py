@@ -229,8 +229,58 @@ def _native_runtime_profile(model: str) -> ModelRuntimeProfile:
     )
 
 
+def _gemini_flash_runtime_profile(
+    native_model_id: str,
+    display_name: str,
+) -> ModelRuntimeProfile:
+    """Build one reviewed stable Gemini Flash route from shared provider facts."""
+
+    return ModelRuntimeProfile(
+        source=ModelRuntimeProfileSource.SAT_PRESET,
+        provider_id="google",
+        native_model_id=native_model_id,
+        display_name=display_name,
+        api=ModelApi.GOOGLE_GENERATIVE_AI,
+        endpoint_kind=ModelEndpointKind.REMOTE,
+        base_url="https://generativelanguage.googleapis.com/v1beta",
+        credential_source=CredentialSource.ENVIRONMENT,
+        credential_env="GEMINI_API_KEY",
+        input_modalities=("text", "image"),
+        context_window_tokens=1_048_576,
+        max_output_tokens=65_536,
+        invocation_max_tokens=16_384,
+        reasoning=True,
+        supports_tools=True,
+        supports_reasoning_effort=True,
+    )
+
+
 _MODEL_RUNTIME_PRESETS: Mapping[str, ModelRuntimeProfile] = MappingProxyType(
     {
+        "google/gemini-3.1-flash-lite": _gemini_flash_runtime_profile(
+            "gemini-3.1-flash-lite",
+            "Gemini 3.1 Flash Lite",
+        ),
+        "google/gemini-3.5-flash-lite": _gemini_flash_runtime_profile(
+            "gemini-3.5-flash-lite",
+            "Gemini 3.5 Flash Lite",
+        ),
+        "google/gemini-3.5-flash": _gemini_flash_runtime_profile(
+            "gemini-3.5-flash",
+            "Gemini 3.5 Flash",
+        ),
+        "google/gemini-3.6-flash": _gemini_flash_runtime_profile(
+            "gemini-3.6-flash",
+            "Gemini 3.6 Flash",
+        ),
+        "google/gemini-3.7-flash": _gemini_flash_runtime_profile(
+            "gemini-3.7-flash",
+            "Gemini 3.7 Flash",
+        ),
+        "google/gemini-3.8-flash": _gemini_flash_runtime_profile(
+            "gemini-3.8-flash",
+            "Gemini 3.8 Flash",
+        ),
         "deepseek/deepseek-v4-flash": ModelRuntimeProfile(
             source=ModelRuntimeProfileSource.SAT_PRESET,
             provider_id="deepseek",
@@ -309,6 +359,20 @@ def runtime_profile_for_model(model: str) -> ModelRuntimeProfile:
     normalized = model.strip()
     preset = _MODEL_RUNTIME_PRESETS.get(normalized)
     return preset if preset is not None else _native_runtime_profile(normalized)
+
+
+def openclaw_invocation_thinking_level(
+    profile: ModelRuntimeProfile,
+) -> Literal["medium"] | None:
+    """Choose a portable default for an explicitly tunable reasoning route."""
+
+    if (
+        profile.reasoning is True
+        and profile.supports_reasoning_effort is True
+        and not profile.disable_thinking
+    ):
+        return "medium"
+    return None
 
 
 def runtime_profile_from_openclaw_configuration(
@@ -475,6 +539,9 @@ def openclaw_agent_model_settings(
     params: dict[str, Any] = {}
     if profile.invocation_max_tokens is not None:
         params["maxTokens"] = profile.invocation_max_tokens
+    thinking_level = openclaw_invocation_thinking_level(profile)
+    if thinking_level is not None:
+        params["thinking"] = thinking_level
     extra_body: dict[str, Any] = {}
     if profile.disable_thinking:
         extra_body["thinking"] = {"type": "disabled"}

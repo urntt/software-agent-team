@@ -301,6 +301,19 @@ Declining the profile or Planning authorization exits without a model request.
 Cancelling Planning preserves its evidence but creates no execution run or
 delivered project.
 
+The optional provider smoke check has a 180-second infrastructure ceiling. SAT
+launches it inside a Linux child-subreaper boundary, assigns a private inherited
+process identity, and verifies PID start times before signalling. If the check
+times out, SAT stops the original process and any descendant that created a new
+session, reports the exact timeout, and directs the user to check provider and
+network availability before retrying with `sat configure`. A process-boundary
+failure is reported separately and never presented as a provider response.
+If OpenClaw returns a non-zero provider result, SAT prefers its nested JSON
+error code, status, and message, removes the configured environment credential,
+strips terminal control characters, and limits the displayed detail. Empty or
+unstructured failures retain a bounded generic fallback, so a provider error
+cannot echo an API key or inject terminal control sequences.
+
 ## Saved Configuration
 
 SAT configuration is stored atomically with mode `0600` at:
@@ -423,6 +436,22 @@ For example, the separate DeepSeek V4.1 Flash preset uses
 export DEEPSEEK_API_KEY='<provider key>'
 sat configure --non-interactive --model deepseek/deepseek-flash
 ```
+
+The reviewed stable Gemini Flash presets similarly use `GEMINI_API_KEY` from
+the trusted caller environment. They add the exact selected model to the pinned
+OpenClaw catalog, use the native Google Generative AI transport, and select
+`medium` thinking for provider smoke and Agent invocations. The reviewed model
+IDs are `gemini-3.1-flash-lite`, `gemini-3.5-flash-lite`,
+`gemini-3.5-flash`, `gemini-3.6-flash`, `gemini-3.7-flash`, and
+`gemini-3.8-flash`; the last two reject OpenClaw's `minimal` one-shot default:
+
+```bash
+export GEMINI_API_KEY='<provider key>'
+sat configure --non-interactive --model google/gemini-3.8-flash
+```
+
+Each preset applies only to its listed exact `google/...` reference. SAT does
+not infer the transport, limits, or capabilities of another Google model.
 
 Configure a custom OpenAI Responses endpoint through the same ordinary command,
 without editing a run JSON or adding model-specific Python code:
