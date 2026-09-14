@@ -333,6 +333,33 @@ account/HOME/resource cleanup all passed. The scenario made no provider calls.
 
 ## Current Development Head
 
+The current development head closes four correction and lifecycle defects found by
+the 2026-09-14 review and by replaying archived Planning failures.
+
+Record identity in a correction response schema now has exactly one owner. A
+collection whose identity is immutable pins every existing record to its current
+ID, and the Review-task-scope and writer-criterion-coverage projections re-apply
+that binding when they rebuild task slots instead of replacing it. Order between
+the two projections no longer changes the contract, and a slot-count mismatch
+fails closed. Replaying the archived split-criterion failure against the same
+builder confirms the separate `2b62dbe` identity fix already binds every
+ProductDefinition `criterion_ids` slot to the criteria the proposal declares;
+that replay is now a regression instead of an untested path.
+
+A Planning invocation that produces no attributable typed submission is treated
+as its own class. Nothing is accepted, the failed turn is persisted in full with
+its execution status, usage and cost, the session stays in the dialogue rather
+than terminating, and the identical request is reissued at most once. Assistant
+text still never substitutes for a typed submission, and a submission that
+exists but is rejected is never reissued.
+
+State-layout inspection keeps one owner for deciding whether a layout is safe to
+consume, while each caller projects its own remediation. Startup asks the user to
+make a state root usable; uninstall asks the user to make the existing one
+removable and no longer suggests selecting another state root.
+
+The suite passes 1,686/1,686 tests in 700.12 seconds. The canonical gate is pending: an attempt on this host completed doctor, format-check and lint with exit 0, then lost its test stage to host memory pressure rather than to a product failure.
+
 The `v0.2.18` execution adapter classifies a missing typed submission as
 `upstream_incomplete` when the exact attributable turn contains tool calls and
 ends either on a paired tool result or on a later assistant response. Assistant
