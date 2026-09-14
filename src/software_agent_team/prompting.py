@@ -736,7 +736,7 @@ def build_upstream_continuation_request(
     workspace_state_sha256: str,
     changed_path_count: int,
 ) -> AgentExecutionRequest:
-    """Continue verified partial work after an upstream tool-loop truncation."""
+    """Continue verified partial work after an incomplete tool-bearing turn."""
 
     if request.submission_contract is None:
         raise AgentPromptError("controlled continuation requires typed submission")
@@ -749,12 +749,11 @@ def build_upstream_continuation_request(
     continuation = f"""
 
 CONTROLLED_UPSTREAM_CONTINUATION_V1
-The preceding invocation in this same Agent session ended immediately after a
-paired tool result, before the required terminal
-`{request.submission_contract.tool_name}` call. The Controller did not accept or
-commit partial work on your behalf. It verified the workspace identity, ancestry,
-permission scope, and {changed_path_count} changed path(s); the exact non-semantic
-state fingerprint is
+The preceding tool-bearing invocation in this same Agent session ended before the
+required terminal `{request.submission_contract.tool_name}` call. The Controller
+did not accept its assistant text or commit partial work on your behalf. It verified
+the workspace identity, ancestry, permission scope, and {changed_path_count} changed
+path(s); the exact non-semantic state fingerprint is
 `{workspace_state_sha256}`.
 
 Continue the same approved task from the existing workspace and session. Inspect

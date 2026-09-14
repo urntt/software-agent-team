@@ -482,6 +482,7 @@ class DynamicExecutor:
         if upstream_writer_mode not in {
             None,
             "complete_after_one",
+            "terminal_response_after_tools",
             "invalid_after_one",
             "no_progress",
             "outside_scope",
@@ -657,7 +658,12 @@ class DynamicExecutor:
                     activity_handler,
                     InvocationStopReason.UPSTREAM_INCOMPLETE,
                 )
-                return self._upstream_incomplete_result(request)
+                return self._upstream_incomplete_result(
+                    request,
+                    terminal_response=(
+                        self.upstream_writer_mode == "terminal_response_after_tools"
+                    ),
+                )
             if self.upstream_writer_mode == "repeat_without_progress" and count == 2:
                 self._emit_lifecycle_stop(
                     request,
@@ -672,7 +678,14 @@ class DynamicExecutor:
                     InvocationStopReason.INVALID_RESPONSE,
                 )
                 return self._result(request, "not valid JSON", None)
-            if self.upstream_writer_mode == "complete_after_one" and count == 2:
+            if (
+                self.upstream_writer_mode
+                in {
+                    "complete_after_one",
+                    "terminal_response_after_tools",
+                }
+                and count == 2
+            ):
                 with (self.workspace / "README.md").open(
                     "a", encoding="utf-8"
                 ) as readme:
@@ -1348,6 +1361,8 @@ class DynamicExecutor:
     @staticmethod
     def _upstream_incomplete_result(
         request: AgentExecutionRequest,
+        *,
+        terminal_response: bool = False,
     ) -> AgentExecutionResult:
         contract = request.submission_contract
         assert contract is not None
@@ -1371,17 +1386,21 @@ class DynamicExecutor:
             contract,
             binding_sha256=binding_sha256,
             status=AgentSubmissionStatus.MISSING,
-            code="upstream_incomplete_after_tool_result",
+            code=(
+                "upstream_incomplete_after_terminal_response"
+                if terminal_response
+                else "upstream_incomplete_after_tool_result"
+            ),
             detail=(
-                "the attributable OpenClaw turn ended after the paired edit tool "
-                "result before the required terminal submission"
+                "the attributable OpenClaw turn ended before the required terminal "
+                "submission after tool use"
             ),
         )
         return AgentExecutionResult(
             status=AgentExecutionStatus.UPSTREAM_INCOMPLETE,
             error=(
-                "OpenClaw ended the invocation after a tool result before the "
-                "required typed submission"
+                "OpenClaw ended the tool-bearing invocation before the required "
+                "typed submission"
             ),
             telemetry=AgentExecutionTelemetry(
                 role=None,
@@ -1942,12 +1961,24 @@ def test_dynamic_writer_missing_typed_submission_fails_without_correction(
     assert writer_record.semantic_correction_request is None
 
 
+@pytest.mark.parametrize(
+    ("upstream_writer_mode", "expected_diagnostic"),
+    [
+        ("complete_after_one", "upstream_incomplete_after_tool_result"),
+        (
+            "terminal_response_after_tools",
+            "upstream_incomplete_after_terminal_response",
+        ),
+    ],
+)
 def test_dynamic_writer_continues_verified_partial_work_in_the_same_session(
     tmp_path: Path,
+    upstream_writer_mode: str,
+    expected_diagnostic: str,
 ) -> None:
     runner, team_plan, executor, quality_gate, workspace = runtime(
         tmp_path,
-        executor_options={"upstream_writer_mode": "complete_after_one"},
+        executor_options={"upstream_writer_mode": upstream_writer_mode},
     )
     events: list[ProgressEvent] = []
     runner.activity_handler = events.append
@@ -1975,9 +2006,7 @@ def test_dynamic_writer_continues_verified_partial_work_in_the_same_session(
         AgentExecutionStatus.COMPLETED,
     ]
     assert writer_records[0].submission_evidence is not None
-    assert writer_records[0].submission_evidence.diagnostic_code == (
-        "upstream_incomplete_after_tool_result"
-    )
+    assert writer_records[0].submission_evidence.diagnostic_code == expected_diagnostic
     assert writer_records[0].response_artifact is None
     assert writer_records[1].response_artifact == runner.outputs["builder"]
     assert git(workspace, "status", "--short").stdout == ""

@@ -1444,9 +1444,10 @@ that actually exists in the foreground execution surface. `sat-probe-run`
 provides the matching fixed, bounded, controller-verifiable execution path; the
 runtime also contains pinned `uv` for relevant bounded probes. The OpenClaw adapter validates
 each exact session turn, pairs actual tool calls and results, and persists only
-bounded sanitized records. When a process exits after a paired tool result but
-before the bound terminal submission, the adapter records
-`upstream_incomplete` rather than a generic semantic failure. A write-capable
+bounded sanitized records. When a process exits after attributable tool use but
+before the bound terminal submission, the adapter records `upstream_incomplete`
+whether the final record is a paired tool result or a later assistant response;
+assistant prose remains non-authoritative. A write-capable
 Agent can continue only in the same task, session, workspace, model route, and
 authority after the Controller verifies identity, ancestry, approved path scope,
 and a previously unseen content-sensitive workspace state. Every continuation

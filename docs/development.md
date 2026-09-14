@@ -563,8 +563,11 @@ publish an artifact; free-form siblings must not be retained without validation.
 Assert that every semantic-correction attempt uses a distinct session generation
 while retaining the same Controller-bound Agent, task, workspace, route, base
 response, and correction authority. Keep verified upstream-incomplete
-continuation on the original session. This boundary prevents an assistant-tail
-or auto-compacted OpenClaw transcript from becoming a correction prerequisite.
+continuation on the original session, and cover both a final paired tool result
+and a later terminal assistant response after attributable tool use. In both
+cases assistant text remains non-authoritative. This boundary prevents an
+assistant-tail or auto-compacted OpenClaw transcript from becoming a correction
+prerequisite.
 Test cancel and interrupt recorded between calls: the shared invocation-admission
 check must prevent initial work, correction, fallback, and continuation alike,
 without creating another reservation or losing the previous invocation's evidence.

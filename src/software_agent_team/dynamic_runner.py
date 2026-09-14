@@ -602,8 +602,8 @@ class DynamicAgentRunner:
                     agent,
                     kind=ProgressEventKind.AGENT_RETRY,
                     message=(
-                        f"{agent.label} upstream turn ended after a tool result "
-                        "before submission; workspace identity, ancestry, scope, "
+                        f"{agent.label} tool-bearing upstream turn ended before "
+                        "submission; workspace identity, ancestry, scope, "
                         f"and {len(current_continuation.progress.changed_files)} "
                         "changed path(s) were verified. Continuing the same task "
                         "and session under the approved budget."

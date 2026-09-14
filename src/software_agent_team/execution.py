@@ -2827,26 +2827,43 @@ class OpenClawSubprocessExecutor:
                     and captured_tools is not None
                     and captured_tools.tool_calls
                     and captured_tools.terminal_state
-                    is OpenClawInvocationTerminalState.TOOL_RESULT
+                    in {
+                        OpenClawInvocationTerminalState.TOOL_RESULT,
+                        OpenClawInvocationTerminalState.ASSISTANT_RESPONSE,
+                    }
                 ):
                     final_tool = captured_tools.tool_calls[-1]
+                    ended_after_tool_result = (
+                        captured_tools.terminal_state
+                        is OpenClawInvocationTerminalState.TOOL_RESULT
+                    )
                     submission_evidence = rejected_submission_evidence(
                         request.submission_contract,
                         binding_sha256=submission_binding_sha256,
                         status=AgentSubmissionStatus.MISSING,
-                        code="upstream_incomplete_after_tool_result",
+                        code=(
+                            "upstream_incomplete_after_tool_result"
+                            if ended_after_tool_result
+                            else "upstream_incomplete_after_terminal_response"
+                        ),
                         detail=(
                             "the attributable OpenClaw turn ended after the paired "
                             f"{final_tool.tool_name} tool result before the required "
                             "terminal submission"
+                            if ended_after_tool_result
+                            else (
+                                "the attributable OpenClaw turn ended with an "
+                                "assistant response after tool use but before the "
+                                "required terminal submission"
+                            )
                         ),
                     )
                     return self._finalize_lifecycle_result(
                         AgentExecutionResult(
                             status=AgentExecutionStatus.UPSTREAM_INCOMPLETE,
                             error=(
-                                "OpenClaw ended the invocation after a tool result "
-                                "before the required typed submission"
+                                "OpenClaw ended the tool-bearing invocation before "
+                                "the required typed submission"
                             ),
                             telemetry=telemetry,
                             submission_evidence=submission_evidence,

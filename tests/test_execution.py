@@ -693,7 +693,10 @@ def test_openclaw_adapter_accepts_bound_submission_after_async_process_chain(
     assert result.telemetry.tool_calls[-1].tool_name == "sat_submit_artifact"
 
 
-def test_openclaw_adapter_rejects_missing_required_submission() -> None:
+def test_openclaw_adapter_rejects_zero_tool_terminal_assistant_submission(
+    tmp_path: Path,
+) -> None:
+    state = tmp_path / "state"
     submission_contract = AgentSubmissionContract.from_schema(
         {
             "type": "object",
@@ -705,16 +708,61 @@ def test_openclaw_adapter_rejects_missing_required_submission() -> None:
     )
 
     def runner(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        session_id = "zero-tool-session"
+        agent_id = command[command.index("--agent") + 1]
+        session_key = command[command.index("--session-key") + 1]
+        prompt = Path(command[command.index("--message-file") + 1]).read_text(
+            encoding="utf-8"
+        )
+        sessions = state / "agents" / agent_id / "sessions"
+        sessions.mkdir(parents=True)
+        transcript = sessions / f"{session_id}.jsonl"
+        transcript.write_text(
+            "\n".join(
+                json.dumps(record)
+                for record in (
+                    {"type": "session", "id": session_id},
+                    {
+                        "type": "message",
+                        "message": {"role": "user", "content": prompt},
+                    },
+                    {
+                        "type": "message",
+                        "message": {
+                            "role": "assistant",
+                            "content": [{"type": "text", "text": "fallback prose"}],
+                            "stopReason": "stop",
+                        },
+                    },
+                )
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (sessions / "sessions.json").write_text(
+            json.dumps(
+                {
+                    session_key: {
+                        "sessionId": session_id,
+                        "sessionFile": str(transcript),
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        response = json.loads(openclaw_result("fallback prose"))
+        response["meta"]["agentMeta"]["sessionId"] = session_id
         return subprocess.CompletedProcess(
             command,
             0,
-            stdout=openclaw_result("fallback prose"),
+            stdout=json.dumps(response),
             stderr="",
         )
 
-    result = executor_with_clocks(runner).execute(
-        request(submission_contract=submission_contract)
-    )
+    result = executor_with_clocks(
+        runner,
+        environment={"OPENCLAW_STATE_DIR": str(state)},
+    ).execute(request(submission_contract=submission_contract))
 
     assert result.status is AgentExecutionStatus.INVALID_RESPONSE
     assert result.response_text is None
@@ -722,10 +770,20 @@ def test_openclaw_adapter_rejects_missing_required_submission() -> None:
     assert result.submission_evidence is not None
     assert result.submission_evidence.status is AgentSubmissionStatus.MISSING
     assert result.submission_evidence.diagnostic_code == "submission_missing"
+    assert result.telemetry.tool_calls == ()
 
 
-def test_openclaw_adapter_classifies_tool_result_termination_before_submission(
+@pytest.mark.parametrize(
+    ("terminal_assistant", "expected_diagnostic"),
+    [
+        (False, "upstream_incomplete_after_tool_result"),
+        (True, "upstream_incomplete_after_terminal_response"),
+    ],
+)
+def test_openclaw_adapter_classifies_tool_bearing_termination_before_submission(
     tmp_path: Path,
+    terminal_assistant: bool,
+    expected_diagnostic: str,
 ) -> None:
     state = tmp_path / "state"
     submission_contract = AgentSubmissionContract.from_schema(
@@ -780,6 +838,22 @@ def test_openclaw_adapter_classifies_tool_result_termination_before_submission(
                 },
             },
         ]
+        if terminal_assistant:
+            records.append(
+                {
+                    "type": "message",
+                    "message": {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Implementation work is complete.",
+                            }
+                        ],
+                        "stopReason": "stop",
+                    },
+                }
+            )
         transcript = sessions / f"{session_id}.jsonl"
         transcript.write_text(
             "\n".join(json.dumps(record) for record in records) + "\n",
@@ -815,9 +889,7 @@ def test_openclaw_adapter_classifies_tool_result_termination_before_submission(
     assert result.semantic_submission is None
     assert result.submission_evidence is not None
     assert result.submission_evidence.status is AgentSubmissionStatus.MISSING
-    assert result.submission_evidence.diagnostic_code == (
-        "upstream_incomplete_after_tool_result"
-    )
+    assert result.submission_evidence.diagnostic_code == expected_diagnostic
     assert result.telemetry.tool_calls[-1].tool_name == "edit"
     assert result.telemetry.invocation_lifecycle is not None
     assert (

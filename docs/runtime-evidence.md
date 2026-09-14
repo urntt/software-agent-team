@@ -286,8 +286,10 @@ private binding. On reviewed compatibility routes whose API otherwise permits a
 plain assistant response, bootstrap Planning selects this exact named function at
 the provider boundary. Dynamic Agents preserve the normal provider completion
 choice, allowing optional work/evidence tools to converge before the bound terminal
-submission. A missing submission remains a terminal protocol failure; assistant text
-never acquires semantic authority.
+submission. A missing submission never grants assistant text semantic authority.
+A write-capable tool-bearing turn may enter the bounded `upstream_incomplete`
+continuation path; a zero-tool response and every unverifiable case remain terminal
+protocol failures.
 The override is absent from non-generation model inspection, provider smoke, and
 legacy text-compatibility configurations, where no invocation-bound submission tool
 exists. This
@@ -629,8 +631,9 @@ Artifact schema v9 added lifecycle-v3 evidence for the content-free
 pre-invocation initialization baseline. Artifact schema v8 added the `deferred` tool-call outcome for a valid async
 process start that has not reached a terminal result. Artifact schema v7 added
 the distinct `upstream_incomplete` execution outcome
-for an attributable invocation that ends on a paired tool result before its
-bound terminal submission. Artifact schema v6 added terminal-response/finalization
+for an attributable tool-bearing invocation that ends before its bound terminal
+submission, with either a paired tool result or a later assistant response as the
+final record. Artifact schema v6 added terminal-response/finalization
 status and lifecycle-v2 evidence. Artifact schema v5
 added the versioned, content-free invocation lifecycle to execution telemetry.
 Lifecycle schema v3 adds the pre-invocation checkpoint and matching-turn-count
