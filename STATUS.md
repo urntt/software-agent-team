@@ -1,8 +1,8 @@
 # Project Status
 
-**Current milestone:** release `v0.2.17` and complete a managed user journey
+**Current milestone:** release `v0.2.18` and complete a managed user journey
 
-**Last updated:** September 13, 2026
+**Last updated:** September 14, 2026
 
 This document records what the repository implements now, what evidence
 supports that claim, and what remains unavailable. It does not redefine the
@@ -11,30 +11,33 @@ product, architecture, experiment, or roadmap; those decisions belong to
 
 ## Current Release
 
-The immutable `v0.2.16` tag,
-[GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.2.16),
+The immutable `v0.2.17` tag,
+[GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.2.17),
 package version, and release manifest identify source revision
-`a24f64298236f2a7fdd648e20b84ca68b2a25a13` and Git archive digest
-`sha256:4206bbb41b580c4a5a7db23ea77706c885fc6e0e53b73a6858ed0b584e5da71f`.
-It preserves verified non-blocking Review findings across later iterations. The
-exact clean release head passed all 1,661 local tests; exact-tag GitHub Actions
-[run 34783374494](https://github.com/urntt/software-agent-team/actions/runs/34783374494)
-passed 1,658 tests with three environment-dependent skips and published exactly
-one identity manifest asset. A fresh non-root `v0.2.15` to `v0.2.16` lifecycle
+`067def39c204e66ba0754f210db5153e21208425` and Git archive digest
+`sha256:ffac275025639a0c65cb83dce0c77dc09091bf730cb6f517f720c303dc598969`.
+It preserves existing definition IDs during whole-record correction unless identity
+itself is targeted. The exact clean release head passed all 1,663 local tests;
+exact-tag GitHub Actions
+[run 34788426298](https://github.com/urntt/software-agent-team/actions/runs/34788426298)
+passed 1,660 tests with three environment-dependent skips and published exactly
+one identity manifest asset. A fresh non-root `v0.2.16` to `v0.2.17` lifecycle
 passed installation, upgrade discovery and activation, state preservation,
 same-target no-op, active-run refusal, fault-injected rollback, channel round
 trip, image reconciliation, foreign OpenClaw isolation, credential-free export,
 full uninstall, and exact cleanup.
 
-A separate fresh provider-backed `v0.2.16` journey passed installation, upgrade,
+Two fresh provider-backed `v0.2.17` journeys passed installation, upgrade,
 first-use configuration and provider checking, interrupted task input, repeat
-startup, and all task-admission checks. Planning then attempted a whole-record
-criterion correction while also repairing two ProductDefinition references.
-The correction schema left the criterion ID vocabulary open, so the submitted
-references named new IDs that had no definition and bounded convergence stopped.
-All calls settled and exact cleanup completed before any runtime Agent, workspace,
-or delivery was created. The post-release development head below fixes that
-criterion identity and reference-projection defect.
+startup, and all task-admission checks. The first stopped during Planning when a
+correction produced provider output without attributable session or submission-tool
+evidence. The second completed six attributable Planning turns, approval, and
+runtime controls, then stopped after the Implementation Agent made 33 attributable
+tool calls and emitted a terminal assistant response without the required typed
+submission. Both failures remained fail closed, settled every call once, created no
+delivery, and completed exact fresh-account cleanup. The post-release development
+head below repairs the controllable Implementation recovery gap; the intermittent
+Planning evidence absence remains unclassified.
 
 The immutable `v0.2.13` tag,
 [GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.2.13),
@@ -332,22 +335,20 @@ account/HOME/resource cleanup all passed. The scenario made no provider calls.
 
 ## Current Development Head
 
-The post-`v0.2.16` correction compiler treats a whole existing definition record
-as content authority while preserving its stable ID. It reopens identity only
-when the defining collection or the record's `/id` field is explicitly targeted,
-and otherwise binds every relation to the existing canonical vocabulary. A
-production-coordinator regression reproduces the mixed security and experience
-criterion correction, verifies exact ID and reference schemas, and reaches an
-accepted proposal; a separate regression proves explicit ID repair remains
-available. All 240 Planning and response-correction tests pass. Clean
-implementation revision `2b62dbe650f09928202864778a5375c870b8df71` passed
-the canonical gate with all 1,663 tests in 873.58 seconds. The report records
-428,408,832 bytes aggregate peak RSS, zero cgroup/kernel OOM delta, complete
-cleanup coverage, and no residual stage process, process lease, sandbox
-container, volume, or private test directory. The package, lock, and
-change-impact ledger identify `v0.2.17` as a compatible patch over `v0.2.16`;
-exact release-head validation, hosted publication, published upgrade, and a
-fresh complete provider-backed journey remain pending.
+The post-`v0.2.17` execution adapter classifies a missing typed submission as
+`upstream_incomplete` when the exact attributable turn contains tool calls and
+ends either on a paired tool result or on a later assistant response. Assistant
+text remains non-authoritative. A write-capable Agent can use the existing
+controlled continuation only after workspace identity, ancestry, approved path
+scope, and a previously unseen content-sensitive state are verified; it retains
+the same task, workspace, session, route, permission, budget, and deadline.
+Zero-tool prose, unverifiable evidence, no progress, repeated state, exhausted
+authority, and user stop remain bounded failures. Execution, dynamic-runner,
+artifact, dynamic-workflow, and workflow modules pass all 256 tests at clean
+implementation revision `853c4d8fec2ba4fb62d7fc2c26ea97fc7ce52da6`.
+The package, lock, and change-impact ledger identify `v0.2.18` as a compatible
+patch over `v0.2.17`; exact release-head validation, hosted publication,
+published upgrade, and a fresh complete provider-backed journey remain pending.
 
 The Controller released in `v0.2.16` accumulates every verified Review across
 completed iterations. Since the current artifact contract has no explicit resolution
