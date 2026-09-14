@@ -1,12 +1,22 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.2.17",
-  "target_version": "0.2.18",
+  "baseline_version": "0.2.18",
+  "target_version": "0.2.19",
   "changes": [
     {
-      "id": "tool-bearing-submission-continuation",
+      "id": "planning-record-identity-pinning",
       "impact": "patch",
-      "summary": "Continue verifiable write-capable tool-bearing turns that end before their required typed submission"
+      "summary": "Preserve every immutable Planning record identity when task-scope projections rebuild correction slots"
+    },
+    {
+      "id": "planning-submission-evidence-recovery",
+      "impact": "patch",
+      "summary": "Persist and reissue once a Planning turn that produced no attributable typed submission"
+    },
+    {
+      "id": "operation-specific-state-remediation",
+      "impact": "patch",
+      "summary": "Render state-layout recovery guidance for the caller's startup or uninstall operation"
     }
   ]
 }

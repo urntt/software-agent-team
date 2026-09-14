@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** validate `v0.2.18` through a complete managed user journey
+**Current milestone:** release `v0.2.19` and complete a managed user journey
 
 **Last updated:** September 14, 2026
 
@@ -363,6 +363,11 @@ the canonical gate with all 1,686 tests in 874.96 seconds. The report records
 four stages at exit 0, 307,957,760 bytes aggregate peak RSS, no kernel OOM
 delta, complete cleanup coverage for every stage, and no residual stage process,
 process lease, sandbox container, volume, or private test directory.
+
+The package and change-impact ledger prepare these compatible fixes as
+`v0.2.19` over `v0.2.18`. Exact release-head validation, immutable publication,
+published lifecycle validation, and a fresh complete provider-backed journey
+remain pending.
 
 The `v0.2.18` execution adapter classifies a missing typed submission as
 `upstream_incomplete` when the exact attributable turn contains tool calls and
