@@ -457,8 +457,17 @@ message. All 81 managed-install, install-script, release-impact, and
 documentation-role tests pass. A real Docker rehearsal with two distinct
 owned images restored the predecessor, removed the failed candidate and
 temporary reference, and preserved the pre-existing rollback-reference
-inventory. Fresh public-bootstrap validation remains pending until this change
-is available from `main`.
+inventory. Exact clean revision
+`8a8f2fea83e01c88ee9e99acc2be3127f81a26e1` then passed doctor, formatting,
+lint, and all 1,725 tests with complete stage cleanup, no residual process,
+container, volume, lease, or private temporary directory, and no cgroup or
+kernel OOM delta. The revision was pushed to `main`. A subsequent fresh
+non-root public-bootstrap run began with a different SAT-labelled image at the
+mutable product reference, installed and verified exact stable `v0.2.19`,
+exported state during full uninstall, removed both launchers and the managed
+application, restored the stable image, removed the predecessor and temporary
+rollback reference, and completed disposable-account cleanup. The `v0.2.20`
+tag, GitHub Release, and published-release lifecycle remain pending.
 
 The prior development batch closed four correction and lifecycle defects found by
 the 2026-09-14 review and by replaying archived Planning failures.
