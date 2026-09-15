@@ -2747,6 +2747,44 @@ def _clarification_recovery_from_diagnostic(
     return None
 
 
+def _planning_wire_user_decision_invariants(
+    payload: Mapping[str, object],
+) -> tuple[_PlanningInvariant, ...]:
+    """Preserve user authority when sibling schema failures mask product intent."""
+
+    proposal = payload.get("proposal")
+    definition = (
+        None
+        if not isinstance(proposal, Mapping)
+        else proposal.get("product_definition")
+    )
+    if not isinstance(definition, Mapping):
+        return ()
+    invariants: list[_PlanningInvariant] = []
+    for dimension in (
+        ProductDefinitionDimension.TARGET_USERS,
+        ProductDefinitionDimension.PRIMARY_WORKFLOW,
+        ProductDefinitionDimension.DELIVERY_MATURITY,
+    ):
+        item = definition.get(dimension.value)
+        if (
+            not isinstance(item, Mapping)
+            or item.get("disposition")
+            != ProductDefinitionDisposition.PLANNER_RECOMMENDATION.value
+        ):
+            continue
+        invariants.append(
+            _PlanningInvariant(
+                invariant_id="planning_product_user_decision_required",
+                message=f"{dimension.value} cannot be silently chosen by Planning",
+                paths=(f"/proposal/product_definition/{dimension.value}",),
+                failure_class=ResponseFailureClass.MISSING_USER_DECISION,
+                authority=ResponseIssueAuthority.USER,
+            )
+        )
+    return tuple(invariants)
+
+
 def _planning_validation_diagnostic(
     error: ValidationError,
     payload: dict[str, object],
@@ -2780,6 +2818,9 @@ def _planning_validation_diagnostic(
             message="Planning validation produced multiple relational invariants",
             paths=("/",),
         )
+    user_decision_invariants = _planning_wire_user_decision_invariants(payload)
+    if user_decision_invariants:
+        return _planning_invariants_diagnostic(payload, user_decision_invariants)
     if any(
         tuple(issue["loc"]) == ("proposal",)
         and str(issue["type"]).startswith("value_error")

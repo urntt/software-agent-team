@@ -429,7 +429,11 @@ Controller applies each value to its pre-authorized path on a copy, preserves
 every unrelated field, and revalidates the compiled result. A writer's verified commit and snapshot
 are frozen before correction and must remain unchanged. A missing user-owned
 decision returns through the typed Planning-question path and never enters this
-protocol. Transport failures, unlocated errors, empty correction submissions,
+protocol. A sibling schema failure cannot mask a model-declared
+`planner_recommendation` for user-owned target users, primary workflow, or delivery
+maturity: the Controller preserves that authority boundary and requests the focused
+user decision before repairing remaining model-owned fields. Transport failures,
+unlocated errors, empty correction submissions,
 invalid slot identity, repeated
 invariant/subject fingerprints, and corrections that leave the same typed defect in place
 stop rather than consuming a random full-response retry. JSON-pointer ancestry

@@ -9320,6 +9320,112 @@ def test_missing_product_decision_returns_to_atomic_clarification(
     ]
 
 
+def test_schema_failures_do_not_hide_required_user_product_clarification(
+    tmp_path: Path,
+) -> None:
+    payload = json.loads(response(proposal_response()))
+    proposal_payload = payload["proposal"]
+    definition = proposal_payload["product_definition"]
+    definition["target_users"].update(
+        disposition="planner_recommendation",
+        source="planner",
+        decision_ids=["DECISION_PRODUCT_AUDIENCE"],
+    )
+    definition["delivery_maturity"].update(
+        disposition="planner_recommendation",
+        source="planner",
+        requirement_ids=[],
+        criterion_ids=[],
+        decision_ids=[],
+    )
+    for dimension in ("operational_expectations", "delivery_expectations"):
+        definition[dimension].update(
+            requirement_ids=[],
+            criterion_ids=[],
+            decision_ids=[],
+        )
+    proposal_payload["decisions"].append(
+        {
+            "id": "DECISION_PRODUCT_AUDIENCE",
+            "category": "product_requirement",
+            "provenance": {
+                "kind": "planner_recommendation",
+                "source": "planner",
+            },
+            "summary": "Developers use the local tool",
+            "rationale": "The Planner inferred an audience.",
+        }
+    )
+    normalized, _ = planning._normalize_planning_response_payload(payload)
+
+    with pytest.raises(ValidationError) as caught:
+        PlanningModelResponse.model_validate(normalized)
+
+    diagnostic = planning._planning_validation_diagnostic(caught.value, normalized)
+    assert diagnostic.failure_class is ResponseFailureClass.MISSING_USER_DECISION
+    assert diagnostic.correction_paths == ()
+    assert {
+        (issue.path, issue.invariant_id, issue.authority) for issue in diagnostic.issues
+    } == {
+        (
+            "/proposal/product_definition/target_users",
+            "planning_product_user_decision_required",
+            ResponseIssueAuthority.USER,
+        ),
+        (
+            "/proposal/product_definition/delivery_maturity",
+            "planning_product_user_decision_required",
+            ResponseIssueAuthority.USER,
+        ),
+    }
+    recovery = planning._clarification_recovery_from_diagnostic(
+        diagnostic,
+        payload=normalized,
+    )
+    assert recovery is not None
+    assert recovery.dimension is ProductDefinitionDimension.TARGET_USERS
+
+    executor = ScriptedAgentExecutor(
+        [
+            ScriptedAgentResponse(text="ignored", submission_payload=payload),
+            response(product_intent_question_response()),
+        ]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(response_repair_limit=0),
+        clock=AdvancingClock(),
+    )
+    planning_request = request(
+        source_request="Build a tool that checks Markdown links in local files."
+    )
+
+    created = coordinator.start(
+        planning_request,
+        answer_question=lambda _question: None,
+    )
+
+    assert created is None
+    assert len(executor.requests) == 2
+    assert executor.requests[1].submission_contract is not None
+    assert (
+        executor.requests[1].submission_contract.purpose
+        is AgentSubmissionPurpose.PLANNING_RESPONSE
+    )
+    first = store.load_turn(planning_request.run_id, 1)
+    assert first.response_validation == diagnostic
+    second = store.load_turn(planning_request.run_id, 2)
+    assert second.question_admission is not None
+    assert second.question_admission.origin is (
+        PlanningQuestionOrigin.CONTROLLER_REQUIREMENT
+    )
+    assert second.question_admission.controller_invariant_ids == (
+        "planning_product_user_decision_required",
+    )
+
+
 def test_product_decision_correction_can_repair_the_shared_decision_relation(
     tmp_path: Path,
 ) -> None:
