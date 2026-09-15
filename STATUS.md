@@ -404,6 +404,23 @@ non-standard constants, oversized values, wrong roots, and JSON-looking literal
 strings remain unnormalized. All 407 Planning, correction, dynamic-runner,
 dynamic-prompting, workflow, and submission-bridge focused tests pass.
 
+A third fresh candidate journey on exact `e37bb68c3ef0840dcbb802cf978a4250035590d0`
+passed the same install, upgrade, startup, provider, routing, interruption, and
+41-check admission boundaries. Its first Planning proposal had 26 independently
+targeted schema failures, with string and structured fields represented as
+booleans. The resulting leaf-by-leaf correction prompt was about 329 KiB; the
+next typed submission contained one null record without a slot handle, so the
+Controller rejected it before approval or execution. Both invocations completed
+at confirmed zero price, with no quota, 429, 503, timeout, or paid-tier use.
+
+The current development head treats more than eight schema-failing fields as one
+`/proposal` correction only when every failure and target is model-owned inside
+an object-valued proposal. It preserves `kind`, binds one exact proposal schema,
+and retains full validation and strict issue-set improvement. Replaying the
+captured failure reduces the correction section to about 99 KiB and one slot.
+All 408 Planning, correction, dynamic-runner, dynamic-prompting, workflow, and
+submission-bridge focused tests pass.
+
 The prior development batch closed four correction and lifecycle defects found by
 the 2026-09-14 review and by replaying archived Planning failures.
 

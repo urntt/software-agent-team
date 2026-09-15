@@ -1021,6 +1021,64 @@ def test_planning_binds_product_recommendation_category_to_exact_candidates(
     )
 
 
+def test_planning_collapses_a_wide_schema_failure_to_one_proposal_slot(
+    tmp_path: Path,
+) -> None:
+    """Many unusable leaves must not duplicate their schemas across a huge prompt."""
+
+    valid = proposal_response().model_dump(mode="json")
+    initial = json.loads(json.dumps(valid))
+    proposal_payload = initial["proposal"]
+    proposal_payload["requirements"] = [True] * 4
+    proposal_payload["acceptance_criteria"] = [True] * 3
+    proposal_payload["assumptions"] = [True]
+    proposal_payload["decisions"] = [True] * 9
+    proposal_payload["tasks"] = [True] * 4
+    proposal_payload["agents"] = [True] * 4
+    proposal_payload["product_definition"] = True
+    executor = ScriptedAgentExecutor(
+        [
+            ScriptedAgentResponse(text="ignored", submission_payload=initial),
+            ScriptedAgentResponse(
+                text="ignored",
+                submission_payload=json.loads(
+                    correction_response(
+                        initial,
+                        {"/proposal": valid["proposal"]},
+                    )
+                ),
+            ),
+        ]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(response_repair_limit=1),
+        clock=AdvancingClock(),
+    )
+
+    created = coordinator.start(
+        request(),
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+
+    assert created is not None
+    assert created.body == proposal_body()
+    first = store.load_turn(request().run_id, 1)
+    assert first.response_validation is not None
+    assert len(first.response_validation.correction_paths) == 26
+    second = store.load_turn(request().run_id, 2)
+    assert second.semantic_correction_request is not None
+    assert second.semantic_correction_request.target_paths == ("/proposal",)
+    assert second.semantic_correction_outcome == "accepted"
+    contract = executor.requests[1].submission_contract
+    assert contract is not None
+    replacements = contract.parameters_schema()["properties"]["replacements"]
+    assert replacements["minItems"] == replacements["maxItems"] == 1
+    assert len(executor.requests[1].prompt.encode("utf-8")) < 180_000
+
+
 def test_planning_final_bounded_correction_requires_all_slots_and_converges(
     tmp_path: Path,
 ) -> None:

@@ -2543,9 +2543,44 @@ def _bind_planning_correction_candidates(
 
     return _bind_planning_decision_authority_correction_candidates(
         _bind_planning_product_recommendation_correction_candidates(
-            _bind_planning_dependency_correction_candidate(plan)
+            _bind_planning_dependency_correction_candidate(
+                _collapse_wide_planning_schema_correction(plan)
+            )
         )
     )
+
+
+_MAX_PRECISE_PLANNING_CORRECTION_TARGETS = 8
+
+
+def _collapse_wide_planning_schema_correction(
+    plan: SemanticCorrectionPlan | None,
+) -> SemanticCorrectionPlan | None:
+    """Replace an unusable proposal as one typed unit instead of many leaf slots."""
+
+    if (
+        plan is None
+        or plan.diagnostic.failure_class is not ResponseFailureClass.SEMANTIC_SCHEMA
+        or len(plan.evidence.target_paths)
+        <= _MAX_PRECISE_PLANNING_CORRECTION_TARGETS
+        or plan.base_payload.get("kind") != PlanningResponseKind.PROPOSAL.value
+        or not isinstance(plan.base_payload.get("proposal"), dict)
+        or any(
+            issue.authority is not ResponseIssueAuthority.MODEL
+            or not (
+                issue.path == "/proposal" or issue.path.startswith("/proposal/")
+            )
+            for issue in plan.diagnostic.issues
+        )
+    ):
+        return plan
+    diagnostic = ResponseValidationDiagnostic.model_validate(
+        {
+            **plan.diagnostic.model_dump(mode="json"),
+            "correction_paths": ["/proposal"],
+        }
+    )
+    return build_semantic_correction_plan(plan.base_payload, diagnostic)
 
 
 def _digest_text(value: str) -> str:

@@ -421,6 +421,14 @@ may perform only these bounded, semantics-preserving normalizations:
   disposition, exact user source, statement, and rationale remain immutable.
   Assumptions use only retained Agent-autonomy decision IDs when decisions
   remain immutable;
+- If a proposal has more than eight independently targeted schema
+  failures, all failures and targets are model-owned descendants of
+  `proposal`, and the retained proposal is still an object, treat the complete
+  proposal as the smallest usable typed correction unit. Preserve `kind`,
+  expose one exact `/proposal` replacement slot, and require the replacement
+  to pass the same complete schema and contextual validation. Mixed authority,
+  transport failures, narrower failure sets, and failures outside `proposal`
+  never receive this widening;
 - When a correction is limited to adding missing specialist authority, preserve
   existing writers, quality Agents with an assigned Review scope, and their
   identities across complete `agents`-array replacements. This projection is

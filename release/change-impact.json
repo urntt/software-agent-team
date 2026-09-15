@@ -27,6 +27,11 @@
       "id": "typed-product-definition-corrections",
       "impact": "patch",
       "summary": "Bind category-compatible ProductDefinition decision repairs to exact candidates and decode structured correction values only under their target schema"
+    },
+    {
+      "id": "bounded-wide-planning-corrections",
+      "impact": "patch",
+      "summary": "Collapse a broadly malformed model-owned proposal into one exact typed correction slot instead of duplicating many expanded leaf schemas"
     }
   ]
 }
