@@ -18,6 +18,7 @@ from software_agent_team.assembly import (
     ArtifactAssemblyError,
     assemble_review_report,
     assemble_test_report,
+    assemble_unchanged_integration_result,
     assemble_work_result,
     validate_verification_assignment,
 )
@@ -184,6 +185,36 @@ def test_work_result_rejects_unapproved_capability_or_run(
             team_id="dynamic_team",
             agent=spec,
             snapshot=git_snapshot,
+            created_at=NOW,
+        )
+
+
+def test_unchanged_work_result_is_reserved_for_integration() -> None:
+    body = WorkResultResponse(
+        summary="Verified the already integrated upstream commit.",
+        completed_tasks=("TASK_INTEGRATE",),
+    )
+
+    result = assemble_unchanged_integration_result(
+        body,
+        task_brief=task_brief(),
+        team_id="dynamic_team",
+        agent=agent("integrator", AgentCapability.INTEGRATION),
+        iteration=2,
+        input_commit=OUTPUT_COMMIT,
+        created_at=NOW,
+    )
+
+    assert result.input_commit == result.output_commit == OUTPUT_COMMIT
+    assert result.changed_files == ()
+    with pytest.raises(ArtifactAssemblyError, match="integration capability"):
+        assemble_unchanged_integration_result(
+            body,
+            task_brief=task_brief(),
+            team_id="dynamic_team",
+            agent=agent("service_builder", AgentCapability.IMPLEMENTATION),
+            iteration=2,
+            input_commit=OUTPUT_COMMIT,
             created_at=NOW,
         )
 

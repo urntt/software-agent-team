@@ -57,8 +57,12 @@ the exact shell form of the manifest setup, start, and test argv; Installation,
 Usage, and Testing headings are acceptable.
 
 Use the repository's own configuration when running checks. Commit all relevant
-changes, leave the workspace clean, and report only assigned task IDs that are
-present in the resulting commit. The exact `run.input_commit` is the immutable
+changes, leave the workspace clean, and report only assigned task IDs that the
+controller-verified result completes. An Integration Agent whose exact upstream
+input already satisfies every assigned integration task must inspect the result,
+run substantive checks, and leave HEAD unchanged instead of creating an empty or
+unrelated commit. Every other completed writer result requires a new commit. The
+exact `run.input_commit` is the immutable
 base of this invocation, including a revision. A detached HEAD is intentional;
 do not reset it to `main`, another branch, or the starter commit. Branch names
 are not input authority and can still point to the original starter. Create new
@@ -69,7 +73,8 @@ been lost, report the blocker rather than claiming completion or rewriting
 history again. The controller independently verifies the
 input commit, output commit, changed paths, workspace scope, and handoffs. Do
 not invent or echo those facts. Complete implementation, checks, commit, and the
-final response within this one controller-bounded invocation.
+final response within this one controller-bounded invocation; the unchanged
+Integration case completes checks and the final response without a new commit.
 
 RUN_CONTEXT_JSON
 ${context_json}
@@ -82,7 +87,7 @@ Call `${submission_tool}` exactly once with one top-level `artifact` argument
 whose value contains the semantic fields in the response schema. The tool
 arguments are exactly `{"artifact": <response object>}`; do not add another
 envelope. `completed_tasks` must contain the exact assigned
-TASK_ IDs completed in the commit. The controller supplies `${expected_kind}`,
+TASK_ IDs completed in the controller-verified result. The controller supplies `${expected_kind}`,
 Agent and run identity, iteration, timestamps, and Git facts. The submission
 tool writes only to a controller-owned invocation file and does not grant more
 workspace access. Its success ends this invocation. Do not serialize the

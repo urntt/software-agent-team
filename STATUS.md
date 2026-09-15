@@ -469,6 +469,20 @@ application, restored the stable image, removed the predecessor and temporary
 rollback reference, and completed disposable-account cleanup. The `v0.2.20`
 tag, GitHub Release, and published-release lifecycle remain pending.
 
+A subsequent fresh DeepSeek candidate journey completed public stable install,
+fixed-revision upgrade, both startup paths, provider configuration and checking,
+input interruption, all task-admission checks, approved Planning, and the first
+implementation commit. Its Integration Agent then inspected that exact commit,
+ran attributable setup, runtime, test, lint, and lock checks, and submitted all
+assigned task IDs with a clean unchanged workspace because the upstream result
+already contained the required integration files. The Controller incorrectly
+reported that the Implementation Agent made no change and stopped before quality
+Agents or delivery. The current runtime now permits only this evidence-backed
+downstream Integration no-op as an explicit zero-length `WorkResult`; unchanged
+implementation, unresolved, ungrounded, unsettled, rejected, dirty, and broken-
+ancestry paths still fail closed. Real-Git runner and full workflow regressions
+continue through Testing, Review, iteration aggregation, and the final report.
+
 The prior development batch closed four correction and lifecycle defects found by
 the 2026-09-14 review and by replaying archived Planning failures.
 

@@ -60,6 +60,7 @@ from software_agent_team.execution import (
     AgentExecutionTelemetry,
     AgentExecutor,
     AgentTokenUsage,
+    ProviderLivenessEvidence,
 )
 from software_agent_team.git_workspace import GitSnapshot
 from software_agent_team.integrity import canonical_model_sha256
@@ -107,6 +108,7 @@ from software_agent_team.submissions import (
 from software_agent_team.teams import (
     AgentCapability,
     AgentSpec,
+    AgentSpecialization,
     ModelRoute,
     ModelRoutePlan,
     ModelRoutingMode,
@@ -165,6 +167,42 @@ def review_tool_call() -> AgentToolCallEvidence:
         output_sha256="c" * 64,
         output_bytes=27,
         output_excerpt="adaptive-review-observation",
+    )
+
+
+def integration_tool_calls() -> tuple[AgentToolCallEvidence, ...]:
+    """Return the adaptive fixture's settled asynchronous integration check."""
+
+    running = b"integration checks running"
+    completed = b"integration checks passed"
+    return (
+        AgentToolCallEvidence(
+            id="tool-001",
+            tool_name="exec",
+            executable="pytest",
+            external_call_sha256="e" * 64,
+            arguments_sha256="f" * 64,
+            outcome="deferred",
+            is_error=False,
+            reported_status="running",
+            output_sha256=hashlib.sha256(running).hexdigest(),
+            output_bytes=len(running),
+            output_excerpt=running.decode(),
+        ),
+        AgentToolCallEvidence(
+            id="tool-002",
+            tool_name="process",
+            external_call_sha256="1" * 64,
+            arguments_sha256="2" * 64,
+            outcome="succeeded",
+            is_error=False,
+            reported_status="completed",
+            exit_code=0,
+            duration_ms=12,
+            output_sha256=hashlib.sha256(completed).hexdigest(),
+            output_bytes=len(completed),
+            output_excerpt=completed.decode(),
+        ),
     )
 
 
@@ -839,26 +877,72 @@ def replace_semantic_payload(
 class TwoWriterExecutor(AdaptiveExecutor):
     """Script two writers while retaining real Git, runner, and scheduler state."""
 
-    def __init__(self, workspace: Path) -> None:
+    def __init__(self, workspace: Path, *, unchanged_finisher: bool = False) -> None:
         super().__init__(workspace)
         self.agent_order: list[str] = []
+        self.unchanged_finisher = unchanged_finisher
 
     def execute(self, request, *, activity_handler=None):
         self.agent_order.append(request.agent_id)
         if request.agent_id != "finisher":
             return super().execute(request, activity_handler=activity_handler)
+        input_commit = git(self.workspace, "rev-parse", "HEAD").stdout.strip()
         result = super().execute(
             request.model_copy(update={"agent_id": "builder"}),
             activity_handler=activity_handler,
         )
+        if self.unchanged_finisher:
+            git(self.workspace, "reset", "--hard", input_commit)
         assert result.semantic_submission is not None
         payload = dict(result.semantic_submission.payload)
         payload["completed_tasks"] = ["TASK_FINISH"]
-        return replace_semantic_payload(result, request, payload)
+        result = replace_semantic_payload(result, request, payload)
+        if not self.unchanged_finisher:
+            return result
+        assert result.submission_evidence is not None
+        submission = result.telemetry.tool_calls[-1].model_copy(
+            update={"id": "tool-003"}
+        )
+        evidence = result.submission_evidence.model_copy(
+            update={"tool_call_id": "tool-003"}
+        )
+        return result.model_copy(
+            update={
+                "telemetry": result.telemetry.model_copy(
+                    update={
+                        "provider_liveness": ProviderLivenessEvidence(
+                            mode="enforced",
+                            policy_source="test integration lifecycle",
+                            silence_seconds=120,
+                            stall_grace_seconds=30,
+                            lease_started=True,
+                            lease_start_source="provider_stream",
+                            session_observed=True,
+                            provider_activity_observations=1,
+                            tool_started_count=3,
+                            tool_completed_count=3,
+                            stall_suspected_count=0,
+                            stall_recovered_count=0,
+                            terminal_response_observed=True,
+                        ),
+                        "session_record_count": 5,
+                        "tool_calls": (*integration_tool_calls(), submission),
+                    }
+                ),
+                "semantic_submission": AgentSemanticSubmission(
+                    payload=payload,
+                    evidence=evidence,
+                ),
+                "submission_evidence": evidence,
+            }
+        )
 
 
 def approved_two_writer_proposal(
-    tmp_path: Path, *, reverse: bool
+    tmp_path: Path,
+    *,
+    reverse: bool,
+    finisher_capability: AgentCapability = AgentCapability.IMPLEMENTATION,
 ) -> ApprovedPlanningResult:
     """Admit and approve the same DAG through the production Planning flow."""
 
@@ -885,6 +969,12 @@ def approved_two_writer_proposal(
             "responsibility": "Complete the usage documentation.",
             "rationale": "A second serial writer integrates public documentation.",
             "dependencies": ("builder",),
+            "capability": finisher_capability,
+            "specialization": (
+                AgentSpecialization.SYSTEM_INTEGRATION
+                if finisher_capability is AgentCapability.INTEGRATION
+                else builder.specialization
+            ),
         }
     )
     quality = tuple(
@@ -1008,6 +1098,42 @@ def test_writer_declaration_order_preserves_planning_to_workflow_acceptance(
     assert works[1].output_commit == report.final_commit
     assert report.final_commit == git(workspace, "rev-parse", "HEAD").stdout.strip()
     git(workspace, "merge-base", "--is-ancestor", source_head, report.final_commit)
+    assert git(source, "rev-parse", "HEAD").stdout.strip() == source_head
+
+
+def test_workflow_accepts_verified_unchanged_integration_after_writer(
+    tmp_path: Path,
+) -> None:
+    approved = approved_two_writer_proposal(
+        tmp_path,
+        reverse=False,
+        finisher_capability=AgentCapability.INTEGRATION,
+    )
+    source = initialize_source(tmp_path)
+    source_head = git(source, "rev-parse", "HEAD").stdout.strip()
+    workspace = tmp_path / "workspaces" / approved.task_brief.run_id
+    executor = TwoWriterExecutor(workspace, unchanged_finisher=True)
+    gates = RecordingQualityGateFactory()
+
+    outcome = coordinator(tmp_path, approved, executor, gates).execute(
+        approved,
+        source_repository=source,
+    )
+    store, report = load_report(tmp_path, outcome, approved)
+
+    assert outcome.record.phase is RunPhase.COMPLETED, report.summary
+    assert gates.calls == [1]
+    iteration = store.load(report.iterations[0])
+    assert isinstance(iteration, IterationRecord)
+    builder, integration = tuple(
+        store.load(reference) for reference in iteration.work_results
+    )
+    assert isinstance(builder, WorkResult)
+    assert isinstance(integration, WorkResult)
+    assert builder.input_commit == source_head
+    assert integration.input_commit == integration.output_commit
+    assert integration.input_commit == builder.output_commit == report.final_commit
+    assert integration.changed_files == ()
     assert git(source, "rev-parse", "HEAD").stdout.strip() == source_head
 
 

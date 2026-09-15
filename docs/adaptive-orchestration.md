@@ -1461,6 +1461,14 @@ share the same controller path. Iteration validation requires a chained result f
 every approved writer, deterministic evidence from every approved Tester or
 from the controller when no Tester exists, evidence from every approved
 Reviewer, one immutable quality commit, and complete manual-review coverage.
+One downstream Integration result may retain the exact upstream commit when the
+workspace is clean and complete attributable execution evidence proves
+substantive verification with no active tool operation, runtime rejection, or
+unresolved issue. A historical asynchronous start is settled only when terminal
+lifecycle counters show every started tool operation completed. The controller
+persists that zero-length chain segment instead of requiring a meaningless
+commit; every implementation or revision writer still must advance the verified
+commit.
 The dynamic runner binds each scheduler-approved Agent to its exact model,
 time authority, prompt, invocation-scoped typed submission schema,
 semantic-correction policy, Git or read-only boundary, aggregate

@@ -626,6 +626,15 @@ gaps, forks, duplicate ranges, and an endpoint that differs from the aggregate
 snapshot. Scripted provider content and quality commands do not replace these
 production state owners.
 
+Also carry a downstream Integration Agent through the production workflow when
+the exact upstream writer commit already satisfies its assigned integration
+responsibility. Require a clean unchanged workspace, accepted typed submission,
+at least one successful attributable non-submission operation, terminal
+lifecycle evidence that every started tool operation completed, no runtime
+rejection or unresolved issue, and continued quality and final artifact
+aggregation. Keep unchanged implementation, ungrounded integration, dirty
+workspace, and wrong-ancestry cases fail closed.
+
 When changing live progress, derive labels only from allow-listed tool identity.
 Tests must prove that unknown executable names, command arguments, output, paths,
 and secrets do not enter activity records or rendered summaries, and that

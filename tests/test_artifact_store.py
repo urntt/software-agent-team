@@ -1463,11 +1463,33 @@ def test_plan_rejects_cyclic_dependencies() -> None:
         ImplementationPlan.model_validate(payload)
 
 
-def test_work_result_requires_a_new_commit() -> None:
+def test_work_result_accepts_a_coherent_unchanged_commit() -> None:
     payload = work_result().model_dump(mode="json")
     payload["output_commit"] = payload["input_commit"]
+    payload["changed_files"] = []
 
-    with pytest.raises(ValidationError, match="must differ"):
+    result = WorkResult.model_validate(payload)
+
+    assert result.input_commit == result.output_commit
+    assert result.changed_files == ()
+
+
+@pytest.mark.parametrize(
+    ("output_commit", "changed_files"),
+    [
+        (INPUT_COMMIT, ("app/main.py",)),
+        (OUTPUT_COMMIT, ()),
+    ],
+)
+def test_work_result_rejects_incoherent_commit_and_file_evidence(
+    output_commit: str,
+    changed_files: tuple[str, ...],
+) -> None:
+    payload = work_result().model_dump(mode="json")
+    payload["output_commit"] = output_commit
+    payload["changed_files"] = changed_files
+
+    with pytest.raises(ValidationError, match="changed files exactly"):
         WorkResult.model_validate(payload)
 
 

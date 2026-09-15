@@ -170,6 +170,42 @@ def review_tool_call() -> AgentToolCallEvidence:
     )
 
 
+def integration_tool_calls() -> tuple[AgentToolCallEvidence, ...]:
+    """Return one settled asynchronous Integration verification command."""
+
+    running = b"integration checks running"
+    completed = b"integration checks passed"
+    return (
+        AgentToolCallEvidence(
+            id="tool-001",
+            tool_name="exec",
+            executable="pytest",
+            external_call_sha256=hashlib.sha256(b"integration-check-call").hexdigest(),
+            arguments_sha256=hashlib.sha256(b'["pytest","-q"]').hexdigest(),
+            outcome="deferred",
+            is_error=False,
+            reported_status="running",
+            output_sha256=hashlib.sha256(running).hexdigest(),
+            output_bytes=len(running),
+            output_excerpt=running.decode("utf-8"),
+        ),
+        AgentToolCallEvidence(
+            id="tool-002",
+            tool_name="process",
+            external_call_sha256=hashlib.sha256(b"integration-check-poll").hexdigest(),
+            arguments_sha256=hashlib.sha256(b'["poll","check"]').hexdigest(),
+            outcome="succeeded",
+            is_error=False,
+            reported_status="completed",
+            exit_code=0,
+            duration_ms=12,
+            output_sha256=hashlib.sha256(completed).hexdigest(),
+            output_bytes=len(completed),
+            output_excerpt=completed.decode("utf-8"),
+        ),
+    )
+
+
 def git(repository: Path, *args: str) -> subprocess.CompletedProcess[str]:
     """Run a bounded test-owned Git command without a shell."""
 
@@ -239,6 +275,7 @@ def budget(**updates: object) -> AgentBudget:
 def dynamic_inputs(
     *,
     include_tester: bool = True,
+    include_integrator: bool = False,
     include_quality_tasks: bool = False,
     chain_quality: bool = False,
     run_budget: AgentBudget | None = None,
@@ -292,13 +329,28 @@ def dynamic_inputs(
             expected_paths=("greeting.py", "README.md"),
         )
     ]
+    last_writer_id = "builder"
+    last_writer_task_id = "TASK_BUILD"
+    if include_integrator:
+        tasks.append(
+            ProposedTask(
+                id="TASK_INTEGRATE",
+                owner_agent_id="integrator",
+                description="Verify and integrate the completed greeting utility.",
+                dependencies=("TASK_BUILD",),
+                acceptance_criteria=("AC_CODE", "AC_REVIEW"),
+                expected_paths=("greeting.py", "README.md"),
+            )
+        )
+        last_writer_id = "integrator"
+        last_writer_task_id = "TASK_INTEGRATE"
     if include_quality_tasks and include_tester:
         tasks.append(
             ProposedTask(
                 id="TASK_TEST",
                 owner_agent_id="tester",
                 description="Analyze the deterministic greeting checks.",
-                dependencies=("TASK_BUILD",),
+                dependencies=(last_writer_task_id,),
                 acceptance_criteria=("AC_CODE",),
                 expected_paths=("greeting.py",),
             )
@@ -312,7 +364,7 @@ def dynamic_inputs(
                 dependencies=(
                     ("TASK_TEST",)
                     if chain_quality and include_tester
-                    else ("TASK_BUILD",)
+                    else (last_writer_task_id,)
                 ),
                 acceptance_criteria=("AC_REVIEW",),
                 expected_paths=("greeting.py", "README.md"),
@@ -345,6 +397,23 @@ def dynamic_inputs(
             workspace_scope=writer_scope,
         )
     ]
+    if include_integrator:
+        agents.append(
+            AgentSpec(
+                id="integrator",
+                label="Integrator",
+                responsibility="Verify and integrate the completed greeting utility.",
+                rationale="The approved plan assigns a downstream integration pass.",
+                capability=AgentCapability.INTEGRATION,
+                permission_profile=PermissionProfile.WORKSPACE_WRITE,
+                stage_id="integrate",
+                dependencies=("builder",),
+                expected_output=ArtifactKind.WORK_RESULT,
+                model_route_id="default",
+                timeout_seconds=59,
+                workspace_scope=writer_scope,
+            )
+        )
     if include_tester:
         agents.append(
             AgentSpec(
@@ -355,7 +424,7 @@ def dynamic_inputs(
                 capability=AgentCapability.TESTING,
                 permission_profile=PermissionProfile.READ_ONLY,
                 stage_id="verify",
-                dependencies=("builder",),
+                dependencies=(last_writer_id,),
                 expected_output=ArtifactKind.TEST_REPORT,
                 model_route_id="default",
                 timeout_seconds=43,
@@ -373,7 +442,7 @@ def dynamic_inputs(
             permission_profile=PermissionProfile.READ_ONLY,
             stage_id="verify",
             dependencies=(
-                ("tester",) if chain_quality and include_tester else ("builder",)
+                ("tester",) if chain_quality and include_tester else (last_writer_id,)
             ),
             expected_output=expected_output_for_specialization(review_specialization),
             model_route_id="default",
@@ -457,6 +526,9 @@ class DynamicExecutor:
         writer_presentation_arrays: bool = False,
         writer_summary: str = "Implemented and documented the greeting utility.",
         upstream_writer_mode: str | None = None,
+        writer_no_change: bool = False,
+        integration_tool_evidence: bool = False,
+        integration_unresolved_issue: bool = False,
     ) -> None:
         self.workspace = workspace
         self.invalid_writer_once = invalid_writer_once
@@ -479,6 +551,9 @@ class DynamicExecutor:
         self.unapproved_review_boundaries = unapproved_review_boundaries
         self.writer_presentation_arrays = writer_presentation_arrays
         self.writer_summary = writer_summary
+        self.writer_no_change = writer_no_change
+        self.integration_tool_evidence = integration_tool_evidence
+        self.integration_unresolved_issue = integration_unresolved_issue
         if upstream_writer_mode not in {
             None,
             "complete_after_one",
@@ -692,7 +767,10 @@ class DynamicExecutor:
                     readme.write("\nUse `greet(name)` to create a greeting.\n")
                 git(self.workspace, "add", "greeting.py", "README.md")
                 git(self.workspace, "commit", "-m", "feat: add greeting utility")
-            if not (self.workspace / "greeting.py").exists():
+            if (
+                not self.writer_no_change
+                and not (self.workspace / "greeting.py").exists()
+            ):
                 (self.workspace / "greeting.py").write_text(
                     "def greet(name: str) -> str:\n    return f'Hello, {name}!'\n",
                     encoding="utf-8",
@@ -730,6 +808,18 @@ class DynamicExecutor:
                         {"/completed_tasks": valid_payload["completed_tasks"]},
                     )
                     submission_payload = json.loads(response_text)
+        elif request.agent_id == "integrator":
+            valid_payload = WorkResultResponse(
+                summary="Verified the upstream commit and its integration checks.",
+                completed_tasks=("TASK_INTEGRATE",),
+                unresolved_issues=(
+                    ("Integration remains incomplete.",)
+                    if self.integration_unresolved_issue
+                    else ()
+                ),
+            ).model_dump(mode="json")
+            response_text = json.dumps(valid_payload)
+            submission_payload = valid_payload
         elif request.agent_id == "tester":
             self._wait_for_quality_peer()
             submission_payload = SemanticTestReportResponse(
@@ -1234,14 +1324,20 @@ class DynamicExecutor:
             if omit_review_call or invalid_review_evidence
             else ((review_tool_call(),) if is_review else ())
         )
+        integration_calls = (
+            integration_tool_calls()
+            if request.capability is AgentCapability.INTEGRATION
+            and self.integration_tool_evidence
+            else ()
+        )
         semantic_submission = None
         submission_evidence = None
-        tool_calls = review_calls
+        tool_calls = (*review_calls, *integration_calls)
         if submission_payload is not None and not invalid_review_evidence:
-            external_id = f"fake-submission-{len(review_calls) + 1:03d}"
+            external_id = f"fake-submission-{len(tool_calls) + 1:03d}"
             output = b"fake-semantic-submission"
             submission_call = AgentToolCallEvidence(
-                id=f"tool-{len(review_calls) + 1:03d}",
+                id=f"tool-{len(tool_calls) + 1:03d}",
                 tool_name=contract.tool_name,
                 external_call_sha256=hashlib.sha256(external_id.encode()).hexdigest(),
                 arguments_sha256=canonical_json_sha256(
@@ -1253,7 +1349,7 @@ class DynamicExecutor:
                 output_bytes=len(output),
                 output_excerpt=output.decode(),
             )
-            tool_calls = (*review_calls, submission_call)
+            tool_calls = (*tool_calls, submission_call)
             submission_evidence = AgentSubmissionEvidence(
                 protocol=contract.protocol,
                 purpose=contract.purpose,
@@ -1304,6 +1400,25 @@ class DynamicExecutor:
             session_id=f"session-{request.agent_id}",
             provider="test",
             model=(None if self.omit_model_for == request.agent_id else request.model),
+            provider_liveness=(
+                ProviderLivenessEvidence(
+                    mode="enforced",
+                    policy_source="test integration lifecycle",
+                    silence_seconds=120,
+                    stall_grace_seconds=30,
+                    lease_started=True,
+                    lease_start_source="provider_stream",
+                    session_observed=True,
+                    provider_activity_observations=1,
+                    tool_started_count=len(tool_calls),
+                    tool_completed_count=len(tool_calls),
+                    stall_suspected_count=0,
+                    stall_recovered_count=0,
+                    terminal_response_observed=True,
+                )
+                if request.capability is AgentCapability.INTEGRATION
+                else None
+            ),
             usage=(
                 None
                 if self.omit_usage_for == request.agent_id
@@ -1438,6 +1553,7 @@ def runtime(
     tmp_path: Path,
     *,
     include_tester: bool = True,
+    include_integrator: bool = False,
     include_quality_tasks: bool = False,
     chain_quality: bool = False,
     run_budget: AgentBudget | None = None,
@@ -1451,6 +1567,7 @@ def runtime(
 
     task_brief, implementation_plan, team_plan = dynamic_inputs(
         include_tester=include_tester,
+        include_integrator=include_integrator,
         include_quality_tasks=include_quality_tasks,
         chain_quality=chain_quality,
         run_budget=run_budget,
@@ -1599,6 +1716,107 @@ def test_dynamic_runner_executes_writer_then_parallel_quality_on_one_commit(
     usage = runner.budget_ledger.snapshot()
     assert usage.calls_started == usage.calls_completed == 3
     assert usage.active_calls == 0
+
+
+def test_dynamic_runner_accepts_verified_unchanged_downstream_integration(
+    tmp_path: Path,
+) -> None:
+    runner, team_plan, executor, quality_gate, _ = runtime(
+        tmp_path,
+        include_integrator=True,
+        executor_options={"integration_tool_evidence": True},
+    )
+
+    result = DagScheduler().execute(team_plan, runner)
+
+    assert result.status is ScheduleStatus.COMPLETED
+    assert quality_gate.calls == 1
+    assert {request.agent_id for request in executor.requests} == {
+        "builder",
+        "integrator",
+        "tester",
+        "reviewer",
+    }
+    integration_request = next(
+        request for request in executor.requests if request.agent_id == "integrator"
+    )
+    assert "instead of creating an empty or unrelated commit" in " ".join(
+        integration_request.prompt.split()
+    )
+    builder = runner.artifact_store.load(runner.outputs["builder"])
+    integration = runner.artifact_store.load(runner.outputs["integrator"])
+    test = runner.artifact_store.load(runner.outputs["tester"])
+    review = runner.artifact_store.load(runner.outputs["reviewer"])
+    assert isinstance(builder, WorkResult)
+    assert isinstance(integration, WorkResult)
+    assert isinstance(test, PhaseTestReport)
+    assert isinstance(review, ReviewReport)
+    assert integration.input_commit == integration.output_commit
+    assert integration.input_commit == builder.output_commit
+    assert integration.changed_files == ()
+    assert test.input_commit == review.input_commit == integration.output_commit
+
+
+@pytest.mark.parametrize(
+    "executor_options",
+    [
+        {},
+        {
+            "integration_tool_evidence": True,
+            "integration_unresolved_issue": True,
+        },
+    ],
+)
+def test_dynamic_runner_rejects_unverified_or_unresolved_unchanged_integration(
+    tmp_path: Path,
+    executor_options: dict[str, object],
+) -> None:
+    runner, team_plan, executor, quality_gate, _ = runtime(
+        tmp_path,
+        include_integrator=True,
+        executor_options=executor_options,
+    )
+
+    result = DagScheduler().execute(team_plan, runner)
+
+    assert result.status is ScheduleStatus.FAILED
+    assert result.failed_agent_id == "integrator"
+    assert runner.termination_reasons["integrator"] is (
+        TerminationReason.NO_RELEVANT_CHANGE
+    )
+    assert [request.agent_id for request in executor.requests] == [
+        "builder",
+        "integrator",
+    ]
+    assert quality_gate.calls == 0
+    integration_record = next(
+        record for record in result.records if record.agent_id == "integrator"
+    )
+    assert "Integrator produced no controller-verified committed change" in (
+        integration_record.error or ""
+    )
+
+
+def test_dynamic_runner_rejects_unchanged_initial_implementation(
+    tmp_path: Path,
+) -> None:
+    runner, team_plan, executor, quality_gate, _ = runtime(
+        tmp_path,
+        executor_options={"writer_no_change": True},
+    )
+
+    result = DagScheduler().execute(team_plan, runner)
+
+    assert result.status is ScheduleStatus.FAILED
+    assert result.failed_agent_id == "builder"
+    assert runner.termination_reasons["builder"] is (
+        TerminationReason.NO_RELEVANT_CHANGE
+    )
+    assert [request.agent_id for request in executor.requests] == ["builder"]
+    assert quality_gate.calls == 0
+    assert "Builder produced no controller-verified committed change" in (
+        result.records[0].error or ""
+    )
 
 
 def test_recovered_finalization_reaches_review_handoff_and_settles_once(

@@ -8689,6 +8689,9 @@ def test_dialogue_revision_structured_edit_and_approval_are_recoverable(
     assert "does not impose a hidden peer-only quality topology" in compact_prompt
     assert "assign every task that creates or modifies project code" in compact_prompt
     assert "quality-owned task may describe only inspection" in compact_prompt
+    assert "Do not duplicate upstream ownership merely to add another writer" in (
+        compact_prompt
+    )
     assert "protocol identifiers, not informal descriptions of depth" in compact_prompt
     assert "do not repeat, paraphrase, shorten, or broaden" in compact_prompt
     assert "establish a product-depth contract" in compact_prompt

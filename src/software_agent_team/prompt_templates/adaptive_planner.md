@@ -200,6 +200,12 @@ Choose the next response by decision value:
   inspection, evidence analysis, testing of existing behavior, or review focus;
   its `expected_paths` are non-binding paths it may inspect, not files it must
   inspect or may write.
+  Add a downstream Integration Agent only for a distinct cross-component or
+  multi-writer integration responsibility. Do not duplicate upstream ownership
+  merely to add another writer. Shared paths are valid when integration really
+  owns cross-cutting configuration or reconciliation; describe verification and
+  gap-fixing precisely, and never require a meaningless edit when the upstream
+  result already satisfies that responsibility.
   Every Review-owned task may reference only criteria in that Review Agent's
   compiled non-overlapping scope. Split or reassign a task when its criteria
   belong to different Review Agents; never use task prose to widen a specialist's

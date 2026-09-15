@@ -1458,7 +1458,7 @@ class WorkResult(IterationArtifact):
     output_commit: str = Field(pattern=COMMIT_PATTERN)
     summary: str = Field(min_length=1)
     completed_tasks: tuple[str, ...] = Field(min_length=1)
-    changed_files: tuple[str, ...] = Field(min_length=1)
+    changed_files: tuple[str, ...] = ()
     unresolved_issues: tuple[str, ...] = ()
 
     @field_validator("completed_tasks", "unresolved_issues")
@@ -1478,14 +1478,17 @@ class WorkResult(IterationArtifact):
 
     @model_validator(mode="after")
     def validate_result(self) -> Self:
-        """Require a new immutable commit.
+        """Keep the commit range coherent with the verified changed paths.
 
         The run-scoped TeamPlan, rather than this context-free model, decides
-        whether the producer owns an implementation capability.
+        whether a producer may report a controller-verified unchanged result.
         """
 
-        if self.input_commit == self.output_commit:
-            raise ValueError("work result output commit must differ from input")
+        unchanged = self.input_commit == self.output_commit
+        if unchanged != (not self.changed_files):
+            raise ValueError(
+                "work result requires changed files exactly when its commits differ"
+            )
         return self
 
 

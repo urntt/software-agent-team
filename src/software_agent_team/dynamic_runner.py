@@ -14,6 +14,7 @@ from pydantic import ValidationError
 
 from software_agent_team.artifact_store import ArtifactStore, ArtifactStoreError
 from software_agent_team.artifacts import (
+    AgentToolCallOutcome,
     AgentToolEvidenceStatus,
     ArtifactKind,
     ArtifactReference,
@@ -29,6 +30,7 @@ from software_agent_team.assembly import (
     ArtifactAssemblyError,
     assemble_review_report,
     assemble_test_report,
+    assemble_unchanged_integration_result,
     assemble_work_result,
     validate_verification_assignment,
 )
@@ -912,6 +914,8 @@ class DynamicAgentRunner:
                             commands=commands,
                             manual_scope=manual_scope,
                             snapshot=snapshot,
+                            result=result,
+                            upstream=upstream,
                         )
                         response_reference = self.artifact_store.write(
                             artifact,
@@ -1657,6 +1661,8 @@ class DynamicAgentRunner:
         commands: tuple[CommandEvidence, ...],
         manual_scope: tuple[str, ...],
         snapshot: GitSnapshot | None,
+        result: AgentExecutionResult,
+        upstream: Mapping[str, AgentRunOutcome],
     ) -> WorkResult | TestReport | ReviewReport:
         created_at = _utc(self.clock)
         if agent.capability in {
@@ -1668,8 +1674,24 @@ class DynamicAgentRunner:
                     "implementation Agent returned the wrong semantic body"
                 )
             if snapshot is None:
+                if self._verified_unchanged_integration(
+                    agent,
+                    body=body,
+                    input_commit=input_commit,
+                    result=result,
+                    upstream=upstream,
+                ):
+                    return assemble_unchanged_integration_result(
+                        body,
+                        task_brief=self.task_brief,
+                        team_id=self.team_plan.team_id,
+                        agent=agent,
+                        iteration=self.iteration,
+                        input_commit=input_commit,
+                        created_at=created_at,
+                    )
                 raise DynamicAgentRunnerError(
-                    "implementation Agent produced no committed change",
+                    f"{agent.label} produced no controller-verified committed change",
                     TerminationReason.NO_RELEVANT_CHANGE,
                 )
             return assemble_work_result(
@@ -1710,6 +1732,53 @@ class DynamicAgentRunner:
         raise ArtifactAssemblyError(
             f"unsupported dynamic capability: {agent.capability.value}"
         )
+
+    def _verified_unchanged_integration(
+        self,
+        agent: AgentSpec,
+        *,
+        body: WorkResultResponse,
+        input_commit: str,
+        result: AgentExecutionResult,
+        upstream: Mapping[str, AgentRunOutcome],
+    ) -> bool:
+        """Authorize an evidence-backed no-op only after a completed writer."""
+
+        liveness = result.telemetry.provider_liveness
+        if (
+            agent.capability is not AgentCapability.INTEGRATION
+            or body.unresolved_issues
+            or result.telemetry.tool_evidence_status
+            is not AgentToolEvidenceStatus.CAPTURED
+            or result.telemetry.runtime_rejections
+            or result.submission_evidence is None
+            or liveness is None
+            or liveness.stalled
+            or not liveness.terminal_response_observed
+            or liveness.tool_started_count != len(result.telemetry.tool_calls)
+            or liveness.tool_completed_count != len(result.telemetry.tool_calls)
+        ):
+            return False
+        submission_tool = result.submission_evidence.tool_name
+        has_successful_verification = any(
+            call.tool_name != submission_tool
+            and call.outcome is AgentToolCallOutcome.SUCCEEDED
+            and not call.is_error
+            for call in result.telemetry.tool_calls
+        )
+        if not has_successful_verification:
+            return False
+        for dependency_id in agent.dependencies:
+            outcome = upstream.get(dependency_id)
+            if outcome is None or outcome.output is None:
+                continue
+            artifact = self.artifact_store.load(outcome.output)
+            if (
+                isinstance(artifact, WorkResult)
+                and artifact.output_commit == input_commit
+            ):
+                return True
+        return False
 
     def _begin_writer(self, agent: AgentSpec) -> str:
         if agent.capability not in {

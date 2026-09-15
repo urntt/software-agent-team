@@ -43,9 +43,15 @@ manual-review scope never depend on a model echoing known values.
 The controller accepts an iteration only when all of the following agree:
 
 1. Every approved implementation or integration Agent returns a semantic work
-   summary. The controller verifies a clean descendant Git commit for each
-   writer and binds the exact changed-file set into an attributable
-   `WorkResult`; the iteration requires those results to form one commit chain.
+   summary. The controller verifies a clean descendant Git commit and exact
+   changed-file set for each ordinary writer result. A downstream Integration
+   Agent may instead produce an unchanged `WorkResult` only at an exact upstream
+   writer commit, with a clean workspace, no unresolved issue or runtime
+   rejection, an accepted typed submission, and complete tool evidence that
+   includes a successful substantive operation. Historical asynchronous starts
+   are permitted only when lifecycle counters prove that every started tool
+   operation completed before the terminal response. The iteration requires all
+   results, including that explicit zero-length segment, to form one commit chain.
 2. Every approved Testing Agent analyzes the same supplied evidence, while the
    controller binds the actual commands, exit-derived status,
    command-to-criterion coverage, and blocker state into each `TestReport`. If

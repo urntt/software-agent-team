@@ -42,6 +42,11 @@
       "id": "anchored-sandbox-image-rollback",
       "impact": "patch",
       "summary": "Keep the previous managed sandbox image addressable until staged activation or rollback settles and preserve both owned causes when recovery fails"
+    },
+    {
+      "id": "verified-unchanged-integration-result",
+      "impact": "patch",
+      "summary": "Continue quality and delivery when a downstream Integration Agent proves that the exact clean upstream commit already satisfies its assigned work"
     }
   ]
 }

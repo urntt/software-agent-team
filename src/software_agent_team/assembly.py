@@ -99,6 +99,37 @@ def assemble_work_result(
     )
 
 
+def assemble_unchanged_integration_result(
+    body: WorkResultResponse,
+    *,
+    task_brief: TaskBrief,
+    team_id: str,
+    agent: AgentSpec,
+    iteration: int,
+    input_commit: str,
+    created_at: datetime,
+) -> WorkResult:
+    """Bind an authorized Integration verification to an unchanged commit."""
+
+    if agent.capability is not AgentCapability.INTEGRATION:
+        raise ArtifactAssemblyError(
+            "unchanged work-result assembly requires the integration capability"
+        )
+    return WorkResult(
+        run_id=task_brief.run_id,
+        team_id=team_id,
+        producer=agent.id,
+        created_at=_utc(created_at),
+        iteration=iteration,
+        input_commit=input_commit,
+        output_commit=input_commit,
+        changed_files=(),
+        summary=body.summary,
+        completed_tasks=body.completed_tasks,
+        unresolved_issues=body.unresolved_issues,
+    )
+
+
 def assemble_test_report(
     body: TestReportResponse | None,
     *,

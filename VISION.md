@@ -708,6 +708,18 @@ signal for those findings, the controller retains their descriptions across
 iterations and in every terminal report. Reviewer omission never counts as
 resolution; exact repeated descriptions are presented once.
 
+A serialized writer chain may contain one zero-length result only when a
+downstream Integration Agent starts at an exact completed writer result, leaves
+that commit clean, completes every assigned integration task with no unresolved
+issue, and supplies an accepted typed submission plus complete attributable tool
+evidence containing a successful substantive check. Runtime rejections
+disqualify the result. Historical asynchronous starts are permitted only when
+the execution lifecycle proves every started tool operation completed before
+the terminal response. This records verified integration without manufacturing
+an empty commit;
+implementation and revision writers must still produce a relevant descendant
+commit.
+
 The workflow stops earlier when fixed acceptance checks pass, every configured
 manual criterion receives independent review, and no blocking review finding
 remains. It stops with a report when:
@@ -718,7 +730,7 @@ remains. It stops with a report when:
 - An Agent's response has no safe typed correction path, repeats without
   improvement, or cannot continue within the applicable resource authority;
 - A safety boundary is crossed;
-- A revision produces no relevant change;
+- An implementation or revision writer produces no relevant change;
 - The same blocker repeats without measurable progress.
 
 Failure and non-convergence are valid outcomes and must remain visible.
