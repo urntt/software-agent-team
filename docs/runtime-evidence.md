@@ -231,6 +231,17 @@ immutable. A specialist-scope defect exposed after an evidence-selector repair
 is therefore a distinct targetable failure rather than an uncorrectable broad
 Review error.
 
+Before a Review invocation, the Controller also binds every model-owned
+criterion reference in that response schema to the Reviewer's exact assigned
+set. This applies to criterion assessments, findings, security surfaces, and
+experience workflows. Each finding must name at least one assigned criterion.
+The prompt and submission tool share this frozen schema, and a targeted
+correction projects its replacement schema from the same contract. A Reviewer
+therefore cannot turn an out-of-scope finding into an apparently valid repair by
+retaining a foreign criterion ID or replacing the list with an empty one. The
+post-application semantic validator remains the final fail-closed boundary for
+scope coverage and blocker relationships.
+
 For current Planning evidence, the Controller compiles Review scopes from the
 approved criterion graph. A criterion carrying all four Review boundaries must
 name exactly one security-authority Reviewer. A criterion referenced by both

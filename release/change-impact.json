@@ -57,6 +57,31 @@
       "id": "distinct-planning-correction-sessions",
       "impact": "patch",
       "summary": "Give every semantic Planning correction a distinct run-scoped OpenClaw session generation across dialogue and revision cycles"
+    },
+    {
+      "id": "cold-runtime-config-validation-boundary",
+      "impact": "patch",
+      "summary": "Give cold OpenClaw configuration validation its own bounded timeout and retain the exact failed preflight command and failure class"
+    },
+    {
+      "id": "masked-product-decision-recovery",
+      "impact": "patch",
+      "summary": "Recover an explicit user-owned product decision as a focused clarification after sibling proposal validation errors no longer mask it"
+    },
+    {
+      "id": "skeletal-proposal-graph-recovery",
+      "impact": "patch",
+      "summary": "Replace a proposal graph atomically when malformed records leave no valid identities for safe reference-level correction"
+    },
+    {
+      "id": "ordered-overlapping-writer-scopes",
+      "impact": "patch",
+      "summary": "Correct every unordered overlapping writer pair in the proposal before compiling the approved runtime team plan"
+    },
+    {
+      "id": "reviewer-scoped-finding-contracts",
+      "impact": "patch",
+      "summary": "Constrain every Review criterion reference and targeted finding correction to the exact assigned scope"
     }
   ]
 }

@@ -844,9 +844,87 @@ def _dynamic_prompt_context(inputs: DynamicAgentPromptInputs) -> dict[str, objec
     return context
 
 
-def _dynamic_response_schema(agent: AgentSpec) -> dict[str, object]:
+def _require_schema_property(
+    definition: object,
+    *,
+    definition_name: str,
+    property_name: str,
+) -> dict[str, object]:
+    """Return one mutable definition property or reject schema drift."""
+
+    if not isinstance(definition, dict):
+        raise AgentPromptError(
+            f"dynamic Review response schema lacks {definition_name} definition"
+        )
+    properties = definition.get("properties")
+    value = properties.get(property_name) if isinstance(properties, dict) else None
+    if not isinstance(value, dict):
+        raise AgentPromptError(
+            f"dynamic Review response schema lacks {definition_name}.{property_name}"
+        )
+    return value
+
+
+def _bind_review_scope_schema(
+    response_schema: dict[str, object],
+    *,
+    reviewed_criterion_ids: tuple[str, ...],
+) -> None:
+    """Constrain every model-owned criterion reference to its assigned scope."""
+
+    definitions = response_schema.get("$defs")
+    if not isinstance(definitions, dict):
+        raise AgentPromptError("dynamic Review response schema lacks definitions")
+    allowed = list(reviewed_criterion_ids)
+
+    assessment = definitions.get("ReviewCriterionAssessmentResponse")
+    assessment_criterion = _require_schema_property(
+        assessment,
+        definition_name="assessment",
+        property_name="criterion_id",
+    )
+    assessment_criterion["enum"] = allowed
+
+    finding = definitions.get("ReviewFinding")
+    finding_criteria = _require_schema_property(
+        finding,
+        definition_name="finding",
+        property_name="criterion_ids",
+    )
+    finding_items = finding_criteria.get("items")
+    if not isinstance(finding_items, dict):
+        raise AgentPromptError(
+            "dynamic Review response schema lacks finding criterion items"
+        )
+    finding_items["enum"] = allowed
+    finding_criteria["minItems"] = 1
+    finding_criteria["uniqueItems"] = True
+
+    for definition_name in (
+        "SecuritySurfaceAssessment",
+        "ExperienceWorkflowAssessment",
+    ):
+        specialized = definitions.get(definition_name)
+        if specialized is None:
+            continue
+        specialized_criteria = _require_schema_property(
+            specialized,
+            definition_name=definition_name,
+            property_name="criterion_ids",
+        )
+        specialized_items = specialized_criteria.get("items")
+        if not isinstance(specialized_items, dict):
+            raise AgentPromptError(
+                "dynamic Review response schema lacks specialized criterion items"
+            )
+        specialized_items["enum"] = allowed
+        specialized_criteria["uniqueItems"] = True
+
+
+def _dynamic_response_schema(inputs: DynamicAgentPromptInputs) -> dict[str, object]:
     """Build the one schema shared by the prompt and submission tool."""
 
+    agent = inputs.agent
     response_model = RESPONSE_BODY_MODELS.get(agent.expected_output)
     if response_model is None:
         raise AgentPromptError(
@@ -890,6 +968,10 @@ def _dynamic_response_schema(agent: AgentSpec) -> dict[str, object]:
             raise AgentPromptError("dynamic Review assessment requirements are invalid")
         if "boundary_checks" not in assessment_required:
             assessment_required.append("boundary_checks")
+        _bind_review_scope_schema(
+            response_schema,
+            reviewed_criterion_ids=inputs.manual_review_criteria,
+        )
     return response_schema
 
 
@@ -923,7 +1005,7 @@ def render_dynamic_agent_prompt(
         raise AgentPromptError(
             f"cannot load specialization prompt module: {specialization.prompt_module}"
         ) from error
-    response_schema = _dynamic_response_schema(agent)
+    response_schema = _dynamic_response_schema(inputs)
     values = {
         "agent_id": agent.id,
         "agent_label": agent.label,
@@ -987,7 +1069,7 @@ def build_dynamic_agent_execution_request(
         timeout_seconds=agent.timeout_seconds,
         model=route.model,
         submission_contract=AgentSubmissionContract.from_schema(
-            _dynamic_response_schema(agent),
+            _dynamic_response_schema(inputs),
             purpose=AgentSubmissionPurpose.ARTIFACT,
         ),
     )

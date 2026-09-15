@@ -35,6 +35,7 @@ from software_agent_team.prompting import (
     DynamicUpstreamResult,
     DynamicUserGuidance,
     build_dynamic_agent_execution_request,
+    build_semantic_correction_request,
     build_upstream_continuation_request,
     render_dynamic_agent_prompt,
 )
@@ -581,6 +582,126 @@ def test_review_prompt_requires_adversarial_absolute_claim_boundaries() -> None:
     assert "execution_attempt" not in claim_schema["properties"]
 
 
+def test_dynamic_review_contract_binds_criterion_references_to_assigned_scope() -> None:
+    inputs = quality_inputs().model_copy(
+        update={
+            "agent_id": "quality_reviewer",
+            "manual_review_criteria": ("AC_LINKS",),
+        }
+    )
+
+    request = build_dynamic_agent_execution_request(inputs)
+    assert request.submission_contract is not None
+    schema = request.submission_contract.parameters_schema()
+
+    assert schema["$defs"]["ReviewCriterionAssessmentResponse"]["properties"][
+        "criterion_id"
+    ]["enum"] == ["AC_LINKS"]
+    finding_criteria = schema["$defs"]["ReviewFinding"]["properties"]["criterion_ids"]
+    assert finding_criteria["items"]["enum"] == ["AC_LINKS"]
+    assert finding_criteria["minItems"] == 1
+    assert finding_criteria["uniqueItems"] is True
+
+    schema_text = request.prompt.split("RESPONSE_SCHEMA_JSON\n", 1)[1].split(
+        "\n\nFINAL_RESPONSE_CONTRACT",
+        1,
+    )[0]
+    assert json.loads(schema_text) == schema
+
+
+def test_review_finding_correction_preserves_assigned_scope_schema() -> None:
+    brief = task_brief().model_copy(
+        update={
+            "acceptance_criteria": [
+                *task_brief().acceptance_criteria,
+                AcceptanceCriterion(
+                    id="AC_OTHER",
+                    description="Documentation explains the output format.",
+                    verification="Inspect the usage documentation.",
+                ),
+            ]
+        }
+    )
+    inputs = DynamicAgentPromptInputs(
+        task_brief=brief,
+        implementation_plan=implementation_plan(),
+        team_plan=team_plan(brief),
+        agent_id="quality_reviewer",
+        iteration=1,
+        iteration_input_commit=INPUT_COMMIT,
+        input_commit=OUTPUT_COMMIT,
+        upstream_results=(upstream_result(),),
+        command_evidence=command_evidence(),
+        manual_review_criteria=("AC_LINKS",),
+    )
+    request = build_dynamic_agent_execution_request(inputs)
+    response = ReviewReportResponse(
+        verdict="accept",
+        criterion_assessments=(
+            ReviewCriterionAssessmentResponse(
+                criterion_id="AC_LINKS",
+                status="satisfied",
+                adversarial_check="Ran the CLI against a broken local link.",
+                evidence="The command failed and identified the broken target.",
+                tool_evidence=(review_tool_claim(),),
+            ),
+        ),
+        findings=(
+            ReviewFinding(
+                id="FINDING_OUTSIDE_SCOPE",
+                severity="low",
+                blocking=False,
+                category="documentation",
+                description="The output format is not fully documented.",
+                recommendation="Document every output field.",
+                criterion_ids=("AC_OTHER",),
+            ),
+        ),
+        summary="The assigned link behavior is correct.",
+    )
+    result = ScriptedAgentExecutor(
+        [
+            ScriptedAgentResponse(
+                text=response.model_dump_json(),
+                model="provider/model",
+            )
+        ],
+        clock=lambda: CREATED_AT,
+    ).execute(request)
+
+    with pytest.raises(
+        AgentArtifactResponseError,
+        match="outside assigned scope",
+    ) as caught:
+        parse_dynamic_agent_response(
+            result,
+            request,
+            task_brief=brief,
+            team_plan=inputs.team_plan,
+            reviewed_criterion_ids=("AC_LINKS",),
+        )
+    error = caught.value
+    assert error.semantic_payload is not None
+    assert error.diagnostic is not None
+    plan = build_semantic_correction_plan(error.semantic_payload, error.diagnostic)
+    assert plan is not None
+    assert plan.evidence.target_paths == ("/findings",)
+
+    correction = build_semantic_correction_request(
+        request,
+        plan,
+        session_generation=2,
+    )
+    assert correction.submission_contract is not None
+    variant = correction.submission_contract.parameters_schema()["properties"][
+        "replacements"
+    ]["items"]["oneOf"][0]
+    finding_items = variant["properties"]["replacement_value"]["items"]
+    finding_criteria = finding_items["properties"]["criterion_ids"]
+    assert finding_criteria["items"]["enum"] == ["AC_LINKS"]
+    assert finding_criteria["minItems"] == 1
+
+
 def specialized_review_inputs(
     specialization: AgentSpecialization,
     expected_output: ArtifactKind,
@@ -646,6 +767,14 @@ def test_specialization_selects_prompt_and_typed_output_contract(
     assert required_field in schema["required"]
     assert "Tool activity is evidence collection, not criterion progress" in rendered
     assert "additional equivalent probes add no authority" in rendered
+
+    definition_name = {
+        "surfaces": "SecuritySurfaceAssessment",
+        "workflows": "ExperienceWorkflowAssessment",
+    }[required_field]
+    criterion_schema = schema["$defs"][definition_name]["properties"]["criterion_ids"]
+    assert criterion_schema["items"]["enum"] == ["AC_LINKS"]
+    assert criterion_schema["uniqueItems"] is True
 
 
 def test_security_specialization_persists_its_typed_assessment() -> None:
