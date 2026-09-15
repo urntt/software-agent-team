@@ -1373,8 +1373,9 @@ def test_preflight_executes_explicit_commands_without_provider_call(
     assert result.model_available is True
     assert result.model_error is None
     assert result.command_timeout_seconds == 30
+    assert result.config_validation_timeout_seconds == 90
     assert result.model_inspection_timeout_seconds == 90
-    assert timeouts == [30, 30, 90, 30, 30, 30, 30, 30, 30, 30]
+    assert timeouts == [30, 90, 90, 30, 30, 30, 30, 30, 30, 30]
     assert os.environ["OPENCLAW_STATE_DIR"] == str(original_state)
     assert os.environ["OPENCLAW_CONFIG_PATH"] == str(original_state / "openclaw.json")
     assert os.environ["OPENCLAW_AGENT_DIR"] == str(original_state / "agent")
@@ -1389,9 +1390,89 @@ def test_preflight_executes_explicit_commands_without_provider_call(
     assert persisted["model"] == DEEPSEEK_VISION_MODEL
     assert persisted["model_available"] is True
     assert persisted["command_timeout_seconds"] == 30
+    assert persisted["config_validation_timeout_seconds"] == 90
     assert persisted["model_inspection_timeout_seconds"] == 90
     with pytest.raises(RuntimeConfigurationError, match="already exists"):
         persist_runtime_preflight(result, evidence)
+
+
+@pytest.mark.parametrize(
+    ("failing_command", "expected"),
+    (
+        ("version", "OpenClaw version check timed out after 7 seconds"),
+        (
+            "config",
+            "OpenClaw configuration validation timed out after 11 seconds",
+        ),
+    ),
+)
+def test_preflight_names_the_openclaw_command_that_times_out(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failing_command: str,
+    expected: str,
+) -> None:
+    openclaw = tmp_path / "openclaw"
+    openclaw.write_text("binary", encoding="utf-8")
+    openclaw.chmod(0o755)
+    config = tmp_path / "runtime.json"
+    config.write_text("{}", encoding="utf-8")
+    state = tmp_path / "sat-state/openclaw"
+    state.mkdir(parents=True)
+
+    def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        is_version = argv[-1] == "--version"
+        if (failing_command == "version" and is_version) or (
+            failing_command == "config" and not is_version
+        ):
+            raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+        return subprocess.CompletedProcess(argv, 0, "OpenClaw test", "")
+
+    monkeypatch.setattr(runtime_configuration.subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeConfigurationError, match=expected):
+        inspect_runtime_preflight(
+            openclaw_binary=openclaw,
+            openclaw_state_dir=state,
+            runtime_config=config,
+            sandbox_binary="docker",
+            sandbox_image="sat-agent:phase1",
+            timeout_seconds=7,
+            config_validation_timeout_seconds=11,
+        )
+
+
+def test_preflight_names_a_version_launch_error_without_command_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    openclaw = tmp_path / "openclaw"
+    openclaw.write_text("binary", encoding="utf-8")
+    openclaw.chmod(0o755)
+    config = tmp_path / "runtime.json"
+    config.write_text("{}", encoding="utf-8")
+    state = tmp_path / "sat-state/openclaw"
+    state.mkdir(parents=True)
+
+    monkeypatch.setattr(
+        runtime_configuration.subprocess,
+        "run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(PermissionError(13, "secret")),
+    )
+
+    with pytest.raises(
+        RuntimeConfigurationError,
+        match=r"OpenClaw version check could not start \(PermissionError; errno=13\)",
+    ) as captured:
+        inspect_runtime_preflight(
+            openclaw_binary=openclaw,
+            openclaw_state_dir=state,
+            runtime_config=config,
+            sandbox_binary="docker",
+            sandbox_image="sat-agent:phase1",
+        )
+
+    assert "secret" not in str(captured.value)
 
 
 def test_preflight_is_not_ready_when_the_exact_model_is_unavailable(

@@ -49,6 +49,7 @@ class RuntimeConfigurationError(ValueError):
 
 
 PREFLIGHT_COMMAND_TIMEOUT_SECONDS = 30
+CONFIG_VALIDATION_TIMEOUT_SECONDS = 90
 MODEL_INSPECTION_TIMEOUT_SECONDS = 90
 
 
@@ -165,6 +166,11 @@ class RuntimePreflight(BaseModel):
     runtime_config: str = Field(min_length=1)
     command_timeout_seconds: int = Field(
         default=PREFLIGHT_COMMAND_TIMEOUT_SECONDS,
+        ge=1,
+        le=3600,
+    )
+    config_validation_timeout_seconds: int = Field(
+        default=CONFIG_VALIDATION_TIMEOUT_SECONDS,
         ge=1,
         le=3600,
     )
@@ -1230,6 +1236,44 @@ def materialize_run_configuration(
     )
 
 
+def _run_openclaw_preflight_command(
+    *,
+    label: str,
+    argv: list[str],
+    environment: Mapping[str, str],
+    timeout_seconds: int,
+    check: bool,
+) -> subprocess.CompletedProcess[str]:
+    """Run one named OpenClaw check with bounded, non-secret diagnostics."""
+
+    try:
+        return subprocess.run(
+            argv,
+            check=check,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            env=environment,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise RuntimeConfigurationError(
+            f"{label} timed out after {timeout_seconds} seconds"
+        ) from error
+    except subprocess.CalledProcessError as error:
+        raise RuntimeConfigurationError(
+            f"{label} exited with status {error.returncode}"
+        ) from error
+    except OSError as error:
+        errno_detail = "" if error.errno is None else f"; errno={error.errno}"
+        raise RuntimeConfigurationError(
+            f"{label} could not start ({type(error).__name__}{errno_detail})"
+        ) from error
+    except subprocess.SubprocessError as error:
+        raise RuntimeConfigurationError(
+            f"{label} failed ({type(error).__name__})"
+        ) from error
+
+
 def inspect_runtime_preflight(
     *,
     openclaw_binary: Path,
@@ -1241,6 +1285,7 @@ def inspect_runtime_preflight(
     expected_model: str | None = None,
     expected_runtime_profile: ModelRuntimeProfile | None = None,
     timeout_seconds: int = PREFLIGHT_COMMAND_TIMEOUT_SECONDS,
+    config_validation_timeout_seconds: int = CONFIG_VALIDATION_TIMEOUT_SECONDS,
     model_inspection_timeout_seconds: int = MODEL_INSPECTION_TIMEOUT_SECONDS,
 ) -> RuntimePreflight:
     """Check config, selected model, and sandbox execution without model calls."""
@@ -1251,6 +1296,10 @@ def inspect_runtime_preflight(
         )
     if timeout_seconds < 1:
         raise RuntimeConfigurationError("preflight timeout must be positive")
+    if config_validation_timeout_seconds < 1:
+        raise RuntimeConfigurationError(
+            "configuration validation timeout must be positive"
+        )
     if model_inspection_timeout_seconds < 1:
         raise RuntimeConfigurationError("model inspection timeout must be positive")
     if not openclaw_binary.is_file() or not os.access(openclaw_binary, os.X_OK):
@@ -1266,25 +1315,20 @@ def inspect_runtime_preflight(
             config_path=runtime_config,
         ),
     }
-    try:
-        version = subprocess.run(
-            [str(openclaw_binary), "--version"],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=timeout_seconds,
-            env=environment,
-        )
-        config = subprocess.run(
-            [str(openclaw_binary), "config", "validate", "--json"],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=timeout_seconds,
-            env=environment,
-        )
-    except (OSError, subprocess.SubprocessError) as error:
-        raise RuntimeConfigurationError("runtime preflight command failed") from error
+    version = _run_openclaw_preflight_command(
+        label="OpenClaw version check",
+        argv=[str(openclaw_binary), "--version"],
+        environment=environment,
+        timeout_seconds=timeout_seconds,
+        check=True,
+    )
+    config = _run_openclaw_preflight_command(
+        label="OpenClaw configuration validation",
+        argv=[str(openclaw_binary), "config", "validate", "--json"],
+        environment=environment,
+        timeout_seconds=config_validation_timeout_seconds,
+        check=False,
+    )
 
     model_inspection: OpenClawModelInspection | None = None
     if expected_model is not None:
@@ -1351,6 +1395,7 @@ def inspect_runtime_preflight(
         openclaw_state_dir=str(openclaw_state_dir.resolve(strict=True)),
         runtime_config=str(runtime_config.resolve(strict=True)),
         command_timeout_seconds=timeout_seconds,
+        config_validation_timeout_seconds=config_validation_timeout_seconds,
         model_inspection_timeout_seconds=model_inspection_timeout_seconds,
         sandbox_binary=sandbox.sandbox_binary,
         sandbox_version=sandbox.sandbox_version,
