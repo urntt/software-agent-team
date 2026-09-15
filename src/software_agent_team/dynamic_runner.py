@@ -758,8 +758,7 @@ class DynamicAgentRunner:
                                     None
                                     if base_request.submission_contract is None
                                     else (
-                                        base_request.submission_contract
-                                        .parameters_schema()
+                                        base_request.submission_contract.parameters_schema()
                                     )
                                 ),
                             )

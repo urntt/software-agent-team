@@ -10316,9 +10316,7 @@ def test_product_planning_empty_atomic_assumption_correction_clears_stale_index(
         "Use one module.",
         "Keep the command synchronous.",
     ]
-    invalid_payload["proposal"]["assumption_decision_ids"] = [
-        "DECISION_SCAN_STRUCTURE"
-    ]
+    invalid_payload["proposal"]["assumption_decision_ids"] = ["DECISION_SCAN_STRUCTURE"]
     executor = ScriptedAgentExecutor(
         [
             json.dumps(invalid_payload),

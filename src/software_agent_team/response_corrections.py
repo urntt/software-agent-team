@@ -1162,14 +1162,10 @@ def _structured_schema_root_types(
     declared = schema.get("type")
     if isinstance(declared, str):
         return (
-            frozenset((declared,))
-            if declared in {"array", "object"}
-            else frozenset()
+            frozenset((declared,)) if declared in {"array", "object"} else frozenset()
         )
     if isinstance(declared, list):
-        values = {
-            value for value in declared if isinstance(value, str)
-        }
+        values = {value for value in declared if isinstance(value, str)}
         if values and values.issubset({"array", "object"}):
             return frozenset(values)
         return frozenset()

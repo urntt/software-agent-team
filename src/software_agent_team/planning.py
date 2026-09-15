@@ -2248,8 +2248,10 @@ def _planning_product_recommendation_decision_candidates(
     retained_ids = tuple(
         decision_id for decision_id in item.decision_ids if decision_id in eligible_ids
     )
-    candidate_id_sets = (retained_ids,) if retained_ids else tuple(
-        (decision_id,) for decision_id in eligible_ids
+    candidate_id_sets = (
+        (retained_ids,)
+        if retained_ids
+        else tuple((decision_id,) for decision_id in eligible_ids)
     )
     candidates: list[SemanticCorrectionCandidate] = []
     for decision_ids in candidate_id_sets:
@@ -2561,15 +2563,12 @@ def _collapse_wide_planning_schema_correction(
     if (
         plan is None
         or plan.diagnostic.failure_class is not ResponseFailureClass.SEMANTIC_SCHEMA
-        or len(plan.evidence.target_paths)
-        <= _MAX_PRECISE_PLANNING_CORRECTION_TARGETS
+        or len(plan.evidence.target_paths) <= _MAX_PRECISE_PLANNING_CORRECTION_TARGETS
         or plan.base_payload.get("kind") != PlanningResponseKind.PROPOSAL.value
         or not isinstance(plan.base_payload.get("proposal"), dict)
         or any(
             issue.authority is not ResponseIssueAuthority.MODEL
-            or not (
-                issue.path == "/proposal" or issue.path.startswith("/proposal/")
-            )
+            or not (issue.path == "/proposal" or issue.path.startswith("/proposal/"))
             for issue in plan.diagnostic.issues
         )
     ):
