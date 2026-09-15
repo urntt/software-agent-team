@@ -26,6 +26,15 @@ TEAM_PLAN_SCHEMA_VERSION = 4
 SPECIALIZATION_CATALOG_VERSION = 1
 
 
+def workspace_scopes_overlap(first: str, second: str) -> bool:
+    """Return whether two canonical repository scopes share one subtree."""
+
+    first_parts = PurePosixPath(first).parts
+    second_parts = PurePosixPath(second).parts
+    common_length = min(len(first_parts), len(second_parts))
+    return first_parts[:common_length] == second_parts[:common_length]
+
+
 class TeamKind(StrEnum):
     """Experimental category for a team definition."""
 
@@ -915,12 +924,6 @@ class TeamPlan(BaseModel):
                         "every quality Agent must depend on every implementation path"
                     )
 
-        def scopes_overlap(first: str, second: str) -> bool:
-            first_parts = PurePosixPath(first).parts
-            second_parts = PurePosixPath(second).parts
-            common_length = min(len(first_parts), len(second_parts))
-            return first_parts[:common_length] == second_parts[:common_length]
-
         for index, agent in enumerate(self.agents):
             for other in self.agents[index + 1 :]:
                 if (
@@ -928,7 +931,10 @@ class TeamPlan(BaseModel):
                     and other.permission_profile is PermissionProfile.READ_ONLY
                 ):
                     continue
-                if not scopes_overlap(agent.workspace_scope, other.workspace_scope):
+                if not workspace_scopes_overlap(
+                    agent.workspace_scope,
+                    other.workspace_scope,
+                ):
                     continue
                 if not (
                     transitively_depends(agent.id, other.id)

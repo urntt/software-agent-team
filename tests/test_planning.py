@@ -6492,6 +6492,142 @@ def test_quality_dependency_correction_binds_the_complete_additive_relation(
     )
 
 
+def test_overlapping_writer_scopes_offer_typed_dependency_correction(
+    tmp_path: Path,
+) -> None:
+    body = proposal_body()
+    integration_writer = ProposedAgent(
+        id="integration_developer",
+        label="Integration Developer",
+        responsibility="Integrate reporting with the complete command-line flow.",
+        rationale="The proposed split assigns reporting to a second writer.",
+        capability=AgentCapability.INTEGRATION,
+        specialization=AgentSpecialization.SYSTEM_INTEGRATION,
+        stage_id="implement",
+        workspace_scope="repository",
+        workload=AgentWorkload.ROUTINE,
+    )
+    test_writer = ProposedAgent(
+        id="test_author",
+        label="Test Author",
+        responsibility="Implement end-to-end fixtures for the integrated CLI.",
+        rationale="The proposed split assigns fixtures to a third writer.",
+        capability=AgentCapability.IMPLEMENTATION,
+        specialization=AgentSpecialization.PRODUCT_IMPLEMENTATION,
+        stage_id="implement",
+        workspace_scope="repository/tests",
+        workload=AgentWorkload.ROUTINE,
+    )
+    quality_agents = tuple(
+        agent.model_copy(
+            update={
+                "dependencies": (
+                    "cli_developer",
+                    integration_writer.id,
+                    test_writer.id,
+                ),
+            }
+        )
+        for agent in body.agents[1:]
+    )
+    invalid = body.model_copy(
+        update={
+            "agents": (
+                body.agents[0],
+                integration_writer,
+                test_writer,
+                *quality_agents,
+            ),
+            "tasks": (
+                body.tasks[0].model_copy(update={"acceptance_criteria": ("AC_SCAN",)}),
+                ProposedTask(
+                    id="TASK_REPORT",
+                    owner_agent_id=integration_writer.id,
+                    description="Integrate actionable reporting into the CLI.",
+                    acceptance_criteria=("AC_REPORT",),
+                    expected_paths=("src", "tests"),
+                ),
+                ProposedTask(
+                    id="TASK_FIXTURES",
+                    owner_agent_id=test_writer.id,
+                    description="Implement end-to-end fixtures for the CLI.",
+                    acceptance_criteria=("AC_SCAN",),
+                    expected_paths=("tests",),
+                ),
+            ),
+        }
+    )
+    invalid_payload = json.loads(response(proposal_response()))
+    invalid_payload["proposal"] = planning._planning_proposal_body_for_model(invalid)
+    correction_base, _ = planning._normalize_planning_response_payload(invalid_payload)
+    dependency_paths = (
+        "/proposal/agents/0/dependencies",
+        "/proposal/agents/1/dependencies",
+        "/proposal/agents/2/dependencies",
+    )
+    executor = ScriptedAgentExecutor(
+        [
+            json.dumps(invalid_payload),
+            correction_response(
+                correction_base,
+                {
+                    dependency_paths[0]: [],
+                    dependency_paths[1]: ["cli_developer"],
+                    dependency_paths[2]: ["integration_developer"],
+                },
+                target_paths=dependency_paths,
+            ),
+        ]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(response_repair_limit=None),
+        clock=AdvancingClock(),
+    )
+
+    created = coordinator.start(
+        request(),
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+
+    assert created is not None
+    assert created.body.agents[1].dependencies == ("cli_developer",)
+    assert created.body.agents[2].dependencies == ("integration_developer",)
+    first = store.load_turn(request().run_id, 1)
+    assert first.response_validation is not None
+    assert first.response_validation.correction_paths == dependency_paths
+    assert {issue.invariant_id for issue in first.response_validation.issues} == {
+        "planning_writer_workspace_dependency_order"
+    }
+    assert {
+        subject.identifier
+        for issue in first.response_validation.issues
+        for subject in issue.subjects
+        if subject.kind is ResponseIssueSubjectKind.AGENT
+    } == {"cli_developer", "integration_developer", "test_author"}
+    assert all(
+        issue.authority is ResponseIssueAuthority.MODEL
+        for issue in first.response_validation.issues
+    )
+    assert first.response_validation.correction_paths != ("/",)
+    corrected = store.load_turn(request().run_id, 2)
+    assert corrected.semantic_correction_outcome is SemanticCorrectionOutcome.ACCEPTED
+    preview = preview_adaptive_proposal(
+        request(),
+        created,
+        policy(response_repair_limit=None),
+        created_at=FIXED_TIME,
+    )
+    assert preview.team_plan.execution_waves() == (
+        ("cli_developer",),
+        ("integration_developer",),
+        ("test_author",),
+        ("acceptance_tester", "quality_reviewer"),
+    )
+
+
 def test_quality_dependency_correction_does_not_offer_a_cyclic_leaf_repair(
     tmp_path: Path,
 ) -> None:

@@ -134,6 +134,7 @@ from software_agent_team.teams import (
     expected_output_for_specialization,
     permission_for_capability,
     specialization_contract,
+    workspace_scopes_overlap,
 )
 
 PLANNING_SCHEMA_VERSION = 20
@@ -3998,6 +3999,55 @@ class PlanningProposalBody(BaseModel):
             dependencies,
             implementation_agents,
         )
+        implementation_by_id = {
+            agent.id: agent
+            for agent in self.agents
+            if agent.id in implementation_agents
+        }
+        unordered_writer_pairs: list[tuple[str, str]] = []
+        ordered_writer_ids = tuple(
+            agent.id for agent in self.agents if agent.id in implementation_agents
+        )
+        for index, agent_id in enumerate(ordered_writer_ids):
+            agent = implementation_by_id[agent_id]
+            for other_id in ordered_writer_ids[index + 1 :]:
+                other = implementation_by_id[other_id]
+                if not workspace_scopes_overlap(
+                    agent.workspace_scope,
+                    other.workspace_scope,
+                ):
+                    continue
+                if not (
+                    transitively_depends(agent_id, other_id)
+                    or transitively_depends(other_id, agent_id)
+                ):
+                    unordered_writer_pairs.append((agent_id, other_id))
+        if unordered_writer_pairs:
+            involved_writer_ids = tuple(
+                sorted(
+                    {agent_id for pair in unordered_writer_pairs for agent_id in pair}
+                )
+            )
+            conflicts = ", ".join(
+                f"{first} <> {second}" for first, second in unordered_writer_pairs
+            )
+            raise _planning_model_invariant(
+                "planning_writer_workspace_dependency_order",
+                (
+                    "overlapping writer workspace scopes must be dependency "
+                    f"ordered: {conflicts}"
+                ),
+                paths=tuple(
+                    f"/proposal/agents/{agent_ids.index(agent_id)}/dependencies"
+                    for agent_id in involved_writer_ids
+                ),
+                subjects=_planning_subjects(
+                    *(
+                        (ResponseIssueSubjectKind.AGENT, agent_id)
+                        for agent_id in involved_writer_ids
+                    )
+                ),
+            )
         covered = {
             criterion
             for task in self.tasks

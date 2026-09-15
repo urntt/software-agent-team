@@ -668,6 +668,13 @@ repository: `repository` grants whole-project access and `repository/path`
 grants a narrower boundary. A destination or project directory name is not a
 workspace scope and is rejected rather than silently widened.
 
+When two implementation or integration Agents have equal or nested workspace
+scopes, their dependency graph must order them before the proposal can be shown
+for approval. Planning reports every involved Agent and exposes only those
+Agents' dependency arrays for typed correction; it does not choose which writer
+runs first. Disjoint writer scopes may remain parallel. The compiled TeamPlan
+rechecks the same shared scope relation as a final authority boundary.
+
 Acceptance criteria have two distinct owners. The Planner defines
 task-specific criteria and must bind every one of them to at least one
 implementation task. The execution profile defines fixed criteria whose text
