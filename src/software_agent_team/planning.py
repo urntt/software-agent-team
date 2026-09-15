@@ -2553,17 +2553,50 @@ def _bind_planning_correction_candidates(
 
 
 _MAX_PRECISE_PLANNING_CORRECTION_TARGETS = 8
+_PLANNING_IDENTITY_COLLECTIONS = frozenset(
+    {"requirements", "acceptance_criteria", "decisions", "tasks", "agents"}
+)
+
+
+def _planning_correction_lost_record_identity(
+    plan: SemanticCorrectionPlan,
+) -> bool:
+    """Return whether an authorized record slot has no identity to preserve.
+
+    A whole-record schema failure means the untrusted value is not a record at
+    all. Repairing that value independently cannot safely reconstruct references
+    carried by sibling proposal fields, so the proposal graph must be replaced
+    as one bounded unit.
+    """
+
+    proposal = plan.base_payload.get("proposal")
+    if not isinstance(proposal, dict):
+        return False
+    for target_path in plan.evidence.target_paths:
+        match = re.fullmatch(
+            r"/proposal/([a-z_]+)/([0-9]+)",
+            target_path,
+        )
+        if match is None or match.group(1) not in _PLANNING_IDENTITY_COLLECTIONS:
+            continue
+        records = proposal.get(match.group(1))
+        index = int(match.group(2))
+        if not isinstance(records, list) or index >= len(records):
+            return True
+        record = records[index]
+        if not isinstance(record, dict) or not isinstance(record.get("id"), str):
+            return True
+    return False
 
 
 def _collapse_wide_planning_schema_correction(
     plan: SemanticCorrectionPlan | None,
 ) -> SemanticCorrectionPlan | None:
-    """Replace an unusable proposal as one typed unit instead of many leaf slots."""
+    """Replace an unusable proposal as one typed unit instead of unsafe slots."""
 
     if (
         plan is None
         or plan.diagnostic.failure_class is not ResponseFailureClass.SEMANTIC_SCHEMA
-        or len(plan.evidence.target_paths) <= _MAX_PRECISE_PLANNING_CORRECTION_TARGETS
         or plan.base_payload.get("kind") != PlanningResponseKind.PROPOSAL.value
         or not isinstance(plan.base_payload.get("proposal"), dict)
         or any(
@@ -2571,6 +2604,11 @@ def _collapse_wide_planning_schema_correction(
             or not (issue.path == "/proposal" or issue.path.startswith("/proposal/"))
             for issue in plan.diagnostic.issues
         )
+    ):
+        return plan
+    if (
+        len(plan.evidence.target_paths) <= _MAX_PRECISE_PLANNING_CORRECTION_TARGETS
+        and not _planning_correction_lost_record_identity(plan)
     ):
         return plan
     diagnostic = ResponseValidationDiagnostic.model_validate(

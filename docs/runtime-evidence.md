@@ -417,6 +417,12 @@ semantic correction schema requires a nonempty set of unique authorized handles
 and bounds it by the current slot count. Controller validation may atomically apply
 that subset to a copy while preserving omitted slots exactly; it then validates the
 complete semantic object before any result can advance or publish.
+If a Planning schema failure targets an entire requirement, criterion, decision,
+task, or Agent record that has no valid record ID, sibling slots cannot safely
+reconstruct its graph references. The Controller therefore replaces the proposal
+field as one bounded typed slot. The response envelope and original rejected turn
+remain immutable, and the replacement still passes the complete Planning contract
+before it can advance.
 both Planning and dynamic corrections use object-only capture inside the canonical
 `artifact` argument before Controller validation. The shared submission-contract
 factory owns this distinction. Value errors therefore return to the Controller's
