@@ -28,6 +28,7 @@ from software_agent_team.product import (
     generate_product_run_id,
     inspect_host_capacity,
     inspect_startup_environment,
+    limit_concurrency_to_host_capacity,
     load_project_commands,
     prepare_product_source,
     validate_project_destination,
@@ -158,6 +159,65 @@ def test_host_capacity_uses_the_tightest_linux_and_cgroup_headroom() -> None:
     assert not capacity.pids_unbounded
 
 
+def test_host_capacity_constrains_each_concurrent_sandbox_ceiling() -> None:
+    capacity = HostCapacitySnapshot(
+        available_memory_bytes=950 * 1024 * 1024,
+        available_pids=200,
+        pids_unbounded=False,
+        memory_sources=("/proc/meminfo",),
+        pid_sources=("/sys/fs/cgroup/pids.max",),
+    )
+
+    decision = limit_concurrency_to_host_capacity(
+        configured_max_concurrency=2,
+        capacity=capacity,
+        sandbox_memory_mb=512,
+        sandbox_pids=128,
+    )
+
+    assert decision.configured_max_concurrency == 2
+    assert decision.effective_max_concurrency == 1
+    assert decision.memory_slots == 1
+    assert decision.pid_slots == 1
+    assert decision.constrained
+
+
+def test_host_capacity_never_raises_or_guesses_a_concurrency_ceiling() -> None:
+    unknown = HostCapacitySnapshot(
+        available_memory_bytes=None,
+        available_pids=None,
+        pids_unbounded=True,
+        memory_sources=(),
+        pid_sources=(),
+    )
+    known = HostCapacitySnapshot(
+        available_memory_bytes=4 * 1024 * 1024 * 1024,
+        available_pids=1024,
+        pids_unbounded=False,
+        memory_sources=("test memory",),
+        pid_sources=("test pids",),
+    )
+
+    assert (
+        limit_concurrency_to_host_capacity(
+            configured_max_concurrency=2,
+            capacity=unknown,
+            sandbox_memory_mb=512,
+            sandbox_pids=128,
+        ).effective_max_concurrency
+        == 2
+    )
+    assert (
+        limit_concurrency_to_host_capacity(
+            configured_max_concurrency=1,
+            capacity=known,
+            sandbox_memory_mb=512,
+            sandbox_pids=128,
+        ).effective_max_concurrency
+        == 1
+    )
+
+
 def test_startup_warns_when_headroom_is_below_sandbox_resource_ceilings(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -197,6 +257,7 @@ def test_startup_warns_when_headroom_is_below_sandbox_resource_ceilings(
     )
 
     checks = {check.id: check for check in diagnostics.checks}
+    assert diagnostics.host_capacity == capacity
     assert checks["memory_capacity"].state is DiagnosticState.WARNING
     assert checks["pid_capacity"].state is DiagnosticState.WARNING
     assert diagnostics.ready

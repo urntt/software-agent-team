@@ -25,6 +25,7 @@ from software_agent_team.model_routing import ModelProfile
 from software_agent_team.product import (
     DiagnosticCheck,
     DiagnosticState,
+    HostCapacitySnapshot,
     StartupDiagnostics,
 )
 from software_agent_team.releases import ReleaseResolutionError
@@ -94,6 +95,36 @@ def ready_user_configuration(
         max_concurrency=max_concurrency,
         progress_visibility=progress_visibility,
     )
+
+
+def test_product_concurrency_constraint_is_visible_and_run_scoped(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    configured = ready_user_configuration(max_concurrency=2)
+    diagnostics = StartupDiagnostics(
+        checks=(),
+        host_capacity=HostCapacitySnapshot(
+            available_memory_bytes=950 * 1024 * 1024,
+            available_pids=None,
+            pids_unbounded=True,
+            memory_sources=("/proc/meminfo",),
+            pid_sources=(),
+        ),
+    )
+
+    effective = cli._constrain_product_concurrency(
+        configured,
+        diagnostics,
+        sandbox_memory_mb=512,
+        sandbox_pids=128,
+    )
+
+    assert configured.max_concurrency == 2
+    assert effective.max_concurrency == 1
+    output = capsys.readouterr().out
+    assert "This run will use at most 1 concurrent Agent(s)." in output
+    assert "Saved maximum remains 2" in output
+    assert "Memory headroom currently covers 1" in output
 
 
 def ready_model_inspection(
@@ -717,7 +748,7 @@ def test_cli_no_command_runs_the_guided_product_journey(
         "docker_daemon": ("Docker daemon", "available"),
         "sandbox_image": ("Pinned sandbox image", "sha256:" + "a" * 64),
         "storage": ("Available storage", "2048 MiB free"),
-        "memory_capacity": ("Available host memory", "2048 MiB available"),
+        "memory_capacity": ("Available host memory", "950 MiB available"),
         "pid_capacity": ("Available process capacity", "1024 PIDs available"),
         "sat_sandbox_resources": (
             "Existing SAT sandbox resources",
@@ -738,7 +769,14 @@ def test_cli_no_command_runs_the_guided_product_journey(
                 detail=detail,
             )
             for check_id, (label, detail) in diagnostic_values.items()
-        )
+        ),
+        host_capacity=HostCapacitySnapshot(
+            available_memory_bytes=950 * 1024 * 1024,
+            available_pids=1024,
+            pids_unbounded=False,
+            memory_sources=("/proc/meminfo",),
+            pid_sources=("test pids",),
+        ),
     )
     monkeypatch.setattr(
         cli,
@@ -890,6 +928,7 @@ def test_cli_no_command_runs_the_guided_product_journey(
     assert planning_request.model == "provider/model"
     assert observed["approved"] is approved
     planning_kwargs = observed["planning_kwargs"]
+    assert planning_kwargs["configuration"].max_concurrency == 1
     assert options.source_repository == source
     assert options.model == "provider/model"
     assert options.progress_handler.visibility is cli.RunEventVisibility.DETAILED
@@ -902,6 +941,8 @@ def test_cli_no_command_runs_the_guided_product_journey(
     assert "What would you like to build?" in output
     assert "task-management" not in output
     assert "Planning authorization" in output
+    assert "Runtime concurrency adjusted for current host capacity" in output
+    assert "Saved maximum remains 2" in output
     assert "Next commands" in output
     assert "link-checker ." in output
     assert str(tmp_path / "link-checker") in output

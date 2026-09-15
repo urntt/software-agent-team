@@ -97,6 +97,7 @@ from software_agent_team.product import (
     ensure_product_state,
     generate_product_run_id,
     inspect_startup_environment,
+    limit_concurrency_to_host_capacity,
     load_project_commands,
     prepare_product_source,
     render_startup_diagnostics,
@@ -3617,6 +3618,57 @@ def _task_admission_checkpoint(
     return report, update_observation, version
 
 
+def _constrain_product_concurrency(
+    configuration: UserConfiguration,
+    diagnostics: StartupDiagnostics,
+    *,
+    sandbox_memory_mb: int,
+    sandbox_pids: int,
+) -> UserConfiguration:
+    """Apply a visible host-capacity ceiling to this run without changing defaults."""
+
+    if diagnostics.host_capacity is None:
+        return configuration
+    decision = limit_concurrency_to_host_capacity(
+        configured_max_concurrency=configuration.max_concurrency,
+        capacity=diagnostics.host_capacity,
+        sandbox_memory_mb=sandbox_memory_mb,
+        sandbox_pids=sandbox_pids,
+    )
+    if not decision.constrained:
+        return configuration
+
+    print("\nRuntime concurrency adjusted for current host capacity")
+    print(
+        "  This run will use at most "
+        f"{decision.effective_max_concurrency} concurrent Agent(s)."
+    )
+    print(
+        "  Saved maximum remains "
+        f"{decision.configured_max_concurrency}; the approved TeamPlan will show "
+        "the effective value."
+    )
+    if (
+        decision.memory_slots is not None
+        and decision.memory_slots < decision.configured_max_concurrency
+    ):
+        print(
+            "  Memory headroom currently covers "
+            f"{decision.memory_slots} complete sandbox ceiling(s)."
+        )
+    if (
+        decision.pid_slots is not None
+        and decision.pid_slots < decision.configured_max_concurrency
+    ):
+        print(
+            "  PID headroom currently covers "
+            f"{decision.pid_slots} complete sandbox ceiling(s)."
+        )
+    return configuration.model_copy(
+        update={"max_concurrency": decision.effective_max_concurrency}
+    )
+
+
 def _plan_execution_checkpoint(
     *,
     admission_report: TaskSelfCheckReport,
@@ -3693,6 +3745,12 @@ def _run_product() -> int:
     state_paths = ProductStatePaths.below(user_state_root())
     ensure_product_state(state_paths)
     configuration, model_inspections = _ensure_product_configuration(state_paths)
+    configuration = _constrain_product_concurrency(
+        configuration,
+        diagnostics,
+        sandbox_memory_mb=quality.policy.limits.memory_mb,
+        sandbox_pids=quality.policy.limits.pids,
+    )
     run_id = generate_product_run_id()
     execution_profile = (
         "A new, small Python 3.12 project.",

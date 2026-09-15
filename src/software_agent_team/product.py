@@ -78,6 +78,7 @@ class StartupDiagnostics:
     """Ordered local startup checks for the primary product flow."""
 
     checks: tuple[DiagnosticCheck, ...]
+    host_capacity: HostCapacitySnapshot | None = None
 
     @property
     def ready(self) -> bool:
@@ -103,6 +104,32 @@ class HostCapacitySnapshot:
             raise ValueError("available PIDs cannot be negative")
         if self.pids_unbounded and self.available_pids is not None:
             raise ValueError("unbounded PID capacity cannot also be finite")
+
+
+@dataclass(frozen=True)
+class HostConcurrencyLimit:
+    """Run-scoped Agent concurrency supported by current host headroom."""
+
+    configured_max_concurrency: int
+    effective_max_concurrency: int
+    memory_slots: int | None
+    pid_slots: int | None
+
+    def __post_init__(self) -> None:
+        if self.configured_max_concurrency < 1:
+            raise ValueError("configured concurrency must be positive")
+        if not 1 <= self.effective_max_concurrency <= self.configured_max_concurrency:
+            raise ValueError(
+                "effective concurrency must preserve the configured ceiling"
+            )
+        if self.memory_slots is not None and self.memory_slots < 0:
+            raise ValueError("memory slots cannot be negative")
+        if self.pid_slots is not None and self.pid_slots < 0:
+            raise ValueError("PID slots cannot be negative")
+
+    @property
+    def constrained(self) -> bool:
+        return self.effective_max_concurrency < self.configured_max_concurrency
 
 
 class ProjectCommands(BaseModel):
@@ -400,6 +427,47 @@ def inspect_host_capacity(
         pids_unbounded=pids_unbounded,
         memory_sources=memory_sources,
         pid_sources=pid_sources,
+    )
+
+
+def limit_concurrency_to_host_capacity(
+    *,
+    configured_max_concurrency: int,
+    capacity: HostCapacitySnapshot,
+    sandbox_memory_mb: int,
+    sandbox_pids: int,
+) -> HostConcurrencyLimit:
+    """Lower one run's concurrency when current headroom cannot fund each sandbox."""
+
+    if (
+        isinstance(configured_max_concurrency, bool)
+        or configured_max_concurrency < 1
+        or isinstance(sandbox_memory_mb, bool)
+        or sandbox_memory_mb < 1
+        or isinstance(sandbox_pids, bool)
+        or sandbox_pids < 1
+    ):
+        raise ValueError("concurrency and sandbox resource ceilings must be positive")
+
+    memory_slots = (
+        None
+        if capacity.available_memory_bytes is None
+        else capacity.available_memory_bytes // (sandbox_memory_mb * 1024 * 1024)
+    )
+    pid_slots = (
+        None
+        if capacity.pids_unbounded or capacity.available_pids is None
+        else capacity.available_pids // sandbox_pids
+    )
+    supported = configured_max_concurrency
+    for slots in (memory_slots, pid_slots):
+        if slots is not None:
+            supported = min(supported, max(1, slots))
+    return HostConcurrencyLimit(
+        configured_max_concurrency=configured_max_concurrency,
+        effective_max_concurrency=supported,
+        memory_slots=memory_slots,
+        pid_slots=pid_slots,
     )
 
 
@@ -847,7 +915,7 @@ def inspect_startup_environment(
             ),
         )
     )
-    return StartupDiagnostics(checks=tuple(checks))
+    return StartupDiagnostics(checks=tuple(checks), host_capacity=capacity)
 
 
 def render_startup_diagnostics(diagnostics: StartupDiagnostics) -> None:

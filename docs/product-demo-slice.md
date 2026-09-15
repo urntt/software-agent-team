@@ -139,11 +139,16 @@ Setup and interactive model changes display discovered input/output prices and
 their source, then let the user keep or replace them. Added profiles must gain
 the same complete metadata before they can be authorized for a task. Adaptive
 maximum concurrency, repair policy, and detailed routing rules remain advanced
-settings. Product Agent invocations do not have a configurable fixed wall-clock
-duration. Before every task's first model call, task admission refreshes and
-shows every authorized route, asks for any metadata that remains unknown, and
-asks for one total USD authorization plus an optional whole-run deadline; no
-deadline is the recommended default.
+settings. Before request collection, SAT compares current Linux/cgroup memory
+and PID headroom with each restricted sandbox ceiling. When that headroom cannot
+support the saved concurrency ceiling, SAT visibly lowers only the current
+run's ceiling; the saved setting remains unchanged and the effective value is
+frozen in the approval overview and TeamPlan. Unknown capacity does not invent
+a lower ceiling. Product Agent invocations do not have a configurable fixed
+wall-clock duration. Before every task's first model call, task admission
+refreshes and shows every authorized route, asks for any metadata that remains
+unknown, and asks for one total USD authorization plus an optional whole-run
+deadline; no deadline is the recommended default.
 
 ## Request, Clarification, and Confirmation
 
