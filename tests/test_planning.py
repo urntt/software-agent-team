@@ -10306,6 +10306,57 @@ def test_product_planning_repairs_assumption_relation_as_atomic_records(
     )
 
 
+def test_product_planning_empty_atomic_assumption_correction_clears_stale_index(
+    tmp_path: Path,
+) -> None:
+    """An empty atomic relation owns both persisted compatibility arrays."""
+
+    invalid_payload = proposal_response().model_dump(mode="json")
+    invalid_payload["proposal"]["assumptions"] = [
+        "Use one module.",
+        "Keep the command synchronous.",
+    ]
+    invalid_payload["proposal"]["assumption_decision_ids"] = [
+        "DECISION_SCAN_STRUCTURE"
+    ]
+    executor = ScriptedAgentExecutor(
+        [
+            json.dumps(invalid_payload),
+            correction_response(
+                invalid_payload,
+                {"/proposal/assumptions": []},
+            ),
+        ]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(response_repair_limit=None),
+        clock=AdvancingClock(),
+    )
+
+    created = coordinator.start(
+        request(),
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+
+    assert created is not None
+    assert created.body.assumptions == ()
+    assert created.body.assumption_decision_ids == ()
+    first = store.load_turn(request().run_id, 1)
+    assert first.response_validation is not None
+    assert first.response_validation.issues[0].invariant_id == (
+        "planning_assumption_decision_cardinality"
+    )
+    accepted = store.load_turn(request().run_id, 2)
+    assert accepted.semantic_correction_outcome == "accepted"
+    assert accepted.response_normalizations == (
+        "compiled atomic proposal.assumptions into canonical statements "
+        "and autonomous decision references",
+    )
+
+
 def test_product_planning_stops_after_a_non_improving_correction(
     tmp_path: Path,
 ) -> None:

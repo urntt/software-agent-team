@@ -1177,8 +1177,8 @@ def _normalize_planning_response_payload(
                 )
 
     assumptions = proposal.get("assumptions")
-    if isinstance(assumptions, list) and any(
-        isinstance(item, dict) for item in assumptions
+    if isinstance(assumptions, list) and (
+        not assumptions or any(isinstance(item, dict) for item in assumptions)
     ):
         if not all(isinstance(item, dict) for item in assumptions):
             raise _planning_context_invariant(

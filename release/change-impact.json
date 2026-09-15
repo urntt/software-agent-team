@@ -32,6 +32,11 @@
       "id": "bounded-wide-planning-corrections",
       "impact": "patch",
       "summary": "Collapse a broadly malformed model-owned proposal into one exact typed correction slot instead of duplicating many expanded leaf schemas"
+    },
+    {
+      "id": "atomic-empty-assumption-corrections",
+      "impact": "patch",
+      "summary": "Compile an empty model-facing assumption relation into both empty persisted compatibility indexes during targeted correction"
     }
   ]
 }

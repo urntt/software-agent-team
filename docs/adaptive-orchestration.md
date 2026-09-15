@@ -408,7 +408,9 @@ may perform only these bounded, semantics-preserving normalizations:
   atomic record already binds identity to meaning;
 - Compile each current model-facing atomic assumption `{statement,
   decision_id}` into the canonical backward-readable statement and decision-ID
-  indexes;
+  indexes. The empty atomic relation also compiles both indexes to empty, so a
+  targeted replacement cannot retain a decision reference from the prior
+  response generation;
 - During targeted correction, derive every relation vocabulary from the
   retained canonical proposal. When the referenced requirement, criterion,
   decision, Agent, or task identities are outside correction authority, the
@@ -546,7 +548,8 @@ assumption therefore cannot be generated without exactly one authorizing
 Agent-autonomy decision reference, and correction replaces the complete
 relation rather than trying to repair two independently generated arrays. The
 Controller compiles the atoms into the persisted parallel representation so
-older evidence remains readable.
+older evidence remains readable. An empty replacement clears both persisted
+arrays through that same compiler.
 
 The terminal overview treats every user- or model-authored string as untrusted
 display text. Each newline is rendered as an indented continuation of its own

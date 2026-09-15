@@ -2,7 +2,7 @@
 
 **Current milestone:** release `v0.2.20` and complete a managed user journey
 
-**Last updated:** September 14, 2026
+**Last updated:** September 15, 2026
 
 This document records what the repository implements now, what evidence
 supports that claim, and what remains unavailable. It does not redefine the
@@ -420,6 +420,32 @@ and retains full validation and strict issue-set improvement. Replaying the
 captured failure reduces the correction section to about 99 KiB and one slot.
 All 408 Planning, correction, dynamic-runner, dynamic-prompting, workflow, and
 submission-bridge focused tests pass.
+
+A fourth fresh candidate journey on exact `fb5cb7f4ba6a2d71fe42437c251fb8435cb0fdab`
+passed installation, upgrade, both startup paths, a 3.5 Flash provider check,
+six-route configuration, input interruption, and all 41 admission checks. Its
+first Planning invocation observed a terminal provider response and continued
+finalization progress, but OpenClaw then exited with status 1 before SAT captured
+provider, usage, or submission evidence. The upstream cause remains unknown; no
+quota, 429, 503, timeout, or paid-tier use was observed. Because 3.5 Flash Lite
+remained an available free route, this single-route evidence gap did not require
+changing the candidate before the next journey.
+
+The fifth fresh journey used 3.5 Flash Lite for Planning and crossed that point.
+Ten typed, zero-price Planning calls completed one user-owned target-users
+question and monotonically narrowed schema and relation defects. The final
+correction had no available Agent-autonomy decision, so its exact replacement
+schema admitted an empty atomic assumptions array. The model submitted that
+value twice, but normalization retained the previous canonical
+`assumption_decision_ids` index and the cardinality invariant eventually failed
+closed before approval or execution.
+
+The current development head now sends an empty model-facing assumptions array
+through the same atomic compiler as non-empty `{statement, decision_id}` records,
+clearing both backward-readable compatibility arrays together. The archived
+failure shape and the existing non-empty relation pass focused regression; all
+409 Planning, correction, dynamic-runner, dynamic-prompting, workflow, and
+submission-bridge tests, all 33 release/documentation checks, and Ruff pass.
 
 The prior development batch closed four correction and lifecycle defects found by
 the 2026-09-14 review and by replaying archived Planning failures.

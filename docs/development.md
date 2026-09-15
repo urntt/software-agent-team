@@ -389,7 +389,9 @@ Planning-schema regressions must test relation-bearing model fields as atomic
 records. In particular, requirements use `{id, description}` and assumptions
 use `{statement, decision_id}` at the model boundary; tests must not recreate
 parallel model-owned arrays whose cardinality can diverge. Persisted historical
-schemas may retain their compiled indexes for backward readability.
+schemas may retain their compiled indexes for backward readability. Cover both
+non-empty records and an empty atomic correction that clears both compiled
+compatibility arrays.
 
 Validate the product profile separately from the default evaluation fixture:
 
