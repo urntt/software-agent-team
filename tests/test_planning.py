@@ -958,7 +958,7 @@ def test_planning_repairs_schema_then_all_invalid_product_dimensions_together(
     ]
     assert final_replacements_schema["minItems"] == 5
     assert final_replacements_schema["maxItems"] == 5
-    assert "final bounded correction attempt" in executor.requests[2].prompt
+    assert "atomic bounded set" in executor.requests[2].prompt
 
 
 def test_planning_binds_product_recommendation_category_to_exact_candidates(
@@ -12025,3 +12025,116 @@ def test_criterion_split_correction_binds_every_downstream_reference() -> None:
     assert [
         item["properties"]["id"]["const"] for item in criteria["prefixItems"]
     ] == stable_ids
+
+
+def test_acceptance_collection_correction_updates_existing_relations_atomically(
+    tmp_path: Path,
+) -> None:
+    """A criterion-set replacement cannot leave task or product links stale."""
+
+    body = proposal_body()
+    invalid_criteria = (
+        body.acceptance_criteria[0],
+        body.acceptance_criteria[1].model_copy(
+            update={"requirement_ids": ("REQ_SCAN",)}
+        ),
+    )
+    invalid_body = body.model_copy(update={"acceptance_criteria": invalid_criteria})
+
+    corrected_criteria = (
+        body.acceptance_criteria[0].model_copy(update={"id": "AC_SCAN_V2"}),
+        body.acceptance_criteria[1].model_copy(update={"id": "AC_REPORT_V2"}),
+    )
+    target_paths = (
+        "/proposal/acceptance_criteria",
+        "/proposal/product_definition/operational_expectations/criterion_ids",
+        "/proposal/product_definition/usability_expectations/criterion_ids",
+        "/proposal/tasks/0/acceptance_criteria",
+    )
+    replacements = {
+        "/proposal/acceptance_criteria": [
+            item.model_dump(mode="json") for item in corrected_criteria
+        ],
+        "/proposal/product_definition/operational_expectations/criterion_ids": [
+            "AC_SCAN_V2"
+        ],
+        "/proposal/product_definition/usability_expectations/criterion_ids": [
+            "AC_REPORT_V2"
+        ],
+        "/proposal/tasks/0/acceptance_criteria": ["AC_SCAN_V2", "AC_REPORT_V2"],
+    }
+    executor = ScriptedAgentExecutor(
+        [
+            response(proposal_response(invalid_body)),
+            correction_response({}, replacements, target_paths=target_paths),
+        ]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(response_repair_limit=1),
+        clock=AdvancingClock(),
+    )
+
+    created = coordinator.start(
+        request(),
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+
+    assert created is not None
+    assert tuple(item.id for item in created.body.acceptance_criteria) == (
+        "AC_SCAN_V2",
+        "AC_REPORT_V2",
+    )
+    assert created.body.tasks[0].acceptance_criteria == (
+        "AC_SCAN_V2",
+        "AC_REPORT_V2",
+    )
+    assert created.body.product_definition is not None
+    assert created.body.product_definition.operational_expectations.criterion_ids == (
+        "AC_SCAN_V2",
+    )
+    assert created.body.product_definition.usability_expectations.criterion_ids == (
+        "AC_REPORT_V2",
+    )
+    rejected = store.load_turn(request().run_id, 1)
+    assert rejected.response_validation is not None
+    assert rejected.response_validation.correction_paths == (
+        "/proposal/acceptance_criteria",
+    )
+    corrected = store.load_turn(request().run_id, 2)
+    assert corrected.semantic_correction_request is not None
+    assert corrected.semantic_correction_request.target_paths == target_paths
+    assert corrected.semantic_correction_outcome is SemanticCorrectionOutcome.ACCEPTED
+    assert "atomic bounded set" in executor.requests[1].prompt
+    assert "mutually consistent" in executor.requests[1].prompt
+
+
+def test_record_correction_keeps_unrelated_relations_immutable() -> None:
+    """Only whole-set identity replacement expands the relation authority."""
+
+    payload = proposal_response().model_dump(mode="json")
+    issue = ResponseValidationIssue(
+        path="/proposal/acceptance_criteria/0/review_boundaries",
+        code="planning_context",
+        invariant_id="planning_criterion_review_boundaries",
+        subjects=(
+            ResponseIssueSubject(
+                kind=ResponseIssueSubjectKind.CRITERION,
+                identifier="AC_SCAN",
+            ),
+        ),
+        message="criterion requires explicit Review boundaries",
+        authority=ResponseIssueAuthority.MODEL,
+    )
+
+    plan = planning._bind_planning_correction_candidates(
+        correction_plan_for(payload, (issue,))
+    )
+
+    assert plan is not None
+    assert plan.evidence.target_paths == (
+        "/proposal/acceptance_criteria/0/review_boundaries",
+    )
+    assert not plan.require_all_targets

@@ -2547,10 +2547,70 @@ def _bind_planning_correction_candidates(
     return _bind_planning_decision_authority_correction_candidates(
         _bind_planning_product_recommendation_correction_candidates(
             _bind_planning_dependency_correction_candidate(
-                _collapse_wide_planning_schema_correction(plan)
+                _expand_planning_acceptance_relation_correction(
+                    _collapse_wide_planning_schema_correction(plan)
+                )
             )
         )
     )
+
+
+def _expand_planning_acceptance_relation_correction(
+    plan: SemanticCorrectionPlan | None,
+) -> SemanticCorrectionPlan | None:
+    """Replace criterion identities and every existing reference atomically.
+
+    A whole ``acceptance_criteria`` replacement may add, split, rename, or remove
+    criterion records. Product-definition links and task coverage are then part
+    of the same model-owned graph edit: preserving their old IDs creates an
+    invalid intermediate graph and can make successive corrections oscillate
+    between the collection and its references.
+    """
+
+    criterion_path = "/proposal/acceptance_criteria"
+    if (
+        plan is None
+        or plan.diagnostic.failure_class is not ResponseFailureClass.SEMANTIC_CONTEXT
+        or criterion_path not in plan.evidence.target_paths
+    ):
+        return plan
+    proposal = plan.base_payload.get("proposal")
+    if not isinstance(proposal, dict):
+        return plan
+
+    related_paths: list[str] = []
+    product_definition = proposal.get("product_definition")
+    if isinstance(product_definition, dict):
+        for dimension in ProductDefinitionDimension:
+            item = product_definition.get(dimension.value)
+            criterion_ids = (
+                item.get("criterion_ids") if isinstance(item, dict) else None
+            )
+            if isinstance(criterion_ids, list) and criterion_ids:
+                related_paths.append(
+                    f"/proposal/product_definition/{dimension.value}/criterion_ids"
+                )
+
+    tasks = proposal.get("tasks")
+    if isinstance(tasks, list):
+        related_paths.extend(
+            f"/proposal/tasks/{index}/acceptance_criteria"
+            for index, task in enumerate(tasks)
+            if isinstance(task, dict)
+            and isinstance(task.get("acceptance_criteria"), list)
+            and task["acceptance_criteria"]
+        )
+    if not related_paths:
+        return plan
+
+    correction_paths = tuple(sorted({*plan.evidence.target_paths, *related_paths}))
+    diagnostic = plan.diagnostic.model_copy(
+        update={"correction_paths": correction_paths}
+    )
+    expanded = build_semantic_correction_plan(plan.base_payload, diagnostic)
+    if expanded is None:
+        return None
+    return require_all_semantic_correction_targets(expanded)
 
 
 _MAX_PRECISE_PLANNING_CORRECTION_TARGETS = 8

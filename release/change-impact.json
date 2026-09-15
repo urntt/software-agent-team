@@ -82,6 +82,11 @@
       "id": "reviewer-scoped-finding-contracts",
       "impact": "patch",
       "summary": "Constrain every Review criterion reference and targeted finding correction to the exact assigned scope"
+    },
+    {
+      "id": "atomic-planning-criterion-relations",
+      "impact": "patch",
+      "summary": "Replace Planning acceptance criteria together with every existing product-definition reference and task coverage relation"
     }
   ]
 }

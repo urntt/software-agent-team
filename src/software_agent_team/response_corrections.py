@@ -1095,8 +1095,8 @@ def correction_prompt(
         )
     )
     coverage_instruction = (
-        "This is the final bounded correction attempt. Submit exactly one record "
-        "for every listed slot; omitting any slot makes the submission invalid. "
+        "This correction is an atomic bounded set. Submit exactly one record for "
+        "every listed slot; omitting any slot makes the submission invalid. "
         if plan.require_all_targets
         else (
             "Provide one or more records for authorized slots; include every slot "
@@ -1120,6 +1120,9 @@ def correction_prompt(
         "slot IDs, not target paths. The controller owns the invocation binding, "
         "response identity, and path bindings. "
         "All other fields are immutable and will be preserved by the controller. "
+        "When multiple slots contain related records and references, make their "
+        "replacement values mutually consistent; per-slot schemas cannot express "
+        "cross-slot relationships. "
         "When a slot includes "
         "value_schema, that schema is the exact type and shape contract for its "
         "replacement value; satisfy its listed error constraints as well. When a "

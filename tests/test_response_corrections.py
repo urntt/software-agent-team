@@ -351,7 +351,7 @@ def test_final_bounded_correction_requires_every_remaining_target() -> None:
     ]
     assert replacements_schema["minItems"] == 2
     assert replacements_schema["maxItems"] == 2
-    assert "final bounded correction attempt" in correction_prompt(final_plan)
+    assert "atomic bounded set" in correction_prompt(final_plan)
 
     with pytest.raises(
         SemanticCorrectionSubmissionError,

@@ -416,6 +416,14 @@ collection is immutable for that correction. Active profile-owned criterion IDs 
 part of the criterion vocabulary. When the Controller authorizes an identity-owning
 collection in the same correction, it deliberately does not freeze that vocabulary;
 otherwise a valid new definition and its relations could not be submitted atomically.
+Replacing the complete Planning acceptance-criterion collection therefore expands
+one semantic-context correction to include every existing ProductDefinition
+criterion reference and every task's criterion coverage. The correction requires
+all of those value slots in one atomic submission. Per-slot schemas still constrain
+their individual shapes, while the complete Planning validator checks that every
+submitted reference resolves against the replacement criterion set. A correction
+to one criterion field keeps the collection identity and unrelated relations
+immutable.
 For mandatory specialist Review ownership, that open vocabulary does not force
 the model to synchronize a newly chosen Agent ID across independent slots. After
 the corrected Agent graph is applied, the Controller projects a criterion to the
@@ -434,7 +442,7 @@ reconstruct its graph references. The Controller therefore replaces the proposal
 field as one bounded typed slot. The response envelope and original rejected turn
 remain immutable, and the replacement still passes the complete Planning contract
 before it can advance.
-both Planning and dynamic corrections use object-only capture inside the canonical
+Both Planning and dynamic corrections use object-only capture inside the canonical
 `artifact` argument before Controller validation. The shared submission-contract
 factory owns this distinction. Value errors therefore return to the Controller's
 typed diagnostic and improvement gate instead of entering an upstream tool-schema
