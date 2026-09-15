@@ -37,6 +37,11 @@
       "id": "atomic-empty-assumption-corrections",
       "impact": "patch",
       "summary": "Compile an empty model-facing assumption relation into both empty persisted compatibility indexes during targeted correction"
+    },
+    {
+      "id": "anchored-sandbox-image-rollback",
+      "impact": "patch",
+      "summary": "Keep the previous managed sandbox image addressable until staged activation or rollback settles and preserve both owned causes when recovery fails"
     }
   ]
 }

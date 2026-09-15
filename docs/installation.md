@@ -655,7 +655,12 @@ sandbox-image tag are restored. A successful change retains the active
 application and one direct predecessor, then removes only older direct version
 directories whose managed marker proves ownership. The target records the
 active predecessor and candidate image references independently before it
-changes Docker state. When both releases use one mutable reference, it removes
+changes Docker state. Before a staged installer may move an existing mutable
+image tag, the transaction pins the exact predecessor under a unique temporary
+local rollback reference. It removes that reference only after activation or
+rollback has settled. If staging and image rollback both fail, the installer
+reports both bounded install-owned causes. When both releases use one mutable
+reference, it removes
 the superseded image only when both SAT labels match that reference and the
 exact image has neither a remaining tag nor a container reference. When the
 reference changes, the tagged predecessor lineage remains available to the

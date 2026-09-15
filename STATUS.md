@@ -447,6 +447,19 @@ failure shape and the existing non-empty relation pass focused regression; all
 409 Planning, correction, dynamic-runner, dynamic-prompting, workflow, and
 submission-bridge tests, all 33 release/documentation checks, and Ruff pass.
 
+Managed staging now pins an existing mutable sandbox-image tag under a unique
+temporary local rollback reference before the target installer may move it. A
+failed stage restores the predecessor from that exact reference and retires only
+the attributable candidate; successful activation releases the temporary
+reference before normal predecessor cleanup. When staging and rollback both
+fail, the user receives both bounded install-owned causes instead of one masking
+message. All 81 managed-install, install-script, release-impact, and
+documentation-role tests pass. A real Docker rehearsal with two distinct
+owned images restored the predecessor, removed the failed candidate and
+temporary reference, and preserved the pre-existing rollback-reference
+inventory. Fresh public-bootstrap validation remains pending until this change
+is available from `main`.
+
 The prior development batch closed four correction and lifecycle defects found by
 the 2026-09-14 review and by replaying archived Planning failures.
 

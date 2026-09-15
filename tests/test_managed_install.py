@@ -1559,6 +1559,284 @@ def test_failed_activation_restores_previous_image_tag_and_removes_candidate(
     assert candidate_id in removed
 
 
+def test_failed_stage_anchors_previous_image_until_rollback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository, _ = prepare_repository(tmp_path)
+    reference = "sat-python-quality:phase1-v8"
+    (repository / "configs").mkdir()
+    (repository / "configs/product-policy.json").write_text(
+        json.dumps({"sandbox": {"image": reference}}),
+        encoding="utf-8",
+    )
+    git(repository, "add", ".")
+    git(repository, "commit", "-m", "test: add sandbox policy")
+    revision = git(repository, "rev-parse", "HEAD")
+    install_paths = paths(tmp_path)
+    previous_id = "sha256:" + "a" * 64
+    candidate_id = "sha256:" + "b" * 64
+    references = {reference: previous_id}
+    removed: list[str] = []
+
+    def inspect(
+        selector: str,
+        *,
+        expected_reference: str | None = None,
+    ) -> managed_install_module.SandboxImageIdentity | None:
+        image_id = references.get(selector, selector)
+        if image_id not in references.values():
+            return None
+        tags = tuple(name for name, target in references.items() if target == image_id)
+        return managed_install_module.SandboxImageIdentity(
+            image_id=image_id,
+            parent_image_id=None,
+            repository_tags=tags,
+            owned=True,
+            reference_labeled=(expected_reference == reference),
+        )
+
+    def docker(
+        arguments: tuple[str, ...],
+        *,
+        check: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        if arguments[:2] == ("image", "tag"):
+            image_id, destination = arguments[2:]
+            references[destination] = image_id
+            return subprocess.CompletedProcess(arguments, 0, "", "")
+        if arguments[:3] == ("image", "rm", "--no-prune"):
+            references.pop(arguments[3], None)
+            return subprocess.CompletedProcess(arguments, 0, "", "")
+        raise AssertionError(f"unexpected Docker command: {arguments}")
+
+    def run(
+        command: tuple[str, ...] | list[str],
+        cwd: Path | None,
+        environment: dict[str, str] | None,
+    ) -> None:
+        if str(command[0]).endswith("/scripts/install.sh"):
+            assert any(
+                name.startswith(
+                    managed_install_module.SANDBOX_IMAGE_ROLLBACK_REPOSITORY + ":"
+                )
+                and image_id == previous_id
+                for name, image_id in references.items()
+            )
+            references[reference] = candidate_id
+            raise ManagedInstallError("injected staging failure")
+        subprocess.run(
+            list(command),
+            cwd=cwd,
+            env=environment,
+            check=True,
+            timeout=30,
+        )
+
+    monkeypatch.setattr(managed_install_module, "_inspect_sandbox_image", inspect)
+    monkeypatch.setattr(
+        managed_install_module,
+        "_inspect_sandbox_image_lineage",
+        lambda image, *, expected_reference: (image,),
+    )
+    monkeypatch.setattr(managed_install_module, "_docker_command", docker)
+    monkeypatch.setattr(
+        managed_install_module,
+        "_remove_attributable_unreferenced_lineage",
+        lambda image, **_kwargs: removed.append(image.image_id) or True,
+    )
+
+    with pytest.raises(ManagedInstallError, match="injected staging failure"):
+        stage_managed_target(
+            dev_target(repository, revision),
+            install_paths,
+            command_runner=run,
+        )
+
+    assert references == {reference: previous_id}
+    assert removed == [candidate_id]
+    assert not tuple(install_paths.versions_root.iterdir())
+
+
+def test_successful_stage_releases_image_anchor_after_activation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository, _ = prepare_repository(tmp_path)
+    reference = "sat-python-quality:phase1-v8"
+    (repository / "configs").mkdir()
+    (repository / "configs/product-policy.json").write_text(
+        json.dumps({"sandbox": {"image": reference}}),
+        encoding="utf-8",
+    )
+    git(repository, "add", ".")
+    git(repository, "commit", "-m", "test: add sandbox policy")
+    revision = git(repository, "rev-parse", "HEAD")
+    install_paths = paths(tmp_path)
+    previous_id = "sha256:" + "a" * 64
+    candidate_id = "sha256:" + "b" * 64
+    references = {reference: previous_id}
+    retired: list[str] = []
+
+    def inspect(
+        selector: str,
+        *,
+        expected_reference: str | None = None,
+    ) -> managed_install_module.SandboxImageIdentity | None:
+        image_id = references.get(selector, selector)
+        if image_id not in references.values():
+            return None
+        tags = tuple(name for name, target in references.items() if target == image_id)
+        return managed_install_module.SandboxImageIdentity(
+            image_id=image_id,
+            parent_image_id=None,
+            repository_tags=tags,
+            owned=True,
+            reference_labeled=(expected_reference == reference),
+        )
+
+    def docker(
+        arguments: tuple[str, ...],
+        *,
+        check: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        if arguments[:2] == ("image", "tag"):
+            image_id, destination = arguments[2:]
+            references[destination] = image_id
+            return subprocess.CompletedProcess(arguments, 0, "", "")
+        if arguments[:3] == ("image", "rm", "--no-prune"):
+            references.pop(arguments[3], None)
+            return subprocess.CompletedProcess(arguments, 0, "", "")
+        raise AssertionError(f"unexpected Docker command: {arguments}")
+
+    def run(
+        command: tuple[str, ...] | list[str],
+        cwd: Path | None,
+        environment: dict[str, str] | None,
+    ) -> None:
+        if str(command[0]).endswith("/scripts/install.sh"):
+            assert any(
+                name.startswith(
+                    managed_install_module.SANDBOX_IMAGE_ROLLBACK_REPOSITORY + ":"
+                )
+                and image_id == previous_id
+                for name, image_id in references.items()
+            )
+            references[reference] = candidate_id
+        subprocess.run(
+            list(command),
+            cwd=cwd,
+            env=environment,
+            check=True,
+            timeout=30,
+        )
+
+    monkeypatch.setattr(managed_install_module, "_inspect_sandbox_image", inspect)
+    monkeypatch.setattr(
+        managed_install_module,
+        "_inspect_sandbox_image_lineage",
+        lambda image, *, expected_reference: (image,),
+    )
+    monkeypatch.setattr(managed_install_module, "_docker_command", docker)
+    monkeypatch.setattr(
+        managed_install_module,
+        "_remove_attributable_unreferenced_lineage",
+        lambda image, **_kwargs: retired.append(image.image_id) or True,
+    )
+
+    install_managed_target(
+        dev_target(repository, revision),
+        install_paths,
+        command_runner=run,
+    )
+
+    assert references == {reference: candidate_id}
+    assert retired == [previous_id]
+
+
+def test_staging_and_rollback_failure_reports_both_owned_causes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository, _ = prepare_repository(tmp_path)
+    reference = "sat-python-quality:phase1-v8"
+    (repository / "configs").mkdir()
+    (repository / "configs/product-policy.json").write_text(
+        json.dumps({"sandbox": {"image": reference}}),
+        encoding="utf-8",
+    )
+    git(repository, "add", ".")
+    git(repository, "commit", "-m", "test: add sandbox policy")
+    revision = git(repository, "rev-parse", "HEAD")
+    install_paths = paths(tmp_path)
+    previous = managed_install_module.SandboxImageIdentity(
+        image_id="sha256:" + "a" * 64,
+        parent_image_id=None,
+        repository_tags=(reference,),
+        owned=True,
+        reference_labeled=True,
+    )
+    candidate = previous.__class__(
+        image_id="sha256:" + "b" * 64,
+        parent_image_id=None,
+        repository_tags=(reference,),
+        owned=True,
+        reference_labeled=True,
+    )
+    current = {"image": previous}
+
+    def run(
+        command: tuple[str, ...] | list[str],
+        cwd: Path | None,
+        environment: dict[str, str] | None,
+    ) -> None:
+        if str(command[0]).endswith("/scripts/install.sh"):
+            current["image"] = candidate
+            raise ManagedInstallError("primary staged probe failed")
+        subprocess.run(
+            list(command),
+            cwd=cwd,
+            env=environment,
+            check=True,
+            timeout=30,
+        )
+
+    monkeypatch.setattr(
+        managed_install_module,
+        "_inspect_sandbox_image",
+        lambda selector, **_kwargs: current["image"],
+    )
+    monkeypatch.setattr(
+        managed_install_module,
+        "_inspect_sandbox_image_lineage",
+        lambda image, *, expected_reference: (image,),
+    )
+    monkeypatch.setattr(
+        managed_install_module,
+        "_preserve_sandbox_image_for_rollback",
+        lambda image, *, expected_reference: "software-agent-team-rollback:test",
+    )
+    monkeypatch.setattr(
+        managed_install_module,
+        "_restore_sandbox_image_transition",
+        lambda _transition: (_ for _ in ()).throw(
+            ManagedInstallError("previous image unavailable")
+        ),
+    )
+
+    with pytest.raises(ManagedInstallError) as captured:
+        stage_managed_target(
+            dev_target(repository, revision),
+            install_paths,
+            command_runner=run,
+        )
+
+    assert str(captured.value) == (
+        "managed staging failed (primary staged probe failed); sandbox image "
+        "rollback also failed (previous image unavailable)"
+    )
+
+
 def test_stable_stage_rejects_package_or_archive_identity_drift(
     tmp_path: Path,
 ) -> None:
