@@ -483,6 +483,29 @@ implementation, unresolved, ungrounded, unsettled, rejected, dirty, and broken-
 ancestry paths still fail closed. Real-Git runner and full workflow regressions
 continue through Testing, Review, iteration aggregation, and the final report.
 
+On hosts with limited memory or PID headroom, startup diagnostics now derive a
+run-scoped concurrency ceiling from the same retained Linux/cgroup capacity
+snapshot used for readiness. The effective value can only lower the saved user
+maximum, is shown before Planning, and is frozen into the approved TeamPlan;
+unknown capacity does not guess a smaller value and the saved configuration is
+not rewritten. Product, CLI, self-check, and scheduling coverage passes 133
+focused tests.
+
+A fresh exact-candidate DeepSeek journey verified that a roughly 1 GiB host
+visibly lowered the saved maximum from two Agents to one on both launches. It
+also exposed a Planning session-identity defect: three semantic corrections in
+separate dialogue cycles all reused generation 2 because each coordinator
+invocation reset its local attempt counter. The eighth Planning call then exited
+zero without a new attributable current turn or usage; SAT correctly rejected
+the submission and refused an unaccounted retry under the task-wide USD limit.
+The upstream reason for that missing turn remains unknown. Semantic-correction
+generations now derive from the next persisted Planning-turn sequence, making
+them distinct across dialogue, revision, and evidence-recovery cycles while
+leaving the base dialogue session and fail-closed budget contract unchanged.
+The cross-cycle regression and adjacent Planning, execution, dynamic-runner,
+workflow, and typed-submission suites pass 453 tests; a fresh provider-backed
+journey and the final release gate remain pending.
+
 The prior development batch closed four correction and lifecycle defects found by
 the 2026-09-14 review and by replaying archived Planning failures.
 

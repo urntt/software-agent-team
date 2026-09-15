@@ -8972,6 +8972,61 @@ def test_invalid_complete_proposal_is_repaired_before_it_is_shown(
     ] == [(1, 2)] * 9 + [(2, 2)] * 9
 
 
+def test_corrections_use_distinct_sessions_across_planning_dialogues(
+    tmp_path: Path,
+) -> None:
+    """A later dialogue cannot reuse an earlier correction transcript."""
+
+    valid_payload = proposal_response().model_dump(mode="json")
+    invalid_payload = deepcopy(valid_payload)
+    invalid_payload["proposal"]["tasks"][0]["owner_agent_id"] = "absent_agent"
+    correction = json.loads(
+        correction_response(
+            invalid_payload,
+            {
+                "/proposal/tasks/0/owner_agent_id": valid_payload["proposal"]["tasks"][
+                    0
+                ]["owner_agent_id"],
+            },
+        )
+    )
+    executor = ScriptedAgentExecutor(
+        [
+            json.dumps(invalid_payload),
+            ScriptedAgentResponse(text="correction", submission_payload=correction),
+            json.dumps(invalid_payload),
+            ScriptedAgentResponse(text="correction", submission_payload=correction),
+        ]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(response_repair_limit=1),
+        clock=AdvancingClock(),
+    )
+    planning_request = request()
+
+    first = coordinator.start(
+        planning_request,
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+    assert first is not None
+    second = coordinator.revise(
+        planning_request,
+        first,
+        "Keep the existing plan.",
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+
+    assert second is not None
+    assert [item.session_generation for item in executor.requests] == [1, 2, 1, 4]
+    correction_sessions = [executor.requests[index].session_key for index in (1, 3)]
+    assert len(set(correction_sessions)) == 2
+    assert correction_sessions[0].endswith("-g2")
+    assert correction_sessions[1].endswith("-g4")
+
+
 def test_missing_product_decision_returns_to_atomic_clarification(
     tmp_path: Path,
 ) -> None:

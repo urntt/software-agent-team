@@ -9446,6 +9446,13 @@ class AdaptivePlanningCoordinator:
                     else AgentSubmissionPurpose.SEMANTIC_CORRECTION
                 ),
             )
+            # ``attempt`` restarts for each dialogue or revision. Persisted turn
+            # order keeps correction sessions unique across those boundaries.
+            session_generation = (
+                self.store.load_session(request.run_id).turn_count + 1
+                if correction_plan is not None
+                else 1
+            )
             execution_request = AgentExecutionRequest(
                 run_id=request.run_id,
                 team_id="adaptive_planning",
@@ -9456,7 +9463,7 @@ class AdaptivePlanningCoordinator:
                 timeout_seconds=self.policy.planning_timeout_seconds,
                 model=request.model,
                 submission_contract=submission_contract,
-                session_generation=(attempt if correction_plan is not None else 1),
+                session_generation=session_generation,
             )
             self._emit_activity(
                 activity_handler,

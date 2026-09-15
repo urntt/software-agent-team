@@ -47,6 +47,16 @@
       "id": "verified-unchanged-integration-result",
       "impact": "patch",
       "summary": "Continue quality and delivery when a downstream Integration Agent proves that the exact clean upstream commit already satisfies its assigned work"
+    },
+    {
+      "id": "host-capacity-concurrency-ceiling",
+      "impact": "patch",
+      "summary": "Lower each run's effective Agent concurrency to current Linux memory and PID headroom without changing the saved user maximum"
+    },
+    {
+      "id": "distinct-planning-correction-sessions",
+      "impact": "patch",
+      "summary": "Give every semantic Planning correction a distinct run-scoped OpenClaw session generation across dialogue and revision cycles"
     }
   ]
 }

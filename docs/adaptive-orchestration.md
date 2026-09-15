@@ -495,6 +495,13 @@ does not consume the semantic-correction budget. A submission that exists but is
 rejected is never reissued this way, and assistant text never substitutes for a
 typed submission.
 
+Every semantic-correction attempt receives a distinct run-scoped OpenClaw
+session generation derived from the next persisted Planning-turn sequence. This
+identity remains unique across clarification rounds, proposal revisions, and
+submission-evidence recovery, so a correction never depends on an earlier
+correction transcript or its automatic compaction. Initial Planning dialogue
+turns retain their shared base session.
+
 Record identity has exactly one owner. Whenever a correction leaves an identity
 collection immutable, every existing record slot is pinned to its current ID.
 Scope projections that rebuild a collection's slots, such as Review-task scope or
