@@ -1,3 +1,2 @@
 offline = true
-no-index = true
-find-links = ["/opt/software-agent-team/wheels"]
+index-url = "https://pypi.org/simple"

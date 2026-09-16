@@ -38,6 +38,18 @@ missing, stale, incomplete, rejected, or mismatched evidence remains
 execution, artifact, Planning, and dynamic-runner suites pass 421 tests for this
 boundary and its existing finalization-stall behavior.
 
+The `v0.2.20` runtime image now builds one PyPI-attributed offline cache with
+both resolution metadata and the profile's installable distributions. The
+runtime `uv` wrapper lazily copies that immutable cache to bounded writable
+tmpfs, so ordinary `uv lock`, `uv sync`, and `uv run` operations retain public
+registry sources instead of writing an image-local wheelhouse into generated
+`uv.lock` files. The exact-command gate now requires setup to preserve the
+committed lock byte for byte. The real `phase1-v9` image passes portable-lock
+refresh and full setup/test/start checks with network disabled, a read-only root,
+an unrelated non-root user, and a 128 MiB tmpfs. Affected runtime, installer,
+profile, and quality-gate regressions pass. The canonical release gate and
+fresh provider-backed journey remain pending.
+
 The immutable `v0.2.18` tag,
 [GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.2.18),
 package version, and release manifest identify source revision
@@ -596,22 +608,19 @@ test directory. The package, lock, and change-impact ledger identify `v0.2.16`
 as a compatible patch over `v0.2.15`; its exact release-head validation, hosted
 publication, and published upgrade passed as recorded above.
 
-The post-`v0.2.14` implementation requires every generated Python delivery to
-commit a bounded portable root `uv.lock`. The runtime image supplies an
-immutable `sat-project-lock` writer backed by frozen public registry metadata;
-it clears inherited `UV_*` configuration and refreshes or checks the portable
-lock offline. Installation and repeat-start preflight execute a real restricted
-self-test of that path. The exact-command gate checks lock consistency before
-setup, then rejects every setup change to another committed file and every new
-file outside the committed ignore policy. The private wheelhouse may rewrite
-only the disposable scratch lock. Missing or ignored locks, inconsistent locks,
-unignored generated artifacts, inherited private index configuration, and
-restricted no-network runtime behavior are covered by 164 focused tests. Clean
-implementation revision `9f95b1dd4716a7246d3df5abe4d4b762c3927262`
-passed the canonical gate with all 1,656 tests in 789.98 seconds. The report
-records 342,597,632 bytes aggregate peak RSS, zero cgroup/kernel OOM delta, and
-no residual stage process, process lease, sandbox container, volume, or private
-test directory.
+Every generated Python delivery must commit a bounded portable root `uv.lock`.
+The runtime image supplies an immutable `sat-project-lock` writer backed by one
+frozen public-registry cache containing both metadata and installable
+distributions; it clears inherited `UV_*` configuration and refreshes or checks
+the portable lock offline. Installation and repeat-start preflight execute a
+real restricted self-test of that path. The exact-command gate checks lock
+consistency before setup, shares the same writable cache across setup/test/start,
+then checks after each command and rejects every committed-file change and every
+new file outside the committed ignore policy. Missing or ignored locks,
+inconsistent or non-portable
+locks, setup-time lock drift, unignored generated artifacts, inherited private
+index configuration, and restricted no-network runtime behavior have direct
+regression coverage.
 
 The current implementation also records the active predecessor and candidate
 sandbox-image references independently during managed staging. A changed-image
@@ -2594,7 +2603,7 @@ The acceptance contract is
 - Docker-only production gates with no network, read-only source execution,
   non-root identity, fixed commands, resource limits, timeouts, bounded output,
   plus fresh-scratch execution of exact generated setup, test, and start argv
-  through a locked offline wheelhouse;
+  through a frozen PyPI-attributed offline cache;
 - The complete function-specialized workflow: Planner, Developer, controller
   snapshot, deterministic gates, independent Tester and Reviewer with
   configurable dispatch concurrency, decision, and launch-policy-bounded

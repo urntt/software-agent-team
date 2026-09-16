@@ -115,7 +115,7 @@ defect. Also verify that the documented setup path preserves committed files
 and creates only explicitly ignored local runtime artifacts, so first setup
 does not silently dirty an otherwise clean delivery. `uv.lock` must be committed and
 must contain no absolute path, `file:` source, parent-directory dependency, or
-SAT sandbox-only wheelhouse reference; a lock that works only inside the
+runtime-image-local package reference; a lock that works only inside the
 quality image is not a portable delivery.
 
 For the project command contract, compare README.md to the exact argv in

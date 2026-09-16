@@ -138,6 +138,8 @@ done
   fail "Python runtime uv configuration is missing"
 [[ -f "$task_root/runtime/python/sat_project_lock.py" ]] || \
   fail "portable lock helper is missing"
+[[ -f "$task_root/runtime/python/sat_uv.py" ]] || \
+  fail "offline uv cache wrapper is missing"
 [[ -f "$task_root/runtime/python/warm_public_uv_cache.py" ]] || \
   fail "public uv cache builder is missing"
 [[ -f "$task_root/scripts/openclaw-environment.sh" && \

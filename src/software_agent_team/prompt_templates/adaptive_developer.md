@@ -37,11 +37,10 @@ only local runtime artifacts covered by the delivered ignore policy. Commit
 reproducibility metadata such as `uv.lock`; an ignored or untracked dependency
 lock is not a delivery. The committed lock must remain installable after
 delivery: never record absolute paths, `file:` sources, parent-directory
-references, or SAT sandbox-only wheelhouse locations. The offline wheelhouse is
-controller runtime infrastructure, not generated-project metadata. Run
-`sat-project-lock` after the last sandbox `uv sync` or `uv run` command and
-before the final commit; it uses frozen public metadata offline to restore or
-refresh the portable lock. When the starter contains profile-owned setup and
+references, or SAT runtime-image-local package locations. Use
+`sat-project-lock` after changing dependency metadata and before the final
+commit; it uses the frozen public cache offline to restore or refresh the
+portable lock. When the starter contains profile-owned setup and
 test command argv, preserve their exact values and change only the explicitly
 marked project-specific start placeholder. The TaskBrief constraints are
 authoritative for the concrete command values.

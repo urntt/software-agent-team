@@ -12,7 +12,7 @@ REPOSITORY_ROOT = Path(__file__).parents[1]
 RUNTIME_ROOT = REPOSITORY_ROOT / "runtime" / "python"
 VALIDATION_ROOT = REPOSITORY_ROOT / "profiles" / "python" / "validation"
 PORTABLE_LOCK = REPOSITORY_ROOT / "tests" / "fixtures" / "portable-registry.uv.lock"
-RUNTIME_IMAGE = "sat-python-quality:phase1-v8"
+RUNTIME_IMAGE = "sat-python-quality:phase1-v9"
 PINNED_REQUIREMENT = re.compile(r"^[a-z0-9][a-z0-9._-]*==[^ ;]+(?: ; [a-z0-9_' .=]+)?$")
 
 
@@ -41,13 +41,17 @@ def test_runtime_image_uses_content_pinned_base_and_dependency_lock() -> None:
     assert "COPY warm_public_uv_cache.py /tmp/warm_public_uv_cache.py" in dockerfile
     assert "pip install --no-cache-dir --requirement" in dockerfile
     assert "UV_CACHE_DIR=/opt/software-agent-team/uv-public-cache" in dockerfile
-    assert "pip download --no-cache-dir --only-binary=:all:" in dockerfile
+    assert "uv sync --project /tmp/sat-runtime-catalog" in dockerfile
+    assert "--no-install-project --frozen" in dockerfile
+    assert ".sat-public-cache-v1" in dockerfile
+    assert "/opt/software-agent-team/wheels" not in dockerfile
     assert "UV_CACHE_DIR=/tmp/uv-cache" in dockerfile
     assert "UV_CONFIG_FILE=/opt/software-agent-team/uv-offline.toml" in dockerfile
-    assert "requirements.lock colorama==0.4.6" in dockerfile
     assert "COPY sat_probe_write.py /usr/local/bin/sat-probe-write" in dockerfile
     assert "COPY sat_probe_run.py /usr/local/bin/sat-probe-run" in dockerfile
     assert "COPY sat_project_lock.py /usr/local/bin/sat-project-lock" in dockerfile
+    assert "COPY sat_uv.py /usr/local/bin/sat-uv" in dockerfile
+    assert "mv /usr/local/bin/uv /usr/local/bin/uv-real" in dockerfile
     assert "chown 0:0 /usr/local/bin/sat-probe-write /usr/local/bin/sat-probe-run" in (
         dockerfile
     )
@@ -59,10 +63,18 @@ def test_runtime_image_uses_content_pinned_base_and_dependency_lock() -> None:
 
     uv_configuration = (RUNTIME_ROOT / "uv-offline.toml").read_text(encoding="utf-8")
     assert uv_configuration == (
-        "offline = true\n"
-        "no-index = true\n"
-        'find-links = ["/opt/software-agent-team/wheels"]\n'
+        'offline = true\nindex-url = "https://pypi.org/simple"\n'
     )
+
+    uv_wrapper = (RUNTIME_ROOT / "sat_uv.py").read_text(encoding="utf-8")
+    assert uv_wrapper.startswith("#!/usr/local/bin/python\n")
+    assert 'PUBLIC_CACHE = Path("/opt/software-agent-team/uv-public-cache")' in (
+        uv_wrapper
+    )
+    assert 'DEFAULT_CACHE = Path("/tmp/uv-cache")' in uv_wrapper
+    assert 'REAL_UV = Path("/usr/local/bin/uv-real")' in uv_wrapper
+    assert "shutil.copytree(PUBLIC_CACHE, candidate, symlinks=True)" in uv_wrapper
+    assert "os.execve(REAL_UV" in uv_wrapper
 
     helper = (RUNTIME_ROOT / "sat_probe_write.py").read_text(encoding="utf-8")
     assert helper.startswith("#!/usr/local/bin/python\n")
@@ -85,6 +97,7 @@ def test_runtime_image_uses_content_pinned_base_and_dependency_lock() -> None:
     assert '"UV_CONFIG_FILE": "/dev/null"' in lock_helper
     assert '"UV_DEFAULT_INDEX": "https://pypi.org/simple"' in lock_helper
     assert '"UV_OFFLINE": "1"' in lock_helper
+    assert "shutil.copytree(PUBLIC_CACHE, cache, symlinks=True)" in lock_helper
 
 
 def test_runtime_image_can_refresh_a_portable_lock_offline(tmp_path: Path) -> None:
@@ -129,7 +142,7 @@ def test_runtime_image_can_refresh_a_portable_lock_offline(tmp_path: Path) -> No
             "--user",
             "65532:65532",
             "--tmpfs",
-            "/tmp:rw,nosuid,nodev,size=256m,mode=1777",
+            "/tmp:rw,nosuid,nodev,size=128m,mode=1777",
             "--volume",
             f"{project}:/project",
             "--workdir",
@@ -164,7 +177,7 @@ def test_runtime_dependency_lock_contains_only_exact_unique_versions() -> None:
 def test_runtime_image_consumes_a_portable_registry_lock_offline(
     tmp_path: Path,
 ) -> None:
-    """Exercise the exact command runner with real uv and the bundled wheels."""
+    """Exercise exact commands with real uv and the frozen public cache."""
 
     docker = shutil.which("docker")
     if docker is None:
@@ -186,7 +199,7 @@ def test_runtime_image_consumes_a_portable_registry_lock_offline(
     project = tmp_path / "project"
     project.mkdir(mode=0o755)
     files = {
-        ".gitignore": ".venv/\n",
+        ".gitignore": ".pytest_cache/\n.venv/\n",
         "README.md": """# Portable registry fixture
 
 ## Installation
@@ -293,7 +306,7 @@ testpaths = ["tests"]
             "--user",
             "65532:65532",
             "--tmpfs",
-            "/tmp:rw,nosuid,nodev,size=512m,mode=1777",
+            "/tmp:rw,exec,nosuid,nodev,size=128m,mode=1777",
             "--env",
             "HOME=/tmp/home",
             "--env",

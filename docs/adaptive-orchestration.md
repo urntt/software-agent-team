@@ -1109,11 +1109,11 @@ boundary established by the implementation and evidence. The generated-project
 contract separately checks that the README shows each exact manifest command,
 that documented first setup creates only explicitly ignored local runtime
 artifacts and uses a committed portable root lock with no host- or sandbox-only
-dependency source. Writers refresh that lock through the immutable offline
-`sat-project-lock` helper after sandbox commands. A deterministic gate checks
-the lock against frozen public metadata, copies clean committed files into fresh
-scratch, then executes exact setup,
-test, and start argv through the runtime's offline wheelhouse. Its start argv
+dependency source. Writers can refresh that lock through the immutable offline
+`sat-project-lock` helper after dependency metadata changes. A deterministic
+gate checks the lock against a frozen public cache, copies clean committed files
+into fresh scratch, then executes exact setup,
+test, and start argv through that cache. Its start argv
 must work from the project root without appended arguments. Independent Review
 probes task-specific runtime behavior that this generic contract cannot infer.
 

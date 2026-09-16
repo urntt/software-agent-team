@@ -18,25 +18,30 @@ RUN python /tmp/warm_public_uv_cache.py \
       UV_CONFIG_FILE=/dev/null \
       UV_DEFAULT_INDEX=https://pypi.org/simple \
       uv lock --project /tmp/sat-runtime-catalog \
+    && UV_CACHE_DIR=/opt/software-agent-team/uv-public-cache \
+      UV_CONFIG_FILE=/dev/null \
+      UV_DEFAULT_INDEX=https://pypi.org/simple \
+      UV_LINK_MODE=copy \
+      uv sync --project /tmp/sat-runtime-catalog --no-install-project --frozen \
+    && printf '%s\n' software-agent-team-public-uv-cache-v1 \
+      > /opt/software-agent-team/uv-public-cache/.sat-public-cache-v1 \
     && rm -rf /tmp/sat-runtime-catalog /tmp/warm_public_uv_cache.py \
     && chmod -R a=rX /opt/software-agent-team/uv-public-cache
 
-RUN mkdir -p /opt/software-agent-team/wheels \
-    && python -m pip download --no-cache-dir --only-binary=:all: \
-    --dest /opt/software-agent-team/wheels --requirement \
-    /opt/software-agent-team/requirements.lock colorama==0.4.6 \
-    && chmod -R a=rX /opt/software-agent-team/wheels \
-    && chown 0:0 /opt/software-agent-team/uv-offline.toml \
+RUN chown 0:0 /opt/software-agent-team/uv-offline.toml \
     && chmod 0444 /opt/software-agent-team/uv-offline.toml
 
 COPY sat_probe_write.py /usr/local/bin/sat-probe-write
 COPY sat_probe_run.py /usr/local/bin/sat-probe-run
 COPY sat_project_lock.py /usr/local/bin/sat-project-lock
+COPY sat_uv.py /usr/local/bin/sat-uv
 
 RUN chown 0:0 /usr/local/bin/sat-probe-write /usr/local/bin/sat-probe-run \
-      /usr/local/bin/sat-project-lock \
+      /usr/local/bin/sat-project-lock /usr/local/bin/sat-uv \
     && chmod 0555 /usr/local/bin/sat-probe-write /usr/local/bin/sat-probe-run \
-      /usr/local/bin/sat-project-lock
+      /usr/local/bin/sat-project-lock /usr/local/bin/sat-uv \
+    && mv /usr/local/bin/uv /usr/local/bin/uv-real \
+    && mv /usr/local/bin/sat-uv /usr/local/bin/uv
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

@@ -1170,13 +1170,14 @@ when investigating it rather than editing artifacts in place.
   a bounded regular root `uv.lock` in the accepted clean snapshot. The lock is
   parsed before setup and must not contain absolute or Windows-drive paths,
   `file:` sources, parent-directory references, missing or symlinked
-  project-local artifacts, or SAT's private offline-wheelhouse location. After
-  setup, the clean-copy gate checks lock consistency offline against frozen
-  public metadata, compares every other committed file with its original digest
-  and executable bit, and rejects new files outside the committed ignore policy.
-  The private wheelhouse may adapt only the disposable scratch lock. Writers use
-  the immutable `sat-project-lock` helper after sandbox commands to refresh the
-  portable committed form. This prevents first use from leaving unexplained
+  project-local artifacts, or a runtime-image-local package location. The
+  clean-copy gate checks lock consistency offline against a frozen public cache,
+  executes setup, test, and start with that same cache, compares every committed
+  file with its original digest and executable bit after each command, and
+  rejects new files outside the committed ignore policy. Writers use the
+  immutable `sat-project-lock` helper after
+  dependency metadata changes to refresh the portable committed form. This
+  prevents first use from leaving unexplained
   repository state and prevents same-image setup from masking non-portable
   delivery metadata.
 - Every run workspace is a self-contained clone with no remote and a detached
@@ -1255,10 +1256,10 @@ when investigating it rather than editing artifacts in place.
   an offline `uv sync` creates project-local virtual-environment entry points
   that must launch there. It first rejects tracked drift and unsafe entries,
   copies only committed regular files, and executes exact setup, test, and
-  start argv. A root-owned runtime `uv` configuration makes the bundled
-  wheelhouse the exclusive package source, including when a portable tracked
-  lock records public registry URLs; it never changes project argv or permits
-  sandbox-only paths in delivery metadata. Network remains disabled; source
+  start argv. A root-owned runtime `uv` configuration uses a frozen
+  PyPI-attributed cache containing both metadata and distributions. A wrapper
+  lazily copies it to bounded writable tmpfs; it never changes project argv or
+  permits runtime-image-local paths in delivery metadata. Network remains disabled; source
   and root filesystems remain
   read-only; the process remains non-root, capability-dropped, and bounded by
   PID, file, memory, CPU, output, and timeout limits. Scratch is discarded with

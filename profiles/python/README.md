@@ -59,16 +59,14 @@ committed as dependency-resolution metadata. The task-independent seed supplies
 both policies. The lock must be portable with the delivered repository: its
 TOML must not contain absolute or Windows drive paths, `file:` sources,
 parent-directory references, missing project-relative artifacts, symlinked
-local sources, or a registry/path that exists only in SAT's private offline
-wheelhouse. Remote registries and archives must use remote URLs. The validator
-parses the committed lock before any same-image setup command can mask a
-host-local source. Writers use the immutable `sat-project-lock` helper after
-sandbox setup or test commands; its frozen public metadata cache can refresh
-the portable form without network access. The clean-copy command gate first
-checks lock consistency against that neutral public cache, then verifies that
-setup changes no other committed file and creates only artifacts covered by
-committed `.gitignore` rules. The private wheelhouse may rewrite only the
-disposable scratch copy of the lock while resolving the exact setup command.
+local sources, or a registry/path that exists only inside SAT's runtime image.
+Remote registries and archives must use remote URLs. The validator parses the
+committed lock before setup. Writers can use the immutable `sat-project-lock`
+helper whenever project dependency metadata changes; its frozen public cache
+refreshes the portable form without network access. The clean-copy command gate
+checks lock consistency against that same cache, then verifies that setup
+changes no committed file and creates only artifacts covered by committed
+`.gitignore` rules.
 
 ## Evidence Boundary
 
@@ -78,14 +76,14 @@ command gate first verifies that tracked files equal `HEAD`, copies only
 committed regular files into fresh disposable scratch, and runs `uv sync
 --dev`, the exact test argv, and the exact start argv with network disabled.
 Untracked local files, an existing `.venv`, and the source repository's `.git`
-directory cannot satisfy that check. The runtime image contains a locked
-offline wheelhouse for setup and build dependencies. That wheelhouse is
-ephemeral controller infrastructure: it may satisfy the clean-copy command
-gate, but its private path must never become generated-project metadata.
-After setup, the gate compares every other committed file with its pre-setup
-digest and executable bit and rejects every new file that is not covered by the
-committed ignore policy. Setup and test run with closed standard input and must
-exit successfully. The
+directory cannot satisfy that check. The runtime image contains a frozen
+PyPI-attributed cache with the resolution metadata and distributions needed for
+setup and build dependencies. The image copies it lazily to writable tmpfs,
+while the source and network stay read-only and disabled. After setup, the gate
+compares every committed file with its pre-setup digest and executable bit and
+rejects every new file that is not covered by the committed ignore policy. It
+repeats that preservation check after the exact test and start commands. Setup
+and test run with closed standard input and must exit successfully. The
 bounded start probe keeps its standard-input pipe open through the startup
 grace so an interactive CLI can wait for user input instead of receiving a
 synthetic EOF; a process still running after that grace is terminated through

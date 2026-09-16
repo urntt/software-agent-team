@@ -181,34 +181,40 @@ def _ignored_paths(
         }
 
 
-def _require_setup_preserves_delivery(
+def _require_delivery_preserved(
     clean: Path,
     snapshot: dict[Path, tuple[str, int]],
+    *,
+    command_label: str,
 ) -> None:
     for relative, (expected_digest, expected_executable_bits) in snapshot.items():
         candidate = clean / relative
         try:
             metadata = candidate.lstat()
         except OSError:
-            fail(f"setup command removed committed file: {relative.as_posix()}")
+            fail(
+                f"{command_label} command removed committed file: {relative.as_posix()}"
+            )
         if candidate.is_symlink() or not candidate.is_file():
-            fail(f"setup command replaced committed file: {relative.as_posix()}")
-        if relative == Path("uv.lock"):
-            # The private no-index wheelhouse can rewrite registry locations in
-            # scratch. A neutral lock check below owns source-lock consistency.
-            continue
+            fail(
+                f"{command_label} command replaced committed file: "
+                f"{relative.as_posix()}"
+            )
         if (
             _file_digest(candidate) != expected_digest
             or metadata.st_mode & 0o111 != expected_executable_bits
         ):
-            fail(f"setup command modified committed file: {relative.as_posix()}")
+            fail(
+                f"{command_label} command modified committed file: "
+                f"{relative.as_posix()}"
+            )
     generated = _generated_leaf_paths(clean, snapshot)
     unignored = sorted(set(generated) - _ignored_paths(clean, generated, snapshot))
     if unignored:
         rendered = ", ".join(path.as_posix() for path in unignored[:8])
         suffix = " ..." if len(unignored) > 8 else ""
         fail(
-            "setup command generated unignored repository artifacts: "
+            f"{command_label} command generated unignored repository artifacts: "
             f"{rendered}{suffix}; commit reproducibility metadata or ignore only "
             "local runtime artifacts"
         )
@@ -302,13 +308,15 @@ def execute(repository: Path) -> None:
             "UV_DEFAULT_INDEX": "https://pypi.org/simple",
             "UV_OFFLINE": "1",
         }
+        command_environment: dict[str, str] | None = None
         if PUBLIC_UV_CACHE.is_dir():
             lock_cache = Path(temporary) / "uv-public-cache"
-            shutil.copytree(PUBLIC_UV_CACHE, lock_cache)
+            shutil.copytree(PUBLIC_UV_CACHE, lock_cache, symlinks=True)
             for path in (lock_cache, *lock_cache.rglob("*")):
                 if not path.is_symlink():
                     path.chmod(path.stat().st_mode | 0o200)
             lock_environment["UV_CACHE_DIR"] = str(lock_cache)
+            command_environment = {"UV_CACHE_DIR": str(lock_cache)}
         lock_check = _run(
             ("uv", "lock", "--check", "--offline"),
             cwd=clean,
@@ -317,19 +325,32 @@ def execute(repository: Path) -> None:
             clear_environment_prefixes=("UV_",),
         )
         _require_success("portable lock consistency check", lock_check)
-        setup = _run(commands.setup, cwd=clean, timeout_seconds=SETUP_TIMEOUT_SECONDS)
+        setup = _run(
+            commands.setup,
+            cwd=clean,
+            timeout_seconds=SETUP_TIMEOUT_SECONDS,
+            environment_overrides=command_environment,
+        )
         _require_success("setup command", setup)
-        _require_setup_preserves_delivery(clean, snapshot)
-        test = _run(commands.test, cwd=clean, timeout_seconds=TEST_TIMEOUT_SECONDS)
+        _require_delivery_preserved(clean, snapshot, command_label="setup")
+        test = _run(
+            commands.test,
+            cwd=clean,
+            timeout_seconds=TEST_TIMEOUT_SECONDS,
+            environment_overrides=command_environment,
+        )
         _require_success("test command", test)
+        _require_delivery_preserved(clean, snapshot, command_label="test")
         start = _run(
             commands.start,
             cwd=clean,
             timeout_seconds=START_GRACE_SECONDS,
             keep_stdin_open=True,
+            environment_overrides=command_environment,
         )
         if not start.timed_out:
             _require_success("start command", start)
+        _require_delivery_preserved(clean, snapshot, command_label="start")
         mode = "running_after_grace" if start.timed_out else "exited_zero"
         print(
             json.dumps(

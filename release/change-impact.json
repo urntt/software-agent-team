@@ -92,6 +92,11 @@
       "id": "nonzero-terminal-submission-recovery",
       "impact": "patch",
       "summary": "Retain attributable terminal session evidence after a nonzero OpenClaw exit and accept only a fully bound typed submission"
+    },
+    {
+      "id": "portable-offline-uv-cache",
+      "impact": "patch",
+      "summary": "Use one PyPI-attributed offline cache for project locking and installation so ordinary uv commands preserve portable delivery metadata"
     }
   ]
 }

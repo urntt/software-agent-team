@@ -411,7 +411,7 @@ Build the exact image named by both product and evaluation policies with:
 
 ```bash
 docker build \
-  --tag sat-python-quality:phase1-v8 \
+  --tag sat-python-quality:phase1-v9 \
   runtime/python
 ```
 
@@ -422,13 +422,14 @@ no-network, read-only-root probe, execute the Reviewer probe runner's self-test
 inside it, inspect its state, and remove it. A successful `docker build`, image
 lookup, or momentary container start alone is not sufficient runtime evidence.
 
-The image includes the exact `uv` pinned in `runtime/python/requirements.in`,
-a locked offline wheelhouse containing project setup and build dependencies,
-a frozen public-registry metadata cache, and a root-owned `uv` configuration
-that makes the wheelhouse the exclusive index while preserving the generated
-project's exact `uv sync --dev` argv. The immutable `sat-project-lock` helper
-copies the public cache into bounded temporary storage and lets a writer refresh
-the portable project lock without network access.
+The image includes the exact `uv` pinned in `runtime/python/requirements.in`
+and one frozen public-registry cache containing both resolution metadata and
+the distributions needed by the generated-project profile. A root-owned `uv`
+configuration keeps resolution offline while retaining PyPI as the lockfile
+source. A small `uv` wrapper lazily copies that immutable cache into bounded
+temporary storage, so ordinary `uv sync`, `uv run`, and the immutable
+`sat-project-lock` helper share a writable cache without recording an
+image-local package path.
 The runtime-image regression uses a committed portable lock containing public
 registry URLs and the real image `uv` behind `--network none`; when the image is
 available locally, it must complete the clean-copy setup, test, and start
@@ -441,11 +442,11 @@ start argv with network disabled. The source and container root remain
 read-only, and the process remains non-root, capability-dropped, and
 resource-bounded. Before setup, the profile requires and parses the committed
 root `uv.lock`, rejects host- or sandbox-only local sources, and checks it
-against project metadata with the frozen public cache. After setup, it verifies
-that every other committed file is unchanged and that every new file is covered
-by the committed ignore policy. The private wheelhouse may adapt the disposable
-scratch lock to satisfy runtime resolution, but its absolute path must never be
-committed into the generated project. The image also
+against project metadata with the frozen public cache. Setup, test, and start
+reuse that same cache; after setup, the gate verifies that every committed file,
+including `uv.lock`, is unchanged and that every new file is covered by the
+committed ignore policy. It repeats that preservation check after the exact test
+and start commands. The image also
 installs the root-owned immutable
 `sat-probe-write` helper. That command can atomically create only a new bounded
 `/tmp/sat-review-probe-*` `.py`, `.json`, or `.txt` direct child; it refuses

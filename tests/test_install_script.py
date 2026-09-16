@@ -42,6 +42,7 @@ def prepare_checkout(tmp_path: Path) -> Path:
         "runtime/python/Dockerfile",
         "runtime/python/requirements.lock",
         "runtime/python/sat_project_lock.py",
+        "runtime/python/sat_uv.py",
         "runtime/python/uv-offline.toml",
         "runtime/python/warm_public_uv_cache.py",
         "pyproject.toml",
@@ -187,7 +188,7 @@ if [[ "$*" == "sync --locked" ]]; then
   chmod 755 .venv/bin/sat
 elif [[ "${1:-}" == "run" && "${2:-}" == "--frozen" && \
         "${3:-}" == "python" && "${4:-}" == "-c" ]]; then
-  echo sat-python-quality:phase1-v8
+  echo sat-python-quality:phase1-v9
 elif [[ "${1:-}" == "run" && "${2:-}" == "--frozen" && \
         "${3:-}" == "python" && "${4:-}" == "-" ]]; then
   cat >/dev/null
@@ -282,8 +283,8 @@ def test_installer_prepares_cli_image_and_checks_idempotently(tmp_path: Path) ->
     assert "info" in docker_calls
     assert (
         "build --pull=false --label software-agent-team.sandbox-image=true "
-        "--label software-agent-team.image-reference=sat-python-quality:phase1-v8 "
-        "--tag sat-python-quality:phase1-v8 runtime/python"
+        "--label software-agent-team.image-reference=sat-python-quality:phase1-v9 "
+        "--tag sat-python-quality:phase1-v9 runtime/python"
     ) in docker_calls
     assert "image inspect --format {{.Id}}" in docker_calls
     assert "run --detach --name sat-install-probe-" in docker_calls

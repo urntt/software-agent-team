@@ -12,10 +12,9 @@ directly runnable from the project root without appending arguments or editing
 configuration. Document the exact shell form of all three manifest commands.
 Keep the supplied `uv.lock` synchronized with `pyproject.toml`. Regenerate it
 without absolute paths, `file:` sources, parent-directory dependencies, or
-references to SAT's private offline wheelhouse, and commit the result. Inside
-the SAT build sandbox, run `sat-project-lock` after the last `uv sync` or `uv
-run` command to write that portable form from frozen public metadata without
-network access.
+runtime-image-local package paths, and commit the result. Inside the SAT build
+sandbox, use `sat-project-lock` after changing dependency metadata to write that
+portable form from the frozen public cache without network access.
 
 If the implementation uses a `src` layout, keep pytest importable in the clean
 quality workspace (for example through the supplied pytest `pythonpath`) as

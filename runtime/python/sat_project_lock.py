@@ -70,7 +70,7 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix="sat-project-lock-") as temporary_name:
         temporary = Path(temporary_name)
         cache = temporary / "cache"
-        shutil.copytree(PUBLIC_CACHE, cache)
+        shutil.copytree(PUBLIC_CACHE, cache, symlinks=True)
         for path in (cache, *cache.rglob("*")):
             if not path.is_symlink():
                 path.chmod(path.stat().st_mode | 0o200)

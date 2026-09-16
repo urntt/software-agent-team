@@ -1,11 +1,14 @@
 #!/usr/local/bin/python
-"""Create a temporary uv project that warms public registry metadata."""
+"""Create a temporary uv project that warms the public package cache."""
 
 from __future__ import annotations
 
 import argparse
 import json
 from pathlib import Path
+
+from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
 
 
 def main() -> None:
@@ -14,11 +17,16 @@ def main() -> None:
     parser.add_argument("--project", required=True, type=Path)
     args = parser.parse_args()
 
-    requirements = [
-        line.strip()
-        for line in args.requirements.read_text(encoding="utf-8").splitlines()
-        if line.strip() and not line.lstrip().startswith("#")
-    ]
+    requirements = []
+    for raw_line in args.requirements.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        # uv is the package manager already installed in the image. Generated
+        # projects do not depend on its 20+ MiB distribution, so copying that
+        # distribution into every sandbox cache would waste the bounded tmpfs.
+        if canonicalize_name(Requirement(line).name) != "uv":
+            requirements.append(line)
     requirements.append("colorama==0.4.6")
     args.project.mkdir(parents=True)
     (args.project / "pyproject.toml").write_text(
