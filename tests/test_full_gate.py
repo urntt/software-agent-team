@@ -1087,7 +1087,7 @@ for batch in range(2):
             os.fsync(stream.fileno())
         os._exit(0)
     os.waitpid(intermediate, 0)
-    deadline = time.monotonic() + 3
+    deadline = time.monotonic() + {SYNTHETIC_STAGE_TIMEOUT_SECONDS}
     while True:
         entries = identities.read_text().splitlines() if identities.exists() else []
         if len(entries) > batch:
