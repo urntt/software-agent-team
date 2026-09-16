@@ -1422,8 +1422,9 @@ when investigating it rather than editing artifacts in place.
   typed `response_finalization_stall` and enters exact-process cleanup. A private
   stream that arrives before the session observer remains sufficient to enforce
   provider liveness; temporary observer ordering no longer disables the guard.
-- After that cleanup, a missing OpenClaw result envelope does not erase evidence
-  already durably owned by SAT. Recovery requires a complete fresh current turn,
+- After that cleanup, a missing OpenClaw result envelope or a nonzero wrapper
+  exit after an observed terminal response does not erase evidence already
+  durably owned by SAT. Recovery requires a complete fresh current turn,
   a terminal assistant record with `stopReason=stop`, and exactly one final
   successful `sat_submit_artifact` call whose invocation binding, schema, tool
   identity, outer arguments digest, and inner semantic digest match the private
@@ -1452,13 +1453,15 @@ when investigating it rather than editing artifacts in place.
   normal result envelope's reported aggregate with a session sum. The same ledger
   settles recovered usage once and blocks subsequent task calls after the ceiling
   is reached or cost becomes unknown. These facts remain alongside
-  the actual nonzero or signalled wrapper outcome and the
-  `response_finalization_stall` lifecycle. It is therefore semantic completion
-  with an abnormal wrapper outcome, not a rewritten normal process exit. A stale
-  turn, incomplete transcript, nonterminal record, terminal runtime rejection,
-  duplicate or failed submission, post-submission work, digest mismatch, or degraded
-  attribution remains `response_finalization_stalled` and cannot publish an
-  artifact.
+  the actual nonzero or signalled wrapper outcome and its original
+  `response_finalization_stall` or `process_failure` lifecycle. It is therefore
+  semantic completion with an abnormal wrapper outcome, not a rewritten normal
+  process exit. A stale turn, incomplete transcript, nonterminal record,
+  terminal runtime rejection, duplicate or failed submission, post-submission
+  work, digest mismatch, or degraded attribution retains the original typed
+  failure and cannot publish an artifact. A failed recovery still preserves any
+  attributable provider, model, usage, tool, and rejected-submission evidence
+  for accounting and diagnosis.
 - Before the first model call, SAT asks whether the user has a real whole-run
   deadline and recommends no deadline by default. When authorized, the exact
   deadline starts at resource authorization, covers Planning and execution, and

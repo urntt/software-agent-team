@@ -87,6 +87,11 @@
       "id": "atomic-planning-criterion-relations",
       "impact": "patch",
       "summary": "Replace Planning acceptance criteria together with every existing product-definition reference and task coverage relation"
+    },
+    {
+      "id": "nonzero-terminal-submission-recovery",
+      "impact": "patch",
+      "summary": "Retain attributable terminal session evidence after a nonzero OpenClaw exit and accept only a fully bound typed submission"
     }
   ]
 }

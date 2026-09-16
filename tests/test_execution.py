@@ -2301,6 +2301,210 @@ time.sleep(30)
     )
 
 
+def test_nonzero_exit_recovers_bound_terminal_submission_and_usage(
+    tmp_path: Path,
+) -> None:
+    semantic_payload = {"summary": "planning complete"}
+    submission_contract = AgentSubmissionContract.from_schema(
+        {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {"summary": {"type": "string"}},
+            "required": ["summary"],
+        },
+        purpose=AgentSubmissionPurpose.ARTIFACT,
+    )
+    program = (
+        FAKE_OPENCLAW_SETUP
+        + f"""
+external_id = "terminal-submission"
+semantic_payload = {semantic_payload!r}
+output_path = Path(os.environ["SAT_ARTIFACT_SUBMISSION_OUTPUT_PATH"])
+output_path.write_text(json.dumps({{
+    "protocol": "{ARTIFACT_SUBMISSION_PROTOCOL}",
+    "binding_sha256": os.environ["SAT_ARTIFACT_SUBMISSION_BINDING_SHA256"],
+    "schema_sha256": os.environ["SAT_ARTIFACT_SUBMISSION_SCHEMA_SHA256"],
+    "tool_call_id": external_id,
+    "payload": semantic_payload,
+}}), encoding="utf-8")
+output_path.chmod(0o600)
+records.extend([
+    {{"type": "message", "message": {{
+        "role": "assistant", "stopReason": "toolUse",
+        "provider": "provider", "model": "model",
+        "usage": {{"input": 7, "output": 3}},
+        "content": [{{
+            "type": "toolCall", "id": external_id,
+            "name": "sat_submit_artifact",
+            "arguments": {{"artifact": semantic_payload}},
+        }}],
+    }}}},
+    {{"type": "message", "message": {{
+        "role": "toolResult", "toolCallId": external_id,
+        "toolName": "sat_submit_artifact", "isError": False,
+        "content": [{{"type": "text", "text": "accepted"}}],
+        "details": {{"status": "completed"}},
+    }}}},
+    {{"type": "message", "message": {{
+        "role": "assistant", "stopReason": "stop",
+        "provider": "provider", "model": "model",
+        "usage": {{"input": 2, "output": 1}},
+        "content": [{{"type": "text", "text": "submitted"}}],
+    }}}},
+])
+write_records()
+sys.exit(17)
+"""
+    )
+    executor = live_liveness_executor(tmp_path, program)
+
+    result = executor.execute(
+        request(
+            timeout_seconds=0,
+            model="provider/model",
+            submission_contract=submission_contract,
+        )
+    )
+
+    assert result.status is AgentExecutionStatus.COMPLETED
+    assert result.semantic_submission is not None
+    assert result.semantic_submission.payload == semantic_payload
+    assert result.submission_evidence is not None
+    assert result.submission_evidence.status is AgentSubmissionStatus.ACCEPTED
+    assert result.telemetry.exit_code == 17
+    assert result.telemetry.session_id == "liveness-session"
+    assert result.telemetry.provider == "provider"
+    assert result.telemetry.model == "provider/model"
+    assert result.telemetry.usage == AgentTokenUsage(
+        input_tokens=9,
+        output_tokens=4,
+    )
+    assert [call.tool_name for call in result.telemetry.tool_calls] == [
+        "sat_submit_artifact"
+    ]
+    lifecycle = result.telemetry.invocation_lifecycle
+    assert lifecycle is not None
+    assert lifecycle.shutdown.reason is InvocationStopReason.PROCESS_FAILURE
+    assert lifecycle.shutdown.exit_code == 17
+    assert lifecycle.shutdown.cleanup_completed
+    assert lifecycle.response_finalization is not None
+    assert lifecycle.response_finalization.terminal_response_observed
+    assert not lifecycle.response_finalization.stalled
+    restored = AgentExecutionResult.model_validate_json(result.model_dump_json())
+    assert restored == result
+    usage = result.telemetry.usage or AgentTokenUsage()
+    record = AgentExecutionRecord(
+        run_id="task-manager-001",
+        team_id="function_specialized",
+        iteration=1,
+        stage="plan",
+        agent_id="planner",
+        capability="planning",
+        specialization="planning",
+        execution_status=result.status,
+        session_key=result.telemetry.session_key,
+        session_id=result.telemetry.session_id,
+        model=result.telemetry.model,
+        provider=result.telemetry.provider,
+        started_at=result.telemetry.started_at,
+        finished_at=result.telemetry.finished_at,
+        duration_ms=result.telemetry.duration_ms,
+        exit_code=result.telemetry.exit_code,
+        provider_liveness=result.telemetry.provider_liveness,
+        invocation_lifecycle=lifecycle,
+        input_tokens=usage.input_tokens,
+        output_tokens=usage.output_tokens,
+        stdout_path="iterations/01/executions/plan/planner-attempt-01.stdout.txt",
+        stderr_path="iterations/01/executions/plan/planner-attempt-01.stderr.txt",
+        stdout_sha256="a" * 64,
+        stderr_sha256="b" * 64,
+        response_contract="semantic_body_v1",
+        response_transport="typed_submission_v2",
+        submission_evidence=result.submission_evidence,
+        tool_evidence_status=result.telemetry.tool_evidence_status,
+        session_transcript_sha256=result.telemetry.session_transcript_sha256,
+        session_record_count=result.telemetry.session_record_count,
+        tool_calls=result.telemetry.tool_calls,
+        response_artifact={
+            "kind": "implementation_plan",
+            "path": "iterations/01/agents/planner/implementation-plan.json",
+            "sha256": "c" * 64,
+        },
+    )
+    assert record.error is None
+    assert record.invocation_lifecycle.shutdown.reason is (
+        InvocationStopReason.PROCESS_FAILURE
+    )
+
+
+def test_nonzero_exit_retains_terminal_evidence_for_rejected_submission(
+    tmp_path: Path,
+) -> None:
+    submission_contract = AgentSubmissionContract.from_schema(
+        {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {"summary": {"type": "string"}},
+            "required": ["summary"],
+        },
+        purpose=AgentSubmissionPurpose.ARTIFACT,
+    )
+    program = (
+        FAKE_OPENCLAW_SETUP
+        + f"""
+output_path = Path(os.environ["SAT_ARTIFACT_SUBMISSION_OUTPUT_PATH"])
+output_path.write_text(json.dumps({{
+    "protocol": "{ARTIFACT_SUBMISSION_PROTOCOL}",
+    "binding_sha256": os.environ["SAT_ARTIFACT_SUBMISSION_BINDING_SHA256"],
+    "schema_sha256": os.environ["SAT_ARTIFACT_SUBMISSION_SCHEMA_SHA256"],
+    "tool_call_id": "missing-tool-call",
+    "payload": {{"summary": "must not be trusted"}},
+}}), encoding="utf-8")
+output_path.chmod(0o600)
+records.append({{"type": "message", "message": {{
+    "role": "assistant", "stopReason": "stop",
+    "provider": "provider", "model": "model",
+    "usage": {{"input": 7, "output": 3}},
+    "content": [{{"type": "text", "text": "not submitted"}}],
+}}}})
+write_records()
+sys.exit(17)
+"""
+    )
+    executor = live_liveness_executor(tmp_path, program)
+
+    result = executor.execute(
+        request(
+            timeout_seconds=0,
+            model="provider/model",
+            submission_contract=submission_contract,
+        )
+    )
+
+    assert result.status is AgentExecutionStatus.PROCESS_FAILED
+    assert result.error == "OpenClaw exited with status 17"
+    assert result.semantic_submission is None
+    assert result.submission_evidence is not None
+    assert result.submission_evidence.status is AgentSubmissionStatus.UNAUTHORIZED
+    assert result.submission_evidence.diagnostic_code == (
+        "unattributed_submission_file"
+    )
+    assert result.telemetry.exit_code == 17
+    assert result.telemetry.provider == "provider"
+    assert result.telemetry.model == "provider/model"
+    assert result.telemetry.usage == AgentTokenUsage(
+        input_tokens=7,
+        output_tokens=3,
+    )
+    assert result.telemetry.tool_calls == ()
+    lifecycle = result.telemetry.invocation_lifecycle
+    assert lifecycle is not None
+    assert lifecycle.shutdown.reason is InvocationStopReason.PROCESS_FAILURE
+    assert lifecycle.shutdown.session_evidence_status == "captured"
+    assert lifecycle.shutdown.submission_evidence_status == "unauthorized"
+    assert lifecycle.shutdown.cleanup_completed
+
+
 def test_missing_attributable_session_degrades_instead_of_guessing_stall(
     tmp_path: Path,
 ) -> None:

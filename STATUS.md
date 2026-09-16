@@ -2,7 +2,7 @@
 
 **Current milestone:** release `v0.2.20` and complete a managed user journey
 
-**Last updated:** September 15, 2026
+**Last updated:** September 16, 2026
 
 This document records what the repository implements now, what evidence
 supports that claim, and what remains unavailable. It does not redefine the
@@ -25,6 +25,18 @@ same-target and channel checks, rollback, foreign OpenClaw isolation, export,
 full uninstall, and exact cleanup. A separate provider-backed journey reached
 the exact configured route check, then timed out before Planning; it did not
 produce a completed delivery.
+
+The `v0.2.20` development head now reads an attributable terminal OpenClaw
+session before classifying a nonzero wrapper exit. A complete fresh current
+turn retains provider/model identity, token usage, tool evidence, and typed
+submission diagnostics. SAT reports semantic completion only when the final
+successful submission call and private submission file bind the exact
+invocation, schema, tool identity, outer arguments digest, and semantic digest;
+missing, stale, incomplete, rejected, or mismatched evidence remains
+`process_failed`. The recovered result keeps the actual nonzero exit and
+`process_failure` lifecycle instead of rewriting it as a normal exit. The
+execution, artifact, Planning, and dynamic-runner suites pass 421 tests for this
+boundary and its existing finalization-stall behavior.
 
 The immutable `v0.2.18` tag,
 [GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.2.18),
@@ -430,6 +442,18 @@ provider, usage, or submission evidence. The upstream cause remains unknown; no
 quota, 429, 503, timeout, or paid-tier use was observed. Because 3.5 Flash Lite
 remained an available free route, this single-route evidence gap did not require
 changing the candidate before the next journey.
+
+A later fresh journey on exact `1680ec43855a51a776d9ed05ed2776161fb8e626`
+passed public `v0.2.19` installation, fixed-revision upgrade, both startup
+paths, Gemini 3.5 Flash provider checking, five free Flash policy routes, input
+interruption, 38 admission checks, and Planning preflight. Its first Planning
+call submitted a typed target-users question. The second call exposed an
+attributable provider stream, terminal response, and three finalization-progress
+observations before OpenClaw exited with status 1. The prior adapter reduced
+that state to `process_failed` without provider, usage, tool, or submission
+evidence. No quota, HTTP 429/503, timeout, or paid-tier use occurred; the fresh
+account and all owned resources were removed after evidence capture. This
+failure is the production case covered by the current nonzero-terminal recovery.
 
 The fifth fresh journey used 3.5 Flash Lite for Planning and crossed that point.
 Ten typed, zero-price Planning calls completed one user-owned target-users
