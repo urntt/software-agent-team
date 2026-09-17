@@ -1314,8 +1314,11 @@ observation time, telemetry, estimated cost, and remaining task authorization.
 The standard progress view shows the updated amount after every invocation;
 the terminal ledger and report preserve the complete Planning-to-delivery
 breakdown by phase, Agent, attempt, route, and model. Unknown usage is retained
-as unknown and prevents another user-budget call, but it does not rewrite an
-already-attributed initialization, provider, transport, or semantic failure.
+as unknown. It prevents another user-budget call when it also leaves cost
+unknown, but a route whose input, output, cache-read, and cache-write rates are
+all explicitly confirmed as zero has a known zero cost even when its token
+counters are missing. Neither state rewrites an already-attributed
+initialization, provider, transport, or semantic failure.
 When no earlier failure exists, a post-call budget rejection remains the
 primary resource-limit reason.
 Runtime switching is currently permitted only after an attributable

@@ -31,6 +31,10 @@ from software_agent_team.execution import (
     validate_role_artifact_kind,
 )
 from software_agent_team.integrity import canonical_model_sha256
+from software_agent_team.model_runtime import (
+    openclaw_invocation_thinking_level,
+    runtime_profile_for_model,
+)
 from software_agent_team.planning import (
     AdaptiveImplementationPlan,
     ProposedTask,
@@ -680,6 +684,11 @@ def build_agent_execution_request(
         prompt=render_agent_prompt(inputs, template_root=template_root),
         timeout_seconds=timeout_seconds,
         model=model,
+        thinking_level=(
+            None
+            if model is None
+            else openclaw_invocation_thinking_level(runtime_profile_for_model(model))
+        ),
     )
 
 
@@ -1068,6 +1077,7 @@ def build_dynamic_agent_execution_request(
         prompt=render_dynamic_agent_prompt(inputs, template_root=template_root),
         timeout_seconds=agent.timeout_seconds,
         model=route.model,
+        thinking_level=openclaw_invocation_thinking_level(route.runtime_profile),
         submission_contract=AgentSubmissionContract.from_schema(
             _dynamic_response_schema(inputs),
             purpose=AgentSubmissionPurpose.ARTIFACT,

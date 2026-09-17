@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import secrets
 import signal
 import stat
@@ -46,6 +47,7 @@ from software_agent_team.invocation_lifecycle import (
     ResponseFinalizationEvidence,
 )
 from software_agent_team.model_costs import CacheTokenUsage
+from software_agent_team.model_runtime import OpenClawThinkingLevel
 from software_agent_team.openclaw_session_evidence import (
     CapturedOpenClawToolEvidence,
     OpenClawInitializationBaseline,
@@ -611,6 +613,7 @@ class AgentExecutionRequest(BaseModel):
     prompt: str = Field(min_length=1)
     timeout_seconds: int = Field(ge=0)
     model: str | None = None
+    thinking_level: OpenClawThinkingLevel | None = None
     submission_contract: AgentSubmissionContract | None = None
 
     @model_validator(mode="before")
@@ -680,6 +683,8 @@ class AgentExecutionRequest(BaseModel):
     def validate_output_contract(self) -> Self:
         """Keep run identity, capability, and response schema coherent."""
 
+        if self.thinking_level is not None and self.model is None:
+            raise ValueError("thinking level requires an explicit model override")
         if (
             self.capability
             not in specialization_contract(self.specialization).compatible_capabilities
@@ -1128,6 +1133,92 @@ def _canonical_model_reference(
 _OPENCLAW_TIMEOUT_PREFIX = "Request timed out before a response was generated."
 _OPENCLAW_PROVIDER_FAILURE_TEXT = "LLM request failed."
 _OPENCLAW_DIAGNOSTIC_PREFIXES = ("⚠️ 🛠️ Exec failed:",)
+_OPENCLAW_PROVIDER_RESPONSE_PATTERN = re.compile(
+    r"^\[provider-transport-fetch\] \[model-fetch\] response "
+    r"provider=(?P<provider>[A-Za-z0-9._-]+) "
+    r"api=[A-Za-z0-9._-]+ "
+    r"model=(?P<model>[A-Za-z0-9._:/-]+) "
+    r"status=(?P<status>[1-5][0-9]{2})(?:\s|$)"
+)
+_OPENCLAW_PROVIDER_ERROR_PATTERN = re.compile(
+    r"^\[agent/embedded\] embedded run agent end: "
+    r"runId=[A-Za-z0-9-]+ "
+    r"isError=true "
+    r"model=(?P<model>[A-Za-z0-9._:/-]+) "
+    r"provider=(?P<provider>[A-Za-z0-9._-]+)(?:\s|$)"
+)
+
+
+class _OpenClawProviderFailure(BaseModel):
+    """Bounded provider diagnostic projected from pinned OpenClaw stderr."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    provider: str = Field(pattern=r"^[A-Za-z0-9._-]+$")
+    model: str = Field(pattern=r"^[A-Za-z0-9._-]+/[A-Za-z0-9._:/-]+$")
+    http_status: int = Field(ge=400, le=599)
+
+    @property
+    def error(self) -> str:
+        """Return a content-free diagnostic safe for execution records."""
+
+        return (
+            "OpenClaw reported an attributable upstream model-provider failure "
+            f"(HTTP {self.http_status})"
+        )
+
+    def response(self) -> _OpenClawResponse:
+        """Project only the route identity needed by normal telemetry."""
+
+        return _OpenClawResponse(
+            visible_texts=(),
+            provider_failed=True,
+            provider=self.provider,
+            model=self.model,
+        )
+
+
+def _parse_openclaw_provider_failure(
+    stderr: str,
+    *,
+    requested_model: str | None,
+) -> _OpenClawProviderFailure | None:
+    """Classify a terminal 429/5xx only when pinned diagnostics bind the route."""
+
+    if requested_model is None:
+        return None
+    requested_provider, separator, requested_leaf = requested_model.partition("/")
+    if not separator or not requested_provider or not requested_leaf:
+        return None
+
+    terminal_error_observed = False
+    response_statuses: list[int] = []
+    for line in stderr.splitlines():
+        response_match = _OPENCLAW_PROVIDER_RESPONSE_PATTERN.match(line.strip())
+        if response_match is not None:
+            provider = response_match.group("provider")
+            model = response_match.group("model")
+            if provider == requested_provider and model == requested_leaf:
+                response_statuses.append(int(response_match.group("status")))
+            continue
+        error_match = _OPENCLAW_PROVIDER_ERROR_PATTERN.match(line.strip())
+        if error_match is not None:
+            provider = error_match.group("provider")
+            model = error_match.group("model")
+            terminal_error_observed = terminal_error_observed or (
+                provider == requested_provider and model == requested_leaf
+            )
+
+    if not terminal_error_observed or not response_statuses:
+        return None
+    status = response_statuses[-1]
+    if status != 429 and status < 500:
+        return None
+    return _OpenClawProviderFailure(
+        provider=requested_provider,
+        model=requested_model,
+        http_status=status,
+    )
 
 
 def _parse_openclaw_payload(stdout: str) -> _OpenClawResponse:
@@ -2725,6 +2816,10 @@ class OpenClawSubprocessExecutor:
                     ),
                     stop_reason=InvocationStopReason.PROCESS_FAILURE,
                 )
+            provider_failure = _parse_openclaw_provider_failure(
+                stderr,
+                requested_model=request.model,
+            )
             telemetry = self._telemetry(
                 request=request,
                 command=command,
@@ -2733,16 +2828,31 @@ class OpenClawSubprocessExecutor:
                 exit_code=completed.returncode,
                 stdout=stdout,
                 stderr=stderr,
+                payload=(
+                    None if provider_failure is None else provider_failure.response()
+                ),
                 provider_liveness=liveness,
             )
             return self._finalize_lifecycle_result(
                 AgentExecutionResult(
-                    status=AgentExecutionStatus.PROCESS_FAILED,
-                    error=f"OpenClaw exited with status {completed.returncode}",
+                    status=(
+                        AgentExecutionStatus.PROCESS_FAILED
+                        if provider_failure is None
+                        else AgentExecutionStatus.PROVIDER_FAILED
+                    ),
+                    error=(
+                        f"OpenClaw exited with status {completed.returncode}"
+                        if provider_failure is None
+                        else provider_failure.error
+                    ),
                     telemetry=telemetry,
                 ),
                 lifecycle=lifecycle,
-                reason=InvocationStopReason.PROCESS_FAILURE,
+                reason=(
+                    InvocationStopReason.PROCESS_FAILURE
+                    if provider_failure is None
+                    else InvocationStopReason.PROVIDER_FAILURE
+                ),
             )
 
         try:
@@ -3471,6 +3581,8 @@ class OpenClawSubprocessExecutor:
             command.append("--local")
         if request.model is not None:
             command.extend(["--model", request.model])
+        if request.thinking_level is not None:
+            command.extend(["--thinking", request.thinking_level])
         return tuple(command)
 
     def _runtime_timeout(
@@ -3903,6 +4015,24 @@ class OpenClawSubprocessExecutor:
     ) -> AgentExecutionResult:
         """Recover attributable terminal evidence before classifying failure."""
 
+        provider_failure = _parse_openclaw_provider_failure(
+            stderr,
+            requested_model=request.model,
+        )
+        effective_failure_status = (
+            failure_status
+            if provider_failure is None
+            else AgentExecutionStatus.PROVIDER_FAILED
+        )
+        effective_failure_error = (
+            failure_error if provider_failure is None else provider_failure.error
+        )
+        effective_stop_reason = (
+            stop_reason
+            if provider_failure is None
+            else InvocationStopReason.PROVIDER_FAILURE
+        )
+
         def failure_result(
             *,
             payload: _OpenClawResponse | None = None,
@@ -3925,13 +4055,13 @@ class OpenClawSubprocessExecutor:
             )
             return self._finalize_lifecycle_result(
                 AgentExecutionResult(
-                    status=failure_status,
-                    error=failure_error,
+                    status=effective_failure_status,
+                    error=effective_failure_error,
                     telemetry=telemetry,
                     submission_evidence=submission_evidence,
                 ),
                 lifecycle=lifecycle,
-                reason=stop_reason,
+                reason=effective_stop_reason,
             )
 
         contract = request.submission_contract
@@ -3941,7 +4071,11 @@ class OpenClawSubprocessExecutor:
             or provider_liveness is None
             or not provider_liveness.terminal_response_observed
         ):
-            return failure_result()
+            return failure_result(
+                payload=(
+                    None if provider_failure is None else provider_failure.response()
+                )
+            )
         try:
             terminal = capture_openclaw_terminal_response(
                 state_dir=state_dir,
@@ -3951,7 +4085,12 @@ class OpenClawSubprocessExecutor:
                 baseline=initialization_baseline,
             )
         except OpenClawSessionEvidenceError as error:
-            return failure_result(tool_evidence_error=str(error))
+            return failure_result(
+                payload=(
+                    None if provider_failure is None else provider_failure.response()
+                ),
+                tool_evidence_error=str(error),
+            )
 
         captured_tools = terminal.tool_evidence
         usage_values = (
@@ -3964,11 +4103,24 @@ class OpenClawSubprocessExecutor:
         )
         payload = _OpenClawResponse(
             visible_texts=(),
+            provider_failed=provider_failure is not None,
             session_id=terminal.session_id,
-            provider=terminal.provider,
+            provider=(
+                provider_failure.provider
+                if provider_failure is not None
+                else terminal.provider
+            ),
             model=_canonical_model_reference(
-                provider=terminal.provider,
-                model=terminal.model,
+                provider=(
+                    provider_failure.provider
+                    if provider_failure is not None
+                    else terminal.provider
+                ),
+                model=(
+                    provider_failure.model
+                    if provider_failure is not None
+                    else terminal.model
+                ),
             ),
             usage=(
                 None

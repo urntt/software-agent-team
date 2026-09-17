@@ -791,6 +791,31 @@ def test_planning_uses_typed_submission_instead_of_assistant_text(
     assert loaded.parsed_response == proposal_response()
 
 
+def test_planning_compiles_thinking_from_the_runtime_profile(tmp_path: Path) -> None:
+    executor = ScriptedAgentExecutor(
+        [
+            ScriptedAgentResponse(
+                text="ignored",
+                submission_payload=proposal_response().model_dump(mode="json"),
+            )
+        ]
+    )
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=PlanningStore(tmp_path / "planning"),
+        policy=policy(),
+        clock=AdvancingClock(),
+    )
+    gemini_request = request().model_copy(update={"model": "google/gemini-3.8-flash"})
+
+    coordinator.start(
+        gemini_request,
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+
+    assert executor.requests[0].thinking_level == "medium"
+
+
 def test_planning_captures_extra_fields_before_deterministic_normalization(
     tmp_path: Path,
 ) -> None:
@@ -1140,6 +1165,57 @@ def test_planning_replaces_a_skeletal_identity_graph_as_one_proposal_slot(
     replacements = contract.parameters_schema()["properties"]["replacements"]
     assert replacements["minItems"] == replacements["maxItems"] == 1
     assert '"enum": []' not in executor.requests[1].prompt
+    replacement_value = replacements["items"]["oneOf"][0]["properties"][
+        "replacement_value"
+    ]
+    assert replacement_value.get("type") != "null"
+    assert all(
+        option.get("type") != "null" for option in replacement_value.get("anyOf", [])
+    )
+
+
+def test_whole_proposal_correction_rejects_null_without_improvement(
+    tmp_path: Path,
+) -> None:
+    valid = proposal_response().model_dump(mode="json")
+    initial = deepcopy(valid)
+    proposal_payload = initial["proposal"]
+    proposal_payload["requirements"] = [0]
+    proposal_payload["acceptance_criteria"] = []
+    proposal_payload["decisions"] = [0]
+    proposal_payload["tasks"] = [0]
+    proposal_payload["agents"] = [0]
+    proposal_payload["product_definition"] = 0
+    executor = ScriptedAgentExecutor(
+        [
+            ScriptedAgentResponse(text="ignored", submission_payload=initial),
+            ScriptedAgentResponse(
+                text="ignored",
+                submission_payload=json.loads(
+                    correction_response(initial, {"/proposal": None})
+                ),
+            ),
+        ]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(response_repair_limit=1),
+        clock=AdvancingClock(),
+    )
+
+    with pytest.raises(PlanningError, match="remained invalid"):
+        coordinator.start(
+            request(),
+            answer_question=lambda _question: pytest.fail("unexpected question"),
+        )
+
+    corrected = store.load_turn(request().run_id, 2)
+    assert corrected.semantic_correction_outcome is (
+        SemanticCorrectionOutcome.INVALID_SUBMISSION
+    )
+    assert corrected.parsed_response is None
 
 
 def test_planning_final_bounded_correction_requires_all_slots_and_converges(
@@ -6492,6 +6568,29 @@ def test_quality_dependency_correction_binds_the_complete_additive_relation(
     )
 
 
+def test_quality_dependency_validation_reports_all_independent_agents() -> None:
+    payload = proposal_body().model_dump(mode="json")
+    payload["agents"][1]["dependencies"] = []
+    payload["agents"][2]["dependencies"] = []
+
+    with pytest.raises(ValidationError) as caught:
+        PlanningProposalBody.model_validate(payload)
+
+    diagnostic = planning._planning_validation_diagnostic(
+        caught.value,
+        {"proposal": payload},
+    )
+    assert diagnostic.correction_paths == (
+        "/proposal/agents/1/dependencies",
+        "/proposal/agents/2/dependencies",
+    )
+    assert {subject.identifier for subject in diagnostic.issues[0].subjects} == {
+        "acceptance_tester",
+        "cli_developer",
+        "quality_reviewer",
+    }
+
+
 def test_overlapping_writer_scopes_offer_typed_dependency_correction(
     tmp_path: Path,
 ) -> None:
@@ -7870,6 +7969,41 @@ def test_cross_agent_task_dependencies_require_matching_agent_dependencies() -> 
         )
 
 
+def test_task_dependency_validation_reports_all_independent_mismatches() -> None:
+    template = proposal_body().tasks[0]
+    tasks = (
+        template.model_copy(update={"id": "TASK_A", "owner_agent_id": "writer_a"}),
+        template.model_copy(
+            update={
+                "id": "TASK_B",
+                "owner_agent_id": "writer_b",
+                "dependencies": ("TASK_A",),
+            }
+        ),
+        template.model_copy(
+            update={
+                "id": "TASK_C",
+                "owner_agent_id": "writer_c",
+                "dependencies": ("TASK_A",),
+            }
+        ),
+    )
+
+    with pytest.raises(planning._PlanningModelInvariantError) as caught:
+        planning.validate_task_agent_bindings(
+            tasks,
+            {"writer_a": (), "writer_b": (), "writer_c": ()},
+            {"writer_a", "writer_b", "writer_c"},
+        )
+
+    assert caught.value.invariant.paths == (
+        "/proposal/tasks/1/dependencies",
+        "/proposal/tasks/2/dependencies",
+    )
+    assert "TASK_B" in caught.value.invariant.message
+    assert "TASK_C" in caught.value.invariant.message
+
+
 def test_proposal_cannot_split_final_commit_coverage_across_quality_agents() -> None:
     body = proposal_body()
     fixture_agent = ProposedAgent(
@@ -9219,7 +9353,7 @@ def test_corrections_use_distinct_sessions_across_planning_dialogues(
     )
 
     assert second is not None
-    assert [item.session_generation for item in executor.requests] == [1, 2, 1, 4]
+    assert [item.session_generation for item in executor.requests] == [1, 2, 3, 4]
     correction_sessions = [executor.requests[index].session_key for index in (1, 3)]
     assert len(set(correction_sessions)) == 2
     assert correction_sessions[0].endswith("-g2")
@@ -10170,7 +10304,7 @@ def test_writer_coverage_correction_preserves_multiple_writer_choice(
         primary_writer.id,
         second_writer.id,
     ]
-    assert replacement["items"] == {"anyOf": positional_items}
+    assert "items" not in replacement
     assert '"items": false' not in executor.requests[1].prompt
     assert replacement["allOf"][0]["contains"]["properties"]["owner_agent_id"][
         "enum"
@@ -11749,6 +11883,25 @@ def test_task_identity_contract_does_not_depend_on_the_correction_invariant(
     assert rendered_task_identities(plan) == stable_ids
 
 
+def test_task_identity_projection_uses_each_duplicate_record_id() -> None:
+    """A duplicate ID remains bound to its own slot until correction replaces it."""
+
+    payload = review_scope_correction_payload()
+    duplicate_id = payload["proposal"]["tasks"][0]["id"]
+    payload["proposal"]["tasks"][1]["id"] = duplicate_id
+    plan = correction_plan_for(
+        payload,
+        (
+            review_task_scope_issue(
+                "/proposal/tasks/1",
+                invariant_id="planning_review_task_scope",
+            ),
+        ),
+    )
+
+    assert rendered_task_identities(plan) == [duplicate_id, duplicate_id]
+
+
 def test_review_scope_projection_keeps_untargeted_task_identity() -> None:
     """The untargeted writer task keeps its identity during a scope correction."""
 
@@ -11891,6 +12044,8 @@ def test_unattributable_tool_evidence_is_recovered_once_then_accepted(
     assert created is not None
     assert executor.evidenceless_calls == 1
     assert len(executor.requests) == 2
+    assert [item.session_generation for item in executor.requests] == [1, 2]
+    assert executor.requests[0].session_key != executor.requests[1].session_key
     recovery_kinds = [
         activity.kind
         for activity in activities
@@ -12109,6 +12264,48 @@ def test_acceptance_collection_correction_updates_existing_relations_atomically(
     assert corrected.semantic_correction_outcome is SemanticCorrectionOutcome.ACCEPTED
     assert "atomic bounded set" in executor.requests[1].prompt
     assert "mutually consistent" in executor.requests[1].prompt
+
+
+def test_acceptance_relation_expansion_collapses_before_the_field_limit() -> None:
+    """A large relation graph stays validated and bounded as one proposal edit."""
+
+    payload = proposal_response().model_dump(mode="json")
+    template = payload["proposal"]["tasks"][0]
+    while len(payload["proposal"]["tasks"]) < 70:
+        task = deepcopy(template)
+        task["id"] = f"TASK_N{len(payload['proposal']['tasks'])}"
+        task["dependencies"] = []
+        payload["proposal"]["tasks"].append(task)
+    issue = ResponseValidationIssue(
+        path="/proposal/acceptance_criteria",
+        code="planning_semantic_invariant",
+        invariant_id="planning_criterion_relation",
+        subjects=(
+            ResponseIssueSubject(
+                kind=ResponseIssueSubjectKind.CRITERION,
+                identifier="AC_SCAN",
+            ),
+        ),
+        message="acceptance criteria must be replaced as one graph",
+        authority=ResponseIssueAuthority.MODEL,
+    )
+
+    base = planning.build_semantic_correction_plan(
+        payload,
+        ResponseValidationDiagnostic(
+            failure_class=ResponseFailureClass.SEMANTIC_CONTEXT,
+            response_sha256=planning.canonical_json_sha256(payload),
+            issues=(issue,),
+            correction_paths=(issue.path,),
+        ),
+    )
+    assert base is not None
+
+    bound = planning._bind_planning_correction_candidates(base)
+
+    assert bound is not None
+    assert bound.evidence.target_paths == ("/proposal",)
+    assert bound.diagnostic.correction_paths == ("/proposal",)
 
 
 def test_record_correction_keeps_unrelated_relations_immutable() -> None:

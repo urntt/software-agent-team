@@ -3463,6 +3463,7 @@ def _run_product_planning(
                 cache_pricing=planning_metadata.cache_pricing,
             ),
             route_id=planning_metadata.profile_id,
+            runtime_profile=configuration.default_model_profile.runtime_profile,
         )
         cleanup_arguments = {
             "sandbox_binary": "docker",

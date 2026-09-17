@@ -269,6 +269,40 @@ def test_openclaw_adapter_uses_message_file_and_no_shell() -> None:
     assert result.telemetry.stderr == "gateway diagnostic\n"
 
 
+def test_openclaw_adapter_passes_profile_compiled_thinking_level() -> None:
+    observed: dict[str, tuple[str, ...]] = {}
+
+    def runner(
+        command: list[str], **_kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        observed["command"] = tuple(command)
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=openclaw_result(),
+            stderr="",
+        )
+
+    executor_with_clocks(runner).execute(
+        request(
+            model="google/gemini-3.8-flash",
+            thinking_level="medium",
+        )
+    )
+
+    assert observed["command"][-4:] == (
+        "--model",
+        "google/gemini-3.8-flash",
+        "--thinking",
+        "medium",
+    )
+
+
+def test_agent_request_rejects_thinking_without_a_model_override() -> None:
+    with pytest.raises(ValidationError, match="thinking level requires"):
+        request(thinking_level="medium")
+
+
 def test_product_invocation_disables_wall_clock_without_disabling_openclaw() -> None:
     observed: dict[str, object] = {}
 
@@ -1155,6 +1189,91 @@ def test_openclaw_adapter_classifies_a_declared_provider_failure() -> None:
     assert "provider failure" in (result.error or "")
     assert result.telemetry.exit_code == 0
     assert result.telemetry.provider == "test-provider"
+
+
+def test_openclaw_adapter_parses_attributable_terminal_provider_http_failure() -> None:
+    stderr = "\n".join(
+        (
+            "[provider-transport-fetch] [model-fetch] response provider=google "
+            "api=google-generative-ai model=gemini-3.5-flash-lite status=200 "
+            "elapsedMs=2247 contentType=text/event-stream",
+            "[provider-transport-fetch] [model-fetch] response provider=google "
+            "api=google-generative-ai model=gemini-3.5-flash-lite status=503 "
+            "elapsedMs=33938 contentType=text/event-stream",
+            "[agent/embedded] embedded run agent end: "
+            "runId=fc784ed9-17d5-4f93-9bbc-891e21cd9321 isError=true "
+            "model=gemini-3.5-flash-lite provider=google "
+            "error=The AI service is temporarily overloaded.",
+        )
+    )
+
+    failure = execution._parse_openclaw_provider_failure(
+        stderr,
+        requested_model="google/gemini-3.5-flash-lite",
+    )
+
+    assert failure is not None
+    assert failure.provider == "google"
+    assert failure.model == "google/gemini-3.5-flash-lite"
+    assert failure.http_status == 503
+    assert failure.error.endswith("(HTTP 503)")
+
+
+@pytest.mark.parametrize(
+    ("requested_model", "status", "terminal_error", "classified"),
+    (
+        ("google/gemini-3.5-flash-lite", 429, True, True),
+        ("google/gemini-3.5-flash-lite", 500, True, True),
+        ("google/gemini-3.5-flash-lite", 400, True, False),
+        ("google/gemini-3.5-flash-lite", 503, False, False),
+        ("google/another-model", 503, True, False),
+    ),
+)
+def test_provider_http_failure_requires_terminal_error_for_the_requested_route(
+    requested_model: str,
+    status: int,
+    terminal_error: bool,
+    classified: bool,
+) -> None:
+    lines = [
+        "[provider-transport-fetch] [model-fetch] response provider=google "
+        "api=google-generative-ai model=gemini-3.5-flash-lite "
+        f"status={status} elapsedMs=10 contentType=text/event-stream"
+    ]
+    if terminal_error:
+        lines.append(
+            "[agent/embedded] embedded run agent end: runId=fixture-run "
+            "isError=true model=gemini-3.5-flash-lite provider=google "
+            "error=bounded fixture"
+        )
+
+    failure = execution._parse_openclaw_provider_failure(
+        "\n".join(lines),
+        requested_model=requested_model,
+    )
+
+    assert (failure is not None) is classified
+
+
+def test_provider_http_failure_uses_the_last_attributable_transport_status() -> None:
+    stderr = "\n".join(
+        (
+            "[provider-transport-fetch] [model-fetch] response provider=google "
+            "api=google-generative-ai model=gemini-3.5-flash-lite status=503",
+            "[agent/embedded] embedded run agent end: runId=fixture-run "
+            "isError=true model=gemini-3.5-flash-lite provider=google",
+            "[provider-transport-fetch] [model-fetch] response provider=google "
+            "api=google-generative-ai model=gemini-3.5-flash-lite status=200",
+        )
+    )
+
+    assert (
+        execution._parse_openclaw_provider_failure(
+            stderr,
+            requested_model="google/gemini-3.5-flash-lite",
+        )
+        is None
+    )
 
 
 def test_openclaw_adapter_ignores_a_recovered_provider_diagnostic() -> None:
@@ -2502,6 +2621,60 @@ sys.exit(17)
     assert lifecycle.shutdown.reason is InvocationStopReason.PROCESS_FAILURE
     assert lifecycle.shutdown.session_evidence_status == "captured"
     assert lifecycle.shutdown.submission_evidence_status == "unauthorized"
+    assert lifecycle.shutdown.cleanup_completed
+
+
+def test_nonzero_exit_recovers_attributable_provider_failure_without_usage(
+    tmp_path: Path,
+) -> None:
+    program = (
+        FAKE_OPENCLAW_SETUP
+        + r"""
+records.append({
+    "type": "message",
+    "message": {
+        "role": "assistant",
+        "provider": "provider",
+        "model": "model",
+        "content": [{"type": "text", "text": "upstream failed"}],
+    },
+})
+write_records()
+print(
+    "[provider-transport-fetch] [model-fetch] response provider=provider "
+    "api=test-api model=model status=503 elapsedMs=10 "
+    "contentType=text/event-stream",
+    file=sys.stderr,
+)
+print(
+    "[agent/embedded] embedded run agent end: runId=fixture-run "
+    "isError=true model=model provider=provider error=private upstream detail",
+    file=sys.stderr,
+)
+sys.exit(17)
+"""
+    )
+    executor = live_liveness_executor(tmp_path, program)
+
+    result = executor.execute(request(timeout_seconds=0, model="provider/model"))
+
+    assert result.status is AgentExecutionStatus.PROVIDER_FAILED
+    assert result.error == (
+        "OpenClaw reported an attributable upstream model-provider failure (HTTP 503)"
+    )
+    assert "private upstream detail" not in result.error
+    assert result.telemetry.exit_code == 17
+    assert result.telemetry.provider == "provider"
+    assert result.telemetry.model == "provider/model"
+    assert result.telemetry.usage is None
+    assert result.telemetry.tool_evidence_status == "invalid"
+    assert result.telemetry.tool_evidence_error == (
+        "OpenClaw terminal response did not finish with stop reason"
+    )
+    lifecycle = result.telemetry.invocation_lifecycle
+    assert lifecycle is not None
+    assert lifecycle.shutdown.reason is InvocationStopReason.PROVIDER_FAILURE
+    assert lifecycle.shutdown.session_evidence_status == "invalid"
     assert lifecycle.shutdown.cleanup_completed
 
 

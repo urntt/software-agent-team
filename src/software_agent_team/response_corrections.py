@@ -973,14 +973,13 @@ def _expand_local_schema_refs(
 
 
 def _make_closed_tuple_items_model_readable(value: JsonValue) -> JsonValue:
-    """Replace an unreachable closed-tuple tail marker with useful item guidance.
+    """Remove an unreachable closed-tuple tail marker from model-facing schema.
 
     In JSON Schema 2020-12, ``items: false`` beside ``prefixItems`` rejects only
     elements after the positional prefix. When ``maxItems`` already prevents
-    such a tail, replacing that boolean with the union of the positional item
-    schemas is validation-equivalent. The explicit item shapes prevent a model
-    from interpreting the prominent boolean as the value requested for every
-    array element.
+    such a tail, omitting that boolean is validation-equivalent. ``prefixItems``
+    already carries every usable item shape, so duplicating those schemas under
+    ``items`` only enlarges the provider prompt.
     """
 
     if isinstance(value, list):
@@ -1001,7 +1000,7 @@ def _make_closed_tuple_items_model_readable(value: JsonValue) -> JsonValue:
         and not isinstance(max_items, bool)
         and max_items <= len(prefix_items)
     ):
-        projected["items"] = {"anyOf": deepcopy(prefix_items)}
+        projected.pop("items")
     return projected
 
 
@@ -1293,6 +1292,21 @@ def apply_semantic_correction_with_evidence(
                 submitted_value,
                 value_schema=value_schema,
             )
+            expected_types = (
+                frozenset()
+                if value_schema is None
+                else _structured_schema_root_types(value_schema)
+            )
+            resolved_type = (
+                "object"
+                if isinstance(resolved_value, dict)
+                else "array"
+                if isinstance(resolved_value, list)
+                else None
+            )
+            if expected_types and resolved_type not in expected_types:
+                invalid_paths.append(path)
+                continue
             resolved_values[path] = resolved_value
             if decoded_type is not None:
                 normalizations.append(

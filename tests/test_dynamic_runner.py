@@ -2945,6 +2945,44 @@ def test_dynamic_runner_switches_only_after_approved_provider_failure(
     )
 
 
+def test_confirmed_free_provider_failure_can_switch_with_missing_token_usage(
+    tmp_path: Path,
+) -> None:
+    runner, team_plan, executor, _, _ = runtime(
+        tmp_path,
+        run_budget=AgentBudget(
+            authority=BudgetAuthority.USER_TASK,
+            max_estimated_cost_usd="1",
+        ),
+        model_switching=True,
+        executor_options={"provider_fail_once_for": "builder"},
+    )
+    runner.pricing_by_model[MODEL] = runner.pricing_by_model[MODEL].model_copy(
+        update={
+            "input_cost_per_million_usd": Decimal(0),
+            "output_cost_per_million_usd": Decimal(0),
+            "pricing_source": ModelMetadataSource.CONFIRMED_ZERO,
+        }
+    )
+
+    result = DagScheduler().execute(team_plan, runner)
+
+    assert result.status is ScheduleStatus.COMPLETED
+    assert [request.model for request in executor.requests[:2]] == [
+        MODEL,
+        "test/fallback-model",
+    ]
+    failed, fallback = runner.budget_ledger.call_records()[:2]
+    assert failed.model == MODEL
+    assert failed.input_tokens is None
+    assert failed.output_tokens is None
+    assert failed.cost_usd == 0
+    assert fallback.model == "test/fallback-model"
+    usage = runner.budget_ledger.snapshot()
+    assert usage.unreported_token_calls == 1
+    assert usage.unpriced_calls == 0
+
+
 @pytest.mark.parametrize("ceiling", ["1", "0.00003"])
 def test_provider_fallback_spends_the_same_budget_at_its_own_prices(
     tmp_path: Path,

@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from software_agent_team.model_costs import (
     CacheAccountingSupport,
     CachePriceSupport,
+    CachePricing,
     CacheTokenUsage,
     estimate_model_cost,
 )
@@ -41,6 +42,26 @@ class ModelCostSource(StrEnum):
     ESTIMATED = "estimated"
     PROVIDER_REPORTED = "provider_reported"
     UNKNOWN = "unknown"
+
+
+def _has_confirmed_zero_pricing(
+    *,
+    input_price: Decimal | None,
+    output_price: Decimal | None,
+    pricing_source: ModelMetadataSource | None,
+    cache_pricing: CachePricing | None,
+) -> bool:
+    """Return whether every billable token bucket has a confirmed zero rate."""
+
+    return (
+        pricing_source is ModelMetadataSource.CONFIRMED_ZERO
+        and input_price == 0
+        and output_price == 0
+        and cache_pricing is not None
+        and cache_pricing.source is ModelMetadataSource.CONFIRMED_ZERO
+        and cache_pricing.read_cost_per_million_usd == 0
+        and cache_pricing.write_cost_per_million_usd == 0
+    )
 
 
 class AgentBudgetExceeded(RuntimeError):
@@ -103,6 +124,16 @@ class AgentCallReservation(CachePriceSupport):
     ) -> Decimal | None:
         """Calculate cost only from this call's frozen prices and usage."""
 
+        if _has_confirmed_zero_pricing(
+            input_price=self.input_cost_per_million_usd,
+            output_price=self.output_cost_per_million_usd,
+            pricing_source=self.pricing_source,
+            cache_pricing=self.cache_pricing,
+        ):
+            # A fully confirmed zero price makes the monetary result independent
+            # of token telemetry. Preserve missing counters in the ledger while
+            # recording the only possible cost instead of inventing token usage.
+            return Decimal(0)
         return estimate_model_cost(
             input_tokens=input_tokens,
             output_tokens=output_tokens,
@@ -236,16 +267,28 @@ class ModelCallCostRecord(CacheAccountingSupport):
         elif self.cost_usd is None:
             raise ValueError("known call cost requires a USD amount")
         if self.cost_source is ModelCostSource.ESTIMATED:
-            if not prices_known or self.input_tokens is None:
-                raise ValueError("estimated call cost requires prices and token usage")
-            expected = estimate_model_cost(
-                input_tokens=self.input_tokens,
-                output_tokens=self.output_tokens,
+            confirmed_zero = _has_confirmed_zero_pricing(
                 input_price=self.input_cost_per_million_usd,
                 output_price=self.output_cost_per_million_usd,
-                cache_usage=self.cache_usage,
+                pricing_source=self.pricing_source,
                 cache_pricing=self.cache_pricing,
             )
+            if not prices_known:
+                raise ValueError("estimated call cost requires prices and token usage")
+            expected = (
+                Decimal(0)
+                if confirmed_zero
+                else estimate_model_cost(
+                    input_tokens=self.input_tokens,
+                    output_tokens=self.output_tokens,
+                    input_price=self.input_cost_per_million_usd,
+                    output_price=self.output_cost_per_million_usd,
+                    cache_usage=self.cache_usage,
+                    cache_pricing=self.cache_pricing,
+                )
+            )
+            if expected is None:
+                raise ValueError("estimated call cost requires prices and token usage")
             if self.cost_usd != expected:
                 raise ValueError("estimated call cost differs from frozen pricing")
         return self
@@ -336,9 +379,10 @@ class AgentBudgetLedger:
     tasks, every call must have frozen pricing and no new non-zero-priced call
     may start after recorded estimated spend reaches the user's ceiling.
     Provider token usage arrives only after a call, so an absolute billing cap
-    still requires a provider-side spending/quota limit. Unknown pricing or
-    missing token telemetry is recorded and stops an ordinary task rather than
-    being converted into a zero-cost claim.
+    still requires a provider-side spending/quota limit. Unknown cost stops an
+    ordinary task. Missing token telemetry remains explicit, but a route whose
+    input, output, cache-read, and cache-write prices were all confirmed as zero
+    has a known zero cost and does not poison later authorized calls.
     """
 
     def __init__(self, budget: AgentBudget) -> None:
@@ -393,7 +437,7 @@ class AgentBudgetLedger:
                         "Task model pricing is unknown before launch",
                         usage,
                     )
-                if self._unpriced_calls or self._unreported_token_calls:
+                if self._unpriced_calls:
                     raise AgentBudgetExceeded(
                         "Task model spend cannot be accounted before another call",
                         usage,
@@ -513,12 +557,11 @@ class AgentBudgetLedger:
 
             usage = self._snapshot_locked()
             detail = self._exceeded_detail(usage)
-            own_usage_unknown = self.budget.authority is BudgetAuthority.USER_TASK and (
-                input_tokens is None
-                or output_tokens is None
-                or estimated_cost_usd is None
+            own_cost_unknown = (
+                self.budget.authority is BudgetAuthority.USER_TASK
+                and estimated_cost_usd is None
             )
-            if detail == previous_detail and not own_usage_unknown:
+            if detail == previous_detail and not own_cost_unknown:
                 # Another concurrently completed call may already have made
                 # the aggregate ledger terminal.  Its violation still blocks
                 # every future reservation, but it is not a rejection of this
@@ -564,9 +607,7 @@ class AgentBudgetLedger:
         )
 
     def _exceeded_detail(self, usage: AgentBudgetUsage) -> str | None:
-        if self.budget.authority is BudgetAuthority.USER_TASK and (
-            usage.unpriced_calls or usage.unreported_token_calls
-        ):
+        if self.budget.authority is BudgetAuthority.USER_TASK and usage.unpriced_calls:
             return "Task model spend could not be accounted from provider usage"
         if (
             self.budget.max_input_tokens is not None

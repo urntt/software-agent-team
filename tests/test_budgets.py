@@ -364,6 +364,64 @@ def test_zero_price_task_can_run_at_zero_authorized_spend() -> None:
     assert ledger.snapshot().calls_completed == 2
 
 
+def test_confirmed_zero_call_preserves_missing_usage_without_blocking_next_call() -> (
+    None
+):
+    ledger = AgentBudgetLedger(user_task_budget("1"))
+    zero = priced_model(input_price="0", output_price="0").model_copy(
+        update={"pricing_source": ModelMetadataSource.CONFIRMED_ZERO}
+    )
+    failed_free_call = reserve_user_call(ledger, pricing=zero)
+
+    usage = ledger.complete_call(
+        failed_free_call,
+        input_tokens=None,
+        output_tokens=None,
+        duration_ms=25,
+        cache_usage=CacheTokenUsage(),
+    )
+
+    assert usage.unreported_token_calls == 1
+    assert usage.unpriced_calls == 0
+    assert usage.known_estimated_cost_usd == 0
+    failed_record = ledger.call_records()[0]
+    assert failed_record.input_tokens is None
+    assert failed_record.output_tokens is None
+    assert failed_record.cost_source is ModelCostSource.ESTIMATED
+    assert failed_record.cost_usd == 0
+
+    paid_call = reserve_user_call(ledger, attempt=2)
+    settled = ledger.complete_call(
+        paid_call,
+        input_tokens=100,
+        output_tokens=20,
+        duration_ms=25,
+        cache_usage=CacheTokenUsage(read_tokens=0, write_tokens=0),
+    )
+    assert settled.calls_started == settled.calls_completed == 2
+    assert settled.known_estimated_cost_usd == Decimal("0.00045")
+
+
+def test_unconfirmed_zero_rates_do_not_convert_missing_usage_to_zero_cost() -> None:
+    ledger = AgentBudgetLedger(user_task_budget("1"))
+    unconfirmed = priced_model(input_price="0", output_price="0").model_copy(
+        update={"pricing_source": ModelMetadataSource.USER_SUPPLIED}
+    )
+    reservation = reserve_user_call(ledger, pricing=unconfirmed)
+
+    with pytest.raises(AgentBudgetExceeded, match="could not be accounted"):
+        ledger.complete_call(
+            reservation,
+            input_tokens=None,
+            output_tokens=None,
+            duration_ms=25,
+            cache_usage=CacheTokenUsage(),
+        )
+
+    assert ledger.snapshot().unreported_token_calls == 1
+    assert ledger.snapshot().unpriced_calls == 1
+
+
 def test_user_task_stops_when_provider_usage_cannot_account_cost() -> None:
     ledger = AgentBudgetLedger(user_task_budget())
     reservation = reserve_user_call(ledger)

@@ -15,6 +15,7 @@ from urllib.parse import urlsplit
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 MODEL_RUNTIME_PROFILE_SCHEMA_VERSION = 1
+OpenClawThinkingLevel = Literal["off", "minimal", "low", "medium", "high"]
 
 
 class ModelApi(StrEnum):
@@ -363,7 +364,7 @@ def runtime_profile_for_model(model: str) -> ModelRuntimeProfile:
 
 def openclaw_invocation_thinking_level(
     profile: ModelRuntimeProfile,
-) -> Literal["medium"] | None:
+) -> OpenClawThinkingLevel | None:
     """Choose a portable default for an explicitly tunable reasoning route."""
 
     if (

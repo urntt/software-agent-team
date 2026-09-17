@@ -21,6 +21,10 @@ fully offline after setup. It verifies tool versions, ownership, Git and ignore
 boundaries, configuration contracts, formatting, lint, the complete test
 suite, and all offline workflow paths. It does not call a model or require
 provider credentials.
+Direct `pytest` runs that cross the real controller submission bridge skip with
+a `make setup` instruction when the pinned OpenClaw runtime is absent. The
+canonical `make check` remains strict because its doctor stage requires that
+runtime before the test suite starts.
 
 `configs/toolchain.sh` is the shared setup/doctor authority for private Node and
 OpenClaw versions and download checksums. A runtime pin update must verify the
@@ -506,6 +510,11 @@ Non-zero OpenClaw results pass through the CLI's bounded failure projection. It
 prefers a nested provider JSON error, removes the exact credential selected by
 the runtime profile, strips control characters, and caps the displayed detail.
 Do not expose raw provider stdout or stderr as a shortcut for diagnostics.
+The execution adapter may additionally project a content-free provider failure
+from the pinned wrapper's strict diagnostic pair when the final response for the
+exact requested route is HTTP 429 or 5xx and the matching embedded run ends in
+error. Route mismatches, incomplete pairs, and other statuses remain process
+failures; raw stderr stays only in private execution evidence.
 
 A reviewed preset for an exact model absent from the pinned OpenClaw catalog
 must remain narrow, versioned in Git, secret-free, and covered by materialization
@@ -516,9 +525,10 @@ rather than adding another model-name branch.
 
 An explicitly reasoning profile that supports configurable reasoning effort and
 does not disable thinking compiles to OpenClaw's portable `medium` level. The
-same helper supplies the provider-smoke `--thinking` flag and the per-model Agent
-setting, so a one-shot check cannot exercise a different reasoning contract from
-Planning or dynamic execution. The reviewed stable Gemini Flash presets for
+same helper supplies the provider-smoke `--thinking` flag, the per-model Agent
+setting, and every `openclaw agent` request's explicit `--thinking` flag, so a
+one-shot check cannot exercise a different reasoning contract from Planning or
+dynamic execution. The reviewed stable Gemini Flash presets for
 3.1 Flash Lite, 3.5 Flash Lite, and 3.5 through 3.8 Flash share this verified
 Google transport contract. Gemini 3.7 and 3.8 reject the pinned OpenClaw
 one-shot default of `minimal`, so the shared setting is required for those exact

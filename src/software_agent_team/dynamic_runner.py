@@ -1525,7 +1525,7 @@ class DynamicAgentRunner:
         )
         if usage.active_calls:
             cost_accounting_state = "active_unsettled"
-        elif usage.unpriced_calls or usage.unreported_token_calls:
+        elif usage.unpriced_calls:
             cost_accounting_state = "terminal_incomplete"
         else:
             cost_accounting_state = "settled"

@@ -2910,6 +2910,27 @@ def test_dynamic_revision_requires_commit_bound_blocking_feedback() -> None:
         DynamicAgentPromptInputs.model_validate(payload)
 
 
+def test_dynamic_request_compiles_thinking_from_the_approved_runtime_profile() -> None:
+    inputs = developer_inputs()
+    gemini_routes = ModelRoutePlan(
+        mode=ModelRoutingMode.STRICT,
+        default_route_id="default",
+        routes=(ModelRoute(id="default", model="google/gemini-3.8-flash"),),
+    )
+    gemini_inputs = inputs.model_copy(
+        update={
+            "team_plan": inputs.team_plan.model_copy(
+                update={"model_routes": gemini_routes}
+            )
+        }
+    )
+
+    request = build_dynamic_agent_execution_request(gemini_inputs)
+
+    assert request.model == "google/gemini-3.8-flash"
+    assert request.thinking_level == "medium"
+
+
 def test_dynamic_response_binds_identity_and_exact_assigned_tasks() -> None:
     execution_request = build_dynamic_agent_execution_request(developer_inputs())
     result = ScriptedAgentExecutor(

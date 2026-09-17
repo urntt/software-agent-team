@@ -36,6 +36,38 @@ from software_agent_team.submissions import (
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def pinned_openclaw_node(root: Path = ROOT) -> Path:
+    """Return the real pinned Node binary or skip an unprepared checkout."""
+
+    pins = (root / "configs/toolchain.sh").read_text(encoding="utf-8")
+    match = re.search(r'^task_node_version="([^"]+)"$', pins, re.MULTILINE)
+    assert match is not None
+    node = root / ".sat/openclaw/tools" / f"node-v{match[1]}/bin/node"
+    if not node.is_file():
+        pytest.skip(
+            "pinned OpenClaw runtime is missing; run `make setup` from the "
+            "repository root"
+        )
+    return node
+
+
+def test_missing_pinned_openclaw_runtime_names_the_setup_precondition(
+    tmp_path: Path,
+) -> None:
+    configs = tmp_path / "configs"
+    configs.mkdir()
+    (configs / "toolchain.sh").write_text(
+        'task_node_version="24.19.0"\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        pytest.skip.Exception,
+        match=r"pinned OpenClaw runtime is missing; run `make setup`",
+    ):
+        pinned_openclaw_node(tmp_path)
+
+
 def capture_controller_correction(
     tmp_path: Path,
     request,
@@ -44,10 +76,7 @@ def capture_controller_correction(
     recorded_payload=None,
 ):
     """Capture a real terminal plugin result; prior work remains caller-owned."""
-    pins = (ROOT / "configs/toolchain.sh").read_text()
-    match = re.search(r'^task_node_version="([^"]+)"$', pins, re.MULTILINE)
-    assert match is not None
-    node = ROOT / ".sat/openclaw/tools" / f"node-v{match[1]}/bin/node"
+    node = pinned_openclaw_node()
     contract = request.submission_contract
     assert contract is not None
     tmp_path.mkdir()
@@ -181,11 +210,7 @@ class CorrectedBody(BaseModel):
     ],
 )
 def test_production_submission_correction_bridge(tmp_path: Path, case: str) -> None:
-    pins = (ROOT / "configs/toolchain.sh").read_text()
-    match = re.search(r'^task_node_version="([^"]+)"$', pins, re.MULTILINE)
-    assert match is not None
-    node = ROOT / ".sat/openclaw/tools" / f"node-v{match[1]}/bin/node"
-    assert node.is_file(), "run make setup to install the pinned Node runtime"
+    node = pinned_openclaw_node()
     base = {"audience": "", "workflow": "", "preserved": "unchanged"}
     with pytest.raises(ValidationError) as invalid:
         CorrectedBody.model_validate(base)

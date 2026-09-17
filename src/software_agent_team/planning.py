@@ -81,12 +81,19 @@ from software_agent_team.model_routing import (
     ModelRoutingPolicy,
     resolve_model_route_plan,
 )
+from software_agent_team.model_runtime import (
+    ModelRuntimeProfile,
+    openclaw_invocation_thinking_level,
+    runtime_profile_for_model,
+)
 from software_agent_team.response_corrections import (
+    MAX_CORRECTION_FIELDS,
     ResponseFailureClass,
     ResponseIssueAuthority,
     ResponseIssueSubject,
     ResponseIssueSubjectKind,
     ResponseValidationDiagnostic,
+    ResponseValidationIssue,
     SemanticCorrectionCandidate,
     SemanticCorrectionCandidateSlot,
     SemanticCorrectionOutcome,
@@ -2604,9 +2611,51 @@ def _expand_planning_acceptance_relation_correction(
         return plan
 
     correction_paths = tuple(sorted({*plan.evidence.target_paths, *related_paths}))
-    diagnostic = plan.diagnostic.model_copy(
-        update={"correction_paths": correction_paths}
+    uncovered_paths = tuple(
+        path
+        for path in related_paths
+        if not any(
+            path == issue.path
+            or path.startswith(f"{issue.path.rstrip('/')}/")
+            or issue.path.startswith(f"{path.rstrip('/')}/")
+            for issue in plan.diagnostic.issues
+            if issue.authority is ResponseIssueAuthority.MODEL
+        )
     )
+    if (
+        len(correction_paths) > MAX_CORRECTION_FIELDS
+        or len(plan.diagnostic.issues) + len(uncovered_paths) > MAX_CORRECTION_FIELDS
+    ):
+        diagnostic = ResponseValidationDiagnostic.model_validate(
+            {
+                **plan.diagnostic.model_dump(mode="json"),
+                "correction_paths": ["/proposal"],
+            }
+        )
+    else:
+        relation_issues = tuple(
+            ResponseValidationIssue(
+                path=path,
+                code="planning_acceptance_relation_atomicity",
+                invariant_id="planning_acceptance_relation_atomicity",
+                message=(
+                    "existing criterion references must change atomically with "
+                    "the acceptance-criteria collection"
+                ),
+                authority=ResponseIssueAuthority.MODEL,
+            )
+            for path in uncovered_paths
+        )
+        diagnostic = ResponseValidationDiagnostic.model_validate(
+            {
+                **plan.diagnostic.model_dump(mode="json"),
+                "issues": [
+                    *(item.model_dump(mode="json") for item in plan.diagnostic.issues),
+                    *(item.model_dump(mode="json") for item in relation_issues),
+                ],
+                "correction_paths": correction_paths,
+            }
+        )
     expanded = build_semantic_correction_plan(plan.base_payload, diagnostic)
     if expanded is None:
         return None
@@ -3744,30 +3793,42 @@ def validate_task_agent_bindings(
         return False
 
     task_owner_by_id = {task.id: task.owner_agent_id for task in tasks}
-    for task in tasks:
+    owner_dependency_paths: list[str] = []
+    owner_dependency_subjects: list[tuple[ResponseIssueSubjectKind, str]] = []
+    owner_dependency_details: list[str] = []
+    for task_index, task in enumerate(tasks):
         for dependency_id in task.dependencies:
             dependency_owner = task_owner_by_id[dependency_id]
             if dependency_owner != task.owner_agent_id and not transitively_depends(
                 task.owner_agent_id,
                 dependency_owner,
             ):
-                message = (
+                owner_dependency_paths.append(
+                    f"/proposal/tasks/{task_index}/dependencies"
+                )
+                owner_dependency_details.append(
                     f"task {task.id} depends on {dependency_id}, but Agent "
                     f"{task.owner_agent_id} does not depend on {dependency_owner}"
                 )
-                raise _planning_model_invariant(
-                    "planning_task_owner_dependency",
-                    message,
-                    paths=(f"/proposal/tasks/{task_ids.index(task.id)}/dependencies",),
-                    subjects=_planning_subjects(
+                owner_dependency_subjects.extend(
+                    (
                         (ResponseIssueSubjectKind.AGENT, dependency_owner),
                         (ResponseIssueSubjectKind.AGENT, task.owner_agent_id),
                         (ResponseIssueSubjectKind.TASK, dependency_id),
                         (ResponseIssueSubjectKind.TASK, task.id),
-                    ),
+                    )
                 )
+    if owner_dependency_paths:
+        raise _planning_model_invariant(
+            "planning_task_owner_dependency",
+            "; ".join(owner_dependency_details)[:1500],
+            paths=tuple(dict.fromkeys(owner_dependency_paths)),
+            subjects=_planning_subjects(*owner_dependency_subjects),
+        )
 
     if require_canonical_cross_agent_projection:
+        projection_paths: list[str] = []
+        projection_subjects: list[tuple[ResponseIssueSubjectKind, str]] = []
         for task_index, task in enumerate(tasks):
             same_owner = tuple(
                 dependency_id
@@ -3783,21 +3844,24 @@ def validate_task_agent_bindings(
             canonical = tuple(dict.fromkeys((*same_owner, *derived_cross_agent)))
             if task.dependencies == canonical:
                 continue
-            raise _planning_model_invariant(
-                "planning_task_dependency_projection",
+            projection_paths.append(f"/proposal/tasks/{task_index}/dependencies")
+            projection_subjects.extend(
                 (
-                    f"task {task.id} dependencies do not match the "
-                    "Controller projection of the Agent DAG"
-                ),
-                paths=(f"/proposal/tasks/{task_index}/dependencies",),
-                subjects=_planning_subjects(
                     (ResponseIssueSubjectKind.AGENT, task.owner_agent_id),
                     (ResponseIssueSubjectKind.TASK, task.id),
                     *(
                         (ResponseIssueSubjectKind.TASK, dependency_id)
                         for dependency_id in canonical
                     ),
-                ),
+                )
+            )
+        if projection_paths:
+            raise _planning_model_invariant(
+                "planning_task_dependency_projection",
+                "task dependencies must match the Controller projection of the "
+                "Agent DAG",
+                paths=tuple(projection_paths),
+                subjects=_planning_subjects(*projection_subjects),
             )
 
 
@@ -4030,6 +4094,8 @@ class PlanningProposalBody(BaseModel):
                     pending.extend(dependencies[current])
             return False
 
+        quality_dependency_paths: list[str] = []
+        quality_dependency_subjects: list[tuple[ResponseIssueSubjectKind, str]] = []
         for quality_agent in sorted(quality_agents):
             missing_dependencies = tuple(
                 sorted(
@@ -4039,20 +4105,25 @@ class PlanningProposalBody(BaseModel):
                 )
             )
             if missing_dependencies:
-                raise _planning_model_invariant(
-                    "planning_quality_dependency_coverage",
-                    "every quality Agent must depend on every implementation path",
-                    paths=(
-                        f"/proposal/agents/{agent_ids.index(quality_agent)}/dependencies",
-                    ),
-                    subjects=_planning_subjects(
+                quality_dependency_paths.append(
+                    f"/proposal/agents/{agent_ids.index(quality_agent)}/dependencies",
+                )
+                quality_dependency_subjects.extend(
+                    (
                         (ResponseIssueSubjectKind.AGENT, quality_agent),
                         *(
                             (ResponseIssueSubjectKind.AGENT, item)
                             for item in missing_dependencies
                         ),
-                    ),
+                    )
                 )
+        if quality_dependency_paths:
+            raise _planning_model_invariant(
+                "planning_quality_dependency_coverage",
+                "every quality Agent must depend on every implementation path",
+                paths=tuple(quality_dependency_paths),
+                subjects=_planning_subjects(*quality_dependency_subjects),
+            )
 
         validate_task_agent_bindings(
             self.tasks,
@@ -6221,6 +6292,18 @@ def _planning_response_schema_for_correction(
                     "Planning response schema has an invalid question union"
                 )
             schema["properties"]["question"] = question_non_null[0]
+    if "/proposal" in plan.evidence.target_paths:
+        proposal_schema = schema["properties"]["proposal"]
+        proposal_options = proposal_schema.get("anyOf")
+        if isinstance(proposal_options, list):
+            proposal_non_null = [
+                option for option in proposal_options if option.get("type") != "null"
+            ]
+            if len(proposal_non_null) != 1:
+                raise PlanningError(
+                    "Planning response schema has an invalid proposal union"
+                )
+            schema["properties"]["proposal"] = proposal_non_null[0]
     proposal = plan.base_payload.get("proposal")
     if not isinstance(proposal, dict):
         return schema
@@ -6557,7 +6640,10 @@ def _planning_response_schema_for_correction(
         if not isinstance(tasks_schema, dict):
             raise PlanningError("Planning response schema has no task collection")
         if not identity_owner_is_mutable("/proposal/tasks"):
-            task_items = pin_collection_identities(task_items, stable_task_ids)
+            task_items = pin_collection_identities(
+                task_items,
+                [task.id for task in tasks],
+            )
         tasks_schema["prefixItems"] = task_items
 
     writer_coverage_issues = tuple(
@@ -6687,12 +6773,15 @@ def _planning_response_schema_for_correction(
         if not isinstance(tasks_schema, dict):
             raise PlanningError("Planning response schema has no task collection")
         if not identity_owner_is_mutable("/proposal/tasks"):
-            task_items = pin_collection_identities(task_items, stable_task_ids)
+            task_items = pin_collection_identities(
+                task_items,
+                [task.id for task in tasks],
+            )
         tasks_schema["prefixItems"] = task_items
         if any(issue.path == "/proposal/tasks" for issue in writer_coverage_issues):
+            tasks_schema.pop("items", None)
             tasks_schema.update(
                 {
-                    "items": {"anyOf": deepcopy(task_items)},
                     "minItems": len(tasks),
                     "maxItems": len(tasks),
                     "allOf": [
@@ -9147,6 +9236,7 @@ class AdaptivePlanningCoordinator:
         budget_ledger: AgentBudgetLedger | None = None,
         pricing: ModelPricing | None = None,
         route_id: str | None = None,
+        runtime_profile: ModelRuntimeProfile | None = None,
         clock: Clock = _system_clock,
     ) -> None:
         if (budget_ledger is None) != (pricing is None):
@@ -9165,6 +9255,7 @@ class AdaptivePlanningCoordinator:
         self.budget_ledger = budget_ledger
         self.pricing = pricing
         self.route_id = route_id
+        self.runtime_profile = runtime_profile
         self.clock = clock
 
     def start(
@@ -9636,12 +9727,9 @@ class AdaptivePlanningCoordinator:
                 ),
             )
             # ``attempt`` restarts for each dialogue or revision. Persisted turn
-            # order keeps correction sessions unique across those boundaries.
-            session_generation = (
-                self.store.load_session(request.run_id).turn_count + 1
-                if correction_plan is not None
-                else 1
-            )
+            # order keeps every invocation isolated across correction, bounded
+            # evidence recovery, and revision boundaries.
+            session_generation = self.store.load_session(request.run_id).turn_count + 1
             execution_request = AgentExecutionRequest(
                 run_id=request.run_id,
                 team_id="adaptive_planning",
@@ -9651,6 +9739,9 @@ class AdaptivePlanningCoordinator:
                 prompt=prompt,
                 timeout_seconds=self.policy.planning_timeout_seconds,
                 model=request.model,
+                thinking_level=openclaw_invocation_thinking_level(
+                    self.runtime_profile or runtime_profile_for_model(request.model)
+                ),
                 submission_contract=submission_contract,
                 session_generation=session_generation,
             )

@@ -248,7 +248,7 @@ def test_correction_decodes_a_serialized_object_only_for_an_object_contract() ->
         '["wrong root type"]',
     ],
 )
-def test_correction_does_not_decode_invalid_serialized_object_values(
+def test_correction_rejects_invalid_serialized_object_values(
     replacement: str,
 ) -> None:
     path = "/item"
@@ -268,17 +268,18 @@ def test_correction_does_not_decode_invalid_serialized_object_values(
     )
     assert plan is not None
 
-    application = apply_semantic_correction_with_evidence(
-        correction_submission(plan, {path: replacement}),
-        plan,
-        response_schema={
-            "type": "object",
-            "properties": {"item": {"type": "object"}},
-        },
-    )
-
-    assert application.payload == {"item": replacement}
-    assert application.normalizations == ()
+    with pytest.raises(
+        SemanticCorrectionSubmissionError,
+        match="not authorized for correction slot /item",
+    ):
+        apply_semantic_correction_with_evidence(
+            correction_submission(plan, {path: replacement}),
+            plan,
+            response_schema={
+                "type": "object",
+                "properties": {"item": {"type": "object"}},
+            },
+        )
 
 
 def test_correction_preserves_a_json_looking_literal_string() -> None:
@@ -650,7 +651,7 @@ def test_schema_projection_rejects_conflicting_union_field_contracts() -> None:
     assert correction_value_schema(response_schema, "/summary") is None
 
 
-def test_schema_projection_makes_an_exact_closed_tuple_model_readable() -> None:
+def test_schema_projection_omits_an_unreachable_closed_tuple_tail() -> None:
     first = {
         "type": "object",
         "properties": {"id": {"type": "string", "const": "TASK_ONE"}},
@@ -674,11 +675,13 @@ def test_schema_projection_makes_an_exact_closed_tuple_model_readable() -> None:
         },
     }
 
+    original_size = len(json.dumps(response_schema, sort_keys=True))
     projected = correction_value_schema(response_schema, "/tasks")
 
     assert projected is not None
     assert projected["prefixItems"] == [first, second]
-    assert projected["items"] == {"anyOf": [first, second]}
+    assert "items" not in projected
+    assert len(json.dumps(projected, sort_keys=True)) < original_size
 
 
 def test_schema_projection_keeps_a_reachable_closed_tuple_tail_closed() -> None:

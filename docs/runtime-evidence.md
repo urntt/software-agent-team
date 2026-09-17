@@ -1081,9 +1081,12 @@ content-free provider-liveness policy and counters, collection status,
 transcript digest, current-turn record count, ordered sanitized tool records,
 and any bounded integrity error. Missing model, provider, token, or required
 Reviewer tool evidence is never treated as zero usage or success. A model call
-whose usage is unknown blocks any later model call under a user-task budget,
-but accounting remains a separate evidence dimension: an already-attributed
-runtime or response failure stays the primary termination reason. When calls
+whose cost is unknown blocks any later model call under a user-task budget.
+Missing token counters remain unknown, but when every frozen billable rate is
+explicitly confirmed as zero, the monetary result is independently known to be
+zero and does not block an authorized fallback. Accounting remains a separate
+evidence dimension: an already-attributed runtime or response failure stays the
+primary termination reason. When calls
 finish concurrently, only the call that introduced an unknown or aggregate
 budget violation receives that post-call rejection; another already-reserved
 call may settle its own known usage without inheriting the first call's error.
@@ -1453,7 +1456,14 @@ when investigating it rather than editing artifacts in place.
   coverage; it does not reconstruct records removed upstream or overwrite a
   normal result envelope's reported aggregate with a session sum. The same ledger
   settles recovered usage once and blocks subsequent task calls after the ceiling
-  is reached or cost becomes unknown. These facts remain alongside
+  is reached or cost becomes unknown. If the pinned wrapper exits nonzero before
+  a valid terminal response can be recovered, SAT may classify only a strict,
+  requested-route diagnostic pair: the last matching transport response must be
+  HTTP 429 or 5xx and a matching embedded-run terminal record must declare an
+  error. SAT projects only the provider, canonical model, and HTTP status into
+  ordinary telemetry; raw stderr remains private evidence. Other statuses,
+  mismatched routes, incomplete pairs, and arbitrary stderr retain the original
+  process failure. These facts remain alongside
   the actual nonzero or signalled wrapper outcome and its original
   `response_finalization_stall` or `process_failure` lifecycle. It is therefore
   semantic completion with an abnormal wrapper outcome, not a rewritten normal
@@ -1502,7 +1512,10 @@ when investigating it rather than editing artifacts in place.
   Controlled evaluations additionally reserve their fixed call count. Completed
   telemetry is retained before any post-call evaluation threshold or task-cost
   rejection; missing token telemetry and unavailable pricing are counted
-  explicitly rather than converted to zero.
+  explicitly rather than converted to zero. The sole monetary exception is a
+  call whose input, output, cache-read, and cache-write rates are all explicitly
+  confirmed as zero: its token counters remain missing while its cost is known
+  to be zero.
 - An ordinary task cannot make its first model call until every authorized
   route has a frozen paired price or the user explicitly confirms that route
   as zero-cost. Unknown is never converted to zero. Controlled comparisons
