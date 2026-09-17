@@ -16,7 +16,12 @@ from software_agent_team.runtime_controls import (
     RuntimeControlChannel,
     RuntimeControlDecision,
 )
-from software_agent_team.teams import AgentSpec, PermissionProfile, TeamPlan
+from software_agent_team.teams import (
+    AgentCapability,
+    AgentSpec,
+    PermissionProfile,
+    TeamPlan,
+)
 
 
 class AgentRunStatus(StrEnum):
@@ -41,6 +46,7 @@ class ScheduleStatus(StrEnum):
     """Overall result of one DAG scheduling pass."""
 
     COMPLETED = "completed"
+    QUALITY_DECISION_REQUIRED = "quality_decision_required"
     FAILED = "failed"
     CANCELLED = "cancelled"
     CORRECTION_REQUESTED = "correction_requested"
@@ -88,6 +94,7 @@ class AgentRunOutcome(BaseModel):
     status: AgentRunStatus
     output: ArtifactReference | None = None
     evidence: tuple[ArtifactReference, ...] = ()
+    requires_quality_decision: bool = False
     summary: str = Field(min_length=1, max_length=2000)
     error: str | None = Field(default=None, min_length=1, max_length=2000)
 
@@ -113,6 +120,11 @@ class AgentRunOutcome(BaseModel):
         paths = [item.path for item in self.evidence]
         if len(paths) != len(set(paths)):
             raise ValueError("Agent outcome evidence references must be unique")
+        if (
+            self.requires_quality_decision
+            and self.status is not AgentRunStatus.COMPLETED
+        ):
+            raise ValueError("quality decisions require a completed Agent output")
         return self
 
 
@@ -213,6 +225,7 @@ class DagScheduleResult(BaseModel):
     completion_order: tuple[str, ...]
     max_observed_concurrency: int = Field(ge=0)
     failed_agent_id: str | None = None
+    quality_decision_agent_id: str | None = None
 
     @model_validator(mode="after")
     def validate_result(self) -> Self:
@@ -239,7 +252,12 @@ class DagScheduleResult(BaseModel):
             if record.state is ScheduledAgentState.INTERRUPTED
         ]
         if self.status is ScheduleStatus.COMPLETED:
-            if failed or interrupted or self.failed_agent_id is not None:
+            if (
+                failed
+                or interrupted
+                or self.failed_agent_id is not None
+                or self.quality_decision_agent_id is not None
+            ):
                 raise ValueError("completed schedules cannot contain failures")
             if any(
                 record.state is not ScheduledAgentState.COMPLETED
@@ -252,8 +270,25 @@ class DagScheduleResult(BaseModel):
                 *interrupted,
             }:
                 raise ValueError("failed schedule identity must name a failed Agent")
+            if self.quality_decision_agent_id is not None:
+                raise ValueError("failed schedules cannot request a quality decision")
+        elif self.status is ScheduleStatus.QUALITY_DECISION_REQUIRED:
+            if failed or interrupted or self.failed_agent_id is not None:
+                raise ValueError(
+                    "quality-decision schedules cannot contain Agent failures"
+                )
+            if self.quality_decision_agent_id not in {
+                record.agent_id
+                for record in self.records
+                if record.state is ScheduledAgentState.COMPLETED
+            }:
+                raise ValueError(
+                    "quality-decision schedules must name a completed Agent"
+                )
         elif self.failed_agent_id is not None:
             raise ValueError("controlled stops cannot claim a failed Agent identity")
+        elif self.quality_decision_agent_id is not None:
+            raise ValueError("controlled stops cannot request a quality decision")
         elif self.status is ScheduleStatus.CORRECTION_REQUESTED and interrupted:
             raise ValueError("cooperative correction cannot interrupt an Agent")
         return self
@@ -329,6 +364,7 @@ class DagScheduler:
             tuple[AgentSpec, datetime, float],
         ] = {}
         first_failure: str | None = None
+        quality_decision_agent_id: str | None = None
         controlled_stop: RuntimeControlDecision | None = None
         max_observed_concurrency = 0
 
@@ -419,6 +455,7 @@ class DagScheduler:
                         controlled_stop = decision
                 launches_allowed = (
                     first_failure is None
+                    and quality_decision_agent_id is None
                     and controlled_stop is None
                     and decision is RuntimeControlDecision.CONTINUE
                 )
@@ -429,6 +466,23 @@ class DagScheduler:
                         if agent.id in pending
                         and set(agent.dependencies).issubset(completed)
                     ]
+                    # A deterministic Tester is the controller's quality
+                    # checkpoint. Do not spend Review calls on a commit until
+                    # every currently ready Testing Agent has reported whether
+                    # the deterministic evidence is accepting.
+                    testing_active = any(
+                        active_agent.capability is AgentCapability.TESTING
+                        for active_agent, _, _ in active.values()
+                    )
+                    testing_ready = any(
+                        agent.capability is AgentCapability.TESTING for agent in ready
+                    )
+                    if testing_active or testing_ready:
+                        ready = [
+                            agent
+                            for agent in ready
+                            if agent.capability is AgentCapability.TESTING
+                        ]
                     for agent in ready:
                         if agent.id not in ready_announced:
                             emit(
@@ -487,6 +541,8 @@ class DagScheduler:
                         self.control_waiter(self.control_poll_seconds)
                         continue
                     if pending and first_failure is None:
+                        if quality_decision_agent_id is not None:
+                            break
                         raise RuntimeError(
                             "approved TeamPlan has no schedulable ready Agent"
                         )
@@ -520,6 +576,13 @@ class DagScheduler:
                         state = ScheduledAgentState.COMPLETED
                         event_kind = ScheduleEventKind.AGENT_COMPLETED
                         error = None
+                        if (
+                            outcome.requires_quality_decision
+                            and quality_decision_agent_id is None
+                            and first_failure is None
+                            and controlled_stop is None
+                        ):
+                            quality_decision_agent_id = agent.id
                     elif outcome.status is AgentRunStatus.FAILED:
                         state = ScheduledAgentState.FAILED
                         event_kind = ScheduleEventKind.AGENT_FAILED
@@ -565,6 +628,13 @@ class DagScheduler:
                 reason = "Not started because replacement Planning was requested."
                 skipped_state = ScheduledAgentState.SKIPPED
                 skipped_event = ScheduleEventKind.AGENT_SKIPPED
+            elif quality_decision_agent_id is not None:
+                reason = (
+                    "Not started because deterministic quality evidence requires "
+                    "a controller decision before further Review."
+                )
+                skipped_state = ScheduledAgentState.SKIPPED
+                skipped_event = ScheduleEventKind.AGENT_SKIPPED
             else:
                 reason = f"Not started after Agent {first_failure} failed."
                 skipped_state = ScheduledAgentState.SKIPPED
@@ -600,15 +670,22 @@ class DagScheduler:
                 if controlled_stop is RuntimeControlDecision.CANCEL
                 else ScheduleStatus.CORRECTION_REQUESTED
                 if controlled_stop is RuntimeControlDecision.CORRECT
-                else ScheduleStatus.COMPLETED
-                if first_failure is None
                 else ScheduleStatus.FAILED
+                if first_failure is not None
+                else ScheduleStatus.QUALITY_DECISION_REQUIRED
+                if quality_decision_agent_id is not None
+                else ScheduleStatus.COMPLETED
             ),
             records=ordered_records,
             events=tuple(events),
             completion_order=tuple(completion_order),
             max_observed_concurrency=max_observed_concurrency,
             failed_agent_id=None if controlled_stop is not None else first_failure,
+            quality_decision_agent_id=(
+                quality_decision_agent_id
+                if controlled_stop is None and first_failure is None
+                else None
+            ),
         )
 
     @staticmethod

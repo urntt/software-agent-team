@@ -1469,7 +1469,26 @@ when investigating it rather than editing artifacts in place.
   coverage; it does not reconstruct records removed upstream or overwrite a
   normal result envelope's reported aggregate with a session sum. The same ledger
   settles recovered usage once and blocks subsequent task calls after the ceiling
-  is reached or cost becomes unknown. If the pinned wrapper exits nonzero before
+  is reached or cost becomes unknown.
+- Run-scoped Agent configuration enables the pinned runtime's mid-turn context
+  pressure check, bounded reserve, transcript rotation after successful
+  compaction, and cache-TTL tool-result pruning on providers that support it.
+  SAT also projects deterministic command tails through one failure-first
+  12,000-character prompt budget while retaining metadata for every command.
+  These controls make tool-heavy Review compact earlier and keep controller-owned
+  artifacts, rather than session memory, as durable task state.
+- If the pinned wrapper exits nonzero with both exact requested-route
+  `CLI transcript compaction failed ... Compaction timed out` terminals, SAT
+  records `openclaw_compaction_timeout` as a process failure. Earlier provider
+  retry diagnostics in the same stderr stream cannot reclassify it as
+  `provider_failure` or authorize fallback. SAT may inspect a complete fresh
+  current invocation even when no terminal assistant record exists, retaining
+  the session ID, canonical requested route, transcript hash and record count,
+  paired tool evidence or its bounded invalid diagnostic, and the typed
+  submission outcome. It never accepts an artifact from this path, and usage
+  and cost remain unknown because the failed compaction call may be absent from
+  the surviving transcript.
+- If the pinned wrapper exits nonzero before
   a valid terminal response can be recovered, SAT may classify only a strict,
   requested-route diagnostic pair: the last matching transport response must be
   HTTP 429 or 5xx and a matching embedded-run terminal record must declare an

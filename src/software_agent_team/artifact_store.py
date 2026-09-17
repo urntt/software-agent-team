@@ -582,15 +582,25 @@ class ArtifactStore:
             actual_work_producers = {item.producer for item in typed_works}
             actual_test_producers = {item.producer for item in typed_tests}
             actual_review_producers = {item.producer for item in typed_reviews}
+            deterministic_nonacceptance = any(
+                item.status is not CheckStatus.PASSED for item in typed_tests
+            )
             if actual_work_producers != expected_work_producers:
                 raise ArtifactStoreError(
                     "iteration work evidence must cover every approved writer"
                 )
-            if actual_test_producers != expected_test_producers:
+            if actual_test_producers != expected_test_producers and not (
+                deterministic_nonacceptance
+                and actual_test_producers
+                and actual_test_producers.issubset(expected_test_producers)
+            ):
                 raise ArtifactStoreError(
                     "iteration test evidence must cover every approved tester"
                 )
-            if actual_review_producers != expected_review_producers:
+            if actual_review_producers != expected_review_producers and not (
+                deterministic_nonacceptance
+                and actual_review_producers.issubset(expected_review_producers)
+            ):
                 raise ArtifactStoreError(
                     "iteration review evidence must cover every approved reviewer"
                 )
@@ -645,7 +655,10 @@ class ArtifactStore:
                 for review in typed_reviews
                 for criterion_id in review.reviewed_criteria
             }
-            if reviewed_criteria != set(first_test.manual_review_criteria):
+            if reviewed_criteria != set(first_test.manual_review_criteria) and not (
+                deterministic_nonacceptance
+                and reviewed_criteria.issubset(first_test.manual_review_criteria)
+            ):
                 raise ArtifactStoreError(
                     "iteration reviews must exactly cover manual criteria"
                 )

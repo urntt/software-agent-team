@@ -19,6 +19,7 @@ import software_agent_team.execution as execution
 from software_agent_team.artifacts import (
     AgentExecutionRecord,
     AgentRole,
+    AgentRuntimeFailureCode,
     AgentToolEvidenceStatus,
     ArtifactKind,
 )
@@ -1222,6 +1223,71 @@ def test_openclaw_adapter_parses_attributable_terminal_provider_http_failure() -
     assert failure.model == "google/gemini-3.5-flash-lite"
     assert failure.http_status == 503
     assert failure.error.endswith("(HTTP 503)")
+
+
+def test_openclaw_adapter_parses_exact_compaction_timeout_for_requested_route() -> None:
+    stderr = "\n".join(
+        (
+            "[session-write-lock] releasing lock held for 321111ms "
+            "(max=300000ms): fixture",
+            "[agents/cli-compaction] CLI transcript compaction failed for "
+            "deepseek/deepseek-flash: Compaction timed out",
+            "Error: CLI transcript compaction failed for "
+            "deepseek/deepseek-flash: Compaction timed out",
+        )
+    )
+
+    failure = execution._parse_openclaw_compaction_failure(
+        stderr,
+        requested_model="deepseek/deepseek-flash",
+    )
+
+    assert failure is not None
+    assert failure.provider == "deepseek"
+    assert failure.model == "deepseek/deepseek-flash"
+    assert failure.error == "OpenClaw transcript compaction timed out"
+
+
+@pytest.mark.parametrize(
+    ("stderr", "requested_model"),
+    (
+        (
+            "[agents/cli-compaction] CLI transcript compaction failed for "
+            "deepseek/deepseek-flash: Compaction timed out",
+            "deepseek/deepseek-flash",
+        ),
+        (
+            "Error: CLI transcript compaction failed for "
+            "deepseek/deepseek-flash: Compaction timed out",
+            "deepseek/deepseek-flash",
+        ),
+        (
+            "[agents/cli-compaction] CLI transcript compaction failed for "
+            "deepseek/deepseek-chat: Compaction timed out\n"
+            "Error: CLI transcript compaction failed for "
+            "deepseek/deepseek-chat: Compaction timed out",
+            "deepseek/deepseek-flash",
+        ),
+        (
+            "[agents/cli-compaction] CLI transcript compaction failed for "
+            "deepseek/deepseek-flash: compaction timed out\n"
+            "Error: CLI transcript compaction failed for "
+            "deepseek/deepseek-flash: compaction timed out",
+            "deepseek/deepseek-flash",
+        ),
+    ),
+)
+def test_compaction_timeout_requires_paired_exact_requested_route_diagnostics(
+    stderr: str,
+    requested_model: str,
+) -> None:
+    assert (
+        execution._parse_openclaw_compaction_failure(
+            stderr,
+            requested_model=requested_model,
+        )
+        is None
+    )
 
 
 @pytest.mark.parametrize(
@@ -2700,6 +2766,101 @@ sys.exit(17)
     assert lifecycle.shutdown.reason is InvocationStopReason.PROCESS_FAILURE
     assert lifecycle.shutdown.session_evidence_status == "invalid"
     assert lifecycle.shutdown.submission_evidence_status == "unauthorized"
+    assert lifecycle.shutdown.cleanup_completed
+
+
+def test_compaction_timeout_retains_nonterminal_invocation_evidence(
+    tmp_path: Path,
+) -> None:
+    submission_contract = AgentSubmissionContract.from_schema(
+        {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {"summary": {"type": "string"}},
+            "required": ["summary"],
+        },
+        purpose=AgentSubmissionPurpose.ARTIFACT,
+    )
+    program = (
+        FAKE_OPENCLAW_SETUP
+        + r"""
+external_id = "review-check"
+records.extend([
+    {"type": "message", "message": {
+        "role": "assistant", "stopReason": "toolUse",
+        "provider": "provider", "model": "model",
+        "usage": {"input": 11, "output": 5},
+        "content": [{
+            "type": "toolCall", "id": external_id, "name": "exec",
+            "arguments": {"command": "git status --short"},
+        }],
+    }},
+    {"type": "message", "message": {
+        "role": "toolResult", "toolCallId": external_id, "toolName": "exec",
+        "isError": False,
+        "content": [{"type": "text", "text": ""}],
+        "details": {"status": "completed", "exitCode": 0, "durationMs": 17},
+    }},
+])
+write_records()
+print(
+    "[provider-transport-fetch] [model-fetch] response provider=provider "
+    "api=test-api model=model status=503 elapsedMs=10 "
+    "contentType=text/event-stream",
+    file=sys.stderr,
+)
+print(
+    "[agent/embedded] embedded run agent end: runId=fixture-run "
+    "isError=true model=model provider=provider error=earlier retry",
+    file=sys.stderr,
+)
+print(
+    "[agents/cli-compaction] CLI transcript compaction failed for "
+    "provider/model: Compaction timed out",
+    file=sys.stderr,
+)
+print(
+    "Error: CLI transcript compaction failed for "
+    "provider/model: Compaction timed out",
+    file=sys.stderr,
+)
+sys.exit(17)
+"""
+    )
+    executor = live_liveness_executor(tmp_path, program)
+
+    result = executor.execute(
+        request(
+            timeout_seconds=0,
+            model="provider/model",
+            submission_contract=submission_contract,
+        )
+    )
+
+    assert result.status is AgentExecutionStatus.PROCESS_FAILED
+    assert result.error == "OpenClaw transcript compaction timed out"
+    assert result.response_text is None
+    assert result.semantic_submission is None
+    assert result.submission_evidence is not None
+    assert result.submission_evidence.status is AgentSubmissionStatus.MISSING
+    assert result.telemetry.runtime_failure_code is (
+        AgentRuntimeFailureCode.OPENCLAW_COMPACTION_TIMEOUT
+    )
+    assert result.telemetry.exit_code == 17
+    assert result.telemetry.session_id == "liveness-session"
+    assert result.telemetry.provider == "provider"
+    assert result.telemetry.model == "provider/model"
+    assert result.telemetry.usage is None
+    assert result.telemetry.tool_evidence_status is AgentToolEvidenceStatus.CAPTURED
+    assert len(result.telemetry.tool_calls) == 1
+    assert result.telemetry.tool_calls[0].tool_name == "exec"
+    assert result.telemetry.session_transcript_sha256 is not None
+    assert result.telemetry.session_record_count == 3
+    lifecycle = result.telemetry.invocation_lifecycle
+    assert lifecycle is not None
+    assert lifecycle.shutdown.reason is InvocationStopReason.PROCESS_FAILURE
+    assert lifecycle.shutdown.session_evidence_status == "captured"
+    assert lifecycle.shutdown.submission_evidence_status == "missing"
     assert lifecycle.shutdown.cleanup_completed
 
 

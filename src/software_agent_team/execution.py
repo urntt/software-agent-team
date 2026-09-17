@@ -27,6 +27,7 @@ from pydantic.types import JsonValue
 from software_agent_team.artifacts import (
     AgentExecutionStatus,
     AgentRole,
+    AgentRuntimeFailureCode,
     AgentToolCallEvidence,
     AgentToolCallOutcome,
     AgentToolEvidenceStatus,
@@ -57,6 +58,7 @@ from software_agent_team.openclaw_session_evidence import (
     OpenClawSessionEvidenceError,
     OpenClawToolActivity,
     capture_openclaw_initialization_baseline,
+    capture_openclaw_invocation_diagnostic,
     capture_openclaw_terminal_diagnostic,
     capture_openclaw_terminal_response,
     capture_openclaw_tool_evidence,
@@ -767,6 +769,7 @@ class AgentExecutionTelemetry(BaseModel):
     exit_code: int | None = None
     timed_out: bool = False
     interrupted: bool = False
+    runtime_failure_code: AgentRuntimeFailureCode | None = None
     stdout: str = ""
     stderr: str = ""
     openclaw_run_id: str | None = None
@@ -876,6 +879,8 @@ class AgentExecutionTelemetry(BaseModel):
             raise ValueError("execution cannot finish before it starts")
         if self.timed_out and self.interrupted:
             raise ValueError("an Agent execution cannot be timed out and interrupted")
+        if self.runtime_failure_code is not None and self.exit_code in {None, 0}:
+            raise ValueError("runtime failure codes require a nonzero process exit")
         if (
             self.provider_liveness is not None
             and self.provider_liveness.stalled
@@ -1150,6 +1155,14 @@ _OPENCLAW_PROVIDER_ERROR_PATTERN = re.compile(
     r"model=(?P<model>[A-Za-z0-9._:/-]+) "
     r"provider=(?P<provider>[A-Za-z0-9._-]+)(?:\s|$)"
 )
+_OPENCLAW_COMPACTION_FAILURE_PATTERN = re.compile(
+    r"^\[agents/cli-compaction\] CLI transcript compaction failed for "
+    r"(?P<model>[A-Za-z0-9._-]+/[A-Za-z0-9._:/-]+): Compaction timed out$"
+)
+_OPENCLAW_COMPACTION_ERROR_PATTERN = re.compile(
+    r"^Error: CLI transcript compaction failed for "
+    r"(?P<model>[A-Za-z0-9._-]+/[A-Za-z0-9._:/-]+): Compaction timed out$"
+)
 
 
 class _OpenClawProviderFailure(BaseModel):
@@ -1179,6 +1192,52 @@ class _OpenClawProviderFailure(BaseModel):
             provider=self.provider,
             model=self.model,
         )
+
+
+class _OpenClawCompactionFailure(BaseModel):
+    """Bounded diagnosis emitted by pinned OpenClaw compaction."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    provider: str = Field(pattern=r"^[A-Za-z0-9._-]+$")
+    model: str = Field(pattern=r"^[A-Za-z0-9._-]+/[A-Za-z0-9._:/-]+$")
+
+    @property
+    def error(self) -> str:
+        return "OpenClaw transcript compaction timed out"
+
+    def response(self) -> _OpenClawResponse:
+        return _OpenClawResponse(
+            visible_texts=(),
+            provider=self.provider,
+            model=self.model,
+        )
+
+
+def _parse_openclaw_compaction_failure(
+    stderr: str,
+    *,
+    requested_model: str | None,
+) -> _OpenClawCompactionFailure | None:
+    """Accept only the paired, exact timeout terminal for the requested route."""
+
+    if requested_model is None:
+        return None
+    diagnostic = False
+    terminal = False
+    for line in stderr.splitlines():
+        cleaned = line.strip()
+        match = _OPENCLAW_COMPACTION_FAILURE_PATTERN.fullmatch(cleaned)
+        if match is not None and match.group("model") == requested_model:
+            diagnostic = True
+            continue
+        match = _OPENCLAW_COMPACTION_ERROR_PATTERN.fullmatch(cleaned)
+        if match is not None and match.group("model") == requested_model:
+            terminal = True
+    if not diagnostic or not terminal:
+        return None
+    provider, _, _ = requested_model.partition("/")
+    return _OpenClawCompactionFailure(provider=provider, model=requested_model)
 
 
 def _parse_openclaw_provider_failure(
@@ -2799,7 +2858,13 @@ class OpenClawSubprocessExecutor:
                 reason=stop_reason,
             )
         if completed.returncode != 0:
-            if liveness is not None and liveness.terminal_response_observed:
+            compaction_failure = _parse_openclaw_compaction_failure(
+                stderr,
+                requested_model=request.model,
+            )
+            if compaction_failure is not None or (
+                liveness is not None and liveness.terminal_response_observed
+            ):
                 return self._terminal_response_recovery_result(
                     request=request,
                     command=command,
@@ -2816,8 +2881,20 @@ class OpenClawSubprocessExecutor:
                     failure_status=AgentExecutionStatus.PROCESS_FAILED,
                     failure_error=(
                         f"OpenClaw exited with status {completed.returncode}"
+                        if compaction_failure is None
+                        else compaction_failure.error
                     ),
                     stop_reason=InvocationStopReason.PROCESS_FAILURE,
+                    runtime_failure_code=(
+                        None
+                        if compaction_failure is None
+                        else AgentRuntimeFailureCode.OPENCLAW_COMPACTION_TIMEOUT
+                    ),
+                    runtime_failure_payload=(
+                        None
+                        if compaction_failure is None
+                        else compaction_failure.response()
+                    ),
                 )
             provider_failure = _parse_openclaw_provider_failure(
                 stderr,
@@ -3728,6 +3805,7 @@ class OpenClawSubprocessExecutor:
         invalid_session_transcript_sha256: str | None = None,
         invalid_session_record_count: int | None = None,
         provider_liveness: ProviderLivenessEvidence | None = None,
+        runtime_failure_code: AgentRuntimeFailureCode | None = None,
     ) -> AgentExecutionTelemetry:
         finished_at = self.clock()
         elapsed = max(0, round((self.monotonic() - started_monotonic) * 1000))
@@ -3745,6 +3823,7 @@ class OpenClawSubprocessExecutor:
             exit_code=exit_code,
             timed_out=timed_out,
             interrupted=interrupted,
+            runtime_failure_code=runtime_failure_code,
             stdout=stdout,
             stderr=stderr,
             openclaw_run_id=None if payload is None else payload.openclaw_run_id,
@@ -4021,12 +4100,22 @@ class OpenClawSubprocessExecutor:
         failure_status: AgentExecutionStatus,
         failure_error: str,
         stop_reason: InvocationStopReason,
+        runtime_failure_code: AgentRuntimeFailureCode | None = None,
+        runtime_failure_payload: _OpenClawResponse | None = None,
     ) -> AgentExecutionResult:
         """Recover attributable terminal evidence before classifying failure."""
 
-        provider_failure = _parse_openclaw_provider_failure(
-            stderr,
-            requested_model=request.model,
+        # The paired compaction terminal is the final runtime failure. Earlier
+        # transport retries in the same stderr stream must not reclassify this
+        # process failure as a provider outage and trigger model fallback.
+        provider_failure = (
+            None
+            if runtime_failure_code
+            is AgentRuntimeFailureCode.OPENCLAW_COMPACTION_TIMEOUT
+            else _parse_openclaw_provider_failure(
+                stderr,
+                requested_model=request.model,
+            )
         )
         effective_failure_status = (
             failure_status
@@ -4065,6 +4154,7 @@ class OpenClawSubprocessExecutor:
                 tool_evidence_error=tool_evidence_error,
                 invalid_session_transcript_sha256=(invalid_session_transcript_sha256),
                 invalid_session_record_count=invalid_session_record_count,
+                runtime_failure_code=runtime_failure_code,
             )
             return self._finalize_lifecycle_result(
                 AgentExecutionResult(
@@ -4079,15 +4169,48 @@ class OpenClawSubprocessExecutor:
 
         contract = request.submission_contract
         state_dir = self._state_directory()
-        if (
-            state_dir is None
-            or provider_liveness is None
-            or not provider_liveness.terminal_response_observed
+        compaction_timeout = (
+            runtime_failure_code is AgentRuntimeFailureCode.OPENCLAW_COMPACTION_TIMEOUT
+        )
+        if state_dir is None or (
+            not compaction_timeout
+            and (
+                provider_liveness is None
+                or not provider_liveness.terminal_response_observed
+            )
         ):
             return failure_result(
                 payload=(
-                    None if provider_failure is None else provider_failure.response()
+                    runtime_failure_payload
+                    if provider_failure is None
+                    else provider_failure.response()
                 )
+            )
+
+        if compaction_timeout:
+            assert runtime_failure_code is not None
+            return self._compaction_failure_diagnostic_result(
+                request=request,
+                state_dir=state_dir,
+                command=command,
+                started_at=started_at,
+                started_monotonic=started_monotonic,
+                exit_code=exit_code,
+                stdout=stdout,
+                stderr=stderr,
+                provider_liveness=provider_liveness,
+                lifecycle=lifecycle,
+                initialization_baseline=initialization_baseline,
+                submission_binding_sha256=submission_binding_sha256,
+                submission_capture=submission_capture,
+                failure_status=effective_failure_status,
+                failure_error=effective_failure_error,
+                stop_reason=effective_stop_reason,
+                runtime_failure_code=runtime_failure_code,
+                runtime_failure_payload=runtime_failure_payload,
+                terminal_evidence_error=(
+                    "OpenClaw compaction timeout has no trusted terminal response"
+                ),
             )
 
         def terminal_payload(
@@ -4234,6 +4357,166 @@ class OpenClawSubprocessExecutor:
             telemetry=telemetry,
             semantic_submission=semantic_submission,
             submission_evidence=submission_evidence,
+        )
+
+    def _compaction_failure_diagnostic_result(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        state_dir: Path,
+        command: tuple[str, ...],
+        started_at: datetime,
+        started_monotonic: float,
+        exit_code: int | None,
+        stdout: str,
+        stderr: str,
+        provider_liveness: ProviderLivenessEvidence | None,
+        lifecycle: _InvocationLifecycleRecorder,
+        initialization_baseline: OpenClawInitializationBaseline | None,
+        submission_binding_sha256: str | None,
+        submission_capture: SubmissionFileCapture | None,
+        failure_status: AgentExecutionStatus,
+        failure_error: str,
+        stop_reason: InvocationStopReason,
+        runtime_failure_code: AgentRuntimeFailureCode,
+        runtime_failure_payload: _OpenClawResponse | None,
+        terminal_evidence_error: str,
+    ) -> AgentExecutionResult:
+        """Retain safe current-turn provenance after compaction aborts a run."""
+
+        try:
+            diagnostic = capture_openclaw_invocation_diagnostic(
+                state_dir=state_dir,
+                agent_id=request.agent_id,
+                session_key=request.session_key,
+                prompt=request.prompt,
+                baseline=initialization_baseline,
+            )
+        except OpenClawSessionEvidenceError as error:
+            tool_evidence_error = (
+                f"{terminal_evidence_error}; invocation diagnostic: {error}"
+            )[:2000]
+            submission_evidence = None
+            if (
+                request.submission_contract is not None
+                and submission_binding_sha256 is not None
+                and submission_capture is not None
+            ):
+                _, submission_evidence = validate_submission_capture(
+                    request.submission_contract,
+                    binding_sha256=submission_binding_sha256,
+                    capture=submission_capture,
+                    tool_calls=(),
+                    tool_evidence_error=tool_evidence_error,
+                )
+            telemetry = self._telemetry(
+                request=request,
+                command=command,
+                started_at=started_at,
+                started_monotonic=started_monotonic,
+                exit_code=exit_code,
+                stdout=stdout,
+                stderr=stderr,
+                payload=runtime_failure_payload,
+                provider_liveness=provider_liveness,
+                tool_evidence_error=tool_evidence_error,
+                runtime_failure_code=runtime_failure_code,
+            )
+            return self._finalize_lifecycle_result(
+                AgentExecutionResult(
+                    status=failure_status,
+                    error=failure_error,
+                    telemetry=telemetry,
+                    submission_evidence=submission_evidence,
+                ),
+                lifecycle=lifecycle,
+                reason=stop_reason,
+            )
+
+        fallback_provider = (
+            None
+            if runtime_failure_payload is None
+            else runtime_failure_payload.provider
+        )
+        fallback_model = (
+            None if runtime_failure_payload is None else runtime_failure_payload.model
+        )
+        provider = diagnostic.provider or fallback_provider
+        model = _canonical_model_reference(
+            provider=provider,
+            model=diagnostic.model or fallback_model,
+        )
+        if model != request.model:
+            provider = fallback_provider
+            model = fallback_model
+        payload = _OpenClawResponse(
+            visible_texts=(),
+            session_id=diagnostic.session_id,
+            provider=provider,
+            model=model,
+        )
+
+        captured_tools: CapturedOpenClawToolEvidence | None = None
+        tool_evidence_error: str | None = None
+        try:
+            captured_tools = capture_openclaw_tool_evidence(
+                state_dir=state_dir,
+                agent_id=request.agent_id,
+                session_key=request.session_key,
+                session_id=diagnostic.session_id,
+                prompt=request.prompt,
+            )
+        except OpenClawSessionEvidenceError as error:
+            tool_evidence_error = str(error)
+
+        submission_evidence = None
+        if (
+            request.submission_contract is not None
+            and submission_binding_sha256 is not None
+            and submission_capture is not None
+        ):
+            _, submission_evidence = validate_submission_capture(
+                request.submission_contract,
+                binding_sha256=submission_binding_sha256,
+                capture=submission_capture,
+                tool_calls=(
+                    () if captured_tools is None else captured_tools.tool_calls
+                ),
+                tool_evidence_error=tool_evidence_error,
+                invalid_submission_tool_call_observed=(
+                    diagnostic.submission_tool_call_observed
+                ),
+            )
+
+        telemetry = self._telemetry(
+            request=request,
+            command=command,
+            started_at=started_at,
+            started_monotonic=started_monotonic,
+            exit_code=exit_code,
+            stdout=stdout,
+            stderr=stderr,
+            payload=payload,
+            captured_tools=captured_tools,
+            tool_evidence_error=tool_evidence_error,
+            invalid_session_transcript_sha256=(
+                diagnostic.transcript_sha256 if captured_tools is None else None
+            ),
+            invalid_session_record_count=(
+                diagnostic.record_count if captured_tools is None else None
+            ),
+            provider_liveness=provider_liveness,
+            runtime_failure_code=runtime_failure_code,
+        )
+        return self._finalize_lifecycle_result(
+            AgentExecutionResult(
+                status=failure_status,
+                error=failure_error,
+                telemetry=telemetry,
+                submission_evidence=submission_evidence,
+            ),
+            lifecycle=lifecycle,
+            reason=stop_reason,
         )
 
     @staticmethod

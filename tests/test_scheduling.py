@@ -174,7 +174,7 @@ def test_scheduler_obeys_dependencies_and_passes_exact_upstream_results() -> Non
     )
 
 
-def test_scheduler_runs_ready_read_only_agents_in_parallel() -> None:
+def test_scheduler_runs_testing_before_parallel_reviewers() -> None:
     plan = team_plan(
         (
             agent(
@@ -188,7 +188,12 @@ def test_scheduler_runs_ready_read_only_agents_in_parallel() -> None:
                 dependencies=("feature_builder",),
             ),
             agent(
-                "review_auditor",
+                "review_auditor_a",
+                AgentCapability.REVIEW,
+                dependencies=("test_auditor",),
+            ),
+            agent(
+                "review_auditor_b",
                 AgentCapability.REVIEW,
                 dependencies=("feature_builder",),
             ),
@@ -205,7 +210,7 @@ def test_scheduler_runs_ready_read_only_agents_in_parallel() -> None:
         upstream: Mapping[str, AgentRunOutcome],
     ) -> AgentRunOutcome:
         nonlocal active_quality, max_active_quality
-        if spec.permission_profile is PermissionProfile.READ_ONLY:
+        if spec.capability is AgentCapability.REVIEW:
             with lock:
                 active_quality += 1
                 max_active_quality = max(max_active_quality, active_quality)
@@ -219,6 +224,48 @@ def test_scheduler_runs_ready_read_only_agents_in_parallel() -> None:
     assert result.status is ScheduleStatus.COMPLETED
     assert max_active_quality == 2
     assert result.max_observed_concurrency == 2
+    assert result.completion_order[1] == "test_auditor"
+
+
+def test_scheduler_stops_review_after_nonaccepting_test_evidence() -> None:
+    plan = team_plan(
+        (
+            agent(
+                "feature_builder",
+                AgentCapability.IMPLEMENTATION,
+                scope="repository/feature",
+            ),
+            agent(
+                "test_auditor",
+                AgentCapability.TESTING,
+                dependencies=("feature_builder",),
+            ),
+            agent(
+                "review_auditor",
+                AgentCapability.REVIEW,
+                dependencies=("test_auditor",),
+            ),
+        ),
+        max_concurrency=2,
+    )
+    invoked: list[str] = []
+
+    def runner(
+        spec: AgentSpec,
+        upstream: Mapping[str, AgentRunOutcome],
+    ) -> AgentRunOutcome:
+        invoked.append(spec.id)
+        outcome = successful_outcome(spec)
+        if spec.capability is AgentCapability.TESTING:
+            return outcome.model_copy(update={"requires_quality_decision": True})
+        return outcome
+
+    result = DagScheduler(clock=lambda: NOW).execute(plan, runner)
+
+    assert result.status is ScheduleStatus.QUALITY_DECISION_REQUIRED
+    assert result.quality_decision_agent_id == "test_auditor"
+    assert invoked == ["feature_builder", "test_auditor"]
+    assert result.records[-1].state is ScheduledAgentState.SKIPPED
 
 
 def test_scheduler_enforces_an_approved_concurrency_cap_of_one() -> None:

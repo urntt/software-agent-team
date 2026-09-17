@@ -1669,18 +1669,15 @@ def runtime(
     return runner, team_plan, executor, quality_gate, Path(workspace.workspace_path)
 
 
-def test_dynamic_runner_executes_writer_then_parallel_quality_on_one_commit(
+def test_dynamic_runner_executes_writer_then_quality_checkpoint_on_one_commit(
     tmp_path: Path,
 ) -> None:
-    runner, team_plan, executor, quality_gate, _ = runtime(
-        tmp_path,
-        executor_options={"synchronize_quality": True},
-    )
+    runner, team_plan, executor, quality_gate, _ = runtime(tmp_path)
 
     result = DagScheduler().execute(team_plan, runner)
 
     assert result.status is ScheduleStatus.COMPLETED
-    assert result.max_observed_concurrency == 2
+    assert result.max_observed_concurrency == 1
     assert quality_gate.calls == runner.quality_gate_calls == 1
     assert {request.agent_id for request in executor.requests} == {
         "builder",
@@ -1902,13 +1899,12 @@ def test_dynamic_runner_preserves_quality_tasks_as_read_only_prompt_focus(
     runner, team_plan, executor, quality_gate, _ = runtime(
         tmp_path,
         include_quality_tasks=True,
-        executor_options={"synchronize_quality": True},
     )
 
     result = DagScheduler().execute(team_plan, runner)
 
     assert result.status is ScheduleStatus.COMPLETED
-    assert result.max_observed_concurrency == 2
+    assert result.max_observed_concurrency == 1
     assert quality_gate.calls == 1
     prompts = {request.agent_id: request.prompt for request in executor.requests}
     assert '"id": "TASK_TEST"' in prompts["tester"]

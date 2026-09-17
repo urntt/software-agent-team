@@ -2308,7 +2308,7 @@ def test_stable_manifest_rejects_known_incompatible_state_before_staging(
     assert "run schema 4" in message
     assert "artifact schema 1" in message
     assert "6..6" in message
-    assert "2..14" in message
+    assert "2..15" in message
     assert "additional problem(s) omitted" in message
     assert "Do not create backup directories inside the SAT state root" in message
     assert (

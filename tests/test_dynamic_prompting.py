@@ -519,6 +519,58 @@ def test_quality_prompt_contains_read_only_evidence_not_write_authority() -> Non
     assert "TASK_LINKS" in rendered
 
 
+def test_command_prompt_excerpts_prioritize_failure_with_one_total_budget() -> None:
+    commands = tuple(
+        CommandEvidence(
+            id=command_id,
+            argv=("pytest", command_id),
+            criterion_ids=("AC_LINKS",),
+            exit_code=exit_code,
+            duration_ms=25,
+            stdout_path=f"iterations/01/{command_id.lower()}.stdout",
+            stderr_path=f"iterations/01/{command_id.lower()}.stderr",
+            stdout_tail=marker * 4_096,
+            stderr_tail=marker.lower() * 4_096,
+            summary=f"{command_id} completed.",
+        )
+        for command_id, exit_code, marker in (
+            ("CHECK_PASS_1", 0, "A"),
+            ("CHECK_PASS_2", 0, "B"),
+            ("CHECK_PASS_3", 0, "C"),
+            ("CHECK_FAIL", 1, "F"),
+        )
+    )
+    rendered = render_dynamic_agent_prompt(
+        quality_inputs().model_copy(update={"command_evidence": commands})
+    )
+    context_text = rendered.split("RUN_CONTEXT_JSON\n", 1)[1].split(
+        "\n\nRESPONSE_SCHEMA_JSON",
+        1,
+    )[0]
+    context = json.loads(context_text)
+    projected = {
+        command["id"]: command for command in context["deterministic_command_evidence"]
+    }
+
+    assert (
+        sum(
+            len(command[stream])
+            for command in projected.values()
+            for stream in ("stdout_tail", "stderr_tail")
+        )
+        == 12_000
+    )
+    assert len(projected["CHECK_FAIL"]["stderr_tail"]) == 2_000
+    assert len(projected["CHECK_FAIL"]["stdout_tail"]) == 2_000
+    assert projected["CHECK_PASS_3"]["stderr_tail"] == ""
+    assert projected["CHECK_PASS_3"]["stdout_tail"] == ""
+    assert all(
+        command["prompt_stdout_tail_truncated"]
+        and command["prompt_stderr_tail_truncated"]
+        for command in projected.values()
+    )
+
+
 def test_review_prompt_requires_adversarial_absolute_claim_boundaries() -> None:
     inputs = quality_inputs().model_copy(
         update={
@@ -2885,6 +2937,7 @@ def test_dynamic_revision_requires_commit_bound_blocking_feedback() -> None:
             "iteration_input_commit": OUTPUT_COMMIT,
             "input_commit": OUTPUT_COMMIT,
             "revision_feedback": revision_feedback(),
+            "command_evidence": command_evidence(),
         }
     )
 
@@ -2892,6 +2945,8 @@ def test_dynamic_revision_requires_commit_bound_blocking_feedback() -> None:
 
     assert '"previous_iteration": 1' in rendered
     assert '"id": "FINDING_DOCS"' in rendered
+    assert '"id": "CHECK_TEST"' in rendered
+    assert '"stdout_tail": "1 passed\\n"' in rendered
     assert "correct every attributable blocker" in rendered
     assert "A detached HEAD is intentional" in rendered
     assert "do not reset it to `main`" in rendered

@@ -1107,6 +1107,43 @@ def materialize_run_configuration(
     defaults = agents["defaults"]
     defaults["repoRoot"] = str(resolved_workspace)
     defaults["skipBootstrap"] = True
+    # Runtime Agents use isolated, single-purpose sessions, but Review can still
+    # accumulate a long tool transcript within one turn. Bound old tool results
+    # and trigger pressure checks before OpenClaw reaches an emergency
+    # compaction. The simpler default compactor is sufficient because durable
+    # task state lives in controller-owned typed artifacts rather than chat
+    # memory.
+    defaults["contextPruning"] = {
+        "mode": "cache-ttl",
+        "ttl": "2m",
+        "keepLastAssistants": 4,
+        "softTrimRatio": 0.3,
+        "hardClearRatio": 0.5,
+        "minPrunableToolChars": 12_000,
+        "softTrim": {
+            "maxChars": 6_000,
+            "headChars": 3_000,
+            "tailChars": 3_000,
+        },
+        "hardClear": {
+            "enabled": True,
+            "placeholder": "[Earlier tool result cleared from active context]",
+        },
+    }
+    defaults["compaction"] = {
+        "mode": "default",
+        "reserveTokens": 24_000,
+        "keepRecentTokens": 12_000,
+        "reserveTokensFloor": 20_000,
+        "maxHistoryShare": 0.5,
+        "recentTurnsPreserve": 2,
+        "identifierPolicy": "strict",
+        "midTurnPrecheck": {"enabled": True},
+        "postIndexSync": "off",
+        "memoryFlush": {"enabled": False},
+        "truncateAfterCompaction": True,
+        "timeoutSeconds": 180,
+    }
     artifact_submission_mode: _ArtifactSubmissionMode | None = None
     if bootstrap_capability is not None:
         artifact_submission_mode = "single_tool"

@@ -80,9 +80,44 @@ DYNAMIC_CAPABILITY_TEMPLATES: dict[AgentCapability, str] = {
     AgentCapability.REVIEW: "adaptive_reviewer.md",
 }
 
+_COMMAND_PROMPT_EXCERPT_BUDGET = 12_000
+_COMMAND_PROMPT_STREAM_LIMIT = 2_000
+
 
 class AgentPromptError(ValueError):
     """Raised when a role prompt would cross its declared context boundary."""
+
+
+def _command_evidence_context(
+    commands: tuple[CommandEvidence, ...],
+) -> list[dict[str, object]]:
+    """Project bounded tails while retaining every deterministic result."""
+
+    projected = [
+        command.model_dump(mode="json", exclude={"stdout_tail", "stderr_tail"})
+        for command in commands
+    ]
+    remaining = _COMMAND_PROMPT_EXCERPT_BUDGET
+    priority = sorted(
+        range(len(commands)),
+        key=lambda index: (
+            commands[index].exit_code == 0 and not commands[index].timed_out,
+            index,
+        ),
+    )
+    for index in priority:
+        command = commands[index]
+        stream_order = (
+            ("stderr", command.stderr_tail),
+            ("stdout", command.stdout_tail),
+        )
+        for stream, tail in stream_order:
+            retained = min(len(tail), _COMMAND_PROMPT_STREAM_LIMIT, remaining)
+            excerpt = tail[-retained:] if retained else ""
+            projected[index][f"{stream}_tail"] = excerpt
+            projected[index][f"prompt_{stream}_tail_truncated"] = retained < len(tail)
+            remaining -= retained
+    return projected
 
 
 class DynamicUpstreamResult(BaseModel):
@@ -310,8 +345,14 @@ class DynamicAgentPromptInputs(BaseModel):
                 raise ValueError(
                     "implementation Agent requires at least one assigned task"
                 )
-            if self.command_evidence or self.manual_review_criteria:
-                raise ValueError("implementation Agent cannot receive quality evidence")
+            if self.manual_review_criteria:
+                raise ValueError(
+                    "implementation Agent cannot receive manual-review scope"
+                )
+            if self.command_evidence and self.revision_feedback is None:
+                raise ValueError(
+                    "initial implementation cannot receive command evidence"
+                )
         else:
             if not self.command_evidence:
                 raise ValueError(
@@ -613,9 +654,9 @@ def _prompt_context(inputs: AgentPromptInputs) -> dict[str, object]:
     if artifacts:
         context["upstream_artifacts"] = artifacts
     if inputs.command_evidence:
-        context["deterministic_command_evidence"] = [
-            command.model_dump(mode="json") for command in inputs.command_evidence
-        ]
+        context["deterministic_command_evidence"] = _command_evidence_context(
+            inputs.command_evidence
+        )
     return context
 
 
@@ -847,9 +888,16 @@ def _dynamic_prompt_context(inputs: DynamicAgentPromptInputs) -> dict[str, objec
                 for criterion in inputs.task_brief.acceptance_criteria
             },
         }
-        context["deterministic_command_evidence"] = [
-            command.model_dump(mode="json") for command in inputs.command_evidence
-        ]
+        context["deterministic_command_evidence"] = _command_evidence_context(
+            inputs.command_evidence
+        )
+    elif inputs.revision_feedback is not None and inputs.command_evidence:
+        # A failed deterministic gate is direct revision evidence. Return its
+        # bounded command identity, outcome, and output excerpts to the writer
+        # that owns the next fix rather than reducing it to a generic blocker.
+        context["deterministic_command_evidence"] = _command_evidence_context(
+            inputs.command_evidence
+        )
     return context
 
 

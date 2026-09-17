@@ -482,6 +482,11 @@ class DynamicWorkflowCoordinator:
                 input_commit=input_commit,
                 artifact_repair_limit=self.artifact_repair_limit,
                 revision_feedback=revision_feedback,
+                revision_command_evidence=(
+                    context.last_tests[0].commands
+                    if revision_feedback is not None and context.last_tests
+                    else ()
+                ),
                 guidance_provider=context.control_channel.consume_guidance,
                 invocation_stop_provider=(
                     context.control_channel.invocation_stop_reason
@@ -688,6 +693,13 @@ class DynamicWorkflowCoordinator:
                     ),
                     detail=failed_record.error or failed_record.summary,
                 )
+            if schedule.status not in {
+                ScheduleStatus.COMPLETED,
+                ScheduleStatus.QUALITY_DECISION_REQUIRED,
+            }:
+                raise DynamicWorkflowError(
+                    f"unsupported dynamic schedule status: {schedule.status.value}"
+                )
             if len(snapshots) != 1 or record.phase is not RunPhase.VERIFYING:
                 raise DynamicWorkflowError(
                     "completed dynamic schedule did not cross one snapshot boundary"
@@ -704,6 +716,9 @@ class DynamicWorkflowCoordinator:
                 team_plan,
                 outputs,
                 {AgentCapability.TESTING},
+                allow_missing=(
+                    schedule.status is ScheduleStatus.QUALITY_DECISION_REQUIRED
+                ),
             )
             if not test_references:
                 controller_test = runner.controller_test_reference
@@ -716,6 +731,9 @@ class DynamicWorkflowCoordinator:
                 team_plan,
                 outputs,
                 {AgentCapability.REVIEW},
+                allow_missing=(
+                    schedule.status is ScheduleStatus.QUALITY_DECISION_REQUIRED
+                ),
             )
             works = self._load_artifacts(
                 context.artifact_store,
@@ -876,6 +894,7 @@ class DynamicWorkflowCoordinator:
         capabilities: set[AgentCapability],
         *,
         agent_order: tuple[str, ...] | None = None,
+        allow_missing: bool = False,
     ) -> tuple[ArtifactReference, ...]:
         selected_ids = {
             agent.id for agent in team_plan.agents if agent.capability in capabilities
@@ -885,7 +904,7 @@ class DynamicWorkflowCoordinator:
             if agent_order is None
             else agent_order
         )
-        if not selected_ids.issubset(ordered_ids):
+        if not allow_missing and not selected_ids.issubset(ordered_ids):
             raise DynamicWorkflowError(
                 "completed schedule omitted a required Agent completion"
             )
@@ -895,6 +914,8 @@ class DynamicWorkflowCoordinator:
                 continue
             reference = outputs.get(agent_id)
             if reference is None:
+                if allow_missing:
+                    continue
                 raise DynamicWorkflowError(
                     f"completed schedule omitted output from Agent {agent_id}"
                 )

@@ -114,6 +114,7 @@ def persist_agent_invocation(
         capability=request.capability.value,
         specialization=request.specialization.value,
         execution_status=result.status,
+        runtime_failure_code=telemetry.runtime_failure_code,
         session_key=request.session_key,
         session_id=telemetry.session_id,
         model=telemetry.model,

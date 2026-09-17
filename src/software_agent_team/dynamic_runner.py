@@ -18,6 +18,7 @@ from software_agent_team.artifacts import (
     AgentToolEvidenceStatus,
     ArtifactKind,
     ArtifactReference,
+    CheckStatus,
     CommandEvidence,
     HandoffEnvelope,
     HandoffStatus,
@@ -213,6 +214,7 @@ class DynamicAgentRunner:
         input_commit: str | None = None,
         artifact_repair_limit: int | None = None,
         revision_feedback: DynamicRevisionFeedback | None = None,
+        revision_command_evidence: tuple[CommandEvidence, ...] = (),
         guidance_provider: GuidanceProvider | None = None,
         invocation_stop_provider: InvocationStopProvider | None = None,
         activity_handler: ProgressDraftHandler | None = None,
@@ -250,6 +252,11 @@ class DynamicAgentRunner:
             raise ValueError(
                 "controlled dynamic evaluation permits zero or one correction"
             )
+        revision_command_ids = [item.id for item in revision_command_evidence]
+        if len(revision_command_ids) != len(set(revision_command_ids)):
+            raise ValueError("revision command evidence IDs must be unique")
+        if revision_command_evidence and revision_feedback is None:
+            raise ValueError("revision command evidence requires revision feedback")
 
         writer_ids = {
             agent.id
@@ -313,6 +320,7 @@ class DynamicAgentRunner:
         self.input_commit = verified_commit
         self.artifact_repair_limit = artifact_repair_limit
         self.revision_feedback = revision_feedback
+        self.revision_command_evidence = revision_command_evidence
         self.guidance_provider = guidance_provider
         self.invocation_stop_provider = invocation_stop_provider
         self.activity_handler = activity_handler
@@ -441,12 +449,17 @@ class DynamicAgentRunner:
                 (*incoming, *executions, *auxiliary, *terminal)
             )
             artifact = self.artifact_store.load(output)
-            summary = cast(WorkResult | TestReport | ReviewReport, artifact).summary
+            typed_artifact = cast(WorkResult | TestReport | ReviewReport, artifact)
+            summary = typed_artifact.summary
             return AgentRunOutcome(
                 agent_id=agent.id,
                 status=AgentRunStatus.COMPLETED,
                 output=output,
                 evidence=evidence,
+                requires_quality_decision=(
+                    isinstance(typed_artifact, TestReport)
+                    and typed_artifact.status is not CheckStatus.PASSED
+                ),
                 summary=_bounded_artifact_summary(
                     summary,
                     limit=_SCHEDULER_SUMMARY_LIMIT,
@@ -501,7 +514,7 @@ class DynamicAgentRunner:
     ) -> ArtifactReference:
         if agent.permission_profile is PermissionProfile.WORKSPACE_WRITE:
             input_commit = self._begin_writer(agent)
-            commands: tuple[CommandEvidence, ...] = ()
+            commands = self.revision_command_evidence
             manual_scope: tuple[str, ...] = ()
         else:
             commands, input_commit = self._ensure_quality_evidence()

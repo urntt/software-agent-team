@@ -37,7 +37,7 @@ from software_agent_team.submissions import (
 )
 from software_agent_team.versioning import SoftwareVersionReport
 
-ARTIFACT_SCHEMA_VERSION = 14
+ARTIFACT_SCHEMA_VERSION = 15
 MINIMUM_READABLE_ARTIFACT_SCHEMA_VERSION = 2
 COMMIT_PATTERN = r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
 AGENT_ID_PATTERN = r"^[a-z][a-z0-9_]*$"
@@ -107,6 +107,12 @@ class AgentExecutionStatus(StrEnum):
     INVALID_RESPONSE = "invalid_response"
     LAUNCH_FAILED = "launch_failed"
     INTERRUPTED = "interrupted"
+
+
+class AgentRuntimeFailureCode(StrEnum):
+    """Controller-classified failures emitted by the pinned local runtime."""
+
+    OPENCLAW_COMPACTION_TIMEOUT = "openclaw_compaction_timeout"
 
 
 class ProviderLivenessEvidence(BaseModel):
@@ -587,7 +593,7 @@ class HandoffEnvelope(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal[
-        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, ARTIFACT_SCHEMA_VERSION
+        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, ARTIFACT_SCHEMA_VERSION
     ] = ARTIFACT_SCHEMA_VERSION
     kind: Literal[ArtifactKind.HANDOFF_ENVELOPE] = ArtifactKind.HANDOFF_ENVELOPE
     run_id: str = Field(min_length=1, pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -652,7 +658,7 @@ class PhaseArtifact(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal[
-        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, ARTIFACT_SCHEMA_VERSION
+        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, ARTIFACT_SCHEMA_VERSION
     ] = ARTIFACT_SCHEMA_VERSION
     kind: ArtifactKind
     run_id: str = Field(min_length=1, pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -910,7 +916,7 @@ class AgentExecutionRecord(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal[
-        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, ARTIFACT_SCHEMA_VERSION
+        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, ARTIFACT_SCHEMA_VERSION
     ] = ARTIFACT_SCHEMA_VERSION
     kind: Literal[ArtifactKind.AGENT_EXECUTION_RECORD] = (
         ArtifactKind.AGENT_EXECUTION_RECORD
@@ -928,6 +934,10 @@ class AgentExecutionRecord(BaseModel):
         exclude_if=lambda value: value is None,
     )
     execution_status: AgentExecutionStatus | None = None
+    runtime_failure_code: AgentRuntimeFailureCode | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     session_key: str = Field(min_length=1)
     session_id: str | None = Field(default=None, min_length=1)
     model: str | None = Field(default=None, min_length=1)
@@ -1088,6 +1098,13 @@ class AgentExecutionRecord(BaseModel):
         )
         if self.schema_version >= 13 and self.specialization is None:
             raise ValueError("current execution records require specialization")
+        if self.runtime_failure_code is not None and (
+            self.execution_status is not AgentExecutionStatus.PROCESS_FAILED
+            or self.exit_code in {None, 0}
+        ):
+            raise ValueError("runtime failure codes require a nonzero process failure")
+        if self.schema_version < 15 and self.runtime_failure_code is not None:
+            raise ValueError("runtime failure codes require artifact schema 15")
         if self.schema_version < 14 and any(
             call.submission_receipt is not None for call in self.tool_calls
         ):

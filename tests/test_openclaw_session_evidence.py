@@ -25,6 +25,7 @@ from software_agent_team.openclaw_session_evidence import (
     OpenClawInvocationTerminalState,
     OpenClawSessionEvidenceError,
     capture_openclaw_initialization_baseline,
+    capture_openclaw_invocation_diagnostic,
     capture_openclaw_terminal_diagnostic,
     capture_openclaw_terminal_response,
     capture_openclaw_tool_evidence,
@@ -301,6 +302,66 @@ def test_terminal_diagnostic_detects_pending_submission_without_reading_payload(
 
     assert diagnostic.submission_tool_call_observed
     assert diagnostic.record_count == 2
+
+
+def test_invocation_diagnostic_recovers_nonterminal_route_without_usage(
+    tmp_path: Path,
+) -> None:
+    invocation = request()
+    first_call = tool_call_record("inspect", command="find . -maxdepth 2 -type f")
+    first_call["message"].update(provider="provider", model="provider/model")
+    second_call = tool_call_record("test", command="pytest -q")
+    second_call["message"].update(provider="provider", model="model")
+    write_session_state(
+        tmp_path,
+        invocation=invocation,
+        records=[
+            session_record(),
+            user_record(invocation.prompt),
+            first_call,
+            tool_result_record("inspect", output="README.md"),
+            second_call,
+            tool_result_record("test", output="1 passed"),
+        ],
+    )
+
+    diagnostic = capture_openclaw_invocation_diagnostic(
+        state_dir=tmp_path,
+        agent_id=invocation.agent_id,
+        session_key=invocation.session_key,
+        prompt=invocation.prompt,
+        baseline=None,
+    )
+
+    assert diagnostic.session_id == SESSION_ID
+    assert diagnostic.provider == "provider"
+    assert diagnostic.model == "model"
+    assert diagnostic.record_count == 5
+    assert len(diagnostic.transcript_sha256) == 64
+    assert not diagnostic.submission_tool_call_observed
+
+
+def test_invocation_diagnostic_rejects_a_stale_current_turn(tmp_path: Path) -> None:
+    invocation = request()
+    call = tool_call_record("inspect", command="git status --short")
+    call["message"].update(provider="provider", model="model")
+    records = [session_record(), user_record(invocation.prompt), call]
+    write_session_state(tmp_path, invocation=invocation, records=records)
+    baseline = capture_openclaw_initialization_baseline(
+        state_dir=tmp_path,
+        agent_id=invocation.agent_id,
+        session_key=invocation.session_key,
+        prompt=invocation.prompt,
+    )
+
+    with pytest.raises(OpenClawSessionEvidenceError, match="not attributable"):
+        capture_openclaw_invocation_diagnostic(
+            state_dir=tmp_path,
+            agent_id=invocation.agent_id,
+            session_key=invocation.session_key,
+            prompt=invocation.prompt,
+            baseline=baseline,
+        )
 
 
 def recover_terminal(root: Path, invocation: AgentExecutionRequest):

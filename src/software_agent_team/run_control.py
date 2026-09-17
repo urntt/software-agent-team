@@ -25,7 +25,6 @@ from pydantic import (
 )
 
 from software_agent_team.artifacts import (
-    REVIEW_ARTIFACT_KINDS,
     ArtifactKind,
     ArtifactReference,
     IterationDecision,
@@ -34,7 +33,6 @@ from software_agent_team.artifacts import (
 from software_agent_team.git_workspace import GitSnapshot, GitWorkspace
 from software_agent_team.integrity import canonical_model_sha256
 from software_agent_team.teams import (
-    AgentCapability,
     TeamManifest,
     TeamPlan,
     TeamPlanOrigin,
@@ -740,21 +738,6 @@ class RunStore:
                     raise RunIntegrityError(
                         "fixed planning transition cannot claim an adaptive digest"
                     )
-            if (
-                transition.source is RunPhase.REVIEWING
-                and transition.target is RunPhase.DECIDING
-                and any(
-                    agent.capability is AgentCapability.REVIEW
-                    for agent in team_plan.agents
-                )
-                and not any(
-                    reference.kind in REVIEW_ARTIFACT_KINDS
-                    for reference in transition.artifacts
-                )
-            ):
-                raise RunIntegrityError(
-                    "review transition is missing approved Reviewer evidence"
-                )
 
 
 Clock = Callable[[], datetime]
@@ -866,20 +849,6 @@ class RunController:
             raise InvalidRunTransitionError(
                 "implementation-plan digest is valid only when planning starts"
             )
-        if (
-            current.phase is RunPhase.REVIEWING
-            and target is RunPhase.DECIDING
-            and any(
-                agent.capability is AgentCapability.REVIEW for agent in team_plan.agents
-            )
-            and not any(
-                reference.kind in REVIEW_ARTIFACT_KINDS for reference in artifacts
-            )
-        ):
-            raise InvalidRunTransitionError(
-                "approved Reviewers require review-report transition evidence"
-            )
-
         iteration_after = current.current_iteration
         if current.phase is RunPhase.DECIDING and target is RunPhase.IMPLEMENTING:
             if current.current_iteration >= current.iteration_limit:

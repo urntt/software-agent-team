@@ -393,8 +393,9 @@ def approved_inputs(
 class RecordingQualityGateFactory:
     """Create deterministic passing gates and retain their iteration calls."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, fail_first: bool = False) -> None:
         self.calls: list[int] = []
+        self.fail_first = fail_first
 
     def __call__(
         self,
@@ -408,10 +409,15 @@ class RecordingQualityGateFactory:
         class Gate:
             def run(self, *, iteration: int) -> tuple[CommandEvidence, ...]:
                 factory.calls.append(iteration)
+                failed = factory.fail_first and iteration == 1
                 event_handler(
                     ProgressEvent(
                         kind=ProgressEventKind.QUALITY_GATE_COMPLETED,
-                        message="Quality gate 1/1 CHECK_TESTS: passed",
+                        message=(
+                            "Quality gate 1/1 CHECK_TESTS: failed"
+                            if failed
+                            else "Quality gate 1/1 CHECK_TESTS: passed"
+                        ),
                         phase=RunPhase.VERIFYING,
                         iteration=iteration,
                         completed=1,
@@ -423,7 +429,7 @@ class RecordingQualityGateFactory:
                         id="CHECK_TESTS",
                         argv=("pytest", "-q"),
                         criterion_ids=("AC_CODE",),
-                        exit_code=0,
+                        exit_code=1 if failed else 0,
                         duration_ms=25,
                         stdout_path=(
                             f"iterations/{iteration:02d}/commands/tests.stdout.txt"
@@ -431,7 +437,11 @@ class RecordingQualityGateFactory:
                         stderr_path=(
                             f"iterations/{iteration:02d}/commands/tests.stderr.txt"
                         ),
-                        summary="Deterministic quality gate passed.",
+                        summary=(
+                            "Deterministic quality gate failed."
+                            if failed
+                            else "Deterministic quality gate passed."
+                        ),
                     ),
                 )
 
@@ -1658,6 +1668,44 @@ def test_dynamic_workflow_revises_from_commit_bound_feedback_then_accepts(
     ][1]
     assert '"previous_iteration": 1' in second_builder.prompt
     assert '"id": "FINDING_DOCS"' in second_builder.prompt
+
+
+def test_dynamic_workflow_revises_before_review_after_failed_quality_gate(
+    tmp_path: Path,
+) -> None:
+    approved = approved_inputs(run_id="adaptive-gate-revise", iteration_limit=2)
+    source = initialize_source(tmp_path)
+    executor = AdaptiveExecutor(
+        tmp_path / "workspaces" / approved.task_brief.run_id,
+    )
+    gates = RecordingQualityGateFactory(fail_first=True)
+
+    outcome = coordinator(tmp_path, approved, executor, gates).execute(
+        approved,
+        source_repository=source,
+    )
+    store, report = load_report(tmp_path, outcome, approved)
+
+    assert outcome.record.phase is RunPhase.COMPLETED
+    assert gates.calls == [1, 2]
+    first = store.load(report.iterations[0])
+    second = store.load(report.iterations[1])
+    assert isinstance(first, IterationRecord)
+    assert isinstance(second, IterationRecord)
+    assert first.decision is IterationDecision.REVISE
+    assert first.review_reports == ()
+    assert second.decision is IterationDecision.ACCEPT
+    assert [
+        request.iteration
+        for request in executor.requests
+        if request.agent_id == "reviewer"
+    ] == [2]
+    second_builder = [
+        request for request in executor.requests if request.agent_id == "builder"
+    ][1]
+    assert "Tester tester status is failed." in second_builder.prompt
+    assert '"id": "CHECK_TESTS"' in second_builder.prompt
+    assert '"exit_code": 1' in second_builder.prompt
 
 
 @pytest.mark.parametrize("review_iterations", [(1,), (1, 2)])

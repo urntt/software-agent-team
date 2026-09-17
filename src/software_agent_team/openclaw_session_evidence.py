@@ -95,6 +95,18 @@ class CapturedOpenClawTerminalDiagnostic:
 
 
 @dataclass(frozen=True)
+class CapturedOpenClawInvocationDiagnostic:
+    """Safe provenance for a fresh invocation without a terminal assistant."""
+
+    session_id: str
+    provider: str | None
+    model: str | None
+    transcript_sha256: str
+    record_count: int
+    submission_tool_call_observed: bool
+
+
+@dataclass(frozen=True)
 class _OpenClawTerminalContext:
     """Fresh terminal session records before success-only evidence validation."""
 
@@ -1605,6 +1617,80 @@ def capture_openclaw_terminal_diagnostic(
         record_count=len(context.invocation),
         submission_tool_call_observed=_submission_tool_call_observed(
             context.invocation
+        ),
+    )
+
+
+def capture_openclaw_invocation_diagnostic(
+    *,
+    state_dir: Path,
+    agent_id: str,
+    session_key: str,
+    prompt: str,
+    baseline: OpenClawInitializationBaseline | None,
+) -> CapturedOpenClawInvocationDiagnostic:
+    """Recover identity from a fresh current turn that has no terminal response.
+
+    This projection deliberately omits usage. A runtime failure such as a
+    compaction timeout can consume an additional model call that never reaches
+    the transcript, so summing the surviving assistant records would undercount.
+    """
+
+    snapshot = _inspect_openclaw_session_snapshot(
+        state_dir=state_dir,
+        agent_id=agent_id,
+        session_key=session_key,
+        prompt=prompt,
+    )
+    if (
+        snapshot is None
+        or not _snapshot_is_new_for_invocation(snapshot, baseline)
+        or snapshot.observation.checkpoint is not InitializationCheckpoint.CURRENT_TURN
+        or snapshot.invocation_records is None
+        or snapshot.session_id is None
+        or snapshot.transcript_sha256 is None
+    ):
+        raise OpenClawSessionEvidenceError(
+            "OpenClaw invocation diagnostic is not attributable to this invocation"
+        )
+    if not snapshot.transcript_complete:
+        raise OpenClawSessionEvidenceError(
+            "OpenClaw invocation diagnostic transcript is incomplete"
+        )
+
+    identities: list[tuple[str, str]] = []
+    for record in snapshot.invocation_records:
+        message = record.get("message") if record.get("type") == "message" else None
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        provider = _optional_usage_identity(message.get("provider"), label="provider")
+        model = _optional_usage_identity(message.get("model"), label="model")
+        if provider is None and model is None:
+            continue
+        if provider is None or model is None:
+            raise OpenClawSessionEvidenceError(
+                "OpenClaw invocation diagnostic has incomplete route identity"
+            )
+        identity = (provider, model)
+        if identities:
+            prior_provider, prior_model = identities[-1]
+            if provider != prior_provider or model.removeprefix(
+                f"{provider}/"
+            ) != prior_model.removeprefix(f"{prior_provider}/"):
+                raise OpenClawSessionEvidenceError(
+                    "OpenClaw invocation diagnostic changes route identity"
+                )
+        identities.append(identity)
+
+    provider, model = identities[-1] if identities else (None, None)
+    return CapturedOpenClawInvocationDiagnostic(
+        session_id=snapshot.session_id,
+        provider=provider,
+        model=model,
+        transcript_sha256=snapshot.transcript_sha256,
+        record_count=len(snapshot.invocation_records),
+        submission_tool_call_observed=_submission_tool_call_observed(
+            snapshot.invocation_records
         ),
     )
 

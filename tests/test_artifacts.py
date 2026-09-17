@@ -11,6 +11,7 @@ from software_agent_team.artifacts import (
     ARTIFACT_SCHEMA_VERSION,
     AgentExecutionRecord,
     AgentExecutionStatus,
+    AgentRuntimeFailureCode,
     AgentToolCallEvidence,
     AgentToolCallOutcome,
     HandoffEnvelope,
@@ -288,6 +289,34 @@ def test_valid_agent_execution_record_is_accepted() -> None:
     assert record.capability == "implementation"
     assert record.specialization == "product_implementation"
     assert record.duration_ms == 2000
+
+
+def test_runtime_failure_code_requires_a_nonzero_process_failure() -> None:
+    payload = valid_execution_payload()
+    payload.update(
+        {
+            "execution_status": "process_failed",
+            "runtime_failure_code": "openclaw_compaction_timeout",
+            "exit_code": 17,
+            "error": "OpenClaw transcript compaction timed out",
+        }
+    )
+    payload.pop("response_artifact")
+
+    record = AgentExecutionRecord.model_validate(payload)
+
+    assert record.runtime_failure_code is (
+        AgentRuntimeFailureCode.OPENCLAW_COMPACTION_TIMEOUT
+    )
+    with pytest.raises(ValidationError, match="artifact schema 15"):
+        AgentExecutionRecord.model_validate({**payload, "schema_version": 14})
+    for invalid in (
+        {"execution_status": "completed"},
+        {"exit_code": 0},
+        {"exit_code": None},
+    ):
+        with pytest.raises(ValidationError, match="nonzero process failure"):
+            AgentExecutionRecord.model_validate({**payload, **invalid})
 
 
 def test_current_execution_requires_specialization_but_reads_schema_twelve() -> None:

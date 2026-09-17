@@ -213,6 +213,37 @@ def test_materialized_config_binds_every_role_to_one_run_workspace(
     defaults = payload["agents"]["defaults"]
     assert defaults["repoRoot"] == str(workspace.resolve())
     assert defaults["skipBootstrap"] is True
+    assert defaults["contextPruning"] == {
+        "mode": "cache-ttl",
+        "ttl": "2m",
+        "keepLastAssistants": 4,
+        "softTrimRatio": 0.3,
+        "hardClearRatio": 0.5,
+        "minPrunableToolChars": 12_000,
+        "softTrim": {
+            "maxChars": 6_000,
+            "headChars": 3_000,
+            "tailChars": 3_000,
+        },
+        "hardClear": {
+            "enabled": True,
+            "placeholder": "[Earlier tool result cleared from active context]",
+        },
+    }
+    assert defaults["compaction"] == {
+        "mode": "default",
+        "reserveTokens": 24_000,
+        "keepRecentTokens": 12_000,
+        "reserveTokensFloor": 20_000,
+        "maxHistoryShare": 0.5,
+        "recentTurnsPreserve": 2,
+        "identifierPolicy": "strict",
+        "midTurnPrecheck": {"enabled": True},
+        "postIndexSync": "off",
+        "memoryFlush": {"enabled": False},
+        "truncateAfterCompaction": True,
+        "timeoutSeconds": 180,
+    }
     assert defaults["skills"] == []
     assert defaults["model"] == {
         "primary": "provider/model",

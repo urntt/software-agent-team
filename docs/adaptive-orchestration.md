@@ -78,10 +78,12 @@ them again from the approved artifacts rather than trusting CLI state.
 Independent quality control is a controller requirement, not a fixed role
 name. A plan may assign testing and review to one or more read-only Agents, but
 the same Agent that writes a change cannot be the sole authority accepting it.
-When separate Testing and Review Agents exist, the approved DAG may make them
-parallel peers or may place Review after Testing so it can consume that durable
-handoff. Both remain read-only and downstream of every writer; independence
-does not impose a hidden peer-only topology.
+When separate Testing and Review Agents exist, both remain read-only and
+downstream of every writer. The scheduler treats ready Testing as the
+deterministic quality checkpoint before it starts any new Review call for that
+immutable commit. The approved DAG may additionally place Review after Testing
+when the Reviewer needs that durable handoff. A non-accepting TestReport returns
+to controller decision without waiting for pending Reviewers.
 
 ## Decision and Control Responsibility
 
@@ -105,10 +107,12 @@ the user authorizes material choices, policy resolves the allowed operational
 envelope, and the controller owns validation, creation, scheduling, time authority,
 lifecycle, evidence, and cleanup.
 
-Dependencies are the complete sequencing contract. A quality Agent may depend
+Dependencies remain the semantic handoff contract. A quality Agent may depend
 on another quality Agent when the overview makes that handoff explicit. The
-controller does not silently rewrite the DAG to maximize parallelism, and the
-scheduler never starts a dependent Agent early.
+controller does not rewrite dependencies, and the scheduler never starts a
+dependent Agent early. Its additional fixed dispatch rule is visible and
+narrow: ready deterministic Testing completes before new Review dispatch so a
+failed gate can return directly to revision.
 
 Fixed capability seconds, call/token ceilings, and iteration counts remain
 valid only when a controlled evaluation deliberately freezes them as measured
@@ -1489,10 +1493,13 @@ quality Agent for a small task; separate testing and review Agents remain an
 explicit justified choice rather than a hidden minimum topology. Controller
 artifact/handoff attribution, bounded DAG dispatch, shared controller-owned
 WorkResult/TestReport/ReviewReport assembly, and dynamic iteration aggregation
-share the same controller path. Iteration validation requires a chained result from
-every approved writer, deterministic evidence from every approved Tester or
-from the controller when no Tester exists, evidence from every approved
-Reviewer, one immutable quality commit, and complete manual-review coverage.
+share the same controller path. Iteration validation requires a chained result
+from every approved writer and one immutable quality commit. Acceptance requires
+deterministic evidence from every approved Tester or from the controller when no
+Tester exists, evidence from every approved Reviewer, and complete manual-review
+coverage. A non-accepting deterministic report may instead produce an early
+revise or fail decision with only the Testing and Review evidence that completed
+before the checkpoint stopped dispatch; it can never produce acceptance.
 One downstream Integration result may retain the exact upstream commit when the
 workspace is clean and complete attributable execution evidence proves
 substantive verification with no active tool operation, runtime rejection, or
@@ -1519,7 +1526,9 @@ A confirmed stall preserves typed content-free
 evidence and may use only an already approved provider-failure fallback; total
 productive wall-clock time is not a stopping condition. Quality gates are shared once
 per immutable iteration, and every quality Agent must be downstream of every
-writer. Controlled evaluation timeout resolution remains separate from the
+writer. Ready Testing runs before new Review calls. Non-accepting deterministic
+evidence stops pending Reviewers, records a controller decision, and returns
+failure-first bounded command excerpts to the next revision writer. Controlled evaluation timeout resolution remains separate from the
 product's provider-liveness and optional whole-run deadline. The Reviewer runtime keeps project
 source read-only and denies the general write tool. Its immutable
 `sat-probe-write` command provides the bounded `/tmp` probe-authoring capability
@@ -1562,9 +1571,10 @@ cleans bootstrap and runtime sandboxes. Plan amendments may apply only at the
 validated safe checkpoints defined by the same controller lifecycle.
 
 The current single-clone Git backend serializes every writer and excludes
-readers while a writer is active; independently ready read-only quality Agents
-may run concurrently up to the user-approved concurrency value and available
-host capacity. Ordinary product Planning has no fixed Agent, Reviewer, call, or
+readers while a writer is active. Ready Testing Agents may run concurrently,
+then independently ready Reviewers may run concurrently after deterministic
+acceptance, each up to the user-approved concurrency value and available host
+capacity. Ordinary product Planning has no fixed Agent, Reviewer, call, or
 iteration maximum. Team size and complementary quality responsibilities come
 from the task, risk, dependency graph, and approved USD budget; controlled
 evaluation limits remain separate experiment inputs.
