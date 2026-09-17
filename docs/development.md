@@ -113,7 +113,7 @@ temporary tree is nonterminal, its mode-0700 report temporarily retains the
 opaque stage marker needed to avoid deleting storage from an active orphan;
 normal or recovered cleanup removes that marker.
 
-Each stage has a 30-minute developer-gate infrastructure ceiling so an
+Each stage has a 60-minute developer-gate infrastructure ceiling so an
 unattended repository check cannot remain stuck forever. That ceiling is not a
 product-run deadline or an Agent invocation work limit. A timeout or terminal
 signal is forwarded to the exact stage process group, followed by a bounded
@@ -130,7 +130,7 @@ failures must report which checkpoint was not reached.
 ```bash
 uv run --frozen python -m software_agent_team.full_gate \
   --evidence-root /absolute/private/evidence/root \
-  --stage-timeout-seconds 1800
+  --stage-timeout-seconds 3600
 ```
 
 Useful targets are:
