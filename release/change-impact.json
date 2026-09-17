@@ -97,6 +97,16 @@
       "id": "portable-offline-uv-cache",
       "impact": "patch",
       "summary": "Use one PyPI-attributed offline cache for project locking and installation so ordinary uv commands preserve portable delivery metadata"
+    },
+    {
+      "id": "deterministic-failure-revision-checkpoint",
+      "impact": "patch",
+      "summary": "Stop pending Review after a deterministic command failure and return bounded command evidence to the next writer revision"
+    },
+    {
+      "id": "bounded-review-compaction-recovery",
+      "impact": "patch",
+      "summary": "Bound long Review context and preserve attributable route, session, tool, and submission evidence when OpenClaw transcript compaction times out"
     }
   ]
 }
