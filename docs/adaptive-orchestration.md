@@ -126,7 +126,9 @@ the separate initialization inactivity lease and cannot grant readiness. Sustain
 suspected-stall probe and grace state before interruption and evidence cleanup.
 
 Before Planning or execution, a separate local readiness check verifies each
-authorized OpenClaw model route without generating content. Its 90-second
+authorized OpenClaw model route without generating content. Bootstrap Planning
+preflights its complete default-first route chain before the first model call;
+runtime execution later preflights every route in the approved TeamPlan. Its 90-second
 model-catalog boundary is infrastructure policy, not part of the TeamPlan and
 not time available to an Agent; ordinary preflight commands retain a 30-second
 bound. SAT announces this wait and stops before Agent creation if it expires.
@@ -1388,6 +1390,19 @@ deterministically deconflicts an echo whose model-owned relationship is still
 needed. The canonical profile text remains controller-owned, both task bindings
 are retained, and the raw response plus every normalization remain recorded in
 the Planning turn.
+
+Planning schema v21 persists the tool-evidence collection state for every new
+turn. When an attributable terminal assistant record is present but cannot pass
+success-only tool validation, the turn retains its bounded provider/model,
+token buckets, transcript digest and record count, plus the safe validation
+error. It never treats invalid tool or submission content as accepted. The
+controller records whether it scheduled one same-route evidence recovery or an
+explicit provider-failure route switch. Either action requires settled cost,
+no accepted, stored, or pending typed submission, and completed cleanup when a
+lifecycle record is available. Stalls, interrupts, unknown cost, and invalid
+typed submissions remain terminal. Planning v2 through v20 remain readable
+without adding these fields to historical records.
+
 Planning schema v20 permits one Controller-required product decision and at
 most one explicitly declared ProductDefinition dimension to share the same
 question admission. The decision ID and category remain Controller-fixed, every

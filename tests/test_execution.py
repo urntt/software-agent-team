@@ -16,7 +16,12 @@ import pytest
 from pydantic import ValidationError
 
 import software_agent_team.execution as execution
-from software_agent_team.artifacts import AgentExecutionRecord, AgentRole, ArtifactKind
+from software_agent_team.artifacts import (
+    AgentExecutionRecord,
+    AgentRole,
+    AgentToolEvidenceStatus,
+    ArtifactKind,
+)
 from software_agent_team.budgets import (
     AgentBudget,
     AgentBudgetExceeded,
@@ -2620,6 +2625,80 @@ sys.exit(17)
     assert lifecycle is not None
     assert lifecycle.shutdown.reason is InvocationStopReason.PROCESS_FAILURE
     assert lifecycle.shutdown.session_evidence_status == "captured"
+    assert lifecycle.shutdown.submission_evidence_status == "unauthorized"
+    assert lifecycle.shutdown.cleanup_completed
+
+
+def test_nonzero_exit_retains_invalid_terminal_diagnostic_for_safe_recovery(
+    tmp_path: Path,
+) -> None:
+    submission_contract = AgentSubmissionContract.from_schema(
+        {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {"summary": {"type": "string"}},
+            "required": ["summary"],
+        },
+        purpose=AgentSubmissionPurpose.ARTIFACT,
+    )
+    program = (
+        FAKE_OPENCLAW_SETUP
+        + r"""
+records.append({"type": "message", "message": {
+    "role": "assistant", "stopReason": "error",
+    "provider": "provider", "model": "model",
+    "usage": {
+        "input": 11,
+        "output": 5,
+        "cacheRead": 2,
+        "cacheWrite": 1,
+        "totalTokens": 19,
+    },
+    "content": [{"type": "text", "text": "terminal evidence incomplete"}],
+}})
+write_records()
+sys.exit(17)
+"""
+    )
+    executor = live_liveness_executor(tmp_path, program)
+
+    result = executor.execute(
+        request(
+            timeout_seconds=0,
+            model="provider/model",
+            submission_contract=submission_contract,
+        )
+    )
+
+    assert result.status is AgentExecutionStatus.PROCESS_FAILED
+    assert result.error == "OpenClaw exited with status 17"
+    assert result.semantic_submission is None
+    assert result.submission_evidence is not None
+    assert result.submission_evidence.status is AgentSubmissionStatus.UNAUTHORIZED
+    assert result.submission_evidence.diagnostic_code == "tool_evidence_unavailable"
+    assert result.telemetry.exit_code == 17
+    assert result.telemetry.session_id == "liveness-session"
+    assert result.telemetry.provider == "provider"
+    assert result.telemetry.model == "provider/model"
+    assert result.telemetry.usage == AgentTokenUsage(
+        input_tokens=11,
+        output_tokens=5,
+        cache_read_tokens=2,
+        cache_write_tokens=1,
+        total_tokens=19,
+    )
+    assert result.telemetry.tool_evidence_status is AgentToolEvidenceStatus.INVALID
+    assert result.telemetry.tool_calls == ()
+    assert result.telemetry.tool_evidence_error == (
+        "OpenClaw terminal response did not finish with stop reason"
+    )
+    assert result.telemetry.session_transcript_sha256 is not None
+    assert len(result.telemetry.session_transcript_sha256) == 64
+    assert result.telemetry.session_record_count == 2
+    lifecycle = result.telemetry.invocation_lifecycle
+    assert lifecycle is not None
+    assert lifecycle.shutdown.reason is InvocationStopReason.PROCESS_FAILURE
+    assert lifecycle.shutdown.session_evidence_status == "invalid"
     assert lifecycle.shutdown.submission_evidence_status == "unauthorized"
     assert lifecycle.shutdown.cleanup_completed
 

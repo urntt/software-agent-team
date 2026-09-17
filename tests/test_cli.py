@@ -1140,6 +1140,161 @@ def test_product_planning_uses_one_bootstrap_agent_and_cleans_it(
     assert "Planning runtime: isolated workspace, sandbox, and model ready" in output
 
 
+def test_product_planning_preflights_finite_authorized_fallback_chain(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    state_paths = cli.ProductStatePaths.below(tmp_path / "state")
+    cli.ensure_product_state(state_paths)
+    planning_workspace = tmp_path / "profile-seed"
+    planning_workspace.mkdir()
+    observed_at = datetime(2026, 9, 4, 12, 0, tzinfo=UTC)
+
+    def configured_profile(profile_id: str, model: str, priority: int) -> ModelProfile:
+        return ModelProfile(
+            id=profile_id,
+            model=model,
+            capabilities=tuple(AgentCapability),
+            priority=priority,
+            input_cost_per_million_usd="1.00",
+            output_cost_per_million_usd="2.00",
+            pricing_source=ModelMetadataSource.RUNTIME_CATALOG,
+            pricing_observed_at=observed_at,
+            cache_pricing=CachePricing(
+                read_cost_per_million_usd=0,
+                write_cost_per_million_usd=0,
+                source=ModelMetadataSource.CONFIRMED_ZERO,
+                observed_at=observed_at,
+            ),
+            context_window_tokens=120_000,
+            context_source=ModelMetadataSource.RUNTIME_CATALOG,
+            context_observed_at=observed_at,
+        )
+
+    configuration = UserConfiguration(
+        model_profiles=(
+            configured_profile("default", "provider/primary", 100),
+            configured_profile("fallback", "backup/secondary", 10),
+        ),
+        routing_mode=ModelRoutingMode.POLICY,
+        authorized_switch_conditions=(ModelSwitchCondition.PROVIDER_FAILURE,),
+    )
+    request = cli.PlanningRequest(
+        run_id="sat-product-planning-fallback",
+        project_name="link-checker",
+        source_request="Build a Markdown link checker.",
+        destination=str(tmp_path / "link-checker"),
+        execution_profile=("A new Python project.",),
+        base_constraints=("No runtime network access.",),
+        model="provider/primary",
+        authorization="user_confirmed",
+        authorized_at=datetime(2026, 8, 26, 12, 0, tzinfo=UTC),
+    )
+    quality = cli.load_quality_gate_configuration(
+        cli.DEFAULT_PRODUCT_POLICY,
+        cli.DEFAULT_PRODUCT_PROFILE,
+    )
+    authorization = task_resource_authorization(configuration)
+    budget_ledger = cli.AgentBudgetLedger(
+        cli.AgentBudget(
+            authority=cli.BudgetAuthority.USER_TASK,
+            max_estimated_cost_usd=authorization.maximum_estimated_cost_usd,
+        )
+    )
+    materialized: list[tuple[str, Path]] = []
+    preflighted: list[tuple[str, Path]] = []
+    observed: dict[str, object] = {}
+    approved = object()
+
+    monkeypatch.setattr(
+        cli,
+        "inspect_sandbox_image",
+        lambda **kwargs: SandboxImageInspection(
+            sandbox_binary="/usr/bin/docker",
+            sandbox_version="Docker version test",
+            sandbox_image=str(kwargs["sandbox_image"]),
+            sandbox_image_id=f"sha256:{'a' * 64}",
+            sandbox_image_present=True,
+        ),
+    )
+
+    def fake_materialize(*args: object, **kwargs: object) -> Path:
+        destination = args[1]
+        assert isinstance(destination, Path)
+        model = kwargs["model"]
+        assert isinstance(model, str)
+        materialized.append((model, destination))
+        destination.write_text("{}\n", encoding="utf-8")
+        return destination
+
+    def fake_preflight(**kwargs: object) -> RuntimePreflight:
+        model = kwargs["expected_model"]
+        runtime_path = kwargs["runtime_config"]
+        assert isinstance(model, str)
+        assert isinstance(runtime_path, Path)
+        preflighted.append((model, runtime_path))
+        return RuntimePreflight(
+            openclaw_binary="/opt/openclaw",
+            openclaw_version="OpenClaw test",
+            openclaw_state_dir=str(kwargs["openclaw_state_dir"]),
+            runtime_config=str(runtime_path),
+            sandbox_binary="/usr/bin/docker",
+            sandbox_version="Docker version test",
+            sandbox_image=quality.policy.sandbox.image,
+            sandbox_image_id=f"sha256:{'a' * 64}",
+            config_valid=True,
+            sandbox_image_present=True,
+            sandbox_container_ready=True,
+            model=model,
+            model_available=True,
+        )
+
+    def fake_interactive(coordinator: object, supplied: object) -> object:
+        observed["coordinator"] = coordinator
+        observed["request"] = supplied
+        return approved
+
+    monkeypatch.setattr(cli, "materialize_run_configuration", fake_materialize)
+    monkeypatch.setattr(cli, "inspect_runtime_preflight", fake_preflight)
+    monkeypatch.setattr(cli, "run_interactive_planning", fake_interactive)
+    monkeypatch.setattr(
+        cli,
+        "cleanup_run_sandbox_containers",
+        lambda **_kwargs: SimpleNamespace(removed=()),
+    )
+
+    result = cli._run_product_planning(
+        request,
+        source_repository=planning_workspace,
+        state_paths=state_paths,
+        quality=quality,
+        configuration=configuration,
+        resource_authorization=authorization,
+        budget_ledger=budget_ledger,
+    )
+
+    assert result is approved
+    assert observed["request"] == request
+    assert [model for model, _path in materialized] == [
+        "provider/primary",
+        "backup/secondary",
+    ]
+    assert preflighted == materialized
+    assert materialized[0][1] != materialized[1][1]
+    coordinator = observed["coordinator"]
+    assert coordinator.route_id == "default"
+    assert coordinator.provider_failure_fallback
+    assert tuple(route.route_id for route in coordinator.fallback_routes) == (
+        "fallback",
+    )
+    assert tuple(route.model for route in coordinator.fallback_routes) == (
+        "backup/secondary",
+    )
+    assert not any(path.exists() for _model, path in materialized)
+    assert "2 authorized routes" in capsys.readouterr().out
+
+
 def test_approved_plan_runtime_check_covers_all_routes_before_workspace_creation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

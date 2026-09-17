@@ -721,6 +721,19 @@ seconds. Approval revalidates that authority against the TeamPlan at the
 execution boundary.
 The bootstrap Planner cannot create Agents or change lifecycle state.
 
+Planning schema v21 makes terminal-evidence uncertainty explicit in every new
+turn. A nonzero OpenClaw exit may retain attributable provider/model identity,
+token buckets, transcript digest and record count even when the terminal
+assistant record fails success-only tool validation; the bounded validation
+error is stored while tool calls and semantic content remain untrusted. A turn
+also records an authorized same-route recovery or provider-failure route switch
+before the next invocation. Recovery requires a settled call cost, completed
+cleanup when lifecycle evidence is present, and proof that no typed submission
+was accepted, stored, or left pending. Response-finalization and provider
+stalls, interruption, unknown cost, and invalid submission content fail closed.
+Planning v2 through v20 remain canonically readable without invented evidence
+or recovery state.
+
 Planning schema v20 lets a Controller-required product-decision admission also
 bind at most one explicitly declared ProductDefinition dimension when the same
 question resolves both. The question-only schema freezes the question ID,

@@ -77,6 +77,37 @@ class CapturedOpenClawTerminalResponse:
 
 
 @dataclass(frozen=True)
+class CapturedOpenClawTerminalDiagnostic:
+    """Attributable identity and usage retained when terminal tools are invalid."""
+
+    session_id: str
+    provider: str | None
+    model: str | None
+    input_tokens: int | None
+    output_tokens: int | None
+    cache_read_tokens: int | None
+    cache_write_tokens: int | None
+    reasoning_tokens: int | None
+    total_tokens: int | None
+    transcript_sha256: str
+    record_count: int
+    submission_tool_call_observed: bool
+
+
+@dataclass(frozen=True)
+class _OpenClawTerminalContext:
+    """Fresh terminal session records before success-only evidence validation."""
+
+    session_id: str
+    transcript_sha256: str
+    invocation: tuple[dict[str, object], ...]
+    execution_records: tuple[dict[str, object], ...]
+    runtime_rejections: tuple[RuntimeToolRejection, ...]
+    terminal_state: OpenClawInvocationTerminalState
+    terminal_message: dict[str, object]
+
+
+@dataclass(frozen=True)
 class OpenClawToolActivity:
     """Content-free tool identity safe for live activity classification."""
 
@@ -1453,15 +1484,15 @@ def _invocation_usage(
     return totals if attributable else dict.fromkeys(fields)
 
 
-def capture_openclaw_terminal_response(
+def _capture_openclaw_terminal_context(
     *,
     state_dir: Path,
     agent_id: str,
     session_key: str,
     prompt: str,
     baseline: OpenClawInitializationBaseline | None,
-) -> CapturedOpenClawTerminalResponse:
-    """Recover one fresh terminal turn without trusting a wrapper result envelope."""
+) -> _OpenClawTerminalContext:
+    """Bind one fresh terminal assistant record before interpreting its outcome."""
 
     snapshot = _inspect_openclaw_session_snapshot(
         state_dir=state_dir,
@@ -1484,27 +1515,122 @@ def capture_openclaw_terminal_response(
         raise OpenClawSessionEvidenceError("OpenClaw terminal transcript is incomplete")
     invocation = snapshot.invocation_records
     execution_records, runtime_rejections = _classify_runtime_rejections(invocation)
-    terminal_state = _invocation_terminal_state(invocation)
-    if terminal_state is not OpenClawInvocationTerminalState.ASSISTANT_RESPONSE:
-        raise OpenClawSessionEvidenceError(
-            "OpenClaw invocation has no terminal assistant response"
-        )
     last_message_index = max(
         index
         for index, record in enumerate(invocation)
         if record.get("type") == "message"
     )
-    if any(item.record_index == last_message_index for item in runtime_rejections):
-        raise OpenClawSessionEvidenceError(
-            "OpenClaw terminal response is a runtime rejection"
-        )
     terminal_record = invocation[last_message_index]
     terminal_message = terminal_record.get("message")
     if not isinstance(terminal_message, dict) or terminal_message.get("role") != (
         "assistant"
     ):
         raise OpenClawSessionEvidenceError(
-            "OpenClaw terminal response has an invalid message identity"
+            "OpenClaw invocation has no terminal assistant response"
+        )
+    if any(item.record_index == last_message_index for item in runtime_rejections):
+        raise OpenClawSessionEvidenceError(
+            "OpenClaw terminal response is a runtime rejection"
+        )
+    return _OpenClawTerminalContext(
+        session_id=snapshot.session_id,
+        transcript_sha256=snapshot.transcript_sha256,
+        invocation=invocation,
+        execution_records=execution_records,
+        runtime_rejections=runtime_rejections,
+        terminal_state=OpenClawInvocationTerminalState.ASSISTANT_RESPONSE,
+        terminal_message=terminal_message,
+    )
+
+
+def _submission_tool_call_observed(
+    records: tuple[dict[str, object], ...],
+) -> bool:
+    """Detect a semantic submission attempt without reading its arguments."""
+
+    for record in records:
+        message = record.get("message") if record.get("type") == "message" else None
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        content = message.get("content")
+        for item in content if isinstance(content, list) else ():
+            if (
+                isinstance(item, dict)
+                and item.get("type") == "toolCall"
+                and item.get("name") == ARTIFACT_SUBMISSION_TOOL
+            ):
+                return True
+    return False
+
+
+def capture_openclaw_terminal_diagnostic(
+    *,
+    state_dir: Path,
+    agent_id: str,
+    session_key: str,
+    prompt: str,
+    baseline: OpenClawInitializationBaseline | None,
+) -> CapturedOpenClawTerminalDiagnostic:
+    """Recover safe identity and usage without accepting invalid terminal tools."""
+
+    context = _capture_openclaw_terminal_context(
+        state_dir=state_dir,
+        agent_id=agent_id,
+        session_key=session_key,
+        prompt=prompt,
+        baseline=baseline,
+    )
+    terminal_message = context.terminal_message
+    provider = _optional_usage_identity(
+        terminal_message.get("provider"), label="provider"
+    )
+    model = _optional_usage_identity(terminal_message.get("model"), label="model")
+    usage_buckets = _invocation_usage(
+        context.invocation,
+        provider=provider,
+        model=model,
+        runtime_rejections=context.runtime_rejections,
+    )
+    return CapturedOpenClawTerminalDiagnostic(
+        session_id=context.session_id,
+        provider=provider,
+        model=model,
+        input_tokens=usage_buckets["input"],
+        output_tokens=usage_buckets["output"],
+        cache_read_tokens=usage_buckets["cacheRead"],
+        cache_write_tokens=usage_buckets["cacheWrite"],
+        reasoning_tokens=usage_buckets["reasoningTokens"],
+        total_tokens=usage_buckets["total"],
+        transcript_sha256=context.transcript_sha256,
+        record_count=len(context.invocation),
+        submission_tool_call_observed=_submission_tool_call_observed(
+            context.invocation
+        ),
+    )
+
+
+def capture_openclaw_terminal_response(
+    *,
+    state_dir: Path,
+    agent_id: str,
+    session_key: str,
+    prompt: str,
+    baseline: OpenClawInitializationBaseline | None,
+) -> CapturedOpenClawTerminalResponse:
+    """Recover one fresh terminal turn without trusting a wrapper result envelope."""
+
+    context = _capture_openclaw_terminal_context(
+        state_dir=state_dir,
+        agent_id=agent_id,
+        session_key=session_key,
+        prompt=prompt,
+        baseline=baseline,
+    )
+    terminal_message = context.terminal_message
+    terminal_state = _invocation_terminal_state(context.invocation)
+    if terminal_state is not OpenClawInvocationTerminalState.ASSISTANT_RESPONSE:
+        raise OpenClawSessionEvidenceError(
+            "OpenClaw invocation has no terminal assistant response"
         )
     if terminal_message.get("stopReason") != "stop":
         raise OpenClawSessionEvidenceError(
@@ -1516,21 +1642,21 @@ def capture_openclaw_terminal_response(
     )
     model = _optional_usage_identity(terminal_message.get("model"), label="model")
     usage_buckets = _invocation_usage(
-        invocation,
+        context.invocation,
         provider=provider,
         model=model,
-        runtime_rejections=runtime_rejections,
+        runtime_rejections=context.runtime_rejections,
     )
 
     tool_evidence = CapturedOpenClawToolEvidence(
-        transcript_sha256=snapshot.transcript_sha256,
-        record_count=len(invocation),
-        tool_calls=_extract_tool_calls(execution_records),
+        transcript_sha256=context.transcript_sha256,
+        record_count=len(context.invocation),
+        tool_calls=_extract_tool_calls(context.execution_records),
         terminal_state=terminal_state,
-        runtime_rejections=runtime_rejections,
+        runtime_rejections=context.runtime_rejections,
     )
     return CapturedOpenClawTerminalResponse(
-        session_id=snapshot.session_id,
+        session_id=context.session_id,
         provider=provider,
         model=model,
         input_tokens=usage_buckets["input"],

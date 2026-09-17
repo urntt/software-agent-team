@@ -49,12 +49,15 @@ from software_agent_team.invocation_lifecycle import (
 from software_agent_team.model_costs import CacheTokenUsage
 from software_agent_team.model_runtime import OpenClawThinkingLevel
 from software_agent_team.openclaw_session_evidence import (
+    CapturedOpenClawTerminalDiagnostic,
+    CapturedOpenClawTerminalResponse,
     CapturedOpenClawToolEvidence,
     OpenClawInitializationBaseline,
     OpenClawInvocationTerminalState,
     OpenClawSessionEvidenceError,
     OpenClawToolActivity,
     capture_openclaw_initialization_baseline,
+    capture_openclaw_terminal_diagnostic,
     capture_openclaw_terminal_response,
     capture_openclaw_tool_evidence,
     inspect_openclaw_initialization,
@@ -3722,6 +3725,8 @@ class OpenClawSubprocessExecutor:
         payload: _OpenClawResponse | None = None,
         captured_tools: CapturedOpenClawToolEvidence | None = None,
         tool_evidence_error: str | None = None,
+        invalid_session_transcript_sha256: str | None = None,
+        invalid_session_record_count: int | None = None,
         provider_liveness: ProviderLivenessEvidence | None = None,
     ) -> AgentExecutionTelemetry:
         finished_at = self.clock()
@@ -3758,10 +3763,14 @@ class OpenClawSubprocessExecutor:
                 )
             ),
             session_transcript_sha256=(
-                None if captured_tools is None else captured_tools.transcript_sha256
+                invalid_session_transcript_sha256
+                if captured_tools is None
+                else captured_tools.transcript_sha256
             ),
             session_record_count=(
-                None if captured_tools is None else captured_tools.record_count
+                invalid_session_record_count
+                if captured_tools is None
+                else captured_tools.record_count
             ),
             tool_calls=(() if captured_tools is None else captured_tools.tool_calls),
             runtime_rejections=(
@@ -4038,6 +4047,8 @@ class OpenClawSubprocessExecutor:
             payload: _OpenClawResponse | None = None,
             captured_tools: CapturedOpenClawToolEvidence | None = None,
             tool_evidence_error: str | None = None,
+            invalid_session_transcript_sha256: str | None = None,
+            invalid_session_record_count: int | None = None,
             submission_evidence: AgentSubmissionEvidence | None = None,
         ) -> AgentExecutionResult:
             telemetry = self._telemetry(
@@ -4052,6 +4063,8 @@ class OpenClawSubprocessExecutor:
                 payload=payload,
                 captured_tools=captured_tools,
                 tool_evidence_error=tool_evidence_error,
+                invalid_session_transcript_sha256=(invalid_session_transcript_sha256),
+                invalid_session_record_count=invalid_session_record_count,
             )
             return self._finalize_lifecycle_result(
                 AgentExecutionResult(
@@ -4076,6 +4089,50 @@ class OpenClawSubprocessExecutor:
                     None if provider_failure is None else provider_failure.response()
                 )
             )
+
+        def terminal_payload(
+            terminal: (
+                CapturedOpenClawTerminalDiagnostic | CapturedOpenClawTerminalResponse
+            ),
+        ) -> _OpenClawResponse:
+            usage_values = (
+                terminal.input_tokens,
+                terminal.output_tokens,
+                terminal.cache_read_tokens,
+                terminal.cache_write_tokens,
+                terminal.reasoning_tokens,
+                terminal.total_tokens,
+            )
+            provider = (
+                provider_failure.provider
+                if provider_failure is not None
+                else terminal.provider
+            )
+            model = (
+                provider_failure.model
+                if provider_failure is not None
+                else terminal.model
+            )
+            return _OpenClawResponse(
+                visible_texts=(),
+                provider_failed=provider_failure is not None,
+                session_id=terminal.session_id,
+                provider=provider,
+                model=_canonical_model_reference(provider=provider, model=model),
+                usage=(
+                    None
+                    if all(value is None for value in usage_values)
+                    else AgentTokenUsage(
+                        input_tokens=terminal.input_tokens,
+                        output_tokens=terminal.output_tokens,
+                        cache_read_tokens=terminal.cache_read_tokens,
+                        cache_write_tokens=terminal.cache_write_tokens,
+                        reasoning_tokens=terminal.reasoning_tokens,
+                        total_tokens=terminal.total_tokens,
+                    )
+                ),
+            )
+
         try:
             terminal = capture_openclaw_terminal_response(
                 state_dir=state_dir,
@@ -4085,56 +4142,50 @@ class OpenClawSubprocessExecutor:
                 baseline=initialization_baseline,
             )
         except OpenClawSessionEvidenceError as error:
+            evidence_error = str(error)
+            try:
+                diagnostic = capture_openclaw_terminal_diagnostic(
+                    state_dir=state_dir,
+                    agent_id=request.agent_id,
+                    session_key=request.session_key,
+                    prompt=request.prompt,
+                    baseline=initialization_baseline,
+                )
+            except OpenClawSessionEvidenceError:
+                return failure_result(
+                    payload=(
+                        None
+                        if provider_failure is None
+                        else provider_failure.response()
+                    ),
+                    tool_evidence_error=evidence_error,
+                )
+            submission_evidence = None
+            if (
+                contract is not None
+                and submission_binding_sha256 is not None
+                and submission_capture is not None
+            ):
+                _, submission_evidence = validate_submission_capture(
+                    contract,
+                    binding_sha256=submission_binding_sha256,
+                    capture=submission_capture,
+                    tool_calls=(),
+                    tool_evidence_error=evidence_error,
+                    invalid_submission_tool_call_observed=(
+                        diagnostic.submission_tool_call_observed
+                    ),
+                )
             return failure_result(
-                payload=(
-                    None if provider_failure is None else provider_failure.response()
-                ),
-                tool_evidence_error=str(error),
+                payload=terminal_payload(diagnostic),
+                tool_evidence_error=evidence_error,
+                invalid_session_transcript_sha256=(diagnostic.transcript_sha256),
+                invalid_session_record_count=diagnostic.record_count,
+                submission_evidence=submission_evidence,
             )
 
         captured_tools = terminal.tool_evidence
-        usage_values = (
-            terminal.input_tokens,
-            terminal.output_tokens,
-            terminal.cache_read_tokens,
-            terminal.cache_write_tokens,
-            terminal.reasoning_tokens,
-            terminal.total_tokens,
-        )
-        payload = _OpenClawResponse(
-            visible_texts=(),
-            provider_failed=provider_failure is not None,
-            session_id=terminal.session_id,
-            provider=(
-                provider_failure.provider
-                if provider_failure is not None
-                else terminal.provider
-            ),
-            model=_canonical_model_reference(
-                provider=(
-                    provider_failure.provider
-                    if provider_failure is not None
-                    else terminal.provider
-                ),
-                model=(
-                    provider_failure.model
-                    if provider_failure is not None
-                    else terminal.model
-                ),
-            ),
-            usage=(
-                None
-                if all(value is None for value in usage_values)
-                else AgentTokenUsage(
-                    input_tokens=terminal.input_tokens,
-                    output_tokens=terminal.output_tokens,
-                    cache_read_tokens=terminal.cache_read_tokens,
-                    cache_write_tokens=terminal.cache_write_tokens,
-                    reasoning_tokens=terminal.reasoning_tokens,
-                    total_tokens=terminal.total_tokens,
-                )
-            ),
-        )
+        payload = terminal_payload(terminal)
         if (
             contract is None
             or submission_binding_sha256 is None

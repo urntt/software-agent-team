@@ -468,6 +468,13 @@ def test_submission_capture_requires_submission_to_be_final() -> None:
             tool_call({"summary": "complete"}),
             "session transcript identity mismatch",
             AgentSubmissionStatus.UNAUTHORIZED,
+            "unattributed_submission_file",
+        ),
+        (
+            SubmissionFileCapture(content=None),
+            tool_call({"summary": "complete"}),
+            "session transcript identity mismatch",
+            AgentSubmissionStatus.UNAUTHORIZED,
             "tool_evidence_unavailable",
         ),
     ],
@@ -490,6 +497,21 @@ def test_submission_capture_rejects_invalid_or_unverifiable_evidence(
     assert submission is None
     assert evidence.status is expected_status
     assert evidence.diagnostic_code == expected_code
+
+
+def test_invalid_tool_evidence_rejects_a_pending_submission_attempt() -> None:
+    submission, evidence = validate_submission_capture(
+        contract(),
+        binding_sha256=BINDING,
+        capture=SubmissionFileCapture(content=None),
+        tool_calls=(),
+        tool_evidence_error="terminal response is incomplete",
+        invalid_submission_tool_call_observed=True,
+    )
+
+    assert submission is None
+    assert evidence.status is AgentSubmissionStatus.UNAUTHORIZED
+    assert evidence.diagnostic_code == "unattributed_submission_attempt"
 
 
 @pytest.mark.parametrize(

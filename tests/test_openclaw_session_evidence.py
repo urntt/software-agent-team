@@ -25,6 +25,7 @@ from software_agent_team.openclaw_session_evidence import (
     OpenClawInvocationTerminalState,
     OpenClawSessionEvidenceError,
     capture_openclaw_initialization_baseline,
+    capture_openclaw_terminal_diagnostic,
     capture_openclaw_terminal_response,
     capture_openclaw_tool_evidence,
     inspect_openclaw_initialization,
@@ -232,8 +233,8 @@ def test_terminal_response_recovery_rejects_incomplete_or_nonterminal_turn(
     tmp_path: Path,
 ) -> None:
     invocation = request()
-    pending = assistant_record("submitting")
-    pending["message"]["stopReason"] = "toolUse"
+    pending = terminal_record()
+    pending["message"]["stopReason"] = "error"
     write_session_state(
         tmp_path,
         invocation=invocation,
@@ -248,6 +249,58 @@ def test_terminal_response_recovery_rejects_incomplete_or_nonterminal_turn(
             prompt=invocation.prompt,
             baseline=None,
         )
+
+    diagnostic = capture_openclaw_terminal_diagnostic(
+        state_dir=tmp_path,
+        agent_id=invocation.agent_id,
+        session_key=invocation.session_key,
+        prompt=invocation.prompt,
+        baseline=None,
+    )
+
+    assert diagnostic.session_id == SESSION_ID
+    assert diagnostic.provider == "provider"
+    assert diagnostic.model == "model"
+    assert diagnostic.input_tokens == 10
+    assert diagnostic.output_tokens == 2
+    assert diagnostic.cache_read_tokens == 1
+    assert diagnostic.cache_write_tokens == 0
+    assert diagnostic.total_tokens == 13
+    assert diagnostic.record_count == 2
+    assert len(diagnostic.transcript_sha256) == 64
+    assert not diagnostic.submission_tool_call_observed
+
+
+def test_terminal_diagnostic_detects_pending_submission_without_reading_payload(
+    tmp_path: Path,
+) -> None:
+    invocation = request()
+    pending = terminal_record()
+    pending["message"]["stopReason"] = "toolUse"
+    pending["message"]["content"] = [
+        {
+            "type": "toolCall",
+            "id": "pending-submission",
+            "name": "sat_submit_artifact",
+            "arguments": {"private": "content"},
+        }
+    ]
+    write_session_state(
+        tmp_path,
+        invocation=invocation,
+        records=[session_record(), user_record(invocation.prompt), pending],
+    )
+
+    diagnostic = capture_openclaw_terminal_diagnostic(
+        state_dir=tmp_path,
+        agent_id=invocation.agent_id,
+        session_key=invocation.session_key,
+        prompt=invocation.prompt,
+        baseline=None,
+    )
+
+    assert diagnostic.submission_tool_call_observed
+    assert diagnostic.record_count == 2
 
 
 def recover_terminal(root: Path, invocation: AgentExecutionRequest):

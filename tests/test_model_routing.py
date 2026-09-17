@@ -10,6 +10,7 @@ from software_agent_team.model_routing import (
     ModelProfile,
     ModelRoutingError,
     ModelRoutingPolicy,
+    resolve_bootstrap_model_profiles,
     resolve_model_route_plan,
 )
 from software_agent_team.teams import (
@@ -49,6 +50,44 @@ def profile(
 
 
 BOOTSTRAP = (AgentCapability.CLARIFICATION, AgentCapability.PLANNING)
+
+
+def test_bootstrap_profiles_are_default_first_then_eligible_priority_order() -> None:
+    policy = ModelRoutingPolicy(
+        mode=ModelRoutingMode.POLICY,
+        profiles=(
+            profile("default", "provider/default", BOOTSTRAP, priority=100),
+            profile("later", "provider/later", BOOTSTRAP, priority=20),
+            profile(
+                "ineligible",
+                "provider/ineligible",
+                (AgentCapability.PLANNING,),
+                priority=1,
+            ),
+            profile("earlier", "provider/earlier", BOOTSTRAP, priority=10),
+        ),
+        default_profile_id="default",
+        authorized_switch_conditions=(ModelSwitchCondition.PROVIDER_FAILURE,),
+    )
+
+    routes = resolve_bootstrap_model_profiles(policy)
+
+    assert tuple(route.id for route in routes) == ("default", "earlier", "later")
+
+
+def test_bootstrap_profiles_do_not_expose_fallback_without_switch_authority() -> None:
+    policy = ModelRoutingPolicy(
+        mode=ModelRoutingMode.POLICY,
+        profiles=(
+            profile("default", "provider/default", BOOTSTRAP),
+            profile("unused", "provider/unused", BOOTSTRAP),
+        ),
+        default_profile_id="default",
+    )
+
+    routes = resolve_bootstrap_model_profiles(policy)
+
+    assert tuple(route.id for route in routes) == ("default",)
 
 
 def test_strict_routing_pins_every_agent_to_one_profile() -> None:

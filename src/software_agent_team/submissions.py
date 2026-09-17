@@ -26,6 +26,14 @@ ARTIFACT_SUBMISSION_PROTOCOL = "sat_artifact_submission_v2"
 ARTIFACT_SUBMISSION_ARGUMENT = "artifact"
 MAX_SUBMISSION_SCHEMA_BYTES = 512 * 1024
 MAX_SUBMISSION_FILE_BYTES = 2 * 1024 * 1024
+RECOVERABLE_SUBMISSION_EVIDENCE_CODES = frozenset(
+    {
+        "tool_evidence_unavailable",
+        "submission_missing",
+        "upstream_incomplete_after_tool_result",
+        "upstream_incomplete_after_terminal_response",
+    }
+)
 
 
 class AgentSubmissionPurpose(StrEnum):
@@ -423,16 +431,40 @@ def validate_submission_capture(
     capture: SubmissionFileCapture,
     tool_calls: tuple[SubmissionToolEvidence, ...],
     tool_evidence_error: str | None,
+    invalid_submission_tool_call_observed: bool = False,
 ) -> tuple[AgentSemanticSubmission | None, AgentSubmissionEvidence]:
     """Bind exactly one plugin file to exactly one captured successful tool call."""
 
     if tool_evidence_error is not None:
+        storage_is_absent = capture.content is None and capture.diagnostic_code is None
+        no_submission_observed = (
+            storage_is_absent and not invalid_submission_tool_call_observed
+        )
         evidence = rejected_submission_evidence(
             contract,
             binding_sha256=binding_sha256,
             status=AgentSubmissionStatus.UNAUTHORIZED,
-            code="tool_evidence_unavailable",
-            detail="submission cannot be attributed because tool evidence is invalid",
+            code=(
+                "tool_evidence_unavailable"
+                if no_submission_observed
+                else (
+                    "unattributed_submission_attempt"
+                    if storage_is_absent
+                    else "unattributed_submission_file"
+                )
+            ),
+            detail=(
+                "submission cannot be attributed because tool evidence is invalid"
+                if no_submission_observed
+                else (
+                    "a submission tool call was observed while tool evidence is invalid"
+                    if storage_is_absent
+                    else (
+                        "submission storage is present or invalid while tool "
+                        "evidence is unavailable"
+                    )
+                )
+            ),
         )
         return None, evidence
 

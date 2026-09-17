@@ -111,6 +111,7 @@ from software_agent_team.scheduling import (
     AgentRunOutcome,
     AgentRunStatus,
 )
+from software_agent_team.submissions import RECOVERABLE_SUBMISSION_EVIDENCE_CODES
 from software_agent_team.teams import (
     AgentCapability,
     AgentSpec,
@@ -1030,12 +1031,19 @@ class DynamicAgentRunner:
                 )
                 attempt += 1
                 continue
+            safe_provider_fallback = (
+                result.status is AgentExecutionStatus.PROVIDER_FAILED
+                and result.semantic_submission is None
+                and result.submission_evidence is not None
+                and result.submission_evidence.diagnostic_code
+                in RECOVERABLE_SUBMISSION_EVIDENCE_CODES
+                and (
+                    result.telemetry.invocation_lifecycle is None
+                    or result.telemetry.invocation_lifecycle.shutdown.cleanup_completed
+                )
+            )
             if (
-                result.status
-                in {
-                    AgentExecutionStatus.PROVIDER_FAILED,
-                    AgentExecutionStatus.PROVIDER_STALLED,
-                }
+                safe_provider_fallback
                 and provider_switching
                 and route_index + 1 < len(route_ids)
                 and isinstance(failure, DynamicAgentRunnerError)

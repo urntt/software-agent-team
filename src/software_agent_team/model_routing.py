@@ -280,6 +280,29 @@ def _eligible_profiles(
     )
 
 
+def resolve_bootstrap_model_profiles(
+    policy: ModelRoutingPolicy,
+) -> tuple[ModelProfile, ...]:
+    """Return the finite authorized route chain for bootstrap Planning."""
+
+    default = policy.get_profile(policy.default_profile_id)
+    if ModelSwitchCondition.PROVIDER_FAILURE not in (
+        policy.authorized_switch_conditions
+    ):
+        return (default,)
+    required = {AgentCapability.CLARIFICATION, AgentCapability.PLANNING}
+    order = _profile_order(policy)
+    fallbacks = sorted(
+        (
+            profile
+            for profile in policy.profiles
+            if profile.id != default.id and required.issubset(set(profile.capabilities))
+        ),
+        key=lambda profile: (profile.priority, order[profile.id]),
+    )
+    return (default, *fallbacks)
+
+
 def resolve_model_route_plan(
     policy: ModelRoutingPolicy,
     agents: Sequence[RoutableAgent],

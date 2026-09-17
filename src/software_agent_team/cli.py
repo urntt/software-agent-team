@@ -65,7 +65,10 @@ from software_agent_team.managed_install import (
 )
 from software_agent_team.model_costs import CachePricing
 from software_agent_team.model_metadata import ModelMetadataSource
-from software_agent_team.model_routing import ModelProfile
+from software_agent_team.model_routing import (
+    ModelProfile,
+    resolve_bootstrap_model_profiles,
+)
 from software_agent_team.model_runtime import (
     ArtifactSubmissionPolicy,
     CredentialSource,
@@ -85,6 +88,7 @@ from software_agent_team.planning import (
     CapabilityTimeoutPolicy,
     PlanningPolicy,
     PlanningRequest,
+    PlanningRouteRuntime,
     PlanningStore,
     run_interactive_planning,
 )
@@ -3370,79 +3374,117 @@ def _run_product_planning(
         prefix=".planning-runtime-",
         dir=state_paths.root,
     ) as temporary:
-        runtime_path = Path(temporary) / "openclaw.runtime.json"
-        materialize_run_configuration(
-            DEFAULT_OPENCLAW_CONFIG,
-            runtime_path,
-            manifest=manifest,
-            workspace=source_repository,
-            sandbox_image=inspection.sandbox_image_id,
-            sandbox_memory_mb=limits.memory_mb,
-            sandbox_cpus=limits.cpu_cores,
-            sandbox_pids_limit=limits.pids,
-            sandbox_open_files=limits.open_files,
-            sandbox_tmpfs_mb=limits.writable_tmpfs_mb,
-            model=configuration.model,
-            model_runtime_profile=(configuration.default_model_profile.runtime_profile),
-            bootstrap_capability=AgentCapability.CLARIFICATION,
+        planning_profiles = resolve_bootstrap_model_profiles(
+            configuration.model_routing_policy()
         )
-        try:
-            preflight = inspect_runtime_preflight(
+        if planning_profiles[0].model != request.model:
+            raise RuntimeConfigurationError(
+                "Planning request differs from the configured default model"
+            )
+        route_runtimes: list[PlanningRouteRuntime] = []
+        for profile in planning_profiles:
+            runtime_path = Path(temporary) / f"openclaw.runtime.{profile.id}.json"
+            materialize_run_configuration(
+                DEFAULT_OPENCLAW_CONFIG,
+                runtime_path,
+                manifest=manifest,
+                workspace=source_repository,
+                sandbox_image=inspection.sandbox_image_id,
+                sandbox_memory_mb=limits.memory_mb,
+                sandbox_cpus=limits.cpu_cores,
+                sandbox_pids_limit=limits.pids,
+                sandbox_open_files=limits.open_files,
+                sandbox_tmpfs_mb=limits.writable_tmpfs_mb,
+                model=profile.model,
+                model_runtime_profile=profile.runtime_profile,
+                bootstrap_capability=AgentCapability.CLARIFICATION,
+            )
+            try:
+                preflight = inspect_runtime_preflight(
+                    openclaw_binary=DEFAULT_OPENCLAW_BINARY,
+                    openclaw_state_dir=state_paths.openclaw,
+                    runtime_config=runtime_path,
+                    sandbox_binary="docker",
+                    sandbox_image=quality.policy.sandbox.image,
+                    expected_sandbox_image_id=inspection.sandbox_image_id,
+                    expected_model=profile.model,
+                    expected_runtime_profile=profile.runtime_profile,
+                )
+            except RuntimeConfigurationError as error:
+                raise RuntimeConfigurationError(
+                    "Planning runtime check failed before any Agent was started: "
+                    f"{error} (profile {profile.id})"
+                ) from error
+            if not preflight.ready:
+                raise RuntimeConfigurationError(
+                    f"Planning runtime preflight failed for profile {profile.id}: "
+                    f"config_valid={preflight.config_valid}, "
+                    f"sandbox_container_ready={preflight.sandbox_container_ready}, "
+                    "sandbox_container_error="
+                    f"{preflight.sandbox_container_error or 'none'}, "
+                    f"model_available={preflight.model_available}, "
+                    f"model_error={preflight.model_error or 'none'}"
+                )
+            planning_metadata = next(
+                (
+                    item
+                    for item in resource_authorization.model_metadata
+                    if item.profile_id == profile.id and item.model == profile.model
+                ),
+                None,
+            )
+            if planning_metadata is None:
+                raise RuntimeConfigurationError(
+                    f"task authorization does not cover Planning profile {profile.id}"
+                )
+            executor = OpenClawSubprocessExecutor(
                 openclaw_binary=DEFAULT_OPENCLAW_BINARY,
-                openclaw_state_dir=state_paths.openclaw,
-                runtime_config=runtime_path,
-                sandbox_binary="docker",
-                sandbox_image=quality.policy.sandbox.image,
-                expected_sandbox_image_id=inspection.sandbox_image_id,
-                expected_model=configuration.model,
-                expected_runtime_profile=(
-                    configuration.default_model_profile.runtime_profile
+                environment=isolated_openclaw_environment(
+                    state_dir=state_paths.openclaw,
+                    config_path=runtime_path,
+                ),
+                local=True,
+                run_deadline_at=resource_authorization.deadline_at,
+                process_lease_store=ProcessLeaseStore(state_paths.process_leases),
+            )
+            executor.register_model_liveness(
+                model=profile.model,
+                local=preflight.model_local,
+                provider_request_timeout_seconds=(
+                    preflight.model_request_timeout_seconds
                 ),
             )
-        except RuntimeConfigurationError as error:
-            raise RuntimeConfigurationError(
-                f"Planning runtime check failed before any Agent was started: {error}"
-            ) from error
-        if not preflight.ready:
-            raise RuntimeConfigurationError(
-                "Planning runtime preflight failed: "
-                f"config_valid={preflight.config_valid}, "
-                f"sandbox_container_ready={preflight.sandbox_container_ready}, "
-                "sandbox_container_error="
-                f"{preflight.sandbox_container_error or 'none'}, "
-                f"model_available={preflight.model_available}, "
-                f"model_error={preflight.model_error or 'none'}"
+            route_runtimes.append(
+                PlanningRouteRuntime(
+                    route_id=profile.id,
+                    model=profile.model,
+                    executor=executor,
+                    pricing=ModelPricing(
+                        model=planning_metadata.model,
+                        input_cost_per_million_usd=(
+                            planning_metadata.input_cost_per_million_usd
+                        ),
+                        output_cost_per_million_usd=(
+                            planning_metadata.output_cost_per_million_usd
+                        ),
+                        pricing_source=planning_metadata.pricing_source,
+                        pricing_observed_at=planning_metadata.observed_at,
+                        cache_pricing=planning_metadata.cache_pricing,
+                    ),
+                    runtime_profile=profile.runtime_profile,
+                )
             )
-        print("✓ Planning runtime: isolated workspace, sandbox, and model ready")
-        executor = OpenClawSubprocessExecutor(
-            openclaw_binary=DEFAULT_OPENCLAW_BINARY,
-            environment=isolated_openclaw_environment(
-                state_dir=state_paths.openclaw,
-                config_path=runtime_path,
-            ),
-            local=True,
-            run_deadline_at=resource_authorization.deadline_at,
-            process_lease_store=ProcessLeaseStore(state_paths.process_leases),
-        )
-        executor.register_model_liveness(
-            model=configuration.model,
-            local=preflight.model_local,
-            provider_request_timeout_seconds=(preflight.model_request_timeout_seconds),
-        )
-        planning_metadata = next(
-            (
-                item
-                for item in resource_authorization.model_metadata
-                if item.model == request.model
-            ),
-            None,
-        )
-        if planning_metadata is None:
-            raise RuntimeConfigurationError(
-                "task authorization does not cover the Planning model"
+        print(
+            "✓ Planning runtime: isolated workspace, sandbox, and model ready"
+            + (
+                ""
+                if len(route_runtimes) == 1
+                else f" ({len(route_runtimes)} authorized routes)"
             )
+        )
+        primary_route, *fallback_routes = route_runtimes
         coordinator = AdaptivePlanningCoordinator(
-            executor=executor,
+            executor=primary_route.executor,
             store=PlanningStore(state_paths.planning),
             policy=_product_planning_policy(
                 quality,
@@ -3450,20 +3492,11 @@ def _run_product_planning(
                 resource_authorization,
             ),
             budget_ledger=budget_ledger,
-            pricing=ModelPricing(
-                model=planning_metadata.model,
-                input_cost_per_million_usd=(
-                    planning_metadata.input_cost_per_million_usd
-                ),
-                output_cost_per_million_usd=(
-                    planning_metadata.output_cost_per_million_usd
-                ),
-                pricing_source=planning_metadata.pricing_source,
-                pricing_observed_at=planning_metadata.observed_at,
-                cache_pricing=planning_metadata.cache_pricing,
-            ),
-            route_id=planning_metadata.profile_id,
-            runtime_profile=configuration.default_model_profile.runtime_profile,
+            pricing=primary_route.pricing,
+            route_id=primary_route.route_id,
+            runtime_profile=primary_route.runtime_profile,
+            fallback_routes=tuple(fallback_routes),
+            provider_failure_fallback=bool(fallback_routes),
         )
         cleanup_arguments = {
             "sandbox_binary": "docker",

@@ -632,6 +632,14 @@ class DynamicExecutor:
                 activity_handler,
                 InvocationStopReason.PROVIDER_FAILURE,
             )
+            assert request.submission_contract is not None
+            submission_evidence = rejected_submission_evidence(
+                request.submission_contract,
+                binding_sha256="f" * 64,
+                status=AgentSubmissionStatus.UNAUTHORIZED,
+                code="tool_evidence_unavailable",
+                detail="no typed submission was accepted or left pending",
+            )
             return AgentExecutionResult(
                 status=AgentExecutionStatus.PROVIDER_FAILED,
                 error="scripted provider failure",
@@ -652,6 +660,7 @@ class DynamicExecutor:
                     provider="test",
                     model=request.model,
                 ),
+                submission_evidence=submission_evidence,
             )
         if self.provider_stall_once_for == request.agent_id and count == 1:
             if activity_handler is not None:
@@ -2945,6 +2954,46 @@ def test_dynamic_runner_switches_only_after_approved_provider_failure(
     )
 
 
+def test_dynamic_runner_does_not_fallback_with_a_pending_submission(
+    tmp_path: Path,
+) -> None:
+    runner, team_plan, executor, _, _ = runtime(
+        tmp_path,
+        model_switching=True,
+        executor_options={"provider_fail_once_for": "builder"},
+    )
+    events: list[ProgressEvent] = []
+    runner.activity_handler = events.append
+    execute = executor.execute
+
+    def pending_submission(request, *, activity_handler=None):
+        result = execute(request, activity_handler=activity_handler)
+        if result.status is not AgentExecutionStatus.PROVIDER_FAILED:
+            return result
+        assert request.submission_contract is not None
+        evidence = rejected_submission_evidence(
+            request.submission_contract,
+            binding_sha256="e" * 64,
+            status=AgentSubmissionStatus.UNAUTHORIZED,
+            code="unattributed_submission_attempt",
+            detail="a typed submission call remains pending",
+        )
+        return result.model_copy(update={"submission_evidence": evidence})
+
+    executor.execute = pending_submission
+
+    result = DagScheduler().execute(team_plan, runner)
+
+    assert result.status is ScheduleStatus.FAILED
+    builder_requests = [
+        request for request in executor.requests if request.agent_id == "builder"
+    ]
+    assert [request.model for request in builder_requests] == [MODEL]
+    assert ProgressEventKind.MODEL_ROUTE_SWITCHED not in {
+        event.kind for event in events
+    }
+
+
 def test_confirmed_free_provider_failure_can_switch_with_missing_token_usage(
     tmp_path: Path,
 ) -> None:
@@ -3071,7 +3120,7 @@ def test_durable_user_stop_precedes_initial_and_fallback_admission(
     assert runner.budget_ledger.snapshot().active_calls == 0
 
 
-def test_dynamic_runner_can_use_approved_fallback_after_provider_stall(
+def test_dynamic_runner_does_not_fallback_after_provider_stall(
     tmp_path: Path,
 ) -> None:
     runner, team_plan, executor, _, _ = runtime(
@@ -3084,14 +3133,15 @@ def test_dynamic_runner_can_use_approved_fallback_after_provider_stall(
 
     result = DagScheduler().execute(team_plan, runner)
 
-    assert result.status is ScheduleStatus.COMPLETED
+    assert result.status is ScheduleStatus.FAILED
+    assert (
+        runner.termination_reasons["builder"]
+        is TerminationReason.DEPENDENCY_UNAVAILABLE
+    )
     builder_requests = [
         request for request in executor.requests if request.agent_id == "builder"
     ]
-    assert [request.model for request in builder_requests] == [
-        MODEL,
-        "test/fallback-model",
-    ]
+    assert [request.model for request in builder_requests] == [MODEL]
     first = next(
         runner.artifact_store.load(reference)
         for reference in runner.execution_records
@@ -3125,10 +3175,10 @@ def test_dynamic_runner_can_use_approved_fallback_after_provider_stall(
         ProgressEventKind.AGENT_COLLECTING_EVIDENCE,
         ProgressEventKind.AGENT_STOPPED,
         ProgressEventKind.AGENT_INVOCATION_COMPLETED,
-        ProgressEventKind.MODEL_ROUTE_SWITCHED,
     ]
     positions = [event_kinds.index(kind) for kind in ordered]
     assert positions == sorted(positions)
+    assert ProgressEventKind.MODEL_ROUTE_SWITCHED not in event_kinds
 
 
 def test_dynamic_runner_projects_response_finalization_without_provider_claims(

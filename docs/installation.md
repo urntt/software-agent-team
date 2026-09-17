@@ -213,10 +213,14 @@ revision: only the changed result and its transitive dependents receive fresh
 evidence, while unrelated results retain their original evidence and
 timestamps. A recheck with no changed input creates no duplicate revision.
 
-After the user confirms a build and before the first Agent call, the run
+Before Planning's first model call, SAT materializes and checks every configured
+profile in the finite bootstrap route chain. A missing fallback therefore stops
+before any provider request instead of appearing only after the primary fails.
+
+After the user approves the plan and before the first runtime Agent call, the run
 preflight repeats the restricted container and tool-execution probe against the
-exact immutable image ID recorded for that run. It also verifies that the
-bootstrap `provider/model` and every route authorized by the approved TeamPlan
+exact immutable image ID recorded for that run. It also verifies that every
+route authorized by the approved TeamPlan
 resolve through the run-scoped catalog and SAT's isolated auth boundary. These
 checks catch a stale container or unresolved primary or fallback route before
 spending provider tokens.
@@ -285,9 +289,13 @@ On the first configured run, SAT then:
 9. Asks for one new direct child project directory;
 10. Shows the request, destination, exact model, and provider-usage consequence;
 11. Requires explicit authorization before model-backed Planning;
-12. Uses a read-only bootstrap Planning capability for bounded material
-    clarification, with elapsed model-wait heartbeats and visible response
-    validation or bounded repair;
+12. Preflights the finite default-first route chain authorized for both
+    clarification and Planning, then uses the active route through the read-only
+    bootstrap capability for bounded material clarification, with elapsed
+    model-wait heartbeats and visible response validation or bounded repair. An
+    attributable provider failure may switch to the next preflighted route only
+    after the failed call's cost is settled and no accepted or pending typed
+    submission exists;
 13. Shows one complete requirements, implementation, Dynamic Team, dependency,
     permission, model, timeout, concurrency, iteration, and budget overview;
 14. Lets the user approve, request a natural-language revision, make a supported
@@ -519,14 +527,20 @@ sat configure --non-interactive \
   --allow-provider-switch
 ```
 
-The default profile continues to serve bootstrap clarification and Planning.
+The default profile starts bootstrap clarification and Planning. When provider
+failure switching is authorized, profiles that support both bootstrap
+capabilities form one finite priority-ordered fallback chain and are all
+preflighted before Planning starts.
+
 For each runtime Agent, the controller resolves Agent edit, stage override,
 capability override, default-profile support, then lowest numeric eligible
 priority. The Planning overview exposes the resulting primary route, reason,
 finite configured fallback list, and pricing before approval. A fallback is not a silent retry:
 it must be in that Agent's approved assignment, is used only after an
 attributable provider failure, consumes the run call budget, and is recorded
-with the failed call and possible cost consequence. `--clear-model-routing`
+with the failed call and possible cost consequence. Planning additionally
+requires settled cost and no accepted, stored, or pending typed submission;
+otherwise it fails closed on the current route. `--clear-model-routing`
 returns configuration to one strict default profile.
 
 Set an absolute `SAT_CONFIG_PATH` only when the configuration location must be

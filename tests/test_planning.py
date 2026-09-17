@@ -21,6 +21,7 @@ from pydantic import ValidationError
 import software_agent_team.planning as planning
 from software_agent_team.artifacts import (
     AcceptanceCriterion,
+    AgentToolEvidenceStatus,
     ArtifactKind,
     DeliveryMaturity,
     ProductDefinition,
@@ -82,8 +83,10 @@ from software_agent_team.planning import (
     PlanningQuestion,
     PlanningQuestionAnswer,
     PlanningQuestionOrigin,
+    PlanningRecoveryAction,
     PlanningRequest,
     PlanningResponseKind,
+    PlanningRouteRuntime,
     PlanningSessionStatus,
     PlanningStore,
     PlanningTurn,
@@ -450,6 +453,21 @@ def strip_v8_decision_fields(body_payload: dict[str, object]) -> None:
             and provenance.get("kind") == "resolved_question"
         ):
             decision["question_id"] = provenance["source"]
+
+
+def strip_v21_turn_fields(payload: dict[str, object]) -> None:
+    """Remove tool-state and recovery fields absent from legacy Planning turns."""
+
+    execution = payload["execution"]
+    assert isinstance(execution, dict)
+    for field in (
+        "tool_evidence_status",
+        "session_transcript_sha256",
+        "session_record_count",
+        "tool_evidence_error",
+    ):
+        execution.pop(field, None)
+    payload.pop("recovery_action", None)
 
 
 def test_planning_overview_separates_constraint_authority_without_losing_data() -> None:
@@ -1631,6 +1649,7 @@ def test_one_question_can_authorize_an_explicit_product_dimension_bundle(
     assert current_payload["question_admission"]["origin"] == "planner_suggestion"
     schema_seventeen = deepcopy(current_payload)
     schema_seventeen["schema_version"] = 17
+    strip_v21_turn_fields(schema_seventeen)
     assert (
         PlanningTurn.model_validate(schema_seventeen).model_dump(mode="json")
         == schema_seventeen
@@ -1641,6 +1660,7 @@ def test_one_question_can_authorize_an_explicit_product_dimension_bundle(
         PlanningTurn.model_validate(without_admission)
     legacy_payload = dict(without_admission)
     legacy_payload["schema_version"] = 16
+    strip_v21_turn_fields(legacy_payload)
     assert (
         PlanningTurn.model_validate(legacy_payload).model_dump(mode="json")
         == legacy_payload
@@ -8270,6 +8290,7 @@ def test_schema_three_turn_remains_readable_without_correction_evidence(
     )
     payload = store.load_turn(request().run_id, 1).model_dump(mode="json")
     payload["schema_version"] = 3
+    strip_v21_turn_fields(payload)
     payload["execution"].pop("invocation_lifecycle", None)
     parsed_body = payload["parsed_response"]["proposal"]
     assert isinstance(parsed_body, dict)
@@ -8315,6 +8336,7 @@ def test_schema_six_turn_remains_canonical_without_typed_submission(
     )
     payload = store.load_turn(request().run_id, 1).model_dump(mode="json")
     payload["schema_version"] = 6
+    strip_v21_turn_fields(payload)
     payload["execution"].pop("invocation_lifecycle", None)
     parsed_body = payload["parsed_response"]["proposal"]
     assert isinstance(parsed_body, dict)
@@ -8362,6 +8384,7 @@ def test_schema_seven_turn_remains_canonical_without_decision_provenance(
     )
     payload = store.load_turn(request().run_id, 1).model_dump(mode="json")
     payload["schema_version"] = 7
+    strip_v21_turn_fields(payload)
     payload["execution"].pop("invocation_lifecycle", None)
     submission_body = payload["submission_payload"]["proposal"]
     parsed_body = payload["parsed_response"]["proposal"]
@@ -8452,6 +8475,7 @@ def test_planning_persists_runtime_rejections_without_legacy_reinterpretation(
     assert evidence.rejections[0].tool_name == "missing_tool"
     payload = turn.model_dump(mode="json")
     payload["schema_version"] = 11
+    strip_v21_turn_fields(payload)
     payload["execution"].pop("invocation_lifecycle", None)
     with pytest.raises(ValidationError, match="legacy Planning turns"):
         PlanningTurn.model_validate(payload)
@@ -8562,6 +8586,7 @@ def test_planning_uses_the_shared_task_cost_ledger_and_persists_source(
     )
     legacy = json.loads(json.dumps(serialized))
     legacy["schema_version"] = 10
+    strip_v21_turn_fields(legacy)
     with pytest.raises(ValidationError, match="legacy Planning turns"):
         PlanningTurn.model_validate(legacy)
     del legacy["execution"]["cost_record"]
@@ -11656,6 +11681,7 @@ raise SystemExit(cli.main([]))
         assert legacy["schema_version"] == planning.PLANNING_SCHEMA_VERSION
         assert legacy["execution"]["invocation_lifecycle"]["schema_version"] == 5
         legacy["schema_version"] = 16
+        strip_v21_turn_fields(legacy)
         assert PlanningTurn.model_validate(legacy).model_dump(mode="json") == legacy
         legacy["schema_version"] = 14
         with pytest.raises(ValidationError, match="lifecycle v5"):
@@ -12018,6 +12044,429 @@ class EvidencelessThenScriptedExecutor:
             ),
             submission_evidence=evidence,
         )
+
+
+class RecoverableFailureThenScriptedExecutor:
+    """Return a settled content-free failure before optional scripted responses."""
+
+    def __init__(
+        self,
+        responses: list[object],
+        *,
+        status: AgentExecutionStatus,
+        usage: AgentTokenUsage | None,
+    ) -> None:
+        self._scripted = ScriptedAgentExecutor(responses)
+        self._status = status
+        self._usage = usage
+        self._failed = False
+
+    @property
+    def requests(self) -> list[AgentExecutionRequest]:
+        return self._scripted.requests
+
+    def execute(
+        self,
+        request: AgentExecutionRequest,
+        *,
+        activity_handler: object = None,
+    ) -> AgentExecutionResult:
+        if self._failed:
+            return self._scripted.execute(
+                request,
+                activity_handler=activity_handler,
+            )
+        self._failed = True
+        self._scripted.requests.append(request)
+        assert request.submission_contract is not None
+        evidence = rejected_submission_evidence(
+            request.submission_contract,
+            binding_sha256=hashlib.sha256(b"recoverable-failure").hexdigest(),
+            status=AgentSubmissionStatus.UNAUTHORIZED,
+            code="tool_evidence_unavailable",
+            detail="no private submission file exists and session tools are invalid",
+        )
+        provider = None if request.model is None else request.model.partition("/")[0]
+        return AgentExecutionResult(
+            status=self._status,
+            error=(
+                "attributable provider failure"
+                if self._status is AgentExecutionStatus.PROVIDER_FAILED
+                else "OpenClaw exited with status 17"
+            ),
+            telemetry=AgentExecutionTelemetry(
+                role=request.role,
+                agent_id=request.agent_id,
+                capability=request.capability,
+                specialization=request.specialization,
+                session_key=request.session_key,
+                command=("fake-agent", request.agent_id),
+                started_at=FIXED_TIME,
+                finished_at=FIXED_TIME,
+                duration_ms=1_200,
+                exit_code=17,
+                session_id=f"session-{request.agent_id}",
+                provider=provider,
+                model=request.model,
+                usage=self._usage,
+                tool_evidence_status=AgentToolEvidenceStatus.INVALID,
+                session_transcript_sha256="d" * 64,
+                session_record_count=3,
+                tool_evidence_error=(
+                    "OpenClaw terminal response did not finish with stop reason"
+                ),
+            ),
+            submission_evidence=evidence,
+        )
+
+
+def planning_route_pricing(model: str) -> ModelPricing:
+    return ModelPricing(
+        model=model,
+        input_cost_per_million_usd="1",
+        output_cost_per_million_usd="2",
+        pricing_source=ModelMetadataSource.USER_SUPPLIED,
+        pricing_observed_at=FIXED_TIME,
+        cache_pricing=CachePricing(
+            read_cost_per_million_usd=0,
+            write_cost_per_million_usd=0,
+            source=ModelMetadataSource.CONFIRMED_ZERO,
+            observed_at=FIXED_TIME,
+        ),
+    )
+
+
+def zero_planning_route_pricing(model: str) -> ModelPricing:
+    return ModelPricing(
+        model=model,
+        input_cost_per_million_usd=0,
+        output_cost_per_million_usd=0,
+        pricing_source=ModelMetadataSource.CONFIRMED_ZERO,
+        pricing_observed_at=FIXED_TIME,
+        cache_pricing=CachePricing(
+            read_cost_per_million_usd=0,
+            write_cost_per_million_usd=0,
+            source=ModelMetadataSource.CONFIRMED_ZERO,
+            observed_at=FIXED_TIME,
+        ),
+    )
+
+
+def complete_planning_usage() -> AgentTokenUsage:
+    return AgentTokenUsage(
+        input_tokens=100,
+        output_tokens=20,
+        cache_read_tokens=0,
+        cache_write_tokens=0,
+    )
+
+
+def test_process_failure_with_settled_usage_retries_same_route_once(
+    tmp_path: Path,
+) -> None:
+    task_budget = AgentBudget(
+        authority=BudgetAuthority.USER_TASK,
+        max_estimated_cost_usd="5",
+    )
+    executor = RecoverableFailureThenScriptedExecutor(
+        [
+            ScriptedAgentResponse(
+                text="ignored",
+                model="provider/model",
+                provider="provider",
+                usage=complete_planning_usage(),
+                submission_payload=proposal_response().model_dump(mode="json"),
+            )
+        ],
+        status=AgentExecutionStatus.PROCESS_FAILED,
+        usage=complete_planning_usage(),
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(budget=task_budget),
+        budget_ledger=AgentBudgetLedger(task_budget),
+        pricing=planning_route_pricing("provider/model"),
+        route_id="default",
+        runtime_profile=planning.runtime_profile_for_model("provider/model"),
+        clock=AdvancingClock(),
+    )
+
+    created = coordinator.start(
+        request(),
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+
+    assert created is not None
+    assert [item.model for item in executor.requests] == [
+        "provider/model",
+        "provider/model",
+    ]
+    assert [item.session_generation for item in executor.requests] == [1, 2]
+    failed = store.load_turn(request().run_id, 1)
+    assert failed.recovery_action is PlanningRecoveryAction.SAME_ROUTE_RETRY
+    assert failed.execution.provider == "provider"
+    assert failed.execution.model == "provider/model"
+    assert failed.execution.input_tokens == 100
+    assert failed.execution.output_tokens == 20
+    assert failed.execution.tool_evidence_status is AgentToolEvidenceStatus.INVALID
+    assert failed.execution.session_transcript_sha256 == "d" * 64
+    assert failed.execution.session_record_count == 3
+    assert failed.execution.tool_evidence_error == (
+        "OpenClaw terminal response did not finish with stop reason"
+    )
+
+
+def test_response_finalization_stall_never_uses_evidence_recovery(
+    tmp_path: Path,
+) -> None:
+    task_budget = AgentBudget(
+        authority=BudgetAuthority.USER_TASK,
+        max_estimated_cost_usd="5",
+    )
+    executor = RecoverableFailureThenScriptedExecutor(
+        [
+            ScriptedAgentResponse(
+                text="ignored",
+                model="provider/model",
+                provider="provider",
+                usage=complete_planning_usage(),
+                submission_payload=proposal_response().model_dump(mode="json"),
+            )
+        ],
+        status=AgentExecutionStatus.RESPONSE_FINALIZATION_STALLED,
+        usage=complete_planning_usage(),
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(budget=task_budget),
+        budget_ledger=AgentBudgetLedger(task_budget),
+        pricing=planning_route_pricing("provider/model"),
+        route_id="default",
+        runtime_profile=planning.runtime_profile_for_model("provider/model"),
+        clock=AdvancingClock(),
+    )
+
+    with pytest.raises(PlanningError, match="OpenClaw exited with status 17"):
+        coordinator.start(
+            request(),
+            answer_question=lambda _question: pytest.fail("unexpected question"),
+        )
+
+    assert len(executor.requests) == 1
+    failed = store.load_turn(request().run_id, 1)
+    assert failed.recovery_action is None
+
+
+def test_provider_failure_switches_to_authorized_planning_fallback(
+    tmp_path: Path,
+) -> None:
+    task_budget = AgentBudget(
+        authority=BudgetAuthority.USER_TASK,
+        max_estimated_cost_usd="5",
+    )
+    primary = RecoverableFailureThenScriptedExecutor(
+        [],
+        status=AgentExecutionStatus.PROVIDER_FAILED,
+        usage=complete_planning_usage(),
+    )
+    fallback = ScriptedAgentExecutor(
+        [
+            ScriptedAgentResponse(
+                text="ignored",
+                model="backup/model",
+                provider="backup",
+                usage=complete_planning_usage(),
+                submission_payload=json.loads(response(question_response())),
+            ),
+            ScriptedAgentResponse(
+                text="ignored",
+                model="backup/model",
+                provider="backup",
+                usage=complete_planning_usage(),
+                submission_payload=proposal_response(
+                    proposal_body(question_id="link_scope")
+                ).model_dump(mode="json"),
+            ),
+        ]
+    )
+    ledger = AgentBudgetLedger(task_budget)
+    store = PlanningStore(tmp_path / "planning")
+    activities: list[PlanningActivity] = []
+    coordinator = AdaptivePlanningCoordinator(
+        executor=primary,
+        store=store,
+        policy=policy(budget=task_budget),
+        budget_ledger=ledger,
+        pricing=planning_route_pricing("provider/model"),
+        route_id="default",
+        runtime_profile=planning.runtime_profile_for_model("provider/model"),
+        fallback_routes=(
+            PlanningRouteRuntime(
+                route_id="backup",
+                model="backup/model",
+                executor=fallback,
+                pricing=planning_route_pricing("backup/model"),
+                runtime_profile=planning.runtime_profile_for_model("backup/model"),
+            ),
+        ),
+        provider_failure_fallback=True,
+        clock=AdvancingClock(),
+    )
+
+    created = coordinator.start(
+        request(source_request=AMBIGUOUS_LINK_REQUEST),
+        answer_question=lambda _question: "Only local links.",
+        activity_handler=activities.append,
+    )
+
+    assert created is not None
+    assert [item.model for item in primary.requests] == ["provider/model"]
+    assert [item.model for item in fallback.requests] == [
+        "backup/model",
+        "backup/model",
+    ]
+    assert primary.requests[0].session_generation == 1
+    assert fallback.requests[0].session_generation == 2
+    assert fallback.requests[1].session_generation == 3
+    failed = store.load_turn(request().run_id, 1)
+    recovered = store.load_turn(request().run_id, 2)
+    assert failed.recovery_action is PlanningRecoveryAction.FALLBACK_ROUTE
+    assert failed.execution.cost_record is not None
+    assert failed.execution.cost_record.route_id == "default"
+    assert recovered.execution.cost_record is not None
+    assert recovered.execution.cost_record.route_id == "backup"
+    assert recovered.execution.cost_record.model == "backup/model"
+    assert ledger.snapshot().calls_completed == 3
+    assert PlanningActivityKind.MODEL_ROUTE_SWITCHED in {
+        activity.kind for activity in activities
+    }
+
+
+def test_confirmed_zero_provider_failure_can_fallback_without_token_usage(
+    tmp_path: Path,
+) -> None:
+    task_budget = AgentBudget(
+        authority=BudgetAuthority.USER_TASK,
+        max_estimated_cost_usd="5",
+    )
+    primary = RecoverableFailureThenScriptedExecutor(
+        [],
+        status=AgentExecutionStatus.PROVIDER_FAILED,
+        usage=None,
+    )
+    fallback = ScriptedAgentExecutor(
+        [
+            ScriptedAgentResponse(
+                text="ignored",
+                model="backup/model",
+                provider="backup",
+                usage=complete_planning_usage(),
+                submission_payload=proposal_response().model_dump(mode="json"),
+            )
+        ]
+    )
+    ledger = AgentBudgetLedger(task_budget)
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=primary,
+        store=store,
+        policy=policy(budget=task_budget),
+        budget_ledger=ledger,
+        pricing=zero_planning_route_pricing("provider/model"),
+        route_id="default",
+        runtime_profile=planning.runtime_profile_for_model("provider/model"),
+        fallback_routes=(
+            PlanningRouteRuntime(
+                route_id="backup",
+                model="backup/model",
+                executor=fallback,
+                pricing=zero_planning_route_pricing("backup/model"),
+                runtime_profile=planning.runtime_profile_for_model("backup/model"),
+            ),
+        ),
+        provider_failure_fallback=True,
+        clock=AdvancingClock(),
+    )
+
+    created = coordinator.start(
+        request(),
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+
+    assert created is not None
+    failed = store.load_turn(request().run_id, 1)
+    assert failed.recovery_action is PlanningRecoveryAction.FALLBACK_ROUTE
+    assert failed.execution.budget_error is None
+    assert failed.execution.input_tokens is None
+    assert failed.execution.output_tokens is None
+    assert failed.execution.estimated_cost_usd == 0
+    usage = ledger.snapshot()
+    assert usage.calls_completed == 2
+    assert usage.known_estimated_cost_usd == 0
+    assert usage.unpriced_calls == 0
+    assert usage.unreported_token_calls == 1
+
+
+def test_provider_failure_with_unknown_cost_does_not_start_fallback(
+    tmp_path: Path,
+) -> None:
+    task_budget = AgentBudget(
+        authority=BudgetAuthority.USER_TASK,
+        max_estimated_cost_usd="5",
+    )
+    primary = RecoverableFailureThenScriptedExecutor(
+        [],
+        status=AgentExecutionStatus.PROVIDER_FAILED,
+        usage=None,
+    )
+    fallback = ScriptedAgentExecutor(
+        [
+            ScriptedAgentResponse(
+                text="ignored",
+                model="backup/model",
+                provider="backup",
+                usage=complete_planning_usage(),
+                submission_payload=proposal_response().model_dump(mode="json"),
+            )
+        ]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=primary,
+        store=store,
+        policy=policy(budget=task_budget),
+        budget_ledger=AgentBudgetLedger(task_budget),
+        pricing=planning_route_pricing("provider/model"),
+        route_id="default",
+        runtime_profile=planning.runtime_profile_for_model("provider/model"),
+        fallback_routes=(
+            PlanningRouteRuntime(
+                route_id="backup",
+                model="backup/model",
+                executor=fallback,
+                pricing=planning_route_pricing("backup/model"),
+                runtime_profile=planning.runtime_profile_for_model("backup/model"),
+            ),
+        ),
+        provider_failure_fallback=True,
+        clock=AdvancingClock(),
+    )
+
+    with pytest.raises(PlanningError, match="attributable provider failure"):
+        coordinator.start(
+            request(),
+            answer_question=lambda _question: pytest.fail("unexpected question"),
+        )
+
+    assert len(primary.requests) == 1
+    assert fallback.requests == []
+    failed = store.load_turn(request().run_id, 1)
+    assert failed.recovery_action is None
+    assert failed.execution.budget_error is not None
 
 
 def test_unattributable_tool_evidence_is_recovered_once_then_accepted(

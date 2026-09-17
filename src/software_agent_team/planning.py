@@ -33,6 +33,7 @@ from pydantic import (
 from software_agent_team.artifacts import (
     AcceptanceCriterion,
     AgentRole,
+    AgentToolEvidenceStatus,
     ArtifactKind,
     DeliveryMaturity,
     ProductDefinition,
@@ -45,6 +46,7 @@ from software_agent_team.artifacts import (
     RuntimeRejectionEvidence,
     TaskBrief,
     review_boundary_definition_map,
+    validate_tool_evidence_collection,
 )
 from software_agent_team.budgets import (
     AgentBudget,
@@ -117,6 +119,7 @@ from software_agent_team.responses import (
 )
 from software_agent_team.submissions import (
     ARTIFACT_SUBMISSION_TOOL,
+    RECOVERABLE_SUBMISSION_EVIDENCE_CODES,
     AgentSubmissionContract,
     AgentSubmissionEvidence,
     AgentSubmissionPurpose,
@@ -144,7 +147,7 @@ from software_agent_team.teams import (
     workspace_scopes_overlap,
 )
 
-PLANNING_SCHEMA_VERSION = 20
+PLANNING_SCHEMA_VERSION = 21
 MINIMUM_READABLE_PLANNING_SCHEMA_VERSION = 2
 
 # One invocation may fail to produce any attributable typed submission even after
@@ -154,12 +157,11 @@ MINIMUM_READABLE_PLANNING_SCHEMA_VERSION = 2
 # times. Raw assistant text still never substitutes for a typed submission, and a
 # submission that exists but is rejected stays fail-closed.
 SUBMISSION_EVIDENCE_RECOVERY_LIMIT = 1
-RECOVERABLE_SUBMISSION_EVIDENCE_CODES = frozenset(
+RECOVERABLE_PLANNING_EXECUTION_STATUSES = frozenset(
     {
-        "tool_evidence_unavailable",
-        "submission_missing",
-        "upstream_incomplete_after_tool_result",
-        "upstream_incomplete_after_terminal_response",
+        AgentExecutionStatus.INVALID_RESPONSE,
+        AgentExecutionStatus.PROCESS_FAILED,
+        AgentExecutionStatus.UPSTREAM_INCOMPLETE,
     }
 )
 PLANNING_TEMPLATE = Path(__file__).with_name("prompt_templates") / "adaptive_planner.md"
@@ -466,6 +468,13 @@ class AgentWorkload(StrEnum):
     COMPLEX = "complex"
 
 
+class PlanningRecoveryAction(StrEnum):
+    """Controller-owned continuation selected after one failed Planning turn."""
+
+    SAME_ROUTE_RETRY = "same_route_retry"
+    FALLBACK_ROUTE = "fallback_route"
+
+
 class PlanningActivityKind(StrEnum):
     """User-safe checkpoints around one blocking Planning invocation."""
 
@@ -498,6 +507,7 @@ class PlanningActivityKind(StrEnum):
     BUDGET_UPDATED = "budget_updated"
     CORRECTION_SCHEDULED = "correction_scheduled"
     SUBMISSION_EVIDENCE_RECOVERY = "submission_evidence_recovery"
+    MODEL_ROUTE_SWITCHED = "model_route_switched"
     CLARIFICATION_SCHEDULED = "clarification_scheduled"
     RESPONSE_VALIDATED = "response_validated"
 
@@ -782,6 +792,11 @@ class TerminalPlanningProgress:
             self._print(
                 "↻ Planning response produced no attributable typed submission; "
                 f"reissuing the same request once as attempt {attempt_label}"
+            )
+        elif activity.kind is PlanningActivityKind.MODEL_ROUTE_SWITCHED:
+            self._print(
+                "↻ Planning provider route failed with settled usage and no "
+                f"accepted submission; switching to {activity.model}"
             )
         elif activity.kind is PlanningActivityKind.CLARIFICATION_SCHEDULED:
             dimension = (
@@ -3094,6 +3109,7 @@ class PlanningRequest(BaseModel):
         17,
         18,
         19,
+        20,
         PLANNING_SCHEMA_VERSION,
     ] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -6847,6 +6863,7 @@ class AdaptiveImplementationPlan(BaseModel):
         17,
         18,
         19,
+        20,
         PLANNING_SCHEMA_VERSION,
     ] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -6912,6 +6929,27 @@ class PlanningExecutionEvidence(BaseModel):
     budget_usage: AgentBudgetUsage | None = None
     budget_error: str | None = Field(default=None, min_length=1, max_length=2000)
     provider_liveness: ProviderLivenessEvidence | None = None
+    tool_evidence_status: AgentToolEvidenceStatus | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    session_transcript_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+        exclude_if=lambda value: value is None,
+    )
+    session_record_count: int | None = Field(
+        default=None,
+        ge=1,
+        le=4096,
+        exclude_if=lambda value: value is None,
+    )
+    tool_evidence_error: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=2000,
+        exclude_if=lambda value: value is None,
+    )
     error: str | None = None
     invocation_lifecycle: InvocationLifecycleEvidence | None = Field(
         default=None, exclude_if=lambda value: value is None
@@ -6934,6 +6972,23 @@ class PlanningExecutionEvidence(BaseModel):
             or record.pricing_source != self.pricing_source
         ):
             raise ValueError("Planning cost record differs from execution evidence")
+        if self.tool_evidence_status is None:
+            if (
+                self.session_transcript_sha256 is not None
+                or self.session_record_count is not None
+                or self.tool_evidence_error is not None
+            ):
+                raise ValueError(
+                    "Planning tool evidence details require a collection status"
+                )
+        else:
+            validate_tool_evidence_collection(
+                status=self.tool_evidence_status,
+                transcript_sha256=self.session_transcript_sha256,
+                record_count=self.session_record_count,
+                tool_calls=(),
+                error=self.tool_evidence_error,
+            )
         return self
 
     @field_validator("started_at", "finished_at")
@@ -6966,6 +7021,7 @@ class PlanningTurn(BaseModel):
         17,
         18,
         19,
+        20,
         PLANNING_SCHEMA_VERSION,
     ] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -7006,6 +7062,10 @@ class PlanningTurn(BaseModel):
         exclude_if=lambda value: value is None,
     )
     semantic_correction_outcome: SemanticCorrectionOutcome | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    recovery_action: PlanningRecoveryAction | None = Field(
         default=None,
         exclude_if=lambda value: value is None,
     )
@@ -7096,6 +7156,49 @@ class PlanningTurn(BaseModel):
             "runtime_rejection_evidence" in self.execution.model_fields_set
         ):
             raise ValueError("legacy Planning turns cannot contain runtime rejections")
+        tool_evidence_fields = {
+            "tool_evidence_status",
+            "session_transcript_sha256",
+            "session_record_count",
+            "tool_evidence_error",
+        }
+        if self.schema_version < 21 and tool_evidence_fields.intersection(
+            self.execution.model_fields_set
+        ):
+            raise ValueError("legacy Planning turns cannot contain tool evidence state")
+        if self.schema_version < 21 and self.recovery_action is not None:
+            raise ValueError("legacy Planning turns cannot schedule typed recovery")
+        if self.schema_version >= 21 and self.execution.tool_evidence_status is None:
+            raise ValueError("current Planning turns require tool evidence state")
+        if self.recovery_action is not None:
+            diagnostic_code = (
+                None
+                if self.submission_evidence is None
+                else self.submission_evidence.diagnostic_code
+            )
+            if (
+                self.execution.status
+                in {
+                    AgentExecutionStatus.COMPLETED,
+                    AgentExecutionStatus.INTERRUPTED,
+                }
+                or self.execution.budget_error is not None
+                or self.submission_payload is not None
+                or diagnostic_code not in RECOVERABLE_SUBMISSION_EVIDENCE_CODES
+            ):
+                raise ValueError("Planning recovery lacks a safe failed invocation")
+            lifecycle = self.execution.invocation_lifecycle
+            if lifecycle is not None and not lifecycle.shutdown.cleanup_completed:
+                raise ValueError("Planning recovery requires completed cleanup")
+            if (self.recovery_action is PlanningRecoveryAction.FALLBACK_ROUTE) != (
+                self.execution.status is AgentExecutionStatus.PROVIDER_FAILED
+            ):
+                raise ValueError("Planning recovery action differs from failure class")
+            if (
+                self.recovery_action is PlanningRecoveryAction.SAME_ROUTE_RETRY
+                and self.execution.status not in RECOVERABLE_PLANNING_EXECUTION_STATUSES
+            ):
+                raise ValueError("Planning failure class cannot be retried")
         cost_record = self.execution.cost_record
         if self.schema_version < 11 and cost_record is not None:
             raise ValueError("legacy Planning turns cannot contain a cost record")
@@ -7247,6 +7350,7 @@ class PlanningProposal(BaseModel):
         17,
         18,
         19,
+        20,
         PLANNING_SCHEMA_VERSION,
     ] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -7337,6 +7441,7 @@ class PlanningSession(BaseModel):
         17,
         18,
         19,
+        20,
         PLANNING_SCHEMA_VERSION,
     ] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -7538,6 +7643,7 @@ class PlanningApproval(BaseModel):
         17,
         18,
         19,
+        20,
         PLANNING_SCHEMA_VERSION,
     ] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -8956,7 +9062,7 @@ class PlanningStore:
         budget_usage: AgentBudgetUsage | None = None,
         budget_error: str | None = None,
         cost_record: ModelCallCostRecord | None = None,
-        evidence_recovery_scheduled: bool = False,
+        recovery_action: PlanningRecoveryAction | None = None,
     ) -> PlanningTurn:
         session = self.load_session(run_id)
         if session.status in {
@@ -8992,6 +9098,7 @@ class PlanningStore:
             response_validation=response_validation,
             semantic_correction_request=semantic_correction_request,
             semantic_correction_outcome=semantic_correction_outcome,
+            recovery_action=recovery_action,
             execution=PlanningExecutionEvidence(
                 status=result.status,
                 session_key=result.telemetry.session_key,
@@ -9008,6 +9115,10 @@ class PlanningStore:
                 budget_error=budget_error,
                 cost_record=cost_record,
                 provider_liveness=result.telemetry.provider_liveness,
+                tool_evidence_status=result.telemetry.tool_evidence_status,
+                session_transcript_sha256=(result.telemetry.session_transcript_sha256),
+                session_record_count=result.telemetry.session_record_count,
+                tool_evidence_error=result.telemetry.tool_evidence_error,
                 invocation_lifecycle=result.telemetry.invocation_lifecycle,
                 runtime_rejection_evidence=(
                     RuntimeRejectionEvidence(
@@ -9034,10 +9145,9 @@ class PlanningStore:
                         if result.status is AgentExecutionStatus.INTERRUPTED
                         else PlanningSessionStatus.CLARIFYING
                         if result.status is AgentExecutionStatus.COMPLETED
-                        # A turn that produced no attributable typed submission is
-                        # persisted in full, but it does not end the dialogue while
-                        # the controller reissues the identical request.
-                        or evidence_recovery_scheduled
+                        # A failed turn stays open only when the Controller has
+                        # already selected one bounded, persisted recovery action.
+                        or recovery_action is not None
                         else PlanningSessionStatus.FAILED
                     ),
                     "updated_at": _utc(now),
@@ -9224,6 +9334,31 @@ class _Invocation:
         )
 
 
+@dataclass(frozen=True)
+class PlanningRouteRuntime:
+    """One authorized bootstrap route and its isolated execution boundary."""
+
+    route_id: str
+    model: str
+    executor: AgentExecutor
+    pricing: ModelPricing
+    runtime_profile: ModelRuntimeProfile
+
+    def __post_init__(self) -> None:
+        if re.fullmatch(r"[a-z][a-z0-9_]*", self.route_id) is None:
+            raise ValueError("Planning route ID is invalid")
+        if self.pricing.model != self.model:
+            raise ValueError("Planning route pricing belongs to another model")
+        provider, separator, leaf = self.model.partition("/")
+        if (
+            not separator
+            or not provider
+            or not leaf
+            or self.runtime_profile.provider_id != provider
+        ):
+            raise ValueError("Planning route runtime profile differs from its model")
+
+
 class AdaptivePlanningCoordinator:
     """Run bounded dialogue while retaining approval and lifecycle authority."""
 
@@ -9237,6 +9372,8 @@ class AdaptivePlanningCoordinator:
         pricing: ModelPricing | None = None,
         route_id: str | None = None,
         runtime_profile: ModelRuntimeProfile | None = None,
+        fallback_routes: tuple[PlanningRouteRuntime, ...] = (),
+        provider_failure_fallback: bool = False,
         clock: Clock = _system_clock,
     ) -> None:
         if (budget_ledger is None) != (pricing is None):
@@ -9249,6 +9386,27 @@ class AdaptivePlanningCoordinator:
             and route_id is None
         ):
             raise ValueError("User-task Planning requires an attributable model route")
+        if fallback_routes and not provider_failure_fallback:
+            raise ValueError(
+                "Planning fallback routes require provider-failure authority"
+            )
+        if fallback_routes and (
+            budget_ledger is None
+            or pricing is None
+            or route_id is None
+            or runtime_profile is None
+        ):
+            raise ValueError(
+                "Planning fallback routes require an attributable primary route"
+            )
+        route_ids = (() if route_id is None else (route_id,)) + tuple(
+            route.route_id for route in fallback_routes
+        )
+        if len(route_ids) != len(set(route_ids)):
+            raise ValueError("Planning route IDs must be unique")
+        fallback_models = tuple(route.model for route in fallback_routes)
+        if len(fallback_models) != len(set(fallback_models)):
+            raise ValueError("Planning fallback models must be unique")
         self.executor = executor
         self.store = store
         self.policy = policy
@@ -9256,6 +9414,9 @@ class AdaptivePlanningCoordinator:
         self.pricing = pricing
         self.route_id = route_id
         self.runtime_profile = runtime_profile
+        self.fallback_routes = fallback_routes
+        self.provider_failure_fallback = provider_failure_fallback
+        self._active_route_index = 0
         self.clock = clock
 
     def start(
@@ -9683,7 +9844,25 @@ class AdaptivePlanningCoordinator:
         )
         attempt = 1
         evidence_recoveries = 0
+        route_index = self._active_route_index
+        if any(route.model == request.model for route in self.fallback_routes):
+            raise PlanningError("Planning fallback route duplicates the primary model")
         while True:
+            if route_index == 0:
+                active_executor = self.executor
+                active_model = request.model
+                active_pricing = self.pricing
+                active_route_id = self.route_id
+                active_runtime_profile = self.runtime_profile
+            else:
+                active_route = self.fallback_routes[route_index - 1]
+                active_executor = active_route.executor
+                active_model = active_route.model
+                active_pricing = active_route.pricing
+                active_route_id = active_route.route_id
+                active_runtime_profile = active_route.runtime_profile
+            if active_pricing is not None and active_pricing.model != active_model:
+                raise PlanningError("Planning route pricing differs from its model")
             base_response_schema = (
                 _planning_response_schema()
                 if clarification_recovery is None
@@ -9738,9 +9917,9 @@ class AdaptivePlanningCoordinator:
                 expected_kind=ArtifactKind.CLARIFICATION_RECORD,
                 prompt=prompt,
                 timeout_seconds=self.policy.planning_timeout_seconds,
-                model=request.model,
+                model=active_model,
                 thinking_level=openclaw_invocation_thinking_level(
-                    self.runtime_profile or runtime_profile_for_model(request.model)
+                    active_runtime_profile or runtime_profile_for_model(active_model)
                 ),
                 submission_contract=submission_contract,
                 session_generation=session_generation,
@@ -9751,7 +9930,7 @@ class AdaptivePlanningCoordinator:
                     kind=PlanningActivityKind.WAITING_MODEL,
                     attempt=attempt,
                     maximum_attempts=maximum_attempts,
-                    model=request.model,
+                    model=active_model,
                 ),
             )
             reservation = (
@@ -9762,8 +9941,8 @@ class AdaptivePlanningCoordinator:
                     run_id=request.run_id,
                     stage="planning",
                     attempt=attempt,
-                    route_id=self.route_id,
-                    pricing=self.pricing,
+                    route_id=active_route_id,
+                    pricing=active_pricing,
                 )
             )
 
@@ -9771,19 +9950,20 @@ class AdaptivePlanningCoordinator:
                 execution_activity: AgentExecutionActivity,
                 *,
                 current_attempt: int = attempt,
+                current_model: str = active_model,
             ) -> None:
                 self._emit_execution_activity(
                     activity_handler,
                     execution_activity,
                     attempt=current_attempt,
                     maximum_attempts=maximum_attempts,
-                    model=request.model,
+                    model=current_model,
                 )
 
             execution_started_at = _utc(self.clock())
             execution_exception: BaseException | None = None
             try:
-                result = self.executor.execute(
+                result = active_executor.execute(
                     execution_request,
                     activity_handler=observe_execution_activity,
                 )
@@ -9801,7 +9981,7 @@ class AdaptivePlanningCoordinator:
                     kind=PlanningActivityKind.RESPONSE_RECEIVED,
                     attempt=attempt,
                     maximum_attempts=maximum_attempts,
-                    model=request.model,
+                    model=active_model,
                     duration_ms=result.telemetry.duration_ms,
                     execution_status=result.status,
                 ),
@@ -9828,7 +10008,7 @@ class AdaptivePlanningCoordinator:
             budget_error: str | None = None
             cost_record: ModelCallCostRecord | None = None
             if self.budget_ledger is not None and reservation is not None:
-                assert self.pricing is not None
+                assert active_pricing is not None
                 usage = result.telemetry.usage
                 if (
                     usage is not None
@@ -9858,18 +10038,19 @@ class AdaptivePlanningCoordinator:
                     for record in self.budget_ledger.call_records()
                     if record.sequence == reservation.sequence
                 )
+                estimated_cost = cost_record.cost_usd
                 self._emit_activity(
                     activity_handler,
                     PlanningActivity(
                         kind=PlanningActivityKind.BUDGET_UPDATED,
                         attempt=attempt,
                         maximum_attempts=maximum_attempts,
-                        model=request.model,
+                        model=active_model,
                         budget_usage=budget_usage,
                         budget_ceiling_usd=(
                             self.budget_ledger.budget.max_estimated_cost_usd
                         ),
-                        pricing_source=self.pricing.pricing_source,
+                        pricing_source=active_pricing.pricing_source,
                     ),
                 )
             if result.status is not AgentExecutionStatus.COMPLETED:
@@ -10192,15 +10373,37 @@ class AdaptivePlanningCoordinator:
                             )
                 elif parsed is not None and correction_plan is not None:
                     current_correction_outcome = SemanticCorrectionOutcome.ACCEPTED
-            evidence_recovery_scheduled = (
-                execution_exception is None
-                and result.status is not AgentExecutionStatus.COMPLETED
-                and result.status is not AgentExecutionStatus.INTERRUPTED
-                and budget_error is None
+            safe_unaccepted_submission = (
+                result.semantic_submission is None
                 and result.submission_evidence is not None
                 and result.submission_evidence.diagnostic_code
                 in RECOVERABLE_SUBMISSION_EVIDENCE_CODES
+                and (
+                    result.telemetry.invocation_lifecycle is None
+                    or result.telemetry.invocation_lifecycle.shutdown.cleanup_completed
+                )
+            )
+            fallback_scheduled = (
+                execution_exception is None
+                and result.status is AgentExecutionStatus.PROVIDER_FAILED
+                and budget_error is None
+                and safe_unaccepted_submission
+                and self.provider_failure_fallback
+                and route_index < len(self.fallback_routes)
+            )
+            evidence_recovery_scheduled = (
+                execution_exception is None
+                and result.status in RECOVERABLE_PLANNING_EXECUTION_STATUSES
+                and budget_error is None
+                and safe_unaccepted_submission
                 and evidence_recoveries < SUBMISSION_EVIDENCE_RECOVERY_LIMIT
+            )
+            recovery_action = (
+                PlanningRecoveryAction.FALLBACK_ROUTE
+                if fallback_scheduled
+                else PlanningRecoveryAction.SAME_ROUTE_RETRY
+                if evidence_recovery_scheduled
+                else None
             )
             turn = self.store.append_turn(
                 run_id=request.run_id,
@@ -10217,18 +10420,33 @@ class AdaptivePlanningCoordinator:
                 now=self.clock(),
                 estimated_cost_usd=estimated_cost,
                 pricing_source=(
-                    None if self.pricing is None else self.pricing.pricing_source
+                    None if active_pricing is None else active_pricing.pricing_source
                 ),
                 budget_usage=budget_usage,
                 budget_error=budget_error,
                 cost_record=cost_record,
-                evidence_recovery_scheduled=evidence_recovery_scheduled,
+                recovery_action=recovery_action,
             )
             if execution_exception is not None:
                 raise execution_exception
             if result.status is AgentExecutionStatus.INTERRUPTED:
                 raise KeyboardInterrupt
             if result.status is not AgentExecutionStatus.COMPLETED:
+                if fallback_scheduled:
+                    next_route = self.fallback_routes[route_index]
+                    route_index += 1
+                    self._active_route_index = route_index
+                    self._emit_activity(
+                        activity_handler,
+                        PlanningActivity(
+                            kind=PlanningActivityKind.MODEL_ROUTE_SWITCHED,
+                            attempt=attempt,
+                            maximum_attempts=maximum_attempts,
+                            model=next_route.model,
+                        ),
+                    )
+                    attempt += 1
+                    continue
                 if evidence_recovery_scheduled:
                     # Nothing was accepted, so the identical request is reissued
                     # without consuming the semantic-correction budget. The failed
@@ -10241,7 +10459,7 @@ class AdaptivePlanningCoordinator:
                             kind=PlanningActivityKind.SUBMISSION_EVIDENCE_RECOVERY,
                             attempt=attempt,
                             maximum_attempts=maximum_attempts,
-                            model=request.model,
+                            model=active_model,
                         ),
                     )
                     attempt += 1
@@ -10256,7 +10474,7 @@ class AdaptivePlanningCoordinator:
                         kind=PlanningActivityKind.RESPONSE_VALIDATED,
                         attempt=attempt,
                         maximum_attempts=maximum_attempts,
-                        model=request.model,
+                        model=active_model,
                     ),
                 )
                 return _Invocation(response=parsed, turn=turn)
@@ -10269,7 +10487,7 @@ class AdaptivePlanningCoordinator:
                         kind=PlanningActivityKind.CLARIFICATION_SCHEDULED,
                         attempt=attempt,
                         maximum_attempts=maximum_attempts,
-                        model=request.model,
+                        model=active_model,
                         clarification_dimension=(next_clarification_recovery.dimension),
                         clarification_category=(
                             next_clarification_recovery.decision_category
@@ -10301,7 +10519,7 @@ class AdaptivePlanningCoordinator:
                     kind=PlanningActivityKind.CORRECTION_SCHEDULED,
                     attempt=attempt,
                     maximum_attempts=maximum_attempts,
-                    model=request.model,
+                    model=active_model,
                 ),
             )
             attempt += 1
