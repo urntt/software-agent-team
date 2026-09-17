@@ -27,15 +27,17 @@ from software_agent_team.full_gate import (
 )
 
 # Launching the stage adopter starts a separate Python interpreter and imports the
-# production supervisor. Give that startup a bounded allowance on constrained CI;
-# the tests below still exercise the configured stage timeout itself.
-SYNTHETIC_STAGE_TIMEOUT_SECONDS = 15
+# production supervisor. This is a bounded fixture-infrastructure allowance, not a
+# product timeout assertion. Explicit short-timeout tests below still exercise the
+# configured stage deadline and cleanup behavior.
+SYNTHETIC_FIXTURE_TIMEOUT_SECONDS = 60
+SYNTHETIC_TIMEOUT_EXERCISE_SECONDS = 15
 
 
 def _run(
     tmp_path: Path,
     *scripts: str,
-    timeout: float = SYNTHETIC_STAGE_TIMEOUT_SECONDS,
+    timeout: float = SYNTHETIC_FIXTURE_TIMEOUT_SECONDS,
     private_temporary: bool = False,
     temporary_path_argument: str | None = None,
 ) -> tuple[int, dict[str, object], bytes, Path]:
@@ -79,7 +81,7 @@ def test_success_records_exact_commands_resources_and_terminal_inventory(
     observer_error: list[str] = []
 
     def release_after_attributable_sample() -> None:
-        deadline = time.monotonic() + SYNTHETIC_STAGE_TIMEOUT_SECONDS
+        deadline = time.monotonic() + SYNTHETIC_FIXTURE_TIMEOUT_SECONDS
         while time.monotonic() < deadline:
             reports = tuple((tmp_path / "evidence").glob("*/report.json"))
             if reports:
@@ -408,7 +410,7 @@ def test_hung_stage_is_bounded_and_records_cleanup(tmp_path: Path) -> None:
     exit_code, report, _, _ = _run(
         tmp_path,
         f"import pathlib, time; pathlib.Path({str(ready)!r}).touch(); time.sleep(30)",
-        timeout=SYNTHETIC_STAGE_TIMEOUT_SECONDS,
+        timeout=SYNTHETIC_TIMEOUT_EXERCISE_SECONDS,
         private_temporary=True,
     )
 
@@ -484,7 +486,7 @@ while True:
     exit_code, report, _, _ = _run(
         tmp_path,
         script,
-        timeout=SYNTHETIC_STAGE_TIMEOUT_SECONDS,
+        timeout=SYNTHETIC_TIMEOUT_EXERCISE_SECONDS,
         private_temporary=True,
     )
 
@@ -1019,7 +1021,7 @@ def test_running_stage_reaps_short_lived_orphans_without_stealing_wait_status(
             stderr=subprocess.DEVNULL,
         )
         foreign.append(child)
-        deadline = time.monotonic() + SYNTHETIC_STAGE_TIMEOUT_SECONDS
+        deadline = time.monotonic() + SYNTHETIC_FIXTURE_TIMEOUT_SECONDS
         while time.monotonic() < deadline:
             snapshot = full_gate._read_proc_snapshot(child.pid)
             if snapshot is not None and snapshot.state == "Z":
@@ -1028,7 +1030,7 @@ def test_running_stage_reaps_short_lived_orphans_without_stealing_wait_status(
         observer_errors.append("foreign child did not reach its unwaited exit")
 
     def create_foreign_during_stage() -> None:
-        stage_start_deadline = time.monotonic() + SYNTHETIC_STAGE_TIMEOUT_SECONDS
+        stage_start_deadline = time.monotonic() + SYNTHETIC_FIXTURE_TIMEOUT_SECONDS
         while time.monotonic() < stage_start_deadline:
             reports = tuple((tmp_path / "evidence").glob("*/report.json"))
             if reports:
@@ -1045,7 +1047,7 @@ def test_running_stage_reaps_short_lived_orphans_without_stealing_wait_status(
             foreign_ready.touch()
             return
 
-        deadline = time.monotonic() + SYNTHETIC_STAGE_TIMEOUT_SECONDS
+        deadline = time.monotonic() + SYNTHETIC_FIXTURE_TIMEOUT_SECONDS
         while not ready.exists() and time.monotonic() < deadline:
             time.sleep(0.005)
         if not ready.exists():
@@ -1063,7 +1065,7 @@ ready = pathlib.Path({str(ready)!r})
 foreign_ready = pathlib.Path({str(foreign_ready)!r})
 identities = pathlib.Path({str(children)!r})
 ready.touch()
-deadline = time.monotonic() + {SYNTHETIC_STAGE_TIMEOUT_SECONDS}
+deadline = time.monotonic() + {SYNTHETIC_FIXTURE_TIMEOUT_SECONDS}
 while not foreign_ready.exists():
     assert time.monotonic() < deadline, 'foreign child checkpoint timed out'
     time.sleep(0.005)
@@ -1087,7 +1089,7 @@ for batch in range(2):
             os.fsync(stream.fileno())
         os._exit(0)
     os.waitpid(intermediate, 0)
-    deadline = time.monotonic() + {SYNTHETIC_STAGE_TIMEOUT_SECONDS}
+    deadline = time.monotonic() + {SYNTHETIC_FIXTURE_TIMEOUT_SECONDS}
     while True:
         entries = identities.read_text().splitlines() if identities.exists() else []
         if len(entries) > batch:
@@ -1106,7 +1108,7 @@ raise SystemExit({stage_exit})
 """
     try:
         exit_code, report, output, _ = _run(
-            tmp_path, script, timeout=SYNTHETIC_STAGE_TIMEOUT_SECONDS
+            tmp_path, script, timeout=SYNTHETIC_FIXTURE_TIMEOUT_SECONDS
         )
         observer.join(timeout=1)
 
@@ -1126,7 +1128,7 @@ raise SystemExit({stage_exit})
         )
         assert stage["adopter"]["residual_after_cleanup"] == []
     finally:
-        observer.join(timeout=SYNTHETIC_STAGE_TIMEOUT_SECONDS + 1)
+        observer.join(timeout=SYNTHETIC_FIXTURE_TIMEOUT_SECONDS + 1)
         for child in foreign:
             if child.poll() is None:
                 child.kill()
