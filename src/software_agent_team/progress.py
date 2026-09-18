@@ -1600,9 +1600,14 @@ class TerminalProgressRenderer:
     def _clear_live_locked(self) -> None:
         if not self.live_enabled or self._live_line_count == 0:
             return
-        self.output.write(f"\x1b[{self._live_line_count}A")
-        for _ in range(self._live_line_count):
+        line_count = self._live_line_count
+        self.output.write(f"\x1b[{line_count}A")
+        for _ in range(line_count):
             self.output.write("\r\x1b[2K\x1b[1B")
+        # Clearing walks to the row below the live panel. Return to the first
+        # cleared row so the next panel or permanent event reuses those rows
+        # instead of turning every refresh into blank scrollback.
+        self.output.write(f"\x1b[{line_count}A")
         self.output.flush()
         self._live_line_count = 0
 

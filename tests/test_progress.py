@@ -47,6 +47,54 @@ class ASCIITTYStringIO(TTYStringIO):
         return "ascii"
 
 
+def terminal_rows(value: str) -> list[str]:
+    """Apply the renderer's small ANSI subset to an unbounded terminal surface."""
+
+    rows: dict[int, list[str]] = {}
+    row = 0
+    column = 0
+    index = 0
+    while index < len(value):
+        character = value[index]
+        if character == "\x1b" and index + 1 < len(value) and value[index + 1] == "[":
+            end = index + 2
+            while end < len(value) and not value[end].isalpha():
+                end += 1
+            assert end < len(value)
+            parameters = value[index + 2 : end]
+            command = value[end]
+            amount = int(parameters or "1") if parameters.isdigit() else 1
+            if command == "A":
+                row = max(0, row - amount)
+            elif command == "B":
+                row += amount
+            elif command == "K":
+                assert parameters == "2"
+                rows[row] = []
+                column = 0
+            else:
+                assert command == "m"
+            index = end + 1
+            continue
+        if character == "\r":
+            column = 0
+        elif character == "\n":
+            row += 1
+            column = 0
+        else:
+            current = rows.setdefault(row, [])
+            if column == len(current):
+                current.append(character)
+            elif column < len(current):
+                current[column] = character
+            else:
+                current.extend(" " * (column - len(current)))
+                current.append(character)
+            column += 1
+        index += 1
+    return ["".join(rows.get(number, [])).rstrip() for number in range(row + 1)]
+
+
 def checkpoint(phase: InvocationPhase) -> ProgressCheckpointSnapshot:
     """Provide an observation independent from the historical event kind."""
 
@@ -921,6 +969,66 @@ def test_real_pty_live_output_is_bounded_by_state_changes(tmp_path: Path) -> Non
     assert "Builder completed" in rendered
     assert rendered.count("\n") <= 5
     assert "observation 199" not in rendered
+
+
+def test_live_redraw_reuses_panel_rows_without_blank_scrollback(tmp_path: Path) -> None:
+    output = TTYStringIO()
+    renderer = TerminalProgressRenderer(
+        output=output,
+        heartbeat_seconds=60,
+        environment={"TERM": "xterm-256color"},
+        terminal_width=lambda: 100,
+    )
+    event_journal = journal(tmp_path, handler=renderer)
+    try:
+        event_journal.append(
+            ProgressEvent(kind=ProgressEventKind.RUN_STARTED, message="Run started"),
+            lifecycle_revision=1,
+            phase=RunPhase.IMPLEMENTING,
+        )
+        for index in range(30):
+            phase = (
+                InvocationPhase.TOOL_ACTIVE
+                if index % 2 == 0
+                else InvocationPhase.PROVIDER_WAIT
+            )
+            event_journal.append(
+                ProgressEvent(
+                    kind=(
+                        ProgressEventKind.AGENT_TOOL_ACTIVE
+                        if phase is InvocationPhase.TOOL_ACTIVE
+                        else ProgressEventKind.AGENT_WAITING_PROVIDER
+                    ),
+                    message=f"Builder state {index}",
+                    agent_id="builder",
+                    iteration=1,
+                    attempt=1,
+                    checkpoint=checkpoint(phase),
+                ),
+                lifecycle_revision=index + 2,
+                phase=RunPhase.IMPLEMENTING,
+            )
+        event_journal.append(
+            ProgressEvent(
+                kind=ProgressEventKind.AGENT_COMPLETED,
+                message="Builder completed",
+                agent_id="builder",
+                iteration=1,
+                attempt=1,
+            ),
+            lifecycle_revision=32,
+            phase=RunPhase.IMPLEMENTING,
+        )
+    finally:
+        renderer.close()
+
+    rows = terminal_rows(output.getvalue())
+    start = next(index for index, line in enumerate(rows) if "Run started" in line)
+    completed = next(
+        index for index, line in enumerate(rows) if "Builder completed" in line
+    )
+    assert completed == start + 1
+    assert all(line for line in rows[start : completed + 1])
 
 
 def test_append_only_plain_detailed_mode_restores_every_event(
