@@ -85,6 +85,50 @@ def _managed_failure_detail(error: BaseException) -> str:
     return type(error).__name__
 
 
+def _docker_failure_detail(
+    completed: subprocess.CompletedProcess[str],
+    *,
+    operation: str,
+) -> str:
+    """Classify one failed Docker call without reflecting arbitrary stderr."""
+
+    diagnostic = " ".join(f"{completed.stderr}\n{completed.stdout}".lower().split())
+    if "permission denied" in diagnostic and (
+        "docker" in diagnostic or "unix" in diagnostic or "socket" in diagnostic
+    ):
+        return (
+            "Docker socket permission denied; grant this user access to the "
+            "configured Docker daemon"
+        )
+    if any(
+        marker in diagnostic
+        for marker in (
+            "cannot connect to the docker daemon",
+            "is the docker daemon running",
+            "connection refused",
+            "docker daemon is not running",
+            "error during connect",
+        )
+    ):
+        return (
+            "Docker daemon is unavailable; start the configured Docker daemon and retry"
+        )
+    if any(
+        marker in diagnostic
+        for marker in (
+            "context deadline exceeded",
+            "i/o timeout",
+            "operation timed out",
+            "request canceled while waiting",
+        )
+    ):
+        return "Docker daemon did not respond before the command deadline"
+    return (
+        f"Docker {operation} failed (exit status {completed.returncode}); "
+        "run 'docker version' to diagnose the configured daemon"
+    )
+
+
 class ManagedApplicationMarker(BaseModel):
     """Release-local ownership and intended activation identity."""
 
@@ -607,6 +651,7 @@ def _stage_managed_target_locked(
     previous_sandbox_lineage: tuple[SandboxImageIdentity, ...] = ()
     sandbox_image_transition: SandboxImageTransition | None = None
     sandbox_image_rollback_reference: str | None = None
+    sandbox_image_transaction_armed = False
     try:
         runner(("git", "init", "-b", "sat-managed", str(stage)), None, None)
         runner(
@@ -716,6 +761,11 @@ def _stage_managed_target_locked(
                     previous_sandbox_image,
                     expected_reference=sandbox_image_reference,
                 )
+            # No target command capable of moving the configured image tag has
+            # run before this point. In particular, an initial Docker access
+            # failure must remain a pre-mutation staging error rather than be
+            # relabeled as a rollback failure by the exception path below.
+            sandbox_image_transaction_armed = True
         runner(
             (str(final_path / "scripts" / "install.sh"),),
             final_path,
@@ -752,7 +802,8 @@ def _stage_managed_target_locked(
         )
     except BaseException as staging_error:
         rollback_error: ManagedInstallError | None = None
-        if sandbox_image_reference is not None:
+        rollback_reference_cleanup_error: ManagedInstallError | None = None
+        if sandbox_image_reference is not None and sandbox_image_transaction_armed:
             try:
                 current_image = _inspect_sandbox_image(sandbox_image_reference)
                 if sandbox_image_rollback_reference is not None or (
@@ -782,8 +833,38 @@ def _stage_managed_target_locked(
                     )
             except ManagedInstallError as restore_error:
                 rollback_error = restore_error
+        elif (
+            sandbox_image_rollback_reference is not None
+            and previous_sandbox_image is not None
+        ):
+            # Pre-mutation preparation may have created only a temporary anchor.
+            # Remove that exact tag without describing the operation as image
+            # rollback, because the configured image reference never changed.
+            try:
+                assert sandbox_image_reference is not None
+                _release_sandbox_image_rollback_reference(
+                    SandboxImageTransition(
+                        reference=sandbox_image_reference,
+                        previous=previous_sandbox_image,
+                        previous_lineage=previous_sandbox_lineage,
+                        candidate=previous_sandbox_image,
+                        candidate_lineage=previous_sandbox_lineage,
+                        rollback_reference=sandbox_image_rollback_reference,
+                    )
+                )
+            except ManagedInstallError as restore_error:
+                rollback_reference_cleanup_error = ManagedInstallError(
+                    "temporary sandbox image reference cleanup failed "
+                    f"({_managed_failure_detail(restore_error)})"
+                )
         if cleanup_path is not None:
             shutil.rmtree(cleanup_path, ignore_errors=True)
+        if rollback_reference_cleanup_error is not None:
+            raise ManagedInstallError(
+                "managed staging failed "
+                f"({_managed_failure_detail(staging_error)}); "
+                f"{_managed_failure_detail(rollback_reference_cleanup_error)}"
+            ) from staging_error
         if rollback_error is not None:
             raise ManagedInstallError(
                 "managed staging failed "
@@ -1858,10 +1939,19 @@ def _docker_command(
             stdin=subprocess.DEVNULL,
             timeout=SANDBOX_IMAGE_COMMAND_TIMEOUT_SECONDS,
         )
+    except subprocess.TimeoutExpired as error:
+        raise ManagedInstallError(
+            "Docker command timed out after "
+            f"{SANDBOX_IMAGE_COMMAND_TIMEOUT_SECONDS} seconds"
+        ) from error
+    except FileNotFoundError as error:
+        raise ManagedInstallError("Docker CLI is unavailable") from error
     except (OSError, subprocess.SubprocessError) as error:
-        raise ManagedInstallError("managed sandbox image command failed") from error
+        raise ManagedInstallError("Docker command could not be completed") from error
     if check and completed.returncode != 0:
-        raise ManagedInstallError("managed sandbox image command failed")
+        raise ManagedInstallError(
+            _docker_failure_detail(completed, operation="command")
+        )
     return completed
 
 
@@ -1880,7 +1970,9 @@ def _inspect_sandbox_image(
         diagnostic = completed.stderr.lower()
         if "no such image" in diagnostic or "no such object" in diagnostic:
             return None
-        raise ManagedInstallError("managed sandbox image inspection failed")
+        raise ManagedInstallError(
+            _docker_failure_detail(completed, operation="image inspection")
+        )
     try:
         raw_payload = json.loads(completed.stdout)
         if (

@@ -1837,6 +1837,120 @@ def test_staging_and_rollback_failure_reports_both_owned_causes(
     )
 
 
+def test_initial_image_inspection_failure_does_not_attempt_rollback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository, _ = prepare_repository(tmp_path)
+    reference = "sat-python-quality:phase1-v8"
+    (repository / "configs").mkdir()
+    (repository / "configs/product-policy.json").write_text(
+        json.dumps({"sandbox": {"image": reference}}),
+        encoding="utf-8",
+    )
+    git(repository, "add", ".")
+    git(repository, "commit", "-m", "test: add sandbox policy")
+    revision = git(repository, "rev-parse", "HEAD")
+    inspection_calls: list[str] = []
+
+    def fail_inspection(
+        selector: str,
+        *,
+        expected_reference: str | None = None,
+    ) -> managed_install_module.SandboxImageIdentity | None:
+        del expected_reference
+        inspection_calls.append(selector)
+        raise ManagedInstallError(
+            "Docker socket permission denied; grant this user access to the "
+            "configured Docker daemon"
+        )
+
+    monkeypatch.setattr(
+        managed_install_module,
+        "_inspect_sandbox_image",
+        fail_inspection,
+    )
+    monkeypatch.setattr(
+        managed_install_module,
+        "_restore_sandbox_image_transition",
+        lambda _transition: pytest.fail("pre-mutation failure attempted rollback"),
+    )
+
+    with pytest.raises(ManagedInstallError) as captured:
+        stage_managed_target(
+            dev_target(repository, revision),
+            paths(tmp_path),
+        )
+
+    assert str(captured.value) == (
+        "Docker socket permission denied; grant this user access to the "
+        "configured Docker daemon"
+    )
+    assert inspection_calls == [reference]
+
+
+@pytest.mark.parametrize(
+    ("stderr", "expected"),
+    (
+        (
+            "permission denied while trying to connect to the docker API at "
+            "unix:///var/run/docker.sock",
+            "Docker socket permission denied; grant this user access to the "
+            "configured Docker daemon",
+        ),
+        (
+            "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. "
+            "Is the docker daemon running?",
+            "Docker daemon is unavailable; start the configured Docker daemon "
+            "and retry",
+        ),
+        (
+            "request canceled while waiting for connection",
+            "Docker daemon did not respond before the command deadline",
+        ),
+        (
+            "unexpected engine failure with sensitive details omitted by SAT",
+            "Docker image inspection failed (exit status 1); run 'docker version' "
+            "to diagnose the configured daemon",
+        ),
+    ),
+)
+def test_image_inspection_projects_bounded_docker_failure_categories(
+    monkeypatch: pytest.MonkeyPatch,
+    stderr: str,
+    expected: str,
+) -> None:
+    monkeypatch.setattr(
+        managed_install_module,
+        "_docker_command",
+        lambda _arguments, *, check: subprocess.CompletedProcess(
+            (),
+            1,
+            "",
+            stderr,
+        ),
+    )
+
+    with pytest.raises(ManagedInstallError) as captured:
+        managed_install_module._inspect_sandbox_image("sat-python-quality:phase1-v8")
+
+    assert str(captured.value) == expected
+
+
+def test_docker_command_timeout_has_bounded_diagnostic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def time_out(*_args: object, **_kwargs: object) -> None:
+        raise subprocess.TimeoutExpired(("docker", "version"), 30)
+
+    monkeypatch.setattr(subprocess, "run", time_out)
+
+    with pytest.raises(ManagedInstallError) as captured:
+        managed_install_module._docker_command(("version",), check=False)
+
+    assert str(captured.value) == "Docker command timed out after 30 seconds"
+
+
 def test_stable_stage_rejects_package_or_archive_identity_drift(
     tmp_path: Path,
 ) -> None:
