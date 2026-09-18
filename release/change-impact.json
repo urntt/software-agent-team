@@ -1,32 +1,17 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.2.20",
-  "target_version": "0.3.0",
+  "baseline_version": "0.3.0",
+  "target_version": "0.3.1",
   "changes": [
     {
-      "id": "pre-mutation-docker-diagnostics",
+      "id": "command-shaped-runtime-rejection",
       "impact": "patch",
-      "summary": "Preserve bounded Docker permission, daemon, timeout, and protocol failures before staging without attempting image rollback"
+      "summary": "Classify the pinned runtime's exact command-shaped orphan rejection through a bounded safe tool-name projection while retaining unknown orphan failures"
     },
     {
-      "id": "atomic-review-state-corrections",
+      "id": "live-progress-row-reuse",
       "impact": "patch",
-      "summary": "Repair interdependent Review assessments, findings, and verdicts atomically while retaining unresolved blocking evidence"
-    },
-    {
-      "id": "bounded-live-terminal-progress",
-      "impact": "minor",
-      "summary": "Render bounded colored TTY progress in place with semantic milestones and configurable live, log, color, and visibility policies"
-    },
-    {
-      "id": "editable-multiline-terminal-input",
-      "impact": "minor",
-      "summary": "Provide shared editable multiline terminal input with cursor navigation, Unicode editing, validation retention, and deterministic pipe behavior"
-    },
-    {
-      "id": "post-signal-process-cleanup-grace",
-      "impact": "patch",
-      "summary": "Reserve each bounded subprocess cleanup grace period for post-signal state transition, adoption, and reaping under slow host process observation"
+      "summary": "Return the live renderer cursor to the cleared panel origin so repeated TTY refreshes reuse rows instead of materializing blank scrollback"
     }
   ]
 }

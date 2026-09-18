@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** validate published `v0.3.0` through one complete managed user journey
+**Current milestone:** release `v0.3.1` and validate it through the gated managed user journey
 
 **Last updated:** September 18, 2026
 
@@ -375,6 +375,28 @@ and legacy state preservation, same-target and same-dev-ref no-ops, active-run
 refusal, injected post-link-swap rollback, a stable-to-dev-to-stable round trip,
 foreign OpenClaw isolation, secret-free export, full uninstall, and exact
 account/HOME/resource cleanup all passed. The scenario made no provider calls.
+
+## Current v0.3.1 Candidate
+
+The `v0.3.1` candidate repairs two defects observed in an ordinary-user
+`v0.3.0` run. The pinned OpenClaw runtime may persist an orphaned not-found
+result whose raw tool name contains an approved SAT tool followed by command
+arguments after sanitizing the corresponding assistant call. SAT now recognizes
+that exact canned rejection through a bounded printable shape and retains only
+the approved first tool token plus provenance hashes. It still grants no
+execution or progress authority, and unknown names, mismatched content, unsafe
+characters, reused identities, or rejections after a terminal submission remain
+invalid. Replaying the retained failing Reviewer session now attributes its later
+successful typed submission without treating the rejected command as work.
+
+The live TTY renderer now returns the cursor to the first erased panel row after
+clearing it. Repeated refreshes, permanent milestones, input suspension, and
+final cleanup therefore reuse the cleared rows instead of leaving blank regions
+in scrollback. The event journal, non-TTY output, and explicit append-only log
+mode are unchanged. The evidence, submission bridge, and progress modules pass
+192 tests; the adjacent execution, dynamic-runner, and CLI modules pass 257
+tests. The clean canonical release gate, immutable release identity, and
+credential-free install and update lifecycle remain pending.
 
 ## Current v0.3.0 Implementation
 
