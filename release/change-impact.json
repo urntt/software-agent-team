@@ -1,112 +1,27 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.2.19",
-  "target_version": "0.2.20",
+  "baseline_version": "0.2.20",
+  "target_version": "0.3.0",
   "changes": [
     {
-      "id": "bounded-provider-smoke-processes",
+      "id": "pre-mutation-docker-diagnostics",
       "impact": "patch",
-      "summary": "Supervise provider smoke checks with inherited process ownership and clean detached descendants after timeout or exit"
+      "summary": "Preserve bounded Docker permission, daemon, timeout, and protocol failures before staging without attempting image rollback"
     },
     {
-      "id": "stable-gemini-flash-presets",
+      "id": "atomic-review-state-corrections",
       "impact": "patch",
-      "summary": "Add exact Google Generative AI profiles and supported thinking settings for six stable Gemini Flash models"
+      "summary": "Repair interdependent Review assessments, findings, and verdicts atomically while retaining unresolved blocking evidence"
     },
     {
-      "id": "bounded-provider-error-detail",
-      "impact": "patch",
-      "summary": "Report structured provider failure details without reflecting credentials or untrusted terminal output"
+      "id": "bounded-live-terminal-progress",
+      "impact": "minor",
+      "summary": "Render bounded colored TTY progress in place with semantic milestones and configurable live, log, color, and visibility policies"
     },
     {
-      "id": "model-readable-positional-corrections",
-      "impact": "patch",
-      "summary": "Render fixed-length positional correction arrays with explicit object item shapes while retaining their exact tuple constraints"
-    },
-    {
-      "id": "typed-product-definition-corrections",
-      "impact": "patch",
-      "summary": "Bind category-compatible ProductDefinition decision repairs to exact candidates and decode structured correction values only under their target schema"
-    },
-    {
-      "id": "bounded-wide-planning-corrections",
-      "impact": "patch",
-      "summary": "Collapse a broadly malformed model-owned proposal into one exact typed correction slot instead of duplicating many expanded leaf schemas"
-    },
-    {
-      "id": "atomic-empty-assumption-corrections",
-      "impact": "patch",
-      "summary": "Compile an empty model-facing assumption relation into both empty persisted compatibility indexes during targeted correction"
-    },
-    {
-      "id": "anchored-sandbox-image-rollback",
-      "impact": "patch",
-      "summary": "Keep the previous managed sandbox image addressable until staged activation or rollback settles and preserve both owned causes when recovery fails"
-    },
-    {
-      "id": "verified-unchanged-integration-result",
-      "impact": "patch",
-      "summary": "Continue quality and delivery when a downstream Integration Agent proves that the exact clean upstream commit already satisfies its assigned work"
-    },
-    {
-      "id": "host-capacity-concurrency-ceiling",
-      "impact": "patch",
-      "summary": "Lower each run's effective Agent concurrency to current Linux memory and PID headroom without changing the saved user maximum"
-    },
-    {
-      "id": "distinct-planning-correction-sessions",
-      "impact": "patch",
-      "summary": "Give every semantic Planning correction a distinct run-scoped OpenClaw session generation across dialogue and revision cycles"
-    },
-    {
-      "id": "cold-runtime-config-validation-boundary",
-      "impact": "patch",
-      "summary": "Give cold OpenClaw configuration validation its own bounded timeout and retain the exact failed preflight command and failure class"
-    },
-    {
-      "id": "masked-product-decision-recovery",
-      "impact": "patch",
-      "summary": "Recover an explicit user-owned product decision as a focused clarification after sibling proposal validation errors no longer mask it"
-    },
-    {
-      "id": "skeletal-proposal-graph-recovery",
-      "impact": "patch",
-      "summary": "Replace a proposal graph atomically when malformed records leave no valid identities for safe reference-level correction"
-    },
-    {
-      "id": "ordered-overlapping-writer-scopes",
-      "impact": "patch",
-      "summary": "Correct every unordered overlapping writer pair in the proposal before compiling the approved runtime team plan"
-    },
-    {
-      "id": "reviewer-scoped-finding-contracts",
-      "impact": "patch",
-      "summary": "Constrain every Review criterion reference and targeted finding correction to the exact assigned scope"
-    },
-    {
-      "id": "atomic-planning-criterion-relations",
-      "impact": "patch",
-      "summary": "Replace Planning acceptance criteria together with every existing product-definition reference and task coverage relation"
-    },
-    {
-      "id": "nonzero-terminal-submission-recovery",
-      "impact": "patch",
-      "summary": "Retain attributable terminal session evidence after a nonzero OpenClaw exit and accept only a fully bound typed submission"
-    },
-    {
-      "id": "portable-offline-uv-cache",
-      "impact": "patch",
-      "summary": "Use one PyPI-attributed offline cache for project locking and installation so ordinary uv commands preserve portable delivery metadata"
-    },
-    {
-      "id": "deterministic-failure-revision-checkpoint",
-      "impact": "patch",
-      "summary": "Stop pending Review after a deterministic command failure and return bounded command evidence to the next writer revision"
-    },
-    {
-      "id": "bounded-review-compaction-recovery",
-      "impact": "patch",
-      "summary": "Bound long Review context and preserve attributable route, session, tool, and submission evidence when OpenClaw transcript compaction times out"
+      "id": "editable-multiline-terminal-input",
+      "impact": "minor",
+      "summary": "Provide shared editable multiline terminal input with cursor navigation, Unicode editing, validation retention, and deterministic pipe behavior"
     }
   ]
 }

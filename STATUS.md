@@ -1,8 +1,8 @@
 # Project Status
 
-**Current milestone:** release `v0.2.20` and complete a managed user journey
+**Current milestone:** release `v0.3.0` and complete a managed user journey
 
-**Last updated:** September 16, 2026
+**Last updated:** September 18, 2026
 
 This document records what the repository implements now, what evidence
 supports that claim, and what remains unavailable. It does not redefine the
@@ -10,6 +10,20 @@ product, architecture, experiment, or roadmap; those decisions belong to
 [`VISION.md`](VISION.md).
 
 ## Current Release
+
+The immutable `v0.2.20` tag,
+[GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.2.20),
+package version, and release manifest identify source revision
+`440aa8cc8598d361f05cbc824d56b0d7cb8ff7bd` and Git archive digest
+`sha256:e3c1f32d80d070bf5baf719673f81cf328228047150f91f898faafa3be38107b`.
+Exact-tag GitHub Actions
+[run 35244917057](https://github.com/urntt/software-agent-team/actions/runs/35244917057)
+passed 1,792 tests with three environment-dependent skips and published exactly
+one identity manifest asset. A fresh non-root `v0.2.19` to `v0.2.20` lifecycle
+passed installation, fixed-revision upgrade, identity and current-version checks,
+state preservation, export, full uninstall, and exact cleanup without making a
+provider call. Later provider-backed ordinary-user evidence exposed the Review,
+terminal-progress, and input defects addressed by the current candidate.
 
 The immutable `v0.2.19` tag,
 [GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.2.19),
@@ -25,30 +39,6 @@ same-target and channel checks, rollback, foreign OpenClaw isolation, export,
 full uninstall, and exact cleanup. A separate provider-backed journey reached
 the exact configured route check, then timed out before Planning; it did not
 produce a completed delivery.
-
-The `v0.2.20` development head now reads an attributable terminal OpenClaw
-session before classifying a nonzero wrapper exit. A complete fresh current
-turn retains provider/model identity, token usage, tool evidence, and typed
-submission diagnostics. SAT reports semantic completion only when the final
-successful submission call and private submission file bind the exact
-invocation, schema, tool identity, outer arguments digest, and semantic digest;
-missing, stale, incomplete, rejected, or mismatched evidence remains
-`process_failed`. The recovered result keeps the actual nonzero exit and
-`process_failure` lifecycle instead of rewriting it as a normal exit. The
-execution, artifact, Planning, and dynamic-runner suites pass 421 tests for this
-boundary and its existing finalization-stall behavior.
-
-The `v0.2.20` runtime image now builds one PyPI-attributed offline cache with
-both resolution metadata and the profile's installable distributions. The
-runtime `uv` wrapper lazily copies that immutable cache to bounded writable
-tmpfs, so ordinary `uv lock`, `uv sync`, and `uv run` operations retain public
-registry sources instead of writing an image-local wheelhouse into generated
-`uv.lock` files. The exact-command gate now requires setup to preserve the
-committed lock byte for byte. The real `phase1-v9` image passes portable-lock
-refresh and full setup/test/start checks with network disabled, a read-only root,
-an unrelated non-root user, and a 128 MiB tmpfs. Affected runtime, installer,
-profile, and quality-gate regressions pass. The canonical release gate and
-fresh provider-backed journey remain pending.
 
 The immutable `v0.2.18` tag,
 [GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.2.18),
@@ -371,6 +361,29 @@ foreign OpenClaw isolation, secret-free export, full uninstall, and exact
 account/HOME/resource cleanup all passed. The scenario made no provider calls.
 
 ## Current Development Head
+
+The `v0.3.0` candidate preserves the actual Docker permission, unavailable-daemon,
+timeout, malformed-response, or bounded unknown cause when managed staging fails
+before any sandbox image mutation. That path performs only attributable temporary
+cleanup and no longer attempts or reports image rollback. General Review
+corrections now authorize the interdependent assessment, finding, and verdict
+paths together, allowing the model to restore one valid semantic state without
+deleting unresolved blocking evidence.
+
+Interactive terminals now show one bounded, colored per-Agent progress panel,
+update repeated observations in place, and retain state-changing milestones in
+scrollback. Display mode, color, and visibility are configurable; redirected or
+incapable terminals remain deterministic plain logs, and the explicit detailed
+log mode preserves the append-only audit view. Initial task input and natural
+Planning answers now use one shared multiline editor with cursor navigation,
+cross-line deletion, Unicode and resize handling, retained text after validation,
+and unchanged Ctrl-C, EOF, secret, and non-TTY contracts.
+
+Focused verification passes 252 affected installer, Review, terminal, CLI,
+configuration, and runtime-control tests; 240 Planning and documentation-role
+tests; and 27 bootstrap, installer, and release-documentation checks. The clean
+canonical release gate, immutable release identity, public install lifecycle,
+and fresh provider-backed user journey remain pending.
 
 The current development head supervises each provider smoke check with a Linux
 child-subreaper, inherited opaque ownership marker, UID and PID/start-time
