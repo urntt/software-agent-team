@@ -686,6 +686,23 @@ def rejected_tool_record(external_id: str = "rejected-call") -> dict[str, object
     }
 
 
+def command_named_rejected_tool_record(
+    external_id: str = "rejected-command-call",
+) -> dict[str, object]:
+    """Reproduce the pinned runtime's captured command-as-tool-name rejection."""
+
+    raw_name = (
+        "sat-probe-write /tmp/sat-review-probe.py --line "
+        "'import sys, tempfile, pathlib'"
+    )
+    record = rejected_tool_record(external_id)
+    message = record["message"]
+    assert isinstance(message, dict)
+    message["toolName"] = raw_name
+    message["content"] = [{"type": "text", "text": f"Tool {raw_name} not found"}]
+    return record
+
+
 def test_runtime_rejection_is_diagnostic_not_execution_or_progress(tmp_path: Path):
     invocation = request()
     records = [session_record(), user_record(invocation.prompt)]
@@ -722,6 +739,72 @@ def test_runtime_rejection_is_diagnostic_not_execution_or_progress(tmp_path: Pat
     assert rejection.tool_name == "missing_tool"
     assert rejection.record_index == 1
     assert not hasattr(rejection, "arguments_sha256")
+
+
+def test_command_named_runtime_rejection_keeps_later_work_attributable(
+    tmp_path: Path,
+) -> None:
+    invocation = request()
+    write_session_state(
+        tmp_path,
+        invocation=invocation,
+        records=[
+            session_record(),
+            user_record(invocation.prompt),
+            command_named_rejected_tool_record(),
+            tool_call_record("work", command="pytest"),
+            tool_result_record("work", output="1 passed"),
+            assistant_record(),
+        ],
+    )
+
+    captured = capture(tmp_path, invocation)
+
+    assert len(captured.runtime_rejections) == 1
+    assert captured.runtime_rejections[0].tool_name == "sat-probe-write"
+    assert [call.id for call in captured.tool_calls] == ["tool-001"]
+    assert captured.tool_calls[0].outcome is AgentToolCallOutcome.SUCCEEDED
+
+
+@pytest.mark.parametrize(
+    "raw_name",
+    [
+        "unknown-tool --flag value",
+        "sat-probe-write ",
+        "sat-probe-write café",
+        f"sat-probe-write {'x' * 497}",
+    ],
+)
+def test_command_named_runtime_rejection_requires_safe_bounded_projection(
+    tmp_path: Path,
+    raw_name: str,
+) -> None:
+    invocation = request()
+    rejected = rejected_tool_record()
+    message = rejected["message"]
+    assert isinstance(message, dict)
+    message["toolName"] = raw_name
+    message["content"] = [{"type": "text", "text": f"Tool {raw_name} not found"}]
+    write_session_state(
+        tmp_path,
+        invocation=invocation,
+        records=[
+            session_record(),
+            user_record(invocation.prompt),
+            rejected,
+            assistant_record(),
+        ],
+    )
+
+    with pytest.raises(OpenClawSessionEvidenceError):
+        capture(tmp_path, invocation)
+    with pytest.raises(OpenClawSessionEvidenceError):
+        inspect_openclaw_session_activity(
+            state_dir=tmp_path,
+            agent_id=invocation.agent_id,
+            session_key=invocation.session_key,
+            prompt=invocation.prompt,
+        )
 
 
 @pytest.mark.parametrize(

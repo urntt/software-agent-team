@@ -206,6 +206,7 @@ class CorrectedBody(BaseModel):
         "action_after_success",
         "wrong_binding",
         "runtime_rejection_then_valid",
+        "command_named_runtime_rejection_then_valid",
         "deferred_work_then_valid",
     ],
 )
@@ -289,18 +290,27 @@ def test_production_submission_correction_bridge(tmp_path: Path, case: str) -> N
         json.dumps({session_key: {"sessionId": session_id}})
     )
     prior_records = []
-    if case == "runtime_rejection_then_valid":
+    if case in {
+        "runtime_rejection_then_valid",
+        "command_named_runtime_rejection_then_valid",
+    }:
+        raw_name = (
+            "missing_tool"
+            if case == "runtime_rejection_then_valid"
+            else (
+                "sat-probe-write /tmp/sat-review-probe.py --line "
+                "'import sys, tempfile, pathlib'"
+            )
+        )
         prior_records.append(
             {
                 "type": "message",
                 "message": {
                     "role": "toolResult",
                     "toolCallId": "unavailable-call",
-                    "toolName": "missing_tool",
+                    "toolName": raw_name,
                     "isError": True,
-                    "content": [
-                        {"type": "text", "text": "Tool missing_tool not found"}
-                    ],
+                    "content": [{"type": "text", "text": f"Tool {raw_name} not found"}],
                     "details": {},
                 },
             }
@@ -382,9 +392,14 @@ def test_production_submission_correction_bridge(tmp_path: Path, case: str) -> N
         session_id=session_id,
         prompt=prompt,
     )
-    if case == "runtime_rejection_then_valid":
+    if case in {
+        "runtime_rejection_then_valid",
+        "command_named_runtime_rejection_then_valid",
+    }:
         assert len(evidence.runtime_rejections) == 1
         assert len(evidence.tool_calls) == 1
+        if case == "command_named_runtime_rejection_then_valid":
+            assert evidence.runtime_rejections[0].tool_name == "sat-probe-write"
     if case == "deferred_work_then_valid":
         assert [call.outcome.value for call in evidence.tool_calls] == [
             "deferred",

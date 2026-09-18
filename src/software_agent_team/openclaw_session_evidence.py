@@ -1070,6 +1070,30 @@ def _output_excerpt(output: str) -> str:
     return f"{safe[:head]}{_TRUNCATION_MARKER}{safe[-tail:]}"
 
 
+def _runtime_rejection_tool_name(value: object) -> str | None:
+    """Project one exact rejected runtime name without retaining its arguments."""
+
+    if not isinstance(value, str):
+        return None
+    if re.fullmatch(r"[A-Za-z0-9_:.-]{1,64}", value):
+        return value
+    if (
+        not value
+        or value.strip() != value
+        or len(value) > 512
+        or any(ord(character) < 32 or ord(character) > 126 for character in value)
+    ):
+        return None
+    command, separator, remainder = value.partition(" ")
+    if (
+        separator != " "
+        or not remainder.strip()
+        or command not in _ACTIVITY_TOOL_NAMES | _ACTIVITY_EXECUTABLES
+    ):
+        return None
+    return command
+
+
 def _classify_runtime_rejections(
     records: tuple[dict[str, object], ...],
 ) -> tuple[tuple[dict[str, object], ...], tuple[RuntimeToolRejection, ...]]:
@@ -1111,6 +1135,7 @@ def _classify_runtime_rejections(
                         "OpenClaw session repeats a runtime rejection identity"
                     )
                 name = message.get("toolName")
+                projected_name = _runtime_rejection_tool_name(name)
                 if (
                     isinstance(identity, str)
                     and identity
@@ -1119,7 +1144,7 @@ def _classify_runtime_rejections(
                     and "\x00" not in identity
                     and identity not in calls
                     and isinstance(name, str)
-                    and re.fullmatch(r"[A-Za-z0-9_:.-]{1,64}", name)
+                    and projected_name is not None
                     and message.get("isError") is True
                     and message.get("details") == {}
                     and message.get("content")
@@ -1133,7 +1158,7 @@ def _classify_runtime_rejections(
                     diagnostics.append(
                         RuntimeToolRejection(
                             record_index=index,
-                            tool_name=name,
+                            tool_name=projected_name,
                             external_call_sha256=_sha256(identity.encode("utf-8")),
                             record_sha256=_sha256(_canonical_arguments(record)),
                         )
