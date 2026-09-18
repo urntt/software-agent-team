@@ -18,6 +18,7 @@ from software_agent_team.artifacts import (
     ExperienceWorkflowAssessment,
     HandoffStatus,
     ReviewBoundaryKind,
+    ReviewCriterionStatus,
     ReviewFinding,
     ReviewSeverity,
     SecurityAssessment,
@@ -2517,6 +2518,98 @@ def test_blocked_absolute_criterion_may_stop_after_one_grounded_counterexample()
     assert parsed.body.criterion_assessments[0].boundary_checks[0].boundary is (
         ReviewBoundaryKind.TOP_LEVEL_INPUT
     )
+
+
+def test_review_cross_field_failure_authorizes_one_atomic_correction() -> None:
+    assessment = ReviewCriterionAssessmentResponse(
+        criterion_id="AC_LINKS",
+        status="satisfied",
+        adversarial_check="Ran the CLI against a missing local-link fixture.",
+        evidence="The run exposed a correctable behavior defect.",
+        tool_evidence=(review_tool_claim(),),
+    )
+    finding = ReviewFinding(
+        id="FINDING_LINK_EXIT_STATUS",
+        severity=ReviewSeverity.HIGH,
+        blocking=True,
+        category="correctness",
+        description="A broken link incorrectly returns a successful exit status.",
+        recommendation="Return a non-zero status for every broken local link.",
+        criterion_ids=("AC_LINKS",),
+    )
+    request, result = _review_result(
+        ReviewReportResponse(
+            verdict="revise",
+            criterion_assessments=(assessment,),
+            findings=(finding,),
+            summary="The blocking finding requires revision.",
+        )
+    )
+
+    with pytest.raises(
+        AgentArtifactResponseError,
+        match="blocked criterion assessments must exactly match blocking finding",
+    ) as captured:
+        parse_dynamic_agent_response(
+            result,
+            request,
+            task_brief=task_brief(),
+            team_plan=team_plan(),
+            reviewed_criterion_ids=("AC_LINKS",),
+        )
+
+    diagnostic = captured.value.diagnostic
+    assert diagnostic is not None
+    assert diagnostic.correction_paths == (
+        "/criterion_assessments",
+        "/findings",
+        "/verdict",
+    )
+    plan = build_semantic_correction_plan(
+        captured.value.semantic_payload,
+        diagnostic,
+    )
+    assert plan is not None
+    replacements = {
+        "/criterion_assessments": [
+            assessment.model_copy(
+                update={"status": ReviewCriterionStatus.BLOCKED}
+            ).model_dump(mode="json")
+        ],
+        "/findings": [finding.model_dump(mode="json")],
+        "/verdict": "revise",
+    }
+    application = apply_semantic_correction_with_evidence(
+        {
+            "replacements": [
+                {
+                    "slot_handle": semantic_correction_slot_handle(
+                        plan.evidence.target_paths,
+                        path,
+                    ),
+                    "replacement_value": value,
+                }
+                for path, value in replacements.items()
+            ]
+        },
+        plan,
+    )
+    corrected_request, corrected_result = _review_result(
+        json.dumps(application.payload)
+    )
+
+    corrected = parse_dynamic_agent_response(
+        corrected_result,
+        corrected_request,
+        task_brief=task_brief(),
+        team_plan=team_plan(),
+        reviewed_criterion_ids=("AC_LINKS",),
+    )
+    assert isinstance(corrected.body, GroundedReviewReportResponse)
+    assert corrected.body.verdict.value == "revise"
+    assert corrected.body.criterion_assessments[0].status.value == "blocked"
+    assert corrected.body.findings[0].id == finding.id
+    assert corrected.body.findings[0].criterion_ids == ("AC_LINKS",)
 
 
 def test_satisfied_review_rejects_matching_failed_deterministic_command() -> None:

@@ -1794,10 +1794,10 @@ def _context_failure_diagnostic(
         if "evidence" in lowered or "tool" in lowered or "command" in lowered:
             failure_class = ResponseFailureClass.EVIDENCE_GROUNDING
             paths = ("/criterion_assessments",)
-        elif "finding" in lowered:
-            paths = ("/findings",)
         elif "verdict" in lowered or "assessment" in lowered:
             paths = ("/criterion_assessments", "/findings", "/verdict")
+        elif "finding" in lowered:
+            paths = ("/findings",)
         else:
             paths = ("/criterion_assessments", "/findings")
     return diagnostic_from_message(
