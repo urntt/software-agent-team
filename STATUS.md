@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** release `v0.3.1` and validate it through the gated managed user journey
+**Current milestone:** validate `v0.3.1` through the gated managed user journey
 
 **Last updated:** September 18, 2026
 
@@ -10,6 +10,21 @@ product, architecture, experiment, or roadmap; those decisions belong to
 [`VISION.md`](VISION.md).
 
 ## Current Release
+
+The immutable `v0.3.1` tag,
+[GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.3.1),
+package version, and release manifest identify source revision
+`4c71b6cd76b5aa78a25806c590f5c71a8044c30c` and Git archive digest
+`sha256:83a0716d0f8c21e34539222408946a312c6975243a17427cf29f35db09457c7e`.
+Exact-tag GitHub Actions
+[run 35389376206](https://github.com/urntt/software-agent-team/actions/runs/35389376206)
+passed 1,827 tests with three environment-dependent skips and published exactly
+one identity manifest asset. The clean local release revision passed all 1,830
+tests. A fresh non-root public bootstrap of current stable and a separate
+`v0.3.0` to `v0.3.1` lifecycle passed exact identity, update, state migration,
+same-target handling, active-run refusal, injected activation rollback, channel
+round trip, export, full uninstall, and exact cleanup without making a provider
+call. A complete provider-backed user journey remains pending.
 
 The immutable `v0.3.0` tag,
 [GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.3.0),
@@ -25,7 +40,8 @@ tests. A fresh non-root public bootstrap of current stable and a separate
 same-target handling, active-run refusal, injected activation rollback, channel
 round trip, export, full uninstall, and exact cleanup without making a provider
 call. A previously affected ordinary account also reran the public bootstrap and
-activated exact `v0.3.0`. A complete provider-backed user journey remains pending.
+activated exact `v0.3.0`; its later journey exposed the Review evidence and live
+terminal defects corrected by `v0.3.1`.
 
 The immutable `v0.2.20` tag,
 [GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.2.20),
