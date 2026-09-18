@@ -1,6 +1,9 @@
 """Tests for persisted controller events and terminal rendering."""
 
 import json
+import os
+import pty
+import select
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
@@ -24,11 +27,24 @@ from software_agent_team.progress import (
     RunEventCategory,
     RunEventJournal,
     RunEventVisibility,
+    TerminalColorMode,
+    TerminalProgressDisplay,
     TerminalProgressRenderer,
 )
 from software_agent_team.run_control import RunPhase
 
 FIXED_TIME = datetime(2026, 8, 26, 12, 0, tzinfo=UTC)
+
+
+class TTYStringIO(StringIO):
+    def isatty(self) -> bool:
+        return True
+
+
+class ASCIITTYStringIO(TTYStringIO):
+    @property
+    def encoding(self) -> str:
+        return "ascii"
 
 
 def checkpoint(phase: InvocationPhase) -> ProgressCheckpointSnapshot:
@@ -783,6 +799,255 @@ def test_renderer_suppresses_repeated_checkpoint_details_but_keeps_real_events(
     assert "Builder started pytest" in rendered
     assert rendered.count("progress phase=tool_active") == 1
     assert rendered.count("task budget") == 1
+
+
+def test_live_renderer_coalesces_high_frequency_checkpoint_updates(
+    tmp_path: Path,
+) -> None:
+    output = TTYStringIO()
+    renderer = TerminalProgressRenderer(
+        output=output,
+        heartbeat_seconds=60,
+        environment={"TERM": "xterm-256color"},
+        terminal_width=lambda: 100,
+    )
+    event_journal = journal(tmp_path, handler=renderer)
+    try:
+        for index in range(100):
+            snapshot = checkpoint(InvocationPhase.TOOL_ACTIVE).model_copy(
+                update={
+                    "completed_tool_operations": index,
+                    "last_verified_checkpoint": f"Completed {index} tool operations",
+                }
+            )
+            event_journal.append(
+                ProgressEvent(
+                    kind=(
+                        ProgressEventKind.AGENT_TOOL_ACTIVE
+                        if index == 0
+                        else ProgressEventKind.AGENT_PROVIDER_ACTIVITY
+                    ),
+                    message=f"Builder checkpoint {index}",
+                    agent_id="builder",
+                    iteration=1,
+                    attempt=1,
+                    checkpoint=snapshot,
+                ),
+                lifecycle_revision=index + 1,
+                phase=RunPhase.IMPLEMENTING,
+            )
+        event_journal.append(
+            ProgressEvent(
+                kind=ProgressEventKind.AGENT_COMPLETED,
+                message="Builder completed",
+                agent_id="builder",
+                iteration=1,
+                attempt=1,
+            ),
+            lifecycle_revision=101,
+            phase=RunPhase.IMPLEMENTING,
+        )
+    finally:
+        renderer.close()
+
+    rendered = output.getvalue()
+    assert renderer.live_enabled
+    assert renderer.color_enabled
+    assert "\x1b[" in rendered
+    assert "[agent] Builder completed" in rendered
+    assert rendered.count("\n") <= 5
+    assert "checkpoint 99" not in rendered
+
+
+def test_real_pty_live_output_is_bounded_by_state_changes(tmp_path: Path) -> None:
+    master, slave = pty.openpty()
+    output = os.fdopen(os.dup(slave), "w", encoding="utf-8", buffering=1)
+    renderer = TerminalProgressRenderer(
+        output=output,
+        heartbeat_seconds=60,
+        environment={"TERM": "xterm-256color"},
+        terminal_width=lambda: 80,
+    )
+    event_journal = journal(tmp_path, handler=renderer)
+    try:
+        for index in range(200):
+            event_journal.append(
+                ProgressEvent(
+                    kind=(
+                        ProgressEventKind.AGENT_TOOL_ACTIVE
+                        if index == 0
+                        else ProgressEventKind.AGENT_PROVIDER_ACTIVITY
+                    ),
+                    message=f"Builder observation {index}",
+                    agent_id="builder",
+                    iteration=1,
+                    attempt=1,
+                    checkpoint=checkpoint(InvocationPhase.TOOL_ACTIVE).model_copy(
+                        update={"completed_tool_operations": index}
+                    ),
+                ),
+                lifecycle_revision=index + 1,
+                phase=RunPhase.IMPLEMENTING,
+            )
+        event_journal.append(
+            ProgressEvent(
+                kind=ProgressEventKind.AGENT_COMPLETED,
+                message="Builder completed",
+                agent_id="builder",
+                iteration=1,
+                attempt=1,
+            ),
+            lifecycle_revision=201,
+            phase=RunPhase.IMPLEMENTING,
+        )
+    finally:
+        renderer.close()
+        output.close()
+        os.close(slave)
+
+    captured = bytearray()
+    while True:
+        ready, _, _ = select.select([master], [], [], 0.05)
+        if not ready:
+            break
+        try:
+            captured.extend(os.read(master, 65_536))
+        except OSError:
+            break
+    os.close(master)
+
+    rendered = captured.decode(errors="replace")
+    assert renderer.live_enabled
+    assert "Builder completed" in rendered
+    assert rendered.count("\n") <= 5
+    assert "observation 199" not in rendered
+
+
+def test_append_only_plain_detailed_mode_restores_every_event(
+    tmp_path: Path,
+) -> None:
+    output = TTYStringIO()
+    renderer = TerminalProgressRenderer(
+        output=output,
+        visibility=RunEventVisibility.DETAILED,
+        display=TerminalProgressDisplay.LOG,
+        color=TerminalColorMode.NEVER,
+        heartbeat_seconds=60,
+        environment={"TERM": "xterm-256color"},
+    )
+    event_journal = journal(tmp_path, handler=renderer)
+    try:
+        for index in range(10):
+            event_journal.append(
+                ProgressEvent(
+                    kind=ProgressEventKind.AGENT_PROVIDER_ACTIVITY,
+                    message=f"Builder checkpoint {index}",
+                    agent_id="builder",
+                    iteration=1,
+                    attempt=1,
+                    checkpoint=checkpoint(InvocationPhase.PROVIDER_WAIT).model_copy(
+                        update={
+                            "completed_tool_operations": index,
+                            "last_verified_checkpoint": f"Completed {index} tools",
+                        }
+                    ),
+                ),
+                lifecycle_revision=index + 1,
+                phase=RunPhase.IMPLEMENTING,
+            )
+    finally:
+        renderer.close()
+
+    rendered = output.getvalue()
+    assert not renderer.live_enabled
+    assert "\x1b[" not in rendered
+    assert rendered.count("Builder checkpoint") == 10
+    assert rendered.count("task budget") == 10
+
+
+@pytest.mark.parametrize("environment", ({"TERM": "dumb"}, {"TERM": "xterm"}))
+def test_non_tty_never_emits_terminal_control_sequences(
+    tmp_path: Path,
+    environment: dict[str, str],
+) -> None:
+    output = StringIO()
+    renderer = TerminalProgressRenderer(
+        output=output,
+        display=TerminalProgressDisplay.LIVE,
+        color=TerminalColorMode.ALWAYS,
+        environment=environment,
+    )
+    journal(tmp_path, handler=renderer).append(
+        ProgressEvent(kind=ProgressEventKind.RUN_STARTED, message="Run started"),
+        lifecycle_revision=1,
+        phase=RunPhase.PLANNING,
+    )
+
+    assert not renderer.live_enabled
+    assert not renderer.color_enabled
+    assert "\x1b[" not in output.getvalue()
+
+
+def test_ascii_terminal_uses_plain_symbols_without_encoding_failure(
+    tmp_path: Path,
+) -> None:
+    output = ASCIITTYStringIO()
+    renderer = TerminalProgressRenderer(
+        output=output,
+        display=TerminalProgressDisplay.LOG,
+        color=TerminalColorMode.NEVER,
+        environment={"TERM": "xterm"},
+    )
+
+    journal(tmp_path, handler=renderer).append(
+        ProgressEvent(kind=ProgressEventKind.RUN_COMPLETED, message="Run completed"),
+        lifecycle_revision=1,
+        phase=RunPhase.COMPLETED,
+    )
+
+    assert output.getvalue() == "ok Run completed\n"
+
+
+def test_live_rendering_can_pause_while_input_owns_the_cursor(tmp_path: Path) -> None:
+    output = TTYStringIO()
+    renderer = TerminalProgressRenderer(
+        output=output,
+        heartbeat_seconds=60,
+        environment={"TERM": "xterm"},
+    )
+    event_journal = journal(tmp_path, handler=renderer)
+    try:
+        event_journal.append(
+            ProgressEvent(
+                kind=ProgressEventKind.AGENT_TOOL_ACTIVE,
+                message="Builder is using a tool",
+                agent_id="builder",
+                iteration=1,
+                attempt=1,
+                checkpoint=checkpoint(InvocationPhase.TOOL_ACTIVE),
+            ),
+            lifecycle_revision=1,
+            phase=RunPhase.IMPLEMENTING,
+        )
+        renderer.suspend_live()
+        suspended = output.getvalue()
+        event_journal.append(
+            ProgressEvent(
+                kind=ProgressEventKind.AGENT_PROVIDER_ACTIVITY,
+                message="Builder is waiting for the model",
+                agent_id="builder",
+                iteration=1,
+                attempt=1,
+                checkpoint=checkpoint(InvocationPhase.PROVIDER_WAIT),
+            ),
+            lifecycle_revision=2,
+            phase=RunPhase.IMPLEMENTING,
+        )
+        assert output.getvalue() == suspended
+        renderer.resume_live()
+        assert "waiting for the model" in output.getvalue()[len(suspended) :]
+    finally:
+        renderer.close()
 
 
 def test_stopping_transition_prevents_stale_working_heartbeat(tmp_path: Path) -> None:

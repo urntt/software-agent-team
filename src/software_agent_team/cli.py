@@ -113,6 +113,8 @@ from software_agent_team.progress import (
     ProgressEventKind,
     ProgressHandler,
     RunEventVisibility,
+    TerminalColorMode,
+    TerminalProgressDisplay,
     TerminalProgressRenderer,
 )
 from software_agent_team.quality_gates import (
@@ -170,6 +172,7 @@ from software_agent_team.teams import (
     TeamPlan,
     load_team_manifest,
 )
+from software_agent_team.terminal_input import DEFAULT_TERMINAL_INPUT
 from software_agent_team.updates import (
     ForegroundUpdateObservation,
     ManagedChangePlan,
@@ -345,6 +348,8 @@ def _print_configuration(configuration: UserConfiguration, path: Path) -> None:
     print(f"authorized model switches: {switches or 'none'}")
     print(f"maximum concurrent Agents: {configuration.max_concurrency}")
     print(f"progress visibility: {configuration.progress_visibility}")
+    print(f"progress display: {configuration.progress_display}")
+    print(f"progress color: {configuration.progress_color}")
 
 
 def _load_user_configuration(path: Path | None = None) -> UserConfiguration | None:
@@ -376,7 +381,7 @@ def _timeout_flag(args: argparse.Namespace) -> tuple[bool, int | None]:
 
 def _prompt_value(label: str, current: object | None = None) -> str:
     suffix = "" if current is None else f" [{current}]"
-    response = input(f"{label}{suffix}: ").strip()
+    response = DEFAULT_TERMINAL_INPUT.read_line(f"{label}{suffix}: ").strip()
     if response:
         return response
     if current is None:
@@ -390,33 +395,50 @@ def _prompt_product_text(
     label: str,
     required: bool = False,
     maximum_length: int | None = None,
+    multiline: bool = True,
 ) -> str:
-    """Read one product answer without accepting undecodable terminal bytes."""
+    """Read editable product text without discarding a failed validation draft."""
 
-    while True:
-        response = input(prompt).strip()
+    def validate(value: str) -> str | None:
+        response = value.strip()
         try:
             response.encode("utf-8", errors="strict")
         except UnicodeEncodeError:
-            print(f"Invalid terminal text in {label}; please type it again.")
-            continue
+            return f"Invalid terminal text in {label}; please edit it."
         if required and not response:
-            print(f"{label.capitalize()} must not be blank; please type it again.")
-            continue
+            return f"{label.capitalize()} must not be blank; please edit it."
         if maximum_length is not None and len(response) > maximum_length:
-            print(
+            return (
                 f"{label.capitalize()} must be at most {maximum_length} "
                 "characters; please shorten it."
             )
-            continue
-        return response
+        return None
+
+    reader = (
+        DEFAULT_TERMINAL_INPUT.read_text
+        if multiline
+        else DEFAULT_TERMINAL_INPUT.read_line
+    )
+    return reader(prompt, validate=validate).strip()
+
+
+def _read_short(prompt: str) -> str:
+    """Read one editable decision or scalar value."""
+
+    return DEFAULT_TERMINAL_INPUT.read_line(prompt)
+
+
+def _read_natural_text(prompt: str) -> str:
+    """Read one editable multiline natural-language answer."""
+
+    return DEFAULT_TERMINAL_INPUT.read_text(prompt).strip()
 
 
 def _prompt_nonnegative_decimal(label: str) -> Decimal:
     """Read one explicit finite USD price without treating blank as zero."""
 
     while True:
-        raw = input(f"{label}: ").strip()
+        raw = _read_short(f"{label}: ").strip()
         try:
             value = Decimal(raw)
         except Exception:
@@ -435,7 +457,9 @@ def _prompt_task_cost_ceiling() -> Decimal:
     print("  This is a maximum authorized spend, not a predicted final cost.")
     print("  $5.00 is a starting suggestion for a small project; change it freely.")
     while True:
-        raw = input("Maximum total model spend for this task (USD) [5.00]: ").strip()
+        raw = _read_short(
+            "Maximum total model spend for this task (USD) [5.00]: "
+        ).strip()
         if not raw:
             return Decimal("5.00")
         try:
@@ -456,7 +480,7 @@ def _prompt_optional_run_deadline() -> int | None:
     if not _prompt_yes_no("Set a deadline for this task?", default=False):
         return None
     while True:
-        raw = input("Maximum whole-run time in minutes [120]: ").strip() or "120"
+        raw = _read_short("Maximum whole-run time in minutes [120]: ").strip() or "120"
         if raw.isdecimal() and 1 <= int(raw) <= 525_600:
             return int(raw) * 60
         print("Enter a whole number of minutes between 1 and 525600.")
@@ -539,7 +563,7 @@ def _prompt_context_window(model: str) -> int:
     """Ask only when the local runtime cannot discover model context length."""
 
     while True:
-        raw = input(
+        raw = _read_short(
             f"Context-window tokens for {model} (provider-documented value): "
         ).strip()
         if raw.isdecimal() and int(raw) >= 1:
@@ -1192,6 +1216,8 @@ def _configure(args: argparse.Namespace) -> int:
                 args.output_cost_per_million_usd,
                 args.max_concurrency,
                 args.progress_visibility,
+                args.progress_display,
+                args.progress_color,
             )
         )
         or any(
@@ -1287,6 +1313,10 @@ def _configure(args: argparse.Namespace) -> int:
             progress_visibility = (
                 current.progress_visibility if current is not None else "standard"
             )
+            progress_display = (
+                current.progress_display if current is not None else "auto"
+            )
+            progress_color = current.progress_color if current is not None else "auto"
         else:
             model = (
                 args.model
@@ -1331,6 +1361,20 @@ def _configure(args: argparse.Namespace) -> int:
                 if current
                 else "standard"
             )
+            progress_display = (
+                args.progress_display
+                if args.progress_display is not None
+                else current.progress_display
+                if current
+                else "auto"
+            )
+            progress_color = (
+                args.progress_color
+                if args.progress_color is not None
+                else current.progress_color
+                if current
+                else "auto"
+            )
             if model is None:
                 raise ValueError(
                     "first-time non-interactive configuration requires --model"
@@ -1347,6 +1391,8 @@ def _configure(args: argparse.Namespace) -> int:
             **model_fields,
             max_concurrency=concurrency,
             progress_visibility=progress_visibility,
+            progress_display=progress_display,
+            progress_color=progress_color,
         )
         configuration = _bind_private_runtime_profiles(
             configuration,
@@ -2390,7 +2436,7 @@ def _prompt_yes_no(label: str, *, default: bool) -> bool:
 
     suffix = "[Y/n]" if default else "[y/N]"
     while True:
-        answer = input(f"{label} {suffix} ").strip().casefold()
+        answer = _read_short(f"{label} {suffix} ").strip().casefold()
         if not answer:
             return default
         if answer in {"y", "yes"}:
@@ -3252,6 +3298,7 @@ def _collect_product_request(
         project_name = _prompt_product_text(
             "Project directory [software-project]: ",
             label="project directory",
+            multiline=False,
         )
         project_name = project_name or "software-project"
         try:
@@ -3507,7 +3554,12 @@ def _run_product_planning(
             "roles": (AgentRole.CLARIFIER,),
         }
         try:
-            approved = run_interactive_planning(coordinator, request)
+            approved = run_interactive_planning(
+                coordinator,
+                request,
+                read=_read_short,
+                read_text=_read_natural_text,
+            )
         except BaseException as error:
             try:
                 cleanup_run_sandbox_containers(**cleanup_arguments)
@@ -3749,7 +3801,12 @@ def _plan_execution_checkpoint(
     return report
 
 
-def _run_product() -> int:
+def _run_product(
+    *,
+    progress_visibility: str | None = None,
+    progress_display: str | None = None,
+    progress_color: str | None = None,
+) -> int:
     """Run the primary diagnostics-to-delivery product journey."""
 
     if not sys.stdin.isatty():
@@ -3779,6 +3836,17 @@ def _run_product() -> int:
     state_paths = ProductStatePaths.below(user_state_root())
     ensure_product_state(state_paths)
     configuration, model_inspections = _ensure_product_configuration(state_paths)
+    presentation_overrides = {
+        key: value
+        for key, value in {
+            "progress_visibility": progress_visibility,
+            "progress_display": progress_display,
+            "progress_color": progress_color,
+        }.items()
+        if value is not None
+    }
+    if presentation_overrides:
+        configuration = configuration.model_copy(update=presentation_overrides)
     configuration = _constrain_product_concurrency(
         configuration,
         diagnostics,
@@ -3855,6 +3923,8 @@ def _run_product() -> int:
 
     renderer = TerminalProgressRenderer(
         visibility=RunEventVisibility(configuration.progress_visibility),
+        display=TerminalProgressDisplay(configuration.progress_display),
+        color=TerminalColorMode(configuration.progress_color),
     )
     try:
         while True:
@@ -3912,6 +3982,13 @@ def _run_product() -> int:
                     team_plan=team_plan,
                     notice_handler=renderer.write_notice,
                     visibility_handler=renderer.set_visibility,
+                    input_activity_handler=(
+                        lambda active: (
+                            renderer.suspend_live()
+                            if active
+                            else renderer.resume_live()
+                        )
+                    ),
                 )
                 console.start()
                 return console.close
@@ -4100,6 +4177,21 @@ def build_parser() -> argparse.ArgumentParser:
         "--version",
         action="store_true",
         help="Show the installed SAT release and exact source identity, then exit.",
+    )
+    parser.add_argument(
+        "--progress-visibility",
+        choices=tuple(item.value for item in RunEventVisibility),
+        help="Override progress detail for this guided run only.",
+    )
+    parser.add_argument(
+        "--progress-display",
+        choices=tuple(item.value for item in TerminalProgressDisplay),
+        help="Override automatic, live, or append-only progress for this run only.",
+    )
+    parser.add_argument(
+        "--progress-color",
+        choices=tuple(item.value for item in TerminalColorMode),
+        help="Override automatic, preferred, or disabled color for this run only.",
     )
     commands = parser.add_subparsers(dest="command")
 
@@ -4448,6 +4540,19 @@ def build_parser() -> argparse.ArgumentParser:
             "without changing execution behavior."
         ),
     )
+    configure.add_argument(
+        "--progress-display",
+        choices=tuple(item.value for item in TerminalProgressDisplay),
+        help=(
+            "Use automatic TTY detection, a bounded live panel, or append-only "
+            "log rendering."
+        ),
+    )
+    configure.add_argument(
+        "--progress-color",
+        choices=tuple(item.value for item in TerminalColorMode),
+        help="Use automatic color detection, prefer color, or disable color.",
+    )
     configure.set_defaults(handler=_configure)
 
     handoff = commands.add_parser(
@@ -4619,7 +4724,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
         if args.command is None:
             with managed_foreground_task_lease(PROJECT_ROOT):
-                return _run_product()
+                if not any(
+                    (
+                        args.progress_visibility,
+                        args.progress_display,
+                        args.progress_color,
+                    )
+                ):
+                    return _run_product()
+                return _run_product(
+                    progress_visibility=args.progress_visibility,
+                    progress_display=args.progress_display,
+                    progress_color=args.progress_color,
+                )
         return args.handler(args)
     except KeyboardInterrupt:
         print("\nBuild interrupted. SAT did not claim a successful delivery.")

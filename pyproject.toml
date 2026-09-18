@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
   "json5>=0.12,<1",
+  "prompt-toolkit>=3.0,<4",
   "pydantic>=2.11,<3",
 ]
 

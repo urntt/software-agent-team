@@ -204,12 +204,20 @@ def test_product_configuration_can_omit_local_price_estimates() -> None:
     assert configuration.output_cost_per_million_usd is None
     assert configuration.max_concurrency == 2
     assert configuration.progress_visibility == "standard"
+    assert configuration.progress_display == "auto"
+    assert configuration.progress_color == "auto"
 
     with pytest.raises(ValueError):
         UserConfiguration(
             model="provider/model",
             progress_visibility="everything",
         )
+
+    with pytest.raises(ValueError):
+        UserConfiguration(model="provider/model", progress_display="scroll")
+
+    with pytest.raises(ValueError):
+        UserConfiguration(model="provider/model", progress_color="sometimes")
 
     with pytest.raises(ValueError, match="configured together"):
         UserConfiguration(
@@ -319,6 +327,8 @@ def test_v7_configuration_preserves_routing_and_retires_timeout(
     payload = sample_configuration().model_dump(mode="json")
     payload["schema_version"] = 7
     payload["stage_timeout_seconds"] = 900
+    payload.pop("progress_display")
+    payload.pop("progress_color")
     path.write_text(json.dumps(payload), encoding="utf-8")
 
     with pytest.warns(UserWarning, match="schema v7"):
@@ -363,6 +373,25 @@ def test_v9_configuration_migrates_to_frozen_runtime_profiles(
     assert migrated.schema_version == USER_CONFIGURATION_SCHEMA_VERSION
     assert migrated.default_model_profile.runtime_profile.provider_id == "provider"
     assert migrated.default_model_profile.runtime_profile_sha256
+
+
+def test_v10_configuration_gets_safe_terminal_presentation_defaults(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "config.json"
+    payload = sample_configuration().model_dump(mode="json")
+    payload["schema_version"] = 10
+    payload.pop("progress_display")
+    payload.pop("progress_color")
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.warns(UserWarning, match="automatic live progress"):
+        migrated = load_user_configuration(path)
+
+    assert migrated is not None
+    assert migrated.schema_version == USER_CONFIGURATION_SCHEMA_VERSION
+    assert migrated.progress_display == "auto"
+    assert migrated.progress_color == "auto"
 
 
 def test_user_configuration_refuses_a_symbolic_link(tmp_path: Path) -> None:

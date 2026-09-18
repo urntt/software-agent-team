@@ -2,6 +2,7 @@
 
 import json
 import os
+from contextlib import nullcontext
 from datetime import UTC, datetime
 from decimal import Decimal
 from importlib.metadata import version as distribution_version
@@ -67,6 +68,8 @@ def ready_user_configuration(
     model: str = "provider/model",
     max_concurrency: int = 2,
     progress_visibility: str = "standard",
+    progress_display: str = "auto",
+    progress_color: str = "auto",
 ) -> UserConfiguration:
     """Return one fully discovered secret-free model configuration."""
 
@@ -94,6 +97,8 @@ def ready_user_configuration(
         ),
         max_concurrency=max_concurrency,
         progress_visibility=progress_visibility,
+        progress_display=progress_display,
+        progress_color=progress_color,
     )
 
 
@@ -1066,9 +1071,14 @@ def test_product_planning_uses_one_bootstrap_agent_and_cleans_it(
         ),
     )
 
-    def fake_interactive(coordinator: object, supplied: object) -> object:
+    def fake_interactive(
+        coordinator: object,
+        supplied: object,
+        **kwargs: object,
+    ) -> object:
         observed["coordinator"] = coordinator
         observed["request"] = supplied
+        observed["interactive_readers"] = kwargs
         return approved
 
     monkeypatch.setattr(cli, "run_interactive_planning", fake_interactive)
@@ -1091,6 +1101,10 @@ def test_product_planning_uses_one_bootstrap_agent_and_cleans_it(
 
     assert result is approved
     assert observed["request"] == request
+    assert observed["interactive_readers"] == {
+        "read": cli._read_short,
+        "read_text": cli._read_natural_text,
+    }
     materialize = observed["materialize"]
     assert materialize["bootstrap_capability"] is cli.AgentCapability.CLARIFICATION
     assert materialize["workspace"] == planning_workspace
@@ -1250,9 +1264,14 @@ def test_product_planning_preflights_finite_authorized_fallback_chain(
             model_available=True,
         )
 
-    def fake_interactive(coordinator: object, supplied: object) -> object:
+    def fake_interactive(
+        coordinator: object,
+        supplied: object,
+        **kwargs: object,
+    ) -> object:
         observed["coordinator"] = coordinator
         observed["request"] = supplied
+        observed["interactive_readers"] = kwargs
         return approved
 
     monkeypatch.setattr(cli, "materialize_run_configuration", fake_materialize)
@@ -1276,6 +1295,10 @@ def test_product_planning_preflights_finite_authorized_fallback_chain(
 
     assert result is approved
     assert observed["request"] == request
+    assert observed["interactive_readers"] == {
+        "read": cli._read_short,
+        "read_text": cli._read_natural_text,
+    }
     assert [model for model, _path in materialized] == [
         "provider/primary",
         "backup/secondary",
@@ -1783,6 +1806,10 @@ def test_cli_noninteractive_configuration_is_private_and_reconfigurable(
                 "4",
                 "--progress-visibility",
                 "detailed",
+                "--progress-display",
+                "log",
+                "--progress-color",
+                "never",
             ]
         )
         == 0
@@ -1792,6 +1819,8 @@ def test_cli_noninteractive_configuration_is_private_and_reconfigurable(
     assert first.model == "provider/model-a"
     assert first.max_concurrency == 4
     assert first.progress_visibility == "detailed"
+    assert first.progress_display == "log"
+    assert first.progress_color == "never"
 
     assert (
         main(
@@ -1811,8 +1840,50 @@ def test_cli_noninteractive_configuration_is_private_and_reconfigurable(
     assert second.output_cost_per_million_usd is None
     assert second.max_concurrency == first.max_concurrency
     assert second.progress_visibility == first.progress_visibility
+    assert second.progress_display == first.progress_display
+    assert second.progress_color == first.progress_color
     output = capsys.readouterr().out
     assert "provider credentials: not stored by SAT" in output
+
+
+def test_guided_run_accepts_non_persistent_progress_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, object] = {}
+    monkeypatch.setattr(
+        cli,
+        "reconcile_pending_sandbox_image_transition",
+        lambda _root: None,
+    )
+    monkeypatch.setattr(
+        cli,
+        "managed_foreground_task_lease",
+        lambda _root: nullcontext(),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_product",
+        lambda **kwargs: observed.update(kwargs) or 0,
+    )
+
+    assert (
+        main(
+            [
+                "--progress-visibility",
+                "compact",
+                "--progress-display",
+                "log",
+                "--progress-color",
+                "never",
+            ]
+        )
+        == 0
+    )
+    assert observed == {
+        "progress_visibility": "compact",
+        "progress_display": "log",
+        "progress_color": "never",
+    }
 
 
 def test_noninteractive_invalid_route_preserves_exact_saved_configuration(
@@ -2759,6 +2830,8 @@ def test_cli_interactive_configuration_prompts_for_first_run_defaults(
     assert configuration.default_model_profile.context_window_tokens == 120_000
     assert configuration.max_concurrency == 2
     assert configuration.progress_visibility == "standard"
+    assert configuration.progress_display == "auto"
+    assert configuration.progress_color == "auto"
 
 
 def test_cli_requires_a_complete_price_pair(

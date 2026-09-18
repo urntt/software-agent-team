@@ -330,7 +330,7 @@ SAT configuration is stored atomically with mode `0600` at:
 ${XDG_CONFIG_HOME:-$HOME/.config}/software-agent-team/config.json
 ```
 
-Schema version 10 stores one or more secret-free model profiles, the default
+Schema version 11 stores one or more secret-free model profiles, the default
 bootstrap profile, strict or policy routing, optional capability and stage
 overrides, and the only currently supported runtime switch condition:
 `provider_failure`. A profile contains a canonical OpenClaw `provider/model`,
@@ -367,11 +367,14 @@ sat configure --non-interactive --profile-cache-pricing default=0.10,0
 
 The example rates are illustrative, not provider pricing advice.
 
-The same configuration may contain a positive adaptive `max_concurrency`
-and `compact`, `standard`, or `detailed` progress visibility. The
+The same configuration may contain a positive adaptive `max_concurrency`;
+`compact`, `standard`, or `detailed` progress visibility; `auto`, `live`, or
+`log` display; and `auto`, `always`, or `never` color. `auto` uses a bounded,
+colored live panel only on a capable TTY. Non-TTY output and `TERM=dumb` fall
+back to deterministic append-only lines without terminal control sequences. The
 guided first-use flow writes one strict default profile and uses controller
-defaults for other fields. Existing schema-v1 through schema-v9 values migrate
-one way into schema 10; old price pairs are preserved and missing cache prices
+defaults for other fields. Existing schema-v1 through schema-v10 values migrate
+one way into schema 11; old price pairs are preserved and missing cache prices
 must be completed before another task, not silently set to zero;
 the former scalar model and price fields become the default profile rather
 than a second source of truth.
@@ -497,16 +500,19 @@ remains the proposed value even when OpenClaw reports a different default, so
 pressing Enter cannot silently switch providers or models.
 
 Pricing, additional model profiles, route policy, adaptive maximum concurrency,
-and progress visibility are advanced configuration and are not part of normal
+and progress presentation are advanced configuration and are not part of normal
 first-use setup. For example:
 
 ```bash
 sat configure --non-interactive --model provider/model \
   --max-concurrency 4 \
-  --progress-visibility detailed
+  --progress-visibility detailed \
+  --progress-display log \
+  --progress-color never
 ```
 
-This sets a scheduling cap and detailed progress; dependency readiness and
+This sets a scheduling cap and restores detailed append-only plain progress;
+dependency readiness and
 shared-workspace writer safety may reduce actual concurrency. Fixed-evaluation
 verification concurrency
 remains a separate `sat run` option documented in the

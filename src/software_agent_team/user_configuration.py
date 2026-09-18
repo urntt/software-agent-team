@@ -20,7 +20,7 @@ from software_agent_team.teams import (
     ModelSwitchCondition,
 )
 
-USER_CONFIGURATION_SCHEMA_VERSION = 10
+USER_CONFIGURATION_SCHEMA_VERSION = 11
 USER_CONFIGURATION_ENVIRONMENT_VARIABLE = "SAT_CONFIG_PATH"
 
 
@@ -114,6 +114,8 @@ class UserConfiguration(BaseModel):
     authorized_switch_conditions: tuple[ModelSwitchCondition, ...] = ()
     max_concurrency: int = Field(default=2, ge=1)
     progress_visibility: Literal["compact", "standard", "detailed"] = "standard"
+    progress_display: Literal["auto", "live", "log"] = "auto"
+    progress_color: Literal["auto", "always", "never"] = "auto"
 
     @model_validator(mode="before")
     @classmethod
@@ -471,6 +473,16 @@ def load_user_configuration(
         notice = (
             "configuration schema v9 model routes were migrated to immutable "
             "transport profiles; provider credentials remain outside SAT config"
+        )
+        if on_migration is None:
+            warnings.warn(notice, UserWarning, stacklevel=2)
+        else:
+            on_migration(notice)
+    if payload.get("schema_version") == 10:
+        payload = {**payload, "schema_version": USER_CONFIGURATION_SCHEMA_VERSION}
+        notice = (
+            "configuration schema v10 was loaded with automatic live progress "
+            "and terminal color detection"
         )
         if on_migration is None:
             warnings.warn(notice, UserWarning, stacklevel=2)

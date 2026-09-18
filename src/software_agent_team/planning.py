@@ -10842,7 +10842,9 @@ def _interactive_question_answerer(
     *,
     read: InputReader,
     write: OutputWriter,
+    read_text: InputReader | None = None,
 ) -> QuestionAnswerer:
+    natural_text_reader = read if read_text is None else read_text
     dimension_prompts = {
         ProductDefinitionDimension.TARGET_USERS: (
             "Who will use or receive the result? Say when the audience is not "
@@ -10977,7 +10979,7 @@ def _interactive_question_answerer(
                     write(f"    - {option.label}: {option.description}")
                 continue
             if choice.casefold() in {"c", "custom"}:
-                custom = read("Your answer: ").strip()
+                custom = natural_text_reader("Your answer: ").strip()
                 if custom:
                     return PlanningQuestionAnswer(text=custom)
                 write("Please enter a non-empty answer.")
@@ -11095,11 +11097,17 @@ def run_interactive_planning(
     request: PlanningRequest,
     *,
     read: InputReader = input,
+    read_text: InputReader | None = None,
     write: OutputWriter = print,
 ) -> ApprovedPlanningResult | None:
     """Run the user-facing clarification, overview, revision, and approval loop."""
 
-    answer_question = _interactive_question_answerer(read=read, write=write)
+    natural_text_reader = read if read_text is None else read_text
+    answer_question = _interactive_question_answerer(
+        read=read,
+        read_text=natural_text_reader,
+        write=write,
+    )
     progress = TerminalPlanningProgress(write=write)
     write("")
     write("Planning started. No runtime Agent has been created yet.")
@@ -11161,7 +11169,7 @@ def run_interactive_planning(
             )
             continue
         if choice in {"r", "revise"}:
-            change = read("Describe the changes you want: ").strip()
+            change = natural_text_reader("Describe the changes you want: ").strip()
             if not change:
                 write("Change request must not be blank.")
                 continue

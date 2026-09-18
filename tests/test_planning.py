@@ -1483,6 +1483,21 @@ def test_question_requires_suggestions_and_preserves_custom_answers() -> None:
     assert question.allow_custom
 
 
+def test_planning_custom_answer_uses_shared_natural_text_reader() -> None:
+    question = question_response().question
+    assert question is not None
+    prompts: list[str] = []
+    answer = planning._interactive_question_answerer(
+        read=lambda _prompt: "c",
+        read_text=lambda prompt: prompts.append(prompt) or "first line\nsecond line",
+        write=lambda _value: None,
+    )(question)
+
+    assert answer is not None
+    assert answer.text == "first line\nsecond line"
+    assert prompts == ["Your answer: "]
+
+
 def test_product_question_declares_one_atomic_dimension() -> None:
     question = product_intent_question_response().question
 

@@ -115,6 +115,23 @@ approval. Pause is cooperative; interrupt and cancel are best effort for an
 active provider call, so already-incurred usage may remain billable. Cancel is
 terminal and never delivers partial work.
 
+In an interactive terminal, progress uses color and a bounded live region when
+the terminal supports them. High-frequency elapsed time, tool counts, Review
+coverage, and budget changes update each Agent's panel in place; milestones,
+warnings, decisions, and final results remain in scrollback. Redirected output
+uses deterministic append-only lines. Persisted configuration controls detail,
+display, and color independently, and these one-run overrides do not change the
+saved defaults:
+
+```bash
+sat --progress-visibility compact --progress-display log --progress-color never
+```
+
+Natural-language prompts support cursor movement, Home/End, Delete, Unicode,
+soft wrapping, and multiline editing. Enter submits the complete buffer;
+Alt+Enter or Ctrl+O inserts a newline, and Ctrl+C cancels at the existing flow
+boundary.
+
 ## Configure a Model
 
 The first `sat` launch includes guided setup. Later launches recheck the exact
@@ -142,6 +159,9 @@ SAT and private OpenClaw configuration unchanged, and success states explicitly
 that the local routes passed while no live provider call was made. Advanced
 configuration can also declare Agent capabilities, deterministic stage or
 capability routes, and a bounded switch after an attributable provider failure.
+It can select `auto`, `live`, or `log` progress display and `auto`, `always`, or
+`never` color in addition to the three visibility levels. The `log` + `never` +
+`detailed` combination provides the full append-only terminal projection.
 Before each task's first model call, SAT refreshes non-secret price and context
 facts and asks for one task-wide USD ceiling and an optional whole-run deadline;
 no deadline is the default. Use `sat configure --help` for the complete advanced

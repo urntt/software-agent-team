@@ -1,5 +1,8 @@
 """Behavior tests for controller-applied dynamic-runtime controls."""
 
+import os
+import pty
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -9,6 +12,7 @@ from software_agent_team.artifacts import ArtifactKind
 from software_agent_team.budgets import AgentBudget
 from software_agent_team.control_console import (
     ControlConsoleError,
+    TerminalControlConsole,
     submit_control_line,
 )
 from software_agent_team.controls import (
@@ -461,3 +465,37 @@ def test_console_rejects_unknown_agents_and_non_control_input(tmp_path: Path) ->
             store=store,
             team_plan=plan,
         )
+
+
+def test_tty_control_entry_suspends_live_rendering_while_editing(
+    tmp_path: Path,
+) -> None:
+    store, _, _ = _channel(tmp_path)
+    master, slave = pty.openpty()
+    input_stream = os.fdopen(slave, "r", encoding="utf-8", buffering=1)
+    input_activity: list[bool] = []
+    notices: list[str] = []
+    console = TerminalControlConsole(
+        store=store,
+        team_plan=_plan(),
+        input_stream=input_stream,
+        notice_handler=notices.append,
+        input_activity_handler=input_activity.append,
+        line_reader=lambda initial: initial + input_stream.readline().strip(),
+        poll_seconds=0.01,
+    )
+    try:
+        console.start()
+        os.write(master, b"/pause\n")
+        deadline = time.monotonic() + 2
+        while not store.list_latest():
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+    finally:
+        console.close()
+        input_stream.close()
+        os.close(master)
+
+    assert input_activity == [True, False]
+    assert store.list_latest()[0].command is ControlCommandType.PAUSE
+    assert any("Queued pause" in notice for notice in notices)

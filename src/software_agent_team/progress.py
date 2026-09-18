@@ -8,16 +8,17 @@ import re
 import sys
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
-from typing import Literal, Self, TextIO
+from typing import ClassVar, Literal, Self, TextIO
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from wcwidth import wcswidth
 
 from software_agent_team.artifacts import IterationDecision
 from software_agent_team.budgets import AgentBudgetUsage
@@ -105,6 +106,22 @@ class RunEventVisibility(StrEnum):
     COMPACT = "compact"
     STANDARD = "standard"
     DETAILED = "detailed"
+
+
+class TerminalProgressDisplay(StrEnum):
+    """Requested terminal projection; unsafe live output always falls back to log."""
+
+    AUTO = "auto"
+    LIVE = "live"
+    LOG = "log"
+
+
+class TerminalColorMode(StrEnum):
+    """Requested color behavior within a capable interactive terminal."""
+
+    AUTO = "auto"
+    ALWAYS = "always"
+    NEVER = "never"
 
 
 class AgentRunState(StrEnum):
@@ -1055,37 +1072,174 @@ class _HeartbeatObservation:
 
 
 class TerminalProgressRenderer:
-    """Render persisted safe summaries and elapsed waiting time."""
+    """Render append-only logs or a bounded, TTY-aware live progress panel."""
+
+    _TRANSIENT_LIVE_KINDS: ClassVar[frozenset[ProgressEventKind]] = frozenset(
+        {
+            ProgressEventKind.AGENT_STARTED,
+            ProgressEventKind.AGENT_INVOCATION_LAUNCHED,
+            ProgressEventKind.AGENT_INITIALIZING,
+            ProgressEventKind.AGENT_INITIALIZATION_PROGRESS,
+            ProgressEventKind.AGENT_WAITING_PROVIDER,
+            ProgressEventKind.AGENT_PROVIDER_ACTIVITY,
+            ProgressEventKind.AGENT_TOOL_ACTIVE,
+            ProgressEventKind.AGENT_TOOL_STARTED,
+            ProgressEventKind.AGENT_TOOL_COMPLETED,
+            ProgressEventKind.AGENT_FINALIZING_RESPONSE,
+            ProgressEventKind.AGENT_FINALIZATION_PROGRESS,
+            ProgressEventKind.AGENT_STOPPING,
+            ProgressEventKind.AGENT_COLLECTING_EVIDENCE,
+            ProgressEventKind.AGENT_STOPPED,
+            ProgressEventKind.AGENT_INVOCATION_COMPLETED,
+        }
+    )
+    _SUCCESS_KINDS: ClassVar[frozenset[ProgressEventKind]] = frozenset(
+        {
+            ProgressEventKind.WORKSPACE_READY,
+            ProgressEventKind.AGENT_TOOL_COMPLETED,
+            ProgressEventKind.AGENT_COMPLETED,
+            ProgressEventKind.SNAPSHOT_VERIFIED,
+            ProgressEventKind.QUALITY_GATE_COMPLETED,
+            ProgressEventKind.QUALITY_GATE_PASSED,
+            ProgressEventKind.DECISION_RECORDED,
+            ProgressEventKind.CONTROL_APPLIED,
+            ProgressEventKind.RUN_COMPLETED,
+        }
+    )
+    _FAILURE_KINDS: ClassVar[frozenset[ProgressEventKind]] = frozenset(
+        {
+            ProgressEventKind.AGENT_INITIALIZATION_STALLED,
+            ProgressEventKind.AGENT_RESPONSE_FINALIZATION_STALLED,
+            ProgressEventKind.AGENT_PROVIDER_STALLED,
+            ProgressEventKind.AGENT_FAILED,
+            ProgressEventKind.QUALITY_GATE_FAILED,
+            ProgressEventKind.RUN_FAILED,
+        }
+    )
+    _WARNING_KINDS: ClassVar[frozenset[ProgressEventKind]] = frozenset(
+        {
+            ProgressEventKind.AGENT_INITIALIZATION_LIVENESS_DEGRADED,
+            ProgressEventKind.AGENT_INITIALIZATION_STALL_SUSPECTED,
+            ProgressEventKind.AGENT_FINALIZATION_STALL_SUSPECTED,
+            ProgressEventKind.AGENT_LIVENESS_DEGRADED,
+            ProgressEventKind.AGENT_STALL_SUSPECTED,
+            ProgressEventKind.AGENT_SKIPPED,
+            ProgressEventKind.CONTROL_REJECTED,
+        }
+    )
+    _UNICODE_SYMBOLS: ClassVar[dict[ProgressEventKind, str]] = {
+        ProgressEventKind.RUN_STARTED: "●",
+        ProgressEventKind.WORKSPACE_READY: "✓",
+        ProgressEventKind.AGENT_QUEUED: "○",
+        ProgressEventKind.AGENT_READY: "→",
+        ProgressEventKind.AGENT_STARTED: "●",
+        ProgressEventKind.AGENT_WAITING_PROVIDER: "●",
+        ProgressEventKind.AGENT_INVOCATION_LAUNCHED: "●",
+        ProgressEventKind.AGENT_INITIALIZING: "●",
+        ProgressEventKind.AGENT_INITIALIZATION_PROGRESS: "·",
+        ProgressEventKind.AGENT_INITIALIZATION_LIVENESS_DEGRADED: "!",
+        ProgressEventKind.AGENT_INITIALIZATION_STALL_SUSPECTED: "?",
+        ProgressEventKind.AGENT_INITIALIZATION_STALL_RECOVERED: "↻",
+        ProgressEventKind.AGENT_INITIALIZATION_STALLED: "!",
+        ProgressEventKind.AGENT_INVOCATION_COMPLETED: "·",
+        ProgressEventKind.AGENT_PROVIDER_ACTIVITY: "·",
+        ProgressEventKind.AGENT_TOOL_ACTIVE: "⚙",
+        ProgressEventKind.AGENT_TOOL_STARTED: "⚙",
+        ProgressEventKind.AGENT_TOOL_COMPLETED: "✓",
+        ProgressEventKind.AGENT_FINALIZING_RESPONSE: "…",
+        ProgressEventKind.AGENT_FINALIZATION_PROGRESS: "·",
+        ProgressEventKind.AGENT_FINALIZATION_STALL_SUSPECTED: "?",
+        ProgressEventKind.AGENT_FINALIZATION_STALL_RECOVERED: "↻",
+        ProgressEventKind.AGENT_RESPONSE_FINALIZATION_STALLED: "!",
+        ProgressEventKind.AGENT_LIVENESS_DEGRADED: "!",
+        ProgressEventKind.AGENT_STALL_SUSPECTED: "?",
+        ProgressEventKind.AGENT_STALL_RECOVERED: "↻",
+        ProgressEventKind.AGENT_PROVIDER_STALLED: "!",
+        ProgressEventKind.AGENT_STOPPING: "■",
+        ProgressEventKind.AGENT_COLLECTING_EVIDENCE: "…",
+        ProgressEventKind.AGENT_STOPPED: "■",
+        ProgressEventKind.MODEL_ROUTE_SWITCHED: "⇄",
+        ProgressEventKind.AGENT_COMPLETED: "✓",
+        ProgressEventKind.AGENT_RETRY: "↻",
+        ProgressEventKind.AGENT_FAILED: "✗",
+        ProgressEventKind.AGENT_SKIPPED: "!",
+        ProgressEventKind.AGENT_PAUSED: "Ⅱ",
+        ProgressEventKind.AGENT_RESUMED: "▶",
+        ProgressEventKind.AGENT_INTERRUPTED: "■",
+        ProgressEventKind.AGENT_CANCELLED: "■",
+        ProgressEventKind.SNAPSHOT_VERIFIED: "✓",
+        ProgressEventKind.QUALITY_GATES_STARTED: "●",
+        ProgressEventKind.QUALITY_GATE_COMPLETED: "✓",
+        ProgressEventKind.QUALITY_GATE_PASSED: "✓",
+        ProgressEventKind.QUALITY_GATE_FAILED: "✗",
+        ProgressEventKind.DECISION_RECORDED: "✓",
+        ProgressEventKind.CONTROL_RECEIVED: "◆",
+        ProgressEventKind.CONTROL_APPLIED: "✓",
+        ProgressEventKind.CONTROL_REJECTED: "!",
+        ProgressEventKind.RUN_COMPLETED: "✓",
+        ProgressEventKind.RUN_FAILED: "✗",
+        ProgressEventKind.RUN_CANCELLED: "■",
+    }
+    _CATEGORY_LABELS: ClassVar[dict[RunEventCategory, str]] = {
+        RunEventCategory.LIFECYCLE: "run",
+        RunEventCategory.AGENT: "agent",
+        RunEventCategory.GIT: "git",
+        RunEventCategory.QUALITY_GATE: "check",
+        RunEventCategory.DECISION: "control",
+    }
 
     def __init__(
         self,
         *,
         output: TextIO | None = None,
         visibility: RunEventVisibility = RunEventVisibility.STANDARD,
+        display: TerminalProgressDisplay | str = TerminalProgressDisplay.AUTO,
+        color: TerminalColorMode | str = TerminalColorMode.AUTO,
         heartbeat_seconds: float = DEFAULT_PROGRESS_HEARTBEAT_SECONDS,
         monotonic: Callable[[], float] = time.monotonic,
+        environment: Mapping[str, str] | None = None,
+        is_terminal: bool | None = None,
+        terminal_width: Callable[[], int] | None = None,
     ) -> None:
         if heartbeat_seconds <= 0:
             raise ValueError("progress heartbeat must be positive")
         self.output = sys.stdout if output is None else output
         self.visibility = visibility
+        self.display = TerminalProgressDisplay(display)
+        self.color = TerminalColorMode(color)
         self.heartbeat_seconds = heartbeat_seconds
         self.monotonic = monotonic
+        self.environment = os.environ if environment is None else environment
+        detected_terminal = (
+            self._output_is_terminal() if is_terminal is None else is_terminal
+        )
+        terminal_capable = detected_terminal and self.environment.get("TERM") != "dumb"
+        self.live_enabled = (
+            self.display is not TerminalProgressDisplay.LOG and terminal_capable
+        )
+        self.color_enabled = (
+            self.color is not TerminalColorMode.NEVER
+            and terminal_capable
+            and (
+                self.color is TerminalColorMode.ALWAYS
+                or "NO_COLOR" not in self.environment
+            )
+        )
+        self.unicode_enabled = self._output_supports_unicode()
+        self.terminal_width = terminal_width
         self._lock = threading.Lock()
         self._waiting: dict[tuple[str, int, int], _HeartbeatObservation] = {}
         self._rendered_checkpoint_digests: dict[tuple[str, int, int], str] = {}
+        self._live_line_count = 0
+        self._live_suspensions = 0
 
     def __call__(self, event: RunEvent) -> None:
         """Render one persisted event and manage its elapsed-time heartbeat."""
 
-        visible = not (
-            _VISIBILITY_RANK[event.minimum_visibility]
-            > _VISIBILITY_RANK[self.visibility]
-        )
+        visible = self._event_visible(event)
+        live_state_changed = False
         if event.kind is ProgressEventKind.AGENT_INVOCATION_COMPLETED:
-            # Invocation checkpoints stop their provider heartbeat before the
-            # standard cost summary is rendered.
-            self._stop_waiting(event)
+            live_state_changed = self._stop_waiting(event)
         elif event.kind in {
             ProgressEventKind.AGENT_COMPLETED,
             ProgressEventKind.AGENT_FAILED,
@@ -1096,27 +1250,22 @@ class TerminalProgressRenderer:
             ProgressEventKind.AGENT_COLLECTING_EVIDENCE,
             ProgressEventKind.AGENT_STOPPED,
         }:
-            # Scheduler terminal events currently identify the scheduling
-            # attempt, while targeted semantic correction may have advanced the
-            # invocation attempt. A terminal Agent state ends every heartbeat
-            # for that Agent and iteration.
-            self._stop_agent_waiting(event)
+            live_state_changed = self._stop_agent_waiting(event)
         elif event.kind in {
             ProgressEventKind.AGENT_RETRY,
             ProgressEventKind.AGENT_PAUSED,
             ProgressEventKind.AGENT_RESUMED,
         }:
-            self._stop_waiting(event)
-
+            live_state_changed = self._stop_waiting(event)
         elif event.checkpoint is not None and event.kind in _INVOCATION_EVENT_KINDS:
             if event.checkpoint.invocation_phase in {
                 InvocationPhase.STOPPING,
                 InvocationPhase.COLLECTING_EVIDENCE,
                 InvocationPhase.STOPPED,
             }:
-                self._stop_waiting(event)
+                live_state_changed = self._stop_waiting(event)
             else:
-                self._start_waiting(event)
+                live_state_changed = self._start_waiting(event)
         elif event.kind in {
             ProgressEventKind.AGENT_STARTED,
             ProgressEventKind.AGENT_INITIALIZING,
@@ -1125,66 +1274,19 @@ class TerminalProgressRenderer:
             ProgressEventKind.AGENT_TOOL_STARTED,
             ProgressEventKind.AGENT_FINALIZING_RESPONSE,
         }:
-            # Checkpoint-free legacy/fixed-workflow events retain their fallback.
-            self._start_waiting(event)
+            live_state_changed = self._start_waiting(event)
 
-        if not visible:
+        if self.live_enabled and event.kind in self._TRANSIENT_LIVE_KINDS:
+            if live_state_changed:
+                self._redraw_live()
             return
-        symbol = {
-            ProgressEventKind.RUN_STARTED: "●",
-            ProgressEventKind.WORKSPACE_READY: "✓",
-            ProgressEventKind.AGENT_QUEUED: "○",
-            ProgressEventKind.AGENT_READY: "→",
-            ProgressEventKind.AGENT_STARTED: "●",
-            ProgressEventKind.AGENT_WAITING_PROVIDER: "●",
-            ProgressEventKind.AGENT_INVOCATION_LAUNCHED: "●",
-            ProgressEventKind.AGENT_INITIALIZING: "●",
-            ProgressEventKind.AGENT_INITIALIZATION_PROGRESS: "·",
-            ProgressEventKind.AGENT_INITIALIZATION_LIVENESS_DEGRADED: "!",
-            ProgressEventKind.AGENT_INITIALIZATION_STALL_SUSPECTED: "?",
-            ProgressEventKind.AGENT_INITIALIZATION_STALL_RECOVERED: "↻",
-            ProgressEventKind.AGENT_INITIALIZATION_STALLED: "!",
-            ProgressEventKind.AGENT_INVOCATION_COMPLETED: "·",
-            ProgressEventKind.AGENT_PROVIDER_ACTIVITY: "·",
-            ProgressEventKind.AGENT_TOOL_ACTIVE: "⚙",
-            ProgressEventKind.AGENT_TOOL_STARTED: "⚙",
-            ProgressEventKind.AGENT_TOOL_COMPLETED: "✓",
-            ProgressEventKind.AGENT_FINALIZING_RESPONSE: "…",
-            ProgressEventKind.AGENT_FINALIZATION_PROGRESS: "·",
-            ProgressEventKind.AGENT_FINALIZATION_STALL_SUSPECTED: "?",
-            ProgressEventKind.AGENT_FINALIZATION_STALL_RECOVERED: "↻",
-            ProgressEventKind.AGENT_RESPONSE_FINALIZATION_STALLED: "!",
-            ProgressEventKind.AGENT_LIVENESS_DEGRADED: "!",
-            ProgressEventKind.AGENT_STALL_SUSPECTED: "?",
-            ProgressEventKind.AGENT_STALL_RECOVERED: "↻",
-            ProgressEventKind.AGENT_PROVIDER_STALLED: "!",
-            ProgressEventKind.AGENT_STOPPING: "■",
-            ProgressEventKind.AGENT_COLLECTING_EVIDENCE: "…",
-            ProgressEventKind.AGENT_STOPPED: "■",
-            ProgressEventKind.MODEL_ROUTE_SWITCHED: "⇄",
-            ProgressEventKind.AGENT_COMPLETED: "✓",
-            ProgressEventKind.AGENT_RETRY: "↻",
-            ProgressEventKind.AGENT_FAILED: "✗",
-            ProgressEventKind.AGENT_SKIPPED: "!",
-            ProgressEventKind.AGENT_PAUSED: "Ⅱ",
-            ProgressEventKind.AGENT_RESUMED: "▶",
-            ProgressEventKind.AGENT_INTERRUPTED: "■",
-            ProgressEventKind.AGENT_CANCELLED: "■",
-            ProgressEventKind.SNAPSHOT_VERIFIED: "✓",
-            ProgressEventKind.QUALITY_GATES_STARTED: "●",
-            ProgressEventKind.QUALITY_GATE_COMPLETED: "✓",
-            ProgressEventKind.QUALITY_GATE_PASSED: "✓",
-            ProgressEventKind.QUALITY_GATE_FAILED: "✗",
-            ProgressEventKind.DECISION_RECORDED: "✓",
-            ProgressEventKind.CONTROL_RECEIVED: "◆",
-            ProgressEventKind.CONTROL_APPLIED: "✓",
-            ProgressEventKind.CONTROL_REJECTED: "!",
-            ProgressEventKind.RUN_COMPLETED: "✓",
-            ProgressEventKind.RUN_FAILED: "✗",
-            ProgressEventKind.RUN_CANCELLED: "■",
-        }[event.kind]
-        self._print(f"{symbol} {event.summary}")
-        self._print_details(event)
+        if not visible:
+            if self.live_enabled and live_state_changed:
+                self._redraw_live()
+            return
+
+        lines = [self._event_line(event), *self._detail_lines(event)]
+        self._print_block(lines)
         if event.kind in {
             ProgressEventKind.RUN_COMPLETED,
             ProgressEventKind.RUN_FAILED,
@@ -1193,11 +1295,12 @@ class TerminalProgressRenderer:
             self.close()
 
     def close(self) -> None:
-        """Stop every outstanding heartbeat thread."""
+        """Stop every outstanding heartbeat thread and remove the live region."""
 
         with self._lock:
             waiting = tuple(self._waiting.values())
             self._waiting.clear()
+            self._clear_live_locked()
         for observation in waiting:
             self._join_waiting(observation)
 
@@ -1208,6 +1311,27 @@ class TerminalProgressRenderer:
         with self._lock:
             self.visibility = resolved
             self._rendered_checkpoint_digests.clear()
+            if self.live_enabled:
+                self._clear_live_locked()
+                self._draw_live_locked()
+
+    def suspend_live(self) -> None:
+        """Pause live redraw while another terminal interaction owns the cursor."""
+
+        with self._lock:
+            self._live_suspensions += 1
+            if self._live_suspensions == 1:
+                self._clear_live_locked()
+
+    def resume_live(self) -> None:
+        """Resume a previously suspended live panel."""
+
+        with self._lock:
+            if self._live_suspensions == 0:
+                raise RuntimeError("progress live rendering is not suspended")
+            self._live_suspensions -= 1
+            if self._live_suspensions == 0:
+                self._draw_live_locked()
 
     def write_notice(self, value: str) -> None:
         """Print an interaction notice without racing a progress heartbeat."""
@@ -1216,24 +1340,35 @@ class TerminalProgressRenderer:
         if cleaned:
             self._print(cleaned)
 
+    def _event_visible(self, event: RunEvent) -> bool:
+        return (
+            _VISIBILITY_RANK[event.minimum_visibility]
+            <= _VISIBILITY_RANK[self.visibility]
+        )
+
     def _key(self, event: RunEvent) -> tuple[str, int, int] | None:
         if event.agent_id is None or event.iteration is None or event.attempt is None:
             return None
         return event.agent_id, event.iteration, event.attempt
 
-    def _start_waiting(self, event: RunEvent) -> None:
+    def _start_waiting(self, event: RunEvent) -> bool:
         key = self._key(event)
         if key is None:
-            return
+            return False
         with self._lock:
             previous = self._waiting.get(key)
             if previous is not None:
+                previous_state = _current_agent_state(
+                    previous.event.kind, previous.event.checkpoint
+                )
+                current_state = _current_agent_state(event.kind, event.checkpoint)
+                changed = previous_state != current_state
                 if self._heartbeat_summary(previous.event) != self._heartbeat_summary(
                     event
                 ):
                     previous.started = self.monotonic()
                 previous.event = event
-                return
+                return changed
             observation = _HeartbeatObservation(
                 event=event, started=self.monotonic(), stop=threading.Event()
             )
@@ -1245,20 +1380,22 @@ class TerminalProgressRenderer:
             )
             self._waiting[key] = observation
             observation.thread.start()
+            return True
 
-    def _stop_waiting(self, event: RunEvent) -> None:
+    def _stop_waiting(self, event: RunEvent) -> bool:
         key = self._key(event)
         if key is None:
-            return
+            return False
         with self._lock:
             waiting = self._waiting.pop(key, None)
             self._rendered_checkpoint_digests.pop(key, None)
         if waiting is not None:
             self._join_waiting(waiting)
+        return waiting is not None
 
-    def _stop_agent_waiting(self, event: RunEvent) -> None:
+    def _stop_agent_waiting(self, event: RunEvent) -> bool:
         if event.agent_id is None or event.iteration is None:
-            return
+            return False
         with self._lock:
             keys = tuple(
                 key
@@ -1270,6 +1407,7 @@ class TerminalProgressRenderer:
                 self._rendered_checkpoint_digests.pop(key, None)
         for observation in waiting:
             self._join_waiting(observation)
+        return bool(waiting)
 
     def _join_waiting(self, observation: _HeartbeatObservation) -> None:
         observation.stop.set()
@@ -1302,6 +1440,10 @@ class TerminalProgressRenderer:
                     return
                 if self.visibility is RunEventVisibility.COMPACT:
                     continue
+                if self.live_enabled:
+                    self._clear_live_locked()
+                    self._draw_live_locked()
+                    continue
                 elapsed = max(0, int(self.monotonic() - observation.started))
                 minutes, seconds = divmod(elapsed, 60)
                 message = self._heartbeat_summary(observation.event)
@@ -1311,7 +1453,45 @@ class TerminalProgressRenderer:
                     flush=True,
                 )
 
-    def _print_details(self, event: RunEvent) -> None:
+    def _event_line(self, event: RunEvent) -> str:
+        symbol = (
+            self._UNICODE_SYMBOLS[event.kind]
+            if self.unicode_enabled
+            else self._ascii_symbol(event.kind)
+        )
+        if self.live_enabled:
+            label = self._CATEGORY_LABELS[event.category]
+            value = f"{symbol} [{label}] {event.summary}"
+        else:
+            value = f"{symbol} {event.summary}"
+        return self._colorize(value, self._event_color(event.kind))
+
+    def _ascii_symbol(self, kind: ProgressEventKind) -> str:
+        if kind in self._SUCCESS_KINDS:
+            return "ok"
+        if kind in self._FAILURE_KINDS:
+            return "x"
+        if kind in self._WARNING_KINDS:
+            return "!"
+        return "*"
+
+    def _event_color(self, kind: ProgressEventKind) -> str:
+        if kind in self._SUCCESS_KINDS:
+            return "32"
+        if kind in self._FAILURE_KINDS:
+            return "31"
+        if kind in self._WARNING_KINDS:
+            return "33"
+        if kind in {
+            ProgressEventKind.AGENT_CANCELLED,
+            ProgressEventKind.AGENT_INTERRUPTED,
+            ProgressEventKind.RUN_CANCELLED,
+        }:
+            return "35"
+        return "36"
+
+    def _detail_lines(self, event: RunEvent) -> list[str]:
+        lines: list[str] = []
         if (
             self.visibility is not RunEventVisibility.COMPACT
             and event.checkpoint is not None
@@ -1319,7 +1499,7 @@ class TerminalProgressRenderer:
         ):
             checkpoint = event.checkpoint
             task_ids = ",".join(checkpoint.approved_task_ids) or "none"
-            self._print(
+            lines.append(
                 "  progress "
                 f"phase={checkpoint.invocation_phase.value} tasks={task_ids} "
                 f"completed_tools={checkpoint.completed_tool_operations} "
@@ -1328,7 +1508,7 @@ class TerminalProgressRenderer:
             )
             if checkpoint.review_coverage_state != "not_applicable":
                 criteria = ",".join(checkpoint.review_criterion_ids)
-                self._print(
+                lines.append(
                     "  review coverage "
                     f"state={checkpoint.review_coverage_state} criteria={criteria}; "
                     "tool activity alone does not establish criterion coverage"
@@ -1347,13 +1527,13 @@ class TerminalProgressRenderer:
                     "terminal provider usage is incomplete; arithmetic headroom is "
                     "not confirmed remaining budget"
                 )
-            self._print(
+            lines.append(
                 "  task budget "
                 f"${checkpoint.known_estimated_cost_usd:.6f} settled estimate / "
                 f"${checkpoint.authorized_cost_usd} authorized; {cost_detail}"
             )
         if self.visibility is not RunEventVisibility.DETAILED:
-            return
+            return [self._colorize(line, "2") for line in lines]
         if event.agent_id is not None:
             fields = [f"agent={event.agent_id}"]
             state = _current_agent_state(event.kind, event.checkpoint)
@@ -1373,10 +1553,10 @@ class TerminalProgressRenderer:
                 fields.append(f"duration_ms={event.duration_ms}")
             dependencies = ",".join(event.dependency_ids) or "none"
             fields.append(f"dependencies={dependencies}")
-            self._print("  " + " ".join(fields))
+            lines.append("  " + " ".join(fields))
         if event.budget_usage is not None:
             usage = event.budget_usage
-            self._print(
+            lines.append(
                 "  budget "
                 f"calls_completed={usage.calls_completed} "
                 f"calls_started={usage.calls_started} "
@@ -1386,6 +1566,7 @@ class TerminalProgressRenderer:
                 f"known_cost_usd={usage.known_estimated_cost_usd} "
                 f"unpriced_calls={usage.unpriced_calls}"
             )
+        return [self._colorize(line, "2") for line in lines]
 
     def _checkpoint_details_changed(self, event: RunEvent) -> bool:
         """Suppress repeated projections while retaining every persisted event."""
@@ -1400,6 +1581,141 @@ class TerminalProgressRenderer:
             self._rendered_checkpoint_digests[key] = digest
         return previous != digest
 
-    def _print(self, value: str) -> None:
+    def _redraw_live(self) -> None:
+        if not self.live_enabled:
+            return
         with self._lock:
-            print(value, file=self.output, flush=True)
+            self._clear_live_locked()
+            self._draw_live_locked()
+
+    def _draw_live_locked(self) -> None:
+        if not self.live_enabled or self._live_suspensions:
+            return
+        lines = self._live_lines_locked()
+        for line in lines:
+            self.output.write(line + "\n")
+        self.output.flush()
+        self._live_line_count = len(lines)
+
+    def _clear_live_locked(self) -> None:
+        if not self.live_enabled or self._live_line_count == 0:
+            return
+        self.output.write(f"\x1b[{self._live_line_count}A")
+        for _ in range(self._live_line_count):
+            self.output.write("\r\x1b[2K\x1b[1B")
+        self.output.flush()
+        self._live_line_count = 0
+
+    def _live_lines_locked(self) -> list[str]:
+        now = self.monotonic()
+        width = self._terminal_columns()
+        lines: list[str] = []
+        branch = "├─" if self.unicode_enabled else "|-"
+        end_branch = "└─" if self.unicode_enabled else "`-"
+        dot = "·" if self.unicode_enabled else "|"
+        for key in sorted(self._waiting):
+            observation = self._waiting[key]
+            event = observation.event
+            if self.visibility is RunEventVisibility.COMPACT:
+                continue
+            elapsed = max(0, int(now - observation.started))
+            minutes, seconds = divmod(elapsed, 60)
+            state = _current_agent_state(event.kind, event.checkpoint)
+            state_text = "working" if state is None else state.value.replace("_", " ")
+            stage = "" if event.stage_id is None else f" [{event.stage_id}]"
+            status = (
+                f"{
+                    self._UNICODE_SYMBOLS[event.kind]
+                    if self.unicode_enabled
+                    else self._ascii_symbol(event.kind)
+                } "
+                f"{event.agent_id}{stage}  {state_text}  {minutes:02d}:{seconds:02d}"
+            )
+            lines.append(self._colorize(self._fit(status, width), "1;36"))
+            lines.append(self._fit(f"  {branch} {event.summary}", width))
+            checkpoint = event.checkpoint
+            if checkpoint is None:
+                lines.append(
+                    self._colorize(
+                        self._fit(f"  {end_branch} waiting for next checkpoint", width),
+                        "2",
+                    )
+                )
+                continue
+            tasks = len(checkpoint.approved_task_ids)
+            coverage = (
+                ""
+                if checkpoint.review_coverage_state == "not_applicable"
+                else f" {dot} review {checkpoint.review_coverage_state}"
+            )
+            cost = f"${checkpoint.known_estimated_cost_usd:.3f}"
+            detail = (
+                f"  {end_branch} {checkpoint.invocation_phase.value} {dot} "
+                f"{tasks} task(s) {dot} {checkpoint.completed_tool_operations} tool(s)"
+                f"{coverage} {dot} {cost} settled"
+            )
+            lines.append(self._colorize(self._fit(detail, width), "2"))
+            if self.visibility is RunEventVisibility.DETAILED:
+                lines.append(
+                    self._colorize(
+                        self._fit(
+                            f"     next: {checkpoint.next_controller_checkpoint}",
+                            width,
+                        ),
+                        "2",
+                    )
+                )
+        return lines
+
+    def _print_block(self, lines: list[str]) -> None:
+        with self._lock:
+            self._clear_live_locked()
+            for line in lines:
+                print(line, file=self.output)
+            self.output.flush()
+            self._draw_live_locked()
+
+    def _print(self, value: str) -> None:
+        self._print_block([value])
+
+    def _colorize(self, value: str, code: str) -> str:
+        if not self.color_enabled:
+            return value
+        return f"\x1b[{code}m{value}\x1b[0m"
+
+    def _terminal_columns(self) -> int:
+        if self.terminal_width is not None:
+            return max(20, self.terminal_width())
+        try:
+            return max(20, os.get_terminal_size(self.output.fileno()).columns)
+        except (AttributeError, OSError):
+            return 80
+
+    def _fit(self, value: str, width: int) -> str:
+        if wcswidth(value) <= width:
+            return value
+        marker = "…" if self.unicode_enabled else "..."
+        target = max(1, width - wcswidth(marker))
+        result: list[str] = []
+        used = 0
+        for character in value:
+            character_width = max(0, wcswidth(character))
+            if used + character_width > target:
+                break
+            result.append(character)
+            used += character_width
+        return "".join(result) + marker
+
+    def _output_is_terminal(self) -> bool:
+        try:
+            return bool(self.output.isatty())
+        except (AttributeError, OSError):
+            return False
+
+    def _output_supports_unicode(self) -> bool:
+        encoding = getattr(self.output, "encoding", None) or "utf-8"
+        try:
+            "✓⚙…└─".encode(encoding)
+        except (LookupError, UnicodeEncodeError):
+            return False
+        return True

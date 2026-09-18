@@ -1173,8 +1173,10 @@ return to `tool_active`. The live label is derived from an allow-listed tool nam
 or executable and contains only a bounded action class, target class, and optional
 safe executable basename. Arbitrary tool names, full commands, arguments, output,
 paths, and secrets are excluded. Identical checkpoint and budget projections are
-suppressed within an invocation, but every real `RunEvent` summary remains visible
-and every event remains persisted.
+suppressed within an invocation. Every event remains persisted. Append-only log
+mode renders every event allowed by the selected visibility, while live TTY mode
+coalesces high-frequency observations into the current Agent panel and retains
+milestones, warnings, decisions, and terminal results in scrollback.
 
 ### Visibility Levels
 
@@ -1191,9 +1193,12 @@ The user may change visibility during a run without changing execution:
 
 Raw provider credentials, environment secrets, hidden reasoning, unbounded
 model output, and unrelated host information are excluded from every level.
-TTY mode may update a live panel; non-TTY mode emits ordered line events using
-the same event source. Logs and a future graphical UI must consume that same
-contract rather than infer progress independently.
+On a capable TTY, `auto` display updates a bounded live panel and `auto` color
+uses consistent active, success, warning, and failure colors. `log` display is
+append-only; `never` disables color. Non-TTY output and `TERM=dumb` emit ordered
+plain lines with no cursor controls. Display, color, and visibility are separate
+persisted settings with one-run CLI overrides. Logs and a future graphical UI
+must consume the same event contract rather than infer progress independently.
 
 ## Input and Interaction Quality
 
@@ -1207,7 +1212,8 @@ The terminal interaction must remain usable while progress is updating:
 - Validate input at the affected question and preserve the user's text after a
   recoverable error;
 - Allow concise and multiline natural-language input without requiring JSON or
-  shell escaping;
+  shell escaping. Enter submits the full buffer, while Alt+Enter or Ctrl+O adds
+  a newline;
 - Suspend live-panel redraw while the user is typing so keystrokes and text are
   never overwritten;
 - State when an action will spend model budget, invalidate work, interrupt an
@@ -1215,7 +1221,12 @@ The terminal interaction must remain usable while progress is updating:
 - Adapt to narrow terminals and provide a stable line-mode fallback with no
   color or Unicode dependency;
 - Keep secrets in trusted provider setup prompts and never echo them into the
-  Planning conversation, progress stream, or plan overview.
+Planning conversation, progress stream, or plan overview.
+
+The guided product command still requires a TTY. At automation seams that
+inject a non-TTY reader, each short or natural-language prompt consumes exactly
+one newline-terminated UTF-8 line and emits no cursor or color sequence; literal
+multiline input is a TTY editing feature.
 
 The current answer set and plan draft are recoverable local state. Returning
 to an earlier question creates a new draft revision instead of silently
@@ -1224,7 +1235,9 @@ changing an already approved plan.
 ## User Controls
 
 The controller owns a local authenticated control mailbox. The foreground TTY
-exposes the following line-mode palette after plan approval:
+exposes the following palette after plan approval. Typing `/` suspends the live
+panel and opens the shared editable line input; submission or cancellation
+restores the panel:
 
 ```text
 /guide <agent|future|phase:name> <instruction>
@@ -1596,8 +1609,9 @@ at least guidance and cooperative pause/resume without losing integrity.
 **Event and control contract:** append-only events project scheduler queue and
 readiness, invocation and provider wait, targeted semantic correction, completion,
 failure, and blocked states with Agent dependencies, capability, stage, model,
-duration, evidence, and aggregate budget data. Configuration schema v8 selects
-compact, standard, or detailed terminal projection. The foreground palette can
+duration, evidence, and aggregate budget data. Configuration schema v11 selects
+visibility, live versus append-only display, and color independently. The
+foreground palette can
 change that projection without changing execution. Its persisted runtime
 channel applies prospective guidance to the next invocation, drains active work
 for safe correction and pause checkpoints, resumes cooperatively, sends

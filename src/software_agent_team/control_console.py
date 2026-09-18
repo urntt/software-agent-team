@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import os
 import select
 import sys
+import termios
 import threading
+import tty
 from collections.abc import Callable
 from typing import TextIO
 
@@ -18,6 +21,7 @@ from software_agent_team.controls import (
 )
 from software_agent_team.run_control import RunPhase
 from software_agent_team.teams import TeamPlan
+from software_agent_team.terminal_input import DEFAULT_TERMINAL_INPUT
 
 
 class ControlConsoleError(ValueError):
@@ -26,6 +30,8 @@ class ControlConsoleError(ValueError):
 
 type NoticeHandler = Callable[[str], None]
 type VisibilityHandler = Callable[[str], None]
+type InputActivityHandler = Callable[[bool], None]
+type ControlLineReader = Callable[[str], str]
 
 
 def control_help() -> str:
@@ -194,6 +200,8 @@ class TerminalControlConsole:
         input_stream: TextIO | None = None,
         notice_handler: NoticeHandler | None = None,
         visibility_handler: VisibilityHandler | None = None,
+        input_activity_handler: InputActivityHandler | None = None,
+        line_reader: ControlLineReader | None = None,
         poll_seconds: float = 0.2,
     ) -> None:
         if poll_seconds <= 0:
@@ -203,6 +211,13 @@ class TerminalControlConsole:
         self.input_stream = sys.stdin if input_stream is None else input_stream
         self.notice_handler = notice_handler or (lambda value: print(value, flush=True))
         self.visibility_handler = visibility_handler
+        self.input_activity_handler = input_activity_handler
+        self.line_reader = line_reader or (
+            lambda initial: DEFAULT_TERMINAL_INPUT.read_line(
+                "control> ",
+                default=initial,
+            )
+        )
         self.poll_seconds = poll_seconds
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -228,6 +243,9 @@ class TerminalControlConsole:
             self._thread.join(timeout=max(0.5, self.poll_seconds * 2))
 
     def _read_loop(self) -> None:
+        if self._is_interactive_terminal():
+            self._read_interactive_loop()
+            return
         while not self._stop.is_set():
             if not self._input_ready():
                 continue
@@ -245,6 +263,70 @@ class TerminalControlConsole:
                 message = f"Control not queued: {error}"
             if message:
                 self.notice_handler(message)
+
+    def _read_interactive_loop(self) -> None:
+        """Wait invisibly for '/', then yield the cursor to the shared line editor."""
+
+        descriptor = self.input_stream.fileno()
+        original = termios.tcgetattr(descriptor)
+        try:
+            while not self._stop.is_set():
+                tty.setcbreak(descriptor, termios.TCSANOW)
+                ready, _, _ = select.select(
+                    [descriptor],
+                    [],
+                    [],
+                    self.poll_seconds,
+                )
+                if not ready:
+                    continue
+                first = os.read(descriptor, 1)
+                termios.tcsetattr(descriptor, termios.TCSADRAIN, original)
+                if first in {b"", b"\x04"}:
+                    return
+                if first in {b"\r", b"\n"}:
+                    continue
+                if first != b"/":
+                    self.notice_handler(
+                        "Run controls begin with '/'. Type /help for examples."
+                    )
+                    continue
+                self._set_input_active(True)
+                try:
+                    line = self.line_reader("/")
+                except KeyboardInterrupt:
+                    self.notice_handler("Control entry cancelled; execution continues.")
+                    continue
+                except EOFError:
+                    return
+                finally:
+                    self._set_input_active(False)
+                self._submit_line(line)
+        finally:
+            termios.tcsetattr(descriptor, termios.TCSADRAIN, original)
+
+    def _submit_line(self, line: str) -> None:
+        try:
+            message = submit_control_line(
+                line,
+                store=self.store,
+                team_plan=self.team_plan,
+                visibility_handler=self.visibility_handler,
+            )
+        except (ControlConsoleError, ValueError) as error:
+            message = f"Control not queued: {error}"
+        if message:
+            self.notice_handler(message)
+
+    def _set_input_active(self, active: bool) -> None:
+        if self.input_activity_handler is not None:
+            self.input_activity_handler(active)
+
+    def _is_interactive_terminal(self) -> bool:
+        try:
+            return self.input_stream.isatty() and self.input_stream.fileno() >= 0
+        except (AttributeError, OSError):
+            return False
 
     def _input_ready(self) -> bool:
         try:
