@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** release `v0.3.0` and complete a managed user journey
+**Current milestone:** validate published `v0.3.0` through one complete managed user journey
 
 **Last updated:** September 18, 2026
 
@@ -10,6 +10,22 @@ product, architecture, experiment, or roadmap; those decisions belong to
 [`VISION.md`](VISION.md).
 
 ## Current Release
+
+The immutable `v0.3.0` tag,
+[GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.3.0),
+package version, and release manifest identify source revision
+`7fc8520879c9b1c437065e774df78845734e83ec` and Git archive digest
+`sha256:0156235a04d96ae1f0c0d2c4df85c7bfbf4e7a52914d98af73ffc8a961cd5364`.
+Exact-tag GitHub Actions
+[run 35309334528](https://github.com/urntt/software-agent-team/actions/runs/35309334528)
+passed 1,820 tests with three environment-dependent skips and published exactly
+one identity manifest asset. The clean local release revision passed all 1,823
+tests. A fresh non-root public bootstrap of current stable and a separate
+`v0.2.20` to `v0.3.0` lifecycle passed exact identity, update, state migration,
+same-target handling, active-run refusal, injected activation rollback, channel
+round trip, export, full uninstall, and exact cleanup without making a provider
+call. A previously affected ordinary account also reran the public bootstrap and
+activated exact `v0.3.0`. A complete provider-backed user journey remains pending.
 
 The immutable `v0.2.20` tag,
 [GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.2.20),
@@ -23,7 +39,7 @@ one identity manifest asset. A fresh non-root `v0.2.19` to `v0.2.20` lifecycle
 passed installation, fixed-revision upgrade, identity and current-version checks,
 state preservation, export, full uninstall, and exact cleanup without making a
 provider call. Later provider-backed ordinary-user evidence exposed the Review,
-terminal-progress, and input defects addressed by the current candidate.
+terminal-progress, and input defects released in `v0.3.0`.
 
 The immutable `v0.2.19` tag,
 [GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.2.19),
@@ -360,9 +376,9 @@ refusal, injected post-link-swap rollback, a stable-to-dev-to-stable round trip,
 foreign OpenClaw isolation, secret-free export, full uninstall, and exact
 account/HOME/resource cleanup all passed. The scenario made no provider calls.
 
-## Current Development Head
+## Current v0.3.0 Implementation
 
-The `v0.3.0` candidate preserves the actual Docker permission, unavailable-daemon,
+The `v0.3.0` release preserves the actual Docker permission, unavailable-daemon,
 timeout, malformed-response, or bounded unknown cause when managed staging fails
 before any sandbox image mutation. That path performs only attributable temporary
 cleanup and no longer attempts or reports image rollback. General Review
@@ -381,41 +397,22 @@ and unchanged Ctrl-C, EOF, secret, and non-TTY contracts.
 
 Focused verification passes 252 affected installer, Review, terminal, CLI,
 configuration, and runtime-control tests; 240 Planning and documentation-role
-tests; and 27 bootstrap, installer, and release-documentation checks. The clean
-canonical release gate, immutable release identity, public install lifecycle,
-and fresh provider-backed user journey remain pending.
+tests; and 27 bootstrap, installer, and release-documentation checks. Bounded
+subprocess cleanup now starts each TERM and KILL grace period after the first
+discovered owned set receives its exact pidfd signal, preserving the configured
+time for state transition, subreaper adoption, and zombie reaping. Production
+signal handling, provider deadlines, and the default five-second termination
+grace remain unchanged.
 
-The first clean candidate gate passed doctor, formatting, and lint, then
-completed all 1,822 tests with one nested full-gate fixture failure. That fixture
-retained a 15-second socket readiness deadline after ordinary nested startup was
-assigned a separate 60-second infrastructure allowance. Focused repair also
-replaced its 0.2-second accelerated termination grace with a bounded one-second
-fixture allowance so a resistant descendant can complete the asserted two-phase
-cleanup handoff. Both exact nodes and all 38 full-gate supervisor tests pass;
-production stage deadlines and the default five-second termination grace are
-unchanged. The next candidate gate kept all 38 supervisor tests passing but
-finished with 1,820 passed and two bounded-process failures. The first consumed
-its accelerated cleanup grace during process observation before SIGKILL could
-settle; the second was the resulting existing-child fail-closed response.
-
-Bounded subprocess cleanup now starts each TERM and KILL grace period after the
-first discovered owned set receives its exact pidfd signal. Slow process
-enumeration therefore cannot erase the time reserved for state transition,
-subreaper adoption, and zombie reaping. A production-interface regression models
-slow observation plus delayed SIGKILL effect; all four bounded-process tests and
-the combined 98 bounded-process/CLI tests pass. A new clean canonical gate is
-pending.
-
-The next clean candidate gate kept every bounded-process test green and finished
-with 1,822 passed and one failure in the SIGTERM supervisor fixture. The nested
-supervisor had already durably recorded its interrupted stage, complete cleanup,
-removed private temporary directory, and terminal inventory when the test's
-remaining hard-coded five-second process wait expired. That exit wait and its
-fallback reap now use the same bounded 60-second fixture infrastructure allowance
-as the ready handshake. The exact interrupt node passes in 11.40 seconds and all
-38 full-gate supervisor tests pass in 140.58 seconds; production signal handling,
-stage timeouts, and termination grace remain unchanged. A new clean canonical
-gate is pending.
+The final clean canonical gate passed doctor, formatting, lint, and all 1,823
+tests in 1,901.51 seconds. All four stages recorded complete cleanup, zero OOM
+deltas, and no process, lease, container, volume, or private-temporary residual.
+The exact-tag hosted gate passed 1,820 tests with three explicit environment
+skips, retained equivalent cleanup evidence, and published the immutable Release
+and its sole identity manifest. Published fresh-install and upgrade lifecycles
+then passed without provider calls. Those lifecycle results establish release,
+installation, migration, rollback, export, uninstall, and cleanup behavior; they
+do not establish a complete provider-backed Planning-to-delivery journey.
 
 The current development head supervises each provider smoke check with a Linux
 child-subreaper, inherited opaque ownership marker, UID and PID/start-time
