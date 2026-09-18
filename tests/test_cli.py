@@ -788,7 +788,11 @@ def test_cli_no_command_runs_the_guided_product_journey(
         "inspect_startup_environment",
         lambda **_kwargs: diagnostics,
     )
-    monkeypatch.setattr(cli, "render_startup_diagnostics", lambda _report: None)
+    monkeypatch.setattr(
+        cli,
+        "render_startup_diagnostics",
+        lambda _report, **_kwargs: None,
+    )
     monkeypatch.setattr(
         cli,
         "_ensure_product_configuration",
@@ -1104,6 +1108,10 @@ def test_product_planning_uses_one_bootstrap_agent_and_cleans_it(
     assert observed["interactive_readers"] == {
         "read": cli._read_short,
         "read_text": cli._read_natural_text,
+        "output": cli.sys.stdout,
+        "progress_visibility": configuration.progress_visibility,
+        "progress_display": configuration.progress_display,
+        "progress_color": configuration.progress_color,
     }
     materialize = observed["materialize"]
     assert materialize["bootstrap_capability"] is cli.AgentCapability.CLARIFICATION
@@ -1298,6 +1306,10 @@ def test_product_planning_preflights_finite_authorized_fallback_chain(
     assert observed["interactive_readers"] == {
         "read": cli._read_short,
         "read_text": cli._read_natural_text,
+        "output": cli.sys.stdout,
+        "progress_visibility": configuration.progress_visibility,
+        "progress_display": configuration.progress_display,
+        "progress_color": configuration.progress_color,
     }
     assert [model for model, _path in materialized] == [
         "provider/primary",

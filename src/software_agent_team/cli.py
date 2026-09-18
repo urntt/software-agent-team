@@ -116,6 +116,7 @@ from software_agent_team.progress import (
     TerminalColorMode,
     TerminalProgressDisplay,
     TerminalProgressRenderer,
+    terminal_color_enabled,
 )
 from software_agent_team.quality_gates import (
     DockerSandboxBackend,
@@ -3559,6 +3560,10 @@ def _run_product_planning(
                 request,
                 read=_read_short,
                 read_text=_read_natural_text,
+                output=sys.stdout,
+                progress_visibility=configuration.progress_visibility,
+                progress_display=configuration.progress_display,
+                progress_color=configuration.progress_color,
             )
         except BaseException as error:
             try:
@@ -3695,12 +3700,17 @@ def _task_admission_checkpoint(
         render_self_check_report(
             report,
             visibility=configuration.progress_visibility,
+            color=terminal_color_enabled(
+                sys.stdout,
+                configuration.progress_color,
+            ),
         )
     )
-    if path is None:
-        print(f"  Evidence unchanged at revision {report.revision}")
-    else:
-        print(f"  Evidence: {path}")
+    if configuration.progress_visibility == "detailed":
+        if path is None:
+            print(f"  Evidence unchanged at revision {report.revision}")
+        else:
+            print(f"  Evidence: {path}")
     return report, update_observation, version
 
 
@@ -3792,12 +3802,17 @@ def _plan_execution_checkpoint(
         render_self_check_report(
             report,
             visibility=configuration.progress_visibility,
+            color=terminal_color_enabled(
+                sys.stdout,
+                configuration.progress_color,
+            ),
         )
     )
-    if path is None:
-        print(f"  Evidence unchanged at revision {report.revision}")
-    else:
-        print(f"  Evidence: {path}")
+    if configuration.progress_visibility == "detailed":
+        if path is None:
+            print(f"  Evidence unchanged at revision {report.revision}")
+        else:
+            print(f"  Evidence: {path}")
     return report
 
 
@@ -3819,6 +3834,21 @@ def _run_product(
         DEFAULT_PRODUCT_POLICY,
         DEFAULT_PRODUCT_PROFILE,
     )
+    saved_configuration = _load_user_configuration(user_configuration_path())
+    startup_visibility = (
+        progress_visibility
+        if progress_visibility is not None
+        else saved_configuration.progress_visibility
+        if saved_configuration is not None
+        else "standard"
+    )
+    startup_color = (
+        progress_color
+        if progress_color is not None
+        else saved_configuration.progress_color
+        if saved_configuration is not None
+        else "auto"
+    )
     working_directory = Path.cwd()
     diagnostics = inspect_startup_environment(
         working_directory=working_directory,
@@ -3828,7 +3858,11 @@ def _run_product(
         required_memory_mb=quality.policy.limits.memory_mb,
         required_pids=quality.policy.limits.pids,
     )
-    render_startup_diagnostics(diagnostics)
+    render_startup_diagnostics(
+        diagnostics,
+        visibility=startup_visibility,
+        color=terminal_color_enabled(sys.stdout, startup_color),
+    )
     if not diagnostics.ready:
         print("\nSAT is not ready. Complete the actions above and run sat again.")
         return 2

@@ -124,8 +124,14 @@ display, and color independently, and these one-run overrides do not change the
 saved defaults:
 
 ```bash
-sat --progress-visibility compact --progress-display log --progress-color never
+sat --progress-visibility detailed --progress-display log --progress-color never
 ```
+
+That exact combination restores the legacy uncolored, append-only terminal
+stream for one run. `log` names the terminal projection: each visible update is
+written as a new line so redirection and simple text capture remain predictable.
+The durable controller event journal is always recorded separately, including
+when the default live display is active.
 
 Natural-language prompts support cursor movement, Home/End, Delete, Unicode,
 soft wrapping, and multiline editing. Enter submits the complete buffer;

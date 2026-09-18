@@ -31,7 +31,53 @@ MINIMUM_READABLE_RUN_EVENT_SCHEMA_VERSION = 2
 EVENTS_DIRECTORY = "events"
 EVENT_FILENAME_PATTERN = re.compile(r"^(?P<sequence>[0-9]{6})\.json$")
 DEFAULT_PROGRESS_HEARTBEAT_SECONDS = 10.0
+DEFAULT_LIVE_REFRESH_SECONDS = 1.0
 MAX_PROGRESS_SUMMARY_CHARACTERS = 500
+
+
+def terminal_presentation_capable(
+    output: TextIO,
+    *,
+    environment: Mapping[str, str] | None = None,
+    is_terminal: bool | None = None,
+) -> bool:
+    """Return whether cursor movement and ANSI styling are safe on this output."""
+
+    resolved_environment = os.environ if environment is None else environment
+    if is_terminal is None:
+        try:
+            detected_terminal = bool(output.isatty())
+        except (AttributeError, OSError):
+            detected_terminal = False
+    else:
+        detected_terminal = is_terminal
+    return detected_terminal and resolved_environment.get("TERM") != "dumb"
+
+
+def terminal_color_enabled(
+    output: TextIO,
+    mode: TerminalColorMode | str,
+    *,
+    environment: Mapping[str, str] | None = None,
+    is_terminal: bool | None = None,
+) -> bool:
+    """Resolve one color mode without allowing ANSI on an unsafe output."""
+
+    resolved_mode = TerminalColorMode(mode)
+    resolved_environment = os.environ if environment is None else environment
+    capable = terminal_presentation_capable(
+        output,
+        environment=resolved_environment,
+        is_terminal=is_terminal,
+    )
+    return (
+        resolved_mode is not TerminalColorMode.NEVER
+        and capable
+        and (
+            resolved_mode is TerminalColorMode.ALWAYS
+            or "NO_COLOR" not in resolved_environment
+        )
+    )
 
 
 class ProgressEventKind(StrEnum):
@@ -1196,6 +1242,7 @@ class TerminalProgressRenderer:
         display: TerminalProgressDisplay | str = TerminalProgressDisplay.AUTO,
         color: TerminalColorMode | str = TerminalColorMode.AUTO,
         heartbeat_seconds: float = DEFAULT_PROGRESS_HEARTBEAT_SECONDS,
+        live_refresh_seconds: float | None = None,
         monotonic: Callable[[], float] = time.monotonic,
         environment: Mapping[str, str] | None = None,
         is_terminal: bool | None = None,
@@ -1203,27 +1250,33 @@ class TerminalProgressRenderer:
     ) -> None:
         if heartbeat_seconds <= 0:
             raise ValueError("progress heartbeat must be positive")
+        if live_refresh_seconds is not None and live_refresh_seconds <= 0:
+            raise ValueError("live progress refresh must be positive")
         self.output = sys.stdout if output is None else output
         self.visibility = visibility
         self.display = TerminalProgressDisplay(display)
         self.color = TerminalColorMode(color)
         self.heartbeat_seconds = heartbeat_seconds
+        self.live_refresh_seconds = (
+            min(heartbeat_seconds, DEFAULT_LIVE_REFRESH_SECONDS)
+            if live_refresh_seconds is None
+            else live_refresh_seconds
+        )
         self.monotonic = monotonic
         self.environment = os.environ if environment is None else environment
-        detected_terminal = (
-            self._output_is_terminal() if is_terminal is None else is_terminal
+        terminal_capable = terminal_presentation_capable(
+            self.output,
+            environment=self.environment,
+            is_terminal=is_terminal,
         )
-        terminal_capable = detected_terminal and self.environment.get("TERM") != "dumb"
         self.live_enabled = (
             self.display is not TerminalProgressDisplay.LOG and terminal_capable
         )
-        self.color_enabled = (
-            self.color is not TerminalColorMode.NEVER
-            and terminal_capable
-            and (
-                self.color is TerminalColorMode.ALWAYS
-                or "NO_COLOR" not in self.environment
-            )
+        self.color_enabled = terminal_color_enabled(
+            self.output,
+            self.color,
+            environment=self.environment,
+            is_terminal=is_terminal,
         )
         self.unicode_enabled = self._output_supports_unicode()
         self.terminal_width = terminal_width
@@ -1232,6 +1285,9 @@ class TerminalProgressRenderer:
         self._rendered_checkpoint_digests: dict[tuple[str, int, int], str] = {}
         self._live_line_count = 0
         self._live_suspensions = 0
+        self._last_live_elapsed_signature: tuple[
+            tuple[tuple[str, int, int], int], ...
+        ] = ()
 
     def __call__(self, event: RunEvent) -> None:
         """Render one persisted event and manage its elapsed-time heartbeat."""
@@ -1300,6 +1356,7 @@ class TerminalProgressRenderer:
         with self._lock:
             waiting = tuple(self._waiting.values())
             self._waiting.clear()
+            self._last_live_elapsed_signature = ()
             self._clear_live_locked()
         for observation in waiting:
             self._join_waiting(observation)
@@ -1433,7 +1490,10 @@ class TerminalProgressRenderer:
         key: tuple[str, int, int],
         stop: threading.Event,
     ) -> None:
-        while not stop.wait(self.heartbeat_seconds):
+        interval = (
+            self.live_refresh_seconds if self.live_enabled else self.heartbeat_seconds
+        )
+        while not stop.wait(interval):
             with self._lock:
                 observation = self._waiting.get(key)
                 if observation is None or observation.stop is not stop:
@@ -1441,6 +1501,9 @@ class TerminalProgressRenderer:
                 if self.visibility is RunEventVisibility.COMPACT:
                     continue
                 if self.live_enabled:
+                    signature = self._live_elapsed_signature_locked()
+                    if signature == self._last_live_elapsed_signature:
+                        continue
                     self._clear_live_locked()
                     self._draw_live_locked()
                     continue
@@ -1596,6 +1659,7 @@ class TerminalProgressRenderer:
             self.output.write(line + "\n")
         self.output.flush()
         self._live_line_count = len(lines)
+        self._last_live_elapsed_signature = self._live_elapsed_signature_locked()
 
     def _clear_live_locked(self) -> None:
         if not self.live_enabled or self._live_line_count == 0:
@@ -1614,7 +1678,7 @@ class TerminalProgressRenderer:
     def _live_lines_locked(self) -> list[str]:
         now = self.monotonic()
         width = self._terminal_columns()
-        lines: list[str] = []
+        blocks: list[list[str]] = []
         branch = "├─" if self.unicode_enabled else "|-"
         end_branch = "└─" if self.unicode_enabled else "`-"
         dot = "·" if self.unicode_enabled else "|"
@@ -1636,16 +1700,19 @@ class TerminalProgressRenderer:
                 } "
                 f"{event.agent_id}{stage}  {state_text}  {minutes:02d}:{seconds:02d}"
             )
-            lines.append(self._colorize(self._fit(status, width), "1;36"))
-            lines.append(self._fit(f"  {branch} {event.summary}", width))
+            block = [
+                self._colorize(self._fit(status, width), "1;36"),
+                self._fit(f"  {branch} {event.summary}", width),
+            ]
             checkpoint = event.checkpoint
             if checkpoint is None:
-                lines.append(
+                block.append(
                     self._colorize(
                         self._fit(f"  {end_branch} waiting for next checkpoint", width),
                         "2",
                     )
                 )
+                blocks.append(block)
                 continue
             tasks = len(checkpoint.approved_task_ids)
             coverage = (
@@ -1659,9 +1726,9 @@ class TerminalProgressRenderer:
                 f"{tasks} task(s) {dot} {checkpoint.completed_tool_operations} tool(s)"
                 f"{coverage} {dot} {cost} settled"
             )
-            lines.append(self._colorize(self._fit(detail, width), "2"))
+            block.append(self._colorize(self._fit(detail, width), "2"))
             if self.visibility is RunEventVisibility.DETAILED:
-                lines.append(
+                block.append(
                     self._colorize(
                         self._fit(
                             f"     next: {checkpoint.next_controller_checkpoint}",
@@ -1670,7 +1737,25 @@ class TerminalProgressRenderer:
                         "2",
                     )
                 )
+            blocks.append(block)
+        lines: list[str] = []
+        for block in blocks:
+            if lines:
+                lines.append("")
+            lines.extend(block)
+        if lines:
+            lines.insert(0, "")
         return lines
+
+    def _live_elapsed_signature_locked(
+        self,
+    ) -> tuple[tuple[tuple[str, int, int], int], ...]:
+        now = self.monotonic()
+        return tuple(
+            (key, max(0, int(now - observation.started)))
+            for key, observation in sorted(self._waiting.items())
+            if self.visibility is not RunEventVisibility.COMPACT
+        )
 
     def _print_block(self, lines: list[str]) -> None:
         with self._lock:

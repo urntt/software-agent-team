@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import sys
 import threading
 import time
 import unicodedata
@@ -17,7 +18,7 @@ from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
 from string import Template
-from typing import Literal, Self
+from typing import Literal, Self, TextIO
 from uuid import uuid4
 
 from pydantic import (
@@ -29,6 +30,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from wcwidth import wcswidth
 
 from software_agent_team.artifacts import (
     AcceptanceCriterion,
@@ -87,6 +89,13 @@ from software_agent_team.model_runtime import (
     ModelRuntimeProfile,
     openclaw_invocation_thinking_level,
     runtime_profile_for_model,
+)
+from software_agent_team.progress import (
+    RunEventVisibility,
+    TerminalColorMode,
+    TerminalProgressDisplay,
+    terminal_color_enabled,
+    terminal_presentation_capable,
 )
 from software_agent_team.response_corrections import (
     MAX_CORRECTION_FIELDS,
@@ -545,23 +554,76 @@ class PlanningActivity:
 PlanningActivityHandler = Callable[[PlanningActivity], None]
 
 
+@dataclass
+class _PlanningProgressObservation:
+    """Current user-facing Planning state; never lifecycle authority."""
+
+    activity: PlanningActivity
+    started: float
+    message: str
+    attempt_label: str
+    stop: threading.Event
+    thread: threading.Thread | None = None
+
+
 class TerminalPlanningProgress:
-    """Show bounded Planning wait heartbeats and validation checkpoints."""
+    """Show semantic Planning history plus one bounded live state card."""
 
     def __init__(
         self,
         *,
         write: Callable[[str], None] = print,
+        output: TextIO | None = None,
+        visibility: RunEventVisibility | str = RunEventVisibility.STANDARD,
+        display: TerminalProgressDisplay | str = TerminalProgressDisplay.AUTO,
+        color: TerminalColorMode | str = TerminalColorMode.AUTO,
         heartbeat_seconds: float = 10.0,
+        live_refresh_seconds: float = 1.0,
         monotonic: Callable[[], float] = time.monotonic,
+        environment: Mapping[str, str] | None = None,
+        is_terminal: bool | None = None,
+        terminal_width: Callable[[], int] | None = None,
     ) -> None:
         if heartbeat_seconds <= 0:
             raise ValueError("Planning heartbeat must be positive")
-        self.write = write
+        if live_refresh_seconds <= 0:
+            raise ValueError("Planning live refresh must be positive")
+        self.output = sys.stdout if output is None and write is print else output
+        self.write = (
+            (lambda value: print(value, file=self.output, flush=True))
+            if output is not None and write is print
+            else write
+        )
+        self.visibility = RunEventVisibility(visibility)
+        self.display = TerminalProgressDisplay(display)
+        self.color = TerminalColorMode(color)
         self.heartbeat_seconds = heartbeat_seconds
+        self.live_refresh_seconds = min(heartbeat_seconds, live_refresh_seconds)
         self.monotonic = monotonic
+        self.environment = os.environ if environment is None else environment
+        self.terminal_width = terminal_width
+        self.live_enabled = bool(
+            self.output is not None
+            and self.display is not TerminalProgressDisplay.LOG
+            and terminal_presentation_capable(
+                self.output,
+                environment=self.environment,
+                is_terminal=is_terminal,
+            )
+        )
+        self.color_enabled = bool(
+            self.output is not None
+            and terminal_color_enabled(
+                self.output,
+                self.color,
+                environment=self.environment,
+                is_terminal=is_terminal,
+            )
+        )
+        self.unicode_enabled = self._output_supports_unicode()
         self._lock = threading.Lock()
-        self._waiting: tuple[threading.Event, threading.Thread] | None = None
+        self._waiting: _PlanningProgressObservation | None = None
+        self._live_line_count = 0
 
     def __call__(self, activity: PlanningActivity) -> None:
         if activity.kind is PlanningActivityKind.WAITING_MODEL:
@@ -631,7 +693,8 @@ class TerminalPlanningProgress:
                     f"■ Planning invocation stopped ({reason}); process outcome "
                     "and evidence are known"
                 )
-            self._print(message)
+            if self.visibility is RunEventVisibility.DETAILED:
+                self._print(message)
             return
 
         checkpoint = (
@@ -736,7 +799,20 @@ class TerminalPlanningProgress:
                 "separate stopping transition follows"
             )
         if intermediate is not None:
-            self._print(intermediate)
+            if self.visibility is RunEventVisibility.DETAILED or activity.kind in {
+                PlanningActivityKind.INITIALIZATION_LIVENESS_DEGRADED,
+                PlanningActivityKind.INITIALIZATION_STALL_SUSPECTED,
+                PlanningActivityKind.INITIALIZATION_STALL_RECOVERED,
+                PlanningActivityKind.INITIALIZATION_STALLED,
+                PlanningActivityKind.FINALIZATION_STALL_SUSPECTED,
+                PlanningActivityKind.FINALIZATION_STALL_RECOVERED,
+                PlanningActivityKind.RESPONSE_FINALIZATION_STALLED,
+                PlanningActivityKind.LIVENESS_DEGRADED,
+                PlanningActivityKind.STALL_SUSPECTED,
+                PlanningActivityKind.STALL_RECOVERED,
+                PlanningActivityKind.PROVIDER_STALLED,
+            }:
+                self._print(intermediate)
             return
 
         if activity.kind is PlanningActivityKind.BUDGET_UPDATED:
@@ -752,12 +828,21 @@ class TerminalPlanningProgress:
                 if activity.pricing_source is None
                 else activity.pricing_source.value
             )
-            self._print(
-                "  Task model spend: "
-                f"${usage.known_estimated_cost_usd:.6f} estimated / "
-                f"${activity.budget_ceiling_usd} authorized; "
-                f"${remaining:.6f} recorded remaining; price source {source}"
-            )
+            if self.visibility is RunEventVisibility.DETAILED:
+                message = (
+                    "  Task model spend: "
+                    f"${usage.known_estimated_cost_usd:.6f} estimated / "
+                    f"${activity.budget_ceiling_usd} authorized; "
+                    f"${remaining:.6f} recorded remaining; price source {source}"
+                )
+            else:
+                message = (
+                    "  Planning spend: "
+                    f"${usage.known_estimated_cost_usd:.6f} of "
+                    f"${activity.budget_ceiling_usd} authorized "
+                    f"· ${remaining:.6f} remaining"
+                )
+            self._print(message)
             return
 
         self.close()
@@ -819,9 +904,18 @@ class TerminalPlanningProgress:
         with self._lock:
             waiting = self._waiting
             self._waiting = None
+            self._clear_live_locked()
         if waiting is not None:
-            waiting[0].set()
-            waiting[1].join(timeout=min(self.heartbeat_seconds, 0.2))
+            waiting.stop.set()
+            assert waiting.thread is not None
+            waiting.thread.join(
+                timeout=min(
+                    self.live_refresh_seconds
+                    if self.live_enabled
+                    else self.heartbeat_seconds,
+                    0.2,
+                )
+            )
 
     def _start_waiting(
         self,
@@ -831,7 +925,6 @@ class TerminalPlanningProgress:
         heartbeat: str,
     ) -> None:
         self.close()
-        self._print(visible)
         stop = threading.Event()
         started = self.monotonic()
         attempt_label = (
@@ -839,34 +932,172 @@ class TerminalPlanningProgress:
             if activity.maximum_attempts is None
             else f"{activity.attempt}/{activity.maximum_attempts}"
         )
-        thread = threading.Thread(
+        observation = _PlanningProgressObservation(
+            activity=activity,
+            started=started,
+            message=heartbeat,
+            attempt_label=attempt_label,
+            stop=stop,
+        )
+        observation.thread = threading.Thread(
             target=self._heartbeat,
-            args=(stop, started, heartbeat, attempt_label),
+            args=(observation,),
             name="sat-planning-progress",
             daemon=True,
         )
         with self._lock:
-            self._waiting = (stop, thread)
-        thread.start()
+            self._waiting = observation
+            if self.live_enabled:
+                self._draw_live_locked()
+        if not self.live_enabled and (
+            self.visibility is RunEventVisibility.DETAILED
+            or activity.kind
+            in {
+                PlanningActivityKind.WAITING_MODEL,
+                PlanningActivityKind.PROVIDER_WAIT,
+                PlanningActivityKind.TOOL_ACTIVE,
+                PlanningActivityKind.FINALIZING_RESPONSE,
+            }
+        ):
+            self._print(visible)
+        observation.thread.start()
 
     def _heartbeat(
         self,
-        stop: threading.Event,
-        started: float,
-        message: str,
-        attempt_label: str,
+        observation: _PlanningProgressObservation,
     ) -> None:
-        while not stop.wait(self.heartbeat_seconds):
-            elapsed = max(0, int(self.monotonic() - started))
+        interval = (
+            self.live_refresh_seconds if self.live_enabled else self.heartbeat_seconds
+        )
+        while not observation.stop.wait(interval):
+            if self.live_enabled:
+                with self._lock:
+                    if self._waiting is not observation:
+                        return
+                    self._clear_live_locked()
+                    self._draw_live_locked()
+                continue
+            elapsed = max(0, int(self.monotonic() - observation.started))
             minutes, seconds = divmod(elapsed, 60)
             self._print(
-                f"  {message} (attempt {attempt_label}): "
+                f"  {observation.message} "
+                f"(attempt {observation.attempt_label}): "
                 f"{minutes:02d}:{seconds:02d} elapsed"
             )
 
     def _print(self, value: str) -> None:
         with self._lock:
-            self.write(value)
+            self._clear_live_locked()
+            self.write(self._colorize(value, self._line_color(value)))
+            self._draw_live_locked()
+
+    def _draw_live_locked(self) -> None:
+        if not self.live_enabled or self._waiting is None:
+            return
+        assert self.output is not None
+        observation = self._waiting
+        elapsed = max(0, int(self.monotonic() - observation.started))
+        minutes, seconds = divmod(elapsed, 60)
+        activity = observation.activity
+        state = {
+            PlanningActivityKind.WAITING_MODEL: "queued",
+            PlanningActivityKind.INITIALIZING: "initializing",
+            PlanningActivityKind.PROVIDER_WAIT: "waiting for model",
+            PlanningActivityKind.TOOL_ACTIVE: "using tools",
+            PlanningActivityKind.FINALIZING_RESPONSE: "finalizing response",
+        }.get(activity.kind, "working")
+        symbol = "●" if self.unicode_enabled else "*"
+        branch = "├─" if self.unicode_enabled else "|-"
+        end_branch = "└─" if self.unicode_enabled else "`-"
+        dot = "·" if self.unicode_enabled else "|"
+        width = self._terminal_columns()
+        lines = [
+            "",
+            self._colorize(
+                self._fit(
+                    f"{symbol} Planning  {state}  {minutes:02d}:{seconds:02d}",
+                    width,
+                ),
+                "1;36",
+            ),
+            self._fit(
+                f"  {branch} attempt {observation.attempt_label} {dot} "
+                f"{activity.model}",
+                width,
+            ),
+            self._colorize(
+                self._fit(f"  {end_branch} {observation.message}", width),
+                "2",
+            ),
+        ]
+        for line in lines:
+            self.output.write(line + "\n")
+        self.output.flush()
+        self._live_line_count = len(lines)
+
+    def _clear_live_locked(self) -> None:
+        if not self.live_enabled or self._live_line_count == 0:
+            return
+        assert self.output is not None
+        line_count = self._live_line_count
+        self.output.write(f"\x1b[{line_count}A")
+        for _ in range(line_count):
+            self.output.write("\r\x1b[2K\x1b[1B")
+        self.output.write(f"\x1b[{line_count}A")
+        self.output.flush()
+        self._live_line_count = 0
+
+    def _colorize(self, value: str, code: str) -> str:
+        if not self.color_enabled:
+            return value
+        return f"\x1b[{code}m{value}\x1b[0m"
+
+    def _terminal_columns(self) -> int:
+        if self.terminal_width is not None:
+            return max(20, self.terminal_width())
+        assert self.output is not None
+        try:
+            return max(20, os.get_terminal_size(self.output.fileno()).columns)
+        except (AttributeError, OSError):
+            return 80
+
+    def _fit(self, value: str, width: int) -> str:
+        if wcswidth(value) <= width:
+            return value
+        marker = "…" if self.unicode_enabled else "..."
+        target = max(1, width - wcswidth(marker))
+        result: list[str] = []
+        used = 0
+        for character in value:
+            character_width = max(0, wcswidth(character))
+            if used + character_width > target:
+                break
+            result.append(character)
+            used += character_width
+        return "".join(result) + marker
+
+    def _output_supports_unicode(self) -> bool:
+        if self.output is None:
+            return True
+        encoding = getattr(self.output, "encoding", None) or "utf-8"
+        try:
+            "●├─└─·…".encode(encoding)
+        except (LookupError, UnicodeEncodeError):
+            return False
+        return True
+
+    @staticmethod
+    def _line_color(value: str) -> str:
+        stripped = value.lstrip()
+        if stripped.startswith(("✓", "→")):
+            return "32"
+        if stripped.startswith("!"):
+            return "31"
+        if stripped.startswith(("?", "↻")):
+            return "33"
+        if stripped.startswith(("■", "…")):
+            return "36"
+        return "2" if value.startswith("  ") else "36"
 
 
 def _utc(value: datetime) -> datetime:
@@ -8373,13 +8604,173 @@ def _render_model_pricing(route: ModelRoute) -> str:
     )
 
 
+def _style_planning_overview(lines: list[str], *, color: bool) -> str:
+    """Apply a small semantic palette after content has been safely wrapped."""
+
+    if not color:
+        return "\n".join(lines)
+    rendered: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        code: str | None = None
+        if line == "Planning overview":
+            code = "1;36"
+        elif stripped.endswith(":") and not stripped.startswith("-"):
+            code = "1"
+        elif stripped.startswith(("Budget:", "Execution:")):
+            code = "36"
+        elif stripped.startswith(("Risk:", "Risks:")):
+            code = "33"
+        if code is not None:
+            rendered.append(f"\x1b[{code}m{line}\x1b[0m")
+        else:
+            rendered.append(line)
+    return "\n".join(rendered)
+
+
+def _render_concise_planning_overview(
+    preview: PlanningPreview,
+    *,
+    budget_usage: AgentBudgetUsage | None,
+    include_fixed_policy: bool,
+    visibility: Literal["compact", "standard"],
+    color: bool,
+) -> str:
+    """Render the decisions a person needs without controller graph internals."""
+
+    brief = preview.task_brief
+    implementation = preview.implementation_plan
+    plan = preview.team_plan
+    definition = implementation.product_definition
+    lines = ["Planning overview"]
+    lines.extend(_render_prefixed_text("  Product: ", brief.title))
+    if definition is not None:
+        lines.extend(
+            _render_prefixed_text(
+                "  For: ",
+                definition.target_users.statement,
+            )
+        )
+        lines.extend(
+            _render_prefixed_text(
+                "  Main workflow: ",
+                definition.primary_workflow.statement,
+            )
+        )
+        lines.append(
+            "  Delivery level: "
+            + definition.delivery_maturity.level.value.replace("_", " ")
+        )
+    lines.extend(_render_prefixed_text("  Destination: ", preview.destination))
+
+    if visibility == "standard":
+        lines.append("  What the team will build:")
+        for requirement in implementation.requirements:
+            lines.extend(_render_prefixed_text("    - ", requirement))
+        lines.append("  Acceptance checks:")
+        for criterion in brief.acceptance_criteria:
+            lines.extend(_render_prefixed_text("    - ", criterion.description))
+        if implementation.non_goals:
+            lines.append("  Outside this build:")
+            for item in implementation.non_goals:
+                lines.extend(_render_prefixed_text("    - ", item))
+        decisions = tuple(
+            decision
+            for decision in implementation.decisions
+            if decision.authority
+            in {
+                PlanningDecisionAuthority.USER,
+                PlanningDecisionAuthority.PLANNER_PROPOSAL,
+            }
+        )
+        if decisions or implementation.assumptions:
+            lines.append("  Decisions and assumptions to approve:")
+            for decision in decisions:
+                lines.extend(_render_prefixed_text("    - ", decision.summary))
+            for assumption in implementation.assumptions:
+                lines.extend(_render_prefixed_text("    - Assumption: ", assumption))
+        lines.append("  Team:")
+        for agent in plan.agents:
+            route = plan.model_routes.get_route(agent.model_route_id)
+            permission = (
+                "can edit the project"
+                if agent.permission_profile is PermissionProfile.WORKSPACE_WRITE
+                else "read-only"
+            )
+            lines.extend(
+                _render_prefixed_text(
+                    f"    - {agent.label}: ",
+                    f"{agent.responsibility} ({permission}; {route.model})",
+                )
+            )
+    else:
+        lines.append(
+            "  Scope: "
+            f"{len(implementation.requirements)} requirement(s), "
+            f"{len(brief.acceptance_criteria)} acceptance check(s), "
+            f"{len(plan.agents)} Agent(s)"
+        )
+
+    waves = " → ".join(" + ".join(wave) for wave in plan.execution_waves())
+    lines.append(f"  Execution: {waves}")
+    lines.append(
+        "  Limits: "
+        f"up to {plan.max_concurrency} Agent(s) at once; "
+        f"{plan.iteration_limit} implementation iteration(s)"
+    )
+    budget = f"${plan.budget.max_estimated_cost_usd} task ceiling"
+    if budget_usage is not None:
+        budget += (
+            f"; ${budget_usage.known_estimated_cost_usd:.6f} used in Planning; "
+            f"${budget_usage.remaining_estimated_cost_usd(plan.budget):.6f} remaining"
+        )
+    lines.append(f"  Budget: {budget}")
+    if implementation.risks:
+        lines.append("  Risks:")
+        for item in implementation.risks:
+            lines.extend(_render_prefixed_text("    - ", item))
+    else:
+        lines.append("  Risks: none identified")
+
+    if include_fixed_policy:
+        lines.extend(
+            (
+                "  Fixed controller policy:",
+                "    - isolate secrets and use least-privilege permissions",
+                "    - preserve immutable evidence and fail closed",
+                "    - clean up only resources proven to be SAT-owned",
+                "    - deliver only a verified, accepted workspace",
+            )
+        )
+        for item in preview.execution_profile_constraints:
+            lines.extend(_render_prefixed_text("    - ", item))
+    else:
+        lines.append(
+            "  Technical details: hidden; choose d to inspect the full task graph, "
+            "bindings, routes, and evidence contract."
+        )
+        lines.append("  Fixed policy: hidden; choose f to inspect it.")
+    return _style_planning_overview(lines, color=color)
+
+
 def render_planning_overview(
     preview: PlanningPreview,
     *,
     budget_usage: AgentBudgetUsage | None = None,
     include_fixed_policy: bool = False,
+    visibility: Literal["compact", "standard", "detailed"] = "detailed",
+    color: bool = False,
 ) -> str:
     """Render task authority, with lossless fixed-policy details on request."""
+
+    if visibility != "detailed":
+        return _render_concise_planning_overview(
+            preview,
+            budget_usage=budget_usage,
+            include_fixed_policy=include_fixed_policy,
+            visibility=visibility,
+            color=color,
+        )
 
     brief = preview.task_brief
     implementation = preview.implementation_plan
@@ -8834,7 +9225,7 @@ def render_planning_overview(
             "readiness checkpoint",
         )
     )
-    return "\n".join(lines)
+    return _style_planning_overview(lines, color=color)
 
 
 def _fsync_directory(path: Path) -> None:
@@ -11099,6 +11490,12 @@ def run_interactive_planning(
     read: InputReader = input,
     read_text: InputReader | None = None,
     write: OutputWriter = print,
+    output: TextIO | None = None,
+    progress_visibility: RunEventVisibility | str = RunEventVisibility.STANDARD,
+    progress_display: TerminalProgressDisplay | str = TerminalProgressDisplay.AUTO,
+    progress_color: TerminalColorMode | str = TerminalColorMode.AUTO,
+    environment: Mapping[str, str] | None = None,
+    is_terminal: bool | None = None,
 ) -> ApprovedPlanningResult | None:
     """Run the user-facing clarification, overview, revision, and approval loop."""
 
@@ -11108,7 +11505,15 @@ def run_interactive_planning(
         read_text=natural_text_reader,
         write=write,
     )
-    progress = TerminalPlanningProgress(write=write)
+    progress = TerminalPlanningProgress(
+        write=write,
+        output=output,
+        visibility=progress_visibility,
+        display=progress_display,
+        color=progress_color,
+        environment=environment,
+        is_terminal=is_terminal,
+    )
     write("")
     write("Planning started. No runtime Agent has been created yet.")
     try:
@@ -11124,6 +11529,7 @@ def run_interactive_planning(
         return None
 
     show_fixed_policy = False
+    show_technical_details = progress.visibility is RunEventVisibility.DETAILED
     while True:
         preview = coordinator.preview(request, proposal)
         write("")
@@ -11136,12 +11542,21 @@ def run_interactive_planning(
                     else coordinator.budget_ledger.snapshot()
                 ),
                 include_fixed_policy=show_fixed_policy,
+                visibility=(
+                    "detailed" if show_technical_details else progress.visibility.value
+                ),
+                color=progress.color_enabled,
             )
         )
         write("")
         write("  a. Approve and allow the controller to create this team")
         write("  r. Request changes in your own words")
         write("  e. Edit safe limits")
+        write(
+            "  d. "
+            + ("Hide" if show_technical_details else "Show")
+            + " technical plan details"
+        )
         write(
             "  f. "
             + ("Hide" if show_fixed_policy else "Show")
@@ -11156,6 +11571,13 @@ def run_interactive_planning(
                 "The controller may now create only the Agents shown above."
             )
             return approved
+        if choice in {"d", "details"}:
+            show_technical_details = not show_technical_details
+            write(
+                "Technical plan details are now "
+                + ("shown." if show_technical_details else "hidden.")
+            )
+            continue
         if choice in {"c", "cancel"}:
             coordinator.store.cancel(request.run_id, now=coordinator.clock())
             write("Planning cancelled; no runtime Agent was created.")
@@ -11207,4 +11629,4 @@ def run_interactive_planning(
             except (PlanningError, ValidationError, ValueError) as error:
                 write(f"Plan was not changed: {_safe_validation_detail(error)}")
             continue
-        write("Choose a, r, e, f, or c.")
+        write("Choose a, r, e, d, f, or c.")

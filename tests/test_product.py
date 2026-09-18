@@ -19,10 +19,12 @@ from software_agent_team.process_lifecycle import (
     ProcessResourceObservation,
 )
 from software_agent_team.product import (
+    DiagnosticCheck,
     DiagnosticState,
     HostCapacitySnapshot,
     ProductFlowError,
     ProductStatePaths,
+    StartupDiagnostics,
     deliver_product_workspace,
     ensure_product_state,
     generate_product_run_id,
@@ -31,6 +33,7 @@ from software_agent_team.product import (
     limit_concurrency_to_host_capacity,
     load_project_commands,
     prepare_product_source,
+    render_startup_diagnostics,
     validate_project_destination,
 )
 from software_agent_team.sandbox_lifecycle import (
@@ -53,6 +56,39 @@ def ready_host_capacity() -> HostCapacitySnapshot:
 
 def completed(argv: object, returncode: int = 0) -> subprocess.CompletedProcess[str]:
     return subprocess.CompletedProcess(argv, returncode, "", "")
+
+
+def test_standard_startup_report_hides_ready_detail_but_keeps_actions(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    diagnostics = StartupDiagnostics(
+        checks=(
+            DiagnosticCheck(
+                id="git",
+                label="git command",
+                state=DiagnosticState.READY,
+                detail="/usr/bin/git",
+            ),
+            DiagnosticCheck(
+                id="memory",
+                label="Available memory",
+                state=DiagnosticState.WARNING,
+                detail="limited headroom",
+                action="Close other workloads.",
+            ),
+        )
+    )
+
+    render_startup_diagnostics(diagnostics, visibility="standard")
+    standard = capsys.readouterr().out
+    render_startup_diagnostics(diagnostics, visibility="detailed")
+    detailed = capsys.readouterr().out
+
+    assert "1 ready, 1 warning" in standard
+    assert "git command" not in standard
+    assert "Available memory" in standard
+    assert "Close other workloads" in standard
+    assert "git command" in detailed
 
 
 def test_startup_diagnostics_report_a_ready_local_environment(

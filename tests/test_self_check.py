@@ -378,12 +378,15 @@ def test_renderer_keeps_compact_output_actionable_and_detailed_output_complete()
     )
 
     compact = render_self_check_report(checked, visibility="compact")
+    standard = render_self_check_report(checked, visibility="standard")
     detailed = render_self_check_report(checked, visibility="detailed")
 
     assert "task.request" not in compact
     assert "model.context" in compact
     assert "Consequence:" in compact
     assert "Action:" in compact
+    assert "task.request" not in standard
+    assert "model.context" in standard
     assert "task.request" in detailed
     assert "Re-run:" in detailed
     assert not checked.ready

@@ -856,6 +856,7 @@ def test_live_renderer_coalesces_high_frequency_checkpoint_updates(
     renderer = TerminalProgressRenderer(
         output=output,
         heartbeat_seconds=60,
+        live_refresh_seconds=60,
         environment={"TERM": "xterm-256color"},
         terminal_width=lambda: 100,
     )
@@ -913,6 +914,7 @@ def test_real_pty_live_output_is_bounded_by_state_changes(tmp_path: Path) -> Non
     renderer = TerminalProgressRenderer(
         output=output,
         heartbeat_seconds=60,
+        live_refresh_seconds=60,
         environment={"TERM": "xterm-256color"},
         terminal_width=lambda: 80,
     )
@@ -976,6 +978,7 @@ def test_live_redraw_reuses_panel_rows_without_blank_scrollback(tmp_path: Path) 
     renderer = TerminalProgressRenderer(
         output=output,
         heartbeat_seconds=60,
+        live_refresh_seconds=60,
         environment={"TERM": "xterm-256color"},
         terminal_width=lambda: 100,
     )
@@ -1008,6 +1011,15 @@ def test_live_redraw_reuses_panel_rows_without_blank_scrollback(tmp_path: Path) 
                 lifecycle_revision=index + 2,
                 phase=RunPhase.IMPLEMENTING,
             )
+        live_rows = terminal_rows(output.getvalue())
+        live_start = next(
+            index for index, line in enumerate(live_rows) if "Run started" in line
+        )
+        live_agent = next(
+            index for index, line in enumerate(live_rows) if "builder" in line
+        )
+        assert live_agent == live_start + 2
+        assert live_rows[live_start + 1] == ""
         event_journal.append(
             ProgressEvent(
                 kind=ProgressEventKind.AGENT_COMPLETED,
@@ -1029,6 +1041,74 @@ def test_live_redraw_reuses_panel_rows_without_blank_scrollback(tmp_path: Path) 
     )
     assert completed == start + 1
     assert all(line for line in rows[start : completed + 1])
+
+
+def test_live_panel_refreshes_elapsed_without_another_event(tmp_path: Path) -> None:
+    output = TTYStringIO()
+    now = [0.0]
+    renderer = TerminalProgressRenderer(
+        output=output,
+        heartbeat_seconds=60,
+        live_refresh_seconds=0.01,
+        monotonic=lambda: now[0],
+        environment={"TERM": "xterm-256color"},
+        terminal_width=lambda: 100,
+    )
+    event_journal = journal(tmp_path, handler=renderer)
+    try:
+        event_journal.append(
+            ProgressEvent(
+                kind=ProgressEventKind.AGENT_WAITING_PROVIDER,
+                message="Builder is waiting for the approved model",
+                agent_id="builder",
+                iteration=1,
+                attempt=1,
+                checkpoint=checkpoint(InvocationPhase.PROVIDER_WAIT),
+            ),
+            lifecycle_revision=1,
+            phase=RunPhase.IMPLEMENTING,
+        )
+        now[0] = 2.0
+        deadline = time.monotonic() + 0.5
+        while not any("00:02" in line for line in terminal_rows(output.getvalue())):
+            assert time.monotonic() < deadline, "live elapsed time did not refresh"
+            time.sleep(0.01)
+    finally:
+        renderer.close()
+
+
+def test_live_panel_separates_adjacent_agents(tmp_path: Path) -> None:
+    output = TTYStringIO()
+    renderer = TerminalProgressRenderer(
+        output=output,
+        heartbeat_seconds=60,
+        live_refresh_seconds=60,
+        environment={"TERM": "xterm-256color"},
+        terminal_width=lambda: 100,
+    )
+    try:
+        event_journal = journal(tmp_path, handler=renderer)
+        for sequence, agent_id in enumerate(("builder", "reviewer"), start=1):
+            event_journal.append(
+                ProgressEvent(
+                    kind=ProgressEventKind.AGENT_WAITING_PROVIDER,
+                    message=f"{agent_id} is waiting",
+                    agent_id=agent_id,
+                    iteration=1,
+                    attempt=1,
+                    checkpoint=checkpoint(InvocationPhase.PROVIDER_WAIT),
+                ),
+                lifecycle_revision=sequence,
+                phase=RunPhase.IMPLEMENTING,
+            )
+        with renderer._lock:
+            lines = renderer._live_lines_locked()
+        assert lines[0] == ""
+        assert lines[4] == ""
+        assert "builder" in lines[1]
+        assert "reviewer" in lines[5]
+    finally:
+        renderer.close()
 
 
 def test_append_only_plain_detailed_mode_restores_every_event(
@@ -1121,6 +1201,7 @@ def test_live_rendering_can_pause_while_input_owns_the_cursor(tmp_path: Path) ->
     renderer = TerminalProgressRenderer(
         output=output,
         heartbeat_seconds=60,
+        live_refresh_seconds=60,
         environment={"TERM": "xterm"},
     )
     event_journal = journal(tmp_path, handler=renderer)

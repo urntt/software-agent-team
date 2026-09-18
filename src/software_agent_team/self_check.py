@@ -668,6 +668,7 @@ def render_self_check_report(
     report: TaskSelfCheckReport,
     *,
     visibility: Literal["compact", "standard", "detailed"] = "standard",
+    color: bool = False,
 ) -> str:
     """Render the same report at three non-secret visibility levels."""
 
@@ -689,9 +690,7 @@ def render_self_check_report(
         report.checks
         if visibility == "detailed"
         else tuple(
-            check
-            for check in report.checks
-            if visibility == "standard" or check.status is not SelfCheckStatus.PASS
+            check for check in report.checks if check.status is not SelfCheckStatus.PASS
         )
     )
     symbols = {
@@ -715,6 +714,24 @@ def render_self_check_report(
             )
             lines.append(f"  Re-run: {check.rerun_rule}")
     lines.append("  Result: ready" if report.ready else "  Result: not ready")
+    if color:
+        styled: list[str] = []
+        for line in lines:
+            stripped = line.lstrip()
+            if line.startswith("Task self-check:"):
+                code = "1;36"
+            elif stripped.startswith(("✓", "Result: ready")):
+                code = "32"
+            elif stripped.startswith(("!", "?", "~")):
+                code = "33"
+            elif stripped.startswith(("✗", "Result: not ready")):
+                code = "31"
+            elif " checks:" in line:
+                code = "2"
+            else:
+                code = "0"
+            styled.append(f"\x1b[{code}m{line}\x1b[0m")
+        lines = styled
     return "\n".join(lines)
 
 

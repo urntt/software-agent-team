@@ -918,19 +918,64 @@ def inspect_startup_environment(
     return StartupDiagnostics(checks=tuple(checks), host_capacity=capacity)
 
 
-def render_startup_diagnostics(diagnostics: StartupDiagnostics) -> None:
+def render_startup_diagnostics(
+    diagnostics: StartupDiagnostics,
+    *,
+    visibility: Literal["compact", "standard", "detailed"] = "standard",
+    color: bool = False,
+) -> None:
     """Print one concise startup report with actionable failures."""
 
-    print("Checking this device...")
-    for check in diagnostics.checks:
+    counts = {
+        state: sum(check.state is state for check in diagnostics.checks)
+        for state in DiagnosticState
+    }
+    lines = ["Device check"]
+    if visibility != "detailed":
+        lines.append(
+            f"  {len(diagnostics.checks)} checks: "
+            f"{counts[DiagnosticState.READY]} ready, "
+            f"{counts[DiagnosticState.WARNING]} warning, "
+            f"{counts[DiagnosticState.ACTION_REQUIRED]} need action"
+        )
+    visible = (
+        diagnostics.checks
+        if visibility == "detailed"
+        else tuple(
+            check
+            for check in diagnostics.checks
+            if check.state is not DiagnosticState.READY
+        )
+    )
+    for check in visible:
         symbol = {
             DiagnosticState.READY: "✓",
             DiagnosticState.WARNING: "!",
             DiagnosticState.ACTION_REQUIRED: "✗",
         }[check.state]
-        print(f"{symbol} {check.label}: {check.detail}")
+        lines.append(f"{symbol} {check.label}: {check.detail}")
         if check.action is not None:
-            print(f"  Action: {check.action}")
+            lines.append(f"  Action: {check.action}")
+    if visibility != "detailed":
+        lines.append("  Result: ready" if diagnostics.ready else "  Result: not ready")
+    for line in lines:
+        if not color:
+            print(line)
+            continue
+        stripped = line.lstrip()
+        if line == "Device check":
+            code = "1;36"
+        elif stripped.startswith(("✓", "Result: ready")):
+            code = "32"
+        elif stripped.startswith("!"):
+            code = "33"
+        elif stripped.startswith(("✗", "Result: not ready")):
+            code = "31"
+        elif " checks:" in line:
+            code = "2"
+        else:
+            code = "0"
+        print(f"\x1b[{code}m{line}\x1b[0m")
 
 
 def generate_product_run_id(

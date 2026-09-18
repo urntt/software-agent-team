@@ -392,7 +392,31 @@ refusal, injected post-link-swap rollback, a stable-to-dev-to-stable round trip,
 foreign OpenClaw isolation, secret-free export, full uninstall, and exact
 account/HOME/resource cleanup all passed. The scenario made no provider calls.
 
-## Current v0.3.1 Candidate
+## Current post-v0.3.1 terminal presentation
+
+The ordinary-user `v0.3.1` run completed all three Review roles and delivered
+12/12 acceptance, while exposing remaining presentation problems. Active Agent
+elapsed time used a ten-second log heartbeat even though the panel displayed
+seconds, adjacent live cards had no visual separation, and startup, self-check,
+Planning lifecycle, and approval output still printed controller-oriented detail
+in the default standard view.
+
+The development head now refreshes elapsed time independently once per second in
+TTY live mode while retaining the ten-second append-only heartbeat. One blank
+row separates permanent history from the live region and each active Agent, and
+the renderer coalesces concurrent heartbeat wakes into one elapsed projection.
+Default startup and self-check views show counts plus only warnings or required
+actions. Planning uses the same bounded colored live-card behavior, keeps
+adapter/attribution/shutdown detail out of standard scrollback, and presents a
+human approval summary; `d` reveals the complete technical plan on demand.
+`detailed + log + never` still restores the uncolored append-only presentation,
+and the durable event and Planning evidence remain complete in every mode.
+
+The affected progress, Planning, self-check, product, and CLI suites pass all
+432 tests. A clean canonical gate and a public patch release remain pending; no
+new complete user journey has been started.
+
+## v0.3.1 implementation
 
 The `v0.3.1` candidate repairs two defects observed in an ordinary-user
 `v0.3.0` run. The pinned OpenClaw runtime may persist an orphaned not-found
@@ -412,7 +436,8 @@ in scrollback. The event journal, non-TTY output, and explicit append-only log
 mode are unchanged. The evidence, submission bridge, and progress modules pass
 192 tests; the adjacent execution, dynamic-runner, and CLI modules pass 257
 tests. The clean canonical release gate, immutable release identity, and
-credential-free install and update lifecycle remain pending.
+credential-free install and update lifecycle subsequently passed as recorded in
+the current-release section above.
 
 ## Current v0.3.0 Implementation
 

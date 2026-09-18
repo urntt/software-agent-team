@@ -521,6 +521,25 @@ available, task admission asks the user to supply it or explicitly confirm a
 zero-cost route before the first model call rather than
 inventing `$0.00`.
 
+For only the next guided run, leave the saved configuration unchanged and use:
+
+```bash
+sat --progress-visibility detailed --progress-display log --progress-color never
+```
+
+SAT calls this the **append-only log display** because every visible terminal
+update becomes a new line. It is distinct from the complete persisted event
+journal, which SAT records in every display mode.
+
+To make that presentation the saved default for an existing configuration:
+
+```bash
+sat configure --non-interactive \
+  --progress-visibility detailed \
+  --progress-display log \
+  --progress-color never
+```
+
 An advanced policy-routing example is:
 
 ```bash

@@ -13,6 +13,7 @@ import time
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from io import StringIO
 from pathlib import Path
 
 import pytest
@@ -522,6 +523,33 @@ def test_planning_overview_separates_constraint_authority_without_losing_data() 
         "handoff: durable artifact to acceptance_tester, quality_reviewer" in overview
     )
     assert "Failure and delivery boundary:" in overview
+
+
+def test_standard_planning_overview_is_human_summary_with_details_on_demand() -> None:
+    preview = preview_adaptive_proposal(
+        request(),
+        proposal(body=proposal_body()),
+        policy(),
+        created_at=FIXED_TIME,
+    )
+
+    standard = render_planning_overview(
+        preview,
+        visibility="standard",
+        color=True,
+    )
+    detailed = render_planning_overview(preview, visibility="detailed")
+
+    assert "\x1b[1;36mPlanning overview\x1b[0m" in standard
+    assert "What the team will build:" in standard
+    assert "Acceptance checks:" in standard
+    assert "Team:" in standard
+    assert "Technical details: hidden" in standard
+    assert "Requirement-to-evidence traceability:" not in standard
+    assert "acceptance authority:" not in standard
+    assert "authorized fallback profiles:" not in standard
+    assert "Requirement-to-evidence traceability:" in detailed
+    assert "authorized fallback profiles:" in detailed
 
 
 def test_planning_overview_contains_multiline_text_inside_its_own_entry() -> None:
@@ -8656,10 +8684,30 @@ def test_planning_cost_progress_and_approval_overview_show_remaining_authority()
     )
     overview = render_planning_overview(preview, budget_usage=usage)
 
-    assert "$0.450000 estimated / $1.00 authorized" in output[-1]
-    assert "price source runtime_catalog" in output[-1]
+    assert "$0.450000 of $1.00 authorized" in output[-1]
+    assert "$0.550000 remaining" in output[-1]
+    assert "price source" not in output[-1]
     assert "recorded Planning spend: $0.450000 estimated" in overview
     assert "recorded budget remaining before execution: $0.550000" in overview
+
+    detailed_output: list[str] = []
+    TerminalPlanningProgress(
+        write=detailed_output.append,
+        visibility="detailed",
+        display="log",
+        color="never",
+    )(
+        PlanningActivity(
+            kind=PlanningActivityKind.BUDGET_UPDATED,
+            attempt=1,
+            maximum_attempts=2,
+            model="provider/model",
+            budget_usage=usage,
+            budget_ceiling_usd=Decimal("1.00"),
+            pricing_source=ModelMetadataSource.RUNTIME_CATALOG,
+        )
+    )
+    assert "price source runtime_catalog" in detailed_output[-1]
     assert "absolute billing cap: requires a provider-side" in overview
 
 
@@ -11044,7 +11092,10 @@ def test_terminal_planning_progress_shows_heartbeat_and_stops_cleanly() -> None:
 
 def test_terminal_planning_progress_shows_safe_tool_action() -> None:
     output: list[str] = []
-    progress = TerminalPlanningProgress(write=output.append)
+    progress = TerminalPlanningProgress(
+        write=output.append,
+        visibility="detailed",
+    )
 
     progress(
         PlanningActivity(
@@ -11074,6 +11125,63 @@ def test_terminal_planning_progress_shows_safe_tool_action() -> None:
         "  Planning started testing quality checks (pytest)",
         "  Planning completed testing quality checks (pytest)",
     ]
+
+
+def test_terminal_planning_live_elapsed_refreshes_and_hides_adapter_detail() -> None:
+    class TTYOutput(StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    output = TTYOutput()
+    now = [0.0]
+    progress = TerminalPlanningProgress(
+        output=output,
+        heartbeat_seconds=60,
+        live_refresh_seconds=0.01,
+        monotonic=lambda: now[0],
+        environment={"TERM": "xterm-256color"},
+    )
+    try:
+        progress(
+            PlanningActivity(
+                kind=PlanningActivityKind.WAITING_MODEL,
+                attempt=1,
+                maximum_attempts=2,
+                model="provider/model",
+            )
+        )
+        now[0] = 2.0
+        deadline = time.monotonic() + 0.5
+        while "00:02" not in output.getvalue():
+            assert time.monotonic() < deadline, "Planning elapsed did not refresh"
+            time.sleep(0.01)
+        progress(
+            PlanningActivity(
+                kind=PlanningActivityKind.INVOCATION_LAUNCHED,
+                attempt=1,
+                maximum_attempts=2,
+                model="provider/model",
+            )
+        )
+        progress(
+            PlanningActivity(
+                kind=PlanningActivityKind.RESPONSE_RECEIVED,
+                attempt=1,
+                maximum_attempts=2,
+                model="provider/model",
+                duration_ms=2_000,
+                execution_status=planning.AgentExecutionStatus.COMPLETED,
+            )
+        )
+    finally:
+        progress.close()
+
+    rendered = output.getvalue()
+    assert progress.live_enabled
+    assert "\x1b[" in rendered
+    assert "00:02" in rendered
+    assert "Planning entered the execution adapter" not in rendered
+    assert "Planning response received in 2.0s (completed)" in rendered
 
 
 def test_terminal_planning_progress_explains_stall_policy_and_recovery() -> None:
@@ -11820,14 +11928,13 @@ def test_ordinary_user_can_answer_revise_edit_and_approve_without_json(
     assert "Fixed policy details are now shown." in rendered
     assert "Fixed policy details are now hidden." in rendered
     assert "Plan revision 3 approved." in rendered
-    assert "Additional user decisions resolved during clarification:" in rendered
-    assert (
-        "DECISION_LINK_SCOPE_ANSWER [product_requirement; question=link_scope]"
-        in rendered
-    )
-    assert "Runtime Agents" in rendered
+    assert "Decisions and assumptions to approve:" in rendered
+    assert "checks Markdown links" in rendered
+    assert "Team:" in rendered
+    assert "Requirement-to-evidence traceability:" not in rendered
     assert "Request changes in your own words" in rendered
     assert "Edit safe limits" in rendered
+    assert "technical plan details" in rendered
     assert "controller may now create only the Agents shown above" in rendered
     assert not any("JSON" in line for line in output)
     assert prompts[-1] == "Review choice: "
