@@ -25,7 +25,6 @@ from software_agent_team.model_runtime import (
     runtime_profile_from_openclaw_configuration,
 )
 from software_agent_team.runtime_configuration import (
-    MODEL_INSPECTION_TIMEOUT_SECONDS,
     materialize_model_check_configuration,
 )
 from software_agent_team.teams import AgentCapability
@@ -49,6 +48,7 @@ GEMINI_FLASH_MODELS = (
     ("google/gemini-3.8-flash", "gemini-3.8-flash", "Gemini 3.8 Flash"),
 )
 REPOSITORY_ROOT = Path(__file__).parents[1]
+PINNED_OPENCLAW_COMPATIBILITY_TIMEOUT_SECONDS = 180
 
 
 def custom_profile(api: ModelApi, *, local: bool = False) -> ModelProfile:
@@ -198,7 +198,7 @@ def test_official_deepseek_v4_flash_profile_validates_with_pinned_openclaw(
         check=False,
         capture_output=True,
         text=True,
-        timeout=MODEL_INSPECTION_TIMEOUT_SECONDS,
+        timeout=PINNED_OPENCLAW_COMPATIBILITY_TIMEOUT_SECONDS,
         env={
             **os.environ,
             "HOME": str(tmp_path),
@@ -269,7 +269,7 @@ def test_gemini_38_flash_profile_is_available_in_pinned_openclaw(
         check=False,
         capture_output=True,
         text=True,
-        timeout=MODEL_INSPECTION_TIMEOUT_SECONDS,
+        timeout=PINNED_OPENCLAW_COMPATIBILITY_TIMEOUT_SECONDS,
         env=environment,
     )
     assert validation.returncode == 0, validation.stderr
@@ -280,7 +280,7 @@ def test_gemini_38_flash_profile_is_available_in_pinned_openclaw(
         check=False,
         capture_output=True,
         text=True,
-        timeout=MODEL_INSPECTION_TIMEOUT_SECONDS,
+        timeout=PINNED_OPENCLAW_COMPATIBILITY_TIMEOUT_SECONDS,
         env=environment,
     )
     assert listing.returncode == 0, listing.stderr
@@ -359,10 +359,10 @@ def test_transport_profile_validates_with_the_pinned_openclaw(
         check=False,
         capture_output=True,
         text=True,
-        # This is a cold pinned-runtime compatibility check, not the ordinary
-        # task preflight. Reuse its registered infrastructure guard rather
-        # than inventing a shorter test-only wall-clock cutoff.
-        timeout=MODEL_INSPECTION_TIMEOUT_SECONDS,
+        # This compatibility process can cold-page the complete pinned Node
+        # runtime during the canonical suite. Keep its finite infrastructure
+        # allowance separate from SAT's shorter user-facing inspection deadline.
+        timeout=PINNED_OPENCLAW_COMPATIBILITY_TIMEOUT_SECONDS,
         env={
             **os.environ,
             "HOME": str(tmp_path),
