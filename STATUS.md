@@ -385,6 +385,16 @@ tests; and 27 bootstrap, installer, and release-documentation checks. The clean
 canonical release gate, immutable release identity, public install lifecycle,
 and fresh provider-backed user journey remain pending.
 
+The first clean candidate gate passed doctor, formatting, and lint, then
+completed all 1,822 tests with one nested full-gate fixture failure. That fixture
+retained a 15-second socket readiness deadline after ordinary nested startup was
+assigned a separate 60-second infrastructure allowance. Focused repair also
+replaced its 0.2-second accelerated termination grace with a bounded one-second
+fixture allowance so a resistant descendant can complete the asserted two-phase
+cleanup handoff. Both exact nodes and all 38 full-gate supervisor tests pass;
+production stage deadlines and the default five-second termination grace are
+unchanged. A new clean canonical gate is pending.
+
 The current development head supervises each provider smoke check with a Linux
 child-subreaper, inherited opaque ownership marker, UID and PID/start-time
 revalidation, and pidfd signalling. A timeout now terminates a detached

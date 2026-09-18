@@ -32,12 +32,14 @@ from software_agent_team.full_gate import (
 # configured stage deadline and cleanup behavior.
 SYNTHETIC_FIXTURE_TIMEOUT_SECONDS = 60
 SYNTHETIC_TIMEOUT_EXERCISE_SECONDS = 15
+SYNTHETIC_FIXTURE_TERMINATION_GRACE_SECONDS = 1.0
 
 
 def _run(
     tmp_path: Path,
     *scripts: str,
     timeout: float = SYNTHETIC_FIXTURE_TIMEOUT_SECONDS,
+    termination_grace: float = SYNTHETIC_FIXTURE_TERMINATION_GRACE_SECONDS,
     private_temporary: bool = False,
     temporary_path_argument: str | None = None,
 ) -> tuple[int, dict[str, object], bytes, Path]:
@@ -59,7 +61,7 @@ def _run(
         stages=stages,
         private_temporary_base=private_temporary_base,
         stage_timeout_seconds=timeout,
-        termination_grace_seconds=0.2,
+        termination_grace_seconds=termination_grace,
         sample_interval_seconds=0.01,
         output=output,
     )
@@ -1201,11 +1203,12 @@ def test_supervisor_interrupt_is_forwarded_and_durably_terminal(
     ready_socket.bind(("127.0.0.1", 0))
     ready_host, ready_port = ready_socket.getsockname()
     ready_socket.listen(1)
-    ready_socket.settimeout(15)
+    ready_socket.settimeout(SYNTHETIC_FIXTURE_TIMEOUT_SECONDS)
     stage_program = "; ".join(
         (
             "import socket, time",
-            f"ready = socket.create_connection(({ready_host!r}, {ready_port}), 5)",
+            f"ready = socket.create_connection(({ready_host!r}, {ready_port}), "
+            f"{SYNTHETIC_FIXTURE_TIMEOUT_SECONDS})",
             "ready.sendall(b'stage-ready\\n')",
             "ready.close()",
             "time.sleep(30)",
