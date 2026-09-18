@@ -406,6 +406,17 @@ slow observation plus delayed SIGKILL effect; all four bounded-process tests and
 the combined 98 bounded-process/CLI tests pass. A new clean canonical gate is
 pending.
 
+The next clean candidate gate kept every bounded-process test green and finished
+with 1,822 passed and one failure in the SIGTERM supervisor fixture. The nested
+supervisor had already durably recorded its interrupted stage, complete cleanup,
+removed private temporary directory, and terminal inventory when the test's
+remaining hard-coded five-second process wait expired. That exit wait and its
+fallback reap now use the same bounded 60-second fixture infrastructure allowance
+as the ready handshake. The exact interrupt node passes in 11.40 seconds and all
+38 full-gate supervisor tests pass in 140.58 seconds; production signal handling,
+stage timeouts, and termination grace remain unchanged. A new clean canonical
+gate is pending.
+
 The current development head supervises each provider smoke check with a Linux
 child-subreaper, inherited opaque ownership marker, UID and PID/start-time
 revalidation, and pidfd signalling. A timeout now terminates a detached

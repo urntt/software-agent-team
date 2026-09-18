@@ -1268,7 +1268,7 @@ def test_supervisor_interrupt_is_forwarded_and_durably_terminal(
 
         process.send_signal(signal.SIGTERM)
         try:
-            exit_code = process.wait(timeout=5)
+            exit_code = process.wait(timeout=SYNTHETIC_FIXTURE_TIMEOUT_SECONDS)
         except subprocess.TimeoutExpired:
             terminal = json.loads(report_path.read_text(encoding="utf-8"))
             pytest.fail(
@@ -1289,4 +1289,4 @@ def test_supervisor_interrupt_is_forwarded_and_durably_terminal(
     finally:
         if process.poll() is None:
             process.kill()
-            process.wait(timeout=5)
+            process.wait(timeout=SYNTHETIC_FIXTURE_TIMEOUT_SECONDS)
