@@ -393,7 +393,18 @@ replaced its 0.2-second accelerated termination grace with a bounded one-second
 fixture allowance so a resistant descendant can complete the asserted two-phase
 cleanup handoff. Both exact nodes and all 38 full-gate supervisor tests pass;
 production stage deadlines and the default five-second termination grace are
-unchanged. A new clean canonical gate is pending.
+unchanged. The next candidate gate kept all 38 supervisor tests passing but
+finished with 1,820 passed and two bounded-process failures. The first consumed
+its accelerated cleanup grace during process observation before SIGKILL could
+settle; the second was the resulting existing-child fail-closed response.
+
+Bounded subprocess cleanup now starts each TERM and KILL grace period after the
+first discovered owned set receives its exact pidfd signal. Slow process
+enumeration therefore cannot erase the time reserved for state transition,
+subreaper adoption, and zombie reaping. A production-interface regression models
+slow observation plus delayed SIGKILL effect; all four bounded-process tests and
+the combined 98 bounded-process/CLI tests pass. A new clean canonical gate is
+pending.
 
 The current development head supervises each provider smoke check with a Linux
 child-subreaper, inherited opaque ownership marker, UID and PID/start-time

@@ -503,9 +503,12 @@ subprocess boundary. It requires a single-threaded controller with no existing
 children, then combines an inherited opaque identity with a Linux child
 subreaper, UID and PID/start-time revalidation, and pidfd signalling so a timed-out
 descendant cannot escape by creating a new process group or session. The
-identity and child environments are never persisted. Tests must cover both timeout
-cleanup of a detached descendant and rejection of a child left behind after an
-otherwise successful root command.
+identity and child environments are never persisted. Each TERM and KILL grace
+period starts after the first discovered owned set has been signalled, so host
+process-enumeration latency cannot consume the time reserved for state transition,
+subreaper adoption, and zombie reaping. Tests must cover timeout cleanup of a
+detached descendant, delayed signal effect after slow ownership observation, and
+rejection of a child left behind after an otherwise successful root command.
 Non-zero OpenClaw results pass through the CLI's bounded failure projection. It
 prefers a nested provider JSON error, removes the exact credential selected by
 the runtime profile, strips control characters, and caps the displayed detail.

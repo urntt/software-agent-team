@@ -22,6 +22,11 @@
       "id": "editable-multiline-terminal-input",
       "impact": "minor",
       "summary": "Provide shared editable multiline terminal input with cursor navigation, Unicode editing, validation retention, and deterministic pipe behavior"
+    },
+    {
+      "id": "post-signal-process-cleanup-grace",
+      "impact": "patch",
+      "summary": "Reserve each bounded subprocess cleanup grace period for post-signal state transition, adoption, and reaping under slow host process observation"
     }
   ]
 }

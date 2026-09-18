@@ -305,7 +305,7 @@ def _terminate_owned_processes(
         )
 
     for signum in (signal.SIGTERM, signal.SIGKILL):
-        deadline = time.monotonic() + grace_seconds
+        deadline: float | None = None
         signalled: set[tuple[int, int]] = set()
         while True:
             owned = observe()
@@ -317,6 +317,10 @@ def _terminate_owned_processes(
                     continue
                 _signal_exact_process(item, signum, expected_uid=expected_uid)
                 signalled.add(key)
+            # Process discovery may be slow under host load. Preserve the configured
+            # grace for signal delivery, state transition, adoption, and reaping.
+            if deadline is None:
+                deadline = time.monotonic() + grace_seconds
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
