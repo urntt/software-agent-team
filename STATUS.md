@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** validate `v0.3.1` through the gated managed user journey
+**Current milestone:** prepare the `v0.3.2` terminal-presentation patch release
 
 **Last updated:** September 18, 2026
 
@@ -392,7 +392,7 @@ refusal, injected post-link-swap rollback, a stable-to-dev-to-stable round trip,
 foreign OpenClaw isolation, secret-free export, full uninstall, and exact
 account/HOME/resource cleanup all passed. The scenario made no provider calls.
 
-## Current post-v0.3.1 terminal presentation
+## Current v0.3.2 candidate
 
 The ordinary-user `v0.3.1` run completed all three Review roles and delivered
 12/12 acceptance, while exposing remaining presentation problems. Active Agent

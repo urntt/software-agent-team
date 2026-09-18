@@ -1,17 +1,22 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.3.0",
-  "target_version": "0.3.1",
+  "baseline_version": "0.3.1",
+  "target_version": "0.3.2",
   "changes": [
     {
-      "id": "command-shaped-runtime-rejection",
+      "id": "independent-live-elapsed-refresh",
       "impact": "patch",
-      "summary": "Classify the pinned runtime's exact command-shaped orphan rejection through a bounded safe tool-name projection while retaining unknown orphan failures"
+      "summary": "Refresh live elapsed clocks once per second without waiting for another controller event and visually separate permanent history and active Agent cards"
     },
     {
-      "id": "live-progress-row-reuse",
+      "id": "bounded-planning-presentation",
       "impact": "patch",
-      "summary": "Return the live renderer cursor to the cleared panel origin so repeated TTY refreshes reuse rows instead of materializing blank scrollback"
+      "summary": "Render Planning waits in one colored live card and replace the default controller graph dump with a human approval summary while retaining on-demand technical detail"
+    },
+    {
+      "id": "actionable-readiness-summary",
+      "impact": "patch",
+      "summary": "Show readiness counts and actionable exceptions by default while preserving every passing check in explicit detailed append-only output"
     }
   ]
 }
