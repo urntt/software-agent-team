@@ -22,8 +22,11 @@ bindings on existing writer tasks. It retains task intent, identity, topology,
 and existing bindings after model submission, with an auditable normalization.
 The archived ninth submission reproduces the overlong field through production
 interfaces and projects to structurally valid tasks after this change. The
-Planning/correction targeted suite passed 289 tests. A canonical full gate,
-fixed-install rehearsal, and exact-tag publication remain to be verified.
+Planning/correction targeted suite passed 289 tests; the full local gate passed
+1,881 tests with four completed stages, no OOM, and complete process and Docker
+cleanup. The code commit passed a fixed rootless dev upgrade with configuration
+and daemon identity preserved. Exact-tag publication and a fresh complete
+public-user journey remain unverified.
 
 ## Current Release
 
