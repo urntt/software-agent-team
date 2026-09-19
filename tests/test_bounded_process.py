@@ -125,7 +125,7 @@ def test_cleanup_grace_starts_after_the_first_signal(
     original_signal = bounded_process._signal_exact_process
     kill_scheduled = threading.Event()
     timers: list[threading.Timer] = []
-    observed_pids: set[int] = set()
+    observed_processes: dict[tuple[int, int], bounded_process._ProcessObservation] = {}
 
     def slow_observe(
         *,
@@ -136,7 +136,7 @@ def test_cleanup_grace_starts_after_the_first_signal(
         tracked: dict[tuple[int, int], ProcessIdentity],
     ) -> tuple[bounded_process._ProcessObservation, ...]:
         if not kill_scheduled.is_set():
-            time.sleep(0.08)
+            time.sleep(0.6)
         return original_observe(
             marker=marker,
             expected_uid=expected_uid,
@@ -151,7 +151,9 @@ def test_cleanup_grace_starts_after_the_first_signal(
         *,
         expected_uid: int,
     ) -> None:
-        observed_pids.add(process.identity.pid)
+        observed_processes[
+            (process.identity.pid, process.identity.start_time_ticks)
+        ] = process
         if signum != signal.SIGKILL:
             original_signal(process, signum, expected_uid=expected_uid)
             return
@@ -174,15 +176,27 @@ def test_cleanup_grace_starts_after_the_first_signal(
                 [str(command)],
                 environment=environment,
                 timeout_seconds=1,
-                termination_grace_seconds=0.05,
+                termination_grace_seconds=0.3,
             )
     finally:
         for timer in timers:
             timer.join(timeout=1)
-        time.sleep(0.02)
-        for pid in observed_pids:
-            with suppress(ChildProcessError):
-                os.waitpid(pid, os.WNOHANG)
+        for observed in observed_processes.values():
+            original_signal(observed, signal.SIGKILL, expected_uid=os.getuid())
+        reap_deadline = time.monotonic() + 1
+        while True:
+            for pid, _ in observed_processes:
+                with suppress(ChildProcessError):
+                    os.waitpid(pid, os.WNOHANG)
+            if (
+                all(
+                    read_linux_process_identity(pid) is None
+                    for pid, _ in observed_processes
+                )
+                or time.monotonic() >= reap_deadline
+            ):
+                break
+            time.sleep(0.01)
 
     detached_pid = int(child_pid_path.read_text(encoding="utf-8"))
     assert read_linux_process_identity(detached_pid) is None

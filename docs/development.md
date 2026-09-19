@@ -516,6 +516,10 @@ process-enumeration latency cannot consume the time reserved for state transitio
 subreaper adoption, and zombie reaping. Tests must cover timeout cleanup of a
 detached descendant, delayed signal effect after slow ownership observation, and
 rejection of a child left behind after an otherwise successful root command.
+The delayed-signal fixture keeps the pre-signal observation longer than the
+configured grace while leaving a wider post-signal scheduling margin; even a
+failed assertion must signal and reap its exact observed child identities so it
+cannot contaminate the next test's no-existing-child prerequisite.
 Non-zero OpenClaw results pass through the CLI's bounded failure projection. It
 prefers a nested provider JSON error, removes the exact credential selected by
 the runtime profile, strips control characters, and caps the displayed detail.

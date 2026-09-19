@@ -41,6 +41,11 @@ suppressed an otherwise safe correction. The `v0.4.1` candidate accepts only
 the exact verified aggregate or exact leaf sets, keeping unrelated and cyclic
 graphs fail-closed. Exact saved-turn replay and targeted coordinator checks
 pass; the patch gate, publication, and complete user journey remain pending.
+An initial exact-revision gate found a scheduling-sensitive delayed-signal test:
+it had only a 30 ms post-signal margin and left a child visible to the next
+test when that assertion failed. The candidate widens the controlled margin and
+reaps exact observed identities even on failure; its replacement full gate is
+pending.
 
 ## Current Release
 
