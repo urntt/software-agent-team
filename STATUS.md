@@ -1,7 +1,7 @@
 # Project Status
 
-**Current milestone:** publish the validated `0.4.8` Planning correction and
-retest a fresh ordinary-user journey from the public stable release.
+**Current milestone:** validate the published `v0.4.8` release through a fresh
+ordinary-user journey from installation to delivery and uninstall.
 
 **Last updated:** September 19, 2026
 
@@ -52,22 +52,28 @@ on an independent non-Docker-group rootless account: doctor, formatting,
 lint, and 1,883 tests passed with one root-only fixture skipped. Stage
 cleanup was complete, process leases, containers, and volumes were empty,
 and cgroup OOM/kill deltas were zero. Kernel OOM inspection was unavailable
-to that account. The final dev upgrade, publication, and fresh full user
-journey remain pending.
+to that account. The final revision
+`4d134fa78298e8186af4b929f133882d1dbafce2` upgraded an existing
+non-Docker-group rootless dev account without changing its configuration or
+daemon identity. The exact-tag hosted gate passed 1,881 tests with three
+environment skips and published a unique verified Release. A fresh full user
+journey remains pending.
 
 ## Current Release
 
-The immutable `v0.4.7` tag,
-[GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.4.7),
+The immutable `v0.4.8` tag,
+[GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.4.8),
 package version, and release manifest identify source revision
-`3be7542a53bd7d3748e50ad07027ae449f02e6c5` and Git archive digest
-`sha256:aeed20024dadaae66558ec70e2751a0605ee6914ee7be85ad5cc0a2489133289`.
+`4d134fa78298e8186af4b929f133882d1dbafce2` and Git archive digest
+`sha256:102f29ef72b4f1afad88afdbbdef6ce3dd734c77bd718615c844fe937a11f928`.
 Exact-tag GitHub Actions
-[run 35471899923](https://github.com/urntt/software-agent-team/actions/runs/35471899923)
-passed 1,880 tests with three environment skips; the local candidate passed
-1,883. The unique Release manifest asset digest is
-`sha256:5d15e61dd636382e5334fb3f94b24a9c5c08d2e14fc5d66d9510e9bdc1e21cd7`.
-The latest public rootless run described above stopped before delivery.
+[run 35476241252](https://github.com/urntt/software-agent-team/actions/runs/35476241252)
+passed 1,881 tests with three environment skips; the independent rootless
+candidate passed 1,883 tests with one root-only fixture skip. The unique
+Release manifest asset digest is
+`sha256:faf0645c3ec6dbc7cef4d4ce8cd4cb019b83939dadebc5f514cf6e25ef4f0146`.
+The latest public rootless run was on `v0.4.7` and stopped before delivery;
+the `v0.4.8` ordinary-user journey has not yet begun.
 
 
 The immutable `v0.4.1` tag,
