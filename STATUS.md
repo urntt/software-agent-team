@@ -1,8 +1,8 @@
 # Project Status
 
-**Current milestone:** prepare the `v0.3.2` terminal-presentation patch release
+**Current milestone:** validate the published `v0.3.2` terminal-presentation patch
 
-**Last updated:** September 18, 2026
+**Last updated:** September 19, 2026
 
 This document records what the repository implements now, what evidence
 supports that claim, and what remains unavailable. It does not redefine the
@@ -10,6 +10,22 @@ product, architecture, experiment, or roadmap; those decisions belong to
 [`VISION.md`](VISION.md).
 
 ## Current Release
+
+The immutable `v0.3.2` tag,
+[GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.3.2),
+package version, and release manifest identify source revision
+`35f353d418b728c0e748b1663850d394d2c0ae34` and Git archive digest
+`sha256:740c7d52cb9d023f6a62f6e9d138b6e4d402c1975a27e27a8f11b53bec1f5140`.
+Exact-tag GitHub Actions
+[run 35406364835](https://github.com/urntt/software-agent-team/actions/runs/35406364835)
+passed 1,832 tests with three environment-dependent skips and published exactly
+one identity manifest asset. The clean local release revision passed all 1,835
+tests. A fresh non-root public bootstrap of current stable and a separate
+`v0.3.1` to `v0.3.2` lifecycle passed exact identity, update, state migration,
+same-target handling, active-run refusal, injected activation rollback, channel
+round trip, export, full uninstall, and exact cleanup without making a provider
+call. The terminal presentation changes still require ordinary-user live TTY
+validation; no new complete provider journey was started for this patch.
 
 The immutable `v0.3.1` tag,
 [GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.3.1),
@@ -392,7 +408,7 @@ refusal, injected post-link-swap rollback, a stable-to-dev-to-stable round trip,
 foreign OpenClaw isolation, secret-free export, full uninstall, and exact
 account/HOME/resource cleanup all passed. The scenario made no provider calls.
 
-## Current v0.3.2 candidate
+## v0.3.2 implementation
 
 The ordinary-user `v0.3.1` run completed all three Review roles and delivered
 12/12 acceptance, while exposing remaining presentation problems. Active Agent
@@ -413,8 +429,10 @@ human approval summary; `d` reveals the complete technical plan on demand.
 and the durable event and Planning evidence remain complete in every mode.
 
 The affected progress, Planning, self-check, product, and CLI suites pass all
-432 tests. A clean canonical gate and a public patch release remain pending; no
-new complete user journey has been started.
+432 tests. The clean release revision passed all 1,835 local tests; its exact-tag
+hosted gate passed 1,832 tests with three explicit environment skips. The public
+fresh-install and `v0.3.1` to `v0.3.2` update lifecycles both completed with
+exact cleanup and no provider calls. No new complete user journey was started.
 
 ## v0.3.1 implementation
 
