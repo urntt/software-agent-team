@@ -1048,8 +1048,9 @@ retains existing writers and Review Agents that already own a valid compiled
 scope when a submission adds missing authority, even if the same correction
 also fixes independent product-definition or criterion fields. This keeps task
 owners, writer criterion coverage, and accepted Review assignments stable while
-the specialist is added. An unrelated Agent-collection defect is handled by its
-own correction authority; it does not receive this additive projection. Only
+the specialist is added. An unrelated Agent-collection defect or ambiguous
+general Review owner is handled by its own correction authority; it does not
+receive this additive projection. Only
 definitions with the exact missing Review
 authority are eligible additions; unrelated writers, integrations, or general
 Reviewers in the replacement are discarded. An admitted specialist retains

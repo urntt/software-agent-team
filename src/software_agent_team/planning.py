@@ -2229,6 +2229,9 @@ def _preserve_agents_during_missing_specialist_correction(
             issue.path == agent_path
             or issue.path.startswith(f"{agent_path}/")
             or agent_path.startswith(f"{issue.path.rstrip('/')}/")
+            # An ambiguous general Review owner is reported at the criterion
+            # reference, but may still require changing the Agent collection.
+            or issue.invariant_id == "planning_criterion_review_scope_ambiguous"
         )
     )
     if not agent_issues or any(

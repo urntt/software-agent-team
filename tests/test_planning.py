@@ -6896,18 +6896,26 @@ def test_mixed_specialist_correction_preserves_writer_coverage_and_task_owners()
         message="Agent dependency order also requires model correction",
         authority=ResponseIssueAuthority.MODEL,
     )
-    agent_repair_plan = correction_plan_for(
-        base,
-        (product_issue, specialist_issue, verifier_issue, other_agent_issue),
+    ambiguous_review_issue = ResponseValidationIssue(
+        path="/proposal/acceptance_criteria/1/verification_agent_ids",
+        code="planning_context",
+        invariant_id="planning_criterion_review_scope_ambiguous",
+        message="general Review owner is ambiguous",
+        authority=ResponseIssueAuthority.MODEL,
     )
-    unprojected, skipped = (
-        planning._preserve_agents_during_missing_specialist_correction(
-            applied.payload,
-            agent_repair_plan,
+    for relation_issue in (other_agent_issue, ambiguous_review_issue):
+        relation_plan = correction_plan_for(
+            base,
+            (product_issue, specialist_issue, verifier_issue, relation_issue),
         )
-    )
-    assert unprojected == applied.payload
-    assert skipped == ()
+        unprojected, skipped = (
+            planning._preserve_agents_during_missing_specialist_correction(
+                applied.payload,
+                relation_plan,
+            )
+        )
+        assert unprojected == applied.payload
+        assert skipped == ()
 
 
 def test_quality_dependency_correction_binds_the_complete_additive_relation(

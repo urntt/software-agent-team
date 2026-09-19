@@ -199,7 +199,8 @@ Choose the next response by decision value:
   those tasks do not create an Agent, grant write access, change its capability,
   or replace writer coverage. When adding a missing specialist Review Agent,
   retain existing Agent IDs, task owners, and writer criterion bindings unless
-  another Agent-specific issue explicitly requires changing them. This also
+  another Agent-specific issue or ambiguous Review owner requires changing
+  them. This also
   applies when the same correction fixes unrelated product or criterion fields.
   Agent entries and their dependency DAG remain the
   authority for identity, permissions, execution order, and model calls. Testing
