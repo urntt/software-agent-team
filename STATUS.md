@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** validate the published `v0.3.2` terminal-presentation patch
+**Current milestone:** prepare the `v0.3.3` runtime-control and Planning patch
 
 **Last updated:** September 19, 2026
 
@@ -8,6 +8,14 @@ This document records what the repository implements now, what evidence
 supports that claim, and what remains unavailable. It does not redefine the
 product, architecture, experiment, or roadmap; those decisions belong to
 [`VISION.md`](VISION.md).
+
+The `v0.3.3` candidate cancels an unfinished runtime control editor before
+returning terminal ownership, buffers progress notices while that editor is
+active, and keeps slash detection in non-echoing cbreak mode. Its Planning
+correction contract opens dependent references with duplicate answered-question
+decisions or ambiguous Agent scope, and the proposal prompt ends with a concise
+relation check. Targeted local regressions have passed; canonical, published
+artifact, and ordinary-user SSH TTY verification are still pending.
 
 ## Current Release
 

@@ -2,8 +2,13 @@
 
 import os
 import pty
+import select
+import signal
+import subprocess
+import sys
 import time
 from datetime import UTC, datetime
+from io import StringIO
 from pathlib import Path
 
 import pytest
@@ -499,3 +504,147 @@ def test_tty_control_entry_suspends_live_rendering_while_editing(
     assert input_activity == [True, False]
     assert store.list_latest()[0].command is ControlCommandType.PAUSE
     assert any("Queued pause" in notice for notice in notices)
+
+
+def test_redirected_output_keeps_tty_input_in_canonical_line_mode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store, _, _ = _channel(tmp_path)
+    master, slave = pty.openpty()
+    input_stream = os.fdopen(slave, "r", encoding="utf-8", buffering=1)
+    monkeypatch.setattr(sys, "stdout", StringIO())
+    console = TerminalControlConsole(
+        store=store,
+        team_plan=_plan(),
+        input_stream=input_stream,
+        notice_handler=lambda _value: None,
+        poll_seconds=0.01,
+    )
+    try:
+        assert not console._is_interactive_terminal()
+        console.start()
+        os.write(master, b"/pause\n")
+        deadline = time.monotonic() + 2
+        while not store.list_latest():
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+    finally:
+        console.close()
+        input_stream.close()
+        os.close(master)
+
+    assert store.list_latest()[0].command is ControlCommandType.PAUSE
+
+
+def test_real_tty_control_waits_for_enter_and_shutdown_cancels_partial_input(
+    tmp_path: Path,
+) -> None:
+    program = """
+import signal
+import sys
+import termios
+import time
+from pathlib import Path
+from software_agent_team.control_console import TerminalControlConsole
+from software_agent_team.controls import ControlCommandStore
+from software_agent_team.progress import TerminalProgressRenderer
+
+flags = {"milestone": False, "stop": False}
+signal.signal(signal.SIGUSR1, lambda *_: flags.__setitem__("milestone", True))
+signal.signal(signal.SIGUSR2, lambda *_: flags.__setitem__("stop", True))
+original = termios.tcgetattr(sys.stdin.fileno())
+store = ControlCommandStore(Path(sys.argv[1]), run_id="tty-control")
+renderer = TerminalProgressRenderer(
+    output=sys.stdout, display="live", is_terminal=True,
+    environment={"TERM": "xterm-256color"},
+)
+
+def activity(active):
+    if active:
+        renderer.suspend_live()
+    else:
+        renderer.resume_live()
+    print("INPUT_ACTIVE=" + str(active), flush=True)
+
+console = TerminalControlConsole(
+    store=store, team_plan=object(), notice_handler=renderer.write_notice,
+    input_activity_handler=activity, poll_seconds=0.01,
+)
+console.start()
+print("READY", flush=True)
+reported = set()
+while not flags["stop"]:
+    if flags["milestone"]:
+        flags["milestone"] = False
+        renderer.write_notice("MILESTONE DURING INPUT")
+    for command in store.list_latest():
+        if command.command_id not in reported:
+            reported.add(command.command_id)
+            print("QUEUED=" + str(command.instruction), flush=True)
+    time.sleep(0.01)
+console.close()
+renderer.close()
+print(
+    "CLOSED thread_alive=" + str(console._thread.is_alive())
+    + " terminal_restored=" + str(termios.tcgetattr(sys.stdin.fileno()) == original),
+    flush=True,
+)
+"""
+    master, slave = pty.openpty()
+    process = subprocess.Popen(
+        [sys.executable, "-c", program, str(tmp_path)],
+        stdin=slave,
+        stdout=slave,
+        stderr=slave,
+        close_fds=True,
+        env={**os.environ, "TERM": "xterm-256color"},
+    )
+    os.close(slave)
+    captured = bytearray()
+
+    def read_until(marker: bytes, *, timeout: float = 6) -> None:
+        deadline = time.monotonic() + timeout
+        while marker not in captured and time.monotonic() < deadline:
+            ready, _, _ = select.select([master], [], [], 0.05)
+            if ready:
+                captured.extend(os.read(master, 65_536))
+        assert marker in captured, bytes(captured)[-1_000:]
+
+    try:
+        read_until(b"READY")
+        os.write(master, b"/correct half")
+        read_until(b"INPUT_ACTIVE=True")
+        os.kill(process.pid, signal.SIGUSR1)
+        time.sleep(0.15)
+        ready, _, _ = select.select([master], [], [], 0)
+        if ready:
+            captured.extend(os.read(master, 65_536))
+        assert b"MILESTONE DURING INPUT" not in captured
+        assert b"QUEUED=" not in captured
+        os.write(master, b" written")
+        time.sleep(0.1)
+        ready, _, _ = select.select([master], [], [], 0)
+        if ready:
+            captured.extend(os.read(master, 65_536))
+        assert b"QUEUED=" not in captured
+        os.write(master, b"\r")
+        read_until(b"QUEUED=half written")
+        assert b"MILESTONE DURING INPUT" in captured
+
+        os.write(master, b"/correct unfinished")
+        deadline = time.monotonic() + 6
+        while captured.count(b"INPUT_ACTIVE=True") < 2 and time.monotonic() < deadline:
+            ready, _, _ = select.select([master], [], [], 0.05)
+            if ready:
+                captured.extend(os.read(master, 65_536))
+        assert captured.count(b"INPUT_ACTIVE=True") == 2
+        os.kill(process.pid, signal.SIGUSR2)
+        read_until(b"CLOSED thread_alive=False terminal_restored=True")
+        assert b"QUEUED=unfinished" not in captured
+        assert process.wait(timeout=2) == 0
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=2)
+        os.close(master)

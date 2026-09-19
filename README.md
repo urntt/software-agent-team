@@ -109,6 +109,10 @@ While execution is active, the same terminal accepts optional slash commands:
 /help
 ```
 
+Type `/` to open the editable control prompt; a command is submitted only when
+you press Enter. Progress notices wait while you edit. If the run ends before
+submission, the unfinished command is cancelled and the terminal is restored.
+
 Guidance applies only to a future invocation. Correction stops at a safe
 checkpoint, preserves the superseded run, and opens a new Planning overview for
 approval. Pause is cooperative; interrupt and cancel are best effort for an

@@ -1,22 +1,17 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.3.1",
-  "target_version": "0.3.2",
+  "baseline_version": "0.3.2",
+  "target_version": "0.3.3",
   "changes": [
     {
-      "id": "independent-live-elapsed-refresh",
+      "id": "interruptible-runtime-controls",
       "impact": "patch",
-      "summary": "Refresh live elapsed clocks once per second without waiting for another controller event and visually separate permanent history and active Agent cards"
+      "summary": "Keep runtime control editing and progress output from racing for the terminal, and cancel unfinished input before run shutdown"
     },
     {
-      "id": "bounded-planning-presentation",
+      "id": "atomic-planning-identity-correction",
       "impact": "patch",
-      "summary": "Render Planning waits in one colored live card and replace the default controller graph dump with a human approval summary while retaining on-demand technical detail"
-    },
-    {
-      "id": "actionable-readiness-summary",
-      "impact": "patch",
-      "summary": "Show readiness counts and actionable exceptions by default while preserving every passing check in explicit detailed append-only output"
+      "summary": "Correct duplicate answered-question decisions and ambiguous Agent scope with their dependent references as one bounded Planning edit"
     }
   ]
 }

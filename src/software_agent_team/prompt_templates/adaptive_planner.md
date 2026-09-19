@@ -262,3 +262,16 @@ $response_schema_json
 
 REPAIR_CONTEXT_JSON
 $repair_context_json
+
+FINAL_RELATION_CHECK
+Before submitting a proposal, verify these links against the exact IDs in your
+response:
+- Each answered question has exactly one `resolved_question` decision. Its
+  category is `product_requirement` for a product question, and every dimension
+  resolved by that question cites only that one decision ID.
+- Every assumption cites an existing Agent-autonomy decision; every product
+  dimension cites only existing requirements, criteria, and decisions.
+- Every task owner and criterion verifier names an existing Agent ID. Keep those
+  references synchronized if an Agent ID changes.
+- Security and experience criteria name the matching specialist Review Agent;
+  do not remove an existing valid specialist while adding another.

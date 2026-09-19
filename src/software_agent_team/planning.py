@@ -2801,10 +2801,163 @@ def _bind_planning_correction_candidates(
         _bind_planning_product_recommendation_correction_candidates(
             _bind_planning_dependency_correction_candidate(
                 _expand_planning_acceptance_relation_correction(
-                    _collapse_wide_planning_schema_correction(plan)
+                    _expand_planning_identity_relation_correction(
+                        _collapse_wide_planning_schema_correction(plan)
+                    )
                 )
             )
         )
+    )
+
+
+def _expand_planning_identity_relation_correction(
+    plan: SemanticCorrectionPlan | None,
+) -> SemanticCorrectionPlan | None:
+    """Keep decision and Agent identities consistent with their live references."""
+
+    if (
+        plan is None
+        or "/proposal" in plan.evidence.target_paths
+        or any(
+            issue.authority is not ResponseIssueAuthority.MODEL
+            for issue in plan.diagnostic.issues
+        )
+    ):
+        return plan
+    proposal = plan.base_payload.get("proposal")
+    if not isinstance(proposal, dict):
+        return plan
+
+    target_paths = set(plan.evidence.target_paths)
+    relation_paths: dict[str, str] = {}
+    decisions = proposal.get("decisions")
+    duplicate_question_sources: set[str] = set()
+    if isinstance(decisions, list):
+        question_sources: set[str] = set()
+        for decision in decisions:
+            provenance = (
+                decision.get("provenance") if isinstance(decision, dict) else None
+            )
+            if (
+                not isinstance(provenance, dict)
+                or provenance.get("kind") != "resolved_question"
+                or not isinstance(provenance.get("source"), str)
+            ):
+                continue
+            source = provenance["source"]
+            if source in question_sources:
+                duplicate_question_sources.add(source)
+            question_sources.add(source)
+
+    decision_collection_targeted = "/proposal/decisions" in target_paths
+    if (
+        not decision_collection_targeted
+        and duplicate_question_sources
+        and plan.diagnostic.failure_class is ResponseFailureClass.SEMANTIC_SCHEMA
+        and any(
+            issue.invariant_id == "planning_decision_authority_provenance"
+            for issue in plan.diagnostic.issues
+        )
+    ):
+        target_paths = {
+            path for path in target_paths if not path.startswith("/proposal/decisions/")
+        }
+        target_paths.add("/proposal/decisions")
+        relation_paths["/proposal/decisions"] = (
+            "one answered question must produce one user-owned decision; "
+            "repair duplicate decisions and their references atomically"
+        )
+        decision_collection_targeted = True
+
+    if decision_collection_targeted and duplicate_question_sources:
+        definition = proposal.get("product_definition")
+        if isinstance(definition, dict):
+            for dimension in ProductDefinitionDimension:
+                item = definition.get(dimension.value)
+                if isinstance(item, dict) and item.get("decision_ids"):
+                    relation_paths[
+                        f"/proposal/product_definition/{dimension.value}/decision_ids"
+                    ] = "decision references must match the replacement decision set"
+        if proposal.get("assumptions"):
+            relation_paths["/proposal/assumptions"] = (
+                "assumptions must cite decisions in the replacement decision set"
+            )
+
+    if "/proposal/agents" in target_paths and any(
+        issue.invariant_id
+        in {
+            "planning_criterion_review_scope_ambiguous",
+            "planning_profile_review_scope_ambiguous",
+        }
+        for issue in plan.diagnostic.issues
+    ):
+        tasks = proposal.get("tasks")
+        if isinstance(tasks, list):
+            for index, task in enumerate(tasks):
+                if isinstance(task, dict) and task.get("owner_agent_id"):
+                    relation_paths[f"/proposal/tasks/{index}/owner_agent_id"] = (
+                        "task owners must match the replacement Agent set"
+                    )
+        criteria = proposal.get("acceptance_criteria")
+        if isinstance(criteria, list):
+            for index, criterion in enumerate(criteria):
+                if isinstance(criterion, dict) and criterion.get(
+                    "verification_agent_ids"
+                ):
+                    relation_paths[
+                        f"/proposal/acceptance_criteria/{index}/verification_agent_ids"
+                    ] = "Review verifiers must match the replacement Agent set"
+
+    if not relation_paths:
+        return plan
+    paths = tuple(sorted({*target_paths, *relation_paths}))
+    minimal_paths = tuple(
+        path
+        for path in paths
+        if not any(
+            path.startswith(f"{other.rstrip('/')}/") for other in paths if other != path
+        )
+    )
+    new_issues = tuple(
+        ResponseValidationIssue(
+            path=path,
+            code="planning_identity_relation_atomicity",
+            invariant_id="planning_identity_relation_atomicity",
+            message=message,
+            authority=ResponseIssueAuthority.MODEL,
+        )
+        for path, message in relation_paths.items()
+        if path in minimal_paths
+        and (
+            (path == "/proposal/decisions" and bool(duplicate_question_sources))
+            or not any(
+                path == issue.path
+                or path.startswith(f"{issue.path.rstrip('/')}/")
+                or issue.path.startswith(f"{path.rstrip('/')}/")
+                for issue in plan.diagnostic.issues
+                if issue.authority is ResponseIssueAuthority.MODEL
+            )
+        )
+    )
+    if (
+        len(minimal_paths) > MAX_CORRECTION_FIELDS
+        or len(plan.diagnostic.issues) + len(new_issues) > MAX_CORRECTION_FIELDS
+    ):
+        correction_paths = ("/proposal",)
+        issues = plan.diagnostic.issues
+    else:
+        correction_paths = minimal_paths
+        issues = (*plan.diagnostic.issues, *new_issues)
+    diagnostic = ResponseValidationDiagnostic.model_validate(
+        {
+            **plan.diagnostic.model_dump(mode="json"),
+            "issues": [issue.model_dump(mode="json") for issue in issues],
+            "correction_paths": correction_paths,
+        }
+    )
+    expanded = build_semantic_correction_plan(plan.base_payload, diagnostic)
+    return (
+        None if expanded is None else require_all_semantic_correction_targets(expanded)
     )
 
 

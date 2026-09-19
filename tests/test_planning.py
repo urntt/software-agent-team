@@ -627,6 +627,10 @@ def test_planner_contract_does_not_treat_provenance_as_semantic_relevance() -> N
     assert "typed `agents` graph is the only team-topology owner" in contract
     assert "Every Review-owned task may reference only criteria" in contract
     assert "existing Agent that already owns valid work" in contract
+    assert "FINAL_RELATION_CHECK" in contract
+    assert (
+        "Every task owner and criterion verifier names an existing Agent ID" in contract
+    )
     assert "cannot be used as target users" in contract
     assert (
         "must leave `requirement_ids`, `criterion_ids`, and `decision_ids` empty"
@@ -5142,6 +5146,159 @@ def test_conflicting_decision_references_withhold_atomic_candidates() -> None:
     assert plan is not None
 
     assert planning._bind_planning_correction_candidates(plan) is None
+
+
+def test_duplicate_resolved_question_decisions_open_one_atomic_relation() -> None:
+    """A captured multi-decision failure must not need serial reference repairs."""
+
+    payload = json.loads(response(proposal_response()))
+    proposal = payload["proposal"]
+    for suffix, category in (
+        ("A", "delivery"),
+        ("B", "product_requirement"),
+    ):
+        proposal["decisions"].append(
+            {
+                "id": f"DECISION_QUESTION_{suffix}",
+                "category": category,
+                "provenance": {
+                    "kind": "resolved_question",
+                    "source": "scope_question",
+                },
+                "summary": "The selected product scope.",
+                "rationale": "The user selected one answer.",
+            }
+        )
+    proposal["product_definition"]["target_users"]["decision_ids"] = [
+        "DECISION_QUESTION_A"
+    ]
+    issue = ResponseValidationIssue(
+        path="/proposal/decisions/5",
+        code="value_error",
+        invariant_id="planning_decision_authority_provenance",
+        message="resolved_question provenance belongs to user",
+        authority=ResponseIssueAuthority.MODEL,
+    )
+    diagnostic = ResponseValidationDiagnostic(
+        failure_class=ResponseFailureClass.SEMANTIC_SCHEMA,
+        response_sha256=planning.canonical_json_sha256(payload),
+        issues=(issue,),
+        correction_paths=(issue.path,),
+    )
+    base = planning.build_semantic_correction_plan(payload, diagnostic)
+    assert base is not None
+
+    bound = planning._bind_planning_correction_candidates(base)
+
+    assert bound is not None
+    targets = bound.evidence.target_paths
+    assert "/proposal/decisions" in targets
+    assert issue.path not in targets
+    assert "/proposal/product_definition/target_users/decision_ids" in targets
+    assert "/proposal/assumptions" in targets
+    assert bound.require_all_targets
+    assert any(
+        item.path == "/proposal/decisions"
+        and item.invariant_id == "planning_identity_relation_atomicity"
+        for item in bound.diagnostic.issues
+    )
+
+    corrected = deepcopy(payload)
+    corrected_decisions = corrected["proposal"]["decisions"]
+    corrected_decisions[-2]["category"] = "product_requirement"
+    corrected_decisions.pop()
+    replacements = {}
+    for path in targets:
+        value = corrected
+        for segment in path.split("/")[1:]:
+            value = value[int(segment) if segment.isdigit() else segment]
+        replacements[path] = value
+    submitted = json.loads(
+        correction_response(payload, replacements, target_paths=targets)
+    )
+    applied = planning.apply_semantic_correction_with_evidence(
+        submitted,
+        bound,
+        response_schema=planning._planning_response_schema(),
+    )
+    assert applied.payload == corrected
+    sources = [
+        decision["provenance"]["source"]
+        for decision in applied.payload["proposal"]["decisions"]
+        if decision["provenance"]["kind"] == "resolved_question"
+    ]
+    assert sources.count("scope_question") == 1
+
+
+def test_whole_agent_correction_opens_task_and_verifier_references() -> None:
+    """Changing Agent IDs cannot strand task owners or Review assignments."""
+
+    payload = json.loads(response(proposal_response()))
+    issue = ResponseValidationIssue(
+        path="/proposal/agents",
+        code="planning_semantic_invariant",
+        invariant_id="planning_profile_review_scope_ambiguous",
+        message="A Review Agent's scope is ambiguous.",
+        authority=ResponseIssueAuthority.MODEL,
+    )
+
+    base = planning.build_semantic_correction_plan(
+        payload,
+        ResponseValidationDiagnostic(
+            failure_class=ResponseFailureClass.SEMANTIC_CONTEXT,
+            response_sha256=planning.canonical_json_sha256(payload),
+            issues=(issue,),
+            correction_paths=(issue.path,),
+        ),
+    )
+    assert base is not None
+    bound = planning._bind_planning_correction_candidates(base)
+
+    assert bound is not None
+    assert bound.evidence.target_paths == (
+        "/proposal/acceptance_criteria/0/verification_agent_ids",
+        "/proposal/acceptance_criteria/1/verification_agent_ids",
+        "/proposal/agents",
+        "/proposal/tasks/0/owner_agent_id",
+    )
+    assert bound.require_all_targets
+
+    corrected = deepcopy(payload)
+    proposal = corrected["proposal"]
+    proposal["agents"][0]["id"] = "app_builder"
+    proposal["agents"][2]["id"] = "general_reviewer"
+    proposal["tasks"][0]["owner_agent_id"] = "app_builder"
+    for criterion in proposal["acceptance_criteria"]:
+        criterion["verification_agent_ids"] = [
+            "general_reviewer" if value == "quality_reviewer" else value
+            for value in criterion["verification_agent_ids"]
+        ]
+    replacements = {}
+    for path in bound.evidence.target_paths:
+        value = corrected
+        for segment in path.split("/")[1:]:
+            value = value[int(segment) if segment.isdigit() else segment]
+        replacements[path] = value
+    submitted = json.loads(
+        correction_response(
+            payload, replacements, target_paths=bound.evidence.target_paths
+        )
+    )
+    applied = planning.apply_semantic_correction_with_evidence(
+        submitted,
+        bound,
+        response_schema=planning._planning_response_schema(),
+    )
+    assert applied.payload == corrected
+    agent_ids = {agent["id"] for agent in applied.payload["proposal"]["agents"]}
+    assert all(
+        task["owner_agent_id"] in agent_ids
+        for task in applied.payload["proposal"]["tasks"]
+    )
+    assert all(
+        set(criterion["verification_agent_ids"]) <= agent_ids
+        for criterion in applied.payload["proposal"]["acceptance_criteria"]
+    )
 
 
 def test_response_normalizer_compiles_question_owner_from_category() -> None:

@@ -429,6 +429,12 @@ may perform only these bounded, semantics-preserving normalizations:
   disposition, exact user source, statement, and rationale remain immutable.
   Assumptions use only retained Agent-autonomy decision IDs when decisions
   remain immutable;
+- If one answered question is represented by duplicate user decisions during
+  schema correction, open the decision collection and its ProductDefinition and
+  assumption references as one required correction. When an ambiguous Review
+  scope opens the Agent collection, open existing task-owner and criterion-verifier
+  references in the same bounded correction. Do not force unrelated valid fields
+  into a correction when identities remain stable;
 - If a proposal has more than eight independently targeted schema
   failures, all failures and targets are model-owned descendants of
   `proposal`, and the retained proposal is still an object, treat the complete
@@ -997,7 +1003,7 @@ path as a general `ReviewReport`. None can approve a writer's work outside its
 assigned criteria or advance lifecycle state by itself.
 
 Missing specialist coverage is a model-owned Planning relation defect. The
-diagnostic opens only the Agent collection when a required catalog Agent is
+diagnostic opens the Agent collection when a required catalog Agent is
 absent and the affected criteria's `verification_agent_ids`; targeted correction
 must add or select the specialist before the proposal can be shown for approval.
 Because that correction replaces the complete Agent collection, the Controller
@@ -1215,7 +1221,9 @@ The terminal interaction must remain usable while progress is updating:
   shell escaping. Enter submits the full buffer, while Alt+Enter or Ctrl+O adds
   a newline;
 - Suspend live-panel redraw while the user is typing so keystrokes and text are
-  never overwritten;
+  never overwritten. Buffer terminal progress notices until the editor releases
+  the cursor, then print them in order; cancel an unfinished control editor and
+  restore terminal mode before the run returns to the shell;
 - State when an action will spend model budget, invalidate work, interrupt an
   active attempt, or make cancellation terminal;
 - Adapt to narrow terminals and provide a stable line-mode fallback with no
@@ -1235,9 +1243,10 @@ changing an already approved plan.
 ## User Controls
 
 The controller owns a local authenticated control mailbox. The foreground TTY
-exposes the following palette after plan approval. Typing `/` suspends the live
-panel and opens the shared editable line input; submission or cancellation
-restores the panel:
+exposes the following palette after plan approval. Typing `/` opens the shared
+editable line input without kernel echo; progress output waits until submission
+or cancellation restores the panel. The console restores terminal mode before
+the run exits even if the user is partway through a command:
 
 ```text
 /guide <agent|future|phase:name> <instruction>

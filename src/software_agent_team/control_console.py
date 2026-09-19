@@ -21,7 +21,7 @@ from software_agent_team.controls import (
 )
 from software_agent_team.run_control import RunPhase
 from software_agent_team.teams import TeamPlan
-from software_agent_team.terminal_input import DEFAULT_TERMINAL_INPUT
+from software_agent_team.terminal_input import TerminalInput
 
 
 class ControlConsoleError(ValueError):
@@ -212,8 +212,10 @@ class TerminalControlConsole:
         self.notice_handler = notice_handler or (lambda value: print(value, flush=True))
         self.visibility_handler = visibility_handler
         self.input_activity_handler = input_activity_handler
+        self._terminal_input = TerminalInput()
+        self._custom_line_reader = line_reader is not None
         self.line_reader = line_reader or (
-            lambda initial: DEFAULT_TERMINAL_INPUT.read_line(
+            lambda initial: self._terminal_input.read_line_cancellable(
                 "control> ",
                 default=initial,
             )
@@ -239,8 +241,9 @@ class TerminalControlConsole:
         """Stop polling without consuming input from a later Planning session."""
 
         self._stop.set()
+        self._terminal_input.cancel_active_read()
         if self._thread is not None:
-            self._thread.join(timeout=max(0.5, self.poll_seconds * 2))
+            self._thread.join(timeout=max(2.0, self.poll_seconds * 2))
 
     def _read_loop(self) -> None:
         if self._is_interactive_terminal():
@@ -270,8 +273,11 @@ class TerminalControlConsole:
         descriptor = self.input_stream.fileno()
         original = termios.tcgetattr(descriptor)
         try:
+            tty.setcbreak(descriptor, termios.TCSANOW)
+            console_mode = termios.tcgetattr(descriptor)
+            console_mode[3] &= ~termios.ECHO
+            termios.tcsetattr(descriptor, termios.TCSANOW, console_mode)
             while not self._stop.is_set():
-                tty.setcbreak(descriptor, termios.TCSANOW)
                 ready, _, _ = select.select(
                     [descriptor],
                     [],
@@ -281,7 +287,6 @@ class TerminalControlConsole:
                 if not ready:
                     continue
                 first = os.read(descriptor, 1)
-                termios.tcsetattr(descriptor, termios.TCSADRAIN, original)
                 if first in {b"", b"\x04"}:
                     return
                 if first in {b"\r", b"\n"}:
@@ -291,6 +296,8 @@ class TerminalControlConsole:
                         "Run controls begin with '/'. Type /help for examples."
                     )
                     continue
+                if self._stop.is_set():
+                    return
                 self._set_input_active(True)
                 try:
                     line = self.line_reader("/")
@@ -324,7 +331,11 @@ class TerminalControlConsole:
 
     def _is_interactive_terminal(self) -> bool:
         try:
-            return self.input_stream.isatty() and self.input_stream.fileno() >= 0
+            return (
+                self.input_stream.isatty()
+                and self.input_stream.fileno() >= 0
+                and (self._custom_line_reader or sys.stdout.isatty())
+            )
         except (AttributeError, OSError):
             return False
 

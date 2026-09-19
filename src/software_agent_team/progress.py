@@ -1285,6 +1285,7 @@ class TerminalProgressRenderer:
         self._rendered_checkpoint_digests: dict[tuple[str, int, int], str] = {}
         self._live_line_count = 0
         self._live_suspensions = 0
+        self._pending_interaction_lines: list[str] = []
         self._last_live_elapsed_signature: tuple[
             tuple[tuple[str, int, int], int], ...
         ] = ()
@@ -1381,13 +1382,17 @@ class TerminalProgressRenderer:
                 self._clear_live_locked()
 
     def resume_live(self) -> None:
-        """Resume a previously suspended live panel."""
+        """Flush progress after the interactive editor releases the cursor."""
 
         with self._lock:
             if self._live_suspensions == 0:
                 raise RuntimeError("progress live rendering is not suspended")
             self._live_suspensions -= 1
             if self._live_suspensions == 0:
+                for line in self._pending_interaction_lines:
+                    print(line, file=self.output)
+                self._pending_interaction_lines.clear()
+                self.output.flush()
                 self._draw_live_locked()
 
     def write_notice(self, value: str) -> None:
@@ -1759,6 +1764,9 @@ class TerminalProgressRenderer:
 
     def _print_block(self, lines: list[str]) -> None:
         with self._lock:
+            if self._live_suspensions:
+                self._pending_interaction_lines.extend(lines)
+                return
             self._clear_live_locked()
             for line in lines:
                 print(line, file=self.output)
