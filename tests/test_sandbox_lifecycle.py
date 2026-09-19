@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from software_agent_team.artifacts import AgentRole, ArtifactKind
+from software_agent_team.docker_engine import DockerEngineError
 from software_agent_team.execution import stable_agent_session_key, stable_session_key
 from software_agent_team.sandbox_lifecycle import (
     SandboxCleanupError,
@@ -109,6 +110,28 @@ def test_resource_observation_is_read_only_and_ignores_other_openclaw(
     assert observation.running == ()
     assert observation.stopped == observation.containers
     assert all("rm" not in call for call in runner.calls)
+
+
+def test_sandbox_cleanup_refuses_daemon_drift_before_listing_containers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = ScriptedRunner([completed()])
+
+    def reject_changed_engine() -> None:
+        raise DockerEngineError("daemon identity changed")
+
+    monkeypatch.setattr(
+        "software_agent_team.sandbox_lifecycle.verify_bound_docker_engine",
+        reject_changed_engine,
+    )
+    with pytest.raises(SandboxCleanupError, match="recorded Docker engine"):
+        inspect_sat_sandbox_resources(
+            sandbox_binary="docker",
+            state_root=(tmp_path / "state").resolve(),
+            runner=runner,
+        )
+
+    assert runner.calls == []
 
 
 def test_cleanup_with_no_openclaw_containers_is_successful(tmp_path: Path) -> None:

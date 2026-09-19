@@ -37,6 +37,7 @@ from software_agent_team.artifacts import (
     RuntimeToolRejection,
     validate_tool_evidence_collection,
 )
+from software_agent_team.docker_engine import verify_bound_docker_engine
 from software_agent_team.invocation_lifecycle import (
     InitializationCheckpoint,
     InitializationLivenessEvidence,
@@ -3268,6 +3269,7 @@ class OpenClawSubprocessExecutor:
                 )
             except OpenClawSessionEvidenceError:
                 initialization_baseline_error = True
+        verify_bound_docker_engine()
         process = subprocess.Popen(
             list(command),
             stdout=subprocess.PIPE,

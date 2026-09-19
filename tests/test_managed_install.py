@@ -11,8 +11,14 @@ from pathlib import Path
 
 import pytest
 
+import software_agent_team.docker_engine as docker_engine_module
 import software_agent_team.managed_install as managed_install_module
 import software_agent_team.schema_compatibility as schema_compatibility_module
+from software_agent_team.docker_engine import (
+    DockerEngineIdentity,
+    current_docker_engine,
+    save_staged_docker_engine,
+)
 from software_agent_team.integrity import canonical_model_sha256
 from software_agent_team.managed_install import (
     MANAGED_ROOT_MARKER_NAME,
@@ -36,6 +42,29 @@ from software_agent_team.versioning import (
     inspect_software_version,
     load_installation_record,
 )
+
+
+@pytest.fixture(autouse=True)
+def stub_selected_docker_engine(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep managed transaction tests independent of a machine's Docker daemon."""
+
+    selected = DockerEngineIdentity(
+        endpoint="unix:///tmp/sat-managed-install-test.sock",
+        daemon_id="test-daemon",
+        rootless=False,
+        owner_uid=os.getuid(),
+        socket_uid=os.getuid(),
+        cgroup_driver="systemd",
+        cgroup_version="2",
+    )
+    monkeypatch.setattr(
+        managed_install_module,
+        "discover_docker_engine",
+        lambda _environment: selected,
+    )
+    monkeypatch.setattr(
+        docker_engine_module, "verify_docker_engine", lambda _identity: None
+    )
 
 
 def git(repository: Path, *arguments: str) -> str:
@@ -1723,6 +1752,11 @@ def test_successful_stage_releases_image_anchor_after_activation(
                 for name, image_id in references.items()
             )
             references[reference] = candidate_id
+            assert cwd is not None
+            (cwd / ".sat").mkdir(exist_ok=True)
+            engine = current_docker_engine()
+            assert engine is not None
+            save_staged_docker_engine(cwd, engine)
         subprocess.run(
             list(command),
             cwd=cwd,

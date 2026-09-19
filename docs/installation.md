@@ -17,8 +17,26 @@ user or organization must decide that the following are permitted:
 - Generated-code execution inside SAT's restricted containers.
 
 The installer does not install or start an OS-level Docker daemon. Install
-Docker first and make it available to the unprivileged Linux/WSL user. The
-installer and every `sat` launch then check that condition directly.
+Docker first and make a local Linux-container daemon available to the
+unprivileged Linux/WSL user. The installer and every `sat` launch check the
+selected daemon directly.
+
+An already configured [rootless Docker daemon](https://docs.docker.com/engine/security/rootless/)
+is supported without membership in the system `docker` group. Select its
+context or set `DOCKER_HOST=unix://$XDG_RUNTIME_DIR/docker.sock` before the
+first install. SAT records the canonical local socket and daemon identity;
+subsequent `sat`, update, and quality-gate commands use that recorded daemon
+even if the shell's Docker context changes. A remote TCP/SSH Docker endpoint
+is not an installation target. Rootless mode requires working user namespaces,
+`newuidmap`/`newgidmap`, sufficient subordinate UID/GID ranges, and cgroup v2
+with systemd delegation that actually enforces memory, PID, and CPU limits.
+SAT proves the isolation and limits with a restricted container before
+accepting the engine. See the Docker
+[rootless setup and limitations](https://docs.docker.com/engine/security/rootless/tips/)
+for host prerequisites. SAT does not add users to groups, install or start
+Docker, change subordinate-ID allocation, enable lingering, or request sudo.
+If the host does not provide those prerequisites, its administrator must
+prepare the daemon or you must use a different supported host.
 
 SAT pins Python 3.12, OpenClaw 2026.7.1-2, OpenClaw's local Node.js 24.19.0
 runtime, Python dependencies through `uv.lock`, and the generated-code sandbox
@@ -91,7 +109,7 @@ The bootstrap:
    installation checks before changing the active application;
 6. Atomically activates the verified version through
    `${XDG_DATA_HOME:-$HOME/.local/share}/software-agent-team/app`, records its
-   provenance, and removes the temporary helper.
+   provenance and selected Docker engine, and removes the temporary helper.
 
 The installation then:
 
@@ -646,6 +664,17 @@ availability compares only the numeric release version. A different Git
 revision bound to the same stable number is an identity conflict, not an update
 to accept. Dev-channel checks may report an exact ref revision change, but that
 commit-only drift is not a normal stable update notification.
+
+The managed installation records the exact local Docker socket, daemon ID,
+owner, and cgroup mode with the active release. An update keeps that engine even
+if your shell selects another context. When an older updater activates a release
+that introduces the engine record, the staged candidate leaves a private
+engine snapshot; the first normal command verifies it and atomically upgrades
+the legacy record. `sat --version` stays read-only and does not perform that
+migration. If the recorded daemon has been replaced, SAT refuses Docker work
+rather than silently adopting the new one. Preserve configuration and data with
+`sat-uninstall`, then install against the intended daemon to establish a new
+binding.
 
 Switching channels is separate and always explicit:
 

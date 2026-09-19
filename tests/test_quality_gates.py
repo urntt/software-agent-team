@@ -11,6 +11,7 @@ import pytest
 from pydantic import ValidationError
 
 from software_agent_team.artifacts import AgentRole
+from software_agent_team.docker_engine import DockerEngineIdentity, bound_docker_engine
 from software_agent_team.quality_gates import (
     BenchmarkManifest,
     DockerSandboxBackend,
@@ -448,6 +449,38 @@ def test_runner_resolves_the_quality_gate_user_to_the_host_identity(
     runner.run(iteration=1)
 
     assert {call.sandbox.user for call in backend.invocations} == {"1234:5678"}
+
+
+def test_runner_maps_rootless_container_root_to_the_unprivileged_host_user(
+    configuration,
+    run_paths: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_directory, workspace = run_paths
+    backend = FakeSandboxBackend(successful_executions())
+    backend.kind = "docker"
+    monkeypatch.setattr(os, "getuid", lambda: 1234)
+    monkeypatch.setattr(os, "getgid", lambda: 5678)
+    engine = DockerEngineIdentity(
+        endpoint="unix:///run/user/1234/docker.sock",
+        daemon_id="rootless-daemon",
+        rootless=True,
+        owner_uid=1234,
+        socket_uid=1234,
+        cgroup_driver="systemd",
+        cgroup_version="2",
+    )
+    runner = QualityGateRunner(
+        configuration,
+        run_directory=run_directory,
+        workspace=workspace,
+        backend=backend,
+    )
+
+    with bound_docker_engine(engine, verify=False):
+        runner.run(iteration=1)
+
+    assert {call.sandbox.user for call in backend.invocations} == {"0:0"}
 
 
 def test_runner_rejects_root_for_live_quality_gates(

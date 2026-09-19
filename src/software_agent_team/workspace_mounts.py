@@ -13,6 +13,13 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+from software_agent_team.docker_engine import (
+    DockerEngineError,
+    load_staged_docker_engine,
+    verify_docker_engine,
+)
+from software_agent_team.versioning import load_installation_record
+
 SANDBOX_SKILL_MOUNT = Path(".openclaw/sandbox-skills/skills")
 _SANDBOX_SKILL_PARTS = (".openclaw", "sandbox-skills", "skills")
 _CONTAINER_WORKSPACE = PurePosixPath("/sat-workspace")
@@ -263,6 +270,21 @@ def repair_legacy_sandbox_skill_mountpoints(
     candidates = _legacy_repair_candidates(workspaces_root)
     if not candidates:
         return ()
+
+    record_path = os.environ.get("SAT_INSTALL_METADATA_PATH")
+    if record_path:
+        try:
+            record = load_installation_record(Path(record_path))
+            if record is None:
+                raise WorkspaceMountError("managed installation record is missing")
+            engine = record.docker_engine or load_staged_docker_engine(
+                policy_path.parent.parent
+            )
+            verify_docker_engine(engine)
+        except (DockerEngineError, OSError, ValueError) as error:
+            raise WorkspaceMountError(
+                "the recorded Docker engine is unavailable for workspace repair"
+            ) from error
 
     image = _sandbox_image(policy_path)
     inspected = _run_command(

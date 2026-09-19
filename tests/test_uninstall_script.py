@@ -14,6 +14,10 @@ from pathlib import Path
 
 import pytest
 
+from software_agent_team.docker_engine import (
+    DockerEngineIdentity,
+    save_staged_docker_engine,
+)
 from software_agent_team.managed_install import (
     MANAGED_ROOT_MARKER_NAME,
     ManagedApplicationMarker,
@@ -214,6 +218,18 @@ def prepare_managed_v2_installation(
         installed_at=datetime(2026, 9, 4, tzinfo=UTC),
     )
     save_installation_record(record, installation_record)
+    save_staged_docker_engine(
+        release,
+        DockerEngineIdentity(
+            endpoint="unix:///tmp/sat-test-docker.sock",
+            daemon_id="test-daemon",
+            rootless=False,
+            owner_uid=os.getuid(),
+            socket_uid=os.getuid(),
+            cgroup_driver="systemd",
+            cgroup_version="2",
+        ),
+    )
     install_bin.mkdir(parents=True, exist_ok=True)
     for existing in (old_bin / "sat", old_bin / "sat-uninstall"):
         existing.unlink(missing_ok=True)

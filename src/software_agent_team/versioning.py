@@ -18,10 +18,11 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from software_agent_team.docker_engine import DockerEngineIdentity
 from software_agent_team.schema_compatibility import SchemaSupport
 
 DISTRIBUTION_NAME = "software-agent-team"
-INSTALLATION_RECORD_SCHEMA_VERSION = 1
+INSTALLATION_RECORD_SCHEMA_VERSION = 2
 INSTALLATION_RECORD_ENVIRONMENT_VARIABLE = "SAT_INSTALL_METADATA_PATH"
 _RELEASE_VERSION_PATTERN = re.compile(
     r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$"
@@ -82,9 +83,7 @@ class InstallationRecord(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[INSTALLATION_RECORD_SCHEMA_VERSION] = (
-        INSTALLATION_RECORD_SCHEMA_VERSION
-    )
+    schema_version: Literal[1, 2] = 1
     install_mode: Literal[InstallMode.MANAGED] = InstallMode.MANAGED
     channel: ManagedChannel
     release_version: str
@@ -94,6 +93,7 @@ class InstallationRecord(BaseModel):
     application_path: str = Field(min_length=1, max_length=4_096)
     artifact_digest: str | None = None
     installed_at: datetime
+    docker_engine: DockerEngineIdentity | None = None
 
     @field_validator("release_version")
     @classmethod
@@ -139,6 +139,10 @@ class InstallationRecord(BaseModel):
 
     @model_validator(mode="after")
     def validate_channel_ref(self) -> InstallationRecord:
+        if (self.schema_version == 1) != (self.docker_engine is None):
+            raise ValueError(
+                "installation schema v2 requires an exact Docker engine binding"
+            )
         if self.channel is ManagedChannel.STABLE:
             expected = f"v{self.release_version}"
             if self.source_ref != expected:
@@ -246,9 +250,10 @@ def save_installation_record(
         raise VersionIdentityError(
             f"installation record must be a regular file: {destination}"
         )
-    content = (
-        json.dumps(record.model_dump(mode="json"), indent=2, ensure_ascii=False) + "\n"
-    ).encode()
+    payload = record.model_dump(
+        mode="json", exclude={"docker_engine"} if record.schema_version == 1 else None
+    )
+    content = (json.dumps(payload, indent=2, ensure_ascii=False) + "\n").encode()
     temporary = destination.parent / f".{destination.name}.{uuid4().hex}.tmp"
     try:
         descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -389,11 +394,13 @@ def make_installation_record(
     repository_url: str,
     application_path: Path,
     artifact_digest: str | None,
+    docker_engine: DockerEngineIdentity | None = None,
     installed_at: datetime | None = None,
 ) -> InstallationRecord:
     """Construct an activation record with one injectable timestamp."""
 
     return InstallationRecord(
+        schema_version=2 if docker_engine is not None else 1,
         channel=channel,
         release_version=release_version,
         source_revision=source_revision,
@@ -402,6 +409,7 @@ def make_installation_record(
         application_path=str(application_path.absolute()),
         artifact_digest=artifact_digest,
         installed_at=installed_at or datetime.now(UTC),
+        docker_engine=docker_engine,
     )
 
 

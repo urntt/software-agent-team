@@ -178,7 +178,7 @@ esac
         fake_bin / "uv",
         """#!/usr/bin/env bash
 set -euo pipefail
-printf '%s\n' "$*" >> "${FAKE_UV_LOG:?}"
+printf 'stage=%s %s\n' "${SAT_INSTALL_STAGE_ONLY-unset}" "$*" >> "${FAKE_UV_LOG:?}"
 if [[ "$*" == "sync --locked" ]]; then
   mkdir -p .venv/bin
   printf '%s\n' \
@@ -186,6 +186,23 @@ if [[ "$*" == "sync --locked" ]]; then
     'printf "sat %s\\n" "$*" >> "${FAKE_UV_LOG:?}"' \
     'exit 0' > .venv/bin/sat
   chmod 755 .venv/bin/sat
+  printf '%s\n' \
+    '#!/usr/bin/env bash' \
+    'if [[ "${2:-}" == *save_staged_docker_engine* ]]; then' \
+    '  mkdir -p .sat' \
+    '  printf "%s\\n" "{}" > .sat/docker-engine.json' \
+    '  chmod 600 .sat/docker-engine.json' \
+    '  if [[ "${FAKE_ROOTLESS_DOCKER:-0}" == "1" ]]; then' \
+    '    printf "unix:///tmp/sat-test-docker.sock\\t0:0\\n"' \
+    '  else' \
+    '    printf "unix:///tmp/sat-test-docker.sock\\t1000:1000\\n"' \
+    '  fi' \
+    'elif [[ "${2:-}" == *probe_sandbox_runtime* ]]; then' \
+    '  printf "rootless contract probe\\n" >> "${FAKE_UV_LOG:?}"' \
+    '  [[ "${FAKE_ROOTLESS_PROBE_FAIL:-0}" != "1" ]] || exit 1' \
+    'fi' \
+    'exit 0' > .venv/bin/python
+  chmod 755 .venv/bin/python
 elif [[ "${1:-}" == "run" && "${2:-}" == "--frozen" && \
         "${3:-}" == "python" && "${4:-}" == "-c" ]]; then
   echo sat-python-quality:phase1-v9
@@ -324,6 +341,7 @@ def test_managed_installer_leaves_the_next_action_to_the_bootstrap(
     assert all(line.startswith("managed=unset ") for line in docker_calls)
     uv_calls = uv_log.read_text(encoding="utf-8")
     assert "run --frozen sat validate-config" in uv_calls
+    assert "stage=0 run --frozen sat validate-config" in uv_calls
     assert "sat _managed-image-transition prepare" in uv_calls
     assert "sat _managed-image-transition finalize" in uv_calls
     assert "ruff" not in uv_calls
@@ -352,6 +370,48 @@ def test_stage_only_managed_install_verifies_without_touching_launchers(
     calls = docker_log.read_text(encoding="utf-8").splitlines()
     assert calls
     assert all("managed=unset" in line for line in calls)
+    assert "stage=1 run --frozen sat validate-config" in (
+        Path(environment["FAKE_UV_LOG"]).read_text(encoding="utf-8")
+    )
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="installer supports Linux/WSL")
+def test_rootless_managed_install_proves_enforcement_before_activation(
+    tmp_path: Path,
+) -> None:
+    checkout = prepare_checkout(tmp_path)
+    (checkout / ".sat-managed-install").write_text('{"schema_version":2}\n')
+    environment, _, uv_log, docker_log = fake_environment(tmp_path, checkout)
+    environment["SAT_MANAGED_INSTALL"] = "1"
+    environment["SAT_INSTALL_STAGE_ONLY"] = "1"
+    environment["FAKE_ROOTLESS_DOCKER"] = "1"
+
+    completed = run_installer(checkout, environment)
+
+    assert completed.returncode == 0, completed.stderr
+    assert "--user 0:0" in docker_log.read_text()
+    assert "rootless contract probe" in uv_log.read_text()
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="installer supports Linux/WSL")
+def test_rootless_managed_install_refuses_missing_enforcement(
+    tmp_path: Path,
+) -> None:
+    checkout = prepare_checkout(tmp_path)
+    (checkout / ".sat-managed-install").write_text('{"schema_version":2}\n')
+    environment, _, _, _ = fake_environment(tmp_path, checkout)
+    environment["SAT_MANAGED_INSTALL"] = "1"
+    environment["SAT_INSTALL_STAGE_ONLY"] = "1"
+    environment["FAKE_ROOTLESS_DOCKER"] = "1"
+    environment["FAKE_ROOTLESS_PROBE_FAIL"] = "1"
+
+    completed = run_installer(checkout, environment)
+
+    assert completed.returncode != 0
+    assert "rootless Docker isolation or cgroup enforcement is unavailable" in (
+        completed.stderr
+    )
+    assert "install: Software Agent Team is ready" not in completed.stdout
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="installer supports Linux/WSL")

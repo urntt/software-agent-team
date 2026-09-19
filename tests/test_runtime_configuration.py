@@ -14,6 +14,7 @@ from pydantic import ValidationError
 import software_agent_team.runtime_configuration as runtime_configuration
 from software_agent_team.budgets import AgentBudget
 from software_agent_team.configuration import READ_ONLY_ROLES, WRITE_ROLES
+from software_agent_team.docker_engine import DockerEngineIdentity, bound_docker_engine
 from software_agent_team.runtime_configuration import (
     OpenClawModelInspection,
     RuntimeConfigurationError,
@@ -21,6 +22,7 @@ from software_agent_team.runtime_configuration import (
     has_model_compatibility,
     inspect_openclaw_model,
     inspect_runtime_preflight,
+    inspect_sandbox_image,
     materialize_model_check_configuration,
     materialize_run_configuration,
     persist_runtime_preflight,
@@ -974,6 +976,90 @@ def test_materialization_rejects_root_host_user(tmp_path: Path) -> None:
             sandbox_image="sat-agent:phase1",
             sandbox_user="0:0",
         )
+
+
+def test_materialized_agent_config_uses_namespace_root_on_a_bound_rootless_engine(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    engine = DockerEngineIdentity(
+        endpoint="unix:///run/user/1001/docker.sock",
+        daemon_id="rootless-daemon",
+        rootless=True,
+        owner_uid=1001,
+        socket_uid=1001,
+        cgroup_driver="systemd",
+        cgroup_version="2",
+    )
+    monkeypatch.setattr(runtime_configuration, "current_docker_engine", lambda: engine)
+    monkeypatch.setattr(runtime_configuration.os, "getuid", lambda: 1001)
+    monkeypatch.setattr(runtime_configuration.os, "getgid", lambda: 1001)
+    destination = tmp_path / "runtime.json"
+
+    materialize_run_configuration(
+        OPENCLAW_TEMPLATE,
+        destination,
+        manifest=load_team_manifest(TEAM_CONFIG),
+        workspace=workspace,
+        sandbox_image="sat-agent:phase1",
+        model="provider/model",
+    )
+
+    payload = json.loads(destination.read_text())
+    assert payload["agents"]["defaults"]["sandbox"]["docker"]["user"] == "0:0"
+
+
+def test_bound_docker_preflight_overrides_an_explicit_foreign_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = DockerEngineIdentity(
+        endpoint="unix:///run/user/1001/docker.sock",
+        daemon_id="rootless-daemon",
+        rootless=True,
+        owner_uid=os.getuid(),
+        socket_uid=os.getuid(),
+        cgroup_driver="systemd",
+        cgroup_version="2",
+    )
+    calls: list[tuple[str, ...]] = []
+
+    def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        selected = kwargs["env"]
+        assert isinstance(selected, dict)
+        assert selected["DOCKER_HOST"] == engine.endpoint
+        assert "DOCKER_CONTEXT" not in selected
+        calls.append(tuple(argv))
+        if argv[1] == "--version":
+            return subprocess.CompletedProcess(argv, 0, "Docker version test\n", "")
+        if argv[1:3] == ["image", "inspect"]:
+            return subprocess.CompletedProcess(argv, 0, "sha256:" + "a" * 64, "")
+        return subprocess.CompletedProcess(argv, 125, "", "unavailable")
+
+    monkeypatch.setattr(runtime_configuration.shutil, "which", lambda _name: "docker")
+    monkeypatch.setattr(
+        runtime_configuration, "verify_docker_engine", lambda _engine: None
+    )
+    monkeypatch.setattr(runtime_configuration.subprocess, "run", fake_run)
+    foreign = {
+        "DOCKER_HOST": "unix:///var/run/docker.sock",
+        "DOCKER_CONTEXT": "default",
+    }
+    with bound_docker_engine(engine, verify=False):
+        image = inspect_sandbox_image(
+            sandbox_binary="docker",
+            sandbox_image="sat-python-quality:phase1-v9",
+            environment=foreign,
+        )
+        probe = probe_sandbox_runtime(
+            sandbox_binary="docker",
+            sandbox_image_id=image.sandbox_image_id,
+            environment=foreign,
+        )
+
+    assert image.sandbox_image_present
+    assert not probe.sandbox_container_ready
+    assert any(command[1] == "run" for command in calls)
 
 
 def test_model_inspection_requires_the_exact_available_catalog_entry(

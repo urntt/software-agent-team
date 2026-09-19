@@ -29,6 +29,10 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from software_agent_team.artifacts import AgentRole, CommandEvidence, TaskBrief
 from software_agent_team.budgets import AgentBudget
+from software_agent_team.docker_engine import (
+    current_docker_engine,
+    verify_bound_docker_engine,
+)
 
 QUALITY_GATE_SCHEMA_VERSION = 1
 _MAX_MANIFEST_BYTES = 1_048_576
@@ -808,6 +812,12 @@ class DockerSandboxBackend:
             raise QualityGateConfigurationError(
                 "Docker sandbox host user must be resolved before execution"
             )
+        if invocation.sandbox.user == "0:0" and not (
+            (engine := current_docker_engine()) is not None and engine.rootless
+        ):
+            raise QualityGateConfigurationError(
+                "container root is allowed only on a verified rootless Docker engine"
+            )
         workspace = invocation.workspace.resolve(strict=True)
         if not workspace.is_dir() or "," in str(workspace):
             raise QualityGateConfigurationError("workspace must be a safe directory")
@@ -877,6 +887,7 @@ class DockerSandboxBackend:
         return tuple(argv)
 
     def _cleanup_container(self, container_name: str) -> None:
+        verify_bound_docker_engine()
         try:
             subprocess.run(
                 [self.executable, "rm", "--force", container_name],
@@ -894,6 +905,7 @@ class DockerSandboxBackend:
 
         container_name = f"sat-qg-{uuid.uuid4().hex[:16]}"
         argv = self.build_argv(invocation, container_name=container_name)
+        verify_bound_docker_engine()
         try:
             result = _run_bounded_process(
                 argv,
@@ -1131,6 +1143,9 @@ class QualityGateRunner:
             raise QualityGateConfigurationError(
                 "live quality gates require an unprivileged host user"
             )
+        engine = current_docker_engine()
+        if engine is not None and engine.rootless:
+            return self.sandbox.model_copy(update={"user": "0:0"})
         return self.sandbox.model_copy(update={"user": f"{uid}:{gid}"})
 
     def _working_directory(self, gate: QualityGateDefinition) -> PurePosixPath:

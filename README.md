@@ -17,7 +17,8 @@ Before installing SAT, you need:
 
 - Linux, or Windows with WSL;
 - Git, Bash, and curl;
-- Docker running Linux containers and available to your normal user account;
+- A local Docker daemon running Linux containers and available to your normal
+  user account (a preconfigured rootless daemon is supported);
 - Network access and credentials for a supported model provider; and
 - Permission to send your request and relevant generated-project context to
   that provider.

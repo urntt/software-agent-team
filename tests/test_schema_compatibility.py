@@ -68,6 +68,10 @@ def test_registry_declares_only_intentional_historical_read_support() -> None:
     assert run_event.supports(2)
 
     for family, item in support.items():
+        if family is SchemaFamily.INSTALLATION:
+            assert item.minimum_readable == 1
+            assert item.current == item.maximum_readable == 2
+            continue
         if family is SchemaFamily.TEAM_PLAN:
             assert item.minimum_readable == 1
             assert item.current == item.maximum_readable == TEAM_PLAN_SCHEMA_VERSION

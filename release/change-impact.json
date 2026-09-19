@@ -1,17 +1,12 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.3.2",
-  "target_version": "0.3.3",
+  "baseline_version": "0.3.3",
+  "target_version": "0.4.0",
   "changes": [
     {
-      "id": "interruptible-runtime-controls",
-      "impact": "patch",
-      "summary": "Keep runtime control editing and progress output from racing for the terminal, and cancel unfinished input before run shutdown"
-    },
-    {
-      "id": "atomic-planning-identity-correction",
-      "impact": "patch",
-      "summary": "Correct duplicate answered-question decisions and ambiguous Agent scope with their dependent references as one bounded Planning edit"
+      "id": "managed-rootless-docker-engine",
+      "impact": "minor",
+      "summary": "Support a preconfigured user-owned rootless Docker daemon with persisted exact engine identity, mapped workspace access, and verified isolation and cgroup enforcement"
     }
   ]
 }

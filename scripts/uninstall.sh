@@ -32,6 +32,7 @@ task_managed_install=0
 task_managed_root=""
 task_versions_root=""
 task_installation_record=""
+task_docker_endpoint=""
 task_update_lock_fd=""
 task_application_link=""
 
@@ -109,12 +110,19 @@ release_path, root_path, release_root, versions_root, managed_root = map(
 )
 
 
-def load_exact(path: Path, keys: set[str], label: str) -> dict[str, object]:
+def load_object(path: Path, label: str) -> dict[str, object]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
         raise SystemExit(f"{label} is unreadable: {error}")
-    if not isinstance(payload, dict) or set(payload) != keys:
+    if not isinstance(payload, dict):
+        raise SystemExit(f"{label} has an unsupported schema")
+    return payload
+
+
+def load_exact(path: Path, keys: set[str], label: str) -> dict[str, object]:
+    payload = load_object(path, label)
+    if set(payload) != keys:
         raise SystemExit(f"{label} has an unsupported schema")
     return payload
 
@@ -179,9 +187,7 @@ if os.path.lexists(record_path):
     record_stat = os.lstat(record_path)
     if not stat.S_ISREG(record_stat.st_mode):
         raise SystemExit("installation record is not a regular file")
-    record = load_exact(
-        record_path,
-        {
+    record_keys = {
             "schema_version",
             "install_mode",
             "channel",
@@ -192,10 +198,16 @@ if os.path.lexists(record_path):
             "application_path",
             "artifact_digest",
             "installed_at",
-        },
-        "installation record",
+    }
+    record_schema = load_object(record_path, "installation record").get(
+        "schema_version"
     )
-    if record["schema_version"] != 1 or record["install_mode"] != "managed":
+    if record_schema == 2:
+        record_keys.add("docker_engine")
+    elif record_schema != 1:
+        raise SystemExit("installation record schema is unsupported")
+    record = load_exact(record_path, record_keys, "installation record")
+    if record["install_mode"] != "managed":
         raise SystemExit("installation record schema is unsupported")
     shared = {
         "channel",
@@ -209,8 +221,24 @@ if os.path.lexists(record_path):
         raise SystemExit("installation record and release marker disagree")
     if record["application_path"] != str(application):
         raise SystemExit("installation record belongs to a different application")
+    if record_schema == 2:
+        from software_agent_team.docker_engine import DockerEngineIdentity
 
-print(f"{application}\t{record_path}\t{bin_directory}")
+        engine = DockerEngineIdentity.model_validate(record["docker_engine"])
+        if engine.owner_uid != os.getuid():
+            raise SystemExit("Docker engine binding belongs to another user")
+        docker_endpoint = engine.endpoint
+    else:
+        from software_agent_team.docker_engine import load_staged_docker_engine
+
+        engine = load_staged_docker_engine(release_root)
+        if engine.owner_uid != os.getuid():
+            raise SystemExit("Docker engine binding belongs to another user")
+        docker_endpoint = engine.endpoint
+else:
+    docker_endpoint = ""
+
+print(f"{application}\t{record_path}\t{bin_directory}\t{docker_endpoint}")
 PY
   )"; then
     fail "managed installation metadata cannot be verified"
@@ -218,7 +246,8 @@ PY
   local task_record_path
   local task_recorded_bin
   IFS=$'\t' read -r \
-    task_application_link task_record_path task_recorded_bin <<<"$task_metadata"
+    task_application_link task_record_path task_recorded_bin task_docker_endpoint \
+    <<<"$task_metadata"
   [[ -n "$task_application_link" && -n "$task_record_path" && \
     -n "$task_recorded_bin" ]] || \
     fail "managed installation metadata is incomplete"
@@ -329,6 +358,11 @@ if [[ -e "$task_managed_marker" || -L "$task_managed_marker" ]]; then
   fi
 fi
 if [[ "$task_managed_install" == "2" ]]; then
+  export SAT_INSTALL_METADATA_PATH="$task_installation_record"
+  if [[ -n "$task_docker_endpoint" ]]; then
+    export DOCKER_HOST="$task_docker_endpoint"
+    unset DOCKER_CONTEXT
+  fi
   acquire_managed_lifecycle_lock
   [[ "$task_managed_root" != "/" && "$task_managed_root" != "$HOME" && \
     "$task_managed_root" != "$(dirname "$HOME")" ]] || \

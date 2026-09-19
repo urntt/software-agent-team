@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 import time
 from collections.abc import Mapping
 from contextlib import suppress
@@ -18,6 +19,14 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from software_agent_team.configuration import load_openclaw_template
+from software_agent_team.docker_engine import (
+    DockerEngineError,
+    DockerEngineIdentity,
+    current_docker_engine,
+    discover_docker_engine,
+    engine_environment,
+    verify_docker_engine,
+)
 from software_agent_team.model_costs import CachePriceSupport, CachePricing
 from software_agent_team.model_metadata import ModelMetadataSource
 from software_agent_team.model_routing import ModelProfile
@@ -716,6 +725,12 @@ def inspect_sandbox_image(
         raise RuntimeConfigurationError(
             f"sandbox binary is unavailable: {sandbox_binary}"
         )
+    engine = current_docker_engine()
+    if engine is not None:
+        verify_docker_engine(engine)
+        environment = engine_environment(
+            engine, os.environ if environment is None else environment
+        )
     try:
         sandbox_version = subprocess.run(
             [resolved_sandbox, "--version"],
@@ -765,6 +780,169 @@ def inspect_sandbox_image(
     )
 
 
+_ROOTLESS_CONTRACT_SCRIPT = """
+import os
+from pathlib import Path
+
+def require(condition, message):
+    if not condition:
+        raise SystemExit(message)
+
+require(Path('/workspace/marker').read_text() == 'sat-rootless-probe\\n', 'bind read')
+mapping_line = Path('/proc/self/uid_map').read_text().splitlines()[0]
+mapping = tuple(int(value) for value in mapping_line.split())
+require(mapping == (0, int(os.environ['SAT_HOST_UID']), 1), 'UID mapping')
+status_lines = Path('/proc/self/status').read_text().splitlines()
+status = dict(line.split(':', 1) for line in status_lines if ':' in line)
+require(int(status['CapEff'].strip(), 16) == 0, 'capabilities')
+require(status['NoNewPrivs'].strip() == '1', 'no-new-privileges')
+memory_limit = Path('/sys/fs/cgroup/memory.max').read_text().strip()
+require(memory_limit == str(512 * 1024 * 1024), 'memory limit')
+require(Path('/sys/fs/cgroup/pids.max').read_text().strip() == '128', 'PID limit')
+quota, period = map(int, Path('/sys/fs/cgroup/cpu.max').read_text().split())
+require(quota == period and quota > 0, 'CPU limit')
+require(not Path('/sys/class/net/eth0').exists(), 'network isolation')
+for target in ('/workspace/write-forbidden', '/etc/sat-write-forbidden'):
+    try:
+        Path(target).write_text('forbidden')
+    except OSError:
+        pass
+    else:
+        raise SystemExit('read-only boundary')
+Path('/tmp/sat-write-ok').write_text('ok')
+require(Path('/tmp/sat-write-ok').read_text() == 'ok', 'tmpfs write')
+print('SAT_ROOTLESS_CONTRACT_OK')
+"""
+
+
+def _probe_rootless_sandbox_contract(
+    *,
+    sandbox_binary: str,
+    sandbox_image_id: str,
+    engine: DockerEngineIdentity,
+    timeout_seconds: int,
+    environment: Mapping[str, str] | None,
+) -> None:
+    """Prove actual namespace, mount, privilege, and cgroup enforcement."""
+
+    verify_docker_engine(engine)
+    sandbox = tempfile.TemporaryDirectory(prefix="sat-rootless-contract-")
+    name = f"sat-rootless-contract-{uuid4().hex}"
+    selected_environment = os.environ if environment is None else environment
+    try:
+        workspace = Path(sandbox.name)
+        marker = workspace / "marker"
+        marker.write_text("sat-rootless-probe\n", encoding="utf-8")
+        marker.chmod(0o600)
+        command = [
+            sandbox_binary,
+            "--host",
+            engine.endpoint,
+            "run",
+            "--rm",
+            "--init",
+            "--name",
+            name,
+            "--pull",
+            "never",
+            "--network",
+            "none",
+            "--ipc",
+            "none",
+            "--read-only",
+            "--cap-drop",
+            "ALL",
+            "--security-opt",
+            "no-new-privileges",
+            "--user",
+            "0:0",
+            "--pids-limit",
+            "128",
+            "--memory",
+            "512m",
+            "--memory-swap",
+            "512m",
+            "--cpus",
+            "1",
+            "--ulimit",
+            "nofile=1024:1024",
+            "--tmpfs",
+            "/tmp:rw,exec,nosuid,nodev,size=128m",
+            "--mount",
+            f"type=bind,source={workspace},target=/workspace,readonly",
+            "--env",
+            f"SAT_HOST_UID={engine.owner_uid}",
+            sandbox_image_id,
+            "python3",
+            "-c",
+            _ROOTLESS_CONTRACT_SCRIPT,
+        ]
+        try:
+            completed = subprocess.run(
+                command,
+                check=False,
+                capture_output=True,
+                text=True,
+                stdin=subprocess.DEVNULL,
+                timeout=timeout_seconds,
+                env=selected_environment,
+            )
+        except (OSError, subprocess.SubprocessError) as error:
+            raise RuntimeConfigurationError(
+                "rootless Docker isolation probe could not complete"
+            ) from error
+        if (
+            completed.returncode != 0
+            or completed.stdout.strip() != "SAT_ROOTLESS_CONTRACT_OK"
+        ):
+            raise RuntimeConfigurationError(
+                "rootless Docker did not enforce the required workspace, "
+                "namespace, privilege, or cgroup boundaries"
+            )
+    finally:
+        try:
+            verify_docker_engine(engine)
+            subprocess.run(
+                [
+                    sandbox_binary,
+                    "--host",
+                    engine.endpoint,
+                    "container",
+                    "rm",
+                    "--force",
+                    name,
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                stdin=subprocess.DEVNULL,
+                timeout=timeout_seconds,
+                env=selected_environment,
+            )
+            remaining = subprocess.run(
+                [
+                    sandbox_binary,
+                    "--host",
+                    engine.endpoint,
+                    "container",
+                    "inspect",
+                    name,
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                stdin=subprocess.DEVNULL,
+                timeout=timeout_seconds,
+                env=selected_environment,
+            )
+            if remaining.returncode == 0:
+                raise RuntimeConfigurationError(
+                    "rootless Docker isolation probe cleanup left a container"
+                )
+        finally:
+            sandbox.cleanup()
+
+
 def probe_sandbox_runtime(
     *,
     sandbox_binary: str,
@@ -798,6 +976,28 @@ def probe_sandbox_runtime(
         raise RuntimeConfigurationError(
             f"sandbox binary is unavailable: {sandbox_binary}"
         )
+    selected_environment = os.environ if environment is None else environment
+    engine = current_docker_engine()
+    if selected_environment.get("SAT_DOCKER_ENGINE_MODE") == "rootless":
+        try:
+            discovered = discover_docker_engine(selected_environment)
+        except DockerEngineError as error:
+            raise RuntimeConfigurationError(
+                "rootless Docker engine identity could not be verified"
+            ) from error
+        if not discovered.rootless or (engine is not None and discovered != engine):
+            raise RuntimeConfigurationError(
+                "the configured Docker engine is not the verified rootless daemon"
+            )
+        engine = discovered
+    sandbox_user = (
+        "0:0"
+        if engine is not None and engine.rootless
+        else (f"{os.getuid()}:{os.getgid()}")
+    )
+    if engine is not None:
+        verify_docker_engine(engine)
+        environment = engine_environment(engine, selected_environment)
 
     container_name = f"sat-runtime-probe-{uuid4().hex}"
     start_attempted = False
@@ -823,7 +1023,7 @@ def probe_sandbox_runtime(
                 "--security-opt",
                 "no-new-privileges",
                 "--user",
-                f"{os.getuid()}:{os.getgid()}",
+                sandbox_user,
                 "--env",
                 "HOME=/tmp",
                 "--tmpfs",
@@ -989,6 +1189,19 @@ def probe_sandbox_runtime(
                     env=environment,
                 )
 
+    if ready and engine is not None and engine.rootless:
+        try:
+            _probe_rootless_sandbox_contract(
+                sandbox_binary=resolved_sandbox,
+                sandbox_image_id=sandbox_image_id,
+                engine=engine,
+                timeout_seconds=timeout_seconds,
+                environment=environment,
+            )
+        except (DockerEngineError, RuntimeConfigurationError) as error:
+            ready = False
+            error_detail = str(error)
+
     return SandboxRuntimeProbe(
         sandbox_binary=resolved_sandbox,
         sandbox_image_id=sandbox_image_id,
@@ -1079,15 +1292,24 @@ def materialize_run_configuration(
         raise RuntimeConfigurationError("run workspace does not exist") from error
     if not resolved_workspace.is_dir() or resolved_workspace.is_symlink():
         raise RuntimeConfigurationError("run workspace must be a real directory")
+    host_uid, host_gid = os.getuid(), os.getgid()
+    engine = current_docker_engine()
     if sandbox_user is None:
-        sandbox_uid = os.getuid()
-        sandbox_gid = os.getgid()
+        if host_uid == 0 or host_gid == 0:
+            raise RuntimeConfigurationError(
+                "live Agent sandboxes require an unprivileged host user"
+            )
+        sandbox_uid, sandbox_gid = (
+            (0, 0) if engine is not None and engine.rootless else (host_uid, host_gid)
+        )
     else:
         parts = sandbox_user.split(":")
         if len(parts) != 2 or not all(part.isdecimal() for part in parts):
             raise RuntimeConfigurationError("sandbox user must use numeric UID:GID")
         sandbox_uid, sandbox_gid = (int(part) for part in parts)
-    if sandbox_uid == 0 or sandbox_gid == 0:
+    if (sandbox_uid == 0 or sandbox_gid == 0) and not (
+        sandbox_uid == sandbox_gid == 0 and engine is not None and engine.rootless
+    ):
         raise RuntimeConfigurationError(
             "live Agent sandboxes require an unprivileged host user"
         )

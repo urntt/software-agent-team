@@ -10,6 +10,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from software_agent_team.artifacts import AgentRole
+from software_agent_team.docker_engine import (
+    DockerEngineError,
+    verify_bound_docker_engine,
+)
 from software_agent_team.execution import (
     ROLE_ARTIFACT_KINDS,
     stable_agent_session_key,
@@ -82,6 +86,12 @@ def _run_command(
     runner: ProcessRunner,
     timeout_seconds: int,
 ) -> subprocess.CompletedProcess[str]:
+    try:
+        verify_bound_docker_engine()
+    except DockerEngineError as error:
+        raise SandboxCleanupError(
+            "recorded Docker engine is unavailable for sandbox cleanup"
+        ) from error
     try:
         return runner(
             argv,

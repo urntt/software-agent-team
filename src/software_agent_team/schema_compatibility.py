@@ -181,6 +181,7 @@ def supported_schemas() -> tuple[SchemaSupport, ...]:
                 if family
                 in {
                     SchemaFamily.BUDGET,
+                    SchemaFamily.INSTALLATION,
                     SchemaFamily.TEAM_PLAN,
                     SchemaFamily.SELF_CHECK,
                 }

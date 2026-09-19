@@ -1,6 +1,7 @@
 # Project Status
 
-**Current milestone:** validate the published `v0.3.3` runtime-control and Planning patch
+**Current milestone:** validate the `v0.4.0` rootless Docker candidate while
+`v0.3.3` remains the published stable release
 
 **Last updated:** September 19, 2026
 
@@ -17,6 +18,21 @@ decisions or ambiguous Agent scope, and the proposal prompt ends with a concise
 relation check. Targeted regressions, the local candidate gate, the clean
 exact-tag hosted gate, and published install/upgrade rehearsals have passed.
 Ordinary-user SSH TTY and provider-backed Planning validation are still pending.
+
+The current `v0.4.0` candidate binds each managed installation to one local
+Docker Unix socket and daemon ID, records rootless and cgroup mode in
+installation schema v2, and preserves schema v1 readability. An older updater's
+schema v1 activation can be promoted under the installation lock from the
+candidate's private engine snapshot on first normal command. Rootless Agent
+configuration and quality gates use container-namespace `0:0`, mapped to the
+unprivileged host owner. Installation proves the rootless namespace, private
+read-only workspace, disabled network/capabilities, and actual cgroup limits
+before activation. SAT does not configure a Docker daemon or host user
+namespaces. A local fixed-source rehearsal on a non-`docker`-group account
+passed rootless upgrade, two 16/16 device checks without `DOCKER_HOST`, a
+private-workspace production quality command, and schema v1 promotion. These
+are candidate checks, not a published stable or provider-backed Agent journey;
+the release gate and fresh public lifecycle remain outstanding.
 
 ## Current Release
 

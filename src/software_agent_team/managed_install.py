@@ -11,7 +11,7 @@ import subprocess
 import tempfile
 import tomllib
 from collections.abc import Callable, Mapping, Sequence
-from contextlib import contextmanager, suppress
+from contextlib import ExitStack, contextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from itertools import pairwise
@@ -21,6 +21,15 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from software_agent_team.docker_engine import (
+    DockerEngineIdentity,
+    bound_docker_engine,
+    discover_docker_engine,
+    engine_environment,
+    load_staged_docker_engine,
+    verify_bound_docker_engine,
+    verify_docker_engine,
+)
 from software_agent_team.integrity import canonical_model_sha256
 from software_agent_team.paths import user_state_root
 from software_agent_team.releases import (
@@ -385,6 +394,7 @@ class StagedApplication:
     schema_support: tuple[SchemaSupport, ...]
     created_candidate: bool
     sandbox_image_transition: SandboxImageTransition | None = None
+    docker_engine: DockerEngineIdentity | None = None
 
 
 @dataclass(frozen=True)
@@ -652,6 +662,8 @@ def _stage_managed_target_locked(
     sandbox_image_transition: SandboxImageTransition | None = None
     sandbox_image_rollback_reference: str | None = None
     sandbox_image_transaction_armed = False
+    docker_engine: DockerEngineIdentity | None = None
+    engine_scope = ExitStack()
     try:
         runner(("git", "init", "-b", "sat-managed", str(stage)), None, None)
         runner(
@@ -751,6 +763,15 @@ def _stage_managed_target_locked(
         install_environment.pop("VIRTUAL_ENV", None)
         sandbox_image_reference = _configured_sandbox_image(final_path)
         if sandbox_image_reference is not None:
+            previous_record = load_installation_record(paths.installation_record)
+            docker_engine = (
+                previous_record.docker_engine
+                if previous_record is not None
+                and previous_record.docker_engine is not None
+                else discover_docker_engine(install_environment)
+            )
+            engine_scope.enter_context(bound_docker_engine(docker_engine))
+            install_environment = engine_environment(docker_engine, install_environment)
             previous_sandbox_image = _inspect_sandbox_image(sandbox_image_reference)
             if previous_sandbox_image is not None:
                 sandbox_image_rollback_reference = _preserve_sandbox_image_for_rollback(
@@ -772,6 +793,10 @@ def _stage_managed_target_locked(
             install_environment,
         )
         if sandbox_image_reference is not None:
+            if load_staged_docker_engine(final_path) != docker_engine:
+                raise ManagedInstallError(
+                    "staged installer changed the selected Docker engine"
+                )
             candidate_image = _inspect_sandbox_image(sandbox_image_reference)
             if candidate_image is None or not candidate_image.owned:
                 raise ManagedInstallError(
@@ -799,6 +824,7 @@ def _stage_managed_target_locked(
             schema_support=schema_support,
             created_candidate=True,
             sandbox_image_transition=sandbox_image_transition,
+            docker_engine=docker_engine,
         )
     except BaseException as staging_error:
         rollback_error: ManagedInstallError | None = None
@@ -872,6 +898,8 @@ def _stage_managed_target_locked(
                 f"rollback also failed ({_managed_failure_detail(rollback_error)})"
             ) from staging_error
         raise
+    finally:
+        engine_scope.close()
 
 
 def activate_staged_application(
@@ -883,6 +911,9 @@ def activate_staged_application(
 ) -> InstallationRecord:
     """Atomically switch the stable application link and roll back any failure."""
 
+    engine_scope = ExitStack()
+    if staged.docker_engine is not None:
+        engine_scope.enter_context(bound_docker_engine(staged.docker_engine))
     try:
         _require_managed_root(paths)
         _validate_staged_application(staged.path, staged.marker)
@@ -901,6 +932,8 @@ def activate_staged_application(
         if staged.sandbox_image_transition is not None:
             _restore_sandbox_image_transition(staged.sandbox_image_transition)
         raise
+    finally:
+        engine_scope.close()
 
 
 def install_managed_target(
@@ -920,16 +953,51 @@ def install_managed_target(
             environment=environment,
             command_runner=command_runner,
         )
-        try:
-            return _activate_staged_application_locked(staged, paths)
-        except BaseException:
+        with bound_docker_engine(staged.docker_engine):
             try:
-                if staged.sandbox_image_transition is not None:
-                    _restore_sandbox_image_transition(staged.sandbox_image_transition)
-            finally:
-                if staged.created_candidate:
-                    shutil.rmtree(staged.path, ignore_errors=True)
-            raise
+                return _activate_staged_application_locked(staged, paths)
+            except BaseException:
+                try:
+                    if staged.sandbox_image_transition is not None:
+                        _restore_sandbox_image_transition(
+                            staged.sandbox_image_transition
+                        )
+                finally:
+                    if staged.created_candidate:
+                        shutil.rmtree(staged.path, ignore_errors=True)
+                raise
+
+
+def promote_legacy_docker_engine_record(
+    *,
+    project_root: Path,
+    paths: ManagedInstallPaths,
+    expected_record: InstallationRecord,
+) -> InstallationRecord:
+    """Complete a legacy updater's activation using its staged engine proof."""
+
+    if expected_record.schema_version != 1:
+        return expected_record
+    identity = load_staged_docker_engine(project_root)
+    verify_docker_engine(identity)
+    with _exclusive_update_lock(paths):
+        if not paths.application_link.is_symlink():
+            raise ManagedInstallError(
+                "managed application link changed during migration"
+            )
+        active = paths.application_link.resolve(strict=True)
+        if active != project_root.resolve(strict=True):
+            raise ManagedInstallError("managed application changed during migration")
+        _require_managed_release_target(active, paths)
+        current = load_installation_record(paths.installation_record)
+        if current != expected_record:
+            raise ManagedInstallError("installation record changed during migration")
+        verify_docker_engine(identity)
+        promoted = current.model_copy(
+            update={"schema_version": 2, "docker_engine": identity}
+        )
+        save_installation_record(promoted, paths.installation_record)
+        return promoted
 
 
 @contextmanager
@@ -1043,6 +1111,7 @@ def _activate_staged_application_locked(
             repository_url=staged.marker.repository_url,
             application_path=paths.application_link,
             artifact_digest=staged.marker.artifact_digest,
+            docker_engine=staged.docker_engine,
             installed_at=installed_at or datetime.now(UTC),
         )
         save_installation_record(record, paths.installation_record)
@@ -1434,6 +1503,7 @@ def _read_staged_schema_support(stage: Path) -> tuple[SchemaSupport, ...]:
         completed = subprocess.run(
             [str(stage / ".venv" / "bin" / "sat"), "version", "--json"],
             cwd=stage,
+            env={**os.environ, "SAT_INSTALL_STAGE_ONLY": "1"},
             check=True,
             capture_output=True,
             text=True,
@@ -1930,6 +2000,7 @@ def _docker_command(
 ) -> subprocess.CompletedProcess[str]:
     """Run one bounded Docker lifecycle command without a shell."""
 
+    verify_bound_docker_engine()
     try:
         completed = subprocess.run(
             ("docker", *arguments),

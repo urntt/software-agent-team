@@ -12,6 +12,7 @@ task_uninstall_link="$task_bin_dir/sat-uninstall"
 task_managed_install="${SAT_MANAGED_INSTALL:-0}"
 task_install_stage_only="${SAT_INSTALL_STAGE_ONLY:-0}"
 task_install_metadata_path="${SAT_INSTALL_METADATA_PATH:-}"
+task_sandbox_user="$(id -u):$(id -g)"
 unset SAT_MANAGED_INSTALL SAT_INSTALL_STAGE_ONLY
 
 fail() {
@@ -25,9 +26,24 @@ require_command() {
 
 task_probe_name=""
 
+docker_checked() {
+  if [[ "$task_managed_install" == "1" ]]; then
+    "$task_root/.venv/bin/python" -c '
+import sys
+from pathlib import Path
+from software_agent_team.docker_engine import (
+    load_staged_docker_engine,
+    verify_docker_engine,
+)
+verify_docker_engine(load_staged_docker_engine(Path(sys.argv[1])))
+' "$task_root" || fail "Docker engine changed during sandbox image installation"
+  fi
+  docker "$@"
+}
+
 cleanup_runtime_probe() {
   if [[ -n "$task_probe_name" ]]; then
-    docker container rm --force "$task_probe_name" >/dev/null 2>&1 || true
+    docker_checked container rm --force "$task_probe_name" >/dev/null 2>&1 || true
   fi
 }
 
@@ -40,14 +56,14 @@ probe_runtime_image() {
 
   task_probe_name="sat-install-probe-$$-${RANDOM}"
   trap cleanup_runtime_probe EXIT
-  if ! docker run \
+  if ! docker_checked run \
       --detach \
       --name "$task_probe_name" \
       --network none \
       --read-only \
       --cap-drop ALL \
       --security-opt no-new-privileges \
-      --user "$(id -u):$(id -g)" \
+      --user "$task_sandbox_user" \
       --env HOME=/tmp \
       --tmpfs /tmp:rw,nosuid,nodev,size=128m \
       --tmpfs /var/tmp:rw,nosuid,nodev,size=32m \
@@ -64,7 +80,7 @@ probe_runtime_image() {
   fi
   sleep 0.2
   if ! task_probe_state="$(
-    docker container inspect \
+    docker_checked container inspect \
       --format '{{.State.Running}} {{.State.Status}} {{.State.ExitCode}} {{.State.OOMKilled}}' \
       "$task_probe_name"
   )"; then
@@ -75,19 +91,19 @@ probe_runtime_image() {
   if [[ "$task_probe_running" != "true" ]]; then
     fail "sandbox image exited during startup (status=$task_probe_status, exit_code=$task_probe_exit_code, oom_killed=$task_probe_oom_killed)"
   fi
-  if ! docker exec \
+  if ! docker_checked exec \
       --workdir /workspace \
       "$task_probe_name" \
       sat-probe-run --self-test; then
     fail "sandbox runtime could not execute the Reviewer probe runner"
   fi
-  if ! docker exec \
+  if ! docker_checked exec \
       --workdir /workspace \
       "$task_probe_name" \
       sat-project-lock --self-test; then
     fail "sandbox runtime could not verify the portable lock helper"
   fi
-  if ! docker container rm --force "$task_probe_name" >/dev/null; then
+  if ! docker_checked container rm --force "$task_probe_name" >/dev/null; then
     fail "sandbox runtime probe container could not be removed"
   fi
   task_probe_name=""
@@ -185,6 +201,31 @@ if ! "$task_root/scripts/setup.sh"; then
   fail "pinned toolchain setup failed; resolve the setup diagnostic above before retrying"
 fi
 
+if [[ "$task_managed_install" == "1" ]]; then
+  if ! task_engine_info="$(
+    "$task_root/.venv/bin/python" -c '
+import os
+import sys
+from pathlib import Path
+from software_agent_team.docker_engine import (
+    discover_docker_engine,
+    save_staged_docker_engine,
+)
+engine = discover_docker_engine()
+save_staged_docker_engine(Path(sys.argv[1]), engine)
+print(engine.endpoint + "\t" + ("0:0" if engine.rootless else f"{os.getuid()}:{os.getgid()}"))
+' "$task_root"
+  )"; then
+    fail "Docker engine identity could not be verified and saved"
+  fi
+  IFS=$'\t' read -r task_docker_endpoint task_sandbox_user \
+    <<<"$task_engine_info"
+  [[ "$task_docker_endpoint" == unix:///* && -n "$task_sandbox_user" ]] || \
+    fail "Docker engine snapshot returned an invalid endpoint or sandbox user"
+  export DOCKER_HOST="$task_docker_endpoint"
+  unset DOCKER_CONTEXT
+fi
+
 cd "$task_root"
 task_image="$(
   "$task_uv_bin" run --frozen python -c \
@@ -198,7 +239,7 @@ if [[ "$task_managed_install" == "1" ]]; then
     --installation-record-path "$task_install_metadata_path"
 fi
 
-if ! docker build \
+if ! docker_checked build \
     --pull=false \
     --label software-agent-team.sandbox-image=true \
     --label "software-agent-team.image-reference=$task_image" \
@@ -206,7 +247,7 @@ if ! docker build \
     runtime/python; then
   fail "sandbox image build failed; inspect Docker output and retry"
 fi
-task_image_id="$(docker image inspect --format '{{.Id}}' "$task_image")"
+task_image_id="$(docker_checked image inspect --format '{{.Id}}' "$task_image")"
 [[ "$task_image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || \
   fail "Docker returned an invalid product image ID"
 if [[ "$task_managed_install" == "1" ]]; then
@@ -214,9 +255,34 @@ if [[ "$task_managed_install" == "1" ]]; then
     --installation-record-path "$task_install_metadata_path"
 fi
 probe_runtime_image
+if [[ "$task_managed_install" == "1" && "$task_sandbox_user" == "0:0" ]]; then
+  "$task_root/.venv/bin/python" -c '
+import sys
+from pathlib import Path
+from software_agent_team.docker_engine import (
+    bound_docker_engine,
+    load_staged_docker_engine,
+)
+from software_agent_team.runtime_configuration import probe_sandbox_runtime
 
-"$task_uv_bin" run --frozen sat validate-config >/dev/null
-"$task_uv_bin" run --frozen sat validate-config \
+root = Path(sys.argv[1])
+engine = load_staged_docker_engine(root)
+with bound_docker_engine(engine):
+    result = probe_sandbox_runtime(
+        sandbox_binary="docker",
+        sandbox_image_id=sys.argv[2],
+        timeout_seconds=60,
+    )
+if not result.sandbox_container_ready:
+    raise SystemExit(result.error or "rootless sandbox contract failed")
+' "$task_root" "$task_image_id" || \
+    fail "rootless Docker isolation or cgroup enforcement is unavailable; check user namespace and cgroup v2/systemd delegation"
+fi
+
+SAT_INSTALL_STAGE_ONLY="$task_install_stage_only" \
+  "$task_uv_bin" run --frozen sat validate-config >/dev/null
+SAT_INSTALL_STAGE_ONLY="$task_install_stage_only" \
+  "$task_uv_bin" run --frozen sat validate-config \
   --policy configs/product-policy.json \
   --quality-manifest profiles/python/quality.json >/dev/null
 if [[ "$task_managed_install" != "1" ]]; then

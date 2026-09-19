@@ -46,6 +46,7 @@ from software_agent_team.configuration import validate_environment_configuration
 from software_agent_team.control_console import TerminalControlConsole
 from software_agent_team.controls import ControlCommandStore
 from software_agent_team.decision_limits import validate_decision_limit_registry
+from software_agent_team.docker_engine import bound_docker_engine
 from software_agent_team.dynamic_workflow import (
     DynamicWorkflowCoordinator,
     DynamicWorkflowOutcome,
@@ -53,12 +54,14 @@ from software_agent_team.dynamic_workflow import (
 from software_agent_team.execution import OpenClawSubprocessExecutor
 from software_agent_team.git_workspace import GitWorkspace, GitWorkspaceManager
 from software_agent_team.managed_install import (
+    MANAGED_MARKER_NAME,
     ManagedInstallError,
     ManagedInstallPaths,
     finalize_staged_sandbox_image_transition,
     install_managed_target,
     managed_foreground_task_lease,
     prepare_staged_sandbox_image_transition,
+    promote_legacy_docker_engine_record,
     reconcile_pending_sandbox_image_transition,
     resolve_dev_target,
     target_from_stable_release,
@@ -4736,42 +4739,84 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _managed_engine_binding(args: argparse.Namespace):
+    """Read the active release's recorded engine before any Docker cleanup."""
+
+    if (
+        args.version
+        or args.command == "version"
+        or args.command
+        in {
+            "_managed-install",
+            "_managed-state-compatibility",
+            "_managed-image-transition",
+        }
+        or os.environ.get("SAT_INSTALL_STAGE_ONLY") == "1"
+        or not (PROJECT_ROOT / MANAGED_MARKER_NAME).is_file()
+    ):
+        return None
+    paths = ManagedInstallPaths.from_environment()
+    record, _marker = validate_current_managed_install(
+        project_root=PROJECT_ROOT, paths=paths
+    )
+    if record.schema_version == 1:
+        record = promote_legacy_docker_engine_record(
+            project_root=PROJECT_ROOT,
+            paths=paths,
+            expected_record=record,
+        )
+    return record.docker_engine
+
+
+def _dispatch_main(args: argparse.Namespace) -> int:
+    version_only = args.version or args.command == "version"
+    if (
+        args.command
+        not in {
+            "_managed-install",
+            "_managed-state-compatibility",
+            "_managed-image-transition",
+        }
+        and not version_only
+    ):
+        try:
+            reconcile_pending_sandbox_image_transition(PROJECT_ROOT)
+        except ManagedInstallError as error:
+            print(
+                f"warning: pending sandbox image cleanup was deferred: {error}",
+                file=sys.stderr,
+            )
+    if args.version:
+        print(render_short_version(_software_version_report()))
+        return 0
+    if args.command is None:
+        with managed_foreground_task_lease(PROJECT_ROOT):
+            if not any(
+                (
+                    args.progress_visibility,
+                    args.progress_display,
+                    args.progress_color,
+                )
+            ):
+                return _run_product()
+            return _run_product(
+                progress_visibility=args.progress_visibility,
+                progress_display=args.progress_display,
+                progress_color=args.progress_color,
+            )
+    return args.handler(args)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run one CLI command and return a process exit code."""
 
     args = build_parser().parse_args(argv)
     try:
-        if args.command not in {
-            "_managed-install",
-            "_managed-state-compatibility",
-            "_managed-image-transition",
-        }:
-            try:
-                reconcile_pending_sandbox_image_transition(PROJECT_ROOT)
-            except ManagedInstallError as error:
-                print(
-                    f"warning: pending sandbox image cleanup was deferred: {error}",
-                    file=sys.stderr,
-                )
-        if args.version:
-            print(render_short_version(_software_version_report()))
-            return 0
-        if args.command is None:
-            with managed_foreground_task_lease(PROJECT_ROOT):
-                if not any(
-                    (
-                        args.progress_visibility,
-                        args.progress_display,
-                        args.progress_color,
-                    )
-                ):
-                    return _run_product()
-                return _run_product(
-                    progress_visibility=args.progress_visibility,
-                    progress_display=args.progress_display,
-                    progress_color=args.progress_color,
-                )
-        return args.handler(args)
+        identity = _managed_engine_binding(args)
+        with bound_docker_engine(
+            identity, verify=not (args.version or args.command == "version")
+        ):
+            return _dispatch_main(args)
     except KeyboardInterrupt:
         print("\nBuild interrupted. SAT did not claim a successful delivery.")
         return 130
