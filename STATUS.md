@@ -24,9 +24,12 @@ assigned task descriptions and its runtime rationale from the approved task
 count and workspace scope. Project-wide requirements do not expand an Agent's
 assigned work or write scope. The original approved plan recompiled through
 the production Planning interface no longer assigns README to the Test Author.
-The affected Planning, dynamic-prompt and runner suite passed 375 tests;
-canonical gate, fixed rootless dev upgrade, exact-tag hosted gate, publication
-and a fresh full public-user journey remain pending.
+The affected Planning, dynamic-prompt and runner suite passed 375 tests. The
+`v0.4.7` local canonical gate passed 1,883 tests; all four stages completed,
+process and temporary-directory cleanup was complete, Docker and process-lease
+inventories were empty, and cgroup/kernel OOM deltas were zero. Fixed rootless
+dev upgrade, exact-tag hosted gate, publication and a fresh full public-user
+journey remain pending.
 
 ## Current Release
 
