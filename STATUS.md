@@ -1,7 +1,7 @@
 # Project Status
 
-**Current milestone:** correct writable-Agent task ownership after the public
-`v0.4.6` journey stopped at the Test Author permission boundary.
+**Current milestone:** validate published `v0.4.7` through one fresh public
+ordinary-user journey after the `v0.4.6` Test Author permission failure.
 
 **Last updated:** September 19, 2026
 
@@ -19,7 +19,7 @@ parallel role summary had independently claimed README work owned by the
 Integrator. Build exited 2 with no accepted delivery. The raw evidence, formal
 export and exact account cleanup were retained for diagnosis.
 
-The `v0.4.7` candidate derives writable-Agent runtime responsibility from
+Published `v0.4.7` derives writable-Agent runtime responsibility from
 assigned task descriptions and its runtime rationale from the approved task
 count and workspace scope. Project-wide requirements do not expand an Agent's
 assigned work or write scope. The original approved plan recompiled through
@@ -27,23 +27,27 @@ the production Planning interface no longer assigns README to the Test Author.
 The affected Planning, dynamic-prompt and runner suite passed 375 tests. The
 `v0.4.7` local canonical gate passed 1,883 tests; all four stages completed,
 process and temporary-directory cleanup was complete, Docker and process-lease
-inventories were empty, and cgroup/kernel OOM deltas were zero. Fixed rootless
-dev upgrade, exact-tag hosted gate, publication and a fresh full public-user
-journey remain pending.
+inventories were empty, and cgroup/kernel OOM deltas were zero. The final
+revision `3be7542a53bd7d3748e50ad07027ae449f02e6c5` upgraded an existing
+non-Docker-group rootless dev account without changing its configuration or
+daemon identity.
+The exact-tag hosted gate passed 1,880 tests with three environment skips and
+published a unique verified Release. A fresh full public-user journey remains
+pending.
 
 ## Current Release
 
-The immutable `v0.4.6` tag,
-[GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.4.6),
+The immutable `v0.4.7` tag,
+[GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.4.7),
 package version, and release manifest identify source revision
-`2d0eb2513218cd89bac6a7f68b25e595adb66362` and Git archive digest
-`sha256:6fe415bbe19f798320567071ded056e24b33317422043ede81f3b148eccd08c7`.
+`3be7542a53bd7d3748e50ad07027ae449f02e6c5` and Git archive digest
+`sha256:aeed20024dadaae66558ec70e2751a0605ee6914ee7be85ad5cc0a2489133289`.
 Exact-tag GitHub Actions
-[run 35465341048](https://github.com/urntt/software-agent-team/actions/runs/35465341048)
-passed 1,878 tests with three environment skips; the local candidate passed
-1,881. The unique Release manifest asset digest is
-`sha256:8e49cb8ab8ab000e87f575bf4f9adc1eaf2d4505e626b56fbf3dccf2faddb881`.
-The public rootless run described above stopped before delivery.
+[run 35471899923](https://github.com/urntt/software-agent-team/actions/runs/35471899923)
+passed 1,880 tests with three environment skips; the local candidate passed
+1,883. The unique Release manifest asset digest is
+`sha256:5d15e61dd636382e5334fb3f94b24a9c5c08d2e14fc5d66d9510e9bdc1e21cd7`.
+The prior public rootless run described above stopped before delivery.
 
 
 The immutable `v0.4.1` tag,
