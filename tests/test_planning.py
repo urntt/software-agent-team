@@ -7036,11 +7036,92 @@ def test_overlapping_writer_scopes_offer_typed_dependency_correction(
     )
 
 
-def test_quality_dependency_correction_does_not_offer_a_cyclic_leaf_repair(
+def test_quality_dependency_correction_reverses_one_direct_edge_atomically(
+    tmp_path: Path,
+) -> None:
+    body = proposal_body()
+    test_task = ProposedTask(
+        id="TASK_TEST",
+        owner_agent_id="acceptance_tester",
+        description="Verify the local CLI with deterministic fixtures.",
+        acceptance_criteria=("AC_SCAN", "AC_REPORT"),
+        expected_paths=("tests",),
+        dependencies=("TASK_IMPLEMENT",),
+    )
+    valid = PlanningProposalBody.model_validate(
+        body.model_copy(update={"tasks": (*body.tasks, test_task)}).model_dump(
+            mode="json"
+        )
+    )
+    invalid_payload = json.loads(response(proposal_response(valid)))
+    invalid_payload["proposal"]["agents"][0]["dependencies"] = ["acceptance_tester"]
+    invalid_payload["proposal"]["agents"][1]["dependencies"] = []
+    invalid_payload["proposal"]["tasks"][0]["dependencies"] = ["TASK_TEST"]
+    invalid_payload["proposal"]["tasks"][1]["dependencies"] = []
+    executor = ScriptedAgentExecutor(
+        [
+            json.dumps(invalid_payload),
+            ScriptedAgentResponse(
+                text="ignored",
+                submission_payload={
+                    "replacements": [
+                        {"slot_handle": "slot_1", "replacement_value": "candidate_1"},
+                        {"slot_handle": "slot_2", "replacement_value": "candidate_1"},
+                        {"slot_handle": "slot_3", "replacement_value": "candidate_1"},
+                    ]
+                },
+            ),
+        ]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(response_repair_limit=None),
+        clock=AdvancingClock(),
+    )
+
+    created = coordinator.start(
+        request(),
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+
+    assert created is not None
+    assert created.body == valid
+    assert len(executor.requests) == 2
+    target_text = (
+        executor.requests[1]
+        .prompt.rsplit("TARGET_SLOTS_AND_ERRORS\n", 1)[1]
+        .split("\nCORRECTION_SCHEMA_JSON", 1)[0]
+    )
+    target_slots = json.loads(target_text)
+    assert [slot["target_path"] for slot in target_slots] == [
+        "/proposal/agents/0/dependencies",
+        "/proposal/agents/1/dependencies",
+        "/proposal/tasks/0/dependencies",
+    ]
+    assert [slot["candidate_catalog"][0]["exact_value"] for slot in target_slots] == [
+        [],
+        ["cli_developer"],
+        [],
+    ]
+    corrected = store.load_turn(request().run_id, 2)
+    assert corrected.semantic_correction_outcome is SemanticCorrectionOutcome.ACCEPTED
+    assert (
+        sum(
+            "bound controller evidence candidate candidate_1" in item
+            for item in corrected.response_normalizations
+        )
+        == 3
+    )
+
+
+def test_quality_dependency_correction_does_not_offer_an_indirect_cyclic_repair(
     tmp_path: Path,
 ) -> None:
     invalid_payload = json.loads(response(proposal_response()))
-    invalid_payload["proposal"]["agents"][0]["dependencies"] = ["quality_reviewer"]
+    invalid_payload["proposal"]["agents"][0]["dependencies"] = ["acceptance_tester"]
+    invalid_payload["proposal"]["agents"][1]["dependencies"] = ["quality_reviewer"]
     invalid_payload["proposal"]["agents"][2]["dependencies"] = []
     executor = ScriptedAgentExecutor([json.dumps(invalid_payload)])
     store = PlanningStore(tmp_path / "planning")

@@ -109,7 +109,7 @@ lifecycle, evidence, and cleanup.
 
 Dependencies remain the semantic handoff contract. A quality Agent may depend
 on another quality Agent when the overview makes that handoff explicit. The
-controller does not rewrite dependencies, and the scheduler never starts a
+controller does not silently rewrite dependencies, and the scheduler never starts a
 dependent Agent early. Its additional fixed dispatch rule is visible and
 narrow: ready deterministic Testing completes before new Review dispatch so a
 failed gate can return directly to revision.
@@ -452,11 +452,14 @@ may perform only these bounded, semantics-preserving normalizations:
   specialist's dependencies from surviving valid references plus every retained
   implementation path. Duplicate or conflicting specialists remain model-owned
   defects;
-- When one quality Agent is missing otherwise-valid dependency coverage, bind
-  one Controller-owned correction candidate containing its current direct
-  dependencies plus every missing implementation path. Do not offer this local
-  repair when adding an edge would form a cycle; the broader graph remains a
-  model-owned defect;
+- When a quality Agent is missing implementation-path coverage, bind one
+  Controller-owned additive candidate for its dependency field. If exactly
+  one missing implementation Agent directly depends on that quality Agent,
+  and removing that reversed edge breaks every path back to it, expose exact
+  candidate slots atomically: remove the reversed writer edge and any writer
+  task dependency on that quality Agent's tasks, then add the required quality
+  edge. Require the model to submit every selection;
+  indirect or multiple reversals remain fail-closed model-owned defects;
 - When one decision combines a category and provenance owned by different
   authorities, bind only complete decision candidates that preserve its ID,
   summary, and rationale. Stable ProductDefinition and assumption references

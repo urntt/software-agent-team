@@ -2338,7 +2338,7 @@ def _preserve_agents_during_missing_specialist_correction(
 def _bind_planning_dependency_correction_candidate(
     plan: SemanticCorrectionPlan | None,
 ) -> SemanticCorrectionPlan | None:
-    """Bind the unique additive repair for a quality dependency relation."""
+    """Bind an exact repair for a quality dependency relation."""
 
     if plan is None:
         return None
@@ -2372,8 +2372,13 @@ def _bind_planning_dependency_correction_candidate(
         in {AgentCapability.IMPLEMENTATION, AgentCapability.INTEGRATION}
     }
 
-    def transitively_depends(agent_id: str, target: str) -> bool:
-        pending = list(dependencies[agent_id])
+    def transitively_depends(
+        agent_id: str,
+        target: str,
+        graph: dict[str, tuple[str, ...]] | None = None,
+    ) -> bool:
+        active_graph = dependencies if graph is None else graph
+        pending = list(active_graph[agent_id])
         seen: set[str] = set()
         while pending:
             current = pending.pop()
@@ -2381,12 +2386,13 @@ def _bind_planning_dependency_correction_candidate(
                 return True
             if current not in seen:
                 seen.add(current)
-                pending.extend(dependencies[current])
+                pending.extend(active_graph[current])
         return False
 
     slots: list[SemanticCorrectionCandidateSlot] = []
     observed_subjects: list[frozenset[str]] = []
     expected_subjects: list[frozenset[str]] = []
+    reversed_edge: tuple[str, str] | None = None
     for issue in sorted(issues, key=lambda item: item.path):
         match = re.fullmatch(r"/proposal/agents/([0-9]+)/dependencies", issue.path)
         if match is None:
@@ -2421,13 +2427,32 @@ def _bind_planning_dependency_correction_candidate(
             return None
         observed_subjects.append(issue_agent_ids)
         expected_subjects.append(frozenset((quality_agent.id, *missing)))
-        if any(
-            transitively_depends(implementation_id, quality_agent.id)
-            for implementation_id in missing
-        ):
-            # This leaf cannot be repaired without creating a cycle. A broader
-            # Agent-graph correction needs a separate validator-owned target.
-            return None
+        for implementation_id in missing:
+            if not transitively_depends(implementation_id, quality_agent.id):
+                continue
+            # A direct reversed edge has one exact, atomic repair: remove it
+            # from the writer and add the required quality dependency. Keep
+            # indirect or multiple reversals fail-closed.
+            if (
+                reversed_edge is not None
+                or quality_agent.id not in dependencies[implementation_id]
+            ):
+                return None
+            reduced_graph = {
+                **dependencies,
+                implementation_id: tuple(
+                    item
+                    for item in dependencies[implementation_id]
+                    if item != quality_agent.id
+                ),
+            }
+            if transitively_depends(
+                implementation_id,
+                quality_agent.id,
+                reduced_graph,
+            ):
+                return None
+            reversed_edge = (quality_agent.id, implementation_id)
         replacement = list(dict.fromkeys((*quality_agent.dependencies, *missing)))
         slots.append(
             SemanticCorrectionCandidateSlot(
@@ -2452,7 +2477,131 @@ def _bind_planning_dependency_correction_candidate(
         # A multi-path invariant projects its complete subject set to every
         # sibling diagnostic. Accept only that exact union or exact leaf sets.
         return None
-    return attach_semantic_correction_candidates(plan, tuple(slots))
+
+    if reversed_edge is None:
+        return attach_semantic_correction_candidates(plan, tuple(slots))
+
+    quality_id, implementation_id = reversed_edge
+    writer_path = f"/proposal/agents/{agent_ids.index(implementation_id)}/dependencies"
+    raw_tasks = proposal.get("tasks")
+    if not isinstance(raw_tasks, list):
+        return None
+    try:
+        tasks = tuple(ProposedTask.model_validate(item) for item in raw_tasks)
+    except ValidationError:
+        return None
+    task_ids = tuple(task.id for task in tasks)
+    if len(task_ids) != len(set(task_ids)):
+        return None
+    quality_task_ids = {task.id for task in tasks if task.owner_agent_id == quality_id}
+    reversed_task_edges = tuple(
+        (index, task)
+        for index, task in enumerate(tasks)
+        if task.owner_agent_id == implementation_id
+        and quality_task_ids.intersection(task.dependencies)
+    )
+    task_paths = tuple(
+        f"/proposal/tasks/{index}/dependencies" for index, _ in reversed_task_edges
+    )
+    target_paths = tuple(
+        sorted({*plan.evidence.target_paths, writer_path, *task_paths})
+    )
+    if (
+        len(target_paths) > MAX_CORRECTION_FIELDS
+        or len(plan.diagnostic.issues) + 1 + len(task_paths) > MAX_CORRECTION_FIELDS
+    ):
+        return None
+    relation_issues = [
+        ResponseValidationIssue(
+            path=writer_path,
+            code="planning_quality_dependency_order",
+            invariant_id="planning_quality_dependency_order",
+            message=(
+                "the implementation Agent must stop depending on the "
+                "quality Agent before the required reverse edge is added"
+            ),
+            authority=ResponseIssueAuthority.MODEL,
+            subjects=_planning_subjects(
+                (ResponseIssueSubjectKind.AGENT, quality_id),
+                (ResponseIssueSubjectKind.AGENT, implementation_id),
+            ),
+        ),
+        *(
+            ResponseValidationIssue(
+                path=f"/proposal/tasks/{index}/dependencies",
+                code="planning_quality_task_dependency_order",
+                invariant_id="planning_quality_task_dependency_order",
+                message=(
+                    "the implementation task must stop depending on a "
+                    "task owned by its downstream quality Agent"
+                ),
+                authority=ResponseIssueAuthority.MODEL,
+                subjects=_planning_subjects(
+                    (ResponseIssueSubjectKind.TASK, task.id),
+                    (ResponseIssueSubjectKind.AGENT, quality_id),
+                    (ResponseIssueSubjectKind.AGENT, implementation_id),
+                ),
+            )
+            for index, task in reversed_task_edges
+        ),
+    ]
+    diagnostic = ResponseValidationDiagnostic.model_validate(
+        {
+            **plan.diagnostic.model_dump(mode="json"),
+            "issues": [
+                *(issue.model_dump(mode="json") for issue in plan.diagnostic.issues),
+                *(issue.model_dump(mode="json") for issue in relation_issues),
+            ],
+            "correction_paths": target_paths,
+        }
+    )
+    expanded = build_semantic_correction_plan(plan.base_payload, diagnostic)
+    if expanded is None:
+        return None
+    writer_dependencies = [
+        item for item in dependencies[implementation_id] if item != quality_id
+    ]
+    slots.append(
+        SemanticCorrectionCandidateSlot(
+            target_path=writer_path,
+            candidates=(
+                SemanticCorrectionCandidate(
+                    handle="candidate_1",
+                    replacement_value=writer_dependencies,
+                    source=(
+                        "controller-required removal of the reversed quality "
+                        f"dependency from {implementation_id}"
+                    ),
+                ),
+            ),
+        )
+    )
+    slots.extend(
+        SemanticCorrectionCandidateSlot(
+            target_path=f"/proposal/tasks/{index}/dependencies",
+            candidates=(
+                SemanticCorrectionCandidate(
+                    handle="candidate_1",
+                    replacement_value=[
+                        item
+                        for item in task.dependencies
+                        if item not in quality_task_ids
+                    ],
+                    source=(
+                        "controller-required removal of the reversed quality "
+                        f"task dependency from {task.id}"
+                    ),
+                ),
+            ),
+        )
+        for index, task in reversed_task_edges
+    )
+    slots_by_path = {slot.target_path: slot for slot in slots}
+    ordered_slots = tuple(slots_by_path[path] for path in target_paths)
+    return attach_semantic_correction_candidates(
+        require_all_semantic_correction_targets(expanded),
+        ordered_slots,
+    )
 
 
 def _planning_product_recommendation_decision_candidates(
