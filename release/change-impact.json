@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.4.2",
-  "target_version": "0.4.3",
+  "baseline_version": "0.4.3",
+  "target_version": "0.4.4",
   "changes": [
     {
-      "id": "bounded-project-test-silence",
+      "id": "bound-compaction-session-lineage",
       "impact": "patch",
-      "summary": "Bound silent generated-project pytest runs in the sandbox, preserve live test output, and give the writer an actionable diagnostic before the provider inactivity guard fires"
+      "summary": "Attribute terminal tool calls and typed submissions across pinned OpenClaw mid-turn compaction sessions while rejecting unbound or divergent lineage"
     }
   ]
 }
