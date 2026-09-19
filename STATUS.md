@@ -1,7 +1,7 @@
 # Project Status
 
-**Current milestone:** validate the `v0.4.0` rootless Docker candidate while
-`v0.3.3` remains the published stable release
+**Current milestone:** prepare a Planning correction patch after the published
+`v0.4.0` rootless Docker release
 
 **Last updated:** September 19, 2026
 
@@ -17,9 +17,11 @@ correction contract opens dependent references with duplicate answered-question
 decisions or ambiguous Agent scope, and the proposal prompt ends with a concise
 relation check. Targeted regressions, the local candidate gate, the clean
 exact-tag hosted gate, and published install/upgrade rehearsals have passed.
-Ordinary-user SSH TTY and provider-backed Planning validation are still pending.
+An ordinary-user SSH TTY now confirms multiline request correction; the first
+fresh provider-backed Planning journey stopped on the dependency correction
+defect below before build execution.
 
-The current `v0.4.0` candidate binds each managed installation to one local
+Published `v0.4.0` binds each managed installation to one local
 Docker Unix socket and daemon ID, records rootless and cgroup mode in
 installation schema v2, and preserves schema v1 readability. An older updater's
 schema v1 activation can be promoted under the installation lock from the
@@ -28,13 +30,34 @@ configuration and quality gates use container-namespace `0:0`, mapped to the
 unprivileged host owner. Installation proves the rootless namespace, private
 read-only workspace, disabled network/capabilities, and actual cgroup limits
 before activation. SAT does not configure a Docker daemon or host user
-namespaces. A local fixed-source rehearsal on a non-`docker`-group account
-passed rootless upgrade, two 16/16 device checks without `DOCKER_HOST`, a
-private-workspace production quality command, and schema v1 promotion. These
-are candidate checks, not a published stable or provider-backed Agent journey;
-the release gate and fresh public lifecycle remain outstanding.
+namespaces. A local fixed-source rehearsal and a fresh public stable install on
+separate non-`docker`-group accounts passed rootless startup, two 16/16 device
+checks without `DOCKER_HOST`, private-workspace production quality, export,
+and full uninstall. The exact local and hosted release gates passed. A fresh
+provider-backed journey then reached Planning but failed after its first user
+clarification: three quality-Agent dependency paths shared one aggregate subject
+set, while the candidate binder expected each issue's leaf-only subjects and
+suppressed an otherwise safe correction. The `v0.4.1` candidate accepts only
+the exact verified aggregate or exact leaf sets, keeping unrelated and cyclic
+graphs fail-closed. Exact saved-turn replay and targeted coordinator checks
+pass; the patch gate, publication, and complete user journey remain pending.
 
 ## Current Release
+
+The immutable `v0.4.0` tag,
+[GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.4.0),
+package version, and release manifest identify source revision
+`6df605436c98929820dc2cecf03987e1392f353a` and Git archive digest
+`sha256:100a6f210fb87b96882555ca93122d5304cf5539b45b2c55485cf8bd76e264a5`.
+Exact-tag GitHub Actions
+[run 35426345810](https://github.com/urntt/software-agent-team/actions/runs/35426345810)
+passed 1,855 tests with three environment skips; the exact local revision
+passed 1,857 with one root-only fixture skip. The unique Release's manifest
+asset digest is
+`sha256:73a958ee3a07d488a4cbcc517a8e540f5031aa436d85b33d58894f1fa6b8fcc3`.
+The public rootless and separate rootful installation lifecycles passed without
+provider calls. The subsequent fresh rootless provider journey found the
+Planning correction defect described above before Agent creation.
 
 The immutable `v0.3.3` tag,
 [GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.3.3),

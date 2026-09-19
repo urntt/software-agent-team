@@ -222,6 +222,13 @@ invalid criteria behind a distinct earlier proposal defect, then prove that the
 next diagnostic exposes both exact `review_boundaries` leaves and that one bound
 correction reaches full proposal acceptance without widening authority.
 
+For quality-Agent dependency coverage, the validator reports all independent
+Agent paths together and repeats the aggregate subject set on each sibling
+diagnostic. Candidate binding must verify that exact aggregate against the
+per-path missing dependencies before offering additive handles. Exercise at
+least two affected quality Agents through the coordinator and keep cyclic or
+unrelated subject sets fail-closed.
+
 Group related defects by their shared contract or state owner. Reproduce failures
 with captured, sanitized inputs and integrated production paths before repairing
 individual symptoms. Mock the external boundary where needed, not the accepted

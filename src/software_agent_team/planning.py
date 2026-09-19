@@ -2386,6 +2386,8 @@ def _bind_planning_dependency_correction_candidate(
         return False
 
     slots: list[SemanticCorrectionCandidateSlot] = []
+    observed_subjects: list[frozenset[str]] = []
+    expected_subjects: list[frozenset[str]] = []
     for issue in sorted(issues, key=lambda item: item.path):
         match = re.fullmatch(r"/proposal/agents/([0-9]+)/dependencies", issue.path)
         if match is None:
@@ -2406,13 +2408,20 @@ def _bind_planning_dependency_correction_candidate(
                 if not transitively_depends(quality_agent.id, implementation_id)
             )
         )
-        issue_agent_ids = {
+        if any(
+            subject.kind is not ResponseIssueSubjectKind.AGENT
+            for subject in issue.subjects
+        ):
+            return None
+        issue_agent_ids = frozenset(
             subject.identifier
             for subject in issue.subjects
             if subject.kind is ResponseIssueSubjectKind.AGENT
-        }
-        if not missing or issue_agent_ids != {quality_agent.id, *missing}:
+        )
+        if not missing:
             return None
+        observed_subjects.append(issue_agent_ids)
+        expected_subjects.append(frozenset((quality_agent.id, *missing)))
         if any(
             transitively_depends(implementation_id, quality_agent.id)
             for implementation_id in missing
@@ -2436,6 +2445,14 @@ def _bind_planning_dependency_correction_candidate(
                 ),
             )
         )
+    combined_subjects = frozenset().union(*expected_subjects)
+    if not (
+        observed_subjects == expected_subjects
+        or all(subjects == combined_subjects for subjects in observed_subjects)
+    ):
+        # A multi-path invariant projects its complete subject set to every
+        # sibling diagnostic. Accept only that exact union or exact leaf sets.
+        return None
     return attach_semantic_correction_candidates(plan, tuple(slots))
 
 

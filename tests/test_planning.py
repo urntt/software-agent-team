@@ -6809,6 +6809,90 @@ def test_quality_dependency_validation_reports_all_independent_agents() -> None:
         "cli_developer",
         "quality_reviewer",
     }
+    unrelated = diagnostic.model_copy(
+        update={
+            "issues": (
+                diagnostic.issues[0].model_copy(
+                    update={
+                        "subjects": (
+                            *diagnostic.issues[0].subjects,
+                            ResponseIssueSubject(
+                                kind=ResponseIssueSubjectKind.AGENT,
+                                identifier="unrelated_agent",
+                            ),
+                        )
+                    }
+                ),
+                *diagnostic.issues[1:],
+            )
+        }
+    )
+    plan = planning.build_semantic_correction_plan({"proposal": payload}, unrelated)
+    assert plan is not None
+    assert planning._bind_planning_dependency_correction_candidate(plan) is None
+
+
+def test_quality_dependency_sibling_diagnostic_reaches_one_bound_correction(
+    tmp_path: Path,
+) -> None:
+    valid = proposal_body()
+    invalid_payload = json.loads(response(proposal_response(valid)))
+    for quality_agent in invalid_payload["proposal"]["agents"][1:]:
+        quality_agent["dependencies"] = []
+    executor = ScriptedAgentExecutor(
+        [
+            json.dumps(invalid_payload),
+            ScriptedAgentResponse(
+                text="ignored",
+                submission_payload={
+                    "replacements": [
+                        {
+                            "slot_handle": "slot_1",
+                            "replacement_value": "candidate_1",
+                        },
+                        {
+                            "slot_handle": "slot_2",
+                            "replacement_value": "candidate_1",
+                        },
+                    ]
+                },
+            ),
+        ]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(response_repair_limit=1),
+        clock=AdvancingClock(),
+    )
+
+    created = coordinator.start(
+        request(),
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+
+    assert created is not None
+    assert created.body == valid
+    assert len(executor.requests) == 2
+    first = store.load_turn(request().run_id, 1)
+    assert first.response_validation is not None
+    assert first.response_validation.correction_paths == (
+        "/proposal/agents/1/dependencies",
+        "/proposal/agents/2/dependencies",
+    )
+    assert all(
+        {subject.identifier for subject in issue.subjects}
+        == {"acceptance_tester", "cli_developer", "quality_reviewer"}
+        for issue in first.response_validation.issues
+    )
+    corrected = store.load_turn(request().run_id, 2)
+    assert corrected.semantic_correction_outcome is SemanticCorrectionOutcome.ACCEPTED
+    assert all(
+        f"bound controller evidence candidate candidate_1 to {path}"
+        in corrected.response_normalizations
+        for path in first.response_validation.correction_paths
+    )
 
 
 def test_overlapping_writer_scopes_offer_typed_dependency_correction(
