@@ -422,7 +422,7 @@ Build the exact image named by both product and evaluation policies with:
 
 ```bash
 docker build \
-  --tag sat-python-quality:phase1-v9 \
+  --tag sat-python-quality:phase1-v10 \
   runtime/python
 ```
 
@@ -438,9 +438,13 @@ and one frozen public-registry cache containing both resolution metadata and
 the distributions needed by the generated-project profile. A root-owned `uv`
 configuration keeps resolution offline while retaining PyPI as the lockfile
 source. A small `uv` wrapper lazily copies that immutable cache into bounded
-temporary storage, so ordinary `uv sync`, `uv run`, and the immutable
+private `/tmp` storage, so ordinary `uv sync`, `uv run`, and the immutable
 `sat-project-lock` helper share a writable cache without recording an
-image-local package path.
+image-local package path. For `uv run pytest`, the wrapper forwards live output
+and stops the exact test process group with exit 124 after 90 seconds without
+output. The bound lets the writer inspect and fix a blocked test before the
+provider silence lease expires; it does not change exported project files or
+the normal `uv` behavior for setup, lock, and start commands.
 The runtime-image regression uses a committed portable lock containing public
 registry URLs and the real image `uv` behind `--network none`; when the image is
 available locally, it must complete the clean-copy setup, test, and start

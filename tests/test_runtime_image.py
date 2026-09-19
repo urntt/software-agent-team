@@ -12,7 +12,7 @@ REPOSITORY_ROOT = Path(__file__).parents[1]
 RUNTIME_ROOT = REPOSITORY_ROOT / "runtime" / "python"
 VALIDATION_ROOT = REPOSITORY_ROOT / "profiles" / "python" / "validation"
 PORTABLE_LOCK = REPOSITORY_ROOT / "tests" / "fixtures" / "portable-registry.uv.lock"
-RUNTIME_IMAGE = "sat-python-quality:phase1-v9"
+RUNTIME_IMAGE = "sat-python-quality:phase1-v10"
 PINNED_REQUIREMENT = re.compile(r"^[a-z0-9][a-z0-9._-]*==[^ ;]+(?: ; [a-z0-9_' .=]+)?$")
 
 

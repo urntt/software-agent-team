@@ -1514,6 +1514,10 @@ counters and never stores streamed response content as progress. Opaque
 progress comparison prevents repeated identical running-process polls and the
 provider turns that request them from renewing that lease; changed output and a
 terminal process result remain renewable progress.
+In the Python sandbox, the `uv run pytest` wrapper also stops a test process
+group after 90 seconds without output and reports a concrete test-command
+diagnostic to the writer. This lets an Agent correct a deadlocked test instead
+of repeatedly polling a silent process until the provider lease ends.
 
 ### Batch 3C: Dynamic Team Runtime
 

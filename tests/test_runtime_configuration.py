@@ -1048,7 +1048,7 @@ def test_bound_docker_preflight_overrides_an_explicit_foreign_environment(
     with bound_docker_engine(engine, verify=False):
         image = inspect_sandbox_image(
             sandbox_binary="docker",
-            sandbox_image="sat-python-quality:phase1-v9",
+            sandbox_image="sat-python-quality:phase1-v10",
             environment=foreign,
         )
         probe = probe_sandbox_runtime(

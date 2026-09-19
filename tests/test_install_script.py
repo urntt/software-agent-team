@@ -205,7 +205,7 @@ if [[ "$*" == "sync --locked" ]]; then
   chmod 755 .venv/bin/python
 elif [[ "${1:-}" == "run" && "${2:-}" == "--frozen" && \
         "${3:-}" == "python" && "${4:-}" == "-c" ]]; then
-  echo sat-python-quality:phase1-v9
+  echo sat-python-quality:phase1-v10
 elif [[ "${1:-}" == "run" && "${2:-}" == "--frozen" && \
         "${3:-}" == "python" && "${4:-}" == "-" ]]; then
   cat >/dev/null
@@ -300,8 +300,8 @@ def test_installer_prepares_cli_image_and_checks_idempotently(tmp_path: Path) ->
     assert "info" in docker_calls
     assert (
         "build --pull=false --label software-agent-team.sandbox-image=true "
-        "--label software-agent-team.image-reference=sat-python-quality:phase1-v9 "
-        "--tag sat-python-quality:phase1-v9 runtime/python"
+        "--label software-agent-team.image-reference=sat-python-quality:phase1-v10 "
+        "--tag sat-python-quality:phase1-v10 runtime/python"
     ) in docker_calls
     assert "image inspect --format {{.Id}}" in docker_calls
     assert "run --detach --name sat-install-probe-" in docker_calls

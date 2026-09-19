@@ -1,13 +1,18 @@
 #!/usr/local/bin/python
-"""Seed a writable offline uv cache, then replace this process with uv."""
+"""Seed the offline uv cache and supervise project tests for silent hangs."""
 
 from __future__ import annotations
 
 import os
+import selectors
 import shutil
+import signal
 import stat
+import subprocess
 import sys
 import tempfile
+import time
+from contextlib import suppress
 from pathlib import Path
 from typing import NoReturn
 
@@ -16,6 +21,8 @@ DEFAULT_CACHE = Path("/tmp/uv-cache")
 REAL_UV = Path("/usr/local/bin/uv-real")
 CACHE_MARKER = ".sat-public-cache-v1"
 MARKER_CONTENT = "software-agent-team-public-uv-cache-v1\n"
+TEST_SILENCE_SECONDS = 90.0
+TEST_SHUTDOWN_SECONDS = 5.0
 
 
 def _fail(message: str) -> NoReturn:
@@ -83,11 +90,88 @@ def _seed(target: Path) -> None:
             shutil.rmtree(candidate)
 
 
+def _stop_process_group(process: subprocess.Popen[bytes]) -> None:
+    with suppress(ProcessLookupError):
+        os.killpg(process.pid, signal.SIGTERM)
+    with suppress(subprocess.TimeoutExpired):
+        process.wait(timeout=TEST_SHUTDOWN_SECONDS)
+    # The uv parent may have exited while a test descendant still owns its
+    # pipes. Signal the exact command group once more before leaving.
+    with suppress(ProcessLookupError):
+        os.killpg(process.pid, signal.SIGKILL)
+    process.wait()
+
+
+def _forward_output(destination: int, chunk: bytes) -> None:
+    while chunk:
+        written = os.write(destination, chunk)
+        chunk = chunk[written:]
+
+
+def _run_project_tests(
+    arguments: list[str],
+    environment: dict[str, str],
+    *,
+    silence_seconds: float = TEST_SILENCE_SECONDS,
+) -> int:
+    """Let uv run normally, but return a bounded error after silent tests."""
+
+    process = subprocess.Popen(
+        [str(REAL_UV), *arguments],
+        env=environment,
+        stdin=None,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    assert process.stdout is not None and process.stderr is not None
+    selector = selectors.DefaultSelector()
+    selector.register(process.stdout, selectors.EVENT_READ, sys.stdout.fileno())
+    selector.register(process.stderr, selectors.EVENT_READ, sys.stderr.fileno())
+    last_output = time.monotonic()
+    try:
+        while selector.get_map() or process.poll() is None:
+            remaining = silence_seconds - (time.monotonic() - last_output)
+            if remaining <= 0:
+                print(
+                    "uv: project tests produced no output for "
+                    f"{silence_seconds:g}s; stopping the test command. "
+                    "Run pytest -vv without piping to tail, find the blocked "
+                    "test, and fix it before retrying.",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                _stop_process_group(process)
+                return 124
+            if not selector.get_map():
+                time.sleep(min(remaining, 0.25))
+                continue
+            for key, _ in selector.select(timeout=min(remaining, 0.25)):
+                chunk = os.read(key.fileobj.fileno(), 65536)
+                if not chunk:
+                    selector.unregister(key.fileobj)
+                    key.fileobj.close()
+                    continue
+                last_output = time.monotonic()
+                _forward_output(key.data, chunk)
+        result = process.wait()
+        return result if result >= 0 else 128 - result
+    except (BrokenPipeError, KeyboardInterrupt):
+        _stop_process_group(process)
+        return 130
+    finally:
+        selector.close()
+        if process.poll() is None:
+            _stop_process_group(process)
+
+
 def main() -> None:
     target = _cache_target()
     _seed(target)
     environment = os.environ.copy()
     environment["UV_CACHE_DIR"] = str(target)
+    if sys.argv[1:3] == ["run", "pytest"]:
+        raise SystemExit(_run_project_tests(sys.argv[1:], environment))
     os.execve(REAL_UV, [str(REAL_UV), *sys.argv[1:]], environment)
 
 

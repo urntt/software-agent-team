@@ -55,6 +55,15 @@ than relying on an editable install left behind by setup. README.md must show
 the exact shell form of the manifest setup, start, and test argv; Installation,
 Usage, and Testing headings are acceptable.
 
+Run tests with visible per-test progress when diagnosing a delay; do not pipe
+the test runner into `tail` or another command that hides progress until exit.
+The sandbox stops `uv run pytest` if it produces no output for 90 seconds. A
+silent-test timeout means inspect the last running test, correct the test or
+product code, and rerun; it is not evidence that the model provider failed.
+When testing an interactive CLI, never wait for a newline from a prompt that
+does not print one. Use a bounded nonblocking read or a PTY, and bound every
+child process wait.
+
 Use the repository's own configuration when running checks. Commit all relevant
 changes, leave the workspace clean, and report only assigned task IDs that the
 controller-verified result completes. An Integration Agent whose exact upstream
