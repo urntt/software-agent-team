@@ -114,6 +114,7 @@ from software_agent_team.response_corrections import (
     SemanticCorrectionOutcome,
     SemanticCorrectionPlan,
     SemanticCorrectionRequestEvidence,
+    SemanticCorrectionSubmissionError,
     correction_value_schema,
     semantic_correction_slot_handle,
 )
@@ -10674,7 +10675,7 @@ def test_writer_coverage_correction_preserves_multiple_writer_choice(
             "tasks": (
                 primary_task,
                 secondary_task.model_copy(
-                    update={"acceptance_criteria": ("AC_REPORT",)}
+                    update={"acceptance_criteria": ("AC_SCAN", "AC_REPORT")}
                 ),
             )
         }
@@ -10684,12 +10685,15 @@ def test_writer_coverage_correction_preserves_multiple_writer_choice(
     invalid_payload["proposal"]["tasks"] = [
         task.model_dump(mode="json") for task in invalid.tasks
     ]
+    submitted_tasks = deepcopy(valid_payload["proposal"]["tasks"])
+    submitted_tasks[0]["description"] = "Rewritten task intent. " * 30
+    submitted_tasks[1]["acceptance_criteria"] = ["AC_REPORT"]
     executor = ScriptedAgentExecutor(
         [
             json.dumps(invalid_payload),
             correction_response(
                 invalid_payload,
-                {"/proposal/tasks": valid_payload["proposal"]["tasks"]},
+                {"/proposal/tasks": submitted_tasks},
             ),
         ]
     )
@@ -10720,6 +10724,12 @@ def test_writer_coverage_correction_preserves_multiple_writer_choice(
         primary_writer.id,
         second_writer.id,
     ]
+    assert [
+        item["properties"]["description"]["const"] for item in positional_items
+    ] == [primary_task.description, secondary_task.description]
+    assert positional_items[1]["properties"]["acceptance_criteria"]["allOf"] == [
+        {"contains": {"const": "AC_SCAN"}}
+    ]
     assert "items" not in replacement
     assert '"items": false' not in executor.requests[1].prompt
     assert replacement["allOf"][0]["contains"]["properties"]["owner_agent_id"][
@@ -10730,6 +10740,10 @@ def test_writer_coverage_correction_preserves_multiple_writer_choice(
     ] == {"const": "AC_REPORT"}
     assert store.load_turn(request().run_id, 2).semantic_correction_outcome == (
         "accepted"
+    )
+    assert store.load_turn(request().run_id, 2).response_normalizations == (
+        "preserved task intent and existing criterion bindings during writer "
+        "coverage correction",
     )
 
 
@@ -12681,6 +12695,37 @@ def test_combined_scope_projections_preserve_identity_in_either_order() -> None:
 
     assert rendered_task_identities(review_only) == stable_ids
     assert rendered_task_identities(combined) == stable_ids
+
+
+@pytest.mark.parametrize("rewrite", ["identity", "extra_task"])
+def test_writer_coverage_correction_rejects_task_topology_rewrites(
+    rewrite: str,
+) -> None:
+    payload = review_scope_correction_payload()
+    issue = ResponseValidationIssue(
+        path="/proposal/tasks",
+        code="planning_semantic_invariant",
+        invariant_id="planning_writer_criterion_coverage",
+        subjects=(
+            ResponseIssueSubject(
+                kind=ResponseIssueSubjectKind.CRITERION,
+                identifier="AC_REPORT",
+            ),
+        ),
+        message="writer tasks do not cover proposal acceptance criteria",
+        authority=ResponseIssueAuthority.MODEL,
+    )
+    plan = correction_plan_for(payload, (issue,))
+    submitted = deepcopy(payload)
+    if rewrite == "identity":
+        submitted["proposal"]["tasks"][0]["id"] = "TASK_REPLACED"
+    else:
+        submitted["proposal"]["tasks"].append(
+            deepcopy(submitted["proposal"]["tasks"][0])
+        )
+
+    with pytest.raises(SemanticCorrectionSubmissionError, match="task"):
+        planning._preserve_tasks_during_writer_coverage_correction(submitted, plan)
 
 
 class EvidencelessThenScriptedExecutor:

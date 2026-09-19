@@ -2117,6 +2117,99 @@ def _compile_review_task_scope_projection(
     return tuple(changes)
 
 
+def _preserve_tasks_during_writer_coverage_correction(
+    payload: dict[str, object],
+    plan: SemanticCorrectionPlan,
+) -> tuple[dict[str, object], tuple[str, ...]]:
+    """Keep task intent and existing bindings when only writer coverage is open."""
+
+    if "/proposal/tasks" not in plan.evidence.target_paths:
+        return payload, ()
+    model_issues = tuple(
+        issue
+        for issue in plan.diagnostic.issues
+        if issue.authority is ResponseIssueAuthority.MODEL
+    )
+    if not model_issues or any(
+        issue.invariant_id != "planning_writer_criterion_coverage"
+        for issue in model_issues
+    ):
+        return payload, ()
+    base_proposal = plan.base_payload.get("proposal")
+    corrected_proposal = payload.get("proposal")
+    if not isinstance(base_proposal, dict) or not isinstance(corrected_proposal, dict):
+        return payload, ()
+    base_tasks = base_proposal.get("tasks")
+    corrected_tasks = corrected_proposal.get("tasks")
+    base_agents = base_proposal.get("agents")
+    if (
+        not isinstance(base_tasks, list)
+        or not isinstance(base_agents, list)
+        or not all(isinstance(item, dict) for item in base_tasks)
+    ):
+        return payload, ()
+    if (
+        not isinstance(corrected_tasks, list)
+        or not all(isinstance(item, dict) for item in corrected_tasks)
+        or len(base_tasks) != len(corrected_tasks)
+    ):
+        raise SemanticCorrectionSubmissionError(
+            "writer coverage correction changed the task collection shape",
+            plan=plan,
+            paths=("/proposal/tasks",),
+        )
+    try:
+        tasks = tuple(ProposedTask.model_validate(item) for item in base_tasks)
+        agents = tuple(ProposedAgent.model_validate(item) for item in base_agents)
+    except ValidationError:
+        return payload, ()
+    writer_ids = {
+        agent.id
+        for agent in agents
+        if agent.capability
+        in {AgentCapability.IMPLEMENTATION, AgentCapability.INTEGRATION}
+    }
+    if any(
+        item.get("id") != task.id or item.get("owner_agent_id") != task.owner_agent_id
+        for item, task in zip(corrected_tasks, tasks, strict=True)
+    ):
+        raise SemanticCorrectionSubmissionError(
+            "writer coverage correction changed task identity or owner",
+            plan=plan,
+            paths=("/proposal/tasks",),
+        )
+
+    projected_tasks = deepcopy(base_tasks)
+    for index, task in enumerate(tasks):
+        if task.owner_agent_id not in writer_ids:
+            continue
+        submitted = corrected_tasks[index].get("acceptance_criteria")
+        if not isinstance(submitted, list) or not all(
+            isinstance(item, str) for item in submitted
+        ):
+            raise SemanticCorrectionSubmissionError(
+                "writer coverage correction requires criterion ID arrays",
+                plan=plan,
+                paths=("/proposal/tasks",),
+            )
+        if len(set(submitted)) != len(submitted):
+            raise SemanticCorrectionSubmissionError(
+                "writer coverage correction repeated a criterion ID",
+                plan=plan,
+                paths=("/proposal/tasks",),
+            )
+        projected_tasks[index]["acceptance_criteria"] = list(
+            dict.fromkeys((*task.acceptance_criteria, *submitted))
+        )
+    if projected_tasks == corrected_tasks:
+        return payload, ()
+    corrected_proposal["tasks"] = projected_tasks
+    return payload, (
+        "preserved task intent and existing criterion bindings during writer "
+        "coverage correction",
+    )
+
+
 def _preserve_agents_during_missing_specialist_correction(
     payload: dict[str, object],
     plan: SemanticCorrectionPlan,
@@ -7364,6 +7457,13 @@ def _planning_response_schema_for_correction(
         )
     )
     if writer_coverage_issues:
+        coverage_only_task_rewrite = any(
+            issue.path == "/proposal/tasks" for issue in writer_coverage_issues
+        ) and all(
+            issue.invariant_id == "planning_writer_criterion_coverage"
+            for issue in plan.diagnostic.issues
+            if issue.authority is ResponseIssueAuthority.MODEL
+        )
         mutable_coverage_inputs = tuple(
             path
             for path in (
@@ -7463,6 +7563,29 @@ def _planning_response_schema_for_correction(
                 )
             acceptance_items["enum"] = stable_criterion_ids
             acceptance_schema["uniqueItems"] = True
+            if coverage_only_task_rewrite:
+                scoped_properties["description"] = {
+                    "const": task.description,
+                    "type": "string",
+                }
+                scoped_properties["dependencies"] = {
+                    "const": list(task.dependencies),
+                    "type": "array",
+                }
+                scoped_properties["expected_paths"] = {
+                    "const": list(task.expected_paths),
+                    "type": "array",
+                }
+                if task.owner_agent_id in writer_ids:
+                    acceptance_schema["allOf"] = [
+                        {"contains": {"const": criterion_id}}
+                        for criterion_id in task.acceptance_criteria
+                    ]
+                else:
+                    scoped_properties["acceptance_criteria"] = {
+                        "const": list(task.acceptance_criteria),
+                        "type": "array",
+                    }
             if task_index in exact_task_indexes:
                 acceptance_schema["allOf"] = [
                     {"contains": {"const": criterion_id}}
@@ -10930,10 +11053,17 @@ class AdaptivePlanningCoordinator:
                             response_schema=response_schema,
                         )
                         (
+                            task_preserved_payload,
+                            task_preservation_normalizations,
+                        ) = _preserve_tasks_during_writer_coverage_correction(
+                            application.payload,
+                            correction_plan,
+                        )
+                        (
                             payload,
                             specialist_preservation_normalizations,
                         ) = _preserve_agents_during_missing_specialist_correction(
-                            application.payload,
+                            task_preserved_payload,
                             correction_plan,
                             profile_criterion_ids=(
                                 criterion.id
@@ -10942,6 +11072,7 @@ class AdaptivePlanningCoordinator:
                         )
                         correction_binding_normalizations = (
                             *application.normalizations,
+                            *task_preservation_normalizations,
                             *specialist_preservation_normalizations,
                         )
                         correction_applied = True

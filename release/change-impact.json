@@ -1,22 +1,12 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.4.4",
-  "target_version": "0.4.5",
+  "baseline_version": "0.4.5",
+  "target_version": "0.4.6",
   "changes": [
     {
-      "id": "ground-successful-direct-review-probes",
+      "id": "preserve-tasks-during-writer-coverage-correction",
       "impact": "patch",
-      "summary": "Ground satisfied Review markers in successful framed direct probes without letting failed script or source echoes contaminate the same selector"
-    },
-    {
-      "id": "bound-review-correction-catalog",
-      "impact": "patch",
-      "summary": "Limit Review evidence correction catalogs and compact their presentation so a multi-field repair can reach the required typed submission"
-    },
-    {
-      "id": "recheck-live-compaction-lineage",
-      "impact": "patch",
-      "summary": "Recheck brief incomplete live compaction lineage without disabling provider liveness or relaxing terminal attribution"
+      "summary": "Keep existing task intent, identities, dependencies and criterion bindings while repairing missing writer coverage"
     }
   ]
 }

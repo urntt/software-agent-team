@@ -1,49 +1,43 @@
 # Project Status
 
-**Current milestone:** prepare the `v0.4.5` Review-grounding and live-compaction
-correction candidate for shared public-user validation.
+**Current milestone:** validate the `v0.4.6` Planning writer-coverage correction
+before another shared public-user journey.
 
 **Last updated:** September 19, 2026
 
 This document records current implementation and validation evidence. Product
 and architecture decisions belong to [`VISION.md`](VISION.md).
 
-Published `v0.4.4` passed its exact-tag gate and installed through the public
-one-command bootstrap in a fresh non-Docker-group account using rootless Docker.
-First and later startup checks, provider configuration, Planning, implementation,
-integration, five deterministic quality gates, Tester, and Experience Reviewer
-completed. General and Security Reviewer did not converge; the run ended
-`artifact_invalid` with zero accepted criteria and no delivery. The failure
-account completed an export, full uninstall, and exact account cleanup.
+Published `v0.4.5` passed its exact-tag hosted gate and installed through the
+public one-command bootstrap in a fresh non-Docker-group account with rootless
+Docker. First and later 16/16 self-checks, the real DeepSeek model check, route
+configuration, and 29/29 task admission passed. Nine attributable Planning
+responses cost $0.079940, but the ninth writer-coverage correction rewrote an
+unrelated task description beyond its 500-character bound. Planning stopped
+before overview approval or runtime Agents; the account completed a formal
+export, full uninstall, and exact cleanup. No accepted delivery exists yet.
 
-The `v0.4.5` candidate makes a complete successful direct probe authoritative
-for an exact satisfied Review marker, keeping failed script and source echoes in
-the audit chain without treating them as positive citations. The archived
-Security Reviewer submissions and correction catalogs replay through production
-grounding with four matching semantic digests and all four boundary citations
-bound to the successful direct probe. Multi-field correction catalogs now expose
-at most 16 ranked candidates per slot in compact JSON; the original failed
-General Reviewer request projected from 151,602 to about 68,286 characters.
-Live liveness rechecks a briefly inconsistent compaction lineage for up to three
-seconds without crediting unknown session activity or relaxing terminal capture.
-Affected tests passed 330/330. The pre-commit canonical local gate passed 1,879
-tests with all four stages and resource cleanup complete. Fixed-install
-rehearsal, exact-tag publication, and fresh ordinary-user acceptance remain
-unverified.
+The `v0.4.6` candidate confines writer-coverage correction to adding criterion
+bindings on existing writer tasks. It retains task intent, identity, topology,
+and existing bindings after model submission, with an auditable normalization.
+The archived ninth submission reproduces the overlong field through production
+interfaces and projects to structurally valid tasks after this change. The
+Planning/correction targeted suite passed 289 tests. A canonical full gate,
+fixed-install rehearsal, and exact-tag publication remain to be verified.
 
 ## Current Release
 
-The immutable `v0.4.4` tag,
-[GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.4.4),
+The immutable `v0.4.5` tag,
+[GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.4.5),
 package version, and release manifest identify source revision
-`4a99e4384801f4a927b13657ac2db08b0e72fe59` and Git archive digest
-`sha256:7df5b44236b8a24323a62b0c4c797e56103b5d133c211abc461320d9b27acbe4`.
+`dbf47cc0243844df02a8fad6ebea9750346d82e5` and Git archive digest
+`sha256:3a0cfbc4d6569c40a96d927544a3ee90893ab8e4ce317830706e3542c53512e0`.
 Exact-tag GitHub Actions
-[run 35450671427](https://github.com/urntt/software-agent-team/actions/runs/35450671427)
-passed 1,873 tests with three environment skips; the exact local candidate
-passed 1,876. The unique Release manifest asset digest is
-`sha256:725c246674df524ce24252f86d2321a8f85cf8be6bd270f0f21427299eb9ce6d`.
-The public rootless run described above reached Review but did not deliver.
+[run 35460651776](https://github.com/urntt/software-agent-team/actions/runs/35460651776)
+passed 1,876 tests with three environment skips; the exact local candidate
+passed 1,879. The unique Release manifest asset digest is
+`sha256:fb88c536a073d7f8fc0f9aa3ad76de4701ee3b2a90dce6757517eb1571de6004`.
+The public rootless run described above stopped in Planning and did not deliver.
 
 
 The immutable `v0.4.1` tag,

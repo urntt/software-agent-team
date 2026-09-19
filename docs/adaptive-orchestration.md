@@ -435,6 +435,13 @@ may perform only these bounded, semantics-preserving normalizations:
   scope opens the Agent collection, open existing task-owner and criterion-verifier
   references in the same bounded correction. Do not force unrelated valid fields
   into a correction when identities remain stable;
+- When the only task-array defect is missing writer coverage, keep the task count,
+  IDs, owners, descriptions, paths, dependencies, and existing criterion bindings.
+  The model may add criterion IDs to an existing implementation or integration
+  task; the Controller reapplies this narrow authority after the tool call and
+  records a normalization if the submitted array also rewrites retained fields.
+  This prevents a coverage repair from creating a new task-description or
+  ownership defect;
 - If a proposal has more than eight independently targeted schema
   failures, all failures and targets are model-owned descendants of
   `proposal`, and the retained proposal is still an object, treat the complete
