@@ -1,17 +1,12 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.4.1",
-  "target_version": "0.4.2",
+  "baseline_version": "0.4.2",
+  "target_version": "0.4.3",
   "changes": [
     {
-      "id": "planning-quality-dependency-reversal-correction",
+      "id": "bounded-project-test-silence",
       "impact": "patch",
-      "summary": "Repair a direct reversed quality Agent dependency and its stale cross-Agent task edge through one bounded atomic correction"
-    },
-    {
-      "id": "planning-live-elapsed-observation",
-      "impact": "patch",
-      "summary": "Preserve one Planning invocation elapsed clock across same-attempt activity updates in the live terminal card"
+      "summary": "Bound silent generated-project pytest runs in the sandbox, preserve live test output, and give the writer an actionable diagnostic before the provider inactivity guard fires"
     }
   ]
 }
