@@ -26,6 +26,9 @@ from software_agent_team.submissions import ARTIFACT_SUBMISSION_TOOL
 _MAX_INDEX_BYTES = 4 * 1024 * 1024
 _MAX_SESSION_BYTES = 16 * 1024 * 1024
 _MAX_SESSION_RECORDS = 4096
+_MAX_SESSION_ROTATIONS = 8
+_MAX_CHAIN_BYTES = 64 * 1024 * 1024
+_MAX_CHAIN_RECORDS = 16384
 _MAX_RECORD_BYTES = 1024 * 1024
 _MAX_TOOL_OUTPUT_BYTES = 1024 * 1024
 _MAX_TOOL_CALLS = 999
@@ -263,6 +266,13 @@ class _OpenClawSessionSnapshot:
     transcript_complete: bool = False
 
 
+@dataclass(frozen=True)
+class _BoundOpenClawTranscript:
+    records: tuple[dict[str, object], ...]
+    sha256: str
+    complete: bool
+
+
 def _sha256(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
@@ -357,6 +367,303 @@ def _load_session_records(payload: bytes) -> tuple[dict[str, object], ...]:
             )
         records.append(_load_json_object(line, label="OpenClaw session record"))
     return tuple(records)
+
+
+def _safe_session_id(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and bool(value)
+        and len(value) <= 128
+        and all(
+            character.isascii() and (character.isalnum() or character in "-_")
+            for character in value
+        )
+    )
+
+
+def _bound_session_path(sessions: Path, session_id: str, value: object) -> Path:
+    expected = sessions / f"{session_id}.jsonl"
+    if value is None:
+        return expected
+    if not isinstance(value, str):
+        raise OpenClawSessionEvidenceError(
+            "OpenClaw session index points outside the expected transcript"
+        )
+    path = Path(value)
+    rotated_name = re.fullmatch(
+        rf"\d{{4}}-\d{{2}}-\d{{2}}T\d{{2}}-\d{{2}}-\d{{2}}-\d{{3}}Z_{re.escape(session_id)}\.jsonl",
+        path.name,
+    )
+    if (
+        not path.is_absolute()
+        or path.parent != sessions
+        or (path != expected and rotated_name is None)
+    ):
+        raise OpenClawSessionEvidenceError(
+            "OpenClaw session index points outside the expected transcript"
+        )
+    return path
+
+
+def _read_session_segment(
+    path: Path, session_id: str, *, allow_incomplete: bool
+) -> tuple[bytes, tuple[dict[str, object], ...], bool]:
+    payload = _read_regular_file(
+        path, limit=_MAX_SESSION_BYTES, label="OpenClaw session transcript"
+    )
+    complete = payload.endswith(b"\n")
+    if allow_incomplete:
+        lines = payload.splitlines()
+        if not complete:
+            lines = lines[:-1]
+        if len(lines) > _MAX_SESSION_RECORDS:
+            raise OpenClawSessionEvidenceError(
+                "OpenClaw session transcript has an invalid record count"
+            )
+        if any(not line or len(line) > _MAX_RECORD_BYTES for line in lines):
+            raise OpenClawSessionEvidenceError(
+                "OpenClaw session transcript contains an invalid record"
+            )
+        records = tuple(
+            _load_json_object(line, label="OpenClaw session record") for line in lines
+        )
+    else:
+        records = _load_session_records(payload)
+    if records and (
+        records[0].get("type") != "session" or records[0].get("id") != session_id
+    ):
+        raise OpenClawSessionEvidenceError(
+            "OpenClaw transcript identity differs from the invocation session"
+        )
+    return payload, records, complete
+
+
+def _rotation_chain(
+    sessions: Path,
+    entry: dict[str, object],
+    *,
+    session_key: str,
+    session_id: str,
+) -> tuple[tuple[str, Path], tuple[dict[str, object], ...]]:
+    current = _bound_session_path(sessions, session_id, entry.get("sessionFile"))
+    family = entry.get("usageFamilySessionIds")
+    checkpoints = entry.get("compactionCheckpoints")
+    if family is None and checkpoints is None:
+        if current != sessions / f"{session_id}.jsonl":
+            raise OpenClawSessionEvidenceError(
+                "OpenClaw rotated transcript has no compaction lineage"
+            )
+        return ((session_id, current),), ()
+    if (
+        not isinstance(family, list)
+        or not family
+        or len(family) > _MAX_SESSION_ROTATIONS + 1
+        or any(not _safe_session_id(value) for value in family)
+        or len(set(family)) != len(family)
+        or family[-1] != session_id
+        or not isinstance(checkpoints, list)
+        or len(checkpoints) != len(family) - 1
+        or entry.get("compactionCount") != len(checkpoints)
+    ):
+        raise OpenClawSessionEvidenceError("OpenClaw compaction lineage is invalid")
+    if len(family) == 1:
+        if current != sessions / f"{session_id}.jsonl":
+            raise OpenClawSessionEvidenceError(
+                "OpenClaw rotated transcript has no compaction lineage"
+            )
+        return ((session_id, current),), ()
+    chain = [(family[0], sessions / f"{family[0]}.jsonl")]
+    for index, checkpoint in enumerate(checkpoints):
+        if not isinstance(checkpoint, dict):
+            raise OpenClawSessionEvidenceError("OpenClaw compaction lineage is invalid")
+        before = checkpoint.get("preCompaction")
+        after = checkpoint.get("postCompaction")
+        if (
+            checkpoint.get("sessionKey") != session_key
+            or checkpoint.get("sessionId") != family[index + 1]
+            or not isinstance(before, dict)
+            or before.get("sessionId") != family[index]
+            or not isinstance(after, dict)
+            or after.get("sessionId") != family[index + 1]
+            or not isinstance(before.get("entryId"), str)
+            or not isinstance(after.get("entryId"), str)
+        ):
+            raise OpenClawSessionEvidenceError("OpenClaw compaction lineage is invalid")
+        successor = _bound_session_path(
+            sessions, family[index + 1], after.get("sessionFile")
+        )
+        chain.append((family[index + 1], successor))
+    if chain[-1][1] != current:
+        raise OpenClawSessionEvidenceError("OpenClaw compaction lineage is invalid")
+    return tuple(chain), tuple(checkpoints)
+
+
+def _join_rotated_records(
+    previous: tuple[dict[str, object], ...],
+    successor: tuple[dict[str, object], ...],
+    checkpoint: dict[str, object],
+    *,
+    previous_path: Path,
+) -> tuple[dict[str, object], ...]:
+    before = checkpoint["preCompaction"]
+    after = checkpoint["postCompaction"]
+    marker_id = after["entryId"]
+    for records in (previous, successor):
+        identifiers = [record.get("id") for record in records]
+        if any(not isinstance(identifier, str) for identifier in identifiers) or len(
+            set(identifiers)
+        ) != len(identifiers):
+            raise OpenClawSessionEvidenceError(
+                "OpenClaw compaction entries are invalid"
+            )
+    if (
+        len(previous) < 2
+        or previous[-1].get("type") != "compaction"
+        or previous[-1].get("id") != marker_id
+        or previous[-1].get("parentId") != before["entryId"]
+        or previous[-2].get("id") != before["entryId"]
+        or successor[0].get("parentSession") != str(previous_path)
+    ):
+        raise OpenClawSessionEvidenceError("OpenClaw compaction boundary is invalid")
+    marker_positions = [
+        index
+        for index, record in enumerate(successor)
+        if record.get("type") == "compaction" and record.get("id") == marker_id
+    ]
+    if len(marker_positions) != 1:
+        raise OpenClawSessionEvidenceError("OpenClaw compaction boundary is invalid")
+    marker_index = marker_positions[0]
+    new_marker = successor[marker_index]
+    old_marker = previous[-1]
+    if {
+        key: value for key, value in new_marker.items() if key != "firstKeptEntryId"
+    } != {key: value for key, value in old_marker.items() if key != "firstKeptEntryId"}:
+        raise OpenClawSessionEvidenceError("OpenClaw compaction boundary is invalid")
+    kept_start = next(
+        (
+            index
+            for index, record in enumerate(successor[1:marker_index], start=1)
+            if record.get("type") == "message"
+        ),
+        marker_index,
+    )
+    if successor[1:kept_start] != previous[1:kept_start]:
+        raise OpenClawSessionEvidenceError("OpenClaw compaction boundary is invalid")
+    kept = successor[kept_start:marker_index]
+    old_kept = previous[len(previous) - 1 - len(kept) : -1]
+    if len(kept) != len(old_kept):
+        raise OpenClawSessionEvidenceError("OpenClaw compaction boundary is invalid")
+    for index, (new_record, old_record) in enumerate(zip(kept, old_kept, strict=True)):
+        if index == 0:
+            if {
+                key: value for key, value in new_record.items() if key != "parentId"
+            } != {
+                key: value for key, value in old_record.items() if key != "parentId"
+            } or new_record.get("parentId") != successor[kept_start - 1].get("id"):
+                raise OpenClawSessionEvidenceError(
+                    "OpenClaw compaction boundary is invalid"
+                )
+        elif new_record != old_record:
+            raise OpenClawSessionEvidenceError(
+                "OpenClaw compaction boundary is invalid"
+            )
+    if checkpoint.get("firstKeptEntryId") not in {record.get("id") for record in kept}:
+        raise OpenClawSessionEvidenceError("OpenClaw compaction boundary is invalid")
+    continuation = successor[marker_index + 1 :]
+    existing_ids = {record.get("id") for record in previous}
+    if any(record.get("id") in existing_ids for record in continuation):
+        raise OpenClawSessionEvidenceError("OpenClaw compaction repeats an entry")
+    if any(
+        successor[index].get("parentId") != successor[index - 1].get("id")
+        for index in range(marker_index + 1, len(successor))
+    ):
+        raise OpenClawSessionEvidenceError(
+            "OpenClaw compaction continuation is invalid"
+        )
+    return continuation
+
+
+def _read_bound_transcript(
+    sessions: Path,
+    entry: dict[str, object],
+    *,
+    session_key: str,
+    session_id: str,
+    allow_incomplete: bool,
+) -> _BoundOpenClawTranscript | None:
+    chain, checkpoints = _rotation_chain(
+        sessions, entry, session_key=session_key, session_id=session_id
+    )
+    combined: tuple[dict[str, object], ...] = ()
+    prior_segment: tuple[dict[str, object], ...] = ()
+    payloads: list[bytes] = []
+    total_bytes = 0
+    latest_complete = False
+    for index, (segment_id, path) in enumerate(chain):
+        try:
+            payload, records, latest_complete = _read_session_segment(
+                path,
+                segment_id,
+                allow_incomplete=allow_incomplete and index == len(chain) - 1,
+            )
+        except _OpenClawSessionFileMissing:
+            if allow_incomplete and index == len(chain) - 1:
+                return None
+            if index == len(chain) - 1:
+                raise
+            raise OpenClawSessionEvidenceError(
+                "OpenClaw compaction ancestor is unavailable"
+            ) from None
+        total_bytes += len(payload)
+        if total_bytes > _MAX_CHAIN_BYTES:
+            raise OpenClawSessionEvidenceError(
+                "OpenClaw session chain exceeds its size limit"
+            )
+        if not records:
+            if allow_incomplete and index == len(chain) - 1:
+                return None
+            raise OpenClawSessionEvidenceError("OpenClaw session transcript is empty")
+        if index:
+            if (
+                not any(
+                    record.get("type") == "compaction"
+                    and record.get("id")
+                    == checkpoints[index - 1]["postCompaction"]["entryId"]
+                    for record in records
+                )
+                and allow_incomplete
+                and not latest_complete
+            ):
+                return None
+            continuation = _join_rotated_records(
+                prior_segment,
+                records,
+                checkpoints[index - 1],
+                previous_path=chain[index - 1][1],
+            )
+            combined_ids = {record.get("id") for record in combined}
+            if any(record.get("id") in combined_ids for record in continuation):
+                raise OpenClawSessionEvidenceError(
+                    "OpenClaw compaction repeats an entry"
+                )
+            combined += continuation
+        else:
+            combined = records
+        prior_segment = records
+        if len(combined) > _MAX_CHAIN_RECORDS:
+            raise OpenClawSessionEvidenceError(
+                "OpenClaw session chain has an invalid record count"
+            )
+        payloads.append(payload)
+    if len(payloads) == 1:
+        digest = _sha256(payloads[0])
+    else:
+        hasher = hashlib.sha256(b"SAT OpenClaw compaction chain v1\0")
+        for payload in payloads:
+            hasher.update(len(payload).to_bytes(8, "big"))
+            hasher.update(payload)
+        digest = hasher.hexdigest()
+    return _BoundOpenClawTranscript(combined, digest, latest_complete)
 
 
 def _message_text(content: object) -> str | None:
@@ -502,25 +809,8 @@ def _inspect_openclaw_session_snapshot(
     if not isinstance(entry, dict):
         raise OpenClawSessionEvidenceError("OpenClaw session index entry is invalid")
     session_id = entry.get("sessionId")
-    if (
-        not isinstance(session_id, str)
-        or not session_id
-        or len(session_id) > 128
-        or any(
-            character
-            not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
-            for character in session_id
-        )
-    ):
+    if not _safe_session_id(session_id):
         raise OpenClawSessionEvidenceError("OpenClaw session ID is unsafe")
-    expected_path = sessions / f"{session_id}.jsonl"
-    session_file = entry.get("sessionFile")
-    if session_file is not None and (
-        not isinstance(session_file, str) or Path(session_file) != expected_path
-    ):
-        raise OpenClawSessionEvidenceError(
-            "OpenClaw session index points outside the expected transcript"
-        )
     snapshot = _OpenClawSessionSnapshot(
         observation=OpenClawInitializationObservation(
             checkpoint=InitializationCheckpoint.SESSION_BOUND
@@ -528,33 +818,18 @@ def _inspect_openclaw_session_snapshot(
         session_id=session_id,
     )
     try:
-        transcript = _read_regular_file(
-            expected_path,
-            limit=_MAX_SESSION_BYTES,
-            label="OpenClaw session transcript",
+        bound = _read_bound_transcript(
+            sessions,
+            entry,
+            session_key=session_key,
+            session_id=session_id,
+            allow_incomplete=True,
         )
     except _OpenClawSessionFileMissing:
         return snapshot
-    if not transcript:
+    if bound is None:
         return snapshot
-    complete_lines = transcript.splitlines()
-    if not transcript.endswith(b"\n"):
-        complete_lines = complete_lines[:-1]
-    if not complete_lines:
-        return snapshot
-    if len(complete_lines) > _MAX_SESSION_RECORDS:
-        raise OpenClawSessionEvidenceError(
-            "OpenClaw session transcript has an invalid record count"
-        )
-    records = tuple(
-        _load_json_object(line, label="OpenClaw session record")
-        for line in complete_lines
-    )
-    first = records[0]
-    if first.get("type") != "session" or first.get("id") != session_id:
-        raise OpenClawSessionEvidenceError(
-            "OpenClaw transcript identity differs from the invocation session"
-        )
+    records = bound.records
     snapshot = _OpenClawSessionSnapshot(
         observation=OpenClawInitializationObservation(
             checkpoint=InitializationCheckpoint.TRANSCRIPT_HEADER
@@ -591,8 +866,8 @@ def _inspect_openclaw_session_snapshot(
         invocation_records=records[start:end],
         session_id=session_id,
         matching_turn_count=len(matches),
-        transcript_sha256=_sha256(transcript),
-        transcript_complete=transcript.endswith(b"\n"),
+        transcript_sha256=bound.sha256,
+        transcript_complete=bound.complete,
     )
 
 
@@ -1381,15 +1656,7 @@ def capture_openclaw_tool_evidence(
 ) -> CapturedOpenClawToolEvidence:
     """Capture only the exact current invocation from SAT's pinned session state."""
 
-    if (
-        not session_id
-        or len(session_id) > 128
-        or any(
-            character
-            not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
-            for character in session_id
-        )
-    ):
+    if not _safe_session_id(session_id):
         raise OpenClawSessionEvidenceError("OpenClaw session ID is unsafe")
     sessions = _require_safe_session_directory(state_dir, agent_id)
     index_payload = _read_regular_file(
@@ -1403,26 +1670,15 @@ def capture_openclaw_tool_evidence(
         raise OpenClawSessionEvidenceError(
             "OpenClaw session index does not bind the invocation session"
         )
-    expected_path = sessions / f"{session_id}.jsonl"
-    session_file = entry.get("sessionFile")
-    if session_file is not None and (
-        not isinstance(session_file, str) or Path(session_file) != expected_path
-    ):
-        raise OpenClawSessionEvidenceError(
-            "OpenClaw session index points outside the expected transcript"
-        )
-    transcript = _read_regular_file(
-        expected_path,
-        limit=_MAX_SESSION_BYTES,
-        label="OpenClaw session transcript",
+    bound = _read_bound_transcript(
+        sessions,
+        entry,
+        session_key=session_key,
+        session_id=session_id,
+        allow_incomplete=False,
     )
-    records = _load_session_records(transcript)
-    first = records[0]
-    if first.get("type") != "session" or first.get("id") != session_id:
-        raise OpenClawSessionEvidenceError(
-            "OpenClaw transcript identity differs from the invocation session"
-        )
-    invocation = _current_invocation_records(records, prompt=prompt)
+    assert bound is not None
+    invocation = _current_invocation_records(bound.records, prompt=prompt)
     execution_records, runtime_rejections = _classify_runtime_rejections(invocation)
     terminal_state = _invocation_terminal_state(invocation)
     last_message_index = max(
@@ -1433,7 +1689,7 @@ def capture_openclaw_tool_evidence(
     if any(item.record_index == last_message_index for item in runtime_rejections):
         terminal_state = OpenClawInvocationTerminalState.RUNTIME_REJECTION
     return CapturedOpenClawToolEvidence(
-        transcript_sha256=_sha256(transcript),
+        transcript_sha256=bound.sha256,
         record_count=len(invocation),
         tool_calls=_extract_tool_calls(execution_records),
         terminal_state=terminal_state,

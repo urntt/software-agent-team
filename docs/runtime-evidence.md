@@ -543,7 +543,14 @@ exactly matches the current prompt, and stops at the next user turn. Tool calls
 and results in that segment must pair one-to-one by the external call ID and
 tool name. SAT then assigns stable invocation-local IDs in execution order and
 normalizes each result as terminal success, terminal failure, or nonterminal
-deferred async work. A deferred `exec` or `process` result must carry the pinned
+deferred async work. When OpenClaw compacts mid-turn into a new session file,
+SAT follows only a bounded index checkpoint chain whose session IDs, direct
+files, parent-session links, retained records, and compaction markers agree.
+It joins the original prompt and each non-duplicated continuation before
+extracting tool evidence. A missing ancestor or divergent boundary remains
+invalid; the index path alone cannot authorize a submission. The transcript
+digest then covers every segment in the chain.
+A deferred `exec` or `process` result must carry the pinned
 runtime's complete, well-formed process-handle shape without terminal fields;
 SAT validates that handle but leaves its raw identity in the private transcript.
 Deferred evidence cannot prove a satisfied Review claim or act as a terminal

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -32,7 +33,14 @@ from software_agent_team.openclaw_session_evidence import (
     inspect_openclaw_initialization,
     inspect_openclaw_session_activity,
 )
-from software_agent_team.submissions import ARTIFACT_SUBMISSION_PROTOCOL
+from software_agent_team.submissions import (
+    ARTIFACT_SUBMISSION_PROTOCOL,
+    AgentSubmissionContract,
+    AgentSubmissionPurpose,
+    AgentSubmissionStatus,
+    SubmissionFileCapture,
+    validate_submission_capture,
+)
 from software_agent_team.teams import AgentCapability
 
 SESSION_ID = "2b1dc5c2-d735-4722-a390-3d28e5854fc4"
@@ -490,6 +498,221 @@ def test_terminal_recovery_rejects_rotation_without_current_prompt(
 
     with pytest.raises(OpenClawSessionEvidenceError, match="not attributable"):
         recover_terminal(tmp_path, invocation)
+
+
+def _write_rotated_session(
+    root: Path, invocation: AgentExecutionRequest
+) -> tuple[Path, Path, dict[str, object]]:
+    """Reproduce the pinned runtime's retained suffix after session compaction."""
+
+    sessions = root / "agents" / invocation.agent_id / "sessions"
+    sessions.mkdir(parents=True, exist_ok=True)
+    next_id = "6aaff0c2-c2fd-42e9-985d-3f13af7ffc72"
+    original = sessions / f"{SESSION_ID}.jsonl"
+    successor = sessions / f"2026-09-19T13-07-15-183Z_{next_id}.jsonl"
+    model = {"type": "model_change", "id": "model", "modelId": "provider/model"}
+    prompt = user_record(invocation.prompt)
+    prompt["parentId"] = "model"
+    earlier_call = tool_call_record("earlier", command="pytest -q")
+    earlier_call["parentId"] = prompt["id"]
+    earlier_result = tool_result_record("earlier", output="1 passed")
+    earlier_result["parentId"] = earlier_call["id"]
+    marker = {
+        "type": "compaction",
+        "id": "compaction-marker",
+        "parentId": earlier_result["id"],
+        "firstKeptEntryId": earlier_result["id"],
+        "tokensBefore": 5000,
+    }
+    original_records = [
+        session_record(),
+        model,
+        prompt,
+        earlier_call,
+        earlier_result,
+        marker,
+    ]
+    original.write_text(
+        "\n".join(json.dumps(record) for record in original_records) + "\n",
+        encoding="utf-8",
+    )
+    next_header = session_record(next_id)
+    next_header["parentSession"] = str(original)
+    retained_call = deepcopy(earlier_call)
+    retained_call["parentId"] = model["id"]
+    next_marker = dict(marker)
+    next_marker["firstKeptEntryId"] = earlier_call["id"]
+    submission_call = tool_call_record("submission", command="unused")
+    submission_call["parentId"] = marker["id"]
+    submission_call["message"]["content"][0].update(
+        {
+            "name": "sat_submit_artifact",
+            "arguments": {"artifact": {"summary": "complete"}},
+        }
+    )
+    submission_result = tool_result_record("submission", output="accepted")
+    submission_result["parentId"] = submission_call["id"]
+    submission_result["message"]["toolName"] = "sat_submit_artifact"
+    submission_result["message"]["details"] = {
+        "status": "completed",
+        "submission_status": "accepted",
+    }
+    final = terminal_record()
+    final["parentId"] = submission_result["id"]
+    successor_records = [
+        next_header,
+        model,
+        retained_call,
+        earlier_result,
+        next_marker,
+        submission_call,
+        submission_result,
+        final,
+    ]
+    successor.write_text(
+        "\n".join(json.dumps(record) for record in successor_records) + "\n",
+        encoding="utf-8",
+    )
+    entry: dict[str, object] = {
+        "sessionId": next_id,
+        "sessionFile": str(successor),
+        "compactionCount": 1,
+        "usageFamilySessionIds": [SESSION_ID, next_id],
+        "compactionCheckpoints": [
+            {
+                "sessionKey": invocation.session_key,
+                "sessionId": next_id,
+                "firstKeptEntryId": earlier_result["id"],
+                "preCompaction": {
+                    "sessionId": SESSION_ID,
+                    "entryId": earlier_result["id"],
+                },
+                "postCompaction": {
+                    "sessionId": next_id,
+                    "sessionFile": str(successor),
+                    "entryId": marker["id"],
+                },
+            }
+        ],
+    }
+    (sessions / "sessions.json").write_text(
+        json.dumps({invocation.session_key: entry}), encoding="utf-8"
+    )
+    return original, successor, entry
+
+
+def test_rotated_session_preserves_original_prompt_and_terminal_submission(
+    tmp_path: Path,
+) -> None:
+    invocation = request()
+    _, _, entry = _write_rotated_session(tmp_path, invocation)
+    captured = capture_openclaw_tool_evidence(
+        state_dir=tmp_path,
+        agent_id=invocation.agent_id,
+        session_key=invocation.session_key,
+        session_id=entry["sessionId"],
+        prompt=invocation.prompt,
+    )
+    terminal = recover_terminal(tmp_path, invocation)
+    activity = inspect_openclaw_session_activity(
+        state_dir=tmp_path,
+        agent_id=invocation.agent_id,
+        session_key=invocation.session_key,
+        prompt=invocation.prompt,
+    )
+
+    assert captured.record_count == 7
+    assert tuple(call.tool_name for call in captured.tool_calls) == (
+        "exec",
+        "sat_submit_artifact",
+    )
+    assert terminal.session_id == entry["sessionId"]
+    assert terminal.tool_evidence == captured
+    assert activity is not None and activity.terminal_response_observed
+    assert activity.tool_completed_count == 2
+    contract = AgentSubmissionContract.from_schema(
+        {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {"summary": {"type": "string"}},
+            "required": ["summary"],
+        },
+        purpose=AgentSubmissionPurpose.ARTIFACT,
+    )
+    submission, evidence = validate_submission_capture(
+        contract,
+        binding_sha256="b" * 64,
+        capture=SubmissionFileCapture(
+            content=json.dumps(
+                {
+                    "protocol": ARTIFACT_SUBMISSION_PROTOCOL,
+                    "binding_sha256": "b" * 64,
+                    "schema_sha256": contract.schema_sha256,
+                    "tool_call_id": "submission",
+                    "payload": {"summary": "complete"},
+                }
+            ).encode()
+        ),
+        tool_calls=captured.tool_calls,
+        tool_evidence_error=None,
+    )
+    assert submission is not None and submission.payload == {"summary": "complete"}
+    assert evidence.status is AgentSubmissionStatus.ACCEPTED
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    [
+        "outside_path",
+        "missing_lineage",
+        "wrong_parent",
+        "wrong_boundary",
+        "divergent_retained_record",
+        "missing_ancestor",
+        "symlink_successor",
+    ],
+)
+def test_rotated_session_rejects_unbound_or_broken_lineage(
+    tmp_path: Path, corruption: str
+) -> None:
+    invocation = request()
+    original, successor, entry = _write_rotated_session(tmp_path, invocation)
+    sessions = original.parent
+    if corruption == "outside_path":
+        entry["sessionFile"] = "/tmp/unrelated.jsonl"
+    elif corruption == "missing_lineage":
+        entry.pop("compactionCheckpoints")
+    elif corruption == "missing_ancestor":
+        original.unlink()
+    elif corruption == "symlink_successor":
+        target = tmp_path / "outside.jsonl"
+        target.write_bytes(successor.read_bytes())
+        successor.unlink()
+        successor.symlink_to(target)
+    else:
+        records = [json.loads(line) for line in successor.read_text().splitlines()]
+        if corruption == "wrong_parent":
+            records[0]["parentSession"] = "/tmp/unrelated.jsonl"
+        elif corruption == "wrong_boundary":
+            records[4]["parentId"] = "unrelated"
+        else:
+            records[3]["message"]["content"] = [{"type": "text", "text": "forged"}]
+        successor.write_text(
+            "\n".join(json.dumps(record) for record in records) + "\n",
+            encoding="utf-8",
+        )
+    (sessions / "sessions.json").write_text(
+        json.dumps({invocation.session_key: entry}), encoding="utf-8"
+    )
+
+    with pytest.raises(OpenClawSessionEvidenceError):
+        capture_openclaw_tool_evidence(
+            state_dir=tmp_path,
+            agent_id=invocation.agent_id,
+            session_key=invocation.session_key,
+            session_id=entry["sessionId"],
+            prompt=invocation.prompt,
+        )
 
 
 @pytest.mark.parametrize("usage", [None, {}, {"totalTokens": 100}])
