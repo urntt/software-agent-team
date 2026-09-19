@@ -445,6 +445,10 @@ and stops the exact test process group with exit 124 after 90 seconds without
 output. The bound lets the writer inspect and fix a blocked test before the
 provider silence lease expires; it does not change exported project files or
 the normal `uv` behavior for setup, lock, and start commands.
+The real-child regression waits for a child readiness signal before applying
+its shortened silence window, so interpreter startup latency cannot satisfy
+the no-output condition. It checks silence after an initial line, continuing
+output, closed output pipes, and exact child termination.
 The runtime-image regression uses a committed portable lock containing public
 registry URLs and the real image `uv` behind `--network none`; when the image is
 available locally, it must complete the clean-copy setup, test, and start

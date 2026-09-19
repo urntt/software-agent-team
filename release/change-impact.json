@@ -7,6 +7,11 @@
       "id": "bound-compaction-session-lineage",
       "impact": "patch",
       "summary": "Attribute terminal tool calls and typed submissions across pinned OpenClaw mid-turn compaction sessions while rejecting unbound or divergent lineage"
+    },
+    {
+      "id": "synchronize-silent-test-fixture",
+      "impact": "patch",
+      "summary": "Bind short project-test silence regressions to real child readiness so slow interpreter startup cannot masquerade as post-output silence"
     }
   ]
 }
