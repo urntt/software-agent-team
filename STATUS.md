@@ -1,7 +1,7 @@
 # Project Status
 
-**Current milestone:** validate the `0.4.8` Planning correction candidate and
-publish a stable build before another fresh ordinary-user journey.
+**Current milestone:** publish the validated `0.4.8` Planning correction and
+retest a fresh ordinary-user journey from the public stable release.
 
 **Last updated:** September 19, 2026
 
@@ -44,8 +44,16 @@ candidate preserves existing Agent identities when the Agent collection's only
 defect is missing specialist authority, even when independent fields are being
 corrected at the same time. Archived production-turn replay matches the first
 three semantic payload hashes and preserves task-owner references and writer
-coverage at the original mixed correction; 355 adjacent tests passed. A full
-candidate gate, publication, and fresh full user journey remain pending.
+coverage at the original mixed correction; 355 adjacent tests passed. A
+separate negative boundary test preserves correction authority when Agent
+review ownership is ambiguous. The exact clean code revision
+`259d900945479336ecd4a9e6aaa70d6c14fce261` passed the canonical gate
+on an independent non-Docker-group rootless account: doctor, formatting,
+lint, and 1,883 tests passed with one root-only fixture skipped. Stage
+cleanup was complete, process leases, containers, and volumes were empty,
+and cgroup OOM/kill deltas were zero. Kernel OOM inspection was unavailable
+to that account. The final dev upgrade, publication, and fresh full user
+journey remain pending.
 
 ## Current Release
 
