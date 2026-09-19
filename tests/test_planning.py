@@ -553,6 +553,83 @@ def test_standard_planning_overview_is_human_summary_with_details_on_demand() ->
     assert "authorized fallback profiles:" in detailed
 
 
+def test_writer_responsibility_uses_owned_tasks_not_role_prose() -> None:
+    """A narrow test writer must not inherit a stale README ownership claim."""
+
+    original = proposal_body()
+    cli_writer = original.agents[0]
+    test_writer = cli_writer.model_copy(
+        update={
+            "id": "test_writer",
+            "label": "Test Author",
+            "responsibility": "Author pytest tests and the root README.md.",
+            "rationale": "Separate ownership of the tests and root README.md.",
+            "dependencies": ("cli_developer",),
+            "workspace_scope": "repository/tests",
+        }
+    )
+    quality = tuple(
+        agent.model_copy(update={"dependencies": ("test_writer",)})
+        for agent in original.agents[1:]
+    )
+    cli_task = original.tasks[0].model_copy(
+        update={
+            "description": "Implement Markdown scanning and CLI output.",
+            "acceptance_criteria": ("AC_SCAN",),
+            "expected_paths": ("src",),
+        }
+    )
+    test_task = ProposedTask(
+        id="TASK_TESTS",
+        owner_agent_id="test_writer",
+        description="Author deterministic pytest tests for output and diagnostics.",
+        dependencies=("TASK_IMPLEMENT",),
+        acceptance_criteria=("AC_REPORT",),
+        expected_paths=("tests",),
+    )
+    body = PlanningProposalBody.model_validate(
+        original.model_copy(
+            update={
+                "agents": (cli_writer, test_writer, *quality),
+                "tasks": (cli_task, test_task),
+            }
+        ).model_dump(mode="json")
+    )
+
+    preview = preview_adaptive_proposal(
+        request(), proposal(body=body), policy(), created_at=FIXED_TIME
+    )
+    compiled = preview.team_plan.get_agent("test_writer")
+
+    assert compiled.workspace_scope == "repository/tests"
+    assert compiled.responsibility == test_task.description
+    assert "README.md" not in compiled.responsibility
+    assert "README.md" not in compiled.rationale
+    assert "assigned tasks define executable work" in compiled.rationale
+    overview = render_planning_overview(preview)
+    assert "Author pytest tests and the root README.md" not in overview
+    assert "Separate ownership of the tests and root README.md" not in overview
+
+
+def test_writer_responsibility_stays_bounded_for_multiple_long_tasks() -> None:
+    writer = proposal_body().agents[0]
+    tasks = tuple(
+        ProposedTask(
+            id=f"TASK_LONG_{index}",
+            owner_agent_id=writer.id,
+            description=f"Implement component {index}: " + "detail " * 65,
+            acceptance_criteria=("AC_SCAN",),
+        )
+        for index in (1, 2)
+    )
+
+    summary, rationale = planning._compiled_writer_role(writer, tasks)
+
+    assert len(summary) <= 500
+    assert "2 approved assigned tasks" in summary
+    assert "2 approved task(s)" in rationale
+
+
 def test_planning_overview_contains_multiline_text_inside_its_own_entry() -> None:
     body = proposal_body()
     definition = body.product_definition

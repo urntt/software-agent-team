@@ -398,6 +398,12 @@ def test_dynamic_prompt_is_compiled_from_the_approved_agent_spec() -> None:
     assert "clean-workspace pytest entrypoint" in compact
     assert "pytest's import path" in compact
     assert "exact shell form" in compact
+    assert "assigned tasks define this Agent's work" in compact
+    assert "not permission for each writer to edit every file" in compact
+    assert (
+        "Edit README.md only when an assigned task and this Agent's write scope"
+        in compact
+    )
 
 
 def test_dynamic_prompt_treats_expected_paths_as_non_binding_forecasts() -> None:

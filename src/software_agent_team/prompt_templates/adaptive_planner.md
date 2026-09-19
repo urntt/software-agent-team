@@ -188,6 +188,11 @@ Choose the next response by decision value:
   proposal's `constraints` array; do not repeat, paraphrase, shorten, or broaden
   an execution-profile constraint.
 - The `tasks` array describes work assigned to the proposed runtime Agents.
+  A writable Agent's executable responsibility and runtime rationale are compiled
+  from its assigned tasks and workspace scope, not from its separate role-summary
+  or rationale prose. Keep task descriptions complete and assign each write to
+  an Agent whose workspace scope permits it. Do not list a downstream owner's
+  files as another writer's work.
   Every implementation or integration Agent owns at least one task, and those
   writer-owned tasks cover every proposal-owned acceptance criterion. A testing
   or review Agent may own tasks that make its verification focus explicit, but

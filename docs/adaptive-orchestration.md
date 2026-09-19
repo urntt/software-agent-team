@@ -802,6 +802,16 @@ contract, and repository ignore policy retain their respective authority. This
 distinction also applies to quality tasks, where a forecast may identify paths
 to inspect without requiring or permitting writes.
 
+For writable Agents, the Controller compiles the runtime responsibility shown in
+the overview and Agent prompt from that Agent's assigned task descriptions, and
+its runtime rationale from the assigned-task count and workspace scope. The
+Planner's separate role-summary or rationale prose cannot add work owned by
+another Agent.
+When several task descriptions cannot fit the bounded summary, the overview
+points to the complete task list. Project-wide command and documentation checks
+do not grant any writer permission to change files outside its assigned tasks
+and workspace scope; the Controller still rejects out-of-scope commits.
+
 The typed Agent graph likewise owns runtime-team topology. The raw model turn is
 preserved unchanged for audit, including any advisory ProductDefinition team
 impact or team-decision prose. During preview compilation, the Controller derives

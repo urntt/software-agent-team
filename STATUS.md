@@ -1,46 +1,46 @@
 # Project Status
 
-**Current milestone:** validate the `v0.4.6` Planning writer-coverage correction
-before another shared public-user journey.
+**Current milestone:** correct writable-Agent task ownership after the public
+`v0.4.6` journey stopped at the Test Author permission boundary.
 
 **Last updated:** September 19, 2026
 
 This document records current implementation and validation evidence. Product
 and architecture decisions belong to [`VISION.md`](VISION.md).
 
-Published `v0.4.5` passed its exact-tag hosted gate and installed through the
-public one-command bootstrap in a fresh non-Docker-group account with rootless
-Docker. First and later 16/16 self-checks, the real DeepSeek model check, route
-configuration, and 29/29 task admission passed. Nine attributable Planning
-responses cost $0.079940, but the ninth writer-coverage correction rewrote an
-unrelated task description beyond its 500-character bound. Planning stopped
-before overview approval or runtime Agents; the account completed a formal
-export, full uninstall, and exact cleanup. No accepted delivery exists yet.
+Published `v0.4.6` passed the exact-tag hosted gate, and a fresh
+non-Docker-group account installed it through the public one-command bootstrap
+with rootless Docker. First and later 16/16 self-checks, real DeepSeek check,
+29/29 task admission, Planning and the seven-Agent execution preflight passed.
+The CLI Implementer completed, but the Test Author then changed root
+`README.md` outside its `repository/tests` workspace and the Controller
+correctly rejected the commit. The approved test task owned only tests; a
+parallel role summary had independently claimed README work owned by the
+Integrator. Build exited 2 with no accepted delivery. The raw evidence, formal
+export and exact account cleanup were retained for diagnosis.
 
-The `v0.4.6` candidate confines writer-coverage correction to adding criterion
-bindings on existing writer tasks. It retains task intent, identity, topology,
-and existing bindings after model submission, with an auditable normalization.
-The archived ninth submission reproduces the overlong field through production
-interfaces and projects to structurally valid tasks after this change. The
-Planning/correction targeted suite passed 289 tests; the full local gate passed
-1,881 tests with four completed stages, no OOM, and complete process and Docker
-cleanup. The code commit passed a fixed rootless dev upgrade with configuration
-and daemon identity preserved. Exact-tag publication and a fresh complete
-public-user journey remain unverified.
+The `v0.4.7` candidate derives writable-Agent runtime responsibility from
+assigned task descriptions and its runtime rationale from the approved task
+count and workspace scope. Project-wide requirements do not expand an Agent's
+assigned work or write scope. The original approved plan recompiled through
+the production Planning interface no longer assigns README to the Test Author.
+The affected Planning, dynamic-prompt and runner suite passed 375 tests;
+canonical gate, fixed rootless dev upgrade, exact-tag hosted gate, publication
+and a fresh full public-user journey remain pending.
 
 ## Current Release
 
-The immutable `v0.4.5` tag,
-[GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.4.5),
+The immutable `v0.4.6` tag,
+[GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.4.6),
 package version, and release manifest identify source revision
-`dbf47cc0243844df02a8fad6ebea9750346d82e5` and Git archive digest
-`sha256:3a0cfbc4d6569c40a96d927544a3ee90893ab8e4ce317830706e3542c53512e0`.
+`2d0eb2513218cd89bac6a7f68b25e595adb66362` and Git archive digest
+`sha256:6fe415bbe19f798320567071ded056e24b33317422043ede81f3b148eccd08c7`.
 Exact-tag GitHub Actions
-[run 35460651776](https://github.com/urntt/software-agent-team/actions/runs/35460651776)
-passed 1,876 tests with three environment skips; the exact local candidate
-passed 1,879. The unique Release manifest asset digest is
-`sha256:fb88c536a073d7f8fc0f9aa3ad76de4701ee3b2a90dce6757517eb1571de6004`.
-The public rootless run described above stopped in Planning and did not deliver.
+[run 35465341048](https://github.com/urntt/software-agent-team/actions/runs/35465341048)
+passed 1,878 tests with three environment skips; the local candidate passed
+1,881. The unique Release manifest asset digest is
+`sha256:8e49cb8ab8ab000e87f575bf4f9adc1eaf2d4505e626b56fbf3dccf2faddb881`.
+The public rootless run described above stopped before delivery.
 
 
 The immutable `v0.4.1` tag,

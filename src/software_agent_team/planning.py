@@ -8779,6 +8779,32 @@ def _normalize_question_answer(
     return answer
 
 
+def _compiled_writer_role(
+    agent: ProposedAgent,
+    tasks: tuple[ProposedTask, ...],
+) -> tuple[str, str]:
+    """Use assigned tasks and scope, rather than parallel prose, for writer work."""
+
+    assigned = tuple(task for task in tasks if task.owner_agent_id == agent.id)
+    if not assigned:
+        raise PlanningError(f"writable Agent {agent.id} has no assigned task")
+    descriptions = tuple(task.description for task in assigned)
+    summary = " ".join(descriptions)
+    responsibility = (
+        summary
+        if len(summary) <= 500
+        else (
+            f"Complete {len(assigned)} approved assigned tasks; "
+            "see the task list for their full scope."
+        )
+    )
+    rationale = (
+        f"Owns {len(assigned)} approved task(s) within {agent.workspace_scope}; "
+        "assigned tasks define executable work."
+    )
+    return responsibility, rationale
+
+
 def preview_adaptive_proposal(
     request: PlanningRequest,
     proposal: PlanningProposal,
@@ -8967,6 +8993,13 @@ def preview_adaptive_proposal(
     agents = []
     timeout_resolutions = []
     for proposed in body.agents:
+        if proposed.capability in {
+            AgentCapability.IMPLEMENTATION,
+            AgentCapability.INTEGRATION,
+        }:
+            responsibility, rationale = _compiled_writer_role(proposed, body.tasks)
+        else:
+            responsibility, rationale = proposed.responsibility, proposed.rationale
         timeout_policy = policy.capability_timeouts[proposed.capability]
         override = proposal.timeout_overrides_seconds.get(proposed.id)
         if timeout_policy.default_seconds == 0:
@@ -8989,8 +9022,8 @@ def preview_adaptive_proposal(
                 AgentSpec(
                     id=proposed.id,
                     label=proposed.label,
-                    responsibility=proposed.responsibility,
-                    rationale=proposed.rationale,
+                    responsibility=responsibility,
+                    rationale=rationale,
                     capability=proposed.capability,
                     specialization=proposed.specialization,
                     permission_profile=permission_for_capability(proposed.capability),
@@ -9070,8 +9103,8 @@ def preview_adaptive_proposal(
             AgentSpec(
                 id=proposed.id,
                 label=proposed.label,
-                responsibility=proposed.responsibility,
-                rationale=proposed.rationale,
+                responsibility=responsibility,
+                rationale=rationale,
                 capability=proposed.capability,
                 specialization=proposed.specialization,
                 permission_profile=permission_for_capability(proposed.capability),
