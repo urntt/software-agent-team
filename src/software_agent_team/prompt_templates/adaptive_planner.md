@@ -197,7 +197,11 @@ Choose the next response by decision value:
   writer-owned tasks cover every proposal-owned acceptance criterion. A testing
   or review Agent may own tasks that make its verification focus explicit, but
   those tasks do not create an Agent, grant write access, change its capability,
-  or replace writer coverage. Agent entries and their dependency DAG remain the
+  or replace writer coverage. When adding a missing specialist Review Agent,
+  retain existing Agent IDs, task owners, and writer criterion bindings unless
+  another Agent-specific issue explicitly requires changing them. This also
+  applies when the same correction fixes unrelated product or criterion fields.
+  Agent entries and their dependency DAG remain the
   authority for identity, permissions, execution order, and model calls. Testing
   and review capabilities are always read-only: assign every task that creates
   or modifies project code, tests, configuration, or documentation to an

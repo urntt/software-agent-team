@@ -1,7 +1,7 @@
 # Project Status
 
-**Current milestone:** validate published `v0.4.7` through one fresh public
-ordinary-user journey after the `v0.4.6` Test Author permission failure.
+**Current milestone:** validate the `0.4.8` Planning correction candidate and
+publish a stable build before another fresh ordinary-user journey.
 
 **Last updated:** September 19, 2026
 
@@ -32,8 +32,20 @@ revision `3be7542a53bd7d3748e50ad07027ae449f02e6c5` upgraded an existing
 non-Docker-group rootless dev account without changing its configuration or
 daemon identity.
 The exact-tag hosted gate passed 1,880 tests with three environment skips and
-published a unique verified Release. A fresh full public-user journey remains
-pending.
+published a unique verified Release. A fresh non-Docker-group account then
+installed public `v0.4.7`, passed first and later self-checks and the real
+DeepSeek probe, and entered Planning. The second Planning invocation exhausted
+six corrections because a mixed missing-specialist and product/criterion repair
+replaced existing Agent identities, invalidating task owners and later writer
+criterion coverage. It exited before an approved overview or any execution
+Agent. The 76-file original trace and 38-file formal uninstall export were
+screened and retained; dedicated-account cleanup completed. The `0.4.8`
+candidate preserves existing Agent identities when the Agent collection's only
+defect is missing specialist authority, even when independent fields are being
+corrected at the same time. Archived production-turn replay matches the first
+three semantic payload hashes and preserves task-owner references and writer
+coverage at the original mixed correction; 355 adjacent tests passed. A full
+candidate gate, publication, and fresh full user journey remain pending.
 
 ## Current Release
 
@@ -47,7 +59,7 @@ Exact-tag GitHub Actions
 passed 1,880 tests with three environment skips; the local candidate passed
 1,883. The unique Release manifest asset digest is
 `sha256:5d15e61dd636382e5334fb3f94b24a9c5c08d2e14fc5d66d9510e9bdc1e21cd7`.
-The prior public rootless run described above stopped before delivery.
+The latest public rootless run described above stopped before delivery.
 
 
 The immutable `v0.4.1` tag,

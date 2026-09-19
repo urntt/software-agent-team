@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.4.6",
-  "target_version": "0.4.7",
+  "baseline_version": "0.4.7",
+  "target_version": "0.4.8",
   "changes": [
     {
-      "id": "derive-writer-responsibility-from-assigned-tasks",
+      "id": "preserve-agent-owners-in-mixed-specialist-corrections",
       "impact": "patch",
-      "summary": "Prevent writable Agents from inheriting out-of-scope work from parallel role prose or project-wide documentation requirements"
+      "summary": "Preserve existing Agent identities and writer task coverage when adding a missing specialist alongside independent Planning corrections"
     }
   ]
 }

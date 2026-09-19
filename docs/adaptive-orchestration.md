@@ -1045,9 +1045,12 @@ absent and the affected criteria's `verification_agent_ids`; targeted correction
 must add or select the specialist before the proposal can be shown for approval.
 Because that correction replaces the complete Agent collection, the Controller
 retains existing writers and Review Agents that already own a valid compiled
-scope when a later incremental submission adds another missing authority. This
-keeps an accepted security or experience assignment from disappearing while the
-other specialist is added. Only definitions with the exact missing Review
+scope when a submission adds missing authority, even if the same correction
+also fixes independent product-definition or criterion fields. This keeps task
+owners, writer criterion coverage, and accepted Review assignments stable while
+the specialist is added. An unrelated Agent-collection defect is handled by its
+own correction authority; it does not receive this additive projection. Only
+definitions with the exact missing Review
 authority are eligible additions; unrelated writers, integrations, or general
 Reviewers in the replacement are discarded. An admitted specialist retains
 valid dependencies on preserved Agents and is placed downstream of every

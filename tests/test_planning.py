@@ -115,6 +115,7 @@ from software_agent_team.response_corrections import (
     SemanticCorrectionPlan,
     SemanticCorrectionRequestEvidence,
     SemanticCorrectionSubmissionError,
+    apply_semantic_correction_with_evidence,
     correction_value_schema,
     semantic_correction_slot_handle,
 )
@@ -6755,6 +6756,158 @@ def test_specialist_correction_discards_unrelated_replacement_topology(
         "implementation paths",
         "preserved existing valid Agents while adding missing Review authority",
     )
+
+
+def test_mixed_specialist_correction_preserves_writer_coverage_and_task_owners() -> (
+    None
+):
+    body = proposal_body()
+    security_criterion = ProposedCriterion(
+        id="AC_SECURITY",
+        description="Untrusted paths cannot escape the selected root.",
+        verification="Probe approved path entry boundaries.",
+        review_boundaries=tuple(ReviewBoundaryKind),
+        requirement_ids=("REQ_SCAN",),
+        verification_agent_ids=("quality_reviewer",),
+    )
+    invalid = body.model_copy(
+        update={
+            "acceptance_criteria": (*body.acceptance_criteria, security_criterion),
+            "tasks": (
+                body.tasks[0].model_copy(
+                    update={
+                        "acceptance_criteria": (
+                            *body.tasks[0].acceptance_criteria,
+                            "AC_SECURITY",
+                        )
+                    }
+                ),
+            ),
+        }
+    )
+    base = json.loads(
+        response(
+            PlanningModelResponse(
+                kind=PlanningResponseKind.PROPOSAL,
+                proposal=invalid,
+            )
+        )
+    )
+    base, _ = planning._normalize_planning_response_payload(
+        base,
+        user_inputs=(f"{request().source_request} Treat every path as untrusted.",),
+    )
+    old_agents = deepcopy(base["proposal"]["agents"])
+    renamed_writer = deepcopy(old_agents[0])
+    renamed_writer["id"] = "renamed_writer"
+    extra_writer = deepcopy(old_agents[0])
+    extra_writer["id"] = "extra_writer"
+    extra_writer["dependencies"] = ["renamed_writer"]
+    renamed_tester = deepcopy(old_agents[1])
+    renamed_tester["id"] = "renamed_tester"
+    renamed_tester["dependencies"] = ["renamed_writer"]
+    renamed_reviewer = deepcopy(old_agents[2])
+    renamed_reviewer["id"] = "renamed_reviewer"
+    renamed_reviewer["dependencies"] = ["renamed_writer"]
+    security_reviewer = deepcopy(old_agents[2])
+    security_reviewer.update(
+        id="security_reviewer",
+        label="Security Reviewer",
+        specialization="security_assessment",
+        dependencies=["extra_writer"],
+    )
+    specialist_issue = ResponseValidationIssue(
+        path="/proposal/agents",
+        code="planning_context",
+        invariant_id="planning_criterion_specialist_required",
+        subjects=(
+            ResponseIssueSubject(
+                kind=ResponseIssueSubjectKind.CAPABILITY,
+                identifier="security",
+            ),
+        ),
+        message="security Review authority is missing",
+        authority=ResponseIssueAuthority.MODEL,
+    )
+    product_issue = ResponseValidationIssue(
+        path="/proposal/product_definition/target_users",
+        code="planning_context",
+        invariant_id="planning_product_explicit_provenance",
+        message="target users need valid provenance",
+        authority=ResponseIssueAuthority.MODEL,
+    )
+    verifier_issue = ResponseValidationIssue(
+        path="/proposal/acceptance_criteria/2/verification_agent_ids",
+        code="planning_context",
+        invariant_id="planning_criterion_specialist_required",
+        subjects=(
+            ResponseIssueSubject(
+                kind=ResponseIssueSubjectKind.CAPABILITY,
+                identifier="security",
+            ),
+        ),
+        message="security criterion needs a specialist verifier",
+        authority=ResponseIssueAuthority.MODEL,
+    )
+    plan = correction_plan_for(base, (product_issue, specialist_issue, verifier_issue))
+    replacements = {
+        "/proposal/agents": [
+            renamed_writer,
+            extra_writer,
+            renamed_tester,
+            renamed_reviewer,
+            security_reviewer,
+        ],
+        "/proposal/acceptance_criteria/2/verification_agent_ids": ["security_reviewer"],
+        "/proposal/product_definition/target_users": base["proposal"][
+            "product_definition"
+        ]["target_users"],
+    }
+    submitted = json.loads(correction_response(base, replacements))
+    applied = apply_semantic_correction_with_evidence(submitted, plan)
+    projected, normalizations = (
+        planning._preserve_agents_during_missing_specialist_correction(
+            applied.payload,
+            plan,
+        )
+    )
+    agents = projected["proposal"]["agents"]
+    assert [agent["id"] for agent in agents] == [
+        *(agent["id"] for agent in old_agents),
+        "security_reviewer",
+    ]
+    assert agents[: len(old_agents)] == old_agents
+    assert "preserved existing valid Agents while adding missing Review authority" in (
+        normalizations
+    )
+    assert {task["owner_agent_id"] for task in projected["proposal"]["tasks"]} <= {
+        agent["id"] for agent in agents
+    }
+    parsed = PlanningModelResponse.model_validate(projected)
+    assert parsed.proposal is not None
+    assert "AC_SECURITY" in parsed.proposal.tasks[0].acceptance_criteria
+    assert parsed.proposal.acceptance_criteria[2].verification_agent_ids == (
+        "security_reviewer",
+    )
+    other_agent_issue = ResponseValidationIssue(
+        path="/proposal/agents",
+        code="planning_context",
+        invariant_id="planning_agent_dependency_order",
+        message="Agent dependency order also requires model correction",
+        authority=ResponseIssueAuthority.MODEL,
+    )
+    agent_repair_plan = correction_plan_for(
+        base,
+        (product_issue, specialist_issue, verifier_issue, other_agent_issue),
+    )
+    unprojected, skipped = (
+        planning._preserve_agents_during_missing_specialist_correction(
+            applied.payload,
+            agent_repair_plan,
+        )
+    )
+    assert unprojected == applied.payload
+    assert skipped == ()
 
 
 def test_quality_dependency_correction_binds_the_complete_additive_relation(

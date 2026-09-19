@@ -2221,19 +2221,24 @@ def _preserve_agents_during_missing_specialist_correction(
     agent_path = "/proposal/agents"
     if agent_path not in plan.evidence.target_paths:
         return payload, ()
-    model_issues = tuple(
+    agent_issues = tuple(
         issue
         for issue in plan.diagnostic.issues
         if issue.authority is ResponseIssueAuthority.MODEL
+        and (
+            issue.path == agent_path
+            or issue.path.startswith(f"{agent_path}/")
+            or agent_path.startswith(f"{issue.path.rstrip('/')}/")
+        )
     )
-    if not model_issues or any(
+    if not agent_issues or any(
         issue.invariant_id != "planning_criterion_specialist_required"
-        for issue in model_issues
+        for issue in agent_issues
     ):
         return payload, ()
     required_authorities = {
         AcceptanceAuthority(subject.identifier)
-        for issue in model_issues
+        for issue in agent_issues
         for subject in issue.subjects
         if subject.kind is ResponseIssueSubjectKind.CAPABILITY
         and subject.identifier
