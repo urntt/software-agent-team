@@ -10822,6 +10822,116 @@ def test_planning_groups_workflow_review_and_requirement_coverage() -> None:
     assert "/proposal/tasks/0/acceptance_criteria" in bound.evidence.target_paths
 
 
+def test_optional_product_dimension_cannot_borrow_answered_core_question() -> None:
+    """A wrong optional question link stays repairable with sibling model errors."""
+
+    payload = proposal_response().model_dump(mode="json")
+    proposal_payload = payload["proposal"]
+    definition = proposal_payload["product_definition"]
+    question_id = "target_users_question"
+    decision_id = "DECISION_TARGET_USERS_ANSWER"
+    proposal_payload["decisions"].append(
+        {
+            "id": decision_id,
+            "category": "product_requirement",
+            "authority": "user",
+            "provenance": {"kind": "resolved_question", "source": question_id},
+            "summary": "Developers will use the tool repeatedly.",
+            "rationale": "The user chose this audience.",
+        }
+    )
+    definition["target_users"].update(
+        disposition="resolved_question",
+        source=question_id,
+        decision_ids=[decision_id],
+    )
+    definition["usability_expectations"].update(
+        disposition="resolved_question",
+        source=question_id,
+        decision_ids=[decision_id],
+    )
+    definition["primary_workflow"]["source"] = "invented workflow"
+    definition["delivery_maturity"]["requirement_ids"].append("REQ_UNKNOWN")
+    parsed = PlanningModelResponse.model_validate(payload)
+    assert parsed.proposal is not None
+
+    with pytest.raises(planning._PlanningContextInvariantsError) as captured:
+        planning.validate_planning_clarity(
+            parsed.proposal,
+            source_request=request().source_request,
+            question_contracts={
+                question_id: planning._PlanningQuestionContract(
+                    category=PlanningDecisionCategory.PRODUCT_REQUIREMENT,
+                    owner=PlanningDecisionAuthority.USER,
+                    product_definition_dimensions=(
+                        ProductDefinitionDimension.TARGET_USERS,
+                    ),
+                    answer="Developers will use the tool repeatedly.",
+                    answer_dimension_values=(
+                        (ProductDefinitionDimension.TARGET_USERS, "developers"),
+                    ),
+                    required_decision_id=decision_id,
+                )
+            },
+        )
+
+    diagnostic = planning._planning_invariants_diagnostic(
+        payload, captured.value.invariants
+    )
+    assert {issue.invariant_id for issue in diagnostic.issues} == {
+        "planning_product_explicit_provenance",
+        "planning_product_definition_reference",
+        "planning_product_question_dimension",
+    }
+    assert all(
+        issue.authority is ResponseIssueAuthority.MODEL for issue in diagnostic.issues
+    )
+    assert diagnostic.failure_class is ResponseFailureClass.SEMANTIC_CONTEXT
+    assert diagnostic.correction_paths == (
+        "/proposal/product_definition/delivery_maturity/requirement_ids",
+        "/proposal/product_definition/primary_workflow",
+        "/proposal/product_definition/usability_expectations",
+    )
+    assert (
+        planning._clarification_recovery_from_diagnostic(diagnostic, payload=payload)
+        is None
+    )
+    bound = planning._bind_planning_correction_candidates(
+        planning.build_semantic_correction_plan(payload, diagnostic)
+    )
+    assert bound is not None
+    assert set(diagnostic.correction_paths).issubset(bound.evidence.target_paths)
+
+    with pytest.raises(planning._PlanningContextInvariantsError) as captured_core:
+        planning.validate_planning_clarity(
+            parsed.proposal,
+            source_request=request().source_request,
+            question_contracts={
+                question_id: planning._PlanningQuestionContract(
+                    category=PlanningDecisionCategory.PRODUCT_REQUIREMENT,
+                    owner=PlanningDecisionAuthority.USER,
+                    product_definition_dimensions=(),
+                    answer="Developers will use the tool repeatedly.",
+                )
+            },
+        )
+    core_diagnostic = planning._planning_invariants_diagnostic(
+        payload, captured_core.value.invariants
+    )
+    assert core_diagnostic.failure_class is ResponseFailureClass.MISSING_USER_DECISION
+    assert core_diagnostic.correction_paths == ()
+    assert any(
+        issue.path == "/proposal/product_definition/target_users"
+        and issue.authority is ResponseIssueAuthority.USER
+        for issue in core_diagnostic.issues
+    )
+    recovery = planning._clarification_recovery_from_diagnostic(
+        core_diagnostic, payload=payload
+    )
+    assert recovery is not None
+    assert recovery.dimension is ProductDefinitionDimension.TARGET_USERS
+
+
 def test_planning_grouped_validation_overflow_stays_fail_closed() -> None:
     payload = proposal_response().model_dump(mode="json")
     invariants = tuple(

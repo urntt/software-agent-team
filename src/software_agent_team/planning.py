@@ -5130,6 +5130,20 @@ def _product_definition_dimension_invariant(
                 subjects=subjects,
             )
         if dimension not in contract.product_definition_dimensions:
+            if dimension not in {
+                ProductDefinitionDimension.TARGET_USERS,
+                ProductDefinitionDimension.PRIMARY_WORKFLOW,
+                ProductDefinitionDimension.DELIVERY_MATURITY,
+            }:
+                return issue(
+                    "planning_product_question_dimension",
+                    (
+                        f"{dimension.value} was not resolved by its declared "
+                        "question; use an attributable Planner recommendation "
+                        "or an exact explicit user input instead"
+                    ),
+                    subjects=subjects,
+                )
             return issue(
                 "planning_product_question_dimension",
                 f"{dimension.value} was not resolved by its declared question",

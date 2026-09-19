@@ -674,6 +674,12 @@ semantic correction attempt: each issue retains its own authority, mixed
 model/user diagnostics expose no proposal replacement path, and the next
 submission schema permits only one `product_requirement` question for the named
 ProductDefinition dimension.
+The question scope is checked per dimension: a core target-user, workflow, or
+maturity dimension that was never authorized by its cited answer needs a new
+user decision. An optional usability, operational, or delivery expectation
+that borrowed an unrelated answered question is a model-owned attribution
+error; Planning may correct its disposition and provenance without widening
+the user's answer or asking the user to repair a model citation.
 
 After the response passes its wire schema, independent model-owned product,
 missing-recommendation, criterion, Review-scope, and request-coverage checks share
