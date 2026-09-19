@@ -198,9 +198,11 @@ least one eligible output and binds every protocol-eligible
 `(execution_attempt, tool-00N)` identity and/or `CHECK_*` command ID. A
 satisfied direct probe uses only its completely framed child stdout and terminal
 result; unframed or partial output and traceback source text in child stderr
-cannot establish success. When a failed direct probe and a later successful
-direct probe emit the same fragment, the successful emission is bound while the
-failed attempt remains in the execution record. Repeated or overlapping
+cannot establish success. When a complete successful direct probe emits the same
+fragment as an earlier failed probe, script write, or source display, the
+successful child-stdout emission is bound while every failed call remains in
+the execution record. Failed deterministic command evidence still cannot prove
+`satisfied`. Repeated or overlapping
 selectors are deterministically deduplicated. A report that is already
 `revise`, contains an independently blocked assessment and blocking finding,
 and has one additional positive assessment backed only by a failed or
@@ -493,7 +495,9 @@ All such leaves within the protocol ceiling are offered together in one bounded
 correction; unaffected assessments, boundary descriptions, findings, verdict,
 and summary remain immutable. SAT derives up to a bounded number of exact candidate
 fragments per leaf from eligible same-chain tool results and deterministic command
-evidence, excluding failed positive proof and submission-tool output. The correction
+evidence, excluding failed positive proof and submission-tool output. Review
+evidence catalogs contain at most 16 ranked choices per leaf and use compact JSON
+presentation so multi-field correction stays within a usable prompt size. The correction
 schema accepts only short request-local handles for those candidates. The model chooses the
 semantic evidence; the Controller replaces the handle with exact bytes and records
 the binding as a normalization. No eligible candidate means no evidence-selector
@@ -1263,8 +1267,8 @@ when investigating it rather than editing artifacts in place.
   satisfied claim, only completely framed child stdout plus the terminal result
   are eligible; missing or partial framing fails closed, and a marker string
   repeated in traceback source text cannot look like a passing emission. A
-  later successful direct probe may supersede an earlier failed
-  direct-probe match for the same fragment, while both calls remain captured.
+  complete successful direct probe may supersede earlier failed tool-result
+  echoes of the same fragment, while every call remains captured.
   SAT otherwise rejects a satisfied assessment when a matched tool result
   failed, a matched deterministic command failed or timed out, or no successful
   probe marker exists. An already-revising report with a separate grounded
@@ -1434,7 +1438,12 @@ when investigating it rather than editing artifacts in place.
   SAT-owned process group, and preserves content-free counters in the Planning
   turn or `AgentExecutionRecord`. If attribution or the private observer is
   unavailable, SAT records degraded liveness and does not guess that silence is
-  a stall.
+  a stall. The live session observer rechecks an invalid compaction lineage for
+  up to three seconds because the index, checkpoint, and successor transcript
+  are written separately. During that window it grants no session progress and
+  does not declare a stall from an incomplete snapshot. A valid follow-up
+  restores ordinary enforcement; sustained invalid lineage degrades liveness.
+  Terminal submission capture still validates the complete lineage strictly.
 - A complete final assistant record with no active tool calls is the attributable
   provider-terminal boundary. It ends provider-stall enforcement and enters
   `finalizing_response`; a tool-call assistant record or its tool result cannot

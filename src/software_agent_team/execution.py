@@ -112,6 +112,8 @@ DEFAULT_LOCAL_PROVIDER_SILENCE_SECONDS = 300.0
 DEFAULT_PROVIDER_STALL_GRACE_SECONDS = 30.0
 DEFAULT_LIVENESS_POLL_SECONDS = 0.25
 PROVIDER_ACTIVITY_REPORT_SECONDS = 10.0
+COMPACTION_LINEAGE_RECHECK_SECONDS = 3.0
+COMPACTION_LINEAGE_ERROR = "OpenClaw compaction lineage is invalid"
 
 
 def resolve_initialization_process_sample_interval(
@@ -2114,6 +2116,7 @@ class _ProviderLivenessMonitor:
         self.stalled = False
         self.terminal_response_observed = False
         self.degradation_reason: str | None = None
+        self.compaction_lineage_error_since: float | None = None
 
     def poll(self, now: float, *, enforce_stall: bool = True) -> bool:
         """Observe activity and optionally enforce the live silence boundary."""
@@ -2145,11 +2148,21 @@ class _ProviderLivenessMonitor:
         except OpenClawSessionEvidenceError as error:
             # This adapter's errors contain only controller-owned labels, never
             # session content, tool arguments, or arbitrary executable names.
-            self._degrade(
-                f"OpenClaw session activity could not be attributed: {error}", now
-            )
+            if str(error) == COMPACTION_LINEAGE_ERROR:
+                # OpenClaw writes the index, checkpoint, and successor segment
+                # separately. One live poll can see that incomplete transition.
+                # Wait briefly without granting activity or enforcing a stall;
+                # terminal capture still validates the full chain strictly.
+                if self.compaction_lineage_error_since is None:
+                    self.compaction_lineage_error_since = now
+            else:
+                self._degrade(
+                    f"OpenClaw session activity could not be attributed: {error}",
+                    now,
+                )
             session = None
         if session is not None:
+            self.compaction_lineage_error_since = None
             first_session_observation = not self.session_observed
             self.session_observed = True
             if first_session_observation:
@@ -2218,6 +2231,16 @@ class _ProviderLivenessMonitor:
                 self.terminal_response_observed = True
                 trusted_activity = True
                 self.lifecycle.response_finalizing(now=now)
+        elif (
+            self.compaction_lineage_error_since is not None
+            and now - self.compaction_lineage_error_since
+            >= COMPACTION_LINEAGE_RECHECK_SECONDS
+        ):
+            self._degrade(
+                f"OpenClaw session activity could not be attributed: "
+                f"{COMPACTION_LINEAGE_ERROR}",
+                now,
+            )
 
         qualified_raw_activity = raw_activity and not self.repeating_no_progress_poll
         if qualified_raw_activity:
@@ -2241,6 +2264,7 @@ class _ProviderLivenessMonitor:
         if (
             not enforce_stall
             or self.degradation_reason is not None
+            or self.compaction_lineage_error_since is not None
             or (self.active_tool_count > 0 and not self.repeating_no_progress_poll)
             or self.terminal_response_observed
         ):
@@ -2262,6 +2286,12 @@ class _ProviderLivenessMonitor:
         """Collect terminal counters without changing an already-owned outcome."""
 
         self.poll(now, enforce_stall=False)
+        if self.compaction_lineage_error_since is not None:
+            self._degrade(
+                f"OpenClaw session activity could not be attributed: "
+                f"{COMPACTION_LINEAGE_ERROR}",
+                now,
+            )
         if self.last_activity is None:
             self._degrade(
                 "OpenClaw current-turn activity was never attributable",

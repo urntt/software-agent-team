@@ -1,17 +1,22 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.4.3",
-  "target_version": "0.4.4",
+  "baseline_version": "0.4.4",
+  "target_version": "0.4.5",
   "changes": [
     {
-      "id": "bound-compaction-session-lineage",
+      "id": "ground-successful-direct-review-probes",
       "impact": "patch",
-      "summary": "Attribute terminal tool calls and typed submissions across pinned OpenClaw mid-turn compaction sessions while rejecting unbound or divergent lineage"
+      "summary": "Ground satisfied Review markers in successful framed direct probes without letting failed script or source echoes contaminate the same selector"
     },
     {
-      "id": "synchronize-silent-test-fixture",
+      "id": "bound-review-correction-catalog",
       "impact": "patch",
-      "summary": "Bind short project-test silence regressions to real child readiness so slow interpreter startup cannot masquerade as post-output silence"
+      "summary": "Limit Review evidence correction catalogs and compact their presentation so a multi-field repair can reach the required typed submission"
+    },
+    {
+      "id": "recheck-live-compaction-lineage",
+      "impact": "patch",
+      "summary": "Recheck brief incomplete live compaction lineage without disabling provider liveness or relaxing terminal attribution"
     }
   ]
 }

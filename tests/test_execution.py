@@ -58,6 +58,10 @@ from software_agent_team.invocation_lifecycle import (
 )
 from software_agent_team.model_costs import CachePricing
 from software_agent_team.model_metadata import ModelMetadataSource
+from software_agent_team.openclaw_session_evidence import (
+    OpenClawSessionActivity,
+    OpenClawSessionEvidenceError,
+)
 from software_agent_team.process_lifecycle import ProcessLeaseStore
 from software_agent_team.submissions import (
     ARTIFACT_SUBMISSION_PROTOCOL,
@@ -488,6 +492,102 @@ def test_shutdown_owns_late_provider_progress(
     lifecycle.initialization_progress(InitializationCheckpoint.CURRENT_TURN, now=4)
     assert activities == before
     assert lifecycle.phase is InvocationPhase.STOPPING
+
+
+def test_live_compaction_lineage_rechecks_before_degrading(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A brief index transition cannot permanently disable live liveness."""
+
+    invocation = request(model="provider/model")
+    activities: list[AgentExecutionActivity] = []
+    initialization_policy = InitializationLivenessPolicy(
+        no_progress_seconds=90, stall_grace_seconds=15, source="test"
+    )
+    lifecycle = execution._InvocationLifecycleRecorder(
+        request=invocation,
+        started_monotonic=0,
+        process_grace_seconds=35,
+        initialization_policy=initialization_policy,
+        response_finalization_policy=ResponseFinalizationPolicy(
+            no_progress_seconds=60, stall_grace_seconds=10, source="test"
+        ),
+        activity_handler=activities.append,
+        monotonic=lambda: 0,
+    )
+    initialization = execution._InitializationLivenessMonitor(
+        request=invocation,
+        policy=initialization_policy,
+        state_dir=tmp_path,
+        baseline=None,
+        baseline_error=False,
+        process_identity=None,
+        expected_uid=0,
+        started_monotonic=0,
+        lifecycle=lifecycle,
+    )
+    raw_stream = tmp_path / "raw-stream"
+    raw_stream.write_bytes(b"")
+    monitor = execution._ProviderLivenessMonitor(
+        request=invocation,
+        policy=ProviderLivenessPolicy(
+            model="provider/model",
+            silence_seconds=1,
+            stall_grace_seconds=0.25,
+            source="test",
+        ),
+        raw_stream_path=raw_stream,
+        state_dir=tmp_path,
+        started_monotonic=0,
+        activity_handler=activities.append,
+        initialization_monitor=initialization,
+        lifecycle=lifecycle,
+    )
+    monitor.session_observed = True
+    monitor.last_activity = 0
+    lineage_error = OpenClawSessionEvidenceError(
+        "OpenClaw compaction lineage is invalid"
+    )
+    samples: list[OpenClawSessionActivity | Exception | None] = [
+        lineage_error,
+        lineage_error,
+        OpenClawSessionActivity(
+            trusted_record_count=1,
+            progress_record_count=1,
+            tool_started_count=0,
+            tool_completed_count=0,
+            active_tool_count=0,
+            repeating_no_progress_poll=False,
+            terminal_response_observed=False,
+        ),
+        lineage_error,
+        None,
+    ]
+
+    def inspect(**_: object) -> OpenClawSessionActivity | None:
+        sample = samples.pop(0)
+        if isinstance(sample, Exception):
+            raise sample
+        return sample
+
+    monkeypatch.setattr(execution, "inspect_openclaw_session_activity", inspect)
+    assert not monitor.poll(0.9)
+    assert not monitor.poll(1.2)
+    assert monitor.degradation_reason is None
+    assert not monitor.stalled
+    assert not monitor.poll(1.3)
+    assert monitor.compaction_lineage_error_since is None
+    assert monitor.degradation_reason is None
+    assert not monitor.poll(1.4)
+    assert not monitor.poll(4.5)
+    assert monitor.degradation_reason == (
+        "OpenClaw session activity could not be attributed: "
+        "OpenClaw compaction lineage is invalid"
+    )
+    assert not monitor.stalled
+    assert [item.kind for item in activities].count(
+        AgentExecutionActivityKind.LIVENESS_DEGRADED
+    ) == 1
 
 
 def test_openclaw_adapter_captures_runtime_telemetry() -> None:

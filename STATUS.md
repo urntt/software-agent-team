@@ -1,43 +1,50 @@
 # Project Status
 
-**Current milestone:** validate the `v0.4.2` Planning correction candidate
-after a published `v0.4.1` ordinary-user failure
+**Current milestone:** prepare the `v0.4.5` Review-grounding and live-compaction
+correction candidate for shared public-user validation.
 
 **Last updated:** September 19, 2026
 
-This document records what the repository implements now, what evidence
-supports that claim, and what remains unavailable. It does not redefine the
-product, architecture, experiment, or roadmap; those decisions belong to
-[`VISION.md`](VISION.md).
+This document records current implementation and validation evidence. Product
+and architecture decisions belong to [`VISION.md`](VISION.md).
 
-Published `v0.4.1` includes rootless Docker installation, the multiline TTY
-editor, bounded progress display, and Planning fixes for aggregate quality
-dependency diagnostics and optional product-question authority. Its clean
-rootless and exact-tag hosted gates passed. A fresh account outside the Docker
-group installed that public stable release with its own rootless daemon,
-completed the first provider check, passed the second startup's 16 device
-checks, and entered a multiline request. After two user clarifications,
-Planning ended after 12 saved turns and an estimated `$0.119709` without an
-overview or execution Agent. The model's integration Agent depended on testing,
-while quality coverage required testing to depend on integration. The original
-bounded correction could only add an edge and therefore stopped rather than
-creating a cycle. The failed account's export, full uninstall, and exact
-cleanup passed; no project was delivered.
+Published `v0.4.4` passed its exact-tag gate and installed through the public
+one-command bootstrap in a fresh non-Docker-group account using rootless Docker.
+First and later startup checks, provider configuration, Planning, implementation,
+integration, five deterministic quality gates, Tester, and Experience Reviewer
+completed. General and Security Reviewer did not converge; the run ended
+`artifact_invalid` with zero accepted criteria and no delivery. The failure
+account completed an export, full uninstall, and exact account cleanup.
 
-The `v0.4.2` candidate offers one atomic, model-selected correction for this
-direct reversed edge: remove the integration-to-testing Agent edge and its
-stale cross-Agent task edge, then add testing-to-integration. Indirect or
-multiple reversals still fail closed. The saved production submission replays
-to its recorded normalized hash; the three exact candidate values then pass
-proposal schema validation. Planning, team, and correction tests pass 323/323.
-The same public TTY also showed 24 elapsed-clock resets within unchanged
-Planning attempts. The candidate now retains the live observation and start
-time across state updates in one invocation, while a new queued invocation
-starts a new clock. A TTY regression covers both boundaries.
-The complete candidate gate, publication, and fresh ordinary-user journey
-remain unverified.
+The `v0.4.5` candidate makes a complete successful direct probe authoritative
+for an exact satisfied Review marker, keeping failed script and source echoes in
+the audit chain without treating them as positive citations. The archived
+Security Reviewer submissions and correction catalogs replay through production
+grounding with four matching semantic digests and all four boundary citations
+bound to the successful direct probe. Multi-field correction catalogs now expose
+at most 16 ranked candidates per slot in compact JSON; the original failed
+General Reviewer request projected from 151,602 to about 68,286 characters.
+Live liveness rechecks a briefly inconsistent compaction lineage for up to three
+seconds without crediting unknown session activity or relaxing terminal capture.
+Affected tests passed 330/330. The pre-commit canonical local gate passed 1,879
+tests with all four stages and resource cleanup complete. Fixed-install
+rehearsal, exact-tag publication, and fresh ordinary-user acceptance remain
+unverified.
 
 ## Current Release
+
+The immutable `v0.4.4` tag,
+[GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.4.4),
+package version, and release manifest identify source revision
+`4a99e4384801f4a927b13657ac2db08b0e72fe59` and Git archive digest
+`sha256:7df5b44236b8a24323a62b0c4c797e56103b5d133c211abc461320d9b27acbe4`.
+Exact-tag GitHub Actions
+[run 35450671427](https://github.com/urntt/software-agent-team/actions/runs/35450671427)
+passed 1,873 tests with three environment skips; the exact local candidate
+passed 1,876. The unique Release manifest asset digest is
+`sha256:725c246674df524ce24252f86d2321a8f85cf8be6bd270f0f21427299eb9ce6d`.
+The public rootless run described above reached Review but did not deliver.
+
 
 The immutable `v0.4.1` tag,
 [GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.4.1),

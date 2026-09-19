@@ -355,18 +355,18 @@ def _match_review_evidence(
         if _observable_matches_output(observable, command.stdout_tail)
         or _observable_matches_output(observable, command.stderr_tail)
     )
-    if satisfied and any(
-        _is_direct_probe(call) and not _tool_result_ineligible_for_satisfied_claim(call)
-        for _, call in tool_matches
-    ):
-        tool_matches = tuple(
-            match
-            for match in tool_matches
-            if not (
-                _is_direct_probe(match[1])
-                and _tool_result_ineligible_for_satisfied_claim(match[1])
-            )
-        )
+    successful_direct_matches = tuple(
+        match
+        for match in tool_matches
+        if _is_direct_probe(match[1])
+        and not _tool_result_ineligible_for_satisfied_claim(match[1])
+    )
+    if satisfied and successful_direct_matches:
+        # A complete successful direct probe is the authoritative emission for
+        # this exact fragment. Script writes, source displays, and failed
+        # probes remain in the audit chain, but their incidental echoes do not
+        # become grounded positive citations or invalidate the observation.
+        tool_matches = successful_direct_matches
     return _ReviewEvidenceMatches(
         tool_matches=tool_matches,
         ineligible_probe_matches=ineligible_probe_matches,
@@ -858,7 +858,7 @@ class ReviewToolEvidenceClaim(BaseModel):
         return cleaned
 
 
-_MAX_REVIEW_EVIDENCE_CANDIDATES_PER_SLOT = 64
+_MAX_REVIEW_EVIDENCE_CANDIDATES_PER_SLOT = 16
 _MAX_REVIEW_EVIDENCE_FRAGMENT_CHARACTERS = 256
 
 

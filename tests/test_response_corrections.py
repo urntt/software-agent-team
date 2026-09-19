@@ -457,13 +457,13 @@ def test_correction_prompt_keeps_path_authority_in_the_controller() -> None:
     assert "TARGETED_SEMANTIC_CORRECTION_SLOTS_V3" in prompt
     assert "Return only the supplied short request-local slot IDs" in prompt
     assert "derived parent error must not be requested" not in prompt
-    assert '"target_path": "/items/0/id"' in prompt
-    assert '"target_path": "/items/1/id"' in prompt
+    assert '"target_path":"/items/0/id"' in prompt
+    assert '"target_path":"/items/1/id"' in prompt
     assert '"replacements"' in schema
     assert '"slot_handle"' in schema
     assert '"replacement_value"' in schema
-    assert '"minItems": 1' in schema
-    assert '"maxItems": 2' in schema
+    assert '"minItems":1' in schema
+    assert '"maxItems":2' in schema
     assert '"path"' not in schema
     assert '"kind"' not in schema
     assert '"base_response_sha256"' not in schema

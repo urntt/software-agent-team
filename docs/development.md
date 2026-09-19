@@ -606,7 +606,10 @@ and must narrow the next request to the remaining siblings; an unchanged remaind
 must stop. Review evidence-selector correction must use Controller-issued
 candidate handles and exact-byte binding; candidate generation and final
 grounding must share the same whole-chain eligibility policy, including
-cross-result failed-match contamination. A model-authored replacement string is
+cross-result failed-match contamination when no successful direct probe emits
+that exact fragment. A complete successful probe's child stdout must supersede
+incidental echoes from failed script writes or source displays without removing
+those failed calls from the audit chain. A model-authored replacement string is
 not an acceptable compatibility path. Add a regression where one exact fragment
 appears in both a successful result and an otherwise failed result, and prove it
 is absent from the correction catalog while an uncontaminated candidate still

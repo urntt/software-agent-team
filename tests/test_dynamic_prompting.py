@@ -1979,6 +1979,128 @@ def test_satisfied_review_uses_successful_probe_emission_after_failed_attempts()
     ]
 
 
+def test_successful_direct_probe_overrides_failed_nonprobe_echoes() -> None:
+    """Failed script writes or source reads cannot poison proven child stdout."""
+
+    marker = "TOP_LEVEL_INPUT_OK"
+    assessment = ReviewCriterionAssessmentResponse(
+        criterion_id="AC_LINKS",
+        status="satisfied",
+        adversarial_check="Ran the input boundary assertions.",
+        evidence="A successful direct probe emitted the marker after assertions.",
+        tool_evidence=(review_tool_claim(marker),),
+    )
+    request, result = _review_result(
+        ReviewReportResponse(
+            verdict="accept",
+            criterion_assessments=(assessment,),
+            summary="The direct probe establishes the input boundary.",
+        )
+    )
+    failed_write = captured_tool_call(
+        1,
+        f"sat-probe-write failed while writing print('{marker}')",
+        executable="sat-probe-write",
+        failed=True,
+    )
+    failed_source_read = captured_tool_call(
+        2,
+        f"sed: failed while displaying print('{marker}')",
+        executable="sed",
+        failed=True,
+    )
+    successful_source_read = captured_tool_call(
+        3, f"print('{marker}')", executable="sed"
+    )
+    successful_probe = captured_tool_call(
+        7, framed_probe_output(stdout=marker), executable="sat-probe-run"
+    )
+    result = result.model_copy(
+        update={
+            "telemetry": result.telemetry.model_copy(
+                update={"tool_calls": (successful_probe,)}
+            )
+        }
+    )
+    attempts = (
+        ReviewToolEvidenceAttempt(execution_attempt=1, tool_calls=(failed_write,)),
+        ReviewToolEvidenceAttempt(
+            execution_attempt=2,
+            tool_calls=(failed_source_read, successful_source_read),
+        ),
+        ReviewToolEvidenceAttempt(execution_attempt=4, tool_calls=(successful_probe,)),
+    )
+
+    parsed = parse_dynamic_agent_response(
+        result,
+        request,
+        task_brief=task_brief(),
+        team_plan=team_plan(),
+        reviewed_criterion_ids=("AC_LINKS",),
+        review_tool_evidence_attempts=attempts,
+    )
+    assert isinstance(parsed.body, GroundedReviewReportResponse)
+    references = parsed.body.criterion_assessments[0].tool_evidence
+    assert [(item.execution_attempt, item.tool_call_id) for item in references] == [
+        (4, "tool-007")
+    ]
+
+
+def test_review_evidence_correction_catalog_is_bounded_for_multiple_slots() -> None:
+    """A multi-slot correction must fit a usable model prompt."""
+
+    assessment = ReviewCriterionAssessmentResponse(
+        criterion_id="AC_LINKS",
+        status="satisfied",
+        adversarial_check="Checked seven distinct boundaries.",
+        evidence="The submitted selectors do not match the captured probes.",
+        tool_evidence=tuple(
+            review_tool_claim(f"UNMATCHED_BOUNDARY_{index}") for index in range(7)
+        ),
+    )
+    request, result = _review_result(
+        ReviewReportResponse(
+            verdict="accept",
+            criterion_assessments=(assessment,),
+            summary="All seven claimed boundaries were checked.",
+        )
+    )
+    calls = tuple(
+        captured_tool_call(
+            index,
+            framed_probe_output(stdout=f"BOUNDARY_{index}_OK"),
+            executable="sat-probe-run",
+        )
+        for index in range(1, 65)
+    )
+    result = result.model_copy(
+        update={"telemetry": result.telemetry.model_copy(update={"tool_calls": calls})}
+    )
+    with pytest.raises(AgentArtifactResponseError) as captured:
+        parse_dynamic_agent_response(
+            result,
+            request,
+            task_brief=task_brief(),
+            team_plan=team_plan(),
+            reviewed_criterion_ids=("AC_LINKS",),
+        )
+    error = captured.value
+    assert error.semantic_payload is not None
+    assert error.diagnostic is not None
+    plan = build_semantic_correction_plan(error.semantic_payload, error.diagnostic)
+    assert plan is not None
+    bound = bind_review_evidence_correction_candidates(
+        plan,
+        evidence_attempts=(
+            ReviewToolEvidenceAttempt(execution_attempt=1, tool_calls=calls),
+        ),
+    )
+    assert bound is not None
+    assert len(bound.candidate_slots) == 7
+    assert all(len(slot.candidates) == 16 for slot in bound.candidate_slots)
+    assert len(correction_prompt(bound)) < 30000
+
+
 def test_satisfied_review_rejects_a_fragment_seen_only_in_probe_stderr() -> None:
     marker = "TRACEBACK_SOURCE_ONLY"
     assessment = ReviewCriterionAssessmentResponse(

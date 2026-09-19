@@ -81,11 +81,12 @@ in its own evidence. It deduplicates repeated or overlapping fragments and
 rejects a fragment with no eligible match. For a `satisfied` claim from a direct
 `sat-probe-run`, only text inside a complete child-stdout frame and the terminal
 result marker are positive evidence; unframed or partial output and source text
-repeated by a traceback in child stderr are not. If a failed direct probe and a
-later successful direct probe emit the same
-fragment, the successful emission supplies that claim while the failed attempt
+repeated by a traceback in child stderr are not. If a complete successful direct
+probe emits the same fragment as an earlier failed probe, script write, or source
+display, its child-stdout emission supplies that claim while every failed call
 remains visible in the invocation evidence. A `satisfied` assessment is still
-rejected when any other matched tool result failed, any matched deterministic
+rejected when a matched tool result failed without such a successful direct
+probe, any matched deterministic
 command failed or timed out, or no successful probe emission exists. Do not
 select a passing substring from an overall failed result. Child stderr
 remains eligible when grounding a `blocked` counterexample. A semantic correction

@@ -11373,8 +11373,11 @@ def test_product_planning_repairs_assumption_relation_as_atomic_records(
     correction = executor.requests[1].prompt.rsplit(
         "TARGETED_SEMANTIC_CORRECTION_SLOTS_V3", 1
     )[1]
-    assert '"target_path": "/proposal/assumptions"' in correction
-    assert '"$ref": "#/$defs/ProposedAssumption"' not in correction
+    slots_text = correction.split("TARGET_SLOTS_AND_ERRORS\n", 1)[1].split(
+        "\nCORRECTION_SCHEMA_JSON", 1
+    )[0]
+    assert json.loads(slots_text)[0]["target_path"] == "/proposal/assumptions"
+    assert "#/$defs/ProposedAssumption" not in correction
     assert "autonomy decision that authorizes this assumption" in correction
     correction_schema_text = correction.split("CORRECTION_SCHEMA_JSON\n", 1)[1].split(
         "\nCall `sat_submit_artifact`", 1
