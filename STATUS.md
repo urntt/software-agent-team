@@ -1,7 +1,7 @@
 # Project Status
 
-**Current milestone:** prepare a Planning correction patch after the published
-`v0.4.0` rootless Docker release
+**Current milestone:** validate the `v0.4.2` Planning correction candidate
+after a published `v0.4.1` ordinary-user failure
 
 **Last updated:** September 19, 2026
 
@@ -10,52 +10,44 @@ supports that claim, and what remains unavailable. It does not redefine the
 product, architecture, experiment, or roadmap; those decisions belong to
 [`VISION.md`](VISION.md).
 
-The published `v0.3.3` release cancels an unfinished runtime control editor before
-returning terminal ownership, buffers progress notices while that editor is
-active, and keeps slash detection in non-echoing cbreak mode. Its Planning
-correction contract opens dependent references with duplicate answered-question
-decisions or ambiguous Agent scope, and the proposal prompt ends with a concise
-relation check. Targeted regressions, the local candidate gate, the clean
-exact-tag hosted gate, and published install/upgrade rehearsals have passed.
-An ordinary-user SSH TTY now confirms multiline request correction; the first
-fresh provider-backed Planning journey stopped on the dependency correction
-defect below before build execution.
+Published `v0.4.1` includes rootless Docker installation, the multiline TTY
+editor, bounded progress display, and Planning fixes for aggregate quality
+dependency diagnostics and optional product-question authority. Its clean
+rootless and exact-tag hosted gates passed. A fresh account outside the Docker
+group installed that public stable release with its own rootless daemon,
+completed the first provider check, passed the second startup's 16 device
+checks, and entered a multiline request. After two user clarifications,
+Planning ended after 12 saved turns and an estimated `$0.119709` without an
+overview or execution Agent. The model's integration Agent depended on testing,
+while quality coverage required testing to depend on integration. The original
+bounded correction could only add an edge and therefore stopped rather than
+creating a cycle. The failed account's export, full uninstall, and exact
+cleanup passed; no project was delivered.
 
-Published `v0.4.0` binds each managed installation to one local
-Docker Unix socket and daemon ID, records rootless and cgroup mode in
-installation schema v2, and preserves schema v1 readability. An older updater's
-schema v1 activation can be promoted under the installation lock from the
-candidate's private engine snapshot on first normal command. Rootless Agent
-configuration and quality gates use container-namespace `0:0`, mapped to the
-unprivileged host owner. Installation proves the rootless namespace, private
-read-only workspace, disabled network/capabilities, and actual cgroup limits
-before activation. SAT does not configure a Docker daemon or host user
-namespaces. A local fixed-source rehearsal and a fresh public stable install on
-separate non-`docker`-group accounts passed rootless startup, two 16/16 device
-checks without `DOCKER_HOST`, private-workspace production quality, export,
-and full uninstall. The exact local and hosted release gates passed. A fresh
-provider-backed journey then reached Planning but failed after its first user
-clarification: three quality-Agent dependency paths shared one aggregate subject
-set, while the candidate binder expected each issue's leaf-only subjects and
-suppressed an otherwise safe correction. The `v0.4.1` candidate accepts only
-the exact verified aggregate or exact leaf sets, keeping unrelated and cyclic
-graphs fail-closed. Exact saved-turn replay and targeted coordinator checks
-pass; the patch gate, publication, and complete user journey remain pending.
-An initial exact-revision gate found a scheduling-sensitive delayed-signal test:
-it had only a 30 ms post-signal margin and left a child visible to the next
-test when that assertion failed. The candidate widens the controlled margin and
-reaps exact observed identities even on failure. The clean `3245a36` rootless
-replacement gate passed 1,858 tests with one root-only skip and complete cleanup.
-A fixed dev upgrade of the original rootless account preserved its state and
-reached a real DeepSeek Planning overview, but needed 10 model turns and
-`$0.087804`. This exposed independent post-schema defects one at a time.
-The current patch candidate groups model-owned product, criterion, Review, and
-requirement-coverage errors into one typed correction and gives terminal progress
-allow-listed reason labels. Replaying the saved fourth turn exposes three
-independent errors in one pass with a bounded 15-slot correction. The full
-candidate gate, publication, and complete ordinary-user journey remain pending.
+The `v0.4.2` candidate offers one atomic, model-selected correction for this
+direct reversed edge: remove the integration-to-testing Agent edge and its
+stale cross-Agent task edge, then add testing-to-integration. Indirect or
+multiple reversals still fail closed. The saved production submission replays
+to its recorded normalized hash; the three exact candidate values then pass
+proposal schema validation. Planning, team, and correction tests pass 323/323.
+The complete candidate gate, publication, and fresh ordinary-user journey
+remain unverified.
 
 ## Current Release
+
+The immutable `v0.4.1` tag,
+[GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.4.1),
+package version, and release manifest identify source revision
+`e0e36abfe4406568b9446690168f8f27d95e03f7` and Git archive digest
+`sha256:c86892b3860494f5aba3963d5a601b4232ffa989a30cf6af45edb8e886b16644`.
+Exact-tag GitHub Actions
+[run 35434557934](https://github.com/urntt/software-agent-team/actions/runs/35434557934)
+passed 1,860 tests with three environment skips; the clean rootless revision
+passed 1,862 with one root-only fixture skip. The unique Release's manifest
+asset digest is
+`sha256:16f52037ec28d1d70eb82560f5d96c91bac17dd66fa43ce5484be6858fd038dd`.
+The fresh public installation and provider-backed Planning outcome are
+described above; that failure is not a completed product journey.
 
 The immutable `v0.4.0` tag,
 [GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.4.0),

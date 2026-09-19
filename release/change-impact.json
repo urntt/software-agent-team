@@ -1,17 +1,12 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.4.0",
-  "target_version": "0.4.1",
+  "baseline_version": "0.4.1",
+  "target_version": "0.4.2",
   "changes": [
     {
-      "id": "planning-quality-dependency-sibling-correction",
+      "id": "planning-quality-dependency-reversal-correction",
       "impact": "patch",
-      "summary": "Keep bounded Planning correction available when sibling quality dependency diagnostics share their aggregate Agent subjects"
-    },
-    {
-      "id": "planning-convergent-validation-feedback",
-      "impact": "patch",
-      "summary": "Group independent Planning validation errors into one bounded correction and show safe readable retry reasons"
+      "summary": "Repair a direct reversed quality Agent dependency and its stale cross-Agent task edge through one bounded atomic correction"
     }
   ]
 }
