@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** prepare the `v0.3.3` runtime-control and Planning patch
+**Current milestone:** validate the published `v0.3.3` runtime-control and Planning patch
 
 **Last updated:** September 19, 2026
 
@@ -9,15 +9,31 @@ supports that claim, and what remains unavailable. It does not redefine the
 product, architecture, experiment, or roadmap; those decisions belong to
 [`VISION.md`](VISION.md).
 
-The `v0.3.3` candidate cancels an unfinished runtime control editor before
+The published `v0.3.3` release cancels an unfinished runtime control editor before
 returning terminal ownership, buffers progress notices while that editor is
 active, and keeps slash detection in non-echoing cbreak mode. Its Planning
 correction contract opens dependent references with duplicate answered-question
 decisions or ambiguous Agent scope, and the proposal prompt ends with a concise
-relation check. Targeted local regressions have passed; canonical, published
-artifact, and ordinary-user SSH TTY verification are still pending.
+relation check. Targeted regressions, the local candidate gate, the clean
+exact-tag hosted gate, and published install/upgrade rehearsals have passed.
+Ordinary-user SSH TTY and provider-backed Planning validation are still pending.
 
 ## Current Release
+
+The immutable `v0.3.3` tag,
+[GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.3.3),
+package version, and release manifest identify source revision
+`a4745795e469c4c71f0a7b19d400b6f039369eff` and Git archive digest
+`sha256:30f377660d1b06983635e339c7ec40da393a5d2588b269b8d07c1027669a5354`.
+Exact-tag GitHub Actions
+[run 35421062689](https://github.com/urntt/software-agent-team/actions/runs/35421062689)
+passed 1,836 tests with three environment-dependent skips and published one
+identity manifest asset. The pre-commit local candidate gate passed all 1,839
+tests; its report correctly records a dirty worktree, while the hosted report
+binds the clean exact tag. Fresh non-root public bootstrap and a separate real
+`v0.3.2` to `v0.3.3` upgrade passed identity, state preservation, no-op,
+active-run refusal, injected rollback, channel round trip, export, full
+uninstall, and exact cleanup without provider calls.
 
 The immutable `v0.3.2` tag,
 [GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.3.2),
