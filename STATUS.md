@@ -30,6 +30,10 @@ stale cross-Agent task edge, then add testing-to-integration. Indirect or
 multiple reversals still fail closed. The saved production submission replays
 to its recorded normalized hash; the three exact candidate values then pass
 proposal schema validation. Planning, team, and correction tests pass 323/323.
+The same public TTY also showed 24 elapsed-clock resets within unchanged
+Planning attempts. The candidate now retains the live observation and start
+time across state updates in one invocation, while a new queued invocation
+starts a new clock. A TTY regression covers both boundaries.
 The complete candidate gate, publication, and fresh ordinary-user journey
 remain unverified.
 

@@ -1502,8 +1502,12 @@ preserve its schema identity rather than relabeling it as current.
 Blocking model waits emit a concise heartbeat every ten seconds, record when a
 response returns, show contract validation, and explicitly announce each exact
 correction target. These messages expose elapsed time and controller state, not
-prompts or hidden reasoning. The execution adapter additionally projects
-content-free provider stream and attributable tool lifecycle activity. A
+prompts or hidden reasoning.
+On a capable TTY, Planning's live card refreshes each second and keeps the
+same elapsed clock across state updates within one invocation; a newly queued
+invocation starts a new clock. A terminal outcome removes the card. The
+execution adapter additionally projects content-free provider stream and
+attributable tool lifecycle activity. A
 provider/model-aware renewable silence lease emits a policy-attributed warning,
 grace, recovery, or typed stall; Planning turn evidence preserves the same
 counters and never stores streamed response content as progress. Opaque

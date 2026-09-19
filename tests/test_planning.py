@@ -11709,6 +11709,56 @@ def test_terminal_planning_live_elapsed_refreshes_and_hides_adapter_detail() -> 
     assert "Planning response received in 2.0s (completed)" in rendered
 
 
+def test_terminal_planning_elapsed_survives_same_attempt_activity() -> None:
+    class TTYOutput(StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    output = TTYOutput()
+    now = [0.0]
+    progress = TerminalPlanningProgress(
+        output=output,
+        heartbeat_seconds=60,
+        live_refresh_seconds=60,
+        monotonic=lambda: now[0],
+        environment={"TERM": "xterm-256color"},
+    )
+    try:
+
+        def emit(kind: PlanningActivityKind, attempt: int = 1) -> None:
+            progress(
+                PlanningActivity(
+                    kind=kind,
+                    attempt=attempt,
+                    maximum_attempts=None,
+                    model="provider/model",
+                )
+            )
+
+        emit(PlanningActivityKind.WAITING_MODEL)
+        observation = progress._waiting
+        assert observation is not None
+        thread = observation.thread
+        now[0] = 6.0
+        emit(PlanningActivityKind.INITIALIZING)
+        now[0] = 7.0
+        emit(PlanningActivityKind.INITIALIZING)
+        assert progress._waiting is observation
+        assert observation.started == 0.0
+        assert observation.thread is thread
+        now[0] = 20.0
+        emit(PlanningActivityKind.PROVIDER_WAIT)
+        assert "Planning  waiting for model  00:20" in output.getvalue()
+        now[0] = 21.0
+        emit(PlanningActivityKind.WAITING_MODEL, attempt=2)
+        assert progress._waiting is not observation
+        assert progress._waiting is not None
+        assert progress._waiting.started == 21.0
+        assert "Planning  queued  00:00" in output.getvalue()
+    finally:
+        progress.close()
+
+
 def test_terminal_planning_progress_explains_stall_policy_and_recovery() -> None:
     output: list[str] = []
     progress = TerminalPlanningProgress(write=output.append)

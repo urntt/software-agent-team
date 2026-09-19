@@ -923,14 +923,52 @@ class TerminalPlanningProgress:
         visible: str,
         heartbeat: str,
     ) -> None:
-        self.close()
-        stop = threading.Event()
-        started = self.monotonic()
         attempt_label = (
             str(activity.attempt)
             if activity.maximum_attempts is None
             else f"{activity.attempt}/{activity.maximum_attempts}"
         )
+        show_visible = not self.live_enabled and (
+            self.visibility is RunEventVisibility.DETAILED
+            or activity.kind
+            in {
+                PlanningActivityKind.WAITING_MODEL,
+                PlanningActivityKind.PROVIDER_WAIT,
+                PlanningActivityKind.TOOL_ACTIVE,
+                PlanningActivityKind.FINALIZING_RESPONSE,
+            }
+        )
+        with self._lock:
+            previous = self._waiting
+            if (
+                previous is not None
+                and activity.kind is not PlanningActivityKind.WAITING_MODEL
+                and previous.activity.attempt == activity.attempt
+                and previous.activity.model == activity.model
+            ):
+                changed = (
+                    previous.activity.kind != activity.kind
+                    or previous.message != heartbeat
+                    or previous.attempt_label != attempt_label
+                )
+                if self.live_enabled and changed:
+                    self._clear_live_locked()
+                previous.activity = activity
+                previous.message = heartbeat
+                previous.attempt_label = attempt_label
+                if self.live_enabled and changed:
+                    self._draw_live_locked()
+                reused = True
+            else:
+                reused = False
+        if reused:
+            if show_visible:
+                self._print(visible)
+            return
+
+        self.close()
+        stop = threading.Event()
+        started = self.monotonic()
         observation = _PlanningProgressObservation(
             activity=activity,
             started=started,
@@ -948,16 +986,7 @@ class TerminalPlanningProgress:
             self._waiting = observation
             if self.live_enabled:
                 self._draw_live_locked()
-        if not self.live_enabled and (
-            self.visibility is RunEventVisibility.DETAILED
-            or activity.kind
-            in {
-                PlanningActivityKind.WAITING_MODEL,
-                PlanningActivityKind.PROVIDER_WAIT,
-                PlanningActivityKind.TOOL_ACTIVE,
-                PlanningActivityKind.FINALIZING_RESPONSE,
-            }
-        ):
+        if show_visible:
             self._print(visible)
         observation.thread.start()
 
