@@ -3306,7 +3306,7 @@ def test_product_definition_correction_binds_immutable_reference_vocabularies(
     )
 
 
-def test_product_reference_correction_preserves_exact_source_and_advances(
+def test_product_reference_correction_preserves_source_and_exposes_dependent_reviewer(
     tmp_path: Path,
 ) -> None:
     initial_payload = json.loads(response(proposal_response()))
@@ -3322,12 +3322,16 @@ def test_product_reference_correction_preserves_exact_source_and_advances(
         user_inputs=(request().source_request,),
     )
     target_path = "/proposal/product_definition/primary_workflow/criterion_ids"
+    boundary_path = "/proposal/acceptance_criteria/0/review_boundaries"
     executor = ScriptedAgentExecutor(
         [
             json.dumps(initial_payload),
             correction_response(
                 correction_base,
-                {target_path: exact_workflow["criterion_ids"]},
+                {
+                    target_path: exact_workflow["criterion_ids"],
+                    boundary_path: [boundary.value for boundary in ReviewBoundaryKind],
+                },
             ),
         ]
     )
@@ -3339,7 +3343,7 @@ def test_product_reference_correction_preserves_exact_source_and_advances(
         clock=AdvancingClock(),
     )
 
-    with pytest.raises(PlanningError, match="must require top-level"):
+    with pytest.raises(PlanningError, match="exactly one Review owner"):
         coordinator.start(
             request(),
             answer_question=lambda _question: pytest.fail("unexpected question"),
@@ -3347,21 +3351,22 @@ def test_product_reference_correction_preserves_exact_source_and_advances(
 
     first = store.load_turn(request().run_id, 1)
     assert first.response_validation is not None
-    assert first.response_validation.correction_paths == (target_path,)
+    assert first.response_validation.correction_paths == (boundary_path, target_path)
     contract = executor.requests[1].submission_contract
     assert contract is not None
-    replacement = contract.parameters_schema()["properties"]["replacements"]["items"][
+    replacements = contract.parameters_schema()["properties"]["replacements"]["items"][
         "oneOf"
-    ][0]["properties"]["replacement_value"]
-    assert replacement["type"] == "array"
+    ]
+    assert len(replacements) == 2
+    assert all(
+        item["properties"]["replacement_value"]["type"] == "array"
+        for item in replacements
+    )
     second = store.load_turn(request().run_id, 2)
     assert second.semantic_correction_outcome == "improved"
     assert second.response_validation is not None
-    assert second.response_validation.correction_paths == (
-        "/proposal/acceptance_criteria/0/review_boundaries",
-    )
     assert second.response_validation.issues[0].invariant_id == (
-        "planning_criterion_review_boundaries"
+        "planning_criterion_specialist_required"
     )
     assert correction_base["proposal"]["product_definition"]["primary_workflow"] == {
         **exact_workflow,
@@ -10285,6 +10290,7 @@ def test_product_decision_correction_can_repair_the_shared_decision_relation(
     assert {issue.invariant_id for issue in rejected.response_validation.issues} == {
         "planning_product_question_source",
         "planning_product_recommendation_source",
+        "planning_recommendation_provenance",
     }
     correction_contract = executor.requests[3].submission_contract
     assert correction_contract is not None
@@ -10646,7 +10652,7 @@ def test_writer_coverage_correction_preserves_multiple_writer_choice(
     )
 
 
-def test_planning_exposes_review_boundary_siblings_after_prior_correction(
+def test_planning_groups_independent_product_and_review_defects_before_correction(
     tmp_path: Path,
 ) -> None:
     valid_payload = proposal_response().model_dump(mode="json")
@@ -10666,15 +10672,14 @@ def test_planning_exposes_review_boundary_siblings_after_prior_correction(
         ),
         review_boundaries=[ReviewBoundaryKind.NESTED_INPUT.value],
     )
+    all_boundaries = [boundary.value for boundary in ReviewBoundaryKind]
     first_corrected = json.loads(json.dumps(invalid_payload))
     first_corrected["proposal"]["product_definition"]["primary_workflow"] = (
         valid_payload["proposal"]["product_definition"]["primary_workflow"]
     )
-    all_boundaries = [boundary.value for boundary in ReviewBoundaryKind]
-    final_payload = json.loads(json.dumps(first_corrected))
-    for criterion in final_payload["proposal"]["acceptance_criteria"][:2]:
+    for criterion in first_corrected["proposal"]["acceptance_criteria"][:2]:
         criterion["review_boundaries"] = all_boundaries
-    specialized_payload = json.loads(json.dumps(final_payload))
+    specialized_payload = json.loads(json.dumps(first_corrected))
     specialized_payload["proposal"]["agents"][2]["specialization"] = (
         AgentSpecialization.SECURITY_ASSESSMENT.value
     )
@@ -10696,15 +10701,12 @@ def test_planning_exposes_review_boundary_siblings_after_prior_correction(
                         valid_payload["proposal"]["product_definition"][
                             "primary_workflow"
                         ]
-                    )
+                    ),
+                    **{path: all_boundaries for path in boundary_paths},
                 },
             ),
             correction_response(
                 first_corrected,
-                {path: all_boundaries for path in boundary_paths},
-            ),
-            correction_response(
-                final_payload,
                 {
                     "/proposal/agents": specialized_payload["proposal"]["agents"],
                     "/proposal/acceptance_criteria/0/verification_agent_ids": (
@@ -10728,44 +10730,113 @@ def test_planning_exposes_review_boundary_siblings_after_prior_correction(
         policy=policy(response_repair_limit=None),
         clock=AdvancingClock(),
     )
+    activities: list[PlanningActivity] = []
 
     created = coordinator.start(
         request(),
         answer_question=lambda _question: pytest.fail("unexpected question"),
+        activity_handler=activities.append,
     )
 
     assert created is not None
     expected = PlanningModelResponse.model_validate(specialized_payload).proposal
     assert created.body == expected
-    assert len(executor.requests) == 4
+    assert len(executor.requests) == 3
     first = store.load_turn(request().run_id, 1)
     assert first.response_validation is not None
     assert first.response_validation.correction_paths == (
+        *boundary_paths,
         "/proposal/product_definition/primary_workflow",
     )
+    assert {issue.invariant_id for issue in first.response_validation.issues} == {
+        "planning_product_workflow_required",
+        "planning_criterion_review_boundaries",
+    }
+    assert [
+        activity.correction_reasons
+        for activity in activities
+        if activity.kind is PlanningActivityKind.CORRECTION_SCHEDULED
+    ] == [
+        ("primary workflow", "Review boundaries"),
+        ("specialist Reviewer",),
+    ]
     second = store.load_turn(request().run_id, 2)
     assert second.semantic_correction_outcome == "improved"
     assert second.response_validation is not None
-    assert second.response_validation.correction_paths == boundary_paths
-    assert {issue.invariant_id for issue in second.response_validation.issues} == {
-        "planning_criterion_review_boundaries"
-    }
-    assert {
-        subject.identifier
-        for issue in second.response_validation.issues
-        for subject in issue.subjects
-    } == {criteria[0]["id"], criteria[1]["id"]}
-    third = store.load_turn(request().run_id, 3)
-    assert third.semantic_correction_outcome == "improved"
-    assert third.response_validation is not None
-    assert third.response_validation.correction_paths == (
+    assert second.response_validation.correction_paths == (
         "/proposal/acceptance_criteria/0/verification_agent_ids",
         "/proposal/acceptance_criteria/1/verification_agent_ids",
         "/proposal/agents",
     )
-    assert store.load_turn(request().run_id, 4).semantic_correction_outcome == (
+    assert store.load_turn(request().run_id, 3).semantic_correction_outcome == (
         "accepted"
     )
+
+
+def test_planning_groups_workflow_review_and_requirement_coverage() -> None:
+    """Independent defects in one typed proposal share one bounded correction."""
+
+    payload = proposal_response().model_dump(mode="json")
+    proposal_payload = payload["proposal"]
+    proposal_payload["product_definition"]["primary_workflow"]["source"] = (
+        "invented workflow"
+    )
+    criterion = proposal_payload["acceptance_criteria"][0]
+    criterion["description"] = "Local files must not be read outside the project."
+    criterion["review_boundaries"] = [ReviewBoundaryKind.TOP_LEVEL_INPUT.value]
+    proposal_payload["requirements"].append("Keep an auditable record of the CLI scan.")
+    proposal_payload["requirement_ids"].append("REQ_AUDIT")
+    parsed = PlanningModelResponse.model_validate(payload)
+    assert parsed.proposal is not None
+
+    with pytest.raises(planning._PlanningContextInvariantsError) as captured:
+        planning.validate_planning_clarity(
+            parsed.proposal,
+            source_request=request().source_request,
+            enforce_specialized_review_authority=True,
+        )
+
+    invariants = captured.value.invariants
+    assert {item.invariant_id for item in invariants} == {
+        "planning_product_explicit_provenance",
+        "planning_criterion_review_boundaries",
+        "planning_requirement_acceptance_coverage",
+    }
+    diagnostic = planning._planning_invariants_diagnostic(payload, invariants)
+    assert planning._planning_correction_reasons(diagnostic) == (
+        "product source",
+        "Review boundaries",
+        "requirement coverage",
+    )
+    assert diagnostic.correction_paths == (
+        "/proposal/acceptance_criteria",
+        "/proposal/product_definition/primary_workflow",
+    )
+    bound = planning._bind_planning_correction_candidates(
+        planning.build_semantic_correction_plan(payload, diagnostic)
+    )
+    assert bound is not None
+    assert bound.evidence.target_paths == planning._minimal_planning_correction_paths(
+        bound.evidence.target_paths
+    )
+    assert "/proposal/tasks/0/acceptance_criteria" in bound.evidence.target_paths
+
+
+def test_planning_grouped_validation_overflow_stays_fail_closed() -> None:
+    payload = proposal_response().model_dump(mode="json")
+    invariants = tuple(
+        planning._PlanningInvariant(
+            invariant_id=f"planning_overflow_{index}",
+            message="independent correction target",
+            paths=("/proposal/acceptance_criteria",),
+        )
+        for index in range(planning.MAX_CORRECTION_FIELDS + 1)
+    )
+    diagnostic = planning._planning_invariants_diagnostic(payload, invariants)
+    assert diagnostic.correction_paths == ()
+    assert diagnostic.issues[0].authority is ResponseIssueAuthority.CONTROLLER
+    assert diagnostic.issues[0].invariant_id == "planning_validation_issue_overflow"
+    assert planning.build_semantic_correction_plan(payload, diagnostic) is None
 
 
 @pytest.mark.parametrize(
@@ -11329,6 +11400,28 @@ def test_terminal_planning_progress_shows_heartbeat_and_stops_cleanly() -> None:
     assert any("Planning invocation is queued" in line for line in output)
     assert any("response received in 0.0s (completed)" in line for line in output)
     assert tuple(output) == rendered_at_completion
+
+
+def test_terminal_planning_progress_explains_bounded_correction() -> None:
+    output: list[str] = []
+    progress = TerminalPlanningProgress(write=output.append)
+    progress(
+        PlanningActivity(
+            kind=PlanningActivityKind.CORRECTION_SCHEDULED,
+            attempt=4,
+            maximum_attempts=12,
+            model="provider/model",
+            correction_reasons=(
+                "product source",
+                "Review boundaries",
+                "requirement coverage",
+            ),
+        )
+    )
+    assert output == [
+        "↻ Planning correction attempt 5/12: product source, Review boundaries, "
+        "requirement coverage"
+    ]
 
 
 def test_terminal_planning_progress_shows_safe_tool_action() -> None:

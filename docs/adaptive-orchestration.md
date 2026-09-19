@@ -675,6 +675,17 @@ model/user diagnostics expose no proposal replacement path, and the next
 submission schema permits only one `product_requirement` question for the named
 ProductDefinition dimension.
 
+After the response passes its wire schema, independent model-owned product,
+missing-recommendation, criterion, Review-scope, and request-coverage checks share
+one validation pass. Their typed issues retain separate invariant identities;
+overlapping correction paths collapse to the smallest disjoint set that still
+covers every authorized field. A check that depends on corrected content may
+surface in the next pass, and a user- or Controller-owned issue still stops
+model-only repair. The terminal reports a short, allow-listed summary of the
+validator's correction reasons and the next attempt number. It never prints
+model-supplied diagnostic text, IDs, or paths in that progress line; complete
+typed reasons and paths remain in the private turn evidence.
+
 Every workspace scope describes controller authority inside the generated
 repository: `repository` grants whole-project access and `repository/path`
 grants a narrower boundary. A destination or project directory name is not a

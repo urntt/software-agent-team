@@ -7,6 +7,11 @@
       "id": "planning-quality-dependency-sibling-correction",
       "impact": "patch",
       "summary": "Keep bounded Planning correction available when sibling quality dependency diagnostics share their aggregate Agent subjects"
+    },
+    {
+      "id": "planning-convergent-validation-feedback",
+      "impact": "patch",
+      "summary": "Group independent Planning validation errors into one bounded correction and show safe readable retry reasons"
     }
   ]
 }

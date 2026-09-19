@@ -549,6 +549,7 @@ class PlanningActivity:
     pricing_source: ModelMetadataSource | None = None
     clarification_dimension: ProductDefinitionDimension | None = None
     clarification_category: PlanningDecisionCategory | None = None
+    correction_reasons: tuple[str, ...] = ()
 
 
 PlanningActivityHandler = Callable[[PlanningActivity], None]
@@ -863,10 +864,8 @@ class TerminalPlanningProgress:
                 if activity.maximum_attempts is None
                 else f"{next_attempt}/{activity.maximum_attempts}"
             )
-            self._print(
-                "↻ Planning response has targeted model-owned fields; "
-                f"requesting correction attempt {attempt_label}"
-            )
+            reasons = ", ".join(activity.correction_reasons) or "proposal validation"
+            self._print(f"↻ Planning correction attempt {attempt_label}: {reasons}")
         elif activity.kind is PlanningActivityKind.SUBMISSION_EVIDENCE_RECOVERY:
             next_attempt = activity.attempt + 1
             attempt_label = (
@@ -2978,6 +2977,23 @@ def _expand_planning_identity_relation_correction(
     )
 
 
+def _minimal_planning_correction_paths(paths: Collection[str]) -> tuple[str, ...]:
+    """Keep the narrowest disjoint set that still covers every authorized path."""
+
+    unique = set(paths)
+    return tuple(
+        sorted(
+            path
+            for path in unique
+            if not any(
+                path.startswith(f"{other.rstrip('/')}/")
+                for other in unique
+                if other != path
+            )
+        )
+    )
+
+
 def _expand_planning_acceptance_relation_correction(
     plan: SemanticCorrectionPlan | None,
 ) -> SemanticCorrectionPlan | None:
@@ -3026,7 +3042,9 @@ def _expand_planning_acceptance_relation_correction(
     if not related_paths:
         return plan
 
-    correction_paths = tuple(sorted({*plan.evidence.target_paths, *related_paths}))
+    correction_paths = _minimal_planning_correction_paths(
+        (*plan.evidence.target_paths, *related_paths)
+    )
     uncovered_paths = tuple(
         path
         for path in related_paths
@@ -3201,6 +3219,28 @@ def _planning_invariants_diagnostic(
         for diagnostic in diagnostics
         for issue in diagnostic.issues
     )
+    issues = tuple(issue for diagnostic in diagnostics for issue in diagnostic.issues)
+    correction_paths = (
+        ()
+        if needs_user_decision
+        else _minimal_planning_correction_paths(
+            path for diagnostic in diagnostics for path in diagnostic.correction_paths
+        )
+    )
+    if (
+        len(issues) > MAX_CORRECTION_FIELDS
+        or len(correction_paths) > MAX_CORRECTION_FIELDS
+    ):
+        return diagnostic_from_invariant(
+            payload,
+            failure_class=ResponseFailureClass.SEMANTIC_CONTEXT,
+            authority=ResponseIssueAuthority.CONTROLLER,
+            code="planning_context_unclassified",
+            invariant_id="planning_validation_issue_overflow",
+            subjects=(),
+            message="Planning has too many independent failures for bounded correction",
+            paths=("/",),
+        )
     return ResponseValidationDiagnostic(
         failure_class=(
             ResponseFailureClass.MISSING_USER_DECISION
@@ -3208,23 +3248,52 @@ def _planning_invariants_diagnostic(
             else ResponseFailureClass.SEMANTIC_CONTEXT
         ),
         response_sha256=canonical_json_sha256(payload),
-        issues=tuple(
-            issue for diagnostic in diagnostics for issue in diagnostic.issues
-        ),
-        correction_paths=(
-            ()
-            if needs_user_decision
-            else tuple(
-                sorted(
-                    {
-                        path
-                        for diagnostic in diagnostics
-                        for path in diagnostic.correction_paths
-                    }
-                )
-            )
-        ),
+        issues=issues,
+        correction_paths=correction_paths,
     )
+
+
+def _planning_correction_reasons(
+    diagnostic: ResponseValidationDiagnostic,
+) -> tuple[str, ...]:
+    """Expose bounded validator-owned reason labels, never model text or IDs."""
+
+    known = {
+        "planning_product_explicit_provenance": "product source",
+        "planning_product_workflow_required": "primary workflow",
+        "planning_product_question_source": "answered-question link",
+        "planning_product_recommendation_source": "recommendation link",
+        "planning_recommendation_provenance": "decision provenance",
+        "planning_decision_authority_provenance": "decision authority",
+        "planning_criterion_review_boundaries": "Review boundaries",
+        "planning_criterion_review_authority_conflict": "Review authority",
+        "planning_criterion_specialist_required": "specialist Reviewer",
+        "planning_review_task_scope": "Reviewer task scope",
+        "planning_writer_criterion_coverage": "writer task coverage",
+        "planning_requirement_acceptance_coverage": "requirement coverage",
+        "planning_quality_dependency_coverage": "quality Agent dependencies",
+    }
+
+    def label(issue: ResponseValidationIssue) -> str:
+        if issue.invariant_id in known:
+            return known[issue.invariant_id]
+        path = issue.path
+        for prefix, reason in (
+            ("/proposal/product_definition", "product definition"),
+            ("/proposal/acceptance_criteria", "acceptance criteria"),
+            ("/proposal/requirements", "requirements"),
+            ("/proposal/decisions", "decision records"),
+            ("/proposal/agents", "Agent assignments"),
+            ("/proposal/tasks", "task assignments"),
+        ):
+            if path == prefix or path.startswith(f"{prefix}/"):
+                return reason
+        return "response format"
+
+    reasons = tuple(dict.fromkeys(label(issue) for issue in diagnostic.issues))
+    if len(reasons) <= 3:
+        return reasons
+    return (*reasons[:3], f"{len(reasons) - 3} more checks")
 
 
 def _clarification_recovery_from_diagnostic(
@@ -5780,19 +5849,36 @@ def validate_planning_clarity(
         require_current_provenance=require_current_decision_provenance,
     )
 
-    _validate_product_definition(
-        body,
-        decisions=decisions,
-        user_inputs=tuple(
-            value
-            for value in (source_request, *additional_user_inputs)
-            if value is not None
-        ),
-        question_contracts=question_contracts,
-        allowed_criterion_ids=allowed_criterion_ids,
-        allow_legacy_decision_links=allow_legacy_product_decision_links,
-        allow_legacy_workflow_exemption=allow_legacy_workflow_exemption,
-    )
+    independent_invariants: list[_PlanningInvariant] = []
+    try:
+        _validate_product_definition(
+            body,
+            decisions=decisions,
+            user_inputs=tuple(
+                value
+                for value in (source_request, *additional_user_inputs)
+                if value is not None
+            ),
+            question_contracts=question_contracts,
+            allowed_criterion_ids=allowed_criterion_ids,
+            allow_legacy_decision_links=allow_legacy_product_decision_links,
+            allow_legacy_workflow_exemption=allow_legacy_workflow_exemption,
+        )
+    except _PlanningContextInvariantError as error:
+        if (
+            error.authority is not ResponseIssueAuthority.MODEL
+            or error.failure_class is not ResponseFailureClass.SEMANTIC_CONTEXT
+        ):
+            raise
+        independent_invariants.append(error.invariant)
+    except _PlanningContextInvariantsError as error:
+        if any(
+            invariant.authority is not ResponseIssueAuthority.MODEL
+            or invariant.failure_class is not ResponseFailureClass.SEMANTIC_CONTEXT
+            for invariant in error.invariants
+        ):
+            raise
+        independent_invariants.extend(error.invariants)
 
     required_recommendations = {
         PlanningDecisionCategory.ACCEPTANCE_SCOPE,
@@ -5810,16 +5896,18 @@ def validate_planning_clarity(
         message = "proposal omits Planner recommendation provenance for: " + ", ".join(
             sorted(item.value for item in missing_recommendations)
         )
-        raise _planning_context_invariant(
-            "planning_recommendation_provenance",
-            message,
-            paths=("/proposal/decisions",),
-            subjects=_planning_subjects(
-                *(
-                    (ResponseIssueSubjectKind.DECISION, item.value)
-                    for item in missing_recommendations
-                )
-            ),
+        independent_invariants.append(
+            _PlanningInvariant(
+                invariant_id="planning_recommendation_provenance",
+                message=message,
+                paths=("/proposal/decisions",),
+                subjects=_planning_subjects(
+                    *(
+                        (ResponseIssueSubjectKind.DECISION, item.value)
+                        for item in missing_recommendations
+                    )
+                ),
+            )
         )
 
     if len(body.assumption_decision_ids) != len(body.assumptions):
@@ -6026,8 +6114,7 @@ def validate_planning_clarity(
             validate_criterion(criterion_index, criterion)
         except _PlanningContextInvariantError as error:
             criterion_invariants.append(error.invariant)
-    if criterion_invariants:
-        raise _PlanningContextInvariantsError(tuple(criterion_invariants))
+    independent_invariants.extend(criterion_invariants)
 
     if enforce_specialized_review_authority:
         review_scope_by_agent, review_scope_invariants = (
@@ -6038,14 +6125,14 @@ def validate_planning_clarity(
                 profile_criterion_ids=allowed_criterion_ids,
             )
         )
-        if review_scope_invariants:
-            raise _PlanningContextInvariantsError(review_scope_invariants)
-        review_task_invariants = _review_task_scope_invariants(
-            tasks=body.tasks,
-            review_scope_by_agent=review_scope_by_agent,
-        )
-        if review_task_invariants:
-            raise _PlanningContextInvariantsError(review_task_invariants)
+        independent_invariants.extend(review_scope_invariants)
+        if not review_scope_invariants:
+            independent_invariants.extend(
+                _review_task_scope_invariants(
+                    tasks=body.tasks,
+                    review_scope_by_agent=review_scope_by_agent,
+                )
+            )
 
     if (
         source_request is not None
@@ -6055,14 +6142,16 @@ def validate_planning_clarity(
             for criterion in body.acceptance_criteria
         )
     ):
-        raise _planning_context_invariant(
-            "planning_request_review_boundaries",
-            (
-                "the user request contains an unqualified prohibition or safety "
-                "guarantee, but no proposed acceptance criterion preserves all "
-                "four Review boundaries"
-            ),
-            paths=("/proposal/acceptance_criteria",),
+        independent_invariants.append(
+            _PlanningInvariant(
+                invariant_id="planning_request_review_boundaries",
+                message=(
+                    "the user request contains an unqualified prohibition or safety "
+                    "guarantee, but no proposed acceptance criterion preserves all "
+                    "four Review boundaries"
+                ),
+                paths=("/proposal/acceptance_criteria",),
+            )
         )
 
     missing_requirement_coverage = requirement_ids - covered_requirements
@@ -6070,17 +6159,22 @@ def validate_planning_clarity(
         message = "requirements lack observable acceptance coverage: " + ", ".join(
             sorted(missing_requirement_coverage)
         )
-        raise _planning_context_invariant(
-            "planning_requirement_acceptance_coverage",
-            message,
-            paths=("/proposal/acceptance_criteria",),
-            subjects=_planning_subjects(
-                *(
-                    (ResponseIssueSubjectKind.REQUIREMENT, item)
-                    for item in missing_requirement_coverage
-                )
-            ),
+        independent_invariants.append(
+            _PlanningInvariant(
+                invariant_id="planning_requirement_acceptance_coverage",
+                message=message,
+                paths=("/proposal/acceptance_criteria",),
+                subjects=_planning_subjects(
+                    *(
+                        (ResponseIssueSubjectKind.REQUIREMENT, item)
+                        for item in missing_requirement_coverage
+                    )
+                ),
+            )
         )
+
+    if independent_invariants:
+        raise _PlanningContextInvariantsError(tuple(independent_invariants))
 
     if question_contracts is None:
         return
@@ -11081,6 +11175,9 @@ class AdaptivePlanningCoordinator:
                     attempt=attempt,
                     maximum_attempts=maximum_attempts,
                     model=active_model,
+                    correction_reasons=_planning_correction_reasons(
+                        correction_plan.diagnostic
+                    ),
                 ),
             )
             attempt += 1

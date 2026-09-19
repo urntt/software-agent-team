@@ -44,8 +44,16 @@ pass; the patch gate, publication, and complete user journey remain pending.
 An initial exact-revision gate found a scheduling-sensitive delayed-signal test:
 it had only a 30 ms post-signal margin and left a child visible to the next
 test when that assertion failed. The candidate widens the controlled margin and
-reaps exact observed identities even on failure; its replacement full gate is
-pending.
+reaps exact observed identities even on failure. The clean `3245a36` rootless
+replacement gate passed 1,858 tests with one root-only skip and complete cleanup.
+A fixed dev upgrade of the original rootless account preserved its state and
+reached a real DeepSeek Planning overview, but needed 10 model turns and
+`$0.087804`. This exposed independent post-schema defects one at a time.
+The current patch candidate groups model-owned product, criterion, Review, and
+requirement-coverage errors into one typed correction and gives terminal progress
+allow-listed reason labels. Replaying the saved fourth turn exposes three
+independent errors in one pass with a bounded 15-slot correction. The full
+candidate gate, publication, and complete ordinary-user journey remain pending.
 
 ## Current Release
 
