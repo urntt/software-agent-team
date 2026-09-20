@@ -6972,9 +6972,7 @@ def _planning_regeneration_transport_schema(
                 # branches overlap; anyOf still preserves their type shapes.
                 projected_key = "anyOf" if key == "oneOf" else key
                 result[projected_key] = [
-                    project(branch)
-                    for branch in branches
-                    if isinstance(branch, dict)
+                    project(branch) for branch in branches if isinstance(branch, dict)
                 ]
         return result
 
@@ -12054,13 +12052,9 @@ class AdaptivePlanningCoordinator:
             response_schema_json=json.dumps(
                 response_schema,
                 ensure_ascii=False,
-                indent=(
-                    None if proposal_regeneration_diagnostic is not None else 2
-                ),
+                indent=(None if proposal_regeneration_diagnostic is not None else 2),
                 separators=(
-                    (",", ":")
-                    if proposal_regeneration_diagnostic is not None
-                    else None
+                    (",", ":") if proposal_regeneration_diagnostic is not None else None
                 ),
             ),
             repair_context_json="null",

@@ -148,8 +148,11 @@ The `v0.4.11` candidate sends only the bound correction contract on such turns
 without relaxing Controller validation. A targeted paid call on the exact
 candidate entered two correction turns and reached an approvable overview;
 approval and execution were deliberately stopped. That single result does not
-prove a deterministic cause for the prior model omission. The publication and
-fresh delivery journey remain unverified.
+prove a deterministic cause for the prior model omission. The subsequent
+published `v0.4.11` journey again stopped in Planning before approval or Agent
+execution. The model submitted numeric placeholders for proposal records after
+the one allowed full regeneration. SAT retained and rejected the raw submission;
+the model's reason for generating these values remains unknown.
 The first clean `v0.4.11` candidate gate passed 1,892 tests but failed the
 bounded-process grace fixture once. Its 20 ms timer delivered SIGKILL from a
 separate thread inside a 0.3 s cleanup window; the gate's four stages cleaned
@@ -158,9 +161,34 @@ post-signal process observations synchronously while retaining a real detached
 child and exact process signalling. All four bounded-process tests, eight
 separate repetitions of that fixture, and a negative control using the old
 pre-signal deadline implementation passed their expected outcomes. A clean
-gate on this revised candidate is still pending.
+gate on revision `61736fbf9589cbf13db2891ceb30bac47ee20461` passed 1,893
+tests; the exact-tag hosted gate passed 1,890 tests with three environment
+skips. The unique `v0.4.11` Release identifies that revision. An existing
+rootless development account upgraded to an unreleased candidate that derives
+a type-only tool schema from the semantic Planning schema only for whole-
+proposal regeneration. Controller validation and the semantic schema remain
+unchanged. The affected Planning, correction, and submission tests passed 333
+cases. Against the original failed submissions, the projected schema accepts
+the structurally valid second turn and rejects numeric placeholders in turns
+four and five. A paid Gemini 3.6 Flash targeted call on that candidate reached
+an approvable overview in three turns (SAT estimate `$0.165975`) and stopped
+before approval; it did not exercise the new regeneration branch. There is no
+fresh complete delivery evidence for this candidate.
 
 ## Current Release
+
+The immutable `v0.4.11` tag and
+[GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.4.11)
+identify revision `61736fbf9589cbf13db2891ceb30bac47ee20461` and Git
+archive digest
+`sha256:8e5456e3f30bbaf61886f5b677f01481ba403b614f31d938e3ac67d8efa0a6de`.
+The exact-tag hosted gate passed 1,890 tests with three environment skips;
+the clean local gate passed 1,893 tests. The Release manifest asset digest is
+`sha256:b3d4aefaeee65562db893957fc31d40047ded655185f31e64b4b64c9c1c633`.
+The latest public rootless user journey installed this version but stopped in
+Planning with structurally invalid model submissions. No project was delivered.
+
+## Historical Release Evidence
 
 The immutable `v0.4.10` tag,
 [GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.4.10),
