@@ -1507,9 +1507,11 @@ when investigating it rather than editing artifacts in place.
 - If the pinned wrapper exits nonzero before
   a valid terminal response can be recovered, SAT may classify only a strict,
   requested-route diagnostic pair: the last matching transport response must be
-  HTTP 429 or 5xx and a matching embedded-run terminal record must declare an
-  error. SAT projects only the provider, canonical model, and HTTP status into
-  ordinary telemetry; raw stderr remains private evidence. Other statuses,
+  HTTP 402, 429, or 5xx and a matching embedded-run terminal record after that
+  response must declare an error. Only SGR styling is removed from the pinned
+  diagnostic lines before strict matching. SAT projects only the provider,
+  canonical model, and HTTP status into ordinary telemetry; raw stderr remains
+  private evidence. Other statuses,
   mismatched routes, incomplete pairs, and arbitrary stderr retain the original
   process failure. These facts remain alongside
   the actual nonzero or signalled wrapper outcome and its original

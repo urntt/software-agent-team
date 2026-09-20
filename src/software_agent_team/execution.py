@@ -1158,6 +1158,7 @@ _OPENCLAW_PROVIDER_ERROR_PATTERN = re.compile(
     r"model=(?P<model>[A-Za-z0-9._:/-]+) "
     r"provider=(?P<provider>[A-Za-z0-9._-]+)(?:\s|$)"
 )
+_OPENCLAW_SGR_PATTERN = re.compile(r"\x1b\[[0-9;]*m")
 _OPENCLAW_COMPACTION_FAILURE_PATTERN = re.compile(
     r"^\[agents/cli-compaction\] CLI transcript compaction failed for "
     r"(?P<model>[A-Za-z0-9._-]+/[A-Za-z0-9._:/-]+): Compaction timed out$"
@@ -1248,7 +1249,7 @@ def _parse_openclaw_provider_failure(
     *,
     requested_model: str | None,
 ) -> _OpenClawProviderFailure | None:
-    """Classify a terminal 429/5xx only when pinned diagnostics bind the route."""
+    """Classify terminal 402/429/5xx only when pinned diagnostics bind the route."""
 
     if requested_model is None:
         return None
@@ -1257,27 +1258,33 @@ def _parse_openclaw_provider_failure(
         return None
 
     terminal_error_observed = False
-    response_statuses: list[int] = []
+    last_response_status: int | None = None
     for line in stderr.splitlines():
-        response_match = _OPENCLAW_PROVIDER_RESPONSE_PATTERN.match(line.strip())
+        # The pinned wrapper colors diagnostic prefixes on an interactive TTY.
+        # Remove only SGR styling before matching the same strict line grammar.
+        diagnostic = _OPENCLAW_SGR_PATTERN.sub("", line).strip()
+        response_match = _OPENCLAW_PROVIDER_RESPONSE_PATTERN.match(diagnostic)
         if response_match is not None:
             provider = response_match.group("provider")
             model = response_match.group("model")
             if provider == requested_provider and model == requested_leaf:
-                response_statuses.append(int(response_match.group("status")))
+                last_response_status = int(response_match.group("status"))
+                terminal_error_observed = False
             continue
-        error_match = _OPENCLAW_PROVIDER_ERROR_PATTERN.match(line.strip())
+        error_match = _OPENCLAW_PROVIDER_ERROR_PATTERN.match(diagnostic)
         if error_match is not None:
             provider = error_match.group("provider")
             model = error_match.group("model")
             terminal_error_observed = terminal_error_observed or (
-                provider == requested_provider and model == requested_leaf
+                last_response_status is not None
+                and provider == requested_provider
+                and model == requested_leaf
             )
 
-    if not terminal_error_observed or not response_statuses:
+    if not terminal_error_observed or last_response_status is None:
         return None
-    status = response_statuses[-1]
-    if status != 429 and status < 500:
+    status = last_response_status
+    if status not in {402, 429} and status < 500:
         return None
     return _OpenClawProviderFailure(
         provider=requested_provider,

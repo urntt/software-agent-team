@@ -800,7 +800,12 @@ modify, or track a path solely because Planning listed it. The approved task,
 execution profile, Agent permission, workspace scope, generated-project command
 contract, and repository ignore policy retain their respective authority. This
 distinction also applies to quality tasks, where a forecast may identify paths
-to inspect without requiring or permitting writes.
+to inspect without requiring or permitting writes. A writer-owned task whose
+forecast contains a path outside its owner's workspace is inconsistent and
+must be corrected before approval. Ancillary read-only paths may be omitted
+from that writer forecast; the check never grants a write or mandates a file.
+Current proposals and approved plans recheck the same invariant before a
+writer starts, while historical proposal records remain readable.
 
 For writable Agents, the Controller compiles the runtime responsibility shown in
 the overview and Agent prompt from that Agent's assigned task descriptions, and

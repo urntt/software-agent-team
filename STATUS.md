@@ -1,9 +1,9 @@
 # Project Status
 
-**Current milestone:** validate the published `v0.4.8` release through a fresh
-ordinary-user journey from installation to delivery and uninstall.
+**Current milestone:** repair two defects found in the published `v0.4.8`
+ordinary-user journey, then validate the next stable release end to end.
 
-**Last updated:** September 19, 2026
+**Last updated:** September 20, 2026
 
 This document records current implementation and validation evidence. Product
 and architecture decisions belong to [`VISION.md`](VISION.md).
@@ -56,8 +56,24 @@ to that account. The final revision
 `4d134fa78298e8186af4b929f133882d1dbafce2` upgraded an existing
 non-Docker-group rootless dev account without changing its configuration or
 daemon identity. The exact-tag hosted gate passed 1,881 tests with three
-environment skips and published a unique verified Release. A fresh full user
-journey remains pending.
+environment skips and published a unique verified Release. The subsequent
+fresh journey is described below.
+
+A fresh non-Docker-group account installed public `v0.4.8`, passed first and
+later 16/16 self-checks, the real DeepSeek provider check, task admission, and
+Planning execution preflight. Its first approvable plan assigned root tests,
+README, and project metadata to an Implementer scoped to
+`repository/src/text_stats`. The user revised the plan to repository-wide
+scope before approval. During Build, that Implementer completed 80 attributable
+tool operations, then DeepSeek returned an SGR-colored HTTP 402 insufficient
+balance terminal. The execution adapter treated it as a generic process failure
+and did not use the approved Gemini free fallback. The run exited without
+delivery. Original evidence, formal secret-free export/uninstall, and dedicated
+account cleanup completed; ISSUE-218 and ISSUE-220 track the fixes and the
+remaining fresh-run validation. The `v0.4.9` source candidate rejects the
+original inconsistent plan before approval and classifies the original 402
+diagnostic as an attributable provider failure in offline replay; release gate
+and real fallback validation remain pending.
 
 ## Current Release
 
@@ -72,8 +88,8 @@ passed 1,881 tests with three environment skips; the independent rootless
 candidate passed 1,883 tests with one root-only fixture skip. The unique
 Release manifest asset digest is
 `sha256:faf0645c3ec6dbc7cef4d4ce8cd4cb019b83939dadebc5f514cf6e25ef4f0146`.
-The latest public rootless run was on `v0.4.7` and stopped before delivery;
-the `v0.4.8` ordinary-user journey has not yet begun.
+The latest public rootless run was on `v0.4.8` and stopped before delivery as
+described above.
 
 
 The immutable `v0.4.1` tag,

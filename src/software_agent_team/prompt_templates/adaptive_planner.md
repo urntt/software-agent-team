@@ -180,9 +180,13 @@ Choose the next response by decision value:
   permission boundary. Do not list a path merely because the starter or
   execution profile mentions it. Omit an ignored local setup artifact unless
   that task genuinely needs to inspect it; the execution profile remains
-  authoritative. Every listed path is relative to the repository root and
-  canonical. A directory is written as `tests`, not `tests/`; never use an
-  absolute path, backslash, `.` segment, or `..` segment.
+  authoritative. For a writer-owned task, every listed path must fit that
+  Agent's `workspace_scope`; omit ancillary read-only paths outside the writer's
+  scope instead of implying that the task may change them. If the task really
+  owns a write outside the scope, reassign the task or choose a scope that
+  permits the write before approval. Every listed path is relative to the
+  repository root and canonical. A directory is written as `tests`, not `tests/`;
+  never use an absolute path, backslash, `.`, or `..` segment.
 - The controller already owns every `base_constraints` entry in
   PLANNING_CONTEXT_JSON. Put only additional task-specific constraints in the
   proposal's `constraints` array; do not repeat, paraphrase, shorten, or broaden

@@ -1394,8 +1394,11 @@ def test_compaction_timeout_requires_paired_exact_requested_route_diagnostics(
     ("requested_model", "status", "terminal_error", "classified"),
     (
         ("google/gemini-3.5-flash-lite", 429, True, True),
+        ("google/gemini-3.5-flash-lite", 402, True, True),
         ("google/gemini-3.5-flash-lite", 500, True, True),
         ("google/gemini-3.5-flash-lite", 400, True, False),
+        ("google/gemini-3.5-flash-lite", 401, True, False),
+        ("google/gemini-3.5-flash-lite", 403, True, False),
         ("google/gemini-3.5-flash-lite", 503, False, False),
         ("google/another-model", 503, True, False),
     ),
@@ -1442,6 +1445,39 @@ def test_provider_http_failure_uses_the_last_attributable_transport_status() -> 
         execution._parse_openclaw_provider_failure(
             stderr,
             requested_model="google/gemini-3.5-flash-lite",
+        )
+        is None
+    )
+
+
+def test_colored_provider_failure_requires_terminal_after_last_response() -> None:
+    response = (
+        "\x1b[33m[provider-transport-fetch]\x1b[39m "
+        "\x1b[36m[model-fetch] response provider=deepseek "
+        "api=openai-completions model=deepseek-flash status=402 "
+        "elapsedMs=10 contentType=text/event-stream\x1b[39m"
+    )
+    terminal = (
+        "\x1b[33m[agent/embedded]\x1b[39m "
+        "\x1b[33membedded run agent end: runId=fixture-run "
+        "isError=true model=deepseek-flash provider=deepseek "
+        "error=private billing detail\x1b[39m"
+    )
+    parsed = execution._parse_openclaw_provider_failure(
+        f"{response}\n{terminal}", requested_model="deepseek/deepseek-flash"
+    )
+    assert parsed is not None
+    assert parsed.http_status == 402
+    assert "private billing detail" not in parsed.error
+    assert (
+        execution._parse_openclaw_provider_failure(
+            f"{terminal}\n{response}", requested_model="deepseek/deepseek-flash"
+        )
+        is None
+    )
+    assert (
+        execution._parse_openclaw_provider_failure(
+            f"{response}\n{terminal}", requested_model="google/deepseek-flash"
         )
         is None
     )
@@ -2964,11 +3000,15 @@ sys.exit(17)
     assert lifecycle.shutdown.cleanup_completed
 
 
+@pytest.mark.parametrize(("status", "colored"), ((503, False), (402, True)))
 def test_nonzero_exit_recovers_attributable_provider_failure_without_usage(
     tmp_path: Path,
+    status: int,
+    colored: bool,
 ) -> None:
     program = (
         FAKE_OPENCLAW_SETUP
+        + f"status = {status!r}\ncolored = {colored!r}\n"
         + r"""
 records.append({
     "type": "message",
@@ -2980,15 +3020,28 @@ records.append({
     },
 })
 write_records()
+response_prefix = "[provider-transport-fetch] [model-fetch] response provider=provider "
+terminal_prefix = "[agent/embedded] embedded run agent end: runId=fixture-run "
+if colored:
+    response_prefix = (
+        "\x1b[33m[provider-transport-fetch]\x1b[39m "
+        "\x1b[36m[model-fetch] response provider=provider "
+    )
+    terminal_prefix = (
+        "\x1b[33m[agent/embedded]\x1b[39m "
+        "\x1b[33membedded run agent end: runId=fixture-run "
+    )
 print(
-    "[provider-transport-fetch] [model-fetch] response provider=provider "
-    "api=test-api model=model status=503 elapsedMs=10 "
-    "contentType=text/event-stream",
+    response_prefix
+    + f"api=test-api model=model status={status} elapsedMs=10 "
+    + "contentType=text/event-stream"
+    + ("\x1b[39m" if colored else ""),
     file=sys.stderr,
 )
 print(
-    "[agent/embedded] embedded run agent end: runId=fixture-run "
-    "isError=true model=model provider=provider error=private upstream detail",
+    terminal_prefix
+    + "isError=true model=model provider=provider error=private upstream detail"
+    + ("\x1b[39m" if colored else ""),
     file=sys.stderr,
 )
 sys.exit(17)
@@ -3000,7 +3053,8 @@ sys.exit(17)
 
     assert result.status is AgentExecutionStatus.PROVIDER_FAILED
     assert result.error == (
-        "OpenClaw reported an attributable upstream model-provider failure (HTTP 503)"
+        "OpenClaw reported an attributable upstream model-provider failure "
+        f"(HTTP {status})"
     )
     assert "private upstream detail" not in result.error
     assert result.telemetry.exit_code == 17

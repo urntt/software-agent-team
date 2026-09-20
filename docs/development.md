@@ -534,9 +534,10 @@ the runtime profile, strips control characters, and caps the displayed detail.
 Do not expose raw provider stdout or stderr as a shortcut for diagnostics.
 The execution adapter may additionally project a content-free provider failure
 from the pinned wrapper's strict diagnostic pair when the final response for the
-exact requested route is HTTP 429 or 5xx and the matching embedded run ends in
-error. Route mismatches, incomplete pairs, and other statuses remain process
-failures; raw stderr stays only in private execution evidence.
+exact requested route is HTTP 402, 429, or 5xx and the matching embedded run
+ends in error. The adapter removes only SGR styling before matching the pinned
+line grammar. Route mismatches, incomplete pairs, and other statuses remain
+process failures; raw stderr stays only in private execution evidence.
 
 A reviewed preset for an exact model absent from the pinned OpenClaw catalog
 must remain narrow, versioned in Git, secret-free, and covered by materialization

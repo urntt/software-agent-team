@@ -612,6 +612,66 @@ def test_writer_responsibility_uses_owned_tasks_not_role_prose() -> None:
     assert "Separate ownership of the tests and root README.md" not in overview
 
 
+def test_writer_task_scope_conflict_is_correctable_before_approval() -> None:
+    """A scoped writer cannot be assigned the archived CLI/tests/README shape."""
+
+    payload = proposal_response().model_dump(mode="json")
+    payload["proposal"]["agents"][0]["workspace_scope"] = "repository/src/scan"
+    payload["proposal"]["tasks"][0]["expected_paths"] = [
+        "src/scan/cli.py",
+        "pyproject.toml",
+    ]
+    payload["proposal"]["tasks"].extend(
+        (
+            {
+                "id": "TASK_TESTS",
+                "owner_agent_id": "cli_developer",
+                "description": "Write deterministic pytest tests.",
+                "dependencies": [],
+                "acceptance_criteria": ["AC_SCAN", "AC_REPORT"],
+                "expected_paths": ["tests/test_cli.py"],
+            },
+            {
+                "id": "TASK_README",
+                "owner_agent_id": "cli_developer",
+                "description": "Write the root README.md.",
+                "dependencies": [],
+                "acceptance_criteria": ["AC_REPORT"],
+                "expected_paths": ["README.md"],
+            },
+        )
+    )
+
+    with pytest.raises(ValidationError) as captured:
+        PlanningModelResponse.model_validate(payload)
+    diagnostic = planning._planning_validation_diagnostic(captured.value, payload)
+    assert {issue.invariant_id for issue in diagnostic.issues} == {
+        "planning_writer_task_workspace_consistency"
+    }
+    assert diagnostic.correction_paths == (
+        "/proposal/agents/0/workspace_scope",
+        "/proposal/tasks/0",
+        "/proposal/tasks/1",
+        "/proposal/tasks/2",
+    )
+    assert planning.build_semantic_correction_plan(payload, diagnostic) is not None
+
+    body = PlanningProposalBody.model_validate(payload["proposal"])
+    with pytest.raises(ValidationError, match="outside owner"):
+        proposal(body=body)
+    legacy = PlanningProposal.model_validate(
+        {
+            **proposal(body=proposal_body()).model_dump(mode="json"),
+            "schema_version": 21,
+            "body": payload["proposal"],
+        }
+    )
+    assert legacy.body.agents[0].workspace_scope == "repository/src/scan"
+
+    payload["proposal"]["agents"][0]["workspace_scope"] = "repository"
+    assert PlanningModelResponse.model_validate(payload).proposal is not None
+
+
 def test_writer_responsibility_stays_bounded_for_multiple_long_tasks() -> None:
     writer = proposal_body().agents[0]
     tasks = tuple(

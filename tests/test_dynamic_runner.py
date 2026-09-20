@@ -69,7 +69,11 @@ from software_agent_team.invocation_lifecycle import (
 )
 from software_agent_team.model_costs import CachePricing
 from software_agent_team.model_metadata import ModelMetadataSource
-from software_agent_team.planning import AdaptiveImplementationPlan, ProposedTask
+from software_agent_team.planning import (
+    PLANNING_SCHEMA_VERSION,
+    AdaptiveImplementationPlan,
+    ProposedTask,
+)
 from software_agent_team.progress import (
     ProgressEvent,
     ProgressEventKind,
@@ -371,6 +375,11 @@ def dynamic_inputs(
             )
         )
     implementation_plan = AdaptiveImplementationPlan(
+        # Legacy approved plans can contain an out-of-scope forecast. Runtime
+        # mutation rejection must still hold when such a plan is resumed.
+        schema_version=(
+            21 if writer_scope != "repository" else PLANNING_SCHEMA_VERSION
+        ),
         run_id=task_brief.run_id,
         team_id="adaptive_team",
         revision=1,

@@ -156,7 +156,7 @@ from software_agent_team.teams import (
     workspace_scopes_overlap,
 )
 
-PLANNING_SCHEMA_VERSION = 21
+PLANNING_SCHEMA_VERSION = 22
 MINIMUM_READABLE_PLANNING_SCHEMA_VERSION = 2
 
 # One invocation may fail to produce any attributable typed submission even after
@@ -3859,6 +3859,7 @@ class PlanningRequest(BaseModel):
         18,
         19,
         20,
+        21,
         PLANNING_SCHEMA_VERSION,
     ] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -4386,7 +4387,8 @@ class ProposedTask(BaseModel):
             "Non-binding forecasts of repository paths likely to be relevant to "
             "the task. They are not required outputs, a completion checklist, or "
             "write authority. Paths are canonical and relative to the repository "
-            "root; directory paths must not end with a slash."
+            "root; directory paths must not end with a slash. A writer task may "
+            "forecast only paths inside its owner's workspace scope."
         ),
     )
 
@@ -4415,6 +4417,68 @@ class ProposedTask(BaseModel):
     def require_safe_paths(cls, values: tuple[str, ...]) -> tuple[str, ...]:
         cleaned = _clean_unique(values, label="expected path")
         return tuple(_safe_path(value) for value in cleaned)
+
+
+def validate_writer_task_scope_forecasts(
+    tasks: tuple[ProposedTask, ...],
+    agents: Collection[ProposedAgent | AgentSpec],
+) -> None:
+    """Reject writer plans whose own path forecasts exceed their write scope."""
+
+    agents_by_id = {agent.id: (index, agent) for index, agent in enumerate(agents)}
+    conflicts: list[
+        tuple[int, ProposedTask, int, ProposedAgent | AgentSpec, tuple[str, ...]]
+    ] = []
+    for task_index, task in enumerate(tasks):
+        owner_record = agents_by_id.get(task.owner_agent_id)
+        if owner_record is None:
+            continue  # The task-owner invariant reports this separately.
+        agent_index, owner = owner_record
+        if owner.capability not in {
+            AgentCapability.IMPLEMENTATION,
+            AgentCapability.INTEGRATION,
+        }:
+            continue
+        scope_parts = PurePosixPath(owner.workspace_scope).parts[1:]
+        outside = tuple(
+            path
+            for path in task.expected_paths
+            if PurePosixPath(path).parts[: len(scope_parts)] != scope_parts
+        )
+        if not outside:
+            continue
+        conflicts.append((task_index, task, agent_index, owner, outside))
+    if conflicts:
+        details = "; ".join(
+            f"{task.id} -> {owner.id} ({owner.workspace_scope}): " + ", ".join(outside)
+            for _, task, _, owner, outside in conflicts[:4]
+        )
+        if len(conflicts) > 4:
+            details += f"; plus {len(conflicts) - 4} more writer task(s)"
+        raise _planning_model_invariant(
+            "planning_writer_task_workspace_consistency",
+            "writer tasks forecast paths outside owner workspaces: "
+            + details
+            + "; align task intent and owner scopes before approval",
+            paths=tuple(
+                path
+                for task_index, _, agent_index, _, _ in conflicts
+                for path in (
+                    f"/proposal/tasks/{task_index}",
+                    f"/proposal/agents/{agent_index}/workspace_scope",
+                )
+            ),
+            subjects=_planning_subjects(
+                *(
+                    subject
+                    for _, task, _, owner, _ in conflicts
+                    for subject in (
+                        (ResponseIssueSubjectKind.TASK, task.id),
+                        (ResponseIssueSubjectKind.AGENT, owner.id),
+                    )
+                )
+            ),
+        )
 
 
 def _validate_dag(
@@ -6598,6 +6662,10 @@ class PlanningModelResponse(BaseModel):
                 raise ValueError("question responses require only question")
         elif self.proposal is None or self.question is not None:
             raise ValueError("proposal responses require only proposal")
+        if self.proposal is not None:
+            validate_writer_task_scope_forecasts(
+                self.proposal.tasks, self.proposal.agents
+            )
         return self
 
 
@@ -7682,6 +7750,7 @@ class AdaptiveImplementationPlan(BaseModel):
         18,
         19,
         20,
+        21,
         PLANNING_SCHEMA_VERSION,
     ] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -7840,6 +7909,7 @@ class PlanningTurn(BaseModel):
         18,
         19,
         20,
+        21,
         PLANNING_SCHEMA_VERSION,
     ] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -8169,6 +8239,7 @@ class PlanningProposal(BaseModel):
         18,
         19,
         20,
+        21,
         PLANNING_SCHEMA_VERSION,
     ] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -8232,6 +8303,8 @@ class PlanningProposal(BaseModel):
                 },
                 require_canonical_cross_agent_projection=True,
             )
+        if self.schema_version >= 22:
+            validate_writer_task_scope_forecasts(self.body.tasks, self.body.agents)
         return self
 
 
@@ -8260,6 +8333,7 @@ class PlanningSession(BaseModel):
         18,
         19,
         20,
+        21,
         PLANNING_SCHEMA_VERSION,
     ] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -8462,6 +8536,7 @@ class PlanningApproval(BaseModel):
         18,
         19,
         20,
+        21,
         PLANNING_SCHEMA_VERSION,
     ] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -8611,6 +8686,10 @@ class ApprovedPlanningResult(BaseModel):
                     in {AgentCapability.IMPLEMENTATION, AgentCapability.INTEGRATION}
                 },
                 require_canonical_cross_agent_projection=True,
+            )
+        if self.implementation_plan.schema_version >= 22:
+            validate_writer_task_scope_forecasts(
+                self.implementation_plan.tasks, self.team_plan.agents
             )
 
         run_ids = {

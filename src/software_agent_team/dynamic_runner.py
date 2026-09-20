@@ -64,6 +64,7 @@ from software_agent_team.invocation_lifecycle import InvocationPhase
 from software_agent_team.planning import (
     AdaptiveImplementationPlan,
     validate_task_agent_bindings,
+    validate_writer_task_scope_forecasts,
 )
 from software_agent_team.progress import (
     ProgressCheckpointSnapshot,
@@ -270,6 +271,10 @@ class DynamicAgentRunner:
                 {agent.id: agent.dependencies for agent in team_plan.agents},
                 writer_ids,
             )
+            if implementation_plan.schema_version >= 22:
+                validate_writer_task_scope_forecasts(
+                    implementation_plan.tasks, team_plan.agents
+                )
         except ValueError as error:
             raise ValueError(f"dynamic implementation plan {error}") from error
 
