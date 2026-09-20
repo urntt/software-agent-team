@@ -1,7 +1,7 @@
 # Project Status
 
-**Current milestone:** repair two defects found in the published `v0.4.8`
-ordinary-user journey, then validate the next stable release end to end.
+**Current milestone:** validate published `v0.4.9` through one complete fresh
+ordinary-user journey, including provider-backed execution and delivery.
 
 **Last updated:** September 20, 2026
 
@@ -78,23 +78,25 @@ independent non-Docker-group rootless canonical gate: doctor, format, lint,
 and 1,889 tests passed with one root-only fixture skip. Cleanup was complete;
 containers, volumes, process leases, and stage processes were empty, and cgroup
 OOM/kill deltas were zero. Kernel OOM inspection remained unavailable to that
-account. Final release identity and real fallback validation remain pending.
+account. The exact-tag hosted gate passed 1,887 tests with three environment
+skips; the unique verified `v0.4.9` Release is published. A fresh stable
+ordinary-user journey and real provider fallback validation remain pending.
 
 ## Current Release
 
-The immutable `v0.4.8` tag,
-[GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.4.8),
+The immutable `v0.4.9` tag,
+[GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.4.9),
 package version, and release manifest identify source revision
-`4d134fa78298e8186af4b929f133882d1dbafce2` and Git archive digest
-`sha256:102f29ef72b4f1afad88afdbbdef6ce3dd734c77bd718615c844fe937a11f928`.
+`c714cc442299e4e768b8d7719a4a4b7795154746` and Git archive digest
+`sha256:3730697640be80eef8e168626bbc927219d870e5d9f8ea263081c0e0ea2e9f9a`.
 Exact-tag GitHub Actions
-[run 35476241252](https://github.com/urntt/software-agent-team/actions/runs/35476241252)
-passed 1,881 tests with three environment skips; the independent rootless
-candidate passed 1,883 tests with one root-only fixture skip. The unique
+[run 35479842372](https://github.com/urntt/software-agent-team/actions/runs/35479842372)
+passed 1,887 tests with three environment skips; the independent rootless
+code revision passed 1,889 tests with one root-only fixture skip. The unique
 Release manifest asset digest is
-`sha256:faf0645c3ec6dbc7cef4d4ce8cd4cb019b83939dadebc5f514cf6e25ef4f0146`.
-The latest public rootless run was on `v0.4.8` and stopped before delivery as
-described above.
+`sha256:7b4a21772c7e04427cfc03e89fcf1553e0dd1fda3598746b16b2017f01248dad`.
+The latest public rootless journey was on `v0.4.8` and stopped before delivery
+as described above. A fresh `v0.4.9` journey remains to be validated.
 
 
 The immutable `v0.4.1` tag,
