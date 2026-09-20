@@ -11996,6 +11996,7 @@ class AdaptivePlanningCoordinator:
                 correction_plan,
                 submission_tool=ARTIFACT_SUBMISSION_TOOL,
                 response_schema=response_schema,
+                include_current_values=True,
             )
         if proposal_regeneration_diagnostic is not None:
             structural_errors = [

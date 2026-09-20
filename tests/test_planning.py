@@ -9960,6 +9960,15 @@ def test_invalid_complete_proposal_is_repaired_before_it_is_shown(
     }
     assert "TARGETED_SEMANTIC_CORRECTION_SLOTS_V3" in executor.requests[1].prompt
     assert "Do not regenerate or repeat that object" in executor.requests[1].prompt
+    current_slot_text = (
+        executor.requests[1]
+        .prompt.rsplit("TARGET_SLOTS_AND_ERRORS\n", 1)[1]
+        .split("\nCORRECTION_SCHEMA_JSON", 1)[0]
+    )
+    current_slots = json.loads(current_slot_text)
+    assert current_slots[0]["target_path"] == "/proposal/tasks/0/owner_agent_id"
+    assert current_slots[0]["current_value_present"] is True
+    assert current_slots[0]["current_value"] == "absent_agent"
     assert (
         "Return only the supplied short request-local slot IDs"
         in executor.requests[1].prompt

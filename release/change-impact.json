@@ -7,6 +7,11 @@
       "id": "regenerate-structurally-invalid-planning-proposal",
       "impact": "patch",
       "summary": "Retry one full Planning proposal after widespread structural schema errors instead of nesting the proposal in a correction slot"
+    },
+    {
+      "id": "show-current-values-to-planning-correction",
+      "impact": "patch",
+      "summary": "Give fresh Planning correction sessions read-only current slot values and restrict bootstrap tools to bound artifact submission"
     }
   ]
 }

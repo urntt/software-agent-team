@@ -303,7 +303,9 @@ semantic schema inside that argument. Planning and targeted semantic corrections
 expose an object-only inner transport schema while retaining the exact semantic-schema digest in the
 private binding. On reviewed compatibility routes whose API otherwise permits a
 plain assistant response, bootstrap Planning selects this exact named function at
-the provider boundary. Dynamic Agents preserve the normal provider completion
+the provider boundary. Its materialized OpenClaw agent policy exposes only that
+submission tool, so unrelated session-history and workspace-reading tools cannot
+substitute for correction context. Dynamic Agents preserve the normal provider completion
 choice, allowing optional work/evidence tools to converge before the bound terminal
 submission. A missing submission never grants assistant text semantic authority.
 A write-capable tool-bearing turn may enter the bounded `upstream_incomplete`
@@ -403,7 +405,11 @@ asks the model to submit only
 order-independent `{slot_handle, replacement_value}` records—never the digest,
 private path authority, or the complete object. Each model-visible slot includes
 a self-contained projection of the target value's exact response schema plus the
-validator-owned error constraints.
+validator-owned error constraints. Fresh Planning correction sessions also receive
+each authorized slot's exact current value, with an absent-versus-null marker.
+These prior model values are read-only, untrusted data; they add no tool, field,
+or path authority. Retained fields remain Controller-owned, and replacements pass
+the same binding, schema, atomic-relation, and complete-proposal validation.
 The correction submission schema discriminates each record by its constant handle
 and exact value schema; it is not an untyped `JsonValue` list with stricter prose
 beside it. The private invocation binding and retained digest—not a model-copied

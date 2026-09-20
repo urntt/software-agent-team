@@ -1454,6 +1454,7 @@ def materialize_run_configuration(
         agent = json.loads(json.dumps(template))
         agent["workspace"] = str(resolved_workspace)
         agent["default"] = True
+        agent["tools"] = {"allow": [ARTIFACT_SUBMISSION_TOOL]}
         sandbox_config = agent.setdefault("sandbox", {})
         sandbox_config["workspaceAccess"] = "ro"
         if model is not None:

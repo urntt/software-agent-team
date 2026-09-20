@@ -379,6 +379,7 @@ def test_bootstrap_runtime_contains_only_the_selected_read_only_capability(
     assert agents[0]["default"] is True
     assert agents[0]["workspace"] == str(workspace.resolve())
     assert agents[0]["sandbox"]["workspaceAccess"] == "ro"
+    assert agents[0]["tools"] == {"allow": ["sat_submit_artifact"]}
     assert agents[0]["model"] == {
         "primary": "provider/model",
         "fallbacks": [],

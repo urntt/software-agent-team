@@ -87,8 +87,18 @@ first proposal had widespread structural errors; the next model call submitted
 separate public `v0.2.20` to `v0.4.9` upgrade, export, uninstall, and exact
 account cleanup passed. Development now requests one full proposal regeneration
 for this class of schema error; the affected Planning suite passed 254 tests.
-This new behavior is the `v0.4.10` candidate and has not passed the canonical
-or provider-backed gates yet.
+The first `v0.4.10` candidate revision `80e0d348d0352dbd2403c9d32be5672ed164cf43`
+passed its clean local canonical gate (1,890 tests). On an existing rootless dev
+account, targeted free Flash Planning still did not reach an approvable proposal:
+3.8 ended without typed submission after a correction prompt omitted the old
+values of ten related fields; 3.7 and 3.6 returned HTTP 503; 3.5 stalled in
+OpenClaw response finalization; 3.5 Flash Lite submitted a writer-coverage
+correction that changed the task collection shape and was rejected. The current
+development revision now supplies read-only current slot values to fresh Planning
+correction sessions and restricts bootstrap tools to bound artifact submission.
+This additional revision has passed the affected 339-test suite but has not yet
+passed a final canonical or provider-backed gate. No new complete user journey
+has begun.
 
 ## Current Release
 
