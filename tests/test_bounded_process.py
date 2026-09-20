@@ -6,7 +6,6 @@ import json
 import os
 import signal
 import sys
-import threading
 import time
 from contextlib import suppress
 from pathlib import Path
@@ -123,9 +122,10 @@ def test_cleanup_grace_starts_after_the_first_signal(
     environment["SAT_TEST_PID_PATH"] = str(child_pid_path)
     original_observe = bounded_process._observe_owned_processes
     original_signal = bounded_process._signal_exact_process
-    kill_scheduled = threading.Event()
-    timers: list[threading.Timer] = []
+    kill_sent = False
+    stale_observation_scans = 0
     observed_processes: dict[tuple[int, int], bounded_process._ProcessObservation] = {}
+    last_owned: tuple[bounded_process._ProcessObservation, ...] = ()
 
     def slow_observe(
         *,
@@ -135,15 +135,24 @@ def test_cleanup_grace_starts_after_the_first_signal(
         baseline_children: set[ProcessIdentity],
         tracked: dict[tuple[int, int], ProcessIdentity],
     ) -> tuple[bounded_process._ProcessObservation, ...]:
-        if not kill_scheduled.is_set():
+        nonlocal stale_observation_scans, last_owned
+        if not kill_sent:
             time.sleep(0.6)
-        return original_observe(
+        elif stale_observation_scans:
+            # Model two stale /proc observations after SIGKILL without racing a
+            # timer thread against the cleanup deadline on a loaded host.
+            stale_observation_scans -= 1
+            return last_owned
+        owned = original_observe(
             marker=marker,
             expected_uid=expected_uid,
             supervisor_pid=supervisor_pid,
             baseline_children=baseline_children,
             tracked=tracked,
         )
+        if owned:
+            last_owned = owned
+        return owned
 
     def delayed_signal(
         process: bounded_process._ProcessObservation,
@@ -151,21 +160,14 @@ def test_cleanup_grace_starts_after_the_first_signal(
         *,
         expected_uid: int,
     ) -> None:
+        nonlocal kill_sent, stale_observation_scans
         observed_processes[
             (process.identity.pid, process.identity.start_time_ticks)
         ] = process
-        if signum != signal.SIGKILL:
-            original_signal(process, signum, expected_uid=expected_uid)
-            return
-        kill_scheduled.set()
-        timer = threading.Timer(
-            0.02,
-            original_signal,
-            args=(process, signum),
-            kwargs={"expected_uid": expected_uid},
-        )
-        timers.append(timer)
-        timer.start()
+        if signum == signal.SIGKILL:
+            kill_sent = True
+            stale_observation_scans = 2
+        original_signal(process, signum, expected_uid=expected_uid)
 
     monkeypatch.setattr(bounded_process, "_observe_owned_processes", slow_observe)
     monkeypatch.setattr(bounded_process, "_signal_exact_process", delayed_signal)
@@ -179,8 +181,6 @@ def test_cleanup_grace_starts_after_the_first_signal(
                 termination_grace_seconds=0.3,
             )
     finally:
-        for timer in timers:
-            timer.join(timeout=1)
         for observed in observed_processes.values():
             original_signal(observed, signal.SIGKILL, expected_uid=os.getuid())
         reap_deadline = time.monotonic() + 1

@@ -150,6 +150,15 @@ candidate entered two correction turns and reached an approvable overview;
 approval and execution were deliberately stopped. That single result does not
 prove a deterministic cause for the prior model omission. The publication and
 fresh delivery journey remain unverified.
+The first clean `v0.4.11` candidate gate passed 1,892 tests but failed the
+bounded-process grace fixture once. Its 20 ms timer delivered SIGKILL from a
+separate thread inside a 0.3 s cleanup window; the gate's four stages cleaned
+up completely with no OOM or residual. The fixture now models two stale
+post-signal process observations synchronously while retaining a real detached
+child and exact process signalling. All four bounded-process tests, eight
+separate repetitions of that fixture, and a negative control using the old
+pre-signal deadline implementation passed their expected outcomes. A clean
+gate on this revised candidate is still pending.
 
 ## Current Release
 
