@@ -123,6 +123,18 @@ before an approvable overview or Agent execution. Formal secret-free export,
 SAT uninstall, and dedicated-account cleanup completed. The model-authored
 tool arguments are preserved; why this route generated that shape remains
 unknown. No project was delivered.
+An archived-payload replay through the production Planning coordinator
+reproduced both structural failures without changing the submitted values;
+the object-only tool transport and typed Controller rejection behaved as
+designed. On the same source revision, targeted calls from the existing
+rootless development account reached an approvable overview with Gemini 3.5
+Flash and 3.6 Flash. A separately bound Gemini 3.5 Flash Lite Agent adapter
+probe completed real `read` and `write` operations. The official two-profile
+configuration passed local route checks with 3.5 Flash as Planning default and
+3.5 Flash Lite for runtime capabilities. These checks did not approve a team
+or deliver a project, and the provider's reason for the earlier Boolean
+placeholders is still unknown. There is no additional SAT source change or
+release; a fresh public stable journey remains necessary.
 
 ## Current Release
 
