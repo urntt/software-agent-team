@@ -922,6 +922,7 @@ def test_mixed_candidate_selection_stages_only_verified_bindings() -> None:
         "unknown_values",
         "wrong_slots",
         "duplicate_slot",
+        "missing_slot_handle",
         "unknown_slot",
         "shape",
     ],
@@ -945,6 +946,8 @@ def test_invalid_candidate_submission_fails_typed_without_guess_or_retry(
         )
     elif defect == "duplicate_slot":
         replacements[1]["slot_handle"] = replacements[0]["slot_handle"]
+    elif defect == "missing_slot_handle":
+        del replacements[0]["slot_handle"]
     elif defect == "unknown_slot":
         replacements[1]["slot_handle"] = "slot_99"
     else:
