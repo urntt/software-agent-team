@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.4.10",
-  "target_version": "0.4.11",
+  "baseline_version": "0.4.11",
+  "target_version": "0.4.12",
   "changes": [
     {
-      "id": "isolate-targeted-planning-correction-contract",
+      "id": "type-guide-whole-proposal-regeneration",
       "impact": "patch",
-      "summary": "Show only the bound correction contract on targeted Planning turns, removing obsolete full-proposal instructions while preserving typed slot validation"
+      "summary": "Guide whole-proposal Planning regeneration with a type-only tool schema derived from the semantic contract while preserving Controller-owned validation"
     }
   ]
 }

@@ -172,8 +172,16 @@ cases. Against the original failed submissions, the projected schema accepts
 the structurally valid second turn and rejects numeric placeholders in turns
 four and five. A paid Gemini 3.6 Flash targeted call on that candidate reached
 an approvable overview in three turns (SAT estimate `$0.165975`) and stopped
-before approval; it did not exercise the new regeneration branch. There is no
-fresh complete delivery evidence for this candidate.
+before approval; it did not exercise the new regeneration branch. On code
+`v0.4.12` candidate revision `1665d95cebf4badc7a0047f71b0e50c1de01afc1`,
+the same rootless account kept its configuration digest and daemon ID across
+the upgrade. A targeted production-CLI replay supplied the original invalid
+model proposal as a zero-cost first turn, then real paid Gemini 3.6 Flash
+entered the new whole-proposal regeneration branch. Its complete proposal had
+the correct record shapes, leaving three semantic errors instead of 35
+structural errors; two further real correction turns reached an approvable
+overview. SAT estimated `$0.1872789` for those three provider calls. Approval
+was deliberately withheld, so there is still no complete delivery evidence.
 
 ## Current Release
 
