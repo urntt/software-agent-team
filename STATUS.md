@@ -72,8 +72,13 @@ delivery. Original evidence, formal secret-free export/uninstall, and dedicated
 account cleanup completed; ISSUE-218 and ISSUE-220 track the fixes and the
 remaining fresh-run validation. The `v0.4.9` source candidate rejects the
 original inconsistent plan before approval and classifies the original 402
-diagnostic as an attributable provider failure in offline replay; release gate
-and real fallback validation remain pending.
+diagnostic as an attributable provider failure in offline replay. The exact
+clean code revision `d671db7d8958a10ff84dfdfb0623705d8390e21a` passed an
+independent non-Docker-group rootless canonical gate: doctor, format, lint,
+and 1,889 tests passed with one root-only fixture skip. Cleanup was complete;
+containers, volumes, process leases, and stage processes were empty, and cgroup
+OOM/kill deltas were zero. Kernel OOM inspection remained unavailable to that
+account. Final release identity and real fallback validation remain pending.
 
 ## Current Release
 
