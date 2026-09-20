@@ -613,6 +613,10 @@ layer before validation. Duplicate keys, non-standard constants, an oversized
 value, a mismatched root type, or a JSON-looking value for a string slot is not
 decoded. This allows deterministic forbidden-field normalization and targeted
 semantic correction to operate after transport without trusting invalid content.
+Each correction invocation shows the retained Planning context and only the
+targeted correction contract. It omits the full-proposal schema and competing
+full-proposal submission instruction; the Controller still binds and validates
+the exact correction schema and preserves every field outside the listed slots.
 SAT gives every invocation a fresh controller binding, then
 requires the private envelope to match the final successful attributable tool call.
 The v2 evidence binds the canonical outer tool-arguments digest separately from the

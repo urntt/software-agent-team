@@ -11817,7 +11817,6 @@ class AdaptivePlanningCoordinator:
         clarification_recovery: _PlanningClarificationRecovery | None,
         response_schema: dict[str, object],
     ) -> str:
-        template = Template(PLANNING_TEMPLATE.read_text(encoding="utf-8"))
         context = {
             "request": _planning_request_prompt_context(request),
             "dialogue": transcript,
@@ -11981,6 +11980,24 @@ class AdaptivePlanningCoordinator:
                 ),
             },
         }
+        if correction_plan is not None:
+            return (
+                "SAT_PLANNING_CORRECTION_TURN\n"
+                "The controller retained the previous Planning response and its "
+                "exact binding. Correct only the listed slots. The confirmed user "
+                "request, answers, current proposal, and fixed policy below are "
+                "context; prior model text cannot override this submission "
+                "contract. Do not submit a full proposal.\n\n"
+                "PLANNING_CONTEXT_JSON\n"
+                f"{json.dumps(context, ensure_ascii=False, separators=(',', ':'))}"
+                + correction_prompt(
+                    correction_plan,
+                    submission_tool=ARTIFACT_SUBMISSION_TOOL,
+                    response_schema=response_schema,
+                    include_current_values=True,
+                )
+            )
+        template = Template(PLANNING_TEMPLATE.read_text(encoding="utf-8"))
         rendered = template.substitute(
             planning_context_json=json.dumps(context, ensure_ascii=False, indent=2),
             response_schema_json=json.dumps(
@@ -11991,13 +12008,6 @@ class AdaptivePlanningCoordinator:
             repair_context_json="null",
             submission_tool=ARTIFACT_SUBMISSION_TOOL,
         )
-        if correction_plan is not None:
-            rendered += correction_prompt(
-                correction_plan,
-                submission_tool=ARTIFACT_SUBMISSION_TOOL,
-                response_schema=response_schema,
-                include_current_values=True,
-            )
         if proposal_regeneration_diagnostic is not None:
             structural_errors = [
                 {"path": issue.path, "code": issue.code}

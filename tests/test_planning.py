@@ -9960,6 +9960,11 @@ def test_invalid_complete_proposal_is_repaired_before_it_is_shown(
     }
     assert "TARGETED_SEMANTIC_CORRECTION_SLOTS_V3" in executor.requests[1].prompt
     assert "Do not regenerate or repeat that object" in executor.requests[1].prompt
+    assert "SAT_PLANNING_CORRECTION_TURN" in executor.requests[1].prompt
+    assert "PLANNING_CONTEXT_JSON\n" in executor.requests[1].prompt
+    assert "\nRESPONSE_SCHEMA_JSON\n" not in executor.requests[1].prompt
+    assert "\nFINAL_RELATION_CHECK\n" not in executor.requests[1].prompt
+    assert "only submission contract" in executor.requests[1].prompt
     current_slot_text = (
         executor.requests[1]
         .prompt.rsplit("TARGET_SLOTS_AND_ERRORS\n", 1)[1]

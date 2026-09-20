@@ -1126,8 +1126,7 @@ def correction_prompt(
     )
     return (
         "\n\nTARGETED_SEMANTIC_CORRECTION_SLOTS_V3\n"
-        "This correction contract supersedes the earlier FINAL_RESPONSE_CONTRACT "
-        "for this invocation. "
+        "This is the only submission contract for this invocation. "
         "The prior semantic JSON object was parsed and retained by the controller. "
         "Do not regenerate or repeat that object. Submit only an object matching "
         "CORRECTION_SCHEMA_JSON. Provide `slot_handle` and `replacement_value` "
