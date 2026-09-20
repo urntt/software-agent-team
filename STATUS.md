@@ -133,8 +133,23 @@ probe completed real `read` and `write` operations. The official two-profile
 configuration passed local route checks with 3.5 Flash as Planning default and
 3.5 Flash Lite for runtime capabilities. These checks did not approve a team
 or deliver a project, and the provider's reason for the earlier Boolean
-placeholders is still unknown. There is no additional SAT source change or
-release; a fresh public stable journey remains necessary.
+placeholders is still unknown. A later fresh rootless installation of public
+`v0.4.10` passed first and subsequent startup checks, but free Flash routes
+timed out or returned 429 at real Planning load and free Lite routes again
+submitted invalid typed values. With an authorized paid Gemini 3.6 Flash
+route, an existing installation reached an approvable overview in a targeted
+check. The subsequent fresh public journey failed during Planning correction:
+one of 12 model-authored replacement records omitted its required slot handle.
+SAT retained and rejected that payload without approving a plan or creating
+an Agent. Formal export, uninstall, and exact dedicated-account cleanup
+completed; no project was delivered. The failed correction prompt carried
+both obsolete full-proposal instructions and the current correction contract.
+The `v0.4.11` candidate sends only the bound correction contract on such turns
+without relaxing Controller validation. A targeted paid call on the exact
+candidate entered two correction turns and reached an approvable overview;
+approval and execution were deliberately stopped. That single result does not
+prove a deterministic cause for the prior model omission. The publication and
+fresh delivery journey remain unverified.
 
 ## Current Release
 

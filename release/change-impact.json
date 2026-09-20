@@ -1,22 +1,12 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.4.9",
-  "target_version": "0.4.10",
+  "baseline_version": "0.4.10",
+  "target_version": "0.4.11",
   "changes": [
     {
-      "id": "regenerate-structurally-invalid-planning-proposal",
+      "id": "isolate-targeted-planning-correction-contract",
       "impact": "patch",
-      "summary": "Retry one full Planning proposal after widespread structural schema errors instead of nesting the proposal in a correction slot"
-    },
-    {
-      "id": "show-current-values-to-planning-correction",
-      "impact": "patch",
-      "summary": "Give fresh Planning correction sessions read-only current slot values and restrict bootstrap tools to bound artifact submission"
-    },
-    {
-      "id": "gemini-planning-output-headroom",
-      "impact": "patch",
-      "summary": "Use the declared Gemini output limit for bootstrap Planning while retaining the smaller execution-Agent turn limit"
+      "summary": "Show only the bound correction contract on targeted Planning turns, removing obsolete full-proposal instructions while preserving typed slot validation"
     }
   ]
 }
