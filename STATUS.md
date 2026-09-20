@@ -104,8 +104,16 @@ invocation stopped with OpenClaw `stopReason=length` and only thinking output;
 SAT's 16,384-token invocation ceiling left no typed submission. Development now
 uses the model's declared 65,536-token output ceiling for reasoning-capable
 Gemini bootstrap Planning while retaining the 16,384-token execution-Agent
-limit. The affected runtime-configuration/model-profile suite passed 69 tests;
-this newest revision has not yet passed a live Planning proposal or final gate.
+limit. The affected runtime-configuration/model-profile suite passed 69 tests.
+The next 3.8 call returned provider HTTP 429 before generation, so it did not
+test the new headroom. A fixed dev `2c7436253ebd94ad15c97847cd454da1b8f9e3a0`
+rootless upgrade then completed a seven-turn 3.5 Flash Lite Planning smoke:
+the rejected widespread-schema proposal triggered one full regeneration,
+targeted corrections received current slot values, and the Controller reached
+an approvable overview. Its seven OpenClaw sessions used only the bound
+submission tool. The smoke stopped before approval; no Agent or delivery ran.
+This revision has not yet passed a final canonical or exact-tag release gate,
+and no new complete user journey has begun.
 
 ## Current Release
 
