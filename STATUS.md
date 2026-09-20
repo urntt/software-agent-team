@@ -87,7 +87,8 @@ first proposal had widespread structural errors; the next model call submitted
 separate public `v0.2.20` to `v0.4.9` upgrade, export, uninstall, and exact
 account cleanup passed. Development now requests one full proposal regeneration
 for this class of schema error; the affected Planning suite passed 254 tests.
-This new behavior has not passed the canonical or provider-backed gates yet.
+This new behavior is the `v0.4.10` candidate and has not passed the canonical
+or provider-backed gates yet.
 
 ## Current Release
 
@@ -102,8 +103,8 @@ passed 1,887 tests with three environment skips; the independent rootless
 code revision passed 1,889 tests with one root-only fixture skip. The unique
 Release manifest asset digest is
 `sha256:7b4a21772c7e04427cfc03e89fcf1553e0dd1fda3598746b16b2017f01248dad`.
-The latest public rootless journey was on `v0.4.8` and stopped before delivery
-as described above. A fresh `v0.4.9` journey remains to be validated.
+The latest public rootless journey used `v0.4.9` and stopped in Planning as
+described above. No public stable journey has delivered a project yet.
 
 
 The immutable `v0.4.1` tag,

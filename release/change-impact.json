@@ -1,17 +1,12 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.4.8",
-  "target_version": "0.4.9",
+  "baseline_version": "0.4.9",
+  "target_version": "0.4.10",
   "changes": [
     {
-      "id": "reject-writer-task-workspace-conflicts",
+      "id": "regenerate-structurally-invalid-planning-proposal",
       "impact": "patch",
-      "summary": "Reject writer task path forecasts outside the assigned Agent workspace before approval"
-    },
-    {
-      "id": "recover-attributable-provider-http-402",
-      "impact": "patch",
-      "summary": "Classify colored, attributable provider HTTP 402 terminals so approved fallback routes can run"
+      "summary": "Retry one full Planning proposal after widespread structural schema errors instead of nesting the proposal in a correction slot"
     }
   ]
 }
