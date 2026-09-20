@@ -440,10 +440,13 @@ that subset to a copy while preserving omitted slots exactly; it then validates 
 complete semantic object before any result can advance or publish.
 If a Planning schema failure targets an entire requirement, criterion, decision,
 task, or Agent record that has no valid record ID, sibling slots cannot safely
-reconstruct its graph references. The Controller therefore replaces the proposal
-field as one bounded typed slot. The response envelope and original rejected turn
-remain immutable, and the replacement still passes the complete Planning contract
-before it can advance.
+reconstruct its graph references. The Controller therefore collapses the diagnostic
+to the proposal boundary. It requests one fresh full Planning response through the
+ordinary response contract instead of asking for a whole proposal nested inside a
+correction slot. This regeneration consumes the configured repair allowance and
+cannot repeat; a second widespread schema failure ends with a clear terminal
+diagnostic. The original rejected turn remains immutable, each invocation and
+cost is settled, and no proposal advances without complete validation.
 Both Planning and dynamic corrections use object-only capture inside the canonical
 `artifact` argument before Controller validation. The shared submission-contract
 factory owns this distinction. Value errors therefore return to the Controller's

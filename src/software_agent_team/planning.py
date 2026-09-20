@@ -515,6 +515,7 @@ class PlanningActivityKind(StrEnum):
     RESPONSE_RECEIVED = "response_received"
     BUDGET_UPDATED = "budget_updated"
     CORRECTION_SCHEDULED = "correction_scheduled"
+    PROPOSAL_REGENERATION_SCHEDULED = "proposal_regeneration_scheduled"
     SUBMISSION_EVIDENCE_RECOVERY = "submission_evidence_recovery"
     MODEL_ROUTE_SWITCHED = "model_route_switched"
     CLARIFICATION_SCHEDULED = "clarification_scheduled"
@@ -866,6 +867,17 @@ class TerminalPlanningProgress:
             )
             reasons = ", ".join(activity.correction_reasons) or "proposal validation"
             self._print(f"↻ Planning correction attempt {attempt_label}: {reasons}")
+        elif activity.kind is PlanningActivityKind.PROPOSAL_REGENERATION_SCHEDULED:
+            next_attempt = activity.attempt + 1
+            attempt_label = (
+                str(next_attempt)
+                if activity.maximum_attempts is None
+                else f"{next_attempt}/{activity.maximum_attempts}"
+            )
+            self._print(
+                "↻ Planning proposal has widespread structural errors; "
+                f"requesting one fresh proposal as attempt {attempt_label}"
+            )
         elif activity.kind is PlanningActivityKind.SUBMISSION_EVIDENCE_RECOVERY:
             next_attempt = activity.attempt + 1
             attempt_label = (
@@ -3441,6 +3453,18 @@ def _collapse_wide_planning_schema_correction(
         }
     )
     return build_semantic_correction_plan(plan.base_payload, diagnostic)
+
+
+def _requires_full_proposal_regeneration(
+    plan: SemanticCorrectionPlan,
+) -> bool:
+    """A whole-proposal schema error cannot benefit from a targeted slot edit."""
+
+    return (
+        plan.diagnostic.failure_class is ResponseFailureClass.SEMANTIC_SCHEMA
+        and plan.base_payload.get("kind") == PlanningResponseKind.PROPOSAL.value
+        and plan.evidence.target_paths == ("/proposal",)
+    )
 
 
 def _digest_text(value: str) -> str:
@@ -10924,6 +10948,8 @@ class AdaptivePlanningCoordinator:
             *(() if change_request is None else (change_request,)),
         )
         correction_plan: SemanticCorrectionPlan | None = None
+        proposal_regeneration_diagnostic: ResponseValidationDiagnostic | None = None
+        proposal_regenerations = 0
         clarification_recovery: _PlanningClarificationRecovery | None = None
         seen_correction_fingerprints: set[str] = set()
         semantic_corrections = 0
@@ -10977,9 +11003,11 @@ class AdaptivePlanningCoordinator:
                 change_request=change_request,
                 previous_user_revisions=previous_user_revisions,
                 correction_plan=correction_plan,
+                proposal_regeneration_diagnostic=proposal_regeneration_diagnostic,
                 clarification_recovery=clarification_recovery,
                 response_schema=response_schema,
             )
+            proposal_regeneration_diagnostic = None
             submission_contract = AgentSubmissionContract.from_schema(
                 (
                     response_schema
@@ -11599,9 +11627,41 @@ class AdaptivePlanningCoordinator:
                 or semantic_corrections < self.policy.response_repair_limit
             )
             if not correction_allowed:
+                if (
+                    next_correction_plan is not None
+                    and proposal_regenerations
+                    and _requires_full_proposal_regeneration(next_correction_plan)
+                ):
+                    raise PlanningError(
+                        "Planning proposal remains structurally invalid after one "
+                        "complete regeneration; select a stronger Planning model "
+                        "or simplify the request"
+                    )
                 raise PlanningError(
                     f"Planning response remained invalid: {validation_error}"
                 )
+            if _requires_full_proposal_regeneration(next_correction_plan):
+                if proposal_regenerations:
+                    raise PlanningError(
+                        "Planning proposal remains structurally invalid after one "
+                        "complete regeneration; select a stronger Planning model "
+                        "or simplify the request"
+                    )
+                proposal_regenerations += 1
+                semantic_corrections += 1
+                proposal_regeneration_diagnostic = next_correction_plan.diagnostic
+                correction_plan = None
+                self._emit_activity(
+                    activity_handler,
+                    PlanningActivity(
+                        kind=PlanningActivityKind.PROPOSAL_REGENERATION_SCHEDULED,
+                        attempt=attempt,
+                        maximum_attempts=maximum_attempts,
+                        model=active_model,
+                    ),
+                )
+                attempt += 1
+                continue
             semantic_corrections += 1
             correction_plan = (
                 require_all_semantic_correction_targets(next_correction_plan)
@@ -11753,6 +11813,7 @@ class AdaptivePlanningCoordinator:
         change_request: str | None,
         previous_user_revisions: tuple[str, ...],
         correction_plan: SemanticCorrectionPlan | None,
+        proposal_regeneration_diagnostic: ResponseValidationDiagnostic | None,
         clarification_recovery: _PlanningClarificationRecovery | None,
         response_schema: dict[str, object],
     ) -> str:
@@ -11935,6 +11996,22 @@ class AdaptivePlanningCoordinator:
                 correction_plan,
                 submission_tool=ARTIFACT_SUBMISSION_TOOL,
                 response_schema=response_schema,
+            )
+        if proposal_regeneration_diagnostic is not None:
+            structural_errors = [
+                {"path": issue.path, "code": issue.code}
+                for issue in proposal_regeneration_diagnostic.issues[:16]
+            ]
+            rendered += (
+                "\n\nFULL_PROPOSAL_REGENERATION\n"
+                "The prior proposal was rejected for structural errors and was "
+                "never approved. Create a complete new Planning response using "
+                "the FINAL_RESPONSE_CONTRACT above. Preserve the user's stated "
+                "requirements and clarification answers. Submit one full proposal "
+                "through the tool, not correction slot records. Do not copy invalid "
+                "scalar or placeholder values from the rejected proposal. "
+                "Representative rejected fields (path and validator code only):\n"
+                f"{json.dumps(structural_errors, ensure_ascii=False)}\n"
             )
         return rendered
 

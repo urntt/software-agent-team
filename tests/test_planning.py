@@ -1235,10 +1235,10 @@ def test_planning_binds_product_recommendation_category_to_exact_candidates(
     )
 
 
-def test_planning_collapses_a_wide_schema_failure_to_one_proposal_slot(
+def test_planning_regenerates_a_wide_schema_failure_as_a_full_response(
     tmp_path: Path,
 ) -> None:
-    """Many unusable leaves must not duplicate their schemas across a huge prompt."""
+    """A broken proposal graph gets one fresh response, not a nested slot call."""
 
     valid = proposal_response().model_dump(mode="json")
     initial = json.loads(json.dumps(valid))
@@ -1255,12 +1255,7 @@ def test_planning_collapses_a_wide_schema_failure_to_one_proposal_slot(
             ScriptedAgentResponse(text="ignored", submission_payload=initial),
             ScriptedAgentResponse(
                 text="ignored",
-                submission_payload=json.loads(
-                    correction_response(
-                        initial,
-                        {"/proposal": valid["proposal"]},
-                    )
-                ),
+                submission_payload=valid,
             ),
         ]
     )
@@ -1283,17 +1278,17 @@ def test_planning_collapses_a_wide_schema_failure_to_one_proposal_slot(
     assert first.response_validation is not None
     assert len(first.response_validation.correction_paths) == 26
     second = store.load_turn(request().run_id, 2)
-    assert second.semantic_correction_request is not None
-    assert second.semantic_correction_request.target_paths == ("/proposal",)
-    assert second.semantic_correction_outcome == "accepted"
+    assert second.semantic_correction_request is None
+    assert second.parsed_response is not None
     contract = executor.requests[1].submission_contract
     assert contract is not None
-    replacements = contract.parameters_schema()["properties"]["replacements"]
-    assert replacements["minItems"] == replacements["maxItems"] == 1
-    assert len(executor.requests[1].prompt.encode("utf-8")) < 180_000
+    assert contract.purpose is AgentSubmissionPurpose.PLANNING_RESPONSE
+    assert "FULL_PROPOSAL_REGENERATION" in executor.requests[1].prompt
+    assert "TARGETED_SEMANTIC_CORRECTION_SLOTS_V3" not in (executor.requests[1].prompt)
+    assert len(executor.requests[1].prompt.encode("utf-8")) < 100_000
 
 
-def test_planning_replaces_a_skeletal_identity_graph_as_one_proposal_slot(
+def test_planning_regenerates_a_skeletal_identity_graph_as_a_full_response(
     tmp_path: Path,
 ) -> None:
     """Invalid identity records cannot be repaired as independent graph slots."""
@@ -1312,12 +1307,7 @@ def test_planning_replaces_a_skeletal_identity_graph_as_one_proposal_slot(
             ScriptedAgentResponse(text="ignored", submission_payload=initial),
             ScriptedAgentResponse(
                 text="ignored",
-                submission_payload=json.loads(
-                    correction_response(
-                        initial,
-                        {"/proposal": valid["proposal"]},
-                    )
-                ),
+                submission_payload=valid,
             ),
         ]
     )
@@ -1346,24 +1336,16 @@ def test_planning_replaces_a_skeletal_identity_graph_as_one_proposal_slot(
         "/proposal/tasks/0",
     )
     corrected = store.load_turn(request().run_id, 2)
-    assert corrected.semantic_correction_request is not None
-    assert corrected.semantic_correction_request.target_paths == ("/proposal",)
-    assert corrected.semantic_correction_outcome == "accepted"
+    assert corrected.semantic_correction_request is None
+    assert corrected.parsed_response is not None
     contract = executor.requests[1].submission_contract
     assert contract is not None
-    replacements = contract.parameters_schema()["properties"]["replacements"]
-    assert replacements["minItems"] == replacements["maxItems"] == 1
+    assert contract.purpose is AgentSubmissionPurpose.PLANNING_RESPONSE
     assert '"enum": []' not in executor.requests[1].prompt
-    replacement_value = replacements["items"]["oneOf"][0]["properties"][
-        "replacement_value"
-    ]
-    assert replacement_value.get("type") != "null"
-    assert all(
-        option.get("type") != "null" for option in replacement_value.get("anyOf", [])
-    )
+    assert "FULL_PROPOSAL_REGENERATION" in executor.requests[1].prompt
 
 
-def test_whole_proposal_correction_rejects_null_without_improvement(
+def test_whole_proposal_regeneration_is_bounded_when_model_repeats_bad_shape(
     tmp_path: Path,
 ) -> None:
     valid = proposal_response().model_dump(mode="json")
@@ -1380,9 +1362,7 @@ def test_whole_proposal_correction_rejects_null_without_improvement(
             ScriptedAgentResponse(text="ignored", submission_payload=initial),
             ScriptedAgentResponse(
                 text="ignored",
-                submission_payload=json.loads(
-                    correction_response(initial, {"/proposal": None})
-                ),
+                submission_payload=initial,
             ),
         ]
     )
@@ -1394,17 +1374,17 @@ def test_whole_proposal_correction_rejects_null_without_improvement(
         clock=AdvancingClock(),
     )
 
-    with pytest.raises(PlanningError, match="remained invalid"):
+    with pytest.raises(PlanningError, match="after one complete regeneration"):
         coordinator.start(
             request(),
             answer_question=lambda _question: pytest.fail("unexpected question"),
         )
 
-    corrected = store.load_turn(request().run_id, 2)
-    assert corrected.semantic_correction_outcome is (
-        SemanticCorrectionOutcome.INVALID_SUBMISSION
-    )
-    assert corrected.parsed_response is None
+    assert len(executor.requests) == 2
+    regenerated = store.load_turn(request().run_id, 2)
+    assert regenerated.semantic_correction_request is None
+    assert regenerated.parsed_response is None
+    assert regenerated.response_validation is not None
 
 
 def test_planning_final_bounded_correction_requires_all_slots_and_converges(

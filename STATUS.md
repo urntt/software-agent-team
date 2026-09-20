@@ -1,6 +1,6 @@
 # Project Status
 
-**Current milestone:** validate published `v0.4.9` through one complete fresh
+**Current milestone:** validate the next Planning repair through a fresh
 ordinary-user journey, including provider-backed execution and delivery.
 
 **Last updated:** September 20, 2026
@@ -79,8 +79,15 @@ and 1,889 tests passed with one root-only fixture skip. Cleanup was complete;
 containers, volumes, process leases, and stage processes were empty, and cgroup
 OOM/kill deltas were zero. Kernel OOM inspection remained unavailable to that
 account. The exact-tag hosted gate passed 1,887 tests with three environment
-skips; the unique verified `v0.4.9` Release is published. A fresh stable
-ordinary-user journey and real provider fallback validation remain pending.
+skips; the unique verified `v0.4.9` Release is published. A fresh normal-user
+journey installed this release using rootless Docker, passed both startup
+self-checks and the live Gemini provider check, then stopped in Planning. The
+first proposal had widespread structural errors; the next model call submitted
+466 invalid correction records, so no plan was approved and no Agent ran. A
+separate public `v0.2.20` to `v0.4.9` upgrade, export, uninstall, and exact
+account cleanup passed. Development now requests one full proposal regeneration
+for this class of schema error; the affected Planning suite passed 254 tests.
+This new behavior has not passed the canonical or provider-backed gates yet.
 
 ## Current Release
 
