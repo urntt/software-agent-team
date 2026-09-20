@@ -1283,9 +1283,35 @@ def test_planning_regenerates_a_wide_schema_failure_as_a_full_response(
     contract = executor.requests[1].submission_contract
     assert contract is not None
     assert contract.purpose is AgentSubmissionPurpose.PLANNING_RESPONSE
+    initial_contract = executor.requests[0].submission_contract
+    assert initial_contract is not None
+    assert contract.schema_sha256 == initial_contract.schema_sha256
+    assert contract.transport_schema_sha256 != initial_contract.transport_schema_sha256
+    transport = contract.transport_schema()
+    proposal_shape = transport["$defs"]["PlanningProposalBody"]
+    assert "required" not in proposal_shape
+    assert transport["$defs"]["ProductDefinition"]["type"] == "object"
+    for field in (
+        "requirements",
+        "acceptance_criteria",
+        "decisions",
+        "assumptions",
+        "agents",
+        "tasks",
+    ):
+        item_shape = proposal_shape["properties"][field]["items"]
+        definition = item_shape["$ref"].removeprefix("#/$defs/")
+        record_shape = transport["$defs"][definition]
+        if "anyOf" in record_shape:
+            assert all(branch["type"] == "object" for branch in record_shape["anyOf"])
+        else:
+            assert record_shape["type"] == "object"
     assert "FULL_PROPOSAL_REGENERATION" in executor.requests[1].prompt
     assert "TARGETED_SEMANTIC_CORRECTION_SLOTS_V3" not in (executor.requests[1].prompt)
-    assert len(executor.requests[1].prompt.encode("utf-8")) < 100_000
+    assert "Integers, booleans, strings, and nulls are not proposal records" in (
+        executor.requests[1].prompt
+    )
+    assert len(executor.requests[1].prompt.encode("utf-8")) < 90_000
 
 
 def test_planning_regenerates_a_skeletal_identity_graph_as_a_full_response(
@@ -1381,6 +1407,8 @@ def test_whole_proposal_regeneration_is_bounded_when_model_repeats_bad_shape(
         )
 
     assert len(executor.requests) == 2
+    # The scripted executor bypasses OpenClaw's type-only regeneration tool
+    # schema, so the Controller must still reject a captured bad proposal.
     regenerated = store.load_turn(request().run_id, 2)
     assert regenerated.semantic_correction_request is None
     assert regenerated.parsed_response is None

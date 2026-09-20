@@ -300,8 +300,11 @@ Schema, creates a fresh invocation binding, and starts the isolated OpenClaw pro
 with only owner-private paths and digests. The tool exposes one exact outer argument,
 `artifact`, whose value is the semantic object. Dynamic work artifacts expose their exact
 semantic schema inside that argument. Planning and targeted semantic corrections
-expose an object-only inner transport schema while retaining the exact semantic-schema digest in the
-private binding. On reviewed compatibility routes whose API otherwise permits a
+initially expose an object-only inner transport schema. A complete proposal
+regeneration instead exposes a type-only projection of the same semantic schema,
+so scalar placeholders for proposal records can be rejected before submission
+while Controller-owned semantic validation remains authoritative. Both retain
+the exact semantic-schema digest in the private binding. On reviewed compatibility routes whose API otherwise permits a
 plain assistant response, bootstrap Planning selects this exact named function at
 the provider boundary. Its materialized OpenClaw agent policy exposes only that
 submission tool, so unrelated session-history and workspace-reading tools cannot

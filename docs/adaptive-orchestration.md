@@ -601,11 +601,14 @@ missing, malformed, duplicate, or post-submission calls. It leaves model inspect
 provider smoke, and legacy
 text-compatibility requests unchanged, because those requests do not expose an
 invocation binding. SAT gives dynamic Agents the exact AgentSpec-derived semantic JSON Schema
-inside the envelope. Planning and targeted correction use a permissive
-object-only inner transport schema so every syntactically structured response
-reaches the Controller's exact semantic validator without an upstream retry
-claiming Controller authority; the private envelope still binds the exact
-semantic-schema digest. The prompt exposes each correction slot's exact value
+inside the envelope. Planning and targeted correction initially use a permissive
+object-only inner transport schema so syntactically structured responses reach
+the Controller's exact semantic validator. When a broad proposal schema failure
+requires one complete regeneration, SAT derives a type-only transport schema
+from that same semantic schema. It rejects scalar placeholders in proposal
+records while leaving required fields, IDs, authorization, and policy to the
+Controller; the private envelope still binds the exact semantic-schema digest.
+The prompt exposes each correction slot's exact value
 schema, and the Controller enforces it after capture. If that schema permits only
 an object or array and the captured replacement contains exactly one strict JSON
 encoding of the matching container, the Controller removes that extra encoding

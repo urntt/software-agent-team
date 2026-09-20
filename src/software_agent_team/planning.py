@@ -6939,6 +6939,51 @@ def _planning_response_schema() -> dict[str, object]:
     return schema
 
 
+def _planning_regeneration_transport_schema(
+    response_schema: dict[str, object],
+) -> dict[str, object]:
+    """Expose only JSON container and primitive types during proposal regeneration.
+
+    The semantic schema remains the Controller's authority. This projection lets
+    the model-facing tool reject scalar placeholders for proposal records without
+    making upstream tool validation decide required fields, IDs, or policy.
+    """
+
+    def project(node: dict[str, object]) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for key in ("type", "$ref"):
+            if key in node:
+                result[key] = node[key]
+        for key in ("properties", "$defs"):
+            values = node.get(key)
+            if isinstance(values, dict):
+                result[key] = {
+                    name: project(value)
+                    for name, value in values.items()
+                    if isinstance(name, str) and isinstance(value, dict)
+                }
+        items = node.get("items")
+        if isinstance(items, dict):
+            result["items"] = project(items)
+        for key in ("anyOf", "oneOf", "allOf"):
+            branches = node.get(key)
+            if isinstance(branches, list):
+                # Stripping discriminator constraints can make former oneOf
+                # branches overlap; anyOf still preserves their type shapes.
+                projected_key = "anyOf" if key == "oneOf" else key
+                result[projected_key] = [
+                    project(branch)
+                    for branch in branches
+                    if isinstance(branch, dict)
+                ]
+        return result
+
+    projected = project(response_schema)
+    if projected.get("type") != "object":
+        raise PlanningError("Planning regeneration transport schema is not an object")
+    return projected
+
+
 def _validate_current_planning_response_wire(
     payload: dict[str, object],
     *,
@@ -11007,6 +11052,7 @@ class AdaptivePlanningCoordinator:
                 clarification_recovery=clarification_recovery,
                 response_schema=response_schema,
             )
+            regenerating_proposal = proposal_regeneration_diagnostic is not None
             proposal_regeneration_diagnostic = None
             submission_contract = AgentSubmissionContract.from_schema(
                 (
@@ -11021,6 +11067,11 @@ class AdaptivePlanningCoordinator:
                     AgentSubmissionPurpose.PLANNING_RESPONSE
                     if correction_plan is None
                     else AgentSubmissionPurpose.SEMANTIC_CORRECTION
+                ),
+                transport_schema=(
+                    _planning_regeneration_transport_schema(response_schema)
+                    if regenerating_proposal
+                    else None
                 ),
             )
             # ``attempt`` restarts for each dialogue or revision. Persisted turn
@@ -12003,7 +12054,14 @@ class AdaptivePlanningCoordinator:
             response_schema_json=json.dumps(
                 response_schema,
                 ensure_ascii=False,
-                indent=2,
+                indent=(
+                    None if proposal_regeneration_diagnostic is not None else 2
+                ),
+                separators=(
+                    (",", ":")
+                    if proposal_regeneration_diagnostic is not None
+                    else None
+                ),
             ),
             repair_context_json="null",
             submission_tool=ARTIFACT_SUBMISSION_TOOL,
@@ -12021,6 +12079,10 @@ class AdaptivePlanningCoordinator:
                 "requirements and clarification answers. Submit one full proposal "
                 "through the tool, not correction slot records. Do not copy invalid "
                 "scalar or placeholder values from the rejected proposal. "
+                "Before calling the tool, check that product_definition is an "
+                "object and that requirements, acceptance_criteria, decisions, "
+                "assumptions, agents, and tasks are arrays of objects. Integers, "
+                "booleans, strings, and nulls are not proposal records. "
                 "Representative rejected fields (path and validator code only):\n"
                 f"{json.dumps(structural_errors, ensure_ascii=False)}\n"
             )
