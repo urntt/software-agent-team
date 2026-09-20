@@ -185,16 +185,18 @@ was deliberately withheld, so there is still no complete delivery evidence.
 
 ## Current Release
 
-The immutable `v0.4.11` tag and
-[GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.4.11)
-identify revision `61736fbf9589cbf13db2891ceb30bac47ee20461` and Git
+The immutable `v0.4.12` tag and
+[GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.4.12)
+identify revision `cd6e67de4e16ec3134c7f4d298f26abfc406244b` and Git
 archive digest
-`sha256:8e5456e3f30bbaf61886f5b677f01481ba403b614f31d938e3ac67d8efa0a6de`.
-The exact-tag hosted gate passed 1,890 tests with three environment skips;
-the clean local gate passed 1,893 tests. The Release manifest asset digest is
-`sha256:b3d4aefaeee65562db893957fc31d40047ded655185f31e64b4b64c9c1c633`.
-The latest public rootless user journey installed this version but stopped in
-Planning with structurally invalid model submissions. No project was delivered.
+`sha256:7dcf1b974dc74d3414caee6534aa10779c6d0a3db6701ab47294b348fef17a95`.
+The [exact-tag hosted gate](https://github.com/urntt/software-agent-team/actions/runs/35507742111)
+passed 1,890 tests with three environment skips; the clean local gate passed
+1,893 tests. The Release manifest asset digest is
+`sha256:ed376f362d4f577410616e2b87c715355eab9e92121fcda8026e46079b54f7cc`.
+The latest fresh rootless user journey used `v0.4.11` and stopped in Planning
+with structurally invalid model submissions. `v0.4.12` has targeted live
+Planning evidence but no fresh public full-journey delivery evidence yet.
 
 ## Historical Release Evidence
 
