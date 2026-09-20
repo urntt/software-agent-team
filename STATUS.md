@@ -113,7 +113,16 @@ passed doctor, format, lint, and 1,892 local tests. The exact-tag hosted gate
 passed 1,889 tests with three environment skips and published a unique
 `v0.4.10` Release. The existing non-Docker-group rootless dev account upgraded
 to the final revision and confirmed same-ref activation is a no-op. A new
-public-stable ordinary-user journey has not yet begun.
+non-Docker-group account then installed public `v0.4.10` with rootless Docker.
+The verified installation, first and later 16/16 startup checks, and live
+Gemini 3.5 Flash Lite provider check passed. Planning asked for a user-owned
+target-user choice, but its first full proposal and one full regeneration
+submitted Boolean placeholders where the semantic schema requires objects or
+strings. The Controller rejected both (28 and 27 structural errors) and exited
+before an approvable overview or Agent execution. Formal secret-free export,
+SAT uninstall, and dedicated-account cleanup completed. The model-authored
+tool arguments are preserved; why this route generated that shape remains
+unknown. No project was delivered.
 
 ## Current Release
 
@@ -128,7 +137,7 @@ passed 1,889 tests with three environment skips; the clean local revision
 passed 1,892 tests. The unique
 Release manifest asset digest is
 `sha256:154f6ed6f886f97a6ae07fe18cfb68754e4bd0ff5419d70365a8b7458cb81f4d`.
-The latest completed public rootless journey used `v0.4.9` and stopped in
+The latest completed public rootless journey used `v0.4.10` and stopped in
 Planning as described above. No public stable journey has delivered a project yet.
 
 
