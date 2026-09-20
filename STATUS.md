@@ -1,8 +1,5 @@
 # Project Status
 
-**Current milestone:** validate the next Planning repair through a fresh
-ordinary-user journey, including provider-backed execution and delivery.
-
 **Last updated:** September 20, 2026
 
 This document records current implementation and validation evidence. Product
@@ -93,15 +90,14 @@ account, targeted free Flash Planning still did not reach an approvable proposal
 3.8 ended without typed submission after a correction prompt omitted the old
 values of ten related fields; 3.7 and 3.6 returned HTTP 503; 3.5 stalled in
 OpenClaw response finalization; 3.5 Flash Lite submitted a writer-coverage
-correction that changed the task collection shape and was rejected. The current
-development revision now supplies read-only current slot values to fresh Planning
+correction that changed the task collection shape and was rejected. The next
+development revision supplied read-only current slot values to fresh Planning
 correction sessions and restricts bootstrap tools to bound artifact submission.
-This additional revision has passed the affected 339-test suite but has not yet
-passed a final canonical or provider-backed gate. No new complete user journey
-has begun.
+The affected 339-test suite passed; the later fixed-revision provider and
+release results are recorded below.
 In a subsequent fixed dev 3.8 Flash Planning call, the first complete-proposal
 invocation stopped with OpenClaw `stopReason=length` and only thinking output;
-SAT's 16,384-token invocation ceiling left no typed submission. Development now
+SAT's 16,384-token invocation ceiling left no typed submission. A later fix
 uses the model's declared 65,536-token output ceiling for reasoning-capable
 Gemini bootstrap Planning while retaining the 16,384-token execution-Agent
 limit. The affected runtime-configuration/model-profile suite passed 69 tests.
@@ -112,24 +108,28 @@ the rejected widespread-schema proposal triggered one full regeneration,
 targeted corrections received current slot values, and the Controller reached
 an approvable overview. Its seven OpenClaw sessions used only the bound
 submission tool. The smoke stopped before approval; no Agent or delivery ran.
-This revision has not yet passed a final canonical or exact-tag release gate,
-and no new complete user journey has begun.
+The final clean revision `5a27beeb294a832313e0bce022b28b6d0abe0145`
+passed doctor, format, lint, and 1,892 local tests. The exact-tag hosted gate
+passed 1,889 tests with three environment skips and published a unique
+`v0.4.10` Release. The existing non-Docker-group rootless dev account upgraded
+to the final revision and confirmed same-ref activation is a no-op. A new
+public-stable ordinary-user journey has not yet begun.
 
 ## Current Release
 
-The immutable `v0.4.9` tag,
-[GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.4.9),
+The immutable `v0.4.10` tag,
+[GitHub Release](https://github.com/urntt/software-agent-team/releases/tag/v0.4.10),
 package version, and release manifest identify source revision
-`c714cc442299e4e768b8d7719a4a4b7795154746` and Git archive digest
-`sha256:3730697640be80eef8e168626bbc927219d870e5d9f8ea263081c0e0ea2e9f9a`.
+`5a27beeb294a832313e0bce022b28b6d0abe0145` and Git archive digest
+`sha256:826a5dbd0d41f6f58b99ccf15464ce81a7267b25556c46b1edfef64fa9b3ba4f`.
 Exact-tag GitHub Actions
-[run 35479842372](https://github.com/urntt/software-agent-team/actions/runs/35479842372)
-passed 1,887 tests with three environment skips; the independent rootless
-code revision passed 1,889 tests with one root-only fixture skip. The unique
+[run 35488406412](https://github.com/urntt/software-agent-team/actions/runs/35488406412)
+passed 1,889 tests with three environment skips; the clean local revision
+passed 1,892 tests. The unique
 Release manifest asset digest is
-`sha256:7b4a21772c7e04427cfc03e89fcf1553e0dd1fda3598746b16b2017f01248dad`.
-The latest public rootless journey used `v0.4.9` and stopped in Planning as
-described above. No public stable journey has delivered a project yet.
+`sha256:154f6ed6f886f97a6ae07fe18cfb68754e4bd0ff5419d70365a8b7458cb81f4d`.
+The latest completed public rootless journey used `v0.4.9` and stopped in
+Planning as described above. No public stable journey has delivered a project yet.
 
 
 The immutable `v0.4.1` tag,
