@@ -743,7 +743,40 @@ def test_materialized_config_uses_supported_gemini_thinking_level(
     assert provider["apiKey"] == "${GEMINI_API_KEY}"
     assert provider["models"][0]["id"] == "gemini-3.8-flash"
     settings = payload["agents"]["defaults"]["models"][GEMINI_38_FLASH_MODEL]
-    assert settings["params"] == {"maxTokens": 16_384, "thinking": "medium"}
+    assert settings["params"] == {"maxTokens": 65_536, "thinking": "medium"}
+    assert "must-not-be-persisted" not in destination.read_text(encoding="utf-8")
+
+
+def test_gemini_execution_agents_keep_the_smaller_invocation_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "must-not-be-persisted")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    destination = tmp_path / "run" / "openclaw.runtime.json"
+    original = adaptive_team_plan()
+    plan = TeamPlan.model_validate(
+        {
+            **original.model_dump(mode="json"),
+            "model_routes": {
+                **original.model_routes.model_dump(mode="json"),
+                "routes": [{"id": "default", "model": GEMINI_38_FLASH_MODEL}],
+            },
+        }
+    )
+    materialize_run_configuration(
+        OPENCLAW_TEMPLATE,
+        destination,
+        manifest=load_team_manifest(TEAM_CONFIG),
+        team_plan=plan,
+        workspace=workspace,
+        sandbox_image="sat-agent:phase1",
+        sandbox_user="1000:1000",
+    )
+    payload = json.loads(destination.read_text(encoding="utf-8"))
+    settings = payload["agents"]["defaults"]["models"][GEMINI_38_FLASH_MODEL]
+    assert settings["params"]["maxTokens"] == 16_384
     assert "must-not-be-persisted" not in destination.read_text(encoding="utf-8")
 
 

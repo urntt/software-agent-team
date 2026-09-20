@@ -1379,6 +1379,18 @@ def materialize_run_configuration(
             runtime_profile=model_runtime_profile,
             artifact_submission_mode=artifact_submission_mode,
         )
+        profile = model_runtime_profile or runtime_profile_for_model(model)
+        if (
+            bootstrap_capability is not None
+            and profile.api is ModelApi.GOOGLE_GENERATIVE_AI
+            and profile.reasoning is True
+            and profile.invocation_max_tokens is not None
+            and profile.max_output_tokens is not None
+        ):
+            # A full Planning proposal needs room for model reasoning and its
+            # terminal typed tool call. Keep the smaller per-turn limit for
+            # execution Agents; the task budget still owns total spend.
+            defaults["models"][model]["params"]["maxTokens"] = profile.max_output_tokens
     if team_plan is not None:
         for route in team_plan.model_routes.routes:
             _apply_model_compatibility(

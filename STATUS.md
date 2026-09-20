@@ -99,6 +99,13 @@ correction sessions and restricts bootstrap tools to bound artifact submission.
 This additional revision has passed the affected 339-test suite but has not yet
 passed a final canonical or provider-backed gate. No new complete user journey
 has begun.
+In a subsequent fixed dev 3.8 Flash Planning call, the first complete-proposal
+invocation stopped with OpenClaw `stopReason=length` and only thinking output;
+SAT's 16,384-token invocation ceiling left no typed submission. Development now
+uses the model's declared 65,536-token output ceiling for reasoning-capable
+Gemini bootstrap Planning while retaining the 16,384-token execution-Agent
+limit. The affected runtime-configuration/model-profile suite passed 69 tests;
+this newest revision has not yet passed a live Planning proposal or final gate.
 
 ## Current Release
 

@@ -308,6 +308,12 @@ submission tool, so unrelated session-history and workspace-reading tools cannot
 substitute for correction context. Dynamic Agents preserve the normal provider completion
 choice, allowing optional work/evidence tools to converge before the bound terminal
 submission. A missing submission never grants assistant text semantic authority.
+For reasoning-capable Gemini routes, bootstrap Planning uses the reviewed
+provider's declared output ceiling so reasoning does not consume the smaller
+execution-Agent turn allowance before a full proposal and terminal tool call.
+Execution Agents retain their configured 16,384-token invocation limit; all
+calls still consume the same task-wide cost and time authorities. A provider
+length stop without a bound submission remains an invalid response.
 A write-capable tool-bearing turn may enter the bounded `upstream_incomplete`
 continuation path; a zero-tool response and every unverifiable case remain terminal
 protocol failures.

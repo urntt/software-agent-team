@@ -12,6 +12,11 @@
       "id": "show-current-values-to-planning-correction",
       "impact": "patch",
       "summary": "Give fresh Planning correction sessions read-only current slot values and restrict bootstrap tools to bound artifact submission"
+    },
+    {
+      "id": "gemini-planning-output-headroom",
+      "impact": "patch",
+      "summary": "Use the declared Gemini output limit for bootstrap Planning while retaining the smaller execution-Agent turn limit"
     }
   ]
 }
