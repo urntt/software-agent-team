@@ -1,6 +1,6 @@
 # Project Status
 
-**Last updated:** September 20, 2026
+**Last updated:** September 26, 2026
 
 This document records current implementation and validation evidence. Product
 and architecture decisions belong to [`VISION.md`](VISION.md).
@@ -194,9 +194,24 @@ The [exact-tag hosted gate](https://github.com/urntt/software-agent-team/actions
 passed 1,890 tests with three environment skips; the clean local gate passed
 1,893 tests. The Release manifest asset digest is
 `sha256:ed376f362d4f577410616e2b87c715355eab9e92121fcda8026e46079b54f7cc`.
-The latest fresh rootless user journey used `v0.4.11` and stopped in Planning
-with structurally invalid model submissions. `v0.4.12` has targeted live
-Planning evidence but no fresh public full-journey delivery evidence yet.
+The latest fresh rootless user journey installed public `v0.4.12`, passed
+initial and later 16/16 self-checks, real Gemini provider validation, Planning
+approval, and an Implementer commit. After pause/resume, its Integration Agent
+ran 14 project tests and submitted an accepted typed artifact on the exact
+Implementer HEAD, but OpenClaw produced no final text response. SAT rejected
+the otherwise verified unchanged handoff as `no_relevant_change`; Testing and
+Review did not start, and there was no accepted delivery or external project
+validation. The failed run, secret-free export, uninstall, independent public
+`v0.4.11` to `v0.4.12` upgrade, and exact dedicated-account cleanup have
+screened private evidence. The model's reason for omitting final text is unknown.
+
+The `v0.4.13` candidate fixes the controller's extra terminal-text condition
+for evidence-backed unchanged Integration, removes a redundant sandbox uv
+cache copy during portable lock generation, bounds cache-capacity errors, and
+removes an unused secret-input API with an echoing non-TTY fallback. Real-Git
+runner and 128 MiB/32 MiB sandbox checks, TTY checks, formatting, and lint
+passed on the code commit `b35e4db`. The final candidate gate, publication,
+and a new public full user journey are still pending.
 
 ## Historical Release Evidence
 

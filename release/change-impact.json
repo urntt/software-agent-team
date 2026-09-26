@@ -1,12 +1,22 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.4.11",
-  "target_version": "0.4.12",
+  "baseline_version": "0.4.12",
+  "target_version": "0.4.13",
   "changes": [
     {
-      "id": "type-guide-whole-proposal-regeneration",
+      "id": "verified-integration-typed-completion",
       "impact": "patch",
-      "summary": "Guide whole-proposal Planning regeneration with a type-only tool schema derived from the semantic contract while preserving Controller-owned validation"
+      "summary": "Accept evidence-backed unchanged Integration after a completed typed submission even when OpenClaw omits final text"
+    },
+    {
+      "id": "shared-offline-lock-cache",
+      "impact": "patch",
+      "summary": "Reuse the sandbox uv cache for portable project locking and report bounded capacity errors"
+    },
+    {
+      "id": "remove-unused-secret-input",
+      "impact": "patch",
+      "summary": "Remove an unused secret-input API whose non-TTY fallback could echo values"
     }
   ]
 }
