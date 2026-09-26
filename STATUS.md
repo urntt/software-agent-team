@@ -213,6 +213,14 @@ runner and 128 MiB/32 MiB sandbox checks, TTY checks, formatting, and lint
 passed on the code commit `b35e4db`. The final candidate gate, publication,
 and a new public full user journey are still pending.
 
+The first clean non-root `v0.4.13` candidate gate on `6b28d7e` passed
+1,893 tests with one root-only skip, but the supervisor correctly failed
+because a new sandbox-image test left a rootless-mapped `.venv` inside its
+host pytest temporary tree. The test fixture now copies a read-only seed
+into container-owned tmpfs before the real `uv sync` and portable-lock
+sequence. A rootless focused replay and final clean gate remain pending;
+the failed gate is not release evidence.
+
 ## Historical Release Evidence
 
 The immutable `v0.4.10` tag,

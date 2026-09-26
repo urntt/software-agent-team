@@ -125,8 +125,7 @@ def test_runtime_image_can_refresh_a_portable_lock_offline(tmp_path: Path) -> No
     )
     for path in (project, *project.rglob("*")):
         if not path.is_symlink():
-            path.chmod(0o777 if path.is_dir() else 0o666)
-
+            path.chmod(0o755 if path.is_dir() else 0o644)
     completed = subprocess.run(
         [
             docker,
@@ -143,15 +142,19 @@ def test_runtime_image_can_refresh_a_portable_lock_offline(tmp_path: Path) -> No
             "65532:65532",
             "--tmpfs",
             "/tmp:rw,nosuid,nodev,size=128m,mode=1777",
+            "--tmpfs",
+            "/work:rw,nosuid,nodev,size=128m,mode=1777",
             "--volume",
-            f"{project}:/project",
+            f"{project}:/seed:ro",
             "--workdir",
-            "/project",
+            "/work",
             inspected.stdout.strip(),
             "sh",
             "-ec",
-            "uv sync --dev; dd if=/dev/zero of=/tmp/other-work bs=1M "
-            "count=12 status=none; sat-project-lock; du -sm /tmp",
+            "cp -R /seed /work/project; cd /work/project; uv sync --dev; "
+            "dd if=/dev/zero of=/tmp/other-work bs=1M count=12 status=none; "
+            "sat-project-lock; printf 'SAT_LOCK_BEGIN\\n'; cat uv.lock; "
+            "printf '\\nSAT_LOCK_END\\n'; du -sm /tmp",
         ],
         check=False,
         capture_output=True,
@@ -160,11 +163,14 @@ def test_runtime_image_can_refresh_a_portable_lock_offline(tmp_path: Path) -> No
     )
 
     assert completed.returncode == 0, completed.stderr
+    lock = completed.stdout.split("SAT_LOCK_BEGIN\n", 1)[1].split(
+        "\nSAT_LOCK_END\n", 1
+    )[0]
     assert int(completed.stdout.strip().splitlines()[-1].split()[0]) < 120
-    lock = (project / "uv.lock").read_text(encoding="utf-8")
     assert 'name = "lock-probe"' in lock
     assert 'registry = "https://pypi.org/simple"' in lock
     assert "/opt/software-agent-team" not in lock
+    assert not (project / ".venv").exists()
 
 
 def test_runtime_lock_helper_reports_bounded_cache_capacity_failure() -> None:
