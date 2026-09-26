@@ -41,10 +41,13 @@ from software_agent_team.prompting import (
     render_dynamic_agent_prompt,
 )
 from software_agent_team.response_corrections import (
+    ResponseFailureClass,
     ResponseIssueAuthority,
+    SemanticCorrectionSubmissionError,
     apply_semantic_correction_with_evidence,
     build_semantic_correction_plan,
     correction_prompt,
+    diagnostic_from_invariant,
     semantic_correction_slot_handle,
 )
 from software_agent_team.responses import (
@@ -1202,6 +1205,106 @@ def test_review_correction_selects_controller_catalog_instead_of_retyping_output
     claim = corrected[0]["tool_evidence"][0]
     assert claim["observable"] == ("Nested child\ndirectories are scanned recursively")
     assert "Nested child directories are scanned recursively" not in prompt
+
+
+def test_review_duplicate_boundary_evidence_repairs_only_repeated_leaves() -> None:
+    """Five container errors must not force five nested-list rewrites."""
+
+    assessment = {
+        "status": "blocked",
+        "adversarial_check": "Checked entry boundaries.",
+        "evidence": "The probe records the rejected behavior.",
+        "tool_evidence": [{"observable": "PROBE_A"}],
+        "boundary_checks": [
+            {
+                "boundary": boundary.value,
+                "adversarial_check": f"Checked {boundary.value}.",
+                "tool_evidence": [{"observable": "PROBE_A"}],
+            }
+            for boundary in ReviewBoundaryKind
+        ],
+    }
+    payload: dict[str, object] = {
+        "criterion_assessments": [
+            {**assessment, "criterion_id": f"AC_{index}"} for index in range(5)
+        ],
+        "summary": "Keep the other review fields unchanged.",
+    }
+    paths = tuple(
+        f"/criterion_assessments/{index}/boundary_checks" for index in range(5)
+    )
+    error_message = (
+        "Value error, criterion boundary checks require distinct evidence fragments"
+    )
+    diagnostic = diagnostic_from_invariant(
+        payload,
+        failure_class=ResponseFailureClass.SEMANTIC_SCHEMA,
+        authority=ResponseIssueAuthority.MODEL,
+        code="value_error",
+        invariant_id="value_error",
+        subjects=(),
+        message=error_message,
+        paths=paths,
+    )
+    plan = build_semantic_correction_plan(payload, diagnostic)
+    assert plan is not None
+    bound = bind_review_evidence_correction_candidates(
+        plan,
+        evidence_attempts=(
+            ReviewToolEvidenceAttempt(
+                execution_attempt=1,
+                tool_calls=(
+                    captured_tool_call(
+                        1,
+                        "PROBE_A\nPROBE_B\nPROBE_C\nPROBE_D",
+                        executable="pytest",
+                    ),
+                ),
+            ),
+        ),
+    )
+    assert bound is not None
+    assert len(bound.evidence.target_paths) == 15
+    assert all(path.endswith("/observable") for path in bound.evidence.target_paths)
+    assert len(bound.candidate_slots) == 15
+    with pytest.raises(SemanticCorrectionSubmissionError):
+        apply_semantic_correction_with_evidence(
+            {
+                "replacements": [
+                    {
+                        "slot_handle": "slot_1",
+                        "replacement_value": ["unattributed free-form evidence"],
+                    }
+                ]
+            },
+            bound,
+        )
+    replacements = []
+    for path, slot in zip(
+        bound.evidence.target_paths, bound.candidate_slots, strict=True
+    ):
+        boundary_index = int(path.split("/")[4])
+        fragment = ("PROBE_B", "PROBE_C", "PROBE_D")[boundary_index - 1]
+        candidate = next(
+            item for item in slot.candidates if item.replacement_value == fragment
+        )
+        replacements.append(
+            {
+                "slot_handle": semantic_correction_slot_handle(
+                    bound.evidence.target_paths, path
+                ),
+                "replacement_value": candidate.handle,
+            }
+        )
+    corrected = apply_semantic_correction_with_evidence(
+        {"replacements": replacements}, bound
+    ).payload
+    assert corrected["summary"] == payload["summary"]
+    for item in corrected["criterion_assessments"]:
+        validated = ReviewCriterionAssessmentResponse.model_validate(item)
+        assert [check.boundary for check in validated.boundary_checks] == list(
+            ReviewBoundaryKind
+        )
 
 
 def test_review_correction_catalog_excludes_fragments_contaminated_by_failures() -> (

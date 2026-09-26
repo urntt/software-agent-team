@@ -157,10 +157,12 @@ def review_tool_claim() -> ReviewToolEvidenceClaim:
     return ReviewToolEvidenceClaim(observable="fake-review-observation")
 
 
-def review_tool_call() -> AgentToolCallEvidence:
+def review_tool_call(
+    output_text: str = "fake-review-observation",
+) -> AgentToolCallEvidence:
     """Return the fake executor's sanitized read record."""
 
-    output = b"fake-review-observation"
+    output = output_text.encode()
     return AgentToolCallEvidence(
         id="tool-001",
         tool_name="read",
@@ -170,7 +172,7 @@ def review_tool_call() -> AgentToolCallEvidence:
         is_error=False,
         output_sha256=hashlib.sha256(output).hexdigest(),
         output_bytes=len(output),
-        output_excerpt=output.decode("utf-8"),
+        output_excerpt=output_text,
     )
 
 
@@ -1026,22 +1028,29 @@ class DynamicExecutor:
                     submission_payload = json.loads(first_correction)
                     response_text = first_correction
                 else:
-                    reduced_payload = json.loads(json.dumps(invalid_payload))
-                    reduced_payload["summary"] = valid_payload["summary"]
-                    distinct_boundaries = json.loads(json.dumps(duplicate_boundaries))
-                    distinct_boundaries[1]["tool_evidence"] = [
-                        {"observable": "observation"}
-                    ]
-                    final_correction = semantic_correction_response(
-                        reduced_payload,
-                        {
-                            "/criterion_assessments/0/boundary_checks": (
-                                distinct_boundaries
-                            )
-                        },
+                    slots_text = request.prompt.split("TARGET_SLOTS_AND_ERRORS\n", 1)[
+                        1
+                    ].split("\nCORRECTION_SCHEMA_JSON\n", 1)[0]
+                    slots = json.loads(slots_text)
+                    assert len(slots) == 1
+                    assert slots[0]["target_path"] == (
+                        "/criterion_assessments/0/boundary_checks/1/"
+                        "tool_evidence/0/observable"
                     )
-                    submission_payload = json.loads(final_correction)
-                    response_text = final_correction
+                    selected = next(
+                        candidate["handle"]
+                        for candidate in slots[0]["candidate_catalog"]
+                        if candidate["exact_value"] == "observation"
+                    )
+                    submission_payload = {
+                        "replacements": [
+                            {
+                                "slot_handle": slots[0]["slot_handle"],
+                                "replacement_value": selected,
+                            }
+                        ]
+                    }
+                    response_text = json.dumps(submission_payload)
             elif self.invalid_review_response_once:
                 invalid_payload = dict(valid_payload)
                 invalid_payload["summary"] = ""
@@ -1342,7 +1351,17 @@ class DynamicExecutor:
         review_calls = (
             ()
             if omit_review_call or invalid_review_evidence
-            else ((review_tool_call(),) if is_review else ())
+            else (
+                (
+                    review_tool_call(
+                        "fake-review\nobservation\nfake-review-observation"
+                        if self.invalid_review_sibling_once
+                        else "fake-review-observation"
+                    ),
+                )
+                if is_review
+                else ()
+            )
         )
         integration_calls = (
             integration_tool_calls()
@@ -2664,6 +2683,10 @@ def test_reviewer_correction_continues_after_strict_sibling_reduction(
     assert records[1].response_validation is not None
     assert records[1].response_validation.correction_paths == (
         "/criterion_assessments/0/boundary_checks",
+    )
+    assert records[2].semantic_correction_request is not None
+    assert records[2].semantic_correction_request.target_paths == (
+        "/criterion_assessments/0/boundary_checks/1/tool_evidence/0/observable",
     )
     assert records[2].semantic_correction_outcome == "accepted"
     assert records[2].response_validation is None

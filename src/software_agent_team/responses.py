@@ -53,6 +53,7 @@ from software_agent_team.response_corrections import (
     SemanticCorrectionCandidateSlot,
     SemanticCorrectionPlan,
     attach_semantic_correction_candidates,
+    build_semantic_correction_plan,
     deterministically_remove_forbidden_fields,
     diagnostic_from_invariant,
     diagnostic_from_message,
@@ -961,6 +962,7 @@ def bind_review_evidence_correction_candidates(
     unreachable and must not be offered as a random retry.
     """
 
+    plan = _target_duplicate_boundary_observables(plan)
     observable_paths = tuple(
         path for path in plan.evidence.target_paths if path.endswith("/observable")
     )
@@ -1060,6 +1062,65 @@ def bind_review_evidence_correction_candidates(
             )
         )
     return attach_semantic_correction_candidates(plan, tuple(slots))
+
+
+def _target_duplicate_boundary_observables(
+    plan: SemanticCorrectionPlan,
+) -> SemanticCorrectionPlan:
+    """Narrow a list-level distinctness error to the repeated evidence leaves.
+
+    The model must choose independently grounded fragments, but it need not
+    rewrite otherwise valid boundary objects to do so. Leave malformed or
+    oversized values on the original fail-closed correction path.
+    """
+
+    issues = plan.diagnostic.issues
+    if not issues or any(
+        issue.authority is not ResponseIssueAuthority.MODEL
+        or not re.fullmatch(r"/criterion_assessments/\d+/boundary_checks", issue.path)
+        or issue.message
+        != "Value error, criterion boundary checks require distinct evidence fragments"
+        for issue in issues
+    ):
+        return plan
+    repeated_paths: list[str] = []
+    for issue in issues:
+        try:
+            checks = _semantic_value_at_pointer(plan.base_payload, issue.path)
+        except ValueError:
+            return plan
+        if not isinstance(checks, list):
+            return plan
+        seen: set[str] = set()
+        for check_index, check in enumerate(checks):
+            if not isinstance(check, dict) or not isinstance(
+                claims := check.get("tool_evidence"), list
+            ):
+                return plan
+            for claim_index, claim in enumerate(claims):
+                if not isinstance(claim, dict) or not isinstance(
+                    observable := claim.get("observable"), str
+                ):
+                    return plan
+                if observable in seen:
+                    repeated_paths.append(
+                        f"{issue.path}/{check_index}/tool_evidence/"
+                        f"{claim_index}/observable"
+                    )
+                seen.add(observable)
+    if not repeated_paths or len(repeated_paths) > MAX_CORRECTION_FIELDS:
+        return plan
+    diagnostic = diagnostic_from_invariant(
+        plan.base_payload,
+        failure_class=ResponseFailureClass.SEMANTIC_SCHEMA,
+        authority=ResponseIssueAuthority.MODEL,
+        code="review_boundary_evidence_duplicate",
+        invariant_id="review_boundary_evidence_distinct",
+        subjects=(),
+        message="Select a distinct, grounded result fragment for this boundary.",
+        paths=tuple(repeated_paths),
+    )
+    return build_semantic_correction_plan(plan.base_payload, diagnostic) or plan
 
 
 class ReviewBoundaryCheckResponse(BaseModel):

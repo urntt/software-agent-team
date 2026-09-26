@@ -6059,6 +6059,9 @@ def test_materially_different_requests_compile_distinct_specialist_contracts() -
     ) != experience.team_plan.model_dump(mode="json")
     security_overview = render_planning_overview(security)
     experience_overview = render_planning_overview(experience)
+    standard_security = render_planning_overview(security, visibility="standard")
+    assert "[general review]:" in standard_security
+    assert "[security assessment]:" in standard_security
     assert "acceptance authority: security" in security_overview
     assert "output: security_assessment" in security_overview
     assert "acceptance authority: experience" not in security_overview

@@ -9465,7 +9465,8 @@ def _render_concise_planning_overview(
             )
             lines.extend(
                 _render_prefixed_text(
-                    f"    - {agent.label}: ",
+                    f"    - {agent.label} "
+                    f"[{agent.specialization.value.replace('_', ' ')}]: ",
                     f"{agent.responsibility} ({permission}; {route.model})",
                 )
             )

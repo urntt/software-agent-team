@@ -891,7 +891,11 @@ is deterministic; whether the presentation is understandable remains a real
 user test.
 
 The default overview emphasizes task-specific product decisions, requirements,
-assumptions, risks, assignments, and approval boundaries. It presents a compact
+assumptions, risks, assignments, and approval boundaries. It shows the
+specialization label beside each Agent's display name, so two Review Agents
+with identical proposed names or responsibility text remain distinguishable.
+The label reflects the Controller's approved role and does not change authority.
+It presents a compact
 count of controller-owned execution-profile constraints, lifecycle safeguards,
 and Review boundary definitions separately from additional task-specific
 constraints proposed during Planning. The user can show or hide the complete
@@ -1131,6 +1135,10 @@ an earlier attempt in that same role-stage, immutable-commit, and invocation
 chain. Deterministic command stdout/stderr from the same immutable iteration is
 also eligible. Targeted correction derives short request-local candidate handles
 under the same whole-chain matching policy used by final grounding. A fragment from a
+repeated `boundary_checks` evidence selector is corrected at the repeated
+`observable` leaf, preserving each boundary's kind and adversarial check; the
+Reviewer chooses a distinct eligible result through a Controller-bound handle.
+A fragment from a
 successful result is excluded when the same selector would also match an
 ineligible failed tool result or failed deterministic command, so the catalog
 cannot offer a handle that the unchanged validator must reject. The controller
