@@ -538,6 +538,7 @@ class DynamicExecutor:
         writer_no_change: bool = False,
         integration_tool_evidence: bool = False,
         integration_unresolved_issue: bool = False,
+        integration_terminal_response: bool = True,
     ) -> None:
         self.workspace = workspace
         self.invalid_writer_once = invalid_writer_once
@@ -563,6 +564,7 @@ class DynamicExecutor:
         self.writer_no_change = writer_no_change
         self.integration_tool_evidence = integration_tool_evidence
         self.integration_unresolved_issue = integration_unresolved_issue
+        self.integration_terminal_response = integration_terminal_response
         if upstream_writer_mode not in {
             None,
             "complete_after_one",
@@ -1432,7 +1434,7 @@ class DynamicExecutor:
                     tool_completed_count=len(tool_calls),
                     stall_suspected_count=0,
                     stall_recovered_count=0,
-                    terminal_response_observed=True,
+                    terminal_response_observed=self.integration_terminal_response,
                 )
                 if request.capability is AgentCapability.INTEGRATION
                 else None
@@ -1733,13 +1735,18 @@ def test_dynamic_runner_executes_writer_then_quality_checkpoint_on_one_commit(
     assert usage.active_calls == 0
 
 
+@pytest.mark.parametrize("terminal_response", [True, False])
 def test_dynamic_runner_accepts_verified_unchanged_downstream_integration(
     tmp_path: Path,
+    terminal_response: bool,
 ) -> None:
     runner, team_plan, executor, quality_gate, _ = runtime(
         tmp_path,
         include_integrator=True,
-        executor_options={"integration_tool_evidence": True},
+        executor_options={
+            "integration_tool_evidence": True,
+            "integration_terminal_response": terminal_response,
+        },
     )
 
     result = DagScheduler().execute(team_plan, runner)

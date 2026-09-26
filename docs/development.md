@@ -438,9 +438,11 @@ and one frozen public-registry cache containing both resolution metadata and
 the distributions needed by the generated-project profile. A root-owned `uv`
 configuration keeps resolution offline while retaining PyPI as the lockfile
 source. A small `uv` wrapper lazily copies that immutable cache into bounded
-private `/tmp` storage, so ordinary `uv sync`, `uv run`, and the immutable
-`sat-project-lock` helper share a writable cache without recording an
-image-local package path. For `uv run pytest`, the wrapper forwards live output
+private `/tmp` storage. Ordinary `uv sync` and `uv run` use that writable cache;
+the `sat-project-lock` helper invokes the same wrapper with a clean `UV_*`
+environment so Agent-provided uv settings cannot change the offline public
+registry lock source. It does not make a second cache copy. For `uv run pytest`,
+the wrapper forwards live output
 and stops the exact test process group with exit 124 after 90 seconds without
 output. The bound lets the writer inspect and fix a blocked test before the
 provider silence lease expires; it does not change exported project files or
@@ -666,11 +668,13 @@ production state owners.
 Also carry a downstream Integration Agent through the production workflow when
 the exact upstream writer commit already satisfies its assigned integration
 responsibility. Require a clean unchanged workspace, accepted typed submission,
-at least one successful attributable non-submission operation, terminal
-lifecycle evidence that every started tool operation completed, no runtime
+at least one successful attributable non-submission operation, a completed
+invocation with every started tool operation accounted for, no runtime
 rejection or unresolved issue, and continued quality and final artifact
-aggregation. Keep unchanged implementation, ungrounded integration, dirty
-workspace, and wrong-ancestry cases fail closed.
+aggregation. An accepted typed submission is the semantic completion authority
+even when OpenClaw ends after that tool call without a final text response;
+provider stalls still fail closed. Keep unchanged implementation, ungrounded
+integration, dirty workspace, and wrong-ancestry cases fail closed.
 
 When changing live progress, derive labels only from allow-listed tool identity.
 Tests must prove that unknown executable names, command arguments, output, paths,

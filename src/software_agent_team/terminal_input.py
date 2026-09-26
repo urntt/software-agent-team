@@ -60,7 +60,7 @@ def _natural_text_bindings() -> KeyBindings:
 
 
 class TerminalInput:
-    """Own short, natural-language, and secret terminal input contracts."""
+    """Own short and natural-language terminal input contracts."""
 
     def __init__(
         self,
@@ -102,7 +102,6 @@ class TerminalInput:
             default=default,
             validate=None,
             multiline=False,
-            secret=False,
             cancellable=True,
         )
 
@@ -120,7 +119,6 @@ class TerminalInput:
             default=default,
             validate=validate,
             multiline=False,
-            secret=False,
         )
 
     def read_text(
@@ -137,23 +135,6 @@ class TerminalInput:
             default=default,
             validate=validate,
             multiline=True,
-            secret=False,
-        )
-
-    def read_secret(
-        self,
-        prompt: str,
-        *,
-        validate: TextValidator | None = None,
-    ) -> str:
-        """Read a non-echoed value without placing it in either input history."""
-
-        return self._read(
-            prompt,
-            default="",
-            validate=validate,
-            multiline=False,
-            secret=True,
         )
 
     def _read(
@@ -163,7 +144,6 @@ class TerminalInput:
         default: str,
         validate: TextValidator | None,
         multiline: bool,
-        secret: bool,
         cancellable: bool = False,
     ) -> str:
         if cancellable:
@@ -177,20 +157,13 @@ class TerminalInput:
             input=self.prompt_input,
             output=self.prompt_output,
             erase_when_done=False,
-            history=(
-                None
-                if secret
-                else self._natural_history
-                if multiline
-                else self._short_history
-            ),
+            history=self._natural_history if multiline else self._short_history,
         )
         prompt_options = {
             "message": [("class:prompt", prompt)],
             "default": default,
             "multiline": multiline,
             "wrap_lines": True,
-            "is_password": secret,
             "key_bindings": _natural_text_bindings() if multiline else None,
             "prompt_continuation": (
                 (lambda width, _line, _wrap: " " * max(0, width - 2) + "· ")

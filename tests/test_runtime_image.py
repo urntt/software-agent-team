@@ -97,7 +97,7 @@ def test_runtime_image_uses_content_pinned_base_and_dependency_lock() -> None:
     assert '"UV_CONFIG_FILE": "/dev/null"' in lock_helper
     assert '"UV_DEFAULT_INDEX": "https://pypi.org/simple"' in lock_helper
     assert '"UV_OFFLINE": "1"' in lock_helper
-    assert "shutil.copytree(PUBLIC_CACHE, cache, symlinks=True)" in lock_helper
+    assert 'SHARED_CACHE = Path("/tmp/uv-cache")' in lock_helper
 
 
 def test_runtime_image_can_refresh_a_portable_lock_offline(tmp_path: Path) -> None:
@@ -148,7 +148,10 @@ def test_runtime_image_can_refresh_a_portable_lock_offline(tmp_path: Path) -> No
             "--workdir",
             "/project",
             inspected.stdout.strip(),
-            "sat-project-lock",
+            "sh",
+            "-ec",
+            "uv sync --dev; dd if=/dev/zero of=/tmp/other-work bs=1M "
+            "count=12 status=none; sat-project-lock; du -sm /tmp",
         ],
         check=False,
         capture_output=True,
@@ -157,10 +160,57 @@ def test_runtime_image_can_refresh_a_portable_lock_offline(tmp_path: Path) -> No
     )
 
     assert completed.returncode == 0, completed.stderr
+    assert int(completed.stdout.strip().splitlines()[-1].split()[0]) < 120
     lock = (project / "uv.lock").read_text(encoding="utf-8")
     assert 'name = "lock-probe"' in lock
     assert 'registry = "https://pypi.org/simple"' in lock
     assert "/opt/software-agent-team" not in lock
+
+
+def test_runtime_lock_helper_reports_bounded_cache_capacity_failure() -> None:
+    docker = shutil.which("docker")
+    if docker is None:
+        pytest.skip("Docker is not installed; static helper checks remain covered")
+    inspected = subprocess.run(
+        [docker, "image", "inspect", "--format", "{{.Id}}", RUNTIME_IMAGE],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    if inspected.returncode != 0:
+        pytest.skip("the configured runtime image is not built in this checkout")
+
+    completed = subprocess.run(
+        [
+            docker,
+            "run",
+            "--rm",
+            "--network",
+            "none",
+            "--read-only",
+            "--cap-drop",
+            "ALL",
+            "--security-opt",
+            "no-new-privileges",
+            "--user",
+            "65532:65532",
+            "--tmpfs",
+            "/tmp:rw,nosuid,nodev,size=32m,mode=1777",
+            inspected.stdout.strip(),
+            "sat-project-lock",
+            "--self-test",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert completed.returncode == 2
+    assert "check writable /tmp space" in completed.stderr
+    assert "Traceback" not in completed.stderr
+    assert len(completed.stderr) < 1024
 
 
 def test_runtime_dependency_lock_contains_only_exact_unique_versions() -> None:

@@ -68,24 +68,6 @@ def test_validation_keeps_the_editable_draft() -> None:
     assert value == "abcde"
 
 
-def test_secret_input_is_not_added_to_editable_histories() -> None:
-    with create_pipe_input() as pipe_input:
-        editor = TerminalInput(
-            prompt_input=pipe_input,
-            prompt_output=DummyOutput(),
-            interactive=True,
-        )
-        feeder = _feed_later(pipe_input, "private-value\r")
-        try:
-            value = editor.read_secret("Secret: ")
-        finally:
-            feeder.join()
-
-    assert value == "private-value"
-    assert editor._short_history.get_strings() == []
-    assert editor._natural_history.get_strings() == []
-
-
 @pytest.mark.parametrize(
     ("control", "exception"),
     (("\x03", KeyboardInterrupt), ("\x04", EOFError)),

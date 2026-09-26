@@ -5,12 +5,13 @@ from __future__ import annotations
 
 import argparse
 import os
-import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
 PUBLIC_CACHE = Path("/opt/software-agent-team/uv-public-cache")
+SHARED_CACHE = Path("/tmp/uv-cache")
 
 
 def _environment(cache: Path) -> dict[str, str]:
@@ -67,19 +68,21 @@ def main() -> None:
     if not PUBLIC_CACHE.is_dir():
         raise SystemExit("sat-project-lock: frozen public uv cache is unavailable")
 
-    with tempfile.TemporaryDirectory(prefix="sat-project-lock-") as temporary_name:
-        temporary = Path(temporary_name)
-        cache = temporary / "cache"
-        shutil.copytree(PUBLIC_CACHE, cache, symlinks=True)
-        for path in (cache, *cache.rglob("*")):
-            if not path.is_symlink():
-                path.chmod(path.stat().st_mode | 0o200)
+    try:
         if args.self_test:
-            raise SystemExit(_self_test(temporary, cache))
+            with tempfile.TemporaryDirectory(prefix="sat-project-lock-") as name:
+                raise SystemExit(_self_test(Path(name), SHARED_CACHE))
         argv = ["uv", "lock", "--offline"]
         if args.check:
             argv.append("--check")
-        result = subprocess.run(argv, check=False, env=_environment(cache))
+        result = subprocess.run(argv, check=False, env=_environment(SHARED_CACHE))
+    except OSError:
+        print(
+            "sat-project-lock: unable to prepare the offline lock command; "
+            "check writable /tmp space and the uv runtime",
+            file=sys.stderr,
+        )
+        raise SystemExit(2) from None
     raise SystemExit(result.returncode)
 
 

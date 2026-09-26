@@ -74,10 +74,13 @@ def _seed(target: Path) -> None:
     if not _ready(PUBLIC_CACHE):
         _fail("frozen public package cache is unavailable")
 
-    target.parent.mkdir(parents=True, exist_ok=True)
-    candidate = Path(tempfile.mkdtemp(prefix=".sat-uv-cache-", dir=str(target.parent)))
-    candidate.rmdir()
+    candidate: Path | None = None
     try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        candidate = Path(
+            tempfile.mkdtemp(prefix=".sat-uv-cache-", dir=str(target.parent))
+        )
+        candidate.rmdir()
         shutil.copytree(PUBLIC_CACHE, candidate, symlinks=True)
         _make_writable(candidate)
         try:
@@ -85,9 +88,11 @@ def _seed(target: Path) -> None:
         except OSError:
             if not _ready(target):
                 raise
+    except (OSError, shutil.Error):
+        _fail("cannot seed the public package cache; check writable /tmp space")
     finally:
-        if candidate.exists():
-            shutil.rmtree(candidate)
+        if candidate is not None and candidate.exists():
+            shutil.rmtree(candidate, ignore_errors=True)
 
 
 def _stop_process_group(process: subprocess.Popen[bytes]) -> None:

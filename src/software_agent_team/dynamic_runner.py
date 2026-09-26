@@ -14,6 +14,7 @@ from pydantic import ValidationError
 
 from software_agent_team.artifact_store import ArtifactStore, ArtifactStoreError
 from software_agent_team.artifacts import (
+    AgentSubmissionStatus,
     AgentToolCallOutcome,
     AgentToolEvidenceStatus,
     ArtifactKind,
@@ -1778,9 +1779,9 @@ class DynamicAgentRunner:
             is not AgentToolEvidenceStatus.CAPTURED
             or result.telemetry.runtime_rejections
             or result.submission_evidence is None
+            or result.submission_evidence.status is not AgentSubmissionStatus.ACCEPTED
             or liveness is None
             or liveness.stalled
-            or not liveness.terminal_response_observed
             or liveness.tool_started_count != len(result.telemetry.tool_calls)
             or liveness.tool_completed_count != len(result.telemetry.tool_calls)
         ):
