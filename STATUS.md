@@ -205,21 +205,32 @@ validation. The failed run, secret-free export, uninstall, independent public
 `v0.4.11` to `v0.4.12` upgrade, and exact dedicated-account cleanup have
 screened private evidence. The model's reason for omitting final text is unknown.
 
-The `v0.4.13` candidate fixes the controller's extra terminal-text condition
-for evidence-backed unchanged Integration, removes a redundant sandbox uv
-cache copy during portable lock generation, bounds cache-capacity errors, and
-removes an unused secret-input API with an echoing non-TTY fallback. Real-Git
-runner and 128 MiB/32 MiB sandbox checks, TTY checks, formatting, and lint
-passed on the code commit `b35e4db`. The final candidate gate, publication,
-and a new public full user journey are still pending.
+Published `v0.4.13` fixes evidence-backed unchanged Integration, sandbox
+cache reuse and bounded capacity errors, an unused non-TTY secret-input path,
+and the rootless image-fixture cleanup. Its final clean non-root/rootless
+candidate gate passed 1,893 tests with one root-only skip; its exact-tag
+hosted gate passed 1,890 tests with four environment skips. The unique
+Release manifest, annotated tag, archive digest, and asset hash matched.
+An independent public `v0.4.12` to `v0.4.13` upgrade retained state and
+completed export and uninstall.
 
-The first clean non-root `v0.4.13` candidate gate on `6b28d7e` passed
-1,893 tests with one root-only skip, but the supervisor correctly failed
-because a new sandbox-image test left a rootless-mapped `.venv` inside its
-host pytest temporary tree. The test fixture now copies a read-only seed
-into container-owned tmpfs before the real `uv sync` and portable-lock
-sequence. A rootless focused replay and final clean gate remain pending;
-the failed gate is not release evidence.
+A fresh public `v0.4.13` ordinary-user journey completed one-command install,
+first and later startup checks, paid-provider validation, Planning approval,
+implementation, integration, and the second iteration's five deterministic
+checks and 14 project tests. Security Review then rejected duplicate evidence
+fragments across five boundary-check lists. Its scoped correction submitted
+invalid nested element types, so the run ended without an accepted delivery
+or external black-box result. The account was cleaned exactly; 14 provider
+calls had a known SAT cost estimate of $0.67803104, while actual billing is
+unknown. The rejected submission body was not retained, so its exact bytes
+cannot be replayed.
+
+The `v0.4.14` candidate narrows duplicate-evidence repair to repeated
+`observable` leaves and binds their replacements to attributable result
+fragments. Planning team rows now show approved specializations when proposed
+names or responsibilities coincide. A production-shaped five-criterion
+correction and the affected Planning/Review/runner suite passed 420 tests;
+final canonical gate, release, and a new public full journey remain pending.
 
 ## Historical Release Evidence
 

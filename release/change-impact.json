@@ -1,22 +1,17 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.4.12",
-  "target_version": "0.4.13",
+  "baseline_version": "0.4.13",
+  "target_version": "0.4.14",
   "changes": [
     {
-      "id": "verified-integration-typed-completion",
+      "id": "review-distinct-evidence-leaf-correction",
       "impact": "patch",
-      "summary": "Accept evidence-backed unchanged Integration after a completed typed submission even when OpenClaw omits final text"
+      "summary": "Correct duplicate Review evidence at grounded observable leaves while preserving boundary objects"
     },
     {
-      "id": "shared-offline-lock-cache",
+      "id": "planning-specialist-overview-labels",
       "impact": "patch",
-      "summary": "Reuse the sandbox uv cache for portable project locking and report bounded capacity errors"
-    },
-    {
-      "id": "remove-unused-secret-input",
-      "impact": "patch",
-      "summary": "Remove an unused secret-input API whose non-TTY fallback could echo values"
+      "summary": "Show approved Agent specialization in Planning team rows so distinct Review roles remain identifiable"
     }
   ]
 }
