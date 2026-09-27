@@ -661,6 +661,10 @@ evaluation limit belongs to Planning and evaluation policy, not the shared Git
 validator. Regressions must carry a user-task run through at least four actual
 Git revisions and their quality, Review, artifact, and budget boundaries, while
 preserving explicit evaluation-limit rejection.
+The shared quality-gate runner follows the same ownership: it rejects a
+nonpositive iteration and persists commands under that iteration's run directory,
+while the approved TeamPlan and RunController enforce the run's upper limit. A
+legacy Phase 1 cap must not reject a later approved adaptive iteration.
 
 For multiple serial writers, collect WorkResults in the scheduler's observed
 completion order. Agent declaration order does not define writer commit ancestry.

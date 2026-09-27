@@ -1195,8 +1195,12 @@ class QualityGateRunner:
     def run(self, *, iteration: int) -> tuple[CommandEvidence, ...]:
         """Execute every fixed gate once and persist bounded stdout/stderr."""
 
-        if not 1 <= iteration <= 3:
-            raise QualityGateConfigurationError("iteration must be between 1 and 3")
+        if (
+            isinstance(iteration, bool)
+            or not isinstance(iteration, int)
+            or iteration < 1
+        ):
+            raise QualityGateConfigurationError("iteration must be a positive integer")
         limits = self.configuration.policy.limits
         runtime_sandbox = self._runtime_sandbox()
         started = self.monotonic()

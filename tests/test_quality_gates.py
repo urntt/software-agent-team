@@ -646,6 +646,57 @@ def test_runner_reports_each_persisted_gate_result(
     ]
 
 
+@pytest.mark.parametrize("iteration", (4, 5))
+def test_runner_preserves_later_approved_iteration_evidence(
+    configuration, run_paths: tuple[Path, Path], iteration: int
+) -> None:
+    """The run owner, rather than a Phase 1 gate constant, caps iterations."""
+
+    run_directory, workspace = run_paths
+    backend = FakeSandboxBackend(successful_executions())
+    observed: list[int] = []
+    runner = QualityGateRunner(
+        configuration,
+        run_directory=run_directory,
+        workspace=workspace,
+        backend=backend,
+        allow_test_backends=True,
+        result_handler=lambda _command, number, _completed, _total: observed.append(
+            number
+        ),
+    )
+
+    evidence = runner.run(iteration=iteration)
+
+    assert len(evidence) == len(configuration.benchmark.gates)
+    assert len(backend.invocations) == len(evidence)
+    assert observed == [iteration] * len(evidence)
+    assert all(
+        item.stdout_path.startswith(f"iterations/{iteration:02d}/commands/")
+        and (run_directory / item.stdout_path).is_file()
+        for item in evidence
+    )
+
+
+@pytest.mark.parametrize("iteration", (0, True))
+def test_runner_rejects_nonpositive_iteration_before_sandbox_execution(
+    configuration, run_paths: tuple[Path, Path], iteration: int
+) -> None:
+    run_directory, workspace = run_paths
+    backend = FakeSandboxBackend(successful_executions())
+    runner = QualityGateRunner(
+        configuration,
+        run_directory=run_directory,
+        workspace=workspace,
+        backend=backend,
+        allow_test_backends=True,
+    )
+
+    with pytest.raises(QualityGateConfigurationError, match="positive"):
+        runner.run(iteration=iteration)
+    assert backend.invocations == []
+
+
 def test_runner_represents_timeout_as_command_evidence(
     configuration, run_paths: tuple[Path, Path]
 ) -> None:
