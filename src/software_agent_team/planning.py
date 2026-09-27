@@ -4198,12 +4198,35 @@ class PlanningDecisionRecord(BaseModel):
 
 _ALL_REVIEW_BOUNDARIES = tuple(ReviewBoundaryKind)
 _ABSOLUTE_GUARANTEE_PATTERN = re.compile(
-    r"(?:\bnever\b|\b(?:must|shall|may|can|does?|is|are)\s+not\b|"
+    r"(?:\bnever\b|\bno\b|\b(?:must|shall|may|can|does?|is|are)\s+not\b|"
     r"\bcannot\b|"
     r"\bunder\s+no\s+circumstances\b|\bat\s+any\s+(?:depth|level|time)\b|"
     r"不得|禁止|永不|绝不|任何(?:层级|深度|情况下)?.{0,8}(?:不|无))",
     flags=re.IGNORECASE,
 )
+_TRUST_BOUNDARY_PATTERN = re.compile(
+    r"\b(?:symlinks?|symbolic links?|path traversal|root escape|"
+    r"unauthori[sz]ed|untrusted|access|private|personal data|"
+    r"credentials?|secrets?|passwords?|"
+    r"permissions?|sandbox|exfiltrat\w*|leak\w*|disclos\w*|"
+    r"delet\w*|overwrit\w*|execut\w*|"
+    r"outside (?:of )?(?:the )?(?:project|root|workspace|sandbox|directory)|"
+    r"network|external (?:service|host|process|command))\b|"
+    r"越权|越界|沙箱|符号链接|凭据|密钥|口令|密码|敏感|隐私|"
+    r"网络|外部服务|删除|覆盖|泄露|泄漏|执行",
+    flags=re.IGNORECASE,
+)
+
+
+def _requires_full_review_boundaries(text: str) -> bool:
+    """Distinguish trust-boundary guarantees from ordinary negative behavior."""
+
+    for clause in re.split(r"[.!?;\n。\uFF1B\uFF01\uFF1F]+", text):
+        if _ABSOLUTE_GUARANTEE_PATTERN.search(clause) and (
+            _TRUST_BOUNDARY_PATTERN.search(clause)
+        ):
+            return True
+    return False
 
 
 class ProposedRequirement(BaseModel):
@@ -6486,14 +6509,15 @@ def validate_planning_clarity(
                         ),
                     ),
                 )
-        if _ABSOLUTE_GUARANTEE_PATTERN.search(criterion.description) and set(
+        if _requires_full_review_boundaries(criterion.description) and set(
             criterion.review_boundaries
         ) != set(_ALL_REVIEW_BOUNDARIES):
             raise _planning_context_invariant(
                 "planning_criterion_review_boundaries",
                 (
-                    f"criterion {criterion.id} contains an unqualified "
-                    "prohibition or safety guarantee and must require top-level, "
+                    f"criterion {criterion.id} contains an unqualified trust-"
+                    "boundary prohibition or safety guarantee and must "
+                    "require top-level, "
                     "nested, alias-or-indirection, and failure-path Review "
                     "boundaries"
                 ),
@@ -6533,7 +6557,7 @@ def validate_planning_clarity(
 
     if (
         source_request is not None
-        and _ABSOLUTE_GUARANTEE_PATTERN.search(source_request)
+        and _requires_full_review_boundaries(source_request)
         and not any(
             set(criterion.review_boundaries) == set(_ALL_REVIEW_BOUNDARIES)
             for criterion in body.acceptance_criteria
@@ -6543,8 +6567,9 @@ def validate_planning_clarity(
             _PlanningInvariant(
                 invariant_id="planning_request_review_boundaries",
                 message=(
-                    "the user request contains an unqualified prohibition or safety "
-                    "guarantee, but no proposed acceptance criterion preserves all "
+                    "the user request contains an unqualified trust-boundary "
+                    "prohibition or safety guarantee, but no proposed acceptance "
+                    "criterion preserves all "
                     "four Review boundaries"
                 ),
                 paths=("/proposal/acceptance_criteria",),

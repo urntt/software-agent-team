@@ -3459,7 +3459,7 @@ def test_product_reference_correction_preserves_source_and_exposes_dependent_rev
     exact_workflow = json.loads(json.dumps(product_definition["primary_workflow"]))
     product_definition["primary_workflow"]["criterion_ids"].append("AC_GHOST")
     initial_payload["proposal"]["acceptance_criteria"][0].update(
-        description="Files that differ in content must not be reported as duplicates.",
+        description="The scanner must not follow symlinks outside the project.",
         review_boundaries=[ReviewBoundaryKind.TOP_LEVEL_INPUT.value],
     )
     correction_base, _ = planning._normalize_planning_response_payload(
@@ -4587,6 +4587,58 @@ def test_absolute_criterion_requires_all_review_entry_boundaries() -> None:
             policy(),
             created_at=FIXED_TIME,
         )
+
+
+def test_functional_negative_count_rule_does_not_require_security_review() -> None:
+    """A newline counting rule is not an access or containment guarantee."""
+
+    functional_request = request().model_copy(
+        update={
+            "source_request": (
+                request().source_request
+                + " A final newline must not create an extra line."
+            )
+        }
+    )
+    body = proposal_body()
+    first = body.acceptance_criteria[0].model_copy(
+        update={
+            "description": "A final newline must not create an extra line.",
+            "review_boundaries": (),
+        }
+    )
+    body = body.model_copy(
+        update={"acceptance_criteria": (first, *body.acceptance_criteria[1:])}
+    )
+
+    assert not planning._requires_full_review_boundaries(
+        functional_request.source_request
+    )
+    assert not planning._requires_full_review_boundaries(first.description)
+    preview_adaptive_proposal(
+        functional_request,
+        proposal(body=body),
+        policy(),
+        created_at=FIXED_TIME,
+    )
+
+
+def test_mixed_functional_and_trust_boundary_request_keeps_security_review() -> None:
+    source = (
+        "A final newline must not create an extra line. "
+        "The CLI must not follow symlinks outside the project."
+    )
+    assert planning._requires_full_review_boundaries(source)
+    assert not planning._requires_full_review_boundaries(
+        "A local project file is the input. A final newline must not create an "
+        "extra line."
+    )
+    assert planning._requires_full_review_boundaries(
+        "No untrusted path can escape the selected root."
+    )
+    assert not planning._requires_full_review_boundaries(
+        "A missing file has no traceback and no extra output."
+    )
 
 
 def test_response_normalizer_canonicalizes_only_safe_presentation_variants() -> None:
@@ -9732,7 +9784,7 @@ def test_dialogue_revision_structured_edit_and_approval_are_recoverable(
     assert len(executor.requests) == 3
     assert all(call.role.value == "clarifier" for call in executor.requests)
     assert all(call.timeout_seconds == 180 for call in executor.requests)
-    assert "unqualified prohibition" in executor.requests[0].prompt
+    assert "unqualified trust-boundary prohibition" in executor.requests[0].prompt
     assert "top-level input" in executor.requests[0].prompt
     assert "`review_boundaries`" in executor.requests[0].prompt
     compact_prompt = " ".join(executor.requests[0].prompt.split())
@@ -11079,13 +11131,11 @@ def test_planning_groups_independent_product_and_review_defects_before_correctio
     )
     criteria = invalid_payload["proposal"]["acceptance_criteria"]
     criteria[0].update(
-        description="Files that differ in content must not be reported as duplicates.",
+        description="The scanner must not follow symlinks outside the project.",
         review_boundaries=[ReviewBoundaryKind.TOP_LEVEL_INPUT.value],
     )
     criteria[1].update(
-        description=(
-            "Content comparison must not hold every file content in memory at once."
-        ),
+        description="The scanner must not execute untrusted external commands.",
         review_boundaries=[ReviewBoundaryKind.NESTED_INPUT.value],
     )
     all_boundaries = [boundary.value for boundary in ReviewBoundaryKind]

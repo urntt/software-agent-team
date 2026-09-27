@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.4.22",
-  "target_version": "0.4.23",
+  "baseline_version": "0.4.23",
+  "target_version": "0.4.24",
   "changes": [
     {
-      "id": "deterministic-gate-revision-feedback",
+      "id": "planning-trust-boundary-classification",
       "impact": "patch",
-      "summary": "Preserve failed gate commands as controller blockers, report completed command stages, and clarify clean-project command and example contracts for revisions"
+      "summary": "Classify unqualified trust-boundary guarantees separately from functional negative rules while preserving four-boundary security review obligations"
     }
   ]
 }

@@ -393,7 +393,7 @@ def test_dynamic_prompt_is_compiled_from_the_approved_agent_spec() -> None:
     assert "protocol identifiers, not informal filesystem depth labels" in " ".join(
         rendered.split()
     )
-    assert "unqualified prohibition" in rendered
+    assert "unqualified trust-boundary prohibition" in rendered
     compact = " ".join(rendered.split())
     assert "profile-owned setup and test command" in compact
     assert "TaskBrief constraints are authoritative" in compact

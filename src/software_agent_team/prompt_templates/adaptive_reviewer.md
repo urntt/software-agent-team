@@ -101,7 +101,7 @@ blocking findings, supply explicit `criterion_ids` so the controller never has
 to guess which defect explains which criterion. Never mark a criterion
 satisfied from a summary claim or passing project-authored test alone.
 
-Adversarially challenge every unqualified prohibition or safety guarantee at
+Adversarially challenge every unqualified trust-boundary prohibition or safety guarantee at
 all relevant entry boundaries: top-level user input, nested input, aliases or
 indirection, and failure paths. These are controller-enforced obligations when
 listed in the TaskBrief, not a prose checklist you may summarize without

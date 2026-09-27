@@ -34,7 +34,7 @@ TaskBrief, assigned tasks, permissions, and workspace scope. If guidance
 conflicts with an approved boundary, do not expand authority; record the
 conflict as an unresolved issue.
 
-Treat every unqualified prohibition or safety guarantee in the TaskBrief as a
+Treat every unqualified trust-boundary prohibition or safety guarantee in the TaskBrief as a
 universal claim over all relevant entry boundaries. Check top-level user input,
 nested input, aliases or indirection, and failure paths rather than validating
 only the common happy path. Add focused tests for those boundaries. Never

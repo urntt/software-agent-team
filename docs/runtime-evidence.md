@@ -84,8 +84,8 @@ The controller accepts an iteration only when all of the following agree:
    the final report.
 
 Generic deterministic gates do not prove arbitrary task semantics. For an
-unqualified prohibition or safety guarantee, the Planning prompt requires
-acceptance intent across all relevant input boundaries, the implementation
+unqualified trust-boundary prohibition or safety guarantee, the Planning
+prompt requires acceptance intent across all relevant input boundaries, the implementation
 prompt requires focused boundary tests, and the Review prompt requires an
 adversarial counterexample search. A Dynamic Reviewer may run bounded
 foreground inspection or probe commands in its no-network sandbox against the

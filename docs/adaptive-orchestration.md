@@ -763,9 +763,12 @@ semantic work itself. A quality task, an unknown or duplicate ID, or an unchange
 task array cannot satisfy this relationship.
 
 Each Planner-owned criterion also declares `review_boundaries`. Most criteria
-use an empty list. A description containing an unqualified prohibition or
-safety guarantee must declare all four controller-known entry boundaries:
-top-level input, nested input, alias or indirection, and failure path. These
+use an empty list. A description containing an unqualified trust-boundary
+prohibition or safety guarantee must declare all four controller-known entry
+boundaries.
+Pure functional negative rules retain task-specific behavioral checks rather
+than artificial security scope. Those four boundaries are top-level input,
+nested input, alias or indirection, and failure path. These
 obligations are shown in the overview and become part of the confirmed
 TaskBrief; they cannot be silently weakened by the execution Reviewer.
 The clarity validator classifies an incomplete declaration as a typed,
@@ -773,10 +776,10 @@ model-owned criterion invariant with the exact criterion subject and
 `review_boundaries` leaf. Independent criteria are collected in the same pass,
 so resolving an earlier proposal defect can expose every boundary sibling in one
 correction request instead of falling back to unclassified root authority. If
-the user request itself contains an unqualified guarantee but no criterion
-preserves all four boundaries, the complete acceptance-criteria relation remains
-the correction boundary because the Controller cannot choose which product
-criterion should carry that guarantee.
+the user request itself contains an unqualified trust-boundary guarantee but no
+criterion preserves all four boundaries, the complete acceptance-criteria
+relation remains the correction boundary because the Controller cannot choose
+which product criterion should carry that guarantee.
 
 Boundary identifiers have controller-owned meanings; they are not casual labels
 that an Agent may reinterpret from filesystem depth:
@@ -1116,9 +1119,10 @@ owner's scope, or with an unknown criterion, remains invalid and must use the
 scope-bound task correction contract.
 
 Task-specific quality remains semantic work rather than a claim made by the
-generic profile gates. Planning must turn every unqualified prohibition or
+generic profile gates. Planning must turn every unqualified trust-boundary prohibition or
 safety guarantee into acceptance and test intent across relevant entry
-boundaries. Implementation must exercise top-level and nested inputs, aliases
+boundaries. Functional negative rules receive the relevant behavioral tests
+without requiring unrelated security entry boundaries. Implementation must exercise top-level and nested inputs, aliases
 or indirection, and failure paths when they apply. Independent Review must
 adversarially challenge the same scope. A Dynamic Reviewer returns exactly one
 criterion assessment for every assigned criterion, with a concrete negative or

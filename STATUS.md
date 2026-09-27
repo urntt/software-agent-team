@@ -5,21 +5,19 @@
 This document records current implementation and validation evidence. Product
 and architecture decisions belong to [`VISION.md`](VISION.md).
 
-Published `v0.4.22` passed its exact-tag hosted gate (1,914 passed, four
-environment skips). A fresh normal-user run completed installation, first and
-later DeepSeek checks, Planning approval, and two implementation/integration/
-testing iterations. Its generated project was correctly rejected: the exact
-start command required a README-only sample file, and one generated test tried
-to resolve the project console script from a temporary directory without
-project metadata. Testing Agent analysis incorrectly claimed that the exact
-command checker skipped setup; the checker actually ran setup and test before
-the failing start. No project delivery, independent acceptance, or product
-uninstall was established by that run. The `0.4.23` candidate now records
-successful checker stages in failures, retains failed deterministic commands
-as controller-owned revision blockers, and clarifies the command and README
-example contracts. An isolated replay of the failed project reproduces both
-gates; a corrected copy passes them. Affected tests passed, while clean
-canonical and published-release checks remain pending for this candidate.
+Published `v0.4.23` passed its exact-tag hosted gate (1,915 passed, four
+environment skips) and produced one identity manifest. A fresh ordinary-user
+run completed public one-command installation, first DeepSeek configuration,
+and later startup, but Planning rejected three accepted provider submissions
+before proposal approval. The request's functional rule that a final newline
+must not create an extra line matched the generic absolute-guarantee detector,
+which required all four trust-boundary Review obligations for a counting rule.
+The `0.4.24` candidate classifies trust-boundary guarantees separately from
+functional negative rules while retaining the four-boundary requirement for
+symlink, access, and similar guarantees. Focused Planning and dynamic prompt
+suites passed (257 and 64 tests); clean canonical gate, exact-tag publication,
+and fresh public delivery remain pending. No Agent build, accepted delivery,
+independent acceptance, export, or uninstall was established by that run.
 
 Published `v0.4.19` installed and started successfully for a fresh normal user
 on Linux with Docker and a live DeepSeek provider check. Planning, approval,
@@ -2172,8 +2170,8 @@ The controller's completed result is therefore retained as failed product
 acceptance rather than promoted to demonstration evidence.
 
 The shared quality prompts now require Planning, implementation, and independent
-Review to cover every relevant entry boundary of an unqualified prohibition or
-safety guarantee and to reject one concrete counterexample. The Python product
+Review to cover every relevant entry boundary of an unqualified trust-boundary
+prohibition or safety guarantee and to reject one concrete counterexample. The Python product
 contract also requires the root setup environment to be ignored and `uv.lock`
 to be either a bounded regular file in the accepted snapshot or explicitly
 ignored. These are task-independent corrections; no duplicate-finder-specific
@@ -2486,7 +2484,7 @@ still required to verify the corrected revision and delivery path.
 Whole-result consistency alone does not prove that an absolute requirement was
 challenged at every relevant entry. Planning now makes that scope explicit:
 every proposed criterion returns `review_boundaries`, and a criterion whose
-description contains an unqualified prohibition or safety guarantee must list
+description contains an unqualified trust-boundary prohibition or safety guarantee must list
 top-level input, nested input, alias or indirection, and failure path. The user
 sees these obligations in the overview, and the confirmed TaskBrief freezes
 them. `semantic_body_v4` requires explicit boundary checks; a satisfied
