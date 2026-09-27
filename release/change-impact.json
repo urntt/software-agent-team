@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.4.15",
-  "target_version": "0.4.16",
+  "baseline_version": "0.4.16",
+  "target_version": "0.4.17",
   "changes": [
     {
-      "id": "task-id-prompt-redaction",
+      "id": "provider-liveness-test-stability",
       "impact": "patch",
-      "summary": "Preserve Controller-approved task IDs through OpenClaw prompt redaction without weakening exact session attribution"
+      "summary": "Assert repeated completed process polls instead of scheduler-dependent raw-stream sample count"
     }
   ]
 }

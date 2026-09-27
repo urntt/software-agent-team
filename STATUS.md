@@ -266,6 +266,13 @@ the same prompt with this JSON spelling preserved an exact current turn and
 accepted the typed submission. The generated README omission remains a
 separate, correctly detected quality failure. A new public full journey is
 still required to validate all execution and delivery stages.
+The immutable `v0.4.16` tag's hosted release gate failed one unrelated
+provider-liveness test: the fake Agent produced repeated empty process polls,
+SAT correctly reported a stall, but the test required four raw-stream sampling
+observations and CI observed three. No `v0.4.16` Release was published. The
+`v0.4.17` candidate retains the prompt fix and tests repeated completed polls
+directly, without treating scheduler-dependent sampling frequency as a product
+contract.
 
 ## Historical Release Evidence
 
