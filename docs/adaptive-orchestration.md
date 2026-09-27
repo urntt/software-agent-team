@@ -1189,6 +1189,11 @@ into fresh scratch, then executes exact setup,
 test, and start argv through that cache. Its start argv
 must work from the project root without appended arguments. Independent Review
 probes task-specific runtime behavior that this generic contract cannot infer.
+An explicitly labeled README `Expected JSON output:` is also checked in that
+clean scratch: the bounded shell fixture creates one new root file, the documented
+exact start command runs with optional arguments, and parsed stdout must equal
+the documented JSON. Unsupported example forms fail with a correction diagnostic;
+independent Review still owns claims outside this machine-checkable format.
 
 Existing fixed team manifests remain versioned evaluation fixtures. During
 migration they are compiled into the same `TeamPlan` contract so the repository

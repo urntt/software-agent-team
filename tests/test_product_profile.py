@@ -155,6 +155,9 @@ elif argv == ["run", "link-checker", "."]:
         print("Enter file path: ", end="", file=sys.stderr, flush=True)
         if sys.stdin.buffer.read(1) == b"":
             raise SystemExit(36)
+elif argv == ["run", "link-checker", ".", "sample.txt"]:
+    content = (cwd / "sample.txt").read_text(encoding="utf-8")
+    print(json.dumps({"code_point_count": len(content)}))
 else:
     raise SystemExit(35)
 """,
@@ -256,7 +259,11 @@ def test_product_test_gate_matches_the_delivered_pytest_entrypoint() -> None:
         "--repository",
         "/workspace",
     )
-    assert exact_gate.criterion_ids == ("AC_RUNNABLE", "AC_TESTS")
+    assert exact_gate.criterion_ids == (
+        "AC_RUNNABLE",
+        "AC_TESTS",
+        "AC_DOCUMENTATION",
+    )
     seed_configuration = tomllib.loads(
         (PROFILE_ROOT / "seed" / "pyproject.toml").read_text(encoding="utf-8")
     )
@@ -648,6 +655,79 @@ def test_exact_command_gate_uses_only_committed_files_in_fresh_scratch(
     assert len({call["cwd"] for call in calls}) == 1
     assert calls[0]["cwd"] != str(project)
     assert not (project / ".venv").exists()
+
+
+@pytest.mark.parametrize("documented_count", (35, 34))
+def test_exact_command_gate_checks_documented_json_against_running_cli(
+    tmp_path: Path,
+    documented_count: int,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    write_valid_project(project)
+    readme = project / "README.md"
+    readme.write_text(
+        readme.read_text(encoding="utf-8")
+        + "\n### Example\n\n```bash\n"
+        + 'echo -e "Hello world\\nWelcome to text-stats" > sample.txt\n'
+        + "uv run link-checker . sample.txt\n```\n\n"
+        + "Expected JSON output:\n```json\n"
+        + json.dumps({"code_point_count": documented_count})
+        + "\n```\n",
+        encoding="utf-8",
+    )
+    commit_project(project)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    write_fake_uv(fake_bin)
+    log = tmp_path / "uv.jsonl"
+
+    result = run_command_validator(
+        project,
+        environment={
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "FAKE_UV_LOG": str(log),
+        },
+    )
+
+    calls = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+    assert calls[-1]["argv"] == ["run", "link-checker", ".", "sample.txt"]
+    assert not (project / "sample.txt").exists()
+    if documented_count == 35:
+        assert result.returncode == 1
+        assert "README JSON example 1 output differs" in result.stderr
+        assert '"code_point_count": 34' in result.stderr
+    else:
+        assert result.returncode == 0, result.stderr
+
+
+def test_exact_command_gate_rejects_json_claim_without_executable_example(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    write_valid_project(project)
+    readme = project / "README.md"
+    readme.write_text(
+        readme.read_text(encoding="utf-8")
+        + "\nExpected JSON output:\n```json\n{}\n```\n",
+        encoding="utf-8",
+    )
+    commit_project(project)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    write_fake_uv(fake_bin)
+
+    result = run_command_validator(
+        project,
+        environment={
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "FAKE_UV_LOG": str(tmp_path / "uv.jsonl"),
+        },
+    )
+
+    assert result.returncode == 1
+    assert "needs a preceding shell example" in result.stderr
 
 
 def test_exact_command_gate_keeps_interactive_start_stdin_open(

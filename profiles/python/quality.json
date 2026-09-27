@@ -54,8 +54,8 @@
         "/workspace"
       ],
       "working_directory": ".",
-      "timeout_seconds": 120,
-      "criterion_ids": ["AC_RUNNABLE", "AC_TESTS"]
+      "timeout_seconds": 150,
+      "criterion_ids": ["AC_RUNNABLE", "AC_TESTS", "AC_DOCUMENTATION"]
     }
   ],
   "manual_review_criteria": ["AC_REQUEST", "AC_DOCUMENTATION"]

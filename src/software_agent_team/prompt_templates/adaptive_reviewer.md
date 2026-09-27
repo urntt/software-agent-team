@@ -126,6 +126,11 @@ a long-running service must reach a viable startup state before you terminate
 the bounded probe. Check both the controller's clean-workspace pytest evidence
 and, when needed, the documented post-setup `uv run pytest` path. A passing
 self-authored test alone does not establish these command boundaries.
+For any explicit `Expected JSON output:` in README.md, inspect the corresponding
+clean-copy command evidence and compare the claim to observed behavior. Do not
+mark documentation satisfied using a file listing or a passing self-authored
+test as evidence for an example's output; probe other factual examples that the
+generic command gate cannot execute.
 
 RUN_CONTEXT_JSON
 ${context_json}

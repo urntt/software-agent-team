@@ -23,7 +23,7 @@
     }
   },
   "limits": {
-    "command_timeout_seconds": 120,
+    "command_timeout_seconds": 150,
     "total_timeout_seconds": 420,
     "cpu_cores": 1.0,
     "memory_mb": 512,

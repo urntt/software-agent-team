@@ -63,6 +63,11 @@ and test argv; Installation, Usage, and Testing headings are acceptable. Edit
 README.md only when an assigned task and this Agent's write scope both include
 it. Otherwise inspect it without changing it and leave any needed documentation
 edit to the authorized downstream writer.
+If README.md includes an `Expected JSON output:` example, run its fixture and
+command before committing. Keep the example in the supported two-line shell
+form (one `echo -e` or `printf %s` root-file fixture, then the exact start
+command with optional arguments) so the clean-copy gate can compare the
+documented JSON with actual stdout. Do not guess example counts or values.
 
 Run tests with visible per-test progress when diagnosing a delay; do not pipe
 the test runner into `tail` or another command that hides progress until exit.

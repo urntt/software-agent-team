@@ -52,6 +52,13 @@ positional arguments.
 README headings may use ordinary terms such as Installation, Usage, and
 Testing, but the document must show the exact shell form of every manifest
 command.
+When a README explicitly labels a fenced JSON block `Expected JSON output:`,
+the immediately preceding shell block must contain two lines: a new root-level
+fixture made with `echo -e "..." > file` or `printf '%s' '...' > file`, followed
+by the exact start command with optional arguments. The clean-copy command gate
+executes at most three such examples after setup, compares actual stdout as
+JSON, and rejects a mismatch or unsupported form. The independent Reviewer
+remains responsible for factual documentation outside this bounded format.
 
 The validated setup contract also protects the first-use repository state.
 The root `.venv` must be ignored, while a bounded regular root `uv.lock` must be

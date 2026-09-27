@@ -7,6 +7,8 @@ import argparse
 import hashlib
 import json
 import os
+import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -24,8 +26,11 @@ MAX_SETUP_ARTIFACTS = 20_000
 SETUP_TIMEOUT_SECONDS = 45
 TEST_TIMEOUT_SECONDS = 75
 START_GRACE_SECONDS = 5
+EXAMPLE_TIMEOUT_SECONDS = 10
+MAX_README_EXAMPLES = 3
 SHUTDOWN_SECONDS = 5
 PUBLIC_UV_CACHE = Path("/opt/software-agent-team/uv-public-cache")
+FENCED_BLOCK = re.compile(r"^```([^\n]*)\n(.*?)^```[ \t]*$", re.MULTILINE | re.DOTALL)
 
 
 @dataclass(frozen=True)
@@ -297,6 +302,115 @@ def _require_success(label: str, result: CommandResult) -> None:
         )
 
 
+def _readme_json_examples(readme: str) -> tuple[tuple[str, object], ...]:
+    """Select explicitly claimed JSON output and its preceding shell example."""
+
+    blocks = tuple(FENCED_BLOCK.finditer(readme))
+    examples: list[tuple[str, object]] = []
+    for index, block in enumerate(blocks):
+        if block.group(1).strip().casefold() != "json":
+            continue
+        previous = blocks[index - 1] if index else None
+        label = readme[previous.end() if previous else 0 : block.start()]
+        if not re.search(r"\bexpected\s+json\s+output\s*:", label, re.IGNORECASE):
+            continue
+        if previous is None or previous.group(1).strip().casefold() not in {
+            "bash",
+            "sh",
+            "shell",
+        }:
+            fail("README expected JSON output needs a preceding shell example")
+        try:
+            expected = json.loads(block.group(2))
+        except json.JSONDecodeError:
+            fail("README expected JSON output is invalid JSON")
+        examples.append((previous.group(2), expected))
+        if len(examples) > MAX_README_EXAMPLES:
+            fail("README has too many expected JSON examples")
+    return tuple(examples)
+
+
+def _fixture_content(tokens: list[str]) -> str:
+    if tokens[:2] == ["echo", "-e"] and len(tokens) == 3:
+        escaped = re.sub(
+            r"\\([nrt\\])",
+            lambda match: {"n": "\n", "r": "\r", "t": "\t", "\\": "\\"}[match.group(1)],
+            tokens[2],
+        )
+        if re.search(r"\\[^nrt\\]", escaped):
+            fail("README shell example uses an unsupported echo escape")
+        return escaped + "\n"
+    if tokens[:2] == ["printf", "%s"] and len(tokens) == 3:
+        return tokens[2]
+    fail("README JSON example fixture must use echo -e or printf %s")
+
+
+def _example_fixture(
+    line: str, clean: Path, snapshot: dict[Path, tuple[str, int]]
+) -> Path:
+    try:
+        lexer = shlex.shlex(line, posix=True, punctuation_chars=">")
+        lexer.whitespace_split = True
+        tokens = list(lexer)
+    except ValueError:
+        fail("README JSON example has invalid shell quoting")
+    if len(tokens) < 5 or tokens[-2] != ">":
+        fail("README JSON example fixture needs one supported file redirection")
+    relative = _safe_relative_path(tokens[-1])
+    if relative in snapshot or len(relative.parts) != 1:
+        fail("README JSON example fixture must be a new root-level file")
+    candidate = clean / relative
+    if candidate.exists() or candidate.is_symlink():
+        fail("README JSON example fixture already exists")
+    content = _fixture_content(tokens[:-2])
+    if len(content.encode("utf-8")) > 8192:
+        fail("README JSON example fixture is too large")
+    candidate.write_text(content, encoding="utf-8")
+    return candidate
+
+
+def _verify_readme_examples(
+    clean: Path,
+    snapshot: dict[Path, tuple[str, int]],
+    commands: ProjectCommands,
+    environment_overrides: dict[str, str] | None,
+) -> None:
+    readme = (clean / "README.md").read_text(encoding="utf-8")
+    for index, (script, expected) in enumerate(_readme_json_examples(readme), start=1):
+        lines = [line.strip() for line in script.splitlines() if line.strip()]
+        if len(lines) != 2:
+            fail(f"README JSON example {index} needs one fixture and one command")
+        fixture = _example_fixture(lines[0], clean, snapshot)
+        try:
+            try:
+                argv = tuple(shlex.split(lines[1]))
+            except ValueError:
+                fail(f"README JSON example {index} has invalid command quoting")
+            if argv[: len(commands.start)] != commands.start:
+                fail(f"README JSON example {index} must invoke the exact start command")
+            result = _run(
+                argv,
+                cwd=clean,
+                timeout_seconds=EXAMPLE_TIMEOUT_SECONDS,
+                environment_overrides=environment_overrides,
+            )
+            _require_success(f"README JSON example {index}", result)
+            try:
+                actual = json.loads(result.stdout_tail)
+            except json.JSONDecodeError:
+                fail(f"README JSON example {index} did not emit JSON on stdout")
+            if actual != expected:
+                fail(
+                    f"README JSON example {index} output differs from documented "
+                    f"JSON: actual={json.dumps(actual, ensure_ascii=False)[:500]}"
+                )
+        finally:
+            fixture.unlink(missing_ok=True)
+        _require_delivery_preserved(
+            clean, snapshot, command_label=f"README JSON example {index}"
+        )
+
+
 def execute(repository: Path) -> None:
     commands: ProjectCommands = validate(repository)
     with tempfile.TemporaryDirectory(prefix="sat-project-commands-") as temporary:
@@ -351,6 +465,7 @@ def execute(repository: Path) -> None:
         if not start.timed_out:
             _require_success("start command", start)
         _require_delivery_preserved(clean, snapshot, command_label="start")
+        _verify_readme_examples(clean, snapshot, commands, command_environment)
         mode = "running_after_grace" if start.timed_out else "exited_zero"
         print(
             json.dumps(
