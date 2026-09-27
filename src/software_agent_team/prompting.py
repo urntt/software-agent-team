@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from string import Template
 from typing import Self
@@ -86,6 +87,25 @@ _COMMAND_PROMPT_STREAM_LIMIT = 2_000
 
 class AgentPromptError(ValueError):
     """Raised when a role prompt would cross its declared context boundary."""
+
+
+def _model_json_with_safe_task_ids(value: object, *, task_ids: tuple[str, ...]) -> str:
+    """Preserve task IDs as JSON while avoiding OpenClaw's false key masking.
+
+    A long ``TASK_TEST_...`` ID contains ``SK_TEST_...`` starting at its third
+    character. Pinned OpenClaw treats that substring as a Stripe test key and
+    shortens the persisted user prompt, which breaks exact turn binding.
+    Escape only Controller-approved task IDs inside JSON; the decoded values
+    and typed artifact contract stay unchanged.
+    """
+
+    rendered = json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True)
+    for task_id in sorted(set(task_ids), key=len, reverse=True):
+        if task_id.upper().startswith("TASK_") and re.search(
+            r"(?i)sk_(?:test|live)_[A-Za-z0-9]{10,}", task_id
+        ):
+            rendered = rendered.replace(task_id, f"{task_id[:4]}\\u005f{task_id[5:]}")
+    return rendered
 
 
 def _command_evidence_context(
@@ -1063,6 +1083,7 @@ def render_dynamic_agent_prompt(
             f"cannot load specialization prompt module: {specialization.prompt_module}"
         ) from error
     response_schema = _dynamic_response_schema(inputs)
+    task_ids = tuple(task.id for task in inputs.implementation_plan.tasks)
     values = {
         "agent_id": agent.id,
         "agent_label": agent.label,
@@ -1071,17 +1092,13 @@ def render_dynamic_agent_prompt(
         "specialization_contract": specialization_source.strip(),
         "expected_kind": agent.expected_output.value,
         "submission_tool": ARTIFACT_SUBMISSION_TOOL,
-        "context_json": json.dumps(
+        "context_json": _model_json_with_safe_task_ids(
             _dynamic_prompt_context(inputs),
-            ensure_ascii=False,
-            indent=2,
-            sort_keys=True,
+            task_ids=task_ids,
         ),
-        "response_schema_json": json.dumps(
+        "response_schema_json": _model_json_with_safe_task_ids(
             response_schema,
-            ensure_ascii=False,
-            indent=2,
-            sort_keys=True,
+            task_ids=task_ids,
         ),
     }
     try:

@@ -642,6 +642,11 @@ execution profile, and base constraints. Run/session identity, destination, sele
 route, authorization state, and authorization timestamp stay Controller-owned. This
 prevents execution-layer secret redaction of authorization-shaped metadata from
 changing the persisted prompt and invalidating exact session attribution.
+For dynamic Agents, Controller-approved task IDs are serialized as JSON escapes
+when a long `TASK_TEST_...` value would otherwise contain OpenClaw's `sk_test_...`
+secret-token pattern. The decoded task ID and typed schema stay identical;
+only its prompt bytes change, so the persisted session still matches the exact
+invocation prompt. User-supplied content is not exempted from redaction.
 
 The pinned OpenClaw Agent CLI does not expose a response-schema parameter for a
 tool-using turn. SAT supplies the explicit one-argument transport schema through its

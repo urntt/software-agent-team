@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, datetime
 
 import pytest
@@ -387,6 +388,7 @@ def test_dynamic_prompt_is_compiled_from_the_approved_agent_spec() -> None:
     assert "top-level user input" in rendered
     assert '"review_boundary_definitions": {' in rendered
     assert "root itself is the top-level input" in rendered
+
     assert "immediate first-level child, is nested input" in rendered
     assert "protocol identifiers, not informal filesystem depth labels" in " ".join(
         rendered.split()
@@ -407,6 +409,33 @@ def test_dynamic_prompt_is_compiled_from_the_approved_agent_spec() -> None:
         "Edit README.md only when an assigned task and this Agent's write scope"
         in compact
     )
+
+
+def test_long_task_id_keeps_its_json_value_without_triggering_session_masking() -> None:
+    """A real Testing task ID must survive pinned OpenClaw prompt persistence."""
+
+    task_id = "TASK_TEST_VERIFICATION"
+    inputs = quality_inputs()
+    plan = inputs.implementation_plan.model_copy(
+        update={
+            "tasks": (
+                inputs.implementation_plan.tasks[0].model_copy(
+                    update={"id": task_id, "owner_agent_id": "acceptance_tester"}
+                ),
+            )
+        }
+    )
+    inputs = inputs.model_copy(update={"implementation_plan": plan})
+
+    rendered = render_dynamic_agent_prompt(inputs)
+    context, _ = json.JSONDecoder().raw_decode(
+        rendered.split("CONTEXT_JSON\n", 1)[1].lstrip()
+    )
+
+    assert context["implementation_intent"]["assigned_tasks"][0]["id"] == task_id
+    assert r"TASK\u005fTEST_VERIFICATION" in rendered
+    assert task_id not in rendered
+    assert re.search(r"(?i)sk_(?:test|live)_[A-Za-z0-9]{10,}", rendered) is None
 
 
 def test_dynamic_prompt_treats_expected_paths_as_non_binding_forecasts() -> None:

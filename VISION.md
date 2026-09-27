@@ -287,6 +287,9 @@ when code, usability evidence, or controlled experiments justify a replacement.
   persisted reproducibility dependency. During an invocation, the controller
   may validate the exact current session turn and persist only bounded,
   sanitized tool-call/result records plus transcript provenance.
+- Model-facing Controller task IDs that resemble secret tokens are JSON-escaped
+  without changing their decoded values, preserving OpenClaw's redaction and
+  SAT's exact session-turn attribution at the same time.
 - A targeted semantic correction is a new invocation with a distinct OpenClaw
   session generation. It receives the complete approved task context plus the
   Controller-bound prior response digest, issue fingerprint, preserved fields,
