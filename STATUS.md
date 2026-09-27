@@ -249,8 +249,23 @@ passed the OVH canonical gate: doctor, format, lint, and 1,897 tests passed
 with one root-only fixture skipped. Stage and temporary-directory cleanup
 completed, process leases, containers, and volumes had no residual entries,
 and cgroup OOM/kill deltas were zero; kernel OOM inspection was unavailable to
-the non-root account. Final version packaging, exact-tag publication, and a
-new public full journey remain pending.
+the non-root account. `v0.4.15` was packaged and published with an exact-tag
+hosted gate. Its fresh ordinary-user journey installed the release, passed
+first/later startup checks and Planning, and completed Implementation and
+Integration, but the generated README missed required limitations guidance.
+The Testing Agent then submitted a typed artifact whose current prompt was
+absent from its persisted OpenClaw session, so the Controller correctly
+rejected it; neither Review nor delivery occurred.
+
+The `v0.4.16` candidate addresses the session mismatch: OpenClaw's
+case-insensitive Stripe test-key redactor masks the middle of the approved
+`TASK_TEST_VERIFICATION` ID in model-facing JSON. SAT now JSON-escapes the
+underscore for matching Controller-owned task IDs. A pinned OpenClaw and paid
+Gemini Lite single-Agent reproduction first rejected the unescaped prompt;
+the same prompt with this JSON spelling preserved an exact current turn and
+accepted the typed submission. The generated README omission remains a
+separate, correctly detected quality failure. A new public full journey is
+still required to validate all execution and delivery stages.
 
 ## Historical Release Evidence
 

@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.4.14",
-  "target_version": "0.4.15",
+  "baseline_version": "0.4.15",
+  "target_version": "0.4.16",
   "changes": [
     {
-      "id": "readme-json-example-verification",
+      "id": "task-id-prompt-redaction",
       "impact": "patch",
-      "summary": "Verify explicitly claimed README JSON examples against the running project in clean sandbox scratch"
+      "summary": "Preserve Controller-approved task IDs through OpenClaw prompt redaction without weakening exact session attribution"
     }
   ]
 }
