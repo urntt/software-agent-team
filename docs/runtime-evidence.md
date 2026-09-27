@@ -427,6 +427,12 @@ ProductDefinition validation reports
 independent invalid dimensions together, and each complete dimension is the atomic
 repair value so coupled disposition, source, statement, and downstream references
 cannot be repaired as a misleading sequence of isolated scalar edits. The exact
+provenance diagnostic distinguishes an invalid user quote from a valid source
+whose `statement` still omits words or paraphrases. One final sentence period
+is accepted when the quoted source has none; it does not alter attribution. A
+remaining statement defect keeps the exact source and requires the same wording
+under case and whitespace normalization; the targeted slot remains the complete
+dimension so linked fields stay coherent. The exact
 value schema also binds requirement, criterion, decision, Agent, and task references
 to the canonical IDs retained in the base proposal whenever their defining
 collection is immutable for that correction. Active profile-owned criterion IDs are

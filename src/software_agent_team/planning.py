@@ -3563,6 +3563,7 @@ def _planning_correction_reasons(
 
     known = {
         "planning_product_explicit_provenance": "product source",
+        "planning_product_explicit_statement": "product quote",
         "planning_product_workflow_required": "primary workflow",
         "planning_product_question_source": "answered-question link",
         "planning_product_recommendation_source": "recommendation link",
@@ -5425,19 +5426,37 @@ def _product_definition_dimension_invariant(
             for value in normalized_inputs
         )
         statement = getattr(item, "statement", None)
-        statement_preserves_source = statement is None or (
-            _normalized_evidence_text(statement)
-            == _normalized_evidence_text(item.source)
+        source_text = _normalized_evidence_text(item.source)
+        statement_text = (
+            None if statement is None else _normalized_evidence_text(statement)
         )
-        if not source_is_exact or not statement_preserves_source:
+        statement_preserves_source = (
+            statement_text is None
+            or statement_text == source_text
+            or (
+                not source_text.endswith(".")
+                and statement_text == f"{source_text}."
+            )
+        )
+        if not source_is_exact:
             return issue(
                 "planning_product_explicit_provenance",
                 (
                     f"{dimension.value} explicit_input requires source to be one "
                     "contiguous verbatim substring of a user input, with no label, "
-                    "quote delimiters, stitched excerpts, ellipsis, or commentary; "
-                    "statement must preserve that exact wording. If the dimension "
-                    "is not explicit, choose the truthful disposition and its source."
+                    "quote delimiters, stitched excerpts, ellipsis, or commentary. "
+                    "If the dimension is not explicit, choose the truthful "
+                    "disposition and its source."
+                ),
+            )
+        if not statement_preserves_source:
+            return issue(
+                "planning_product_explicit_statement",
+                (
+                    f"{dimension.value} source already quotes user input correctly; "
+                    "keep that source and set statement to the same wording. "
+                    "Only case, whitespace, and one final sentence period may "
+                    "differ: do not omit leading words or paraphrase."
                 ),
             )
         if item.decision_ids and not allow_legacy_decision_links:

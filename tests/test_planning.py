@@ -3226,7 +3226,7 @@ def test_explicit_product_statement_cannot_expand_beyond_user_wording() -> None:
     )
 
     with pytest.raises(
-        PlanningError, match="statement must preserve that exact wording"
+        PlanningError, match="set statement to the same wording"
     ):
         preview_adaptive_proposal(
             request(),
@@ -11238,6 +11238,63 @@ def test_planning_groups_workflow_review_and_requirement_coverage() -> None:
         bound.evidence.target_paths
     )
     assert "/proposal/tasks/0/acceptance_criteria" in bound.evidence.target_paths
+
+
+def test_product_quote_accepts_sentence_period_and_repairs_omission() -> None:
+    """A sentence period is harmless, while dropping a source word needs repair."""
+
+    source_request = (
+        request().source_request
+        + " Build it for software developers and system administrators on Linux, "
+        "macOS, and WSL."
+    )
+    source = "software developers and system administrators on Linux, macOS, and WSL"
+    payload = proposal_response().model_dump(mode="json")
+    definition = payload["proposal"]["product_definition"]
+    target = definition["target_users"]
+    target["source"] = source
+    target["statement"] = (
+        "Software developers and system administrators on Linux, macOS, and WSL."
+    )
+    parsed = PlanningModelResponse.model_validate(payload)
+    assert parsed.proposal is not None
+    planning.validate_planning_clarity(
+        parsed.proposal, source_request=source_request
+    )
+
+    target["source"] = f"for {source}"
+    parsed = PlanningModelResponse.model_validate(payload)
+    assert parsed.proposal is not None
+
+    with pytest.raises(planning._PlanningContextInvariantsError) as captured:
+        planning.validate_planning_clarity(
+            parsed.proposal, source_request=source_request
+        )
+    diagnostic = planning._planning_invariants_diagnostic(
+        payload, captured.value.invariants
+    )
+    target_path = "/proposal/product_definition/target_users"
+    assert diagnostic.correction_paths == (target_path,)
+    assert [issue.invariant_id for issue in diagnostic.issues] == [
+        "planning_product_explicit_statement"
+    ]
+    assert "source already quotes user input correctly" in diagnostic.issues[0].message
+    assert "do not omit leading words" in diagnostic.issues[0].message
+
+    plan = planning.build_semantic_correction_plan(payload, diagnostic)
+    assert plan is not None
+    corrected = {**target, "statement": f"for {source}"}
+    submitted = json.loads(correction_response(payload, {target_path: corrected}))
+    applied = apply_semantic_correction_with_evidence(submitted, plan)
+    accepted = PlanningModelResponse.model_validate(applied.payload)
+    assert accepted.proposal is not None
+    planning.validate_planning_clarity(
+        accepted.proposal, source_request=source_request
+    )
+    assert (
+        applied.payload["proposal"]["product_definition"]["target_users"]
+        == corrected
+    )
 
 
 def test_optional_product_dimension_cannot_borrow_answered_core_question() -> None:

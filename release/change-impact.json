@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.4.19",
-  "target_version": "0.4.20",
+  "baseline_version": "0.4.20",
+  "target_version": "0.4.21",
   "changes": [
     {
-      "id": "integration-unresolved-issue-reporting",
+      "id": "planning-product-quote-convergence",
       "impact": "patch",
-      "summary": "Clarify Integration Agent blocker reporting so resolved environment observations do not reject valid unchanged handoffs"
+      "summary": "Accept a final sentence period in attributable product statements and distinguish remaining wording defects from invalid user quotes"
     }
   ]
 }

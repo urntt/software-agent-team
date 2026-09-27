@@ -307,6 +307,12 @@ Planner recommendations that become user-approved with the overview.
 
 The source carried by an `explicit_input` or `not_material` dimension is its
 decision provenance, so those dimensions do not cite a separate decision ID. A
+model-authored `explicit_input.statement` must preserve the source wording under
+case and whitespace normalization. One final sentence period may be added to a
+source that has none. A source that is already an attributable user quote
+receives a distinct statement diagnostic when the model omits words or
+paraphrases it, allowing the complete dimension to be corrected
+without treating the valid source as missing user input. A
 `resolved_question` dimension cites exactly its matching question decision. A
 `planner_recommendation` dimension cites only the corresponding Planner category
 (`acceptance_scope` for usability/operations and `delivery` for delivery). This
