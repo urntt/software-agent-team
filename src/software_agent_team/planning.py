@@ -5433,10 +5433,7 @@ def _product_definition_dimension_invariant(
         statement_preserves_source = (
             statement_text is None
             or statement_text == source_text
-            or (
-                not source_text.endswith(".")
-                and statement_text == f"{source_text}."
-            )
+            or (not source_text.endswith(".") and statement_text == f"{source_text}.")
         )
         if not source_is_exact:
             return issue(

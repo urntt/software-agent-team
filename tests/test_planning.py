@@ -3225,9 +3225,7 @@ def test_explicit_product_statement_cannot_expand_beyond_user_wording() -> None:
         }
     )
 
-    with pytest.raises(
-        PlanningError, match="set statement to the same wording"
-    ):
+    with pytest.raises(PlanningError, match="set statement to the same wording"):
         preview_adaptive_proposal(
             request(),
             proposal(body=body.model_copy(update={"product_definition": expanded})),
@@ -11258,9 +11256,7 @@ def test_product_quote_accepts_sentence_period_and_repairs_omission() -> None:
     )
     parsed = PlanningModelResponse.model_validate(payload)
     assert parsed.proposal is not None
-    planning.validate_planning_clarity(
-        parsed.proposal, source_request=source_request
-    )
+    planning.validate_planning_clarity(parsed.proposal, source_request=source_request)
 
     target["source"] = f"for {source}"
     parsed = PlanningModelResponse.model_validate(payload)
@@ -11288,12 +11284,9 @@ def test_product_quote_accepts_sentence_period_and_repairs_omission() -> None:
     applied = apply_semantic_correction_with_evidence(submitted, plan)
     accepted = PlanningModelResponse.model_validate(applied.payload)
     assert accepted.proposal is not None
-    planning.validate_planning_clarity(
-        accepted.proposal, source_request=source_request
-    )
+    planning.validate_planning_clarity(accepted.proposal, source_request=source_request)
     assert (
-        applied.payload["proposal"]["product_definition"]["target_users"]
-        == corrected
+        applied.payload["proposal"]["product_definition"]["target_users"] == corrected
     )
 
 
