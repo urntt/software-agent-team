@@ -1,6 +1,6 @@
 # Project Status
 
-**Last updated:** September 26, 2026
+**Last updated:** September 27, 2026
 
 This document records current implementation and validation evidence. Product
 and architecture decisions belong to [`VISION.md`](VISION.md).
@@ -225,12 +225,32 @@ calls had a known SAT cost estimate of $0.67803104, while actual billing is
 unknown. The rejected submission body was not retained, so its exact bytes
 cannot be replayed.
 
-The `v0.4.14` candidate narrows duplicate-evidence repair to repeated
+Published `v0.4.14` narrows duplicate-evidence repair to repeated
 `observable` leaves and binds their replacements to attributable result
 fragments. Planning team rows now show approved specializations when proposed
 names or responsibilities coincide. A production-shaped five-criterion
 correction and the affected Planning/Review/runner suite passed 420 tests;
-final canonical gate, release, and a new public full journey remain pending.
+the exact local and hosted release gates passed. A new public non-root account
+installed the stable release, completed Planning, three implementation
+iterations, five deterministic gates, independent Security and General Review,
+and delivered an accepted clean `text-stats` project. Its external command and
+black-box checks passed except for a README example that claimed 35 Unicode
+code points where the running CLI returned 34. Export, uninstall, and exact
+account cleanup completed; that journey is not an all-green external acceptance.
+
+The `v0.4.15` candidate runs explicitly claimed README JSON examples against
+the generated project in disposable clean sandbox scratch and rejects a
+documented/actual mismatch. The archived `v0.4.14` delivery now fails the
+production command gate on the 35/34 claim and passes when only the claim is
+corrected. The affected profile, quality, and runtime-image suite passed 86
+tests; an additional malformed-example regression passed. The exact clean
+implementation revision `2e20ceed5f651edf5c39a2f192fbe91cbf9ab1dd`
+passed the OVH canonical gate: doctor, format, lint, and 1,897 tests passed
+with one root-only fixture skipped. Stage and temporary-directory cleanup
+completed, process leases, containers, and volumes had no residual entries,
+and cgroup OOM/kill deltas were zero; kernel OOM inspection was unavailable to
+the non-root account. Final version packaging, exact-tag publication, and a
+new public full journey remain pending.
 
 ## Historical Release Evidence
 
@@ -245,8 +265,8 @@ passed 1,889 tests with three environment skips; the clean local revision
 passed 1,892 tests. The unique
 Release manifest asset digest is
 `sha256:154f6ed6f886f97a6ae07fe18cfb68754e4bd0ff5419d70365a8b7458cb81f4d`.
-The latest completed public rootless journey used `v0.4.10` and stopped in
-Planning as described above. No public stable journey has delivered a project yet.
+At the time of this historical release evidence, the public `v0.4.10`
+rootless journey stopped in Planning as described above.
 
 
 The immutable `v0.4.1` tag,

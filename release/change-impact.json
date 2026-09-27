@@ -1,17 +1,12 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.4.13",
-  "target_version": "0.4.14",
+  "baseline_version": "0.4.14",
+  "target_version": "0.4.15",
   "changes": [
     {
-      "id": "review-distinct-evidence-leaf-correction",
+      "id": "readme-json-example-verification",
       "impact": "patch",
-      "summary": "Correct duplicate Review evidence at grounded observable leaves while preserving boundary objects"
-    },
-    {
-      "id": "planning-specialist-overview-labels",
-      "impact": "patch",
-      "summary": "Show approved Agent specialization in Planning team rows so distinct Review roles remain identifiable"
+      "summary": "Verify explicitly claimed README JSON examples against the running project in clean sandbox scratch"
     }
   ]
 }
