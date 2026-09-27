@@ -2909,6 +2909,90 @@ sys.exit(17)
     assert lifecycle.shutdown.cleanup_completed
 
 
+def test_nonzero_exit_recovers_exact_model_stream_termination(
+    tmp_path: Path,
+) -> None:
+    contract = AgentSubmissionContract.from_schema(
+        {"type": "object", "properties": {"summary": {"type": "string"}}},
+        purpose=AgentSubmissionPurpose.ARTIFACT,
+    )
+    program = (
+        FAKE_OPENCLAW_SETUP
+        + r"""
+records.append({"type": "message", "message": {
+    "role": "assistant", "stopReason": "error", "errorMessage": "terminated",
+    "provider": "deepseek", "model": "deepseek-flash",
+    "usage": {"input": 11, "output": 5}, "content": [],
+}})
+write_records()
+print("\x1b[33m[provider-transport-fetch]\x1b[39m "
+      "[model-fetch] response provider=deepseek api=openai-completions "
+      "model=deepseek-flash status=200", file=sys.stderr)
+print("\x1b[33m[agent/embedded]\x1b[39m "
+      "embedded run agent end: runId=fixture-run isError=true "
+      "model=deepseek-flash provider=deepseek "
+      "error=LLM request timed out. rawError=terminated", file=sys.stderr)
+print("[model-fallback/decision] model fallback decision: "
+      "decision=candidate_failed requested=deepseek/deepseek-flash "
+      "candidate=deepseek/deepseek-flash reason=timeout "
+      "next=none detail=terminated", file=sys.stderr)
+sys.exit(1)
+"""
+    )
+    result = live_liveness_executor(tmp_path, program).execute(
+        request(
+            timeout_seconds=0,
+            model="deepseek/deepseek-flash",
+            submission_contract=contract,
+        )
+    )
+
+    assert result.status is AgentExecutionStatus.PROVIDER_FAILED
+    assert result.error == "OpenClaw reported that the approved model stream terminated"
+    assert result.telemetry.runtime_failure_code is (
+        AgentRuntimeFailureCode.OPENCLAW_MODEL_STREAM_TERMINATED
+    )
+    assert result.telemetry.usage == AgentTokenUsage(input_tokens=11, output_tokens=5)
+    assert result.semantic_submission is None
+    assert result.submission_evidence is not None
+    assert result.submission_evidence.diagnostic_code == "tool_evidence_unavailable"
+    assert result.telemetry.invocation_lifecycle is not None
+    assert result.telemetry.invocation_lifecycle.shutdown.cleanup_completed
+
+
+def test_model_stream_termination_requires_both_exact_route_diagnostics() -> None:
+    terminal = (
+        "[agent/embedded] embedded run agent end: runId=fixture-run "
+        "isError=true model=deepseek-flash provider=deepseek "
+        "error=LLM request timed out. rawError=terminated"
+    )
+    fallback = (
+        "[model-fallback/decision] model fallback decision: "
+        "decision=candidate_failed requested=deepseek/deepseek-flash "
+        "candidate=deepseek/deepseek-flash reason=timeout "
+        "next=none detail=terminated"
+    )
+    for stderr, model in (
+        (terminal, "deepseek/deepseek-flash"),
+        (fallback, "deepseek/deepseek-flash"),
+        (f"{terminal}\n{fallback}", "google/deepseek-flash"),
+    ):
+        assert (
+            execution._parse_openclaw_stream_failure(
+                stderr,
+                requested_model=model,
+            )
+            is None
+        )
+    assert (
+        execution._parse_openclaw_stream_failure(
+            f"{terminal}\n{fallback}",
+            requested_model="deepseek/deepseek-flash",
+        )
+        is not None
+    )
+
+
 def test_compaction_timeout_retains_nonterminal_invocation_evidence(
     tmp_path: Path,
 ) -> None:

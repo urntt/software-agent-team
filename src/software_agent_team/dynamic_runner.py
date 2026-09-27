@@ -14,6 +14,7 @@ from pydantic import ValidationError
 
 from software_agent_team.artifact_store import ArtifactStore, ArtifactStoreError
 from software_agent_team.artifacts import (
+    AgentRuntimeFailureCode,
     AgentSubmissionStatus,
     AgentToolCallOutcome,
     AgentToolEvidenceStatus,
@@ -551,6 +552,7 @@ class DynamicAgentRunner:
         provider_switching = ModelSwitchCondition.PROVIDER_FAILURE in (
             self.team_plan.model_routes.authorized_switch_conditions
         )
+        stream_retries = 0
 
         while True:
             route_id = route_ids[route_index]
@@ -666,6 +668,19 @@ class DynamicAgentRunner:
                     )
                 ),
             )
+            recoverable_stream_failure = (
+                stream_retries < 1
+                and result.status is AgentExecutionStatus.PROVIDER_FAILED
+                and result.telemetry.runtime_failure_code
+                is AgentRuntimeFailureCode.OPENCLAW_MODEL_STREAM_TERMINATED
+                and result.semantic_submission is None
+                and result.submission_evidence is not None
+                and result.submission_evidence.tool_call_id is None
+                and result.submission_evidence.diagnostic_code
+                in RECOVERABLE_SUBMISSION_EVIDENCE_CODES
+                and result.telemetry.invocation_lifecycle is not None
+                and result.telemetry.invocation_lifecycle.shutdown.cleanup_completed
+            )
             response_reference: ArtifactReference | None = None
             ignored_fields: tuple[str, ...] = ()
             response_normalizations: tuple[str, ...] = ()
@@ -738,6 +753,14 @@ class DynamicAgentRunner:
                             else:
                                 seen_continuation_states.add(progress.state_sha256)
                                 next_continuation_progress = progress
+                        elif (
+                            recoverable_stream_failure
+                            and correction_plan is None
+                            and progress.made_progress
+                        ):
+                            seen_continuation_states.add(progress.state_sha256)
+                            next_continuation_progress = progress
+                            failure = execution_failure
                         else:
                             failure = execution_failure
                     else:
@@ -1043,10 +1066,32 @@ class DynamicAgentRunner:
                     self._finish_writer(agent, input_commit, work.output_commit)
                 return response_reference
             if next_continuation_progress is not None:
+                if recoverable_stream_failure:
+                    stream_retries += 1
                 continuation = _UpstreamContinuation(
                     progress=next_continuation_progress,
                     prior_execution=persisted.reference,
                     completed_tool_operations=len(result.telemetry.tool_calls),
+                )
+                attempt += 1
+                continue
+            if (
+                recoverable_stream_failure
+                and isinstance(failure, DynamicAgentRunnerError)
+                and failure.reason is TerminationReason.DEPENDENCY_UNAVAILABLE
+            ):
+                stream_retries += 1
+                self._emit_activity(
+                    agent,
+                    kind=ProgressEventKind.AGENT_RETRY,
+                    message=(
+                        f"{agent.label} model stream terminated before a trusted "
+                        "submission; retrying the same approved route once "
+                        "under the remaining task budget. The failed call "
+                        "remains recorded and may be billable."
+                    ),
+                    attempt=attempt,
+                    model=request.model,
                 )
                 attempt += 1
                 continue

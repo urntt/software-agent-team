@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.4.20",
-  "target_version": "0.4.21",
+  "baseline_version": "0.4.21",
+  "target_version": "0.4.22",
   "changes": [
     {
-      "id": "planning-product-quote-convergence",
+      "id": "openclaw-model-stream-recovery",
       "impact": "patch",
-      "summary": "Accept a final sentence period in attributable product statements and distinguish remaining wording defects from invalid user quotes"
+      "summary": "Classify an attributable terminated model stream and retry the same approved route once after safe evidence and workspace checks"
     }
   ]
 }

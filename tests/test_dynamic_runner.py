@@ -17,6 +17,7 @@ from software_agent_team.artifact_store import ArtifactStore
 from software_agent_team.artifacts import (
     AcceptanceCriterion,
     AgentExecutionRecord,
+    AgentRuntimeFailureCode,
     AgentToolCallEvidence,
     AgentToolEvidenceStatus,
     ArtifactKind,
@@ -524,6 +525,8 @@ class DynamicExecutor:
         mutate_reader: str | None = None,
         synchronize_quality: bool = False,
         provider_fail_once_for: str | None = None,
+        stream_terminate_once_for: str | None = None,
+        stream_terminate_for: str | None = None,
         provider_stall_once_for: str | None = None,
         initialization_stall_for: str | None = None,
         recovered_finalization_for: str | None = None,
@@ -549,6 +552,8 @@ class DynamicExecutor:
         self.omit_usage_for = omit_usage_for
         self.mutate_reader = mutate_reader
         self.provider_fail_once_for = provider_fail_once_for
+        self.stream_terminate_once_for = stream_terminate_once_for
+        self.stream_terminate_for = stream_terminate_for
         self.provider_stall_once_for = provider_stall_once_for
         self.initialization_stall_for = initialization_stall_for
         self.recovered_finalization_for = recovered_finalization_for
@@ -675,6 +680,100 @@ class DynamicExecutor:
                 ),
                 submission_evidence=submission_evidence,
             )
+        if self.stream_terminate_for == request.agent_id or (
+            self.stream_terminate_once_for == request.agent_id and count == 1
+        ):
+            if request.agent_id == "builder" and count == 1:
+                (self.workspace / "greeting.py").write_text(
+                    "def greet(name: str) -> str:\n    return f'Hello, {name}!'\n",
+                    encoding="utf-8",
+                )
+            self._emit_lifecycle_stop(
+                request,
+                activity_handler,
+                InvocationStopReason.PROVIDER_FAILURE,
+            )
+            assert request.submission_contract is not None
+            return AgentExecutionResult(
+                status=AgentExecutionStatus.PROVIDER_FAILED,
+                error="OpenClaw reported that the approved model stream terminated",
+                telemetry=AgentExecutionTelemetry(
+                    agent_id=request.agent_id,
+                    capability=request.capability,
+                    specialization=request.specialization,
+                    session_key=request.session_key,
+                    command=("fake-agent", request.agent_id),
+                    started_at=FIXED_TIME,
+                    finished_at=FIXED_TIME,
+                    duration_ms=60_000,
+                    exit_code=1,
+                    provider="test",
+                    model=request.model,
+                    runtime_failure_code=(
+                        AgentRuntimeFailureCode.OPENCLAW_MODEL_STREAM_TERMINATED
+                    ),
+                    usage=AgentTokenUsage(input_tokens=10, output_tokens=5),
+                    invocation_lifecycle=InvocationLifecycleEvidence(
+                        transitions=(
+                            InvocationLifecycleTransition(
+                                sequence=1,
+                                phase=InvocationPhase.LAUNCHED,
+                                elapsed_ms=0,
+                            ),
+                            InvocationLifecycleTransition(
+                                sequence=2,
+                                phase=InvocationPhase.STOPPING,
+                                elapsed_ms=60_000,
+                                stop_reason=InvocationStopReason.PROVIDER_FAILURE,
+                            ),
+                            InvocationLifecycleTransition(
+                                sequence=3,
+                                phase=InvocationPhase.COLLECTING_EVIDENCE,
+                                elapsed_ms=60_000,
+                                stop_reason=InvocationStopReason.PROVIDER_FAILURE,
+                            ),
+                            InvocationLifecycleTransition(
+                                sequence=4,
+                                phase=InvocationPhase.STOPPED,
+                                elapsed_ms=60_000,
+                                stop_reason=InvocationStopReason.PROVIDER_FAILURE,
+                            ),
+                        ),
+                        initialization=InitializationLivenessEvidence(
+                            mode="enforced",
+                            policy_source="test stream termination",
+                            no_progress_seconds=90,
+                            stall_grace_seconds=15,
+                            checkpoints=(InitializationCheckpoint.CURRENT_TURN,),
+                        ),
+                        response_finalization=ResponseFinalizationEvidence(
+                            mode="not_observed",
+                            policy_source="test stream termination",
+                            no_progress_seconds=60,
+                            stall_grace_seconds=10,
+                        ),
+                        shutdown=InvocationShutdownEvidence(
+                            reason=InvocationStopReason.PROVIDER_FAILURE,
+                            shutdown_grace_seconds=35,
+                            process_started=True,
+                            exit_code=1,
+                            stdout_collected=True,
+                            stderr_collected=True,
+                            session_evidence_status="invalid",
+                            submission_evidence_status="unauthorized",
+                            process_lease_released=True,
+                            cleanup_completed=True,
+                        ),
+                    ),
+                ),
+                submission_evidence=rejected_submission_evidence(
+                    request.submission_contract,
+                    binding_sha256="f" * 64,
+                    status=AgentSubmissionStatus.UNAUTHORIZED,
+                    code="tool_evidence_unavailable",
+                    detail="terminal stream error before typed submission",
+                ),
+            )
         if self.provider_stall_once_for == request.agent_id and count == 1:
             if activity_handler is not None:
                 for kind, elapsed_ms, inactivity_ms in (
@@ -777,12 +876,9 @@ class DynamicExecutor:
                 return self._result(request, "not valid JSON", None)
             if (
                 self.upstream_writer_mode
-                in {
-                    "complete_after_one",
-                    "terminal_response_after_tools",
-                }
-                and count == 2
-            ):
+                in {"complete_after_one", "terminal_response_after_tools"}
+                or self.stream_terminate_once_for == request.agent_id
+            ) and count == 2:
                 with (self.workspace / "README.md").open(
                     "a", encoding="utf-8"
                 ) as readme:
@@ -2987,6 +3083,92 @@ def test_dynamic_runner_switches_only_after_approved_provider_failure(
         "default",
         "fallback",
     )
+
+
+def test_dynamic_writer_resumes_exact_stream_failure_once_with_partial_work(
+    tmp_path: Path,
+) -> None:
+    runner, team_plan, executor, _, workspace = runtime(
+        tmp_path,
+        executor_options={"stream_terminate_once_for": "builder"},
+    )
+    events: list[ProgressEvent] = []
+    runner.activity_handler = events.append
+
+    result = DagScheduler().execute(team_plan, runner)
+
+    assert result.status is ScheduleStatus.COMPLETED, (
+        result.records[0].error,
+        len(executor.requests),
+        [reference.path for reference in runner.execution_records],
+    )
+    builder_requests = [
+        request for request in executor.requests if request.agent_id == "builder"
+    ]
+    assert len(builder_requests) == 2
+    assert builder_requests[0].session_key == builder_requests[1].session_key
+    assert "CONTROLLED_UPSTREAM_CONTINUATION_V1" in builder_requests[1].prompt
+    records = [
+        runner.artifact_store.load(reference)
+        for reference in runner.execution_records
+        if "/implement/builder-" in reference.path
+    ]
+    assert [record.execution_status for record in records] == [
+        AgentExecutionStatus.PROVIDER_FAILED,
+        AgentExecutionStatus.COMPLETED,
+    ]
+    assert records[0].runtime_failure_code is (
+        AgentRuntimeFailureCode.OPENCLAW_MODEL_STREAM_TERMINATED
+    )
+    assert records[0].input_tokens == 10
+    assert records[0].output_tokens == 5
+    assert git(workspace, "status", "--short").stdout == ""
+    assert runner.budget_ledger.snapshot().calls_completed == len(executor.requests)
+    assert any(event.kind is ProgressEventKind.AGENT_RETRY for event in events)
+
+
+def test_dynamic_writer_stops_after_one_repeated_stream_termination(
+    tmp_path: Path,
+) -> None:
+    runner, team_plan, executor, _, _ = runtime(
+        tmp_path,
+        executor_options={"stream_terminate_for": "builder"},
+    )
+
+    result = DagScheduler().execute(team_plan, runner)
+
+    assert result.status is ScheduleStatus.FAILED
+    assert [request.agent_id for request in executor.requests] == [
+        "builder",
+        "builder",
+    ]
+    assert runner.budget_ledger.snapshot().calls_completed == 2
+    assert runner.termination_reasons["builder"] is (
+        TerminationReason.DEPENDENCY_UNAVAILABLE
+    )
+
+
+def test_dynamic_reader_retries_one_stream_termination_without_route_switch(
+    tmp_path: Path,
+) -> None:
+    runner, team_plan, executor, _, _ = runtime(
+        tmp_path,
+        executor_options={"stream_terminate_once_for": "tester"},
+    )
+    events: list[ProgressEvent] = []
+    runner.activity_handler = events.append
+
+    result = DagScheduler().execute(team_plan, runner)
+
+    assert result.status is ScheduleStatus.COMPLETED
+    tester_requests = [
+        request for request in executor.requests if request.agent_id == "tester"
+    ]
+    assert len(tester_requests) == 2
+    assert tester_requests[0].model == tester_requests[1].model
+    assert ProgressEventKind.MODEL_ROUTE_SWITCHED not in {
+        event.kind for event in events
+    }
 
 
 def test_dynamic_runner_does_not_fallback_with_a_pending_submission(

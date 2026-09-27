@@ -1167,6 +1167,18 @@ _OPENCLAW_COMPACTION_ERROR_PATTERN = re.compile(
     r"^Error: CLI transcript compaction failed for "
     r"(?P<model>[A-Za-z0-9._-]+/[A-Za-z0-9._:/-]+): Compaction timed out$"
 )
+_OPENCLAW_STREAM_TERMINAL_PATTERN = re.compile(
+    r"^\[agent/embedded\] embedded run agent end: runId=[A-Za-z0-9-]+ "
+    r"isError=true model=(?P<model>[A-Za-z0-9._:/-]+) "
+    r"provider=(?P<provider>[A-Za-z0-9._-]+) "
+    r"error=LLM request timed out\. rawError=terminated$"
+)
+_OPENCLAW_STREAM_FALLBACK_PATTERN = re.compile(
+    r"^\[model-fallback/decision\] model fallback decision: "
+    r"decision=candidate_failed requested=(?P<requested>[A-Za-z0-9._:/-]+) "
+    r"candidate=(?P<candidate>[A-Za-z0-9._:/-]+) "
+    r"reason=timeout next=none detail=terminated$"
+)
 
 
 class _OpenClawProviderFailure(BaseModel):
@@ -1196,6 +1208,60 @@ class _OpenClawProviderFailure(BaseModel):
             provider=self.provider,
             model=self.model,
         )
+
+
+class _OpenClawStreamFailure(BaseModel):
+    """Exact terminal stream failure for one requested pinned-runtime route."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    provider: str = Field(pattern=r"^[A-Za-z0-9._-]+$")
+    model: str = Field(pattern=r"^[A-Za-z0-9._-]+/[A-Za-z0-9._:/-]+$")
+
+    @property
+    def error(self) -> str:
+        return "OpenClaw reported that the approved model stream terminated"
+
+    def response(self) -> _OpenClawResponse:
+        return _OpenClawResponse(
+            visible_texts=(),
+            provider_failed=True,
+            provider=self.provider,
+            model=self.model,
+        )
+
+
+def _parse_openclaw_stream_failure(
+    stderr: str,
+    *,
+    requested_model: str | None,
+) -> _OpenClawStreamFailure | None:
+    """Require paired terminal and exhausted-route diagnostics, without raw text."""
+
+    if requested_model is None or "/" not in requested_model:
+        return None
+    provider, model = requested_model.split("/", 1)
+    terminal = False
+    exhausted = False
+    for line in stderr.splitlines():
+        diagnostic = _OPENCLAW_SGR_PATTERN.sub("", line).strip()
+        match = _OPENCLAW_STREAM_TERMINAL_PATTERN.fullmatch(diagnostic)
+        if match is not None and (match.group("provider"), match.group("model")) == (
+            provider,
+            model,
+        ):
+            terminal = True
+        match = _OPENCLAW_STREAM_FALLBACK_PATTERN.fullmatch(diagnostic)
+        if match is not None and (
+            match.group("requested") == requested_model
+            and match.group("candidate") == requested_model
+        ):
+            exhausted = True
+    return (
+        _OpenClawStreamFailure(provider=provider, model=requested_model)
+        if terminal and exhausted
+        else None
+    )
 
 
 class _OpenClawCompactionFailure(BaseModel):
@@ -2937,6 +3003,9 @@ class OpenClawSubprocessExecutor:
             provider_failure = _parse_openclaw_provider_failure(
                 stderr,
                 requested_model=request.model,
+            ) or _parse_openclaw_stream_failure(
+                stderr,
+                requested_model=request.model,
             )
             telemetry = self._telemetry(
                 request=request,
@@ -2950,6 +3019,11 @@ class OpenClawSubprocessExecutor:
                     None if provider_failure is None else provider_failure.response()
                 ),
                 provider_liveness=liveness,
+                runtime_failure_code=(
+                    AgentRuntimeFailureCode.OPENCLAW_MODEL_STREAM_TERMINATED
+                    if isinstance(provider_failure, _OpenClawStreamFailure)
+                    else None
+                ),
             )
             return self._finalize_lifecycle_result(
                 AgentExecutionResult(
@@ -4151,11 +4225,18 @@ class OpenClawSubprocessExecutor:
             None
             if runtime_failure_code
             is AgentRuntimeFailureCode.OPENCLAW_COMPACTION_TIMEOUT
-            else _parse_openclaw_provider_failure(
-                stderr,
-                requested_model=request.model,
+            else (
+                _parse_openclaw_provider_failure(stderr, requested_model=request.model)
+                or _parse_openclaw_stream_failure(
+                    stderr,
+                    requested_model=request.model,
+                )
             )
         )
+        if isinstance(provider_failure, _OpenClawStreamFailure):
+            runtime_failure_code = (
+                AgentRuntimeFailureCode.OPENCLAW_MODEL_STREAM_TERMINATED
+            )
         effective_failure_status = (
             failure_status
             if provider_failure is None

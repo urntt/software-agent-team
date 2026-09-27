@@ -113,6 +113,7 @@ class AgentRuntimeFailureCode(StrEnum):
     """Controller-classified failures emitted by the pinned local runtime."""
 
     OPENCLAW_COMPACTION_TIMEOUT = "openclaw_compaction_timeout"
+    OPENCLAW_MODEL_STREAM_TERMINATED = "openclaw_model_stream_terminated"
 
 
 class ProviderLivenessEvidence(BaseModel):
@@ -1098,11 +1099,20 @@ class AgentExecutionRecord(BaseModel):
         )
         if self.schema_version >= 13 and self.specialization is None:
             raise ValueError("current execution records require specialization")
-        if self.runtime_failure_code is not None and (
-            self.execution_status is not AgentExecutionStatus.PROCESS_FAILED
-            or self.exit_code in {None, 0}
-        ):
-            raise ValueError("runtime failure codes require a nonzero process failure")
+        if self.runtime_failure_code is not None:
+            expected_status = (
+                AgentExecutionStatus.PROVIDER_FAILED
+                if self.runtime_failure_code
+                is AgentRuntimeFailureCode.OPENCLAW_MODEL_STREAM_TERMINATED
+                else AgentExecutionStatus.PROCESS_FAILED
+            )
+            if self.execution_status is not expected_status or self.exit_code in {
+                None,
+                0,
+            }:
+                raise ValueError(
+                    "runtime failure code requires its matching nonzero outcome"
+                )
         if self.schema_version < 15 and self.runtime_failure_code is not None:
             raise ValueError("runtime failure codes require artifact schema 15")
         if self.schema_version < 14 and any(

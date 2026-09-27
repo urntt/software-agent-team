@@ -320,6 +320,16 @@ length stop without a bound submission remains an invalid response.
 A write-capable tool-bearing turn may enter the bounded `upstream_incomplete`
 continuation path; a zero-tool response and every unverifiable case remain terminal
 protocol failures.
+If pinned OpenClaw ends a route with the paired `LLM request timed out` /
+`rawError=terminated` terminal and exhausted-route diagnostics after a nonzero
+exit, SAT records `openclaw_model_stream_terminated` and a content-free provider
+failure rather than a generic exit code. This identifies the observed stream
+termination; it does not infer which network component closed the stream. With
+no attributable submission attempt, completed process cleanup, and budget for
+another call, the controller retries that same approved route at most once.
+A writer's partial workspace must first pass identity, ancestry, and scope
+inspection; changed work resumes in the same session under the controlled
+continuation prompt. Every attempt keeps separate usage and lifecycle evidence.
 The override is absent from non-generation model inspection, provider smoke, and
 legacy text-compatibility configurations, where no invocation-bound submission tool
 exists. This
