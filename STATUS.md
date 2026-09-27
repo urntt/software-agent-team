@@ -21,6 +21,22 @@ The 163-test affected dynamic suite passed; the clean OVH canonical gate passed
 without provider calls, and the exact-tag hosted release gate passed 1,907 tests
 with four environment skips. Fresh public delivery validation remains open.
 
+Published `v0.4.20` then completed one-command installation, first-time
+DeepSeek configuration, and later startup in a new normal-user account. Its
+Planning proposal did not reach review: four model corrections exhausted the
+budget with an invalid `target_users` dimension. The retained Planning
+submissions and terminal record show that the fourth turn's
+source quoted the user request exactly while its display statement added only
+a sentence-final period. Published `v0.4.21` accepts that presentation period,
+keeps exact user-source attribution, and gives a separate diagnostic when a
+statement omits or changes quoted words. Focused Planning regressions and
+Ruff checks passed. A clean isolated OVH gate passed 1,911 tests with one
+root-only skip and no cgroup OOM/kill events; a fixed-dev fresh-account
+install, first-launch interrupt, export, and uninstall passed without provider
+calls. The exact-tag hosted gate passed 1,908 tests with four environment
+skips and published one identity manifest. Fresh public provider-backed
+delivery, independent acceptance, export, and uninstall remain unverified.
+
 Published `v0.4.6` passed the exact-tag hosted gate, and a fresh
 non-Docker-group account installed it through the public one-command bootstrap
 with rootless Docker. First and later 16/16 self-checks, real DeepSeek check,
