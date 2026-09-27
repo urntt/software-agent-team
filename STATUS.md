@@ -5,6 +5,22 @@
 This document records current implementation and validation evidence. Product
 and architecture decisions belong to [`VISION.md`](VISION.md).
 
+Published `v0.4.22` passed its exact-tag hosted gate (1,914 passed, four
+environment skips). A fresh normal-user run completed installation, first and
+later DeepSeek checks, Planning approval, and two implementation/integration/
+testing iterations. Its generated project was correctly rejected: the exact
+start command required a README-only sample file, and one generated test tried
+to resolve the project console script from a temporary directory without
+project metadata. Testing Agent analysis incorrectly claimed that the exact
+command checker skipped setup; the checker actually ran setup and test before
+the failing start. No project delivery, independent acceptance, or product
+uninstall was established by that run. The `0.4.23` candidate now records
+successful checker stages in failures, retains failed deterministic commands
+as controller-owned revision blockers, and clarifies the command and README
+example contracts. An isolated replay of the failed project reproduces both
+gates; a corrected copy passes them. Affected tests passed, while clean
+canonical and published-release checks remain pending for this candidate.
+
 Published `v0.4.19` installed and started successfully for a fresh normal user
 on Linux with Docker and a live DeepSeek provider check. Planning, approval,
 implementation, and pause/resume controls worked, but the first Integration

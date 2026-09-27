@@ -46,6 +46,10 @@ fixed for reproducibility; `start` belongs to the generated project.
 The exact `start` argv must be directly usable from the project root without
 extra arguments or configuration edits. A CLI therefore needs a safe default
 input or interactive flow; a local service needs a complete startup command.
+An untracked sample file created only by a README example cannot be a required
+argument in the manifest's exact `start` argv. The README example may create
+that file and pass it as an additional argument to an independently runnable
+start command.
 The deterministic clean-copy gate executes that exact argv because static
 manifest validation cannot infer whether a project entry point has required
 positional arguments.
@@ -57,10 +61,12 @@ the label may appear immediately before the shell block or between that shell
 block and its JSON block. The shell block must contain two lines: a new
 root-level fixture made with `echo -e "..." > file`, `printf '%s' '...' > file`,
 or a bounded `printf "..." > file` format, followed by the exact start command
-with optional arguments. The clean-copy command gate executes at most three
-such examples after setup, compares actual stdout as JSON, and rejects a
-mismatch, orphan label, or unsupported form. If a documented file example
-claims `code_point_count` or `code_points`, it also runs the same command on a
+with optional arguments. Put explanatory comments outside this fenced shell
+block: the fixture and command are its only two lines. The clean-copy command
+gate executes at most three such examples after setup, compares actual stdout
+as JSON, and rejects a mismatch, orphan label, or unsupported form. If a
+documented file example claims `code_point_count` or `code_points`, it also
+runs the same command on a
 mixed CRLF/LF Unicode fixture and checks the count against the original UTF-8
 decoded input. The independent Reviewer remains responsible for factual
 documentation outside this bounded format.
@@ -101,11 +107,10 @@ grace so an interactive CLI can wait for user input instead of receiving a
 synthetic EOF; a process still running after that grace is terminated through
 the same bounded process-group cleanup.
 
-The ordinary pytest gate
-uses the console entry point, matching the `uv run pytest` command delivered to
-the user; it must not substitute `python -m pytest`, which changes import-path
-behavior and can hide a project that fails from a fresh user environment.
-The gate runs in the clean quality workspace before user setup. Projects using
+The ordinary pytest gate invokes `pytest -q -p no:cacheprovider` directly in
+the clean quality workspace before user setup. The separate exact-command gate
+also runs the documented `uv run pytest` after setup in its fresh scratch copy.
+Project tests must pass through both entry points. Projects using
 a `src` layout must therefore declare the pytest import path (the seed includes
 `pythonpath = [".", "src"]`) instead of depending on an editable install that
 happens to exist. User-specific behavior is also assigned to independent review because no

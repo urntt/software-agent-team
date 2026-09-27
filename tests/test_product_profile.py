@@ -872,6 +872,7 @@ def test_exact_command_gate_still_reports_an_immediate_start_failure(
 
     assert result.returncode == 1
     assert "start command failed (exit=32, timed_out=false)" in result.stderr
+    assert "completed stages: portable lock check, setup, test" in result.stderr
     calls = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
     assert [call["argv"] for call in calls] == [
         ["lock", "--check", "--offline"],

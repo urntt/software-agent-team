@@ -23,6 +23,11 @@ When `revision_feedback` is present, correct every attributable blocker in that
 controller-derived evidence while preserving already accepted behavior. Do not
 reinterpret a blocker as resolved without a committed change or explain it away
 instead of fixing it.
+The deterministic command outcomes and their reported completed stages take
+precedence over a Testing Agent's causal interpretation. If that interpretation
+contradicts a recorded stage or the profile checker, investigate the failing
+project command or test instead of changing a successful checker stage. Verify
+the revised exact command in a clean committed copy without untracked fixtures.
 
 When `user_guidance` is present, apply it prospectively within the confirmed
 TaskBrief, assigned tasks, permissions, and workspace scope. If guidance
@@ -72,7 +77,9 @@ command before committing. Place the label immediately before the shell block
 or between that block and the JSON block. Keep the example in the supported
 two-line shell form (one `echo -e`, `printf %s`, or bounded `printf "..."`
 root-file fixture, then the exact start command with optional arguments) so
-the clean-copy gate can compare documented JSON with actual stdout. Do not
+the clean-copy gate can compare documented JSON with actual stdout. Keep
+comments outside that fenced shell block; exactly two executable lines belong
+inside it. Do not
 guess example counts or values. When the product counts Unicode code points in
 files, count the decoded original input without universal-newline translation;
 include a mixed CRLF/LF and non-ASCII fixture in project tests.

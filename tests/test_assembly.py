@@ -299,6 +299,27 @@ def test_test_report_records_timeout_as_controller_blocking_evidence() -> None:
     assert report.blockers == ("Deterministic command CHECK_TESTS timed out.",)
 
 
+def test_failed_command_remains_a_controller_blocker_despite_tester_inference() -> None:
+    report = assemble_test_report(
+        AgentTestReportResponse(
+            summary="The generated project is correct; the checker skipped setup.",
+            findings=("The checker skipped setup.",),
+        ),
+        task_brief=task_brief(),
+        team_id="dynamic_team",
+        agent=agent("quality_auditor", AgentCapability.TESTING),
+        iteration=1,
+        input_commit=OUTPUT_COMMIT,
+        commands=(command(exit_code=2),),
+        manual_review_criteria=("AC_DOCUMENTATION",),
+        created_at=NOW,
+    )
+
+    assert report.status is CheckStatus.FAILED
+    assert report.blockers == ("Deterministic command CHECK_TESTS failed (exit=2).",)
+    assert report.findings == ("The checker skipped setup.",)
+
+
 @pytest.mark.parametrize(
     ("commands", "manual", "message"),
     [

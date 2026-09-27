@@ -1703,7 +1703,7 @@ def test_dynamic_workflow_revises_before_review_after_failed_quality_gate(
     second_builder = [
         request for request in executor.requests if request.agent_id == "builder"
     ][1]
-    assert "Tester tester status is failed." in second_builder.prompt
+    assert "Deterministic command CHECK_TESTS failed (exit=1)." in second_builder.prompt
     assert '"id": "CHECK_TESTS"' in second_builder.prompt
     assert '"exit_code": 1' in second_builder.prompt
 

@@ -298,12 +298,22 @@ def _run(
     return result
 
 
-def _require_success(label: str, result: CommandResult) -> None:
+def _require_success(
+    label: str,
+    result: CommandResult,
+    *,
+    completed_stages: tuple[str, ...] = (),
+) -> None:
     if result.timed_out or result.exit_code != 0:
         detail = (result.stderr_tail or result.stdout_tail).strip()[-2000:]
+        completed = (
+            f"; completed stages: {', '.join(completed_stages)}"
+            if completed_stages
+            else ""
+        )
         fail(
             f"{label} failed (exit={result.exit_code}, "
-            f"timed_out={str(result.timed_out).lower()}): {detail}"
+            f"timed_out={str(result.timed_out).lower()}): {detail}{completed}"
         )
 
 
@@ -546,7 +556,9 @@ def execute(repository: Path) -> None:
             timeout_seconds=SETUP_TIMEOUT_SECONDS,
             environment_overrides=command_environment,
         )
-        _require_success("setup command", setup)
+        _require_success(
+            "setup command", setup, completed_stages=("portable lock check",)
+        )
         _require_delivery_preserved(clean, snapshot, command_label="setup")
         test = _run(
             commands.test,
@@ -554,7 +566,11 @@ def execute(repository: Path) -> None:
             timeout_seconds=TEST_TIMEOUT_SECONDS,
             environment_overrides=command_environment,
         )
-        _require_success("test command", test)
+        _require_success(
+            "test command",
+            test,
+            completed_stages=("portable lock check", "setup"),
+        )
         _require_delivery_preserved(clean, snapshot, command_label="test")
         start = _run(
             commands.start,
@@ -564,7 +580,11 @@ def execute(repository: Path) -> None:
             environment_overrides=command_environment,
         )
         if not start.timed_out:
-            _require_success("start command", start)
+            _require_success(
+                "start command",
+                start,
+                completed_stages=("portable lock check", "setup", "test"),
+            )
         _require_delivery_preserved(clean, snapshot, command_label="start")
         _verify_readme_examples(clean, snapshot, commands, command_environment)
         mode = "running_after_grace" if start.timed_out else "exited_zero"

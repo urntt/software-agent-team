@@ -1025,7 +1025,11 @@ class DynamicWorkflowCoordinator:
             if test.status is CheckStatus.PASSED:
                 continue
             reasons.extend(test.blockers)
-            reasons.extend(test.findings)
+            reasons.extend(
+                "Tester analysis (verify against deterministic command evidence): "
+                + finding
+                for finding in test.findings
+            )
             if not test.blockers and not test.findings:
                 reasons.append(f"Tester {test.producer} status is {test.status.value}.")
         return _unique(reasons)

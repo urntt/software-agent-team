@@ -206,11 +206,14 @@ def assemble_test_report(
             )
         )
 
-    blockers = tuple(
-        f"Deterministic command {command.id} timed out."
-        for command in commands
-        if command.timed_out
-    )
+    blockers_list: list[str] = []
+    for command in commands:
+        prefix = f"Deterministic command {command.id}"
+        if command.timed_out:
+            blockers_list.append(f"{prefix} timed out.")
+        elif command.exit_code != 0:
+            blockers_list.append(f"{prefix} failed (exit={command.exit_code}).")
+    blockers = tuple(blockers_list)
     return TestReport(
         run_id=task_brief.run_id,
         team_id=team_id,
