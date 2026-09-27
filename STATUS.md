@@ -5,6 +5,20 @@
 This document records current implementation and validation evidence. Product
 and architecture decisions belong to [`VISION.md`](VISION.md).
 
+Published `v0.4.19` installed and started successfully for a fresh normal user
+on Linux with Docker and a live DeepSeek provider check. Planning, approval,
+implementation, and pause/resume controls worked, but the first Integration
+Agent submitted an unchanged result with a nonempty `unresolved_issues` field.
+The entry described a `/tmp` `noexec` check that had already passed after a
+rerun on an executable filesystem. The Controller correctly rejected that
+unchanged handoff and blocked Testing and Review, so no project was delivered.
+The screened internal run and session evidence establishes the rejected
+submission; the operator's separate PTY transcript was not captured before the
+fresh account was removed. The `v0.4.20` source candidate clarifies current
+blockers versus resolved host observations in the WorkResult schema and Agent
+prompt; the 163-test affected dynamic suite passes. Candidate full-gate,
+publication, and fresh public delivery validation remain outstanding.
+
 Published `v0.4.6` passed the exact-tag hosted gate, and a fresh
 non-Docker-group account installed it through the public one-command bootstrap
 with rootless Docker. First and later 16/16 self-checks, real DeepSeek check,

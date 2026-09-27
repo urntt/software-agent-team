@@ -800,7 +800,14 @@ class WorkResultResponse(BaseModel):
 
     summary: str = Field(min_length=1)
     completed_tasks: tuple[str, ...] = Field(min_length=1)
-    unresolved_issues: tuple[str, ...] = ()
+    unresolved_issues: tuple[str, ...] = Field(
+        default=(),
+        description=(
+            "Currently open defects or constraints blocking assigned work or "
+            "the product; record resolved checks and nonblocking environment "
+            "observations in summary instead."
+        ),
+    )
 
     @field_validator("summary")
     @classmethod

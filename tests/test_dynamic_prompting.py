@@ -401,6 +401,9 @@ def test_dynamic_prompt_is_compiled_from_the_approved_agent_spec() -> None:
     assert "ignored or untracked dependency lock is not a delivery" in compact
     assert "without appending arguments" in compact
     assert "clean-workspace pytest entrypoint" in compact
+    assert "`/tmp` may be mounted `noexec`" in compact
+    assert "resolved checks and nonblocking environment observations" in compact
+    assert "Use an empty `unresolved_issues` array when no blocker remains" in compact
     assert "pytest's import path" in compact
     assert "exact shell form" in compact
     assert "assigned tasks define this Agent's work" in compact

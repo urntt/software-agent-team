@@ -1609,6 +1609,11 @@ lifecycle counters show every started tool operation completed. The controller
 persists that zero-length chain segment instead of requiring a meaningless
 commit; every implementation or revision writer still must advance the verified
 commit.
+The WorkResult `unresolved_issues` field names only current blockers. A failed
+check later rerun successfully or a nonblocking host-specific observation belongs
+in the summary, with its history preserved. An unchanged Integration result with
+any unresolved issue remains blocked; Agents must not erase a genuine defect to
+qualify for the unchanged handoff.
 The dynamic runner binds each scheduler-approved Agent to its exact model,
 time authority, prompt, invocation-scoped typed submission schema,
 semantic-correction policy, Git or read-only boundary, aggregate

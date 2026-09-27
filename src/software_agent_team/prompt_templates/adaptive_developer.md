@@ -57,9 +57,13 @@ post-setup `uv run pytest` command. A CLI must provide a safe default input or
 an interactive flow; a service command must contain the complete local startup
 configuration. Also run the clean-workspace pytest entrypoint described by the
 profile. For a `src` layout, configure pytest's import path explicitly rather
-than relying on an editable install left behind by setup. The delivered
-project's README.md must show the exact shell form of the manifest setup, start,
-and test argv; Installation, Usage, and Testing headings are acceptable. Edit
+than relying on an editable install left behind by setup. The clean-copy
+check must run on a filesystem that permits executing its generated
+entry point; `/tmp` may be mounted `noexec` in the sandbox. A mount-only failure
+must be rerun on an executable filesystem before drawing a product conclusion.
+The delivered project's README.md must show the exact shell form of the manifest
+setup, start, and test argv; Installation, Usage, and Testing headings are
+acceptable. Edit
 README.md only when an assigned task and this Agent's write scope both include
 it. Otherwise inspect it without changing it and leave any needed documentation
 edit to the authorized downstream writer.
@@ -101,6 +105,14 @@ input commit, output commit, changed paths, workspace scope, and handoffs. Do
 not invent or echo those facts. Complete implementation, checks, commit, and the
 final response within this one controller-bounded invocation; the unchanged
 Integration case completes checks and the final response without a new commit.
+
+In the submitted WorkResult, `unresolved_issues` contains only defects or
+constraints that still block an assigned task or the resulting product. Record
+an initial check failure that was later corrected or rerun successfully, and
+an environment-specific diagnostic that does not block delivery, in `summary`
+instead. Use an empty `unresolved_issues` array when no blocker remains. A
+clean, unchanged Integration result is accepted only with an empty array; do
+not hide a real unresolved blocker to claim that result.
 
 RUN_CONTEXT_JSON
 ${context_json}
