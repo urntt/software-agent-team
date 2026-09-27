@@ -14,10 +14,12 @@ rerun on an executable filesystem. The Controller correctly rejected that
 unchanged handoff and blocked Testing and Review, so no project was delivered.
 The screened internal run and session evidence establishes the rejected
 submission; the operator's separate PTY transcript was not captured before the
-fresh account was removed. The `v0.4.20` source candidate clarifies current
-blockers versus resolved host observations in the WorkResult schema and Agent
-prompt; the 163-test affected dynamic suite passes. Candidate full-gate,
-publication, and fresh public delivery validation remain outstanding.
+fresh account was removed. Published `v0.4.20` clarifies current blockers
+versus resolved host observations in the WorkResult schema and Agent prompt.
+The 163-test affected dynamic suite passed; the clean OVH canonical gate passed
+1,910 tests with one root-only skip, a fixed dev fresh-account lifecycle passed
+without provider calls, and the exact-tag hosted release gate passed 1,907 tests
+with four environment skips. Fresh public delivery validation remains open.
 
 Published `v0.4.6` passed the exact-tag hosted gate, and a fresh
 non-Docker-group account installed it through the public one-command bootstrap
