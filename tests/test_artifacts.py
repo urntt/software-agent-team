@@ -319,6 +319,31 @@ def test_runtime_failure_code_requires_a_nonzero_process_failure() -> None:
             AgentExecutionRecord.model_validate({**payload, **invalid})
 
 
+def test_model_stream_failure_code_requires_nonzero_provider_failure() -> None:
+    payload = valid_execution_payload()
+    payload.update(
+        {
+            "execution_status": "provider_failed",
+            "runtime_failure_code": "openclaw_model_stream_terminated",
+            "exit_code": 1,
+            "error": "OpenClaw reported that the approved model stream terminated",
+        }
+    )
+    payload.pop("response_artifact")
+
+    record = AgentExecutionRecord.model_validate(payload)
+    assert record.runtime_failure_code is (
+        AgentRuntimeFailureCode.OPENCLAW_MODEL_STREAM_TERMINATED
+    )
+    for invalid in (
+        {"execution_status": "process_failed"},
+        {"exit_code": 0},
+        {"exit_code": None},
+    ):
+        with pytest.raises(ValidationError, match="nonzero provider failure"):
+            AgentExecutionRecord.model_validate({**payload, **invalid})
+
+
 def test_current_execution_requires_specialization_but_reads_schema_twelve() -> None:
     payload = valid_execution_payload()
     payload.pop("specialization")

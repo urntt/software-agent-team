@@ -1111,7 +1111,9 @@ class AgentExecutionRecord(BaseModel):
                 0,
             }:
                 raise ValueError(
-                    "runtime failure code requires its matching nonzero outcome"
+                    "model stream termination requires a nonzero provider failure"
+                    if expected_status is AgentExecutionStatus.PROVIDER_FAILED
+                    else "runtime failure codes require a nonzero process failure"
                 )
         if self.schema_version < 15 and self.runtime_failure_code is not None:
             raise ValueError("runtime failure codes require artifact schema 15")
