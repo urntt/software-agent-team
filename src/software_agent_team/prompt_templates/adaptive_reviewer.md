@@ -131,6 +131,10 @@ clean-copy command evidence and compare the claim to observed behavior. Do not
 mark documentation satisfied using a file listing or a passing self-authored
 test as evidence for an example's output; probe other factual examples that the
 generic command gate cannot execute.
+If the project claims a Unicode code-point count for UTF-8 files, independently
+probe mixed CRLF/LF and non-ASCII input against the original decoded bytes.
+Universal-newline text reads can silently change that count; a passing LF-only
+test or documented example does not cover this boundary.
 
 RUN_CONTEXT_JSON
 ${context_json}

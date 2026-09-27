@@ -53,12 +53,17 @@ README headings may use ordinary terms such as Installation, Usage, and
 Testing, but the document must show the exact shell form of every manifest
 command.
 When a README explicitly labels a fenced JSON block `Expected JSON output:`,
-the immediately preceding shell block must contain two lines: a new root-level
-fixture made with `echo -e "..." > file` or `printf '%s' '...' > file`, followed
-by the exact start command with optional arguments. The clean-copy command gate
-executes at most three such examples after setup, compares actual stdout as
-JSON, and rejects a mismatch or unsupported form. The independent Reviewer
-remains responsible for factual documentation outside this bounded format.
+the label may appear immediately before the shell block or between that shell
+block and its JSON block. The shell block must contain two lines: a new
+root-level fixture made with `echo -e "..." > file`, `printf '%s' '...' > file`,
+or a bounded `printf "..." > file` format, followed by the exact start command
+with optional arguments. The clean-copy command gate executes at most three
+such examples after setup, compares actual stdout as JSON, and rejects a
+mismatch, orphan label, or unsupported form. If a documented file example
+claims `code_point_count` or `code_points`, it also runs the same command on a
+mixed CRLF/LF Unicode fixture and checks the count against the original UTF-8
+decoded input. The independent Reviewer remains responsible for factual
+documentation outside this bounded format.
 
 The validated setup contract also protects the first-use repository state.
 The root `.venv` must be ignored, while a bounded regular root `uv.lock` must be

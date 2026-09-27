@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.4.16",
-  "target_version": "0.4.17",
+  "baseline_version": "0.4.17",
+  "target_version": "0.4.18",
   "changes": [
     {
-      "id": "provider-liveness-test-stability",
+      "id": "readme-example-discovery-and-crlf-count",
       "impact": "patch",
-      "summary": "Assert repeated completed process polls instead of scheduler-dependent raw-stream sample count"
+      "summary": "Execute labeled README JSON examples and check documented Unicode code-point counts with mixed CRLF/LF input"
     }
   ]
 }

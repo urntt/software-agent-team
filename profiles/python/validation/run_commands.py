@@ -31,6 +31,11 @@ MAX_README_EXAMPLES = 3
 SHUTDOWN_SECONDS = 5
 PUBLIC_UV_CACHE = Path("/opt/software-agent-team/uv-public-cache")
 FENCED_BLOCK = re.compile(r"^```([^\n]*)\n(.*?)^```[ \t]*$", re.MULTILINE | re.DOTALL)
+EXPECTED_JSON_LABEL = re.compile(
+    r"^[ \t]*(?:#{1,6}[ \t]+)?expected[ \t]+json[ \t]+output[ \t]*:[ \t]*$",
+    re.MULTILINE | re.IGNORECASE,
+)
+CODE_POINT_KEYS = ("code_point_count", "code_points")
 
 
 @dataclass(frozen=True)
@@ -306,13 +311,30 @@ def _readme_json_examples(readme: str) -> tuple[tuple[str, object], ...]:
     """Select explicitly claimed JSON output and its preceding shell example."""
 
     blocks = tuple(FENCED_BLOCK.finditer(readme))
+    labels = tuple(
+        label
+        for label in EXPECTED_JSON_LABEL.finditer(readme)
+        if not any(block.start() <= label.start() < block.end() for block in blocks)
+    )
+    matched_labels: set[int] = set()
     examples: list[tuple[str, object]] = []
     for index, block in enumerate(blocks):
         if block.group(1).strip().casefold() != "json":
             continue
         previous = blocks[index - 1] if index else None
-        label = readme[previous.end() if previous else 0 : block.start()]
-        if not re.search(r"\bexpected\s+json\s+output\s*:", label, re.IGNORECASE):
+        earlier = blocks[index - 2] if index > 1 else None
+        spans = (
+            (previous.end(), block.start()) if previous else (0, block.start()),
+            (earlier.end() if earlier else 0, previous.start()) if previous else (0, 0),
+        )
+        eligible_labels = [
+            label
+            for label in labels
+            if any(
+                start <= label.start() and label.end() <= end for start, end in spans
+            )
+        ]
+        if not eligible_labels:
             continue
         if previous is None or previous.group(1).strip().casefold() not in {
             "bash",
@@ -320,6 +342,9 @@ def _readme_json_examples(readme: str) -> tuple[tuple[str, object], ...]:
             "shell",
         }:
             fail("README expected JSON output needs a preceding shell example")
+        if len(eligible_labels) != 1 or eligible_labels[0].start() in matched_labels:
+            fail("README expected JSON output has ambiguous example labels")
+        matched_labels.add(eligible_labels[0].start())
         try:
             expected = json.loads(block.group(2))
         except json.JSONDecodeError:
@@ -327,22 +352,95 @@ def _readme_json_examples(readme: str) -> tuple[tuple[str, object], ...]:
         examples.append((previous.group(2), expected))
         if len(examples) > MAX_README_EXAMPLES:
             fail("README has too many expected JSON examples")
+    if len(matched_labels) != len(labels):
+        fail("README expected JSON output needs adjacent shell and JSON blocks")
     return tuple(examples)
 
 
 def _fixture_content(tokens: list[str]) -> str:
-    if tokens[:2] == ["echo", "-e"] and len(tokens) == 3:
-        escaped = re.sub(
+    def decode_escapes(value: str, label: str) -> str:
+        if re.search(r"\\[^nrt\\]", value):
+            fail(f"README shell example uses an unsupported {label} escape")
+        return re.sub(
             r"\\([nrt\\])",
             lambda match: {"n": "\n", "r": "\r", "t": "\t", "\\": "\\"}[match.group(1)],
-            tokens[2],
+            value,
         )
-        if re.search(r"\\[^nrt\\]", escaped):
-            fail("README shell example uses an unsupported echo escape")
-        return escaped + "\n"
+
+    if tokens[:2] == ["echo", "-e"] and len(tokens) == 3:
+        return decode_escapes(tokens[2], "echo") + "\n"
     if tokens[:2] == ["printf", "%s"] and len(tokens) == 3:
         return tokens[2]
-    fail("README JSON example fixture must use echo -e or printf %s")
+    if tokens[:1] == ["printf"] and len(tokens) == 2:
+        if "%" in tokens[1]:
+            fail("README shell example uses an unsupported printf format")
+        return decode_escapes(tokens[1], "printf")
+    fail("README JSON example fixture must use echo -e or supported printf")
+
+
+def _verify_code_point_newlines(
+    index: int,
+    argv: tuple[str, ...],
+    fixture: Path,
+    expected: object,
+    clean: Path,
+    snapshot: dict[Path, tuple[str, int]],
+    environment_overrides: dict[str, str] | None,
+) -> None:
+    """Check a documented file code-point claim against preserved CRLF bytes."""
+
+    if not isinstance(expected, dict):
+        return
+    keys = tuple(key for key in CODE_POINT_KEYS if key in expected)
+    if not keys:
+        return
+    if any(type(expected[key]) is not int for key in keys):
+        fail(f"README JSON example {index} code-point claim must be an integer")
+    positions = [
+        position
+        for position, argument in enumerate(argv)
+        if argument in {fixture.name, f"./{fixture.name}"}
+    ]
+    if len(positions) != 1:
+        fail(f"README JSON example {index} cannot bind its code-point fixture")
+    variant = clean / f"sat-example-{index}-mixed-newlines.txt"
+    if (
+        variant.relative_to(clean) in snapshot
+        or variant.exists()
+        or variant.is_symlink()
+    ):
+        fail(f"README JSON example {index} mixed-newline fixture already exists")
+    content = "A\r\nβ\n"
+    variant.write_bytes(content.encode("utf-8"))
+    variant_argv = list(argv)
+    variant_argv[positions[0]] = variant.name
+    try:
+        result = _run(
+            tuple(variant_argv),
+            cwd=clean,
+            timeout_seconds=EXAMPLE_TIMEOUT_SECONDS,
+            environment_overrides=environment_overrides,
+        )
+        _require_success(f"README JSON example {index} mixed-newline check", result)
+        try:
+            actual = json.loads(result.stdout_tail)
+        except json.JSONDecodeError:
+            fail(f"README JSON example {index} mixed-newline check did not emit JSON")
+        if not isinstance(actual, dict):
+            fail(f"README JSON example {index} mixed-newline check needs a JSON object")
+        for key in keys:
+            observed = actual.get(key)
+            if type(observed) is not int or observed != len(content):
+                detail = (
+                    str(observed) if type(observed) is int else type(observed).__name__
+                )
+                fail(
+                    f"README JSON example {index} {key} miscounts mixed CRLF/LF "
+                    f"Unicode code points: expected={len(content)}, "
+                    f"actual={detail}"
+                )
+    finally:
+        variant.unlink(missing_ok=True)
 
 
 def _example_fixture(
@@ -354,7 +452,7 @@ def _example_fixture(
         tokens = list(lexer)
     except ValueError:
         fail("README JSON example has invalid shell quoting")
-    if len(tokens) < 5 or tokens[-2] != ">":
+    if len(tokens) < 4 or tokens[-2] != ">":
         fail("README JSON example fixture needs one supported file redirection")
     relative = _safe_relative_path(tokens[-1])
     if relative in snapshot or len(relative.parts) != 1:
@@ -404,6 +502,9 @@ def _verify_readme_examples(
                     f"README JSON example {index} output differs from documented "
                     f"JSON: actual={json.dumps(actual, ensure_ascii=False)[:500]}"
                 )
+            _verify_code_point_newlines(
+                index, argv, fixture, expected, clean, snapshot, environment_overrides
+            )
         finally:
             fixture.unlink(missing_ok=True)
         _require_delivery_preserved(

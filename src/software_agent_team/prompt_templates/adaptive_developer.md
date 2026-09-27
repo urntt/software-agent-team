@@ -64,10 +64,14 @@ README.md only when an assigned task and this Agent's write scope both include
 it. Otherwise inspect it without changing it and leave any needed documentation
 edit to the authorized downstream writer.
 If README.md includes an `Expected JSON output:` example, run its fixture and
-command before committing. Keep the example in the supported two-line shell
-form (one `echo -e` or `printf %s` root-file fixture, then the exact start
-command with optional arguments) so the clean-copy gate can compare the
-documented JSON with actual stdout. Do not guess example counts or values.
+command before committing. Place the label immediately before the shell block
+or between that block and the JSON block. Keep the example in the supported
+two-line shell form (one `echo -e`, `printf %s`, or bounded `printf "..."`
+root-file fixture, then the exact start command with optional arguments) so
+the clean-copy gate can compare documented JSON with actual stdout. Do not
+guess example counts or values. When the product counts Unicode code points in
+files, count the decoded original input without universal-newline translation;
+include a mixed CRLF/LF and non-ASCII fixture in project tests.
 
 Run tests with visible per-test progress when diagnosing a delay; do not pipe
 the test runner into `tail` or another command that hides progress until exit.
