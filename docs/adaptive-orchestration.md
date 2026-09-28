@@ -836,7 +836,12 @@ another Agent.
 When several task descriptions cannot fit the bounded summary, the overview
 points to the complete task list. Project-wide command and documentation checks
 do not grant any writer permission to change files outside its assigned tasks
-and workspace scope; the Controller still rejects out-of-scope commits.
+and workspace scope; the Controller still rejects out-of-scope commits. For a
+narrow writer, the runtime prompt exposes its assigned tasks and a compact owner
+map for other writable tasks, while withholding the plan's product-wide
+approach, risks, and assumptions. Those planning notes remain in the approved
+plan and full-project or read-only review context; they are not another
+checklist for a source-only writer.
 
 The typed Agent graph likewise owns runtime-team topology. The raw model turn is
 preserved unchanged for audit, including any advisory ProductDefinition team

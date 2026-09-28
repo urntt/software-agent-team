@@ -56,6 +56,7 @@ from software_agent_team.submissions import (
 from software_agent_team.teams import (
     AgentCapability,
     AgentSpec,
+    PermissionProfile,
     TeamPlan,
     capability_for_legacy_role,
     specialization_contract,
@@ -913,12 +914,37 @@ def _dynamic_prompt_context(inputs: DynamicAgentPromptInputs) -> dict[str, objec
         "review_boundary_definitions": review_boundary_definition_map(),
         "implementation_intent": {
             "objective": inputs.implementation_plan.objective,
-            "approach": list(inputs.implementation_plan.approach),
             "assigned_tasks": [
                 task.model_dump(mode="json") for task in inputs.assigned_tasks
             ],
-            "risks": list(inputs.implementation_plan.risks),
-            "assumptions": list(inputs.implementation_plan.assumptions),
+            # The approved approach describes the whole delivery. A narrow
+            # writer must not see another writer's files as its own checklist.
+            **(
+                {
+                    "approach": list(inputs.implementation_plan.approach),
+                    "risks": list(inputs.implementation_plan.risks),
+                    "assumptions": list(inputs.implementation_plan.assumptions),
+                }
+                if agent.capability in {AgentCapability.TESTING, AgentCapability.REVIEW}
+                or agent.workspace_scope == "repository"
+                else {
+                    "other_task_owners": [
+                        {
+                            "task_id": task.id,
+                            "owner_agent_id": task.owner_agent_id,
+                            "expected_paths": list(task.expected_paths),
+                        }
+                        for task in inputs.implementation_plan.tasks
+                        if task.owner_agent_id != agent.id
+                        and any(
+                            owner.id == task.owner_agent_id
+                            and owner.permission_profile
+                            is PermissionProfile.WORKSPACE_WRITE
+                            for owner in inputs.team_plan.agents
+                        )
+                    ]
+                }
+            ),
         },
         "upstream_results": [
             item.model_dump(mode="json") for item in inputs.upstream_results

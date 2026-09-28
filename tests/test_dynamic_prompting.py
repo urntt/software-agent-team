@@ -505,6 +505,69 @@ def test_dynamic_prompt_treats_expected_paths_as_non_binding_forecasts() -> None
     assert "ignored or untracked dependency lock is not a delivery" in rendered
 
 
+def test_narrow_writer_context_separates_project_approach_from_task_ownership() -> None:
+    """A product-wide delivery approach must not become a source writer checklist."""
+
+    base = developer_inputs()
+    source_task = base.implementation_plan.tasks[0].model_copy(
+        update={"expected_paths": ("src/link_checker.py",)}
+    )
+    docs_task = ProposedTask(
+        id="TASK_DOCS_TESTS",
+        owner_agent_id="integrator",
+        description="Write tests, README, and project metadata.",
+        acceptance_criteria=("AC_LINKS",),
+        expected_paths=("tests/test_cli.py", "README.md", "pyproject.toml"),
+        dependencies=("TASK_LINKS",),
+    )
+    plan = base.implementation_plan.model_copy(
+        update={
+            "approach": (
+                "Implement the CLI, then author tests, README, and project metadata.",
+            ),
+            "tasks": (source_task, docs_task),
+        }
+    )
+    source_agent = base.agent.model_copy(update={"workspace_scope": "repository/src"})
+    integrator = source_agent.model_copy(
+        update={
+            "id": "integrator",
+            "label": "Integrator",
+            "capability": AgentCapability.INTEGRATION,
+            "workspace_scope": "repository",
+            "dependencies": ("cli_developer",),
+        }
+    )
+    approved = base.team_plan.model_copy(
+        update={
+            "implementation_plan_sha256": canonical_model_sha256(plan),
+            "agents": (source_agent, integrator, *base.team_plan.agents[1:]),
+        }
+    )
+    inputs = base.model_copy(
+        update={"implementation_plan": plan, "team_plan": approved}
+    )
+
+    rendered = render_dynamic_agent_prompt(inputs)
+    context, _ = json.JSONDecoder().raw_decode(
+        rendered.split("RUN_CONTEXT_JSON\n", 1)[1].lstrip()
+    )
+    intent = context["implementation_intent"]
+
+    assert "approach" not in intent
+    assert "risks" not in intent
+    assert "assumptions" not in intent
+    assert [task["id"] for task in intent["assigned_tasks"]] == ["TASK_LINKS"]
+    assert intent["other_task_owners"] == [
+        {
+            "task_id": "TASK_DOCS_TESTS",
+            "owner_agent_id": "integrator",
+            "expected_paths": ["tests/test_cli.py", "README.md", "pyproject.toml"],
+        }
+    ]
+    assert "lists work reserved for other Agents" in " ".join(rendered.split())
+
+
 def test_upstream_continuation_preserves_identity_and_recovery_context() -> None:
     original = build_dynamic_agent_execution_request(developer_inputs())
 

@@ -13,6 +13,8 @@ call other Agents. Do not change unrelated behavior.
 The assigned tasks define this Agent's work; the workspace scope limits which
 repository paths it may change. Product-wide requirements and command checks
 describe the final project, not permission for each writer to edit every file.
+`implementation_intent.other_task_owners`, when present, lists work reserved
+for other Agents. It is context for handoff, not work for this invocation.
 If a needed change belongs to another task or is outside this Agent's write
 scope, leave that file unchanged and report the gap for its authorized owner.
 This applies to the final-product instructions below, including test authoring,

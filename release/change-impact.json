@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.4.29",
-  "target_version": "0.4.30",
+  "baseline_version": "0.4.30",
+  "target_version": "0.4.31",
   "changes": [
     {
-      "id": "approved-line-count-quality-boundary",
+      "id": "scoped-writer-prompt-authority",
       "impact": "patch",
-      "summary": "Bind the approved user brief to the Python quality gate, independently probe logical line counts, and recognize colonless README JSON example headings"
+      "summary": "Keep product-wide planning steps out of narrow writer prompts and show downstream write owners explicitly"
     }
   ]
 }
