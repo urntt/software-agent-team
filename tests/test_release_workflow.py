@@ -30,11 +30,27 @@ def test_release_workflow_gates_exact_tag_before_one_release_publication() -> No
     manifest_step = workflow.split("- name: Build release identity manifest")[1]
     assert "if: always()" not in manifest_step
     assert "scripts/release.py" in workflow
+    assert "scripts/build_bootstrap_asset.py" in workflow
     assert '--tag "${GITHUB_REF_NAME}"' in workflow
     assert "gh release view" in workflow
     assert "gh release create" in workflow
     assert "--verify-tag" in workflow
     assert "dist/sat-release.json" in workflow
+    assert "dist/bootstrap.sh" in workflow
+
+
+def test_main_and_pull_requests_run_checks_without_publishing() -> None:
+    workflow = (REPOSITORY_ROOT / ".github/workflows/ci.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "branches:" in workflow
+    assert "- main" in workflow
+    assert "pull_request:" in workflow
+    assert "contents: read" in workflow
+    assert "make setup" in workflow
+    assert "make check" in workflow
+    assert "gh release create" not in workflow
 
 
 def test_release_workflow_pins_third_party_actions_to_full_commits() -> None:

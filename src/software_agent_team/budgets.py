@@ -14,7 +14,14 @@ from threading import Lock
 from typing import Literal, Self
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 from software_agent_team.model_costs import (
     CacheAccountingSupport,
@@ -91,6 +98,7 @@ class AgentCallReservation(CachePriceSupport):
     output_cost_per_million_usd: Decimal | None = Field(default=None, ge=0)
     pricing_source: ModelMetadataSource | None = None
     pricing_observed_at: datetime | None = None
+    reserved_estimated_cost_usd: Decimal = Field(default=Decimal(0), ge=0)
 
     @model_validator(mode="after")
     def require_complete_pricing(self) -> Self:
@@ -156,6 +164,7 @@ class AgentBudgetUsage(BaseModel):
     output_tokens: int = Field(ge=0)
     agent_duration_ms: int = Field(ge=0)
     known_estimated_cost_usd: Decimal = Field(ge=0)
+    active_reserved_cost_usd: Decimal = Field(default=Decimal(0), ge=0)
     unpriced_calls: int = Field(ge=0)
     unreported_token_calls: int = Field(ge=0)
 
@@ -169,6 +178,8 @@ class AgentBudgetUsage(BaseModel):
             raise ValueError("unpriced calls cannot exceed completed calls")
         if self.unreported_token_calls > self.calls_completed:
             raise ValueError("unreported-token calls cannot exceed completed calls")
+        if not self.active_calls and self.active_reserved_cost_usd:
+            raise ValueError("terminal usage cannot retain a call reservation")
         return self
 
     def remaining_estimated_cost_usd(self, budget: AgentBudget) -> Decimal:
@@ -176,8 +187,19 @@ class AgentBudgetUsage(BaseModel):
 
         return max(
             Decimal(0),
-            budget.max_estimated_cost_usd - self.known_estimated_cost_usd,
+            budget.max_estimated_cost_usd
+            - self.known_estimated_cost_usd
+            - self.active_reserved_cost_usd,
         )
+
+    @model_serializer(mode="wrap")
+    def serialize_active_reservation(self, handler):
+        """Keep terminal and historical ledger bytes free of transient holds."""
+
+        result = handler(self)
+        if self.active_reserved_cost_usd == 0:
+            result.pop("active_reserved_cost_usd", None)
+        return result
 
 
 class AgentBudget(BaseModel):
@@ -376,8 +398,9 @@ class AgentBudgetLedger:
     """Atomically reserve calls and retain all reported aggregate usage.
 
     Controlled-evaluation call count is enforced before launch. For ordinary
-    tasks, every call must have frozen pricing and no new non-zero-priced call
-    may start after recorded estimated spend reaches the user's ceiling.
+    tasks, every call must have frozen pricing. Paid calls atomically occupy
+    available authorization while active, using a route-bound estimate when
+    possible and the whole remaining authorization otherwise.
     Provider token usage arrives only after a call, so an absolute billing cap
     still requires a provider-side spending/quota limit. Unknown cost stops an
     ordinary task. Missing token telemetry remains explicit, but a route whose
@@ -423,6 +446,7 @@ class AgentBudgetLedger:
                     "Agent call budget is exhausted",
                     usage,
                 )
+            reserved_cost = Decimal(0)
             if self.budget.authority is BudgetAuthority.USER_TASK:
                 if run_id is None or stage is None or route_id is None:
                     raise ValueError(
@@ -442,20 +466,29 @@ class AgentBudgetLedger:
                         "Task model spend cannot be accounted before another call",
                         usage,
                     )
-                non_zero_price = bool(
-                    pricing.input_cost_per_million_usd
-                    or pricing.output_cost_per_million_usd
-                    or pricing.cache_pricing.read_cost_per_million_usd
-                    or pricing.cache_pricing.write_cost_per_million_usd
+                confirmed_zero = _has_confirmed_zero_pricing(
+                    input_price=pricing.input_cost_per_million_usd,
+                    output_price=pricing.output_cost_per_million_usd,
+                    pricing_source=pricing.pricing_source,
+                    cache_pricing=pricing.cache_pricing,
                 )
-                if (
-                    non_zero_price
-                    and self._known_estimated_cost_usd
-                    >= self.budget.max_estimated_cost_usd
-                ):
-                    raise AgentBudgetExceeded(
-                        "Task model-spend authorization is exhausted before launch",
-                        usage,
+                if not confirmed_zero:
+                    available = (
+                        self.budget.max_estimated_cost_usd
+                        - self._known_estimated_cost_usd
+                        - usage.active_reserved_cost_usd
+                    )
+                    if available <= 0:
+                        raise AgentBudgetExceeded(
+                            "Task model-spend authorization is exhausted before "
+                            "launch or reserved by active calls",
+                            usage,
+                        )
+                    upper_bound = pricing.max_call_estimated_cost_usd()
+                    reserved_cost = (
+                        available
+                        if upper_bound is None or upper_bound == 0
+                        else min(available, upper_bound)
                     )
             self._calls_started += 1
             sequence = self._calls_started
@@ -478,6 +511,7 @@ class AgentBudgetLedger:
                     None if pricing is None else pricing.pricing_observed_at
                 ),
                 cache_pricing=None if pricing is None else pricing.cache_pricing,
+                reserved_estimated_cost_usd=reserved_cost,
             )
             self._active[sequence] = reservation
             return reservation
@@ -602,6 +636,10 @@ class AgentBudgetLedger:
             output_tokens=self._output_tokens,
             agent_duration_ms=self._agent_duration_ms,
             known_estimated_cost_usd=self._known_estimated_cost_usd,
+            active_reserved_cost_usd=sum(
+                (call.reserved_estimated_cost_usd for call in self._active.values()),
+                Decimal(0),
+            ),
             unpriced_calls=self._unpriced_calls,
             unreported_token_calls=self._unreported_token_calls,
         )
@@ -645,6 +683,8 @@ class ModelPricing(CachePriceSupport):
     )
     pricing_source: ModelMetadataSource | None = None
     pricing_observed_at: datetime | None = None
+    max_input_tokens: int | None = Field(default=None, ge=1)
+    max_output_tokens: int | None = Field(default=None, ge=1)
 
     @model_validator(mode="before")
     @classmethod
@@ -701,6 +741,27 @@ class ModelPricing(CachePriceSupport):
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError("pricing observation time must include a UTC offset")
         return value.astimezone(UTC)
+
+    def max_call_estimated_cost_usd(self) -> Decimal | None:
+        """Bound one call from normalized token buckets and frozen route limits."""
+
+        if (
+            self.max_input_tokens is None
+            or self.max_output_tokens is None
+            or self.input_cost_per_million_usd is None
+            or self.output_cost_per_million_usd is None
+            or self.cache_pricing is None
+        ):
+            return None
+        input_rate = max(
+            self.input_cost_per_million_usd,
+            self.cache_pricing.read_cost_per_million_usd,
+            self.cache_pricing.write_cost_per_million_usd,
+        )
+        return (
+            Decimal(self.max_input_tokens) * input_rate
+            + Decimal(self.max_output_tokens) * self.output_cost_per_million_usd
+        ) / Decimal(1_000_000)
 
     def estimate_cost(
         self,

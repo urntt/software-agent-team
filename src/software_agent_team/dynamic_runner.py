@@ -1767,10 +1767,10 @@ class DynamicAgentRunner:
             ),
             known_estimated_cost_usd=usage.known_estimated_cost_usd,
             authorized_cost_usd=authorized,
-            remaining_estimated_cost_usd=max(
-                0,
-                authorized - usage.known_estimated_cost_usd,
+            remaining_estimated_cost_usd=usage.remaining_estimated_cost_usd(
+                self.budget_ledger.budget
             ),
+            active_reserved_cost_usd=usage.active_reserved_cost_usd,
             cost_accounting_state=cost_accounting_state,
             unsettled_model_calls=usage.active_calls,
         )

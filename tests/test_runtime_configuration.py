@@ -2,13 +2,13 @@
 
 import json
 import os
-import re
 import subprocess
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from pinned_runtime import pinned_openclaw_node
 from pydantic import ValidationError
 
 import software_agent_team.runtime_configuration as runtime_configuration
@@ -410,10 +410,8 @@ def test_materialized_plugins_disable_pinned_runtime_memory_slot(
         bootstrap_capability=AgentCapability.CLARIFICATION if bootstrap else None,
         team_plan=None if bootstrap else adaptive_team_plan(),
     )
-    pins = (REPOSITORY_ROOT / "configs/toolchain.sh").read_text()
-    match = re.search(r'^task_node_version="([^"]+)"$', pins, re.MULTILINE)
-    assert match is not None
-    runtime = REPOSITORY_ROOT / ".sat/openclaw/tools" / f"node-v{match[1]}"
+    node = pinned_openclaw_node(REPOSITORY_ROOT)
+    runtime = node.parent.parent
     dist = runtime / "lib/node_modules/openclaw/dist"
     modules = [
         path
@@ -423,7 +421,7 @@ def test_materialized_plugins_disable_pinned_runtime_memory_slot(
     assert len(modules) == 1, "review plugin-slot compatibility after a runtime update"
     result = subprocess.run(
         [
-            str(runtime / "bin/node"),
+            str(node),
             "--input-type=module",
             "-e",
             """
@@ -480,10 +478,8 @@ def test_materialized_config_enables_pinned_no_progress_loop_breaker(
         sandbox_user="1000:1000",
         team_plan=adaptive_team_plan(),
     )
-    pins = (REPOSITORY_ROOT / "configs/toolchain.sh").read_text()
-    match = re.search(r'^task_node_version="([^"]+)"$', pins, re.MULTILINE)
-    assert match is not None
-    runtime = REPOSITORY_ROOT / ".sat/openclaw/tools" / f"node-v{match[1]}"
+    node = pinned_openclaw_node(REPOSITORY_ROOT)
+    runtime = node.parent.parent
     modules = [
         path
         for path in (runtime / "lib/node_modules/openclaw/dist").glob(
@@ -495,7 +491,7 @@ def test_materialized_config_enables_pinned_no_progress_loop_breaker(
 
     result = subprocess.run(
         [
-            str(runtime / "bin/node"),
+            str(node),
             "--input-type=module",
             "-e",
             """

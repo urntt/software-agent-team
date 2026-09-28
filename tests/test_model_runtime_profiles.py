@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from pinned_runtime import pinned_openclaw_binary
 from pydantic import ValidationError
 
 from software_agent_team.model_routing import (
@@ -192,7 +193,7 @@ def test_official_deepseek_v4_flash_profile_validates_with_pinned_openclaw(
             },
         }
     ]
-    openclaw = REPOSITORY_ROOT / ".sat/openclaw/bin/openclaw"
+    openclaw = pinned_openclaw_binary(REPOSITORY_ROOT)
     result = subprocess.run(
         [str(openclaw), "config", "validate", "--json"],
         check=False,
@@ -255,7 +256,7 @@ def test_gemini_38_flash_profile_is_available_in_pinned_openclaw(
     }
     assert "test-only" not in destination.read_text(encoding="utf-8")
 
-    openclaw = REPOSITORY_ROOT / ".sat/openclaw/bin/openclaw"
+    openclaw = pinned_openclaw_binary(REPOSITORY_ROOT)
     environment = {
         **os.environ,
         "HOME": str(tmp_path),
@@ -348,7 +349,7 @@ def test_transport_profile_validates_with_the_pinned_openclaw(
     monkeypatch.setenv("CUSTOM_API_KEY", "test-only")
     state = tmp_path / "state"
     state.mkdir()
-    openclaw = REPOSITORY_ROOT / ".sat/openclaw/bin/openclaw"
+    openclaw = pinned_openclaw_binary(REPOSITORY_ROOT)
     destination = tmp_path / f"{api.value}.json"
     materialize_model_check_configuration(
         destination,

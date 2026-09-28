@@ -1136,8 +1136,13 @@ to it. It binds that invocation to the approved capability, model route,
 time authority, permission profile, assigned tasks, and dependency
 handoffs; it cannot create Agents, edit the DAG, or extend a user deadline.
 
-Each invocation enters the shared budget ledger atomically before launch and
-records reported tokens, duration, and known price after completion. Raw
+Each invocation enters the shared budget ledger atomically before launch. A
+paid call reserves the lesser of its frozen route/token-limit cost estimate and
+the remaining authorized spend; without usable token limits it reserves the
+whole remainder. Active reservations reduce admission headroom. Actual provider
+usage may exceed an estimate, so a provider-side quota is needed for an absolute
+billing cap. Settlement releases the reservation and records reported tokens,
+duration, and known price. Raw
 stdout/stderr, telemetry, the semantic response reference when valid, and any
 post-call budget rejection are persisted together. When session collection is
 active, the same `AgentExecutionRecord` stores its typed execution status,

@@ -7,12 +7,12 @@ No accepted submission, tool digest, or correction result is fabricated.
 from __future__ import annotations
 
 import json
-import re
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from pinned_runtime import pinned_openclaw_node
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from software_agent_team.openclaw_session_evidence import capture_openclaw_tool_evidence
@@ -34,21 +34,6 @@ from software_agent_team.submissions import (
 )
 
 ROOT = Path(__file__).resolve().parents[1]
-
-
-def pinned_openclaw_node(root: Path = ROOT) -> Path:
-    """Return the real pinned Node binary or skip an unprepared checkout."""
-
-    pins = (root / "configs/toolchain.sh").read_text(encoding="utf-8")
-    match = re.search(r'^task_node_version="([^"]+)"$', pins, re.MULTILINE)
-    assert match is not None
-    node = root / ".sat/openclaw/tools" / f"node-v{match[1]}/bin/node"
-    if not node.is_file():
-        pytest.skip(
-            "pinned OpenClaw runtime is missing; run `make setup` from the "
-            "repository root"
-        )
-    return node
 
 
 def test_missing_pinned_openclaw_runtime_names_the_setup_precondition(
@@ -76,7 +61,7 @@ def capture_controller_correction(
     recorded_payload=None,
 ):
     """Capture a real terminal plugin result; prior work remains caller-owned."""
-    node = pinned_openclaw_node()
+    node = pinned_openclaw_node(ROOT)
     contract = request.submission_contract
     assert contract is not None
     tmp_path.mkdir()
@@ -211,7 +196,7 @@ class CorrectedBody(BaseModel):
     ],
 )
 def test_production_submission_correction_bridge(tmp_path: Path, case: str) -> None:
-    node = pinned_openclaw_node()
+    node = pinned_openclaw_node(ROOT)
     base = {"audience": "", "workflow": "", "preserved": "unchanged"}
     with pytest.raises(ValidationError) as invalid:
         CorrectedBody.model_validate(base)

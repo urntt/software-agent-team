@@ -51,6 +51,9 @@ jobs:
           uv run --frozen python scripts/release.py \
             --tag "${GITHUB_REF_NAME}" \
             --output dist/sat-release.json
+          uv run --frozen python scripts/build_bootstrap_asset.py \
+            --tag "${GITHUB_REF_NAME}" \
+            --output dist/bootstrap.sh
 
       - name: Refuse release-version reuse
         env:
@@ -70,4 +73,5 @@ jobs:
             --latest \
             --generate-notes \
             --title "SAT ${GITHUB_REF_NAME#v}" \
-            "dist/sat-release.json#SAT release identity manifest"
+            "dist/sat-release.json#SAT release identity manifest" \
+            "dist/bootstrap.sh#SAT stable installation bootstrap"

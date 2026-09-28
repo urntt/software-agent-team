@@ -21,9 +21,10 @@ fully offline after setup. It verifies tool versions, ownership, Git and ignore
 boundaries, configuration contracts, formatting, lint, the complete test
 suite, and all offline workflow paths. It does not call a model or require
 provider credentials.
-Direct `pytest` runs that cross the real controller submission bridge skip with
-a `make setup` instruction when the pinned OpenClaw runtime is absent. The
-canonical `make check` remains strict because its doctor stage requires that
+Direct `pytest` runs that execute the pinned OpenClaw launcher or Node runtime
+skip with a `make setup` instruction when that runtime is absent. With the
+runtime installed, those tests still execute the real compatibility checks.
+The canonical `make check` remains strict because its doctor stage requires the
 runtime before the test suite starts.
 
 `configs/toolchain.sh` is the shared setup/doctor authority for private Node and
@@ -907,7 +908,9 @@ src/software_agent_team/
   artifact_store.py            Write-once artifact and output persistence
   assembly.py                  Semantic response and verified-fact assembly
   budgets.py                   Agent and pricing budgets
-  cli.py                       Unified command-line interface
+  entrypoint.py                Lightweight local version/help dispatch
+  _cli_help.py                 Generated root help from the canonical parser
+  cli.py                       Unified workflow command-line interface
   controls.py                  Persisted user-control command contracts
   dynamic_runner.py            Approved dynamic Agent invocation lifecycle
   dynamic_workflow.py          Adaptive lifecycle convergence and decisions
@@ -947,7 +950,9 @@ src/software_agent_team/
   workspace_mounts.py          User-owned sandbox mountpoint preparation and repair
   workflow.py                  Fixed-fixture compatibility orchestration
 scripts/
-  bootstrap.sh                 Remote managed-install entry point
+  bootstrap.sh                 Release asset template and explicit dev entry
+  build_bootstrap_asset.py     Bind stable shell entry to exact release tag
+  generate_cli_help.py        Regenerate lightweight root-help snapshot
   install-openclaw.sh          Checksum-verified private dependency installation
   install.sh                   Locked Linux/WSL application installation
   release.py                   Release manifest and candidate gate CLI
@@ -958,10 +963,18 @@ scripts/
 tests/                         Offline unit, integration, and end-to-end tests
 release/change-impact.json     Machine-readable SemVer impact ledger
 .github/workflows/release.yml  Exact-tag GitHub Release automation
+.github/workflows/ci.yml       Main and pull-request canonical checks
 README.md                      User-facing public overview and quick start
 STATUS.md                      Current implementation and evaluation evidence
 VISION.md                      Product, architecture, experiment, and roadmap
 ```
+
+`__init__.py` resolves public exports lazily, preserving their canonical
+module identities without loading the workflow graph for every local command.
+After changing the root CLI parser, run
+`uv run --frozen python scripts/generate_cli_help.py`; the entrypoint serves
+that generated snapshot for exact root `--help`/`-h`, and the test suite checks
+it against the parser. Other CLI requests use the canonical parser directly.
 
 `openclaw/workspaces/` contains stable ignored role workspace boundaries. The
 installed private OpenClaw binary lives under ignored `.sat/openclaw/`.

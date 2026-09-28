@@ -36,18 +36,20 @@ the complete prerequisite and isolation boundaries.
 Run the following command as a normal Linux or WSL user:
 
 ```bash
-curl -fsSL \
-  https://raw.githubusercontent.com/urntt/software-agent-team/main/scripts/bootstrap.sh \
-  | bash && exec "${SHELL:-/bin/bash}" -l
+bash -o pipefail -c 'curl -fsSL \
+  https://github.com/urntt/software-agent-team/releases/latest/download/bootstrap.sh \
+  | bash' && exec "${SHELL:-/bin/bash}" -l
 ```
 
 The installer validates the device, installs SAT's pinned private runtime,
 prepares its Python environment and Docker image, proves that the restricted
 sandbox container stays runnable and can execute a tool helper, runs offline
 checks, and adds `sat` and `sat-uninstall` to the user-local command path. A
-normal installation resolves the latest published stable release and binds it
-to an exact source revision and artifact digest; it does not install a moving
-`main` checkout as stable.
+normal installation downloads the latest published release's bootstrap asset.
+That shell entry point pins its helper to the same release tag and full source
+revision, then verifies the selected application's release identity and source
+archive digest. Changes to moving `main` do not change an existing stable
+installation transaction.
 
 The command is safe to rerun for an owned installation. It stages and verifies
 the requested target before activation, preserves the prior version on failure,

@@ -30,11 +30,16 @@ def prepare_helper_repository(tmp_path: Path) -> Path:
     source = tmp_path / "source"
     source.mkdir()
     (source / "uv.lock").write_text("version = 1\n", encoding="utf-8")
+    (source / "scripts").mkdir()
+    (source / "scripts/bootstrap.sh").write_bytes(
+        (REPOSITORY_ROOT / "scripts/bootstrap.sh").read_bytes()
+    )
     git(source, "init", "-b", "main")
     git(source, "config", "user.name", "urntt")
     git(source, "config", "user.email", "urntts@gmail.com")
     git(source, "add", ".")
     git(source, "commit", "-m", "test: initialize bootstrap helper")
+    git(source, "tag", "-a", "v0.4.32", "-m", "release: SAT 0.4.32")
     return source
 
 
@@ -58,7 +63,9 @@ esac
 set -euo pipefail
 printf '%s\n' "$*" >> "${FAKE_UV_LOG:?}"
 if [[ "${1:-}" == "run" ]]; then
-  printf 'root=%s args=%s\n' "${SAT_INSTALL_ROOT-unset}" "$*" >> "${FAKE_INSTALL_LOG:?}"
+  printf 'root=%s helper=%s args=%s\n' \
+    "${SAT_INSTALL_ROOT-unset}" "$(git rev-parse HEAD)" "$*" \
+    >> "${FAKE_INSTALL_LOG:?}"
   if [[ "${FAKE_INSTALL_FAIL_ONCE:-0}" == "1" && \
         ! -e "${FAKE_INSTALL_ATTEMPT_MARKER:?}" ]]; then
     : > "${FAKE_INSTALL_ATTEMPT_MARKER:?}"
@@ -70,6 +77,22 @@ fi
     home = tmp_path / "home"
     home.mkdir()
     install_root = home / ".local/share/software-agent-team/app"
+    bootstrap_asset = tmp_path / "bootstrap.sh"
+    subprocess.run(
+        [
+            sys.executable,
+            str(REPOSITORY_ROOT / "scripts/build_bootstrap_asset.py"),
+            "--repository",
+            str(source),
+            "--tag",
+            "v0.4.32",
+            "--output",
+            str(bootstrap_asset),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
     environment = {
         **os.environ,
         "PATH": f"{fake_bin}:/usr/bin:/bin",
@@ -80,13 +103,14 @@ fi
         "FAKE_UV_LOG": str(tmp_path / "uv.log"),
         "FAKE_INSTALL_LOG": str(tmp_path / "install.log"),
         "FAKE_INSTALL_ATTEMPT_MARKER": str(tmp_path / "install-attempted"),
+        "FAKE_BOOTSTRAP_SCRIPT": str(bootstrap_asset),
     }
     return environment, install_root
 
 
 def run_bootstrap(environment: dict[str, str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [str(REPOSITORY_ROOT / "scripts/bootstrap.sh")],
+        [environment["FAKE_BOOTSTRAP_SCRIPT"]],
         env=environment,
         check=False,
         capture_output=True,
@@ -111,7 +135,9 @@ def test_bootstrap_defaults_to_stable_and_never_passes_a_moving_ref(
     assert len(calls) == 2
     assert all("_managed-install --channel stable" in call for call in calls)
     assert all(" --ref " not in call for call in calls)
+    assert all("/releases/tags/v0.4.32" in call for call in calls)
     assert all(f"root={install_root}" in call for call in calls)
+    assert "bootstrap: release=v0.4.32 revision=" in first.stdout
     assert "bootstrap: channel=stable" in first.stdout
     assert first.stdout.splitlines()[-2:] == [
         "bootstrap: uninstall=sat-uninstall",
@@ -194,6 +220,56 @@ def test_bootstrap_recovery_uses_fresh_helper_not_installed_predecessor(
     assert not stale_call.exists()
     call = (tmp_path / "install.log").read_text(encoding="utf-8")
     assert "_managed-install --channel stable" in call
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="bootstrap supports Linux/WSL")
+def test_stable_asset_stays_on_its_tag_when_main_moves(tmp_path: Path) -> None:
+    source = prepare_helper_repository(tmp_path)
+    environment, _ = fake_environment(tmp_path, source)
+    release_revision = subprocess.check_output(
+        ["git", "-C", str(source), "rev-parse", "HEAD"], text=True
+    ).strip()
+    (source / "uv.lock").write_text("version = 2\n", encoding="utf-8")
+    git(source, "add", ".")
+    git(source, "commit", "-m", "test: change moving main")
+
+    completed = run_bootstrap(environment)
+
+    assert completed.returncode == 0, completed.stderr
+    assert f"helper={release_revision}" in (tmp_path / "install.log").read_text(
+        encoding="utf-8"
+    )
+    new_asset = tmp_path / "main-bootstrap.sh"
+    rejected = subprocess.run(
+        [
+            sys.executable,
+            str(REPOSITORY_ROOT / "scripts/build_bootstrap_asset.py"),
+            "--repository",
+            str(source),
+            "--tag",
+            "v0.4.32",
+            "--output",
+            str(new_asset),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert rejected.returncode != 0
+    assert not new_asset.exists()
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="bootstrap supports Linux/WSL")
+def test_raw_main_bootstrap_cannot_start_stable_install(tmp_path: Path) -> None:
+    source = prepare_helper_repository(tmp_path)
+    environment, _ = fake_environment(tmp_path, source)
+    environment["FAKE_BOOTSTRAP_SCRIPT"] = str(REPOSITORY_ROOT / "scripts/bootstrap.sh")
+
+    completed = run_bootstrap(environment)
+
+    assert completed.returncode == 1
+    assert "published release bootstrap.sh asset" in completed.stderr
+    assert not (tmp_path / "install.log").exists()
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="bootstrap supports Linux/WSL")

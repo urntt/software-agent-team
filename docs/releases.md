@@ -136,10 +136,11 @@ git push origin v0.1.0
 ```
 
 The pinned GitHub Actions workflow checks out that exact tag, installs the
-locked toolchain, reruns formatting, lint, and all tests, rebuilds the manifest,
-refuses an existing release, and creates the GitHub Release with exactly one
-`sat-release.json` identity asset. It never publishes from a dirty checkout or
-moving branch.
+locked toolchain, reruns formatting, lint, and all tests, rebuilds the manifest
+and release-bound `bootstrap.sh`, refuses an existing release, and creates the
+GitHub Release with both assets. It never publishes from a dirty checkout or
+moving branch. Main pushes and pull requests run a separate non-publishing
+canonical check workflow; the exact-tag release gate remains independent.
 
 Never force-move or reuse a version tag. Because all local candidate gates run
 before tag authorization, a post-push gate failure should be an attributable
@@ -153,9 +154,9 @@ Publication is not complete evidence until a clean user-local environment
 resolves the new stable release and exercises the lifecycle:
 
 ```bash
-curl -fsSL \
-  https://raw.githubusercontent.com/urntt/software-agent-team/main/scripts/bootstrap.sh \
-  | bash
+bash -o pipefail -c 'curl -fsSL \
+  https://github.com/urntt/software-agent-team/releases/latest/download/bootstrap.sh \
+  | bash'
 sat --version
 sat channel status
 sat update --check

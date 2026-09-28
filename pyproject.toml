@@ -15,7 +15,7 @@ dependencies = [
 ]
 
 [project.scripts]
-sat = "software_agent_team.cli:main"
+sat = "software_agent_team.entrypoint:main"
 
 [dependency-groups]
 dev = [

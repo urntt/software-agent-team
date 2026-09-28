@@ -1571,6 +1571,11 @@ def test_dynamic_product_launch_uses_approved_agents_and_manual_scope(
         pricing_source=None,
         pricing_observed_at=None,
         cache_pricing=None,
+        context_window_tokens=120_000,
+        runtime_profile=SimpleNamespace(
+            invocation_max_tokens=16_384,
+            max_output_tokens=16_384,
+        ),
     )
     agents = (SimpleNamespace(id="builder"), SimpleNamespace(id="reviewer"))
     team_plan = SimpleNamespace(

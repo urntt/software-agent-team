@@ -7,6 +7,7 @@ import select
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
+from decimal import Decimal
 from io import StringIO
 from pathlib import Path
 from typing import Any
@@ -138,6 +139,26 @@ def review_checkpoint(
         cost_accounting_state=cost_accounting_state,
         unsettled_model_calls=unsettled_model_calls,
     )
+
+
+def test_checkpoint_accounts_for_active_spend_without_rewriting_old_snapshots() -> None:
+    historical = review_checkpoint()
+    payload = historical.model_dump(mode="json")
+    assert "active_reserved_cost_usd" not in payload
+    assert (
+        ProgressCheckpointSnapshot.model_validate(payload).model_dump(mode="json")
+        == payload
+    )
+
+    held = historical.model_copy(
+        update={
+            "active_reserved_cost_usd": Decimal("0.50"),
+            "remaining_estimated_cost_usd": Decimal("1.25"),
+        }
+    )
+    assert ProgressCheckpointSnapshot.model_validate(
+        held.model_dump(mode="json")
+    ).remaining_estimated_cost_usd == Decimal("1.25")
 
 
 @pytest.mark.parametrize("phase", tuple(InvocationPhase))

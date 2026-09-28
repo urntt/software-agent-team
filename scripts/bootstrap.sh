@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+task_release_tag="__SAT_RELEASE_TAG__"
+task_release_revision="__SAT_RELEASE_REVISION__"
 task_repository="${SAT_REPOSITORY_URL:-https://github.com/urntt/software-agent-team.git}"
 task_channel="${SAT_INSTALL_CHANNEL:-stable}"
 task_ref="${SAT_INSTALL_REF:-main}"
 task_bootstrap_ref="${SAT_BOOTSTRAP_REF:-main}"
-task_release_api_url="${SAT_RELEASE_API_URL:-https://api.github.com/repos/urntt/software-agent-team/releases/latest}"
+task_release_api_url="${SAT_RELEASE_API_URL:-}"
 task_data_root="${XDG_DATA_HOME:-$HOME/.local/share}"
 task_install_root_override="${SAT_INSTALL_ROOT:-}"
 task_install_root="${task_install_root_override:-$task_data_root/software-agent-team/app}"
@@ -41,6 +43,17 @@ done
   fail "SAT_REPOSITORY_URL is invalid"
 [[ "$task_channel" == "stable" || "$task_channel" == "dev" ]] || \
   fail "SAT_INSTALL_CHANNEL must be stable or dev"
+if [[ "$task_channel" == "stable" ]]; then
+  [[ "$task_release_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ && \
+    "$task_release_revision" =~ ^[0-9a-f]{40}$ ]] || \
+    fail "stable bootstrap requires the published release bootstrap.sh asset"
+  [[ -z "${SAT_BOOTSTRAP_REF:-}" || "$SAT_BOOTSTRAP_REF" == "$task_release_tag" ]] || \
+    fail "SAT_BOOTSTRAP_REF cannot override a stable release helper"
+  task_bootstrap_ref="$task_release_tag"
+  task_release_api_url="${task_release_api_url:-https://api.github.com/repos/urntt/software-agent-team/releases/tags/$task_release_tag}"
+else
+  task_release_api_url="${task_release_api_url:-https://api.github.com/repos/urntt/software-agent-team/releases/latest}"
+fi
 [[ "$task_ref" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$ ]] || \
   fail "SAT_INSTALL_REF is invalid"
 [[ "$task_bootstrap_ref" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$ ]] || \
@@ -65,6 +78,15 @@ if ! git clone \
     "$task_repository" \
     "$task_temporary/helper"; then
   fail "could not download the SAT bootstrap helper; check Git and network access"
+fi
+if [[ "$task_channel" == "stable" ]]; then
+  task_helper_revision="$(git -C "$task_temporary/helper" rev-parse HEAD)" || \
+    fail "could not inspect the stable bootstrap helper revision"
+  [[ "$task_helper_revision" == "$task_release_revision" ]] || \
+    fail "stable bootstrap helper revision differs from the published release"
+  echo "bootstrap: release=$task_release_tag revision=$task_release_revision"
+else
+  echo "bootstrap: helper_ref=$task_bootstrap_ref"
 fi
 
 if [[ ! -x "$task_uv_bin" ]]; then

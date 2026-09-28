@@ -17,7 +17,14 @@ from pathlib import Path, PurePosixPath
 from typing import ClassVar, Literal, Self, TextIO
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 from wcwidth import wcswidth
 
 from software_agent_team.artifacts import IterationDecision
@@ -598,6 +605,7 @@ class ProgressCheckpointSnapshot(BaseModel):
     known_estimated_cost_usd: Decimal = Field(ge=0)
     authorized_cost_usd: Decimal = Field(gt=0)
     remaining_estimated_cost_usd: Decimal = Field(ge=0)
+    active_reserved_cost_usd: Decimal = Field(default=Decimal(0), ge=0)
     cost_accounting_state: Literal[
         "settled",
         "active_unsettled",
@@ -632,10 +640,14 @@ class ProgressCheckpointSnapshot(BaseModel):
     def validate_cost_snapshot(self) -> Self:
         expected = max(
             Decimal(0),
-            self.authorized_cost_usd - self.known_estimated_cost_usd,
+            self.authorized_cost_usd
+            - self.known_estimated_cost_usd
+            - self.active_reserved_cost_usd,
         )
         if self.remaining_estimated_cost_usd != expected:
-            raise ValueError("checkpoint remaining cost must match known task spend")
+            raise ValueError(
+                "checkpoint remaining cost must match known and reserved task spend"
+            )
         if self.review_coverage_state == "not_applicable":
             if self.review_criterion_ids:
                 raise ValueError(
@@ -648,7 +660,18 @@ class ProgressCheckpointSnapshot(BaseModel):
                 raise ValueError("active cost accounting requires an unsettled call")
         elif self.unsettled_model_calls:
             raise ValueError("only active cost accounting may contain unsettled calls")
+        if not self.unsettled_model_calls and self.active_reserved_cost_usd:
+            raise ValueError("settled checkpoint cannot retain a call reservation")
         return self
+
+    @model_serializer(mode="wrap")
+    def serialize_active_reservation(self, handler):
+        """Keep unchanged historical checkpoint bytes stable."""
+
+        result = handler(self)
+        if self.active_reserved_cost_usd == 0:
+            result.pop("active_reserved_cost_usd", None)
+        return result
 
 
 # Scheduler decisions describe the Agent, not its most recent invocation.

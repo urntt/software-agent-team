@@ -2258,6 +2258,12 @@ def _execute_dynamic_workflow(
             pricing_source=route.pricing_source,
             pricing_observed_at=route.pricing_observed_at,
             cache_pricing=route.cache_pricing,
+            max_input_tokens=route.context_window_tokens,
+            max_output_tokens=(
+                route.runtime_profile.invocation_max_tokens
+                or route.runtime_profile.max_output_tokens
+                or route.context_window_tokens
+            ),
         )
         for route in team_plan.model_routes.routes
     }
@@ -3532,6 +3538,12 @@ def _run_product_planning(
                         pricing_source=planning_metadata.pricing_source,
                         pricing_observed_at=planning_metadata.observed_at,
                         cache_pricing=planning_metadata.cache_pricing,
+                        max_input_tokens=profile.context_window_tokens,
+                        max_output_tokens=(
+                            profile.runtime_profile.invocation_max_tokens
+                            or profile.runtime_profile.max_output_tokens
+                            or profile.context_window_tokens
+                        ),
                     ),
                     runtime_profile=profile.runtime_profile,
                 )

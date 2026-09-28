@@ -1435,6 +1435,11 @@ remains unknown, while an unknown price must be supplied or explicitly
 confirmed as zero. Every invocation records the canonical provider/model,
 route reference, resolution source and reason, frozen price source and
 observation time, telemetry, estimated cost, and remaining task authorization.
+The controller includes active paid-call reservations in that remaining amount.
+Unknown per-call token bounds serialize paid admission by occupying the whole
+available authorization until settlement; confirmed-zero routes occupy none.
+One provider call may still exceed the locally estimated amount, so a hard
+billing ceiling requires provider-side enforcement.
 The standard progress view shows the updated amount after every invocation;
 the terminal ledger and report preserve the complete Planning-to-delivery
 breakdown by phase, Agent, attempt, route, and model. Unknown usage is retained

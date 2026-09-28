@@ -83,9 +83,9 @@ them access to the same external resources.
 Run this command as a normal Linux/WSL user:
 
 ```bash
-curl -fsSL \
-  https://raw.githubusercontent.com/urntt/software-agent-team/main/scripts/bootstrap.sh \
-  | bash && exec "${SHELL:-/bin/bash}" -l
+bash -o pipefail -c 'curl -fsSL \
+  https://github.com/urntt/software-agent-team/releases/latest/download/bootstrap.sh \
+  | bash' && exec "${SHELL:-/bin/bash}" -l
 ```
 
 The final login-shell step activates the standard user-local command path on a
@@ -95,11 +95,16 @@ new device. The only next product command is:
 sat
 ```
 
+The published bootstrap asset binds its shell entry point and temporary helper
+to the same exact release tag and full Git revision. The stable release API
+lookup is pinned to that tag; moving `main` cannot change this transaction.
+The development checkout's `scripts/bootstrap.sh` is a template and refuses a
+stable install until rendered for a published release.
+
 The bootstrap:
 
 1. Checks Linux/WSL, unprivileged identity, Git, curl, and safe target paths;
-2. Downloads a temporary bootstrap helper without treating `main` as the
-   installed application;
+2. Downloads and verifies the temporary helper at the asset's release tag;
 3. Resolves the latest published stable release to one SemVer, full source
    revision, tag, source-archive digest, and schema-support manifest;
 4. Uses that verified manifest and the code-owned state layout to reject any
@@ -403,6 +408,15 @@ model spend in USD and, separately, whether to set a whole-run deadline; no
 deadline is the recommended default. Calls, tokens, Agent count, Reviewer
 count, iterations, and cumulative Agent duration are measured but are not
 separate ordinary-product limits.
+
+Before each paid call, the task ledger atomically reserves estimated spend
+against that USD authorization, including reservations held by other active
+calls. It uses frozen route rates and input/output token limits when available.
+Without a usable limit, one paid call occupies all remaining authorization
+until it settles; a confirmed-free route occupies none. A call whose estimated
+upper bound exceeds the remainder may still start alone, so this local
+concurrency protection is not a provider billing cap. Configure a provider-side
+spending or quota limit if a hard billing boundary is required.
 
 The normal first-run wizard stores only one strict default model profile in SAT
 configuration and uses checked-in runtime defaults. Credential entry and
