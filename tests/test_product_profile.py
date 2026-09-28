@@ -921,7 +921,8 @@ def test_exact_command_gate_keeps_interactive_start_stdin_open(
 
 @pytest.mark.parametrize("prompt_stream", ("stdout", "stderr"))
 def test_exact_command_gate_checks_interactive_json_stdout(
-    tmp_path: Path, prompt_stream: str,
+    tmp_path: Path,
+    prompt_stream: str,
 ) -> None:
     project = tmp_path / "project"
     project.mkdir()
@@ -932,7 +933,7 @@ def test_exact_command_gate_checks_interactive_json_stdout(
         + "\nExpected JSON output:\n```bash\n"
         + "printf '%s' 'hello world' > sample.txt\n"
         + "uv run link-checker . sample.txt\n```\n"
-        + "```json\n{\"code_point_count\": 11}\n```\n",
+        + '```json\n{"code_point_count": 11}\n```\n',
         encoding="utf-8",
     )
     commit_project(project)
