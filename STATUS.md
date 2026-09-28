@@ -9,25 +9,21 @@ status narrative remains available through the [historical source map](docs/hist
 
 ## Release and checkout boundary
 
-The latest published stable release is `v0.4.31`, tagged at
-`e727ba48aa07e652c688385d2ab48425512d3a9c`. Its normal-user Linux
-journey reached an approved plan, execution, independent Review, accepted
-project delivery, and 13/13 external black-box checks. Export and uninstall
-completed. That evidence applies to the tagged release, not automatically to
-later checkout changes or a different provider, WSL device, or Docker mode.
+The latest published stable release is `v0.5.0`, tagged at
+`58365224f770b4474545c5b492eda9cdec4bb9bb`. Its exact-tag GitHub gate
+passed and published the release-bound `bootstrap.sh` and `sat-release.json`
+assets. The same clean commit passed a normal-user OVH canonical gate: doctor,
+format, lint, and 1,977 tests passed; one cross-UID fixture was skipped because
+it requires root. Isolated fresh-account checks then installed the public
+current-stable bootstrap, upgraded `v0.4.31` to `v0.5.0`, exercised rollback
+and stable/dev switching, verified state preservation, and completed export,
+uninstall, and exact cleanup without provider calls. The ordinary
+Planning-to-delivery journey for `v0.5.0` remains unverified.
 
-The checkout declares unpublished release candidate version `0.5.0`. Stable
-bootstrap has been changed to a release-bound asset and
-`main` has CI configuration, but `v0.4.31` does not contain that new bootstrap
-asset. The one-command URL in the current README therefore needs the next
-published release before it can install this checkout. A public install,
-upgrade, and rollback of that release-bound entry point remain unverified.
-
-The post-release source revision `7af665007c23333f66c05a09270f3a7f7a2710fc`
-passed a clean, normal-user OVH canonical gate: doctor, format, lint, and 1,977
-tests passed; one cross-UID fixture was skipped because it requires root. This
-is offline validation of that revision, not a new public release or a fresh
-ordinary-user acceptance run.
+The prior `v0.4.31` Linux journey reached an approved plan, execution,
+independent Review, accepted delivery, and 13/13 external black-box checks,
+followed by export and uninstall. That evidence applies to its tagged release,
+not automatically to `v0.5.0`, another provider, WSL device, or Docker mode.
 
 ## Implemented in the checkout
 
@@ -65,12 +61,13 @@ ordinary-user acceptance run.
 
 ## Validation limits and open capabilities
 
-The tagged DeepSeek journey demonstrates one Linux managed-install and
-single-route delivery path. It does not establish a fresh WSL recovery run,
+The prior tagged DeepSeek journey demonstrates one Linux managed-install and
+single-route delivery path. The new release lifecycle checks do not establish
+`v0.5.0` Planning-to-delivery acceptance or a fresh WSL recovery run,
 rootless Docker without a host Docker group, every Gemini route, a live
 provider switch, or manual slow-key terminal usability. Those conditions need
 their own targeted evidence. A successful offline gate does not substitute for
-a public release asset or ordinary-user installation.
+a new ordinary-user Planning-to-delivery journey.
 
 The two-request, one-route comparison is too small to establish general
 quality, cost, or latency superiority, and it does not include a frozen
