@@ -414,6 +414,35 @@ def test_dynamic_prompt_is_compiled_from_the_approved_agent_spec() -> None:
     )
 
 
+def test_narrow_writer_prompt_does_not_assign_out_of_scope_test_files() -> None:
+    """A source-only writer must leave project tests to an authorized writer."""
+
+    inputs = developer_inputs()
+    plan = inputs.team_plan
+    agents = tuple(
+        agent.model_copy(update={"workspace_scope": "repository/src"})
+        if agent.id == inputs.agent_id
+        else agent
+        for agent in plan.agents
+    )
+    inputs = inputs.model_copy(
+        update={"team_plan": plan.model_copy(update={"agents": agents})}
+    )
+
+    rendered = " ".join(render_dynamic_agent_prompt(inputs).split())
+
+    assert "Your authorized write scope is `repository/src`" in rendered
+    assert "`repository/src` excludes top-level README.md" in rendered
+    assert (
+        "If a test-authoring task and your write scope cover the test files" in rendered
+    )
+    assert "otherwise report the needed cases to their assigned writer" in rendered
+    assert (
+        "Do not edit files outside your scope to make an unfinished check pass"
+        in rendered
+    )
+
+
 def test_long_task_id_keeps_its_json_value_without_triggering_session_masking() -> None:
     """A real Testing task ID must survive pinned OpenClaw prompt persistence."""
 

@@ -215,6 +215,15 @@ Choose the next response by decision value:
   inspection, evidence analysis, testing of existing behavior, or review focus;
   its `expected_paths` are non-binding paths it may inspect, not files it must
   inspect or may write.
+  When acceptance requires an offline pytest suite, explicitly assign creating
+  and maintaining its test files to one implementation or integration writer
+  whose scope covers `repository/tests` (or all of `repository`). Cover the
+  test-suite acceptance criterion in that writer's task and describe test
+  authoring there. The read-only Testing Agent checks the suite after that
+  writer has produced it; it cannot be its author. If the source writer is
+  scoped to `repository/src`, give a downstream writer explicit ownership of
+  tests, README, project metadata, and the lock as needed. Do not ask the
+  source writer to complete or repair those out-of-scope files.
   Add a downstream Integration Agent only for a distinct cross-component or
   multi-writer integration responsibility. Do not duplicate upstream ownership
   merely to add another writer. Shared paths are valid when integration really

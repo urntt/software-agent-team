@@ -156,7 +156,7 @@ from software_agent_team.teams import (
     workspace_scopes_overlap,
 )
 
-PLANNING_SCHEMA_VERSION = 22
+PLANNING_SCHEMA_VERSION = 23
 MINIMUM_READABLE_PLANNING_SCHEMA_VERSION = 2
 
 # One invocation may fail to produce any attributable typed submission even after
@@ -3885,6 +3885,7 @@ class PlanningRequest(BaseModel):
         19,
         20,
         21,
+        22,
         PLANNING_SCHEMA_VERSION,
     ] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -4768,6 +4769,68 @@ def validate_task_criterion_references(
                     (ResponseIssueSubjectKind.TASK, task.id)
                     for task in tasks
                     if set(task.acceptance_criteria) & unknown
+                ),
+            ),
+        )
+
+
+def validate_test_suite_writer_ownership(
+    criteria: tuple[ProposedCriterion, ...],
+    tasks: tuple[ProposedTask, ...],
+    agents: tuple[ProposedAgent, ...],
+) -> None:
+    """Require a writable test author when a proposal promises a pytest suite."""
+
+    agents_by_id = {agent.id: agent for agent in agents}
+    for criterion in criteria:
+        evidence = f"{criterion.description} {criterion.verification}"
+        test_identity = "test" in criterion.id.lower() or any(
+            "test" in requirement_id.lower()
+            for requirement_id in criterion.requirement_ids
+        )
+        explicitly_promises_suite = re.search(
+            r"\b(?:pytest|test) suite\b", criterion.description, re.IGNORECASE
+        )
+        if not explicitly_promises_suite and not (
+            test_identity and re.search(r"\bpytest\b", evidence, re.IGNORECASE)
+        ):
+            continue
+        candidates = [
+            (index, task, agents_by_id[task.owner_agent_id])
+            for index, task in enumerate(tasks)
+            if criterion.id in task.acceptance_criteria
+            and task.owner_agent_id in agents_by_id
+            and agents_by_id[task.owner_agent_id].capability
+            in {AgentCapability.IMPLEMENTATION, AgentCapability.INTEGRATION}
+        ]
+        if any(
+            owner.workspace_scope in {"repository", "repository/tests"}
+            and re.search(
+                r"\b(?:write|create|author|add|implement|develop|extend|"
+                r"maintain|update|build)\b.{0,250}\b(?:tests|test suite|test cases)\b",
+                task.description,
+                re.IGNORECASE,
+            )
+            for _, task, owner in candidates
+        ):
+            continue
+        raise _planning_model_invariant(
+            "planning_test_suite_writer_ownership",
+            (
+                f"criterion {criterion.id} requires a pytest test suite but no "
+                "implementation or integration task explicitly authors tests "
+                "within repository/tests; assign that work to a writer before "
+                "a read-only Testing Agent verifies it"
+            ),
+            paths=tuple(
+                f"/proposal/tasks/{index}/description" for index, _, _ in candidates
+            )
+            or ("/proposal/tasks",),
+            subjects=_planning_subjects(
+                (ResponseIssueSubjectKind.CRITERION, criterion.id),
+                *(
+                    (ResponseIssueSubjectKind.AGENT, owner.id)
+                    for _, _, owner in candidates
                 ),
             ),
         )
@@ -6185,10 +6248,15 @@ def validate_planning_clarity(
     allow_legacy_product_decision_links: bool = False,
     allow_legacy_workflow_exemption: bool = False,
     enforce_specialized_review_authority: bool = False,
+    enforce_test_suite_writer_ownership: bool = False,
 ) -> None:
     """Enforce the current decision and requirement-to-evidence contract."""
 
     allowed_criterion_ids = tuple(allowed_criterion_ids)
+    if enforce_test_suite_writer_ownership:
+        validate_test_suite_writer_ownership(
+            body.acceptance_criteria, body.tasks, body.agents
+        )
 
     if len(body.requirement_ids) != len(body.requirements):
         raise _planning_context_invariant(
@@ -7859,6 +7927,7 @@ class AdaptiveImplementationPlan(BaseModel):
         19,
         20,
         21,
+        22,
         PLANNING_SCHEMA_VERSION,
     ] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -8018,6 +8087,7 @@ class PlanningTurn(BaseModel):
         19,
         20,
         21,
+        22,
         PLANNING_SCHEMA_VERSION,
     ] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -8348,6 +8418,7 @@ class PlanningProposal(BaseModel):
         19,
         20,
         21,
+        22,
         PLANNING_SCHEMA_VERSION,
     ] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -8442,6 +8513,7 @@ class PlanningSession(BaseModel):
         19,
         20,
         21,
+        22,
         PLANNING_SCHEMA_VERSION,
     ] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -8645,6 +8717,7 @@ class PlanningApproval(BaseModel):
         19,
         20,
         21,
+        22,
         PLANNING_SCHEMA_VERSION,
     ] = PLANNING_SCHEMA_VERSION
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -9026,6 +9099,7 @@ def preview_adaptive_proposal(
             allow_legacy_product_decision_links=proposal.schema_version < 8,
             allow_legacy_workflow_exemption=proposal.schema_version < 9,
             enforce_specialized_review_authority=proposal.schema_version >= 19,
+            enforce_test_suite_writer_ownership=proposal.schema_version >= 23,
         )
     if policy.max_agents is not None and len(body.agents) > policy.max_agents:
         raise PlanningError(
@@ -11434,6 +11508,7 @@ class AdaptivePlanningCoordinator:
                                 for criterion in self.policy.profile_acceptance_criteria
                             ),
                             enforce_specialized_review_authority=True,
+                            enforce_test_suite_writer_ownership=True,
                         )
                         candidate = PlanningProposal(
                             run_id=request.run_id,

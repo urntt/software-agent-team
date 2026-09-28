@@ -5,22 +5,26 @@
 This document records current implementation and validation evidence. Product
 and architecture decisions belong to [`VISION.md`](VISION.md).
 
-Published `v0.4.27` passed an independent OVH candidate gate (1,926 passed,
-one root-only skip), exact-tag hosted gate (1,923 passed, four environment
-skips), fresh dev-account lifecycle, and a public `v0.4.26` to `v0.4.27`
-stable upgrade with rollback and exact cleanup. Its interactive CLI JSON
-contract rejects the captured `v0.4.26` prompt-on-stdout failure in the real
-quality image. A fresh public `v0.4.27` DeepSeek journey passed installation,
-first and later startup, approved Planning, Implementation, Integration,
-Testing, and project quality commands (37 generated pytest tests). It failed
-before delivery: the general Reviewer completed 41 attributable tool calls
-but ended with assistant prose instead of the required typed submission.
-The `0.4.28` candidate allows a read-only Agent to continue the same session
-only after clean-workspace, terminal, tool-evidence, and budget checks; a
-content-sensitive tool-observation digest must make progress. The captured
-Review execution crosses the production scheduler and runner in an offline
-replay; 244 affected tests pass. Candidate publication and a fresh public
-delivery with independent acceptance remain pending.
+Published `v0.4.28` passed an independent OVH candidate gate (1,931 passed,
+one root-only skip), an exact-tag hosted gate (1,928 passed, four environment
+skips), a fresh dev-account lifecycle, and a public `v0.4.27` to `v0.4.28`
+stable upgrade with rollback and exact cleanup. A fresh public DeepSeek
+journey passed one-command installation, first and later startup, approved
+Planning, and in-run controls. The Implementation Agent then committed changes
+to README, project metadata, tests, and the lock outside its approved
+`repository/src` scope. The Controller correctly stopped the run at the Git
+safety boundary; no later Agent or delivery was accepted. The ordinary-user
+account and its owned resources were cleaned up exactly.
+
+The `0.4.29` candidate requires Planning to name a writable test-suite owner
+when it promises pytest coverage. Writer prompts state the approved scope and
+assign test, metadata, documentation, and final-command work only to the
+responsible writer. The captured `v0.4.28` proposal is rejected by the new
+Planning invariant; a version with test authoring assigned to its existing
+Integration writer passes the same production validation, without provider
+calls. Planning schema 22 records remain readable under schema 23. Focused
+validation passed; canonical gate, release, and a fresh public delivery with
+independent acceptance remain pending.
 
 Published `v0.4.19` installed and started successfully for a fresh normal user
 on Linux with Docker and a live DeepSeek provider check. Planning, approval,

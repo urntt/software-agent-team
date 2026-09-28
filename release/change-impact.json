@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.4.27",
-  "target_version": "0.4.28",
+  "baseline_version": "0.4.28",
+  "target_version": "0.4.29",
   "changes": [
     {
-      "id": "readonly-upstream-submission-continuation",
+      "id": "planning-test-authoring-scope-contract",
       "impact": "patch",
-      "summary": "Continue attributable read-only Agent turns that end before typed submission while preserving review evidence and session identity"
+      "summary": "Require an explicit writable test-suite owner in Planning and scope writer instructions to assigned paths and tasks"
     }
   ]
 }

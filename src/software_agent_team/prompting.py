@@ -1130,6 +1130,7 @@ def render_dynamic_agent_prompt(
         "agent_id": agent.id,
         "agent_label": agent.label,
         "capability": agent.capability.value,
+        "workspace_scope": agent.workspace_scope,
         "specialization": agent.specialization.value,
         "specialization_contract": specialization_source.strip(),
         "expected_kind": agent.expected_output.value,

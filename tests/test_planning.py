@@ -771,9 +771,72 @@ def test_planner_contract_does_not_treat_provenance_as_semantic_relevance() -> N
         "Every task owner and criterion verifier names an existing Agent ID" in contract
     )
     assert "cannot be used as target users" in contract
+    assert "read-only Testing Agent checks the suite" in contract
     assert (
         "must leave `requirement_ids`, `criterion_ids`, and `decision_ids` empty"
         in (contract)
+    )
+
+
+def test_pytest_suite_requires_explicit_test_authoring_writer() -> None:
+    """A read-only tester cannot own the tests required by the build."""
+
+    body = proposal_response().proposal
+    assert body is not None
+    criterion = body.acceptance_criteria[0].model_copy(
+        update={
+            "description": "The offline pytest suite exercises count semantics.",
+            "verification": "Run pytest and inspect the collected tests.",
+        }
+    )
+    criteria = (criterion, *body.acceptance_criteria[1:])
+    proposed = body.model_copy(update={"acceptance_criteria": criteria})
+    with pytest.raises(
+        planning._PlanningModelInvariantError,
+        match="no implementation or integration task explicitly authors tests",
+    ):
+        planning.validate_planning_clarity(
+            proposed,
+            source_request=request().source_request,
+            enforce_test_suite_writer_ownership=True,
+        )
+    planning.validate_planning_clarity(
+        proposed,
+        source_request=request().source_request,
+        enforce_test_suite_writer_ownership=False,
+    )
+
+    writer_task = body.tasks[0].model_copy(
+        update={
+            "description": "Implement the CLI and write deterministic pytest tests."
+        }
+    )
+    tasks = (writer_task,)
+    planning.validate_planning_clarity(
+        proposed.model_copy(update={"tasks": tasks}),
+        source_request=request().source_request,
+        enforce_test_suite_writer_ownership=True,
+    )
+
+    scoped_agents = (
+        body.agents[0].model_copy(update={"workspace_scope": "repository/src"}),
+        *body.agents[1:],
+    )
+    with pytest.raises(
+        planning._PlanningModelInvariantError,
+        match="within repository/tests",
+    ):
+        planning.validate_test_suite_writer_ownership(criteria, tasks, scoped_agents)
+
+    readme_criterion = criterion.model_copy(
+        update={
+            "id": "AC_README",
+            "description": "README documents the pytest command.",
+            "verification": "Inspect README and run the documented pytest command.",
+        }
+    )
+    planning.validate_test_suite_writer_ownership(
+        (readme_criterion,), body.tasks, body.agents
     )
 
 
