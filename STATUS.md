@@ -16,8 +16,8 @@ project delivery, and 13/13 external black-box checks. Export and uninstall
 completed. That evidence applies to the tagged release, not automatically to
 later checkout changes or a different provider, WSL device, or Docker mode.
 
-The checkout retains package version `0.4.31` while post-release changes are
-being prepared. Stable bootstrap has been changed to a release-bound asset and
+The checkout declares unpublished release candidate version `0.5.0`. Stable
+bootstrap has been changed to a release-bound asset and
 `main` has CI configuration, but `v0.4.31` does not contain that new bootstrap
 asset. The one-command URL in the current README therefore needs the next
 published release before it can install this checkout. A public install,
