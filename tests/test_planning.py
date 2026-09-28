@@ -10505,6 +10505,54 @@ def test_missing_product_decision_returns_to_atomic_clarification(
     ]
 
 
+@pytest.mark.parametrize(
+    "dimension",
+    ("target_users", "primary_workflow", "delivery_maturity"),
+)
+@pytest.mark.parametrize("sibling_schema_failure", (False, True))
+def test_user_decision_diagnostic_survives_both_validation_boundaries(
+    dimension: str,
+    sibling_schema_failure: bool,
+) -> None:
+    payload = json.loads(response(proposal_response()))
+    payload["proposal"]["product_definition"][dimension].update(
+        disposition="planner_recommendation",
+        source="planner",
+    )
+    normalized, _ = planning._normalize_planning_response_payload(payload)
+    if sibling_schema_failure:
+        normalized["proposal"]["tasks"] = "invalid sibling schema"
+
+    if sibling_schema_failure:
+        with pytest.raises(ValidationError) as caught:
+            PlanningModelResponse.model_validate(normalized)
+        diagnostic = planning._planning_validation_diagnostic(caught.value, normalized)
+        matching = tuple(
+            issue
+            for issue in diagnostic.issues
+            if issue.path == f"/proposal/product_definition/{dimension}"
+        )
+        assert diagnostic.failure_class is ResponseFailureClass.MISSING_USER_DECISION
+    else:
+        parsed = PlanningModelResponse.model_validate(normalized)
+        assert parsed.proposal is not None
+        with pytest.raises(planning._PlanningContextInvariantsError) as caught:
+            planning.validate_planning_clarity(
+                parsed.proposal, source_request=request().source_request
+            )
+        matching = tuple(
+            invariant
+            for invariant in caught.value.invariants
+            if invariant.paths == (f"/proposal/product_definition/{dimension}",)
+        )
+    assert len(matching) == 1
+    assert matching[0].invariant_id == "planning_product_user_decision_required"
+    assert matching[0].message == f"{dimension} cannot be silently chosen by Planning"
+    assert matching[0].authority is ResponseIssueAuthority.USER
+    if not sibling_schema_failure:
+        assert matching[0].failure_class is ResponseFailureClass.MISSING_USER_DECISION
+
+
 def test_schema_failures_do_not_hide_required_user_product_clarification(
     tmp_path: Path,
 ) -> None:

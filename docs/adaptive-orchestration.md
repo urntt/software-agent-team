@@ -702,6 +702,9 @@ semantic correction attempt: each issue retains its own authority, mixed
 model/user diagnostics expose no proposal replacement path, and the next
 submission schema permits only one `product_requirement` question for the named
 ProductDefinition dimension.
+The core dimension set and its user-decision diagnostic have one Controller
+definition; wire recovery and typed clarity validation invoke that same rule at
+their separate reachable boundaries.
 The question scope is checked per dimension: a core target-user, workflow, or
 maturity dimension that was never authorized by its cited answer needs a new
 user decision. An optional usability, operational, or delivery expectation

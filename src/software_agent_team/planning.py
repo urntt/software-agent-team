@@ -200,6 +200,27 @@ class _PlanningInvariant:
     authority: ResponseIssueAuthority = ResponseIssueAuthority.MODEL
 
 
+_USER_DECISION_PRODUCT_DIMENSIONS = (
+    ProductDefinitionDimension.TARGET_USERS,
+    ProductDefinitionDimension.PRIMARY_WORKFLOW,
+    ProductDefinitionDimension.DELIVERY_MATURITY,
+)
+
+
+def _planning_user_decision_invariant(
+    dimension: ProductDefinitionDimension,
+) -> _PlanningInvariant:
+    """Own the shared diagnostic for a Planner-selected user decision."""
+
+    return _PlanningInvariant(
+        invariant_id="planning_product_user_decision_required",
+        message=f"{dimension.value} cannot be silently chosen by Planning",
+        paths=(f"/proposal/product_definition/{dimension.value}",),
+        failure_class=ResponseFailureClass.MISSING_USER_DECISION,
+        authority=ResponseIssueAuthority.USER,
+    )
+
+
 @dataclass(frozen=True)
 class _PlanningClarificationRecovery:
     """One user-owned decision that an invalid proposal must ask about."""
@@ -3609,11 +3630,7 @@ def _clarification_recovery_from_diagnostic(
 
     if diagnostic.failure_class is not ResponseFailureClass.MISSING_USER_DECISION:
         return None
-    for dimension in (
-        ProductDefinitionDimension.TARGET_USERS,
-        ProductDefinitionDimension.PRIMARY_WORKFLOW,
-        ProductDefinitionDimension.DELIVERY_MATURITY,
-    ):
+    for dimension in _USER_DECISION_PRODUCT_DIMENSIONS:
         base_path = f"/proposal/product_definition/{dimension.value}"
         matching = tuple(
             issue
@@ -3698,11 +3715,7 @@ def _planning_wire_user_decision_invariants(
     if not isinstance(definition, Mapping):
         return ()
     invariants: list[_PlanningInvariant] = []
-    for dimension in (
-        ProductDefinitionDimension.TARGET_USERS,
-        ProductDefinitionDimension.PRIMARY_WORKFLOW,
-        ProductDefinitionDimension.DELIVERY_MATURITY,
-    ):
+    for dimension in _USER_DECISION_PRODUCT_DIMENSIONS:
         item = definition.get(dimension.value)
         if (
             not isinstance(item, Mapping)
@@ -3710,15 +3723,7 @@ def _planning_wire_user_decision_invariants(
             != ProductDefinitionDisposition.PLANNER_RECOMMENDATION.value
         ):
             continue
-        invariants.append(
-            _PlanningInvariant(
-                invariant_id="planning_product_user_decision_required",
-                message=f"{dimension.value} cannot be silently chosen by Planning",
-                paths=(f"/proposal/product_definition/{dimension.value}",),
-                failure_class=ResponseFailureClass.MISSING_USER_DECISION,
-                authority=ResponseIssueAuthority.USER,
-            )
-        )
+        invariants.append(_planning_user_decision_invariant(dimension))
     return tuple(invariants)
 
 
@@ -5599,11 +5604,7 @@ def _product_definition_dimension_invariant(
                 subjects=subjects,
             )
         if dimension not in contract.product_definition_dimensions:
-            if dimension not in {
-                ProductDefinitionDimension.TARGET_USERS,
-                ProductDefinitionDimension.PRIMARY_WORKFLOW,
-                ProductDefinitionDimension.DELIVERY_MATURITY,
-            }:
+            if dimension not in _USER_DECISION_PRODUCT_DIMENSIONS:
                 return issue(
                     "planning_product_question_dimension",
                     (
@@ -5679,17 +5680,8 @@ def _product_definition_dimension_invariant(
         return None
 
     if item.disposition is ProductDefinitionDisposition.PLANNER_RECOMMENDATION:
-        if dimension in {
-            ProductDefinitionDimension.TARGET_USERS,
-            ProductDefinitionDimension.PRIMARY_WORKFLOW,
-            ProductDefinitionDimension.DELIVERY_MATURITY,
-        }:
-            return issue(
-                "planning_product_user_decision_required",
-                f"{dimension.value} cannot be silently chosen by Planning",
-                failure_class=ResponseFailureClass.MISSING_USER_DECISION,
-                authority=ResponseIssueAuthority.USER,
-            )
+        if dimension in _USER_DECISION_PRODUCT_DIMENSIONS:
+            return _planning_user_decision_invariant(dimension)
         expected_category = {
             ProductDefinitionDimension.USABILITY_EXPECTATIONS: (
                 PlanningDecisionCategory.ACCEPTANCE_SCOPE
