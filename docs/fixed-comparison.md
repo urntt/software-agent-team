@@ -16,8 +16,10 @@ The checked-in comparison fixtures are:
 | Task-management Web app | `benchmarks/task_manager/comparison-benchmark.json` | `benchmarks/task_manager/seed/` |
 | Offline text statistics CLI | `benchmarks/text_stats/benchmark.json` | `benchmarks/text_stats/seed/` |
 
-The task-manager comparison fixture retains its functional acceptance suite
-but removes the original benchmark's two manual-review criteria. Documentation
+The task-manager comparison fixture (`task_manager_structure_comparison_v2`)
+retains its functional acceptance suite, including same-origin absolute
+`Location` handling, but removes the original benchmark's two manual-review
+criteria. Documentation
 and accessibility remain request requirements and must be scored by the same
 external rubric after each arm. The separate fixture prevents the baseline
 from claiming that a nonexistent independent Reviewer passed them. The text

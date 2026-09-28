@@ -108,7 +108,7 @@ def test_checked_in_manifests_are_complete_and_hashed(configuration) -> None:
         AgentRole.TESTER: 300,
         AgentRole.REVIEWER: 300,
     }
-    assert configuration.benchmark.id == "task_manager_phase1_v2"
+    assert configuration.benchmark.id == "task_manager_phase1_v3"
     assert configuration.task_brief.confirmed is True
     assert len(configuration.benchmark.gates) == 4
     assert len(configuration.policy_sha256) == 64

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "id": "task_manager_structure_comparison_v1",
+  "id": "task_manager_structure_comparison_v2",
   "policy_id": "phase1_deterministic",
   "task_brief": "comparison-task-brief.json",
   "input_mounts": [

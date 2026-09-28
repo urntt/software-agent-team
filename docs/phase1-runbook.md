@@ -18,7 +18,13 @@ ordered evaluation procedure and its acceptance checklist.
 ## Acceptance Objective
 
 Exercise the complete `function_specialized` path against the frozen
-`task_manager_phase1_v2` benchmark:
+`task_manager_phase1_v3` benchmark:
+
+The acceptance suite follows the canonical task detail path from either a
+root-relative `Location` or an absolute `Location` on its own origin. It still
+rejects cross-origin redirects and noncanonical paths. Version three corrects
+the earlier relative-only redirect check; record the benchmark ID with every
+trial and do not compare earlier results as though they used this check.
 
 ```text
 Planner
@@ -32,7 +38,7 @@ Planner
 A useful failed run remains valid experimental evidence, but the Phase 1
 acceptance evaluation should reach `completed`, exercise every role, preserve
 the actual model and token telemetry, and leave a reproducible Git snapshot.
-Do not combine earlier benchmark-version results with version-two comparisons.
+Do not combine earlier benchmark-version results with version-three comparisons.
 Record the harness Git commit with every trial so the acceptance input is
 attributable to its checked-in version.
 

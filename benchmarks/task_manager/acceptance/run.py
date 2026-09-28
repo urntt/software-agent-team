@@ -134,6 +134,30 @@ def require_any_text(body: str, *values: str) -> None:
         raise AssertionError(f"response does not contain any of {values!r}")
 
 
+def canonical_task_path(location: str) -> str:
+    """Resolve a canonical same-origin task Location to a local request path."""
+
+    if any(ord(character) < 32 or ord(character) == 127 for character in location):
+        raise AssertionError("task creation did not expose a canonical detail URL")
+    if "?" in location or "#" in location:
+        raise AssertionError("task creation did not expose a canonical detail URL")
+    try:
+        parsed = urllib.parse.urlsplit(location)
+    except ValueError as error:
+        raise AssertionError(
+            "task creation did not expose a canonical detail URL"
+        ) from error
+    origin = urllib.parse.urlsplit(BASE_URL)
+    root_relative = location.startswith("/") and not location.startswith("//")
+    same_origin = parsed.scheme == origin.scheme and parsed.netloc == origin.netloc
+    if (
+        not (root_relative or same_origin)
+        or TASK_LOCATION.fullmatch(parsed.path) is None
+    ):
+        raise AssertionError("task creation did not expose a canonical detail URL")
+    return parsed.path
+
+
 def create_task(title: str, *, description: str = "persisted") -> str:
     """Create a complete task and return its canonical detail location."""
 
@@ -151,9 +175,9 @@ def create_task(title: str, *, description: str = "persisted") -> str:
     if location is None:
         match = re.search(r'href=["\'](/tasks/[1-9][0-9]*)["\']', body)
         location = None if match is None else match.group(1)
-    if location is None or TASK_LOCATION.fullmatch(location) is None:
+    if location is None:
         raise AssertionError("task creation did not expose a canonical detail URL")
-    return location
+    return canonical_task_path(location)
 
 
 def run_acceptance(repository: Path) -> None:

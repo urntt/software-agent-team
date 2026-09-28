@@ -41,6 +41,44 @@ def test_acceptance_allows_canonical_or_humanized_status_text() -> None:
         acceptance.require_any_text("<dd>pending</dd>", "todo", "to do")
 
 
+@pytest.mark.parametrize(
+    "location",
+    ("/tasks/1", "http://127.0.0.1:8765/tasks/1", "/tasks/42"),
+)
+def test_acceptance_resolves_canonical_same_origin_detail(location: str) -> None:
+    acceptance = load_acceptance_module()
+
+    assert acceptance.canonical_task_path(location) == (
+        "/tasks/" + location.rsplit("/tasks/", 1)[-1]
+    )
+
+
+@pytest.mark.parametrize(
+    "location",
+    (
+        "http://example.test/tasks/1",
+        "http://127.0.0.1:8766/tasks/1",
+        "https://127.0.0.1:8765/tasks/1",
+        "//example.test/tasks/1",
+        "tasks/1",
+        "/tasks/0",
+        "/tasks/01",
+        "/tasks/1/edit",
+        "/tasks/1?preview=true",
+        "http://127.0.0.1:8765/tasks/1#details",
+        "http://127.0.0.1:8765@evil.test/tasks/1",
+        "/tasks/1\r\n",
+    ),
+)
+def test_acceptance_rejects_noncanonical_or_cross_origin_location(
+    location: str,
+) -> None:
+    acceptance = load_acceptance_module()
+
+    with pytest.raises(AssertionError, match="canonical detail URL"):
+        acceptance.canonical_task_path(location)
+
+
 def test_confirmed_brief_exposes_the_fixed_form_and_field_contract() -> None:
     brief = TaskBrief.model_validate_json(
         (BENCHMARK_ROOT / "task-brief.json").read_text(encoding="utf-8")
