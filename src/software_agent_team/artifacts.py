@@ -2257,11 +2257,12 @@ class IterationRecord(IterationArtifact):
     def validate_decision(self) -> Self:
         """Require exact artifact kinds and evidence for revision or failure."""
 
-        if (self.implementation_plan is None) == (
-            self.implementation_plan_sha256 is None
+        if (
+            self.implementation_plan is not None
+            and self.implementation_plan_sha256 is not None
         ):
             raise ValueError(
-                "iteration record requires exactly one implementation-plan binding"
+                "iteration record cannot bind both a plan artifact and digest"
             )
         if (
             self.implementation_plan is not None

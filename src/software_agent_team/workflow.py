@@ -1,4 +1,4 @@
-"""Phase 1 function-specialized workflow orchestration and reporting."""
+"""Fixed evaluation workflows and reporting."""
 
 from __future__ import annotations
 
@@ -210,7 +210,7 @@ class _WorkflowContext:
 
 
 class WorkflowCoordinator:
-    """Execute the complete function-specialized Phase 1 state machine."""
+    """Execute a fixed team or one-writer evaluation through shared boundaries."""
 
     def __init__(
         self,
@@ -230,6 +230,7 @@ class WorkflowCoordinator:
         artifact_repair_limit: int = 1,
         iteration_limit: int = PHASE1_ITERATION_LIMIT,
         verification_concurrency: int = 2,
+        team_id: str = PHASE1_TEAM_ID,
         progress_handler: ProgressHandler | None = None,
         clock: Clock = _system_clock,
     ) -> None:
@@ -255,9 +256,21 @@ class WorkflowCoordinator:
             raise WorkflowError(
                 "manual-review criterion IDs must be non-empty and unique"
             )
-        team = manifest.get_team(PHASE1_TEAM_ID)
-        if AgentRole.GENERALIST_DEVELOPER not in team.roles:
+        if team_id not in {PHASE1_TEAM_ID, "single_agent"}:
+            raise WorkflowError("fixed evaluation supports only the selected workflows")
+        team = manifest.get_team(team_id)
+        if (
+            team_id == PHASE1_TEAM_ID
+            and AgentRole.GENERALIST_DEVELOPER not in team.roles
+        ):
             raise WorkflowError("Phase 1 team is missing the generalist developer")
+        if team_id == "single_agent" and verification_concurrency != 1:
+            raise WorkflowError("single-agent evaluation requires concurrency one")
+        if team_id == "single_agent" and cleaned_manual_criteria:
+            raise WorkflowError(
+                "single-agent evaluation requires a fully deterministic acceptance "
+                "manifest; manual review belongs to the external comparison"
+            )
         if (
             isinstance(iteration_limit, bool)
             or not 1 <= iteration_limit <= team.max_iterations
@@ -267,6 +280,7 @@ class WorkflowCoordinator:
                 f"{team.max_iterations} for {team.id}"
             )
         self.manifest = manifest
+        self.team_id = team_id
         self.runs_root = runs_root
         self.workspaces_root = workspaces_root
         self.executor = executor
@@ -315,7 +329,7 @@ class WorkflowCoordinator:
             raise WorkflowError("manual-review scope references an unknown criterion")
         team_plan = compile_fixed_team_plan(
             self.manifest,
-            team_id=PHASE1_TEAM_ID,
+            team_id=self.team_id,
             run_id=task_brief.run_id,
             task_brief_sha256=canonical_model_sha256(task_brief),
             model=self.pricing.model,
@@ -412,7 +426,12 @@ class WorkflowCoordinator:
                 Path(workspace.workspace_path),
                 lambda event: self._emit(context, event),
             )
-            return self._execute_planned_run(
+            execute_run = (
+                self._execute_single_agent_run
+                if self.team_id == "single_agent"
+                else self._execute_planned_run
+            )
+            return execute_run(
                 context,
                 record,
                 workspace,
@@ -743,6 +762,202 @@ class WorkflowCoordinator:
             feedback = (test, review, iteration_record)
             previous_blocking_ids = blocking_ids
 
+    def _execute_single_agent_run(
+        self,
+        context: _WorkflowContext,
+        record: RunRecord,
+        workspace: GitWorkspace,
+        workspace_manager: GitWorkspaceManager,
+        quality_gate: QualityGate,
+    ) -> WorkflowOutcome:
+        """Run one writer once, then apply controller-owned deterministic checks."""
+
+        record = context.controller.advance(
+            record.run_id,
+            expected_revision=record.revision,
+            target=RunPhase.IMPLEMENTING,
+            reason="single-agent baseline starts without a planning Agent",
+        )
+        input_commit = record.current_commit
+        if input_commit is None:
+            raise WorkflowEvidenceError("baseline input commit is missing")
+        snapshots: list[GitSnapshot] = []
+
+        def guard(is_correction: bool) -> None:
+            if not snapshots:
+                snapshots.append(
+                    workspace_manager.verify_snapshot(
+                        workspace,
+                        iteration=1,
+                        input_commit=input_commit,
+                    )
+                )
+            elif is_correction:
+                workspace_manager.verify_workspace(
+                    workspace,
+                    expected_commit=snapshots[0].output_commit,
+                    require_clean=True,
+                )
+            else:
+                raise WorkflowEvidenceError("baseline writer ran more than once")
+
+        def assemble(body: AgentResponseBody) -> PhaseArtifact:
+            if len(snapshots) != 1:
+                raise WorkflowEvidenceError("baseline snapshot was not frozen")
+            return self._assemble_work_result(
+                context,
+                body,
+                snapshot=snapshots[0],
+                role=AgentRole.SINGLE_AGENT,
+            )
+
+        work_artifact, work_reference, _ = self._invoke(
+            context,
+            AgentPromptInputs(
+                task_brief=context.brief,
+                team_id=context.team_plan.team_id,
+                team_roles=frozenset(context.team_plan.legacy_roles),
+                iteration=1,
+                iteration_limit=1,
+                role=AgentRole.SINGLE_AGENT,
+                expected_kind=ArtifactKind.WORK_RESULT,
+                input_commit=input_commit,
+            ),
+            stage="implement",
+            assembler=assemble,
+            invocation_guard=guard,
+        )
+        work = cast(WorkResult, work_artifact)
+        snapshot = snapshots[0]
+        record = context.controller.advance(
+            record.run_id,
+            expected_revision=record.revision,
+            target=RunPhase.SNAPSHOTTING,
+            reason="single Agent reported a committed implementation",
+            artifacts=(work_reference,),
+        )
+        validate_work_result_snapshot(work, snapshot)
+        record = context.controller.record_snapshot(
+            record.run_id,
+            expected_revision=record.revision,
+            snapshot=snapshot,
+        )
+        self._emit(
+            context,
+            ProgressEvent(
+                kind=ProgressEventKind.SNAPSHOT_VERIFIED,
+                message=(
+                    "Git snapshot verified: "
+                    f"{len(snapshot.changed_files)} files changed"
+                ),
+                phase=RunPhase.VERIFYING,
+                iteration=1,
+                changed_files=snapshot.changed_files,
+            ),
+        )
+        self._emit(
+            context,
+            ProgressEvent(
+                kind=ProgressEventKind.QUALITY_GATES_STARTED,
+                message="Running deterministic quality gates",
+                phase=RunPhase.VERIFYING,
+                iteration=1,
+            ),
+        )
+        commands = quality_gate.run(iteration=1)
+        if not commands:
+            raise WorkflowEvidenceError("quality gate returned no command evidence")
+        self._validate_verification_assignment(context.brief, commands)
+        workspace_manager.verify_workspace(
+            workspace,
+            expected_commit=snapshot.output_commit,
+            require_clean=True,
+        )
+        context.command_evidence.extend(commands)
+        test = assemble_test_report(
+            None,
+            task_brief=context.brief,
+            team_id=context.team_plan.team_id,
+            agent=None,
+            iteration=1,
+            input_commit=snapshot.output_commit,
+            commands=commands,
+            manual_review_criteria=(),
+            created_at=_utc(self.clock),
+        )
+        test_reference = context.artifact_store.write(
+            test,
+            description="Controller-owned deterministic baseline acceptance.",
+        )
+        context.last_test = test
+        record = context.controller.advance(
+            record.run_id,
+            expected_revision=record.revision,
+            target=RunPhase.REVIEWING,
+            reason="deterministic baseline acceptance is recorded",
+            artifacts=(test_reference,),
+        )
+        decision = (
+            IterationDecision.ACCEPT
+            if test.status is CheckStatus.PASSED
+            else IterationDecision.FAIL
+        )
+        summary = (
+            f"Controller decision: {decision.value}; deterministic "
+            f"test={test.status.value}; independent Agent review=none."
+        )
+        iteration = IterationRecord(
+            run_id=record.run_id,
+            team_id=record.team_id,
+            created_at=_utc(self.clock),
+            iteration=1,
+            input_commit=snapshot.input_commit,
+            output_commit=snapshot.output_commit,
+            work_results=(work_reference,),
+            test_reports=(test_reference,),
+            decision=decision,
+            blocking_reasons=self._blocking_reasons(test),
+            summary=summary,
+        )
+        iteration_reference = context.artifact_store.write(
+            iteration,
+            description="Controller decision for the one-pass baseline.",
+        )
+        context.iteration_records.append(iteration_reference)
+        context.last_iteration = iteration
+        record = context.controller.advance(
+            record.run_id,
+            expected_revision=record.revision,
+            target=RunPhase.DECIDING,
+            reason="one-pass deterministic baseline decision is recorded",
+            artifacts=(iteration_reference,),
+        )
+        self._emit(
+            context,
+            ProgressEvent(
+                kind=ProgressEventKind.DECISION_RECORDED,
+                message=f"Iteration 1 decision: {decision.value}",
+                phase=RunPhase.DECIDING,
+                iteration=1,
+                decision=decision,
+            ),
+        )
+        if decision is IterationDecision.FAIL:
+            return self._fail(
+                context,
+                record,
+                reason=TerminationReason.ITERATION_LIMIT_REACHED,
+                detail=summary,
+            )
+        record = context.controller.advance(
+            record.run_id,
+            expected_revision=record.revision,
+            target=RunPhase.DELIVERING,
+            reason="deterministic acceptance passed",
+            decision=IterationDecision.ACCEPT,
+        )
+        return self._complete(context, record, test, None)
+
     def _verify(
         self,
         context: _WorkflowContext,
@@ -861,6 +1076,7 @@ class WorkflowCoordinator:
         body: AgentResponseBody,
         *,
         snapshot: GitSnapshot,
+        role: AgentRole = AgentRole.GENERALIST_DEVELOPER,
     ) -> WorkResult:
         if not isinstance(body, WorkResultResponse):
             raise WorkflowEvidenceError("Developer returned the wrong semantic body")
@@ -868,7 +1084,7 @@ class WorkflowCoordinator:
             body,
             task_brief=context.brief,
             team_id=context.team_plan.team_id,
-            agent=context.team_plan.get_agent(AgentRole.GENERALIST_DEVELOPER.value),
+            agent=context.team_plan.get_agent(role.value),
             snapshot=snapshot,
             created_at=_utc(self.clock),
         )
@@ -1356,7 +1572,7 @@ class WorkflowCoordinator:
         context: _WorkflowContext,
         record: RunRecord,
         test: TestReport,
-        review: ReviewReport,
+        review: ReviewReport | None,
     ) -> WorkflowOutcome:
         final_report = FinalReport(
             run_id=record.run_id,
@@ -1367,11 +1583,18 @@ class WorkflowCoordinator:
             termination_reason=TerminationReason.SUCCEEDED.value,
             final_commit=record.current_commit,
             iterations=tuple(context.iteration_records),
-            acceptance_results=resolve_acceptance_results(test, review),
+            acceptance_results=resolve_acceptance_results(
+                test, () if review is None else review
+            ),
             unresolved_findings=collect_unresolved_review_findings(
                 context.review_history
             ),
-            summary="The implementation passed deterministic gates and review.",
+            summary=(
+                "The implementation passed deterministic gates; no independent "
+                "Agent review was part of this baseline."
+                if review is None
+                else "The implementation passed deterministic gates and review."
+            ),
         )
         bundle = self._write_terminal_report(
             context,

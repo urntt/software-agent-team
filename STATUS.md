@@ -48,9 +48,13 @@ ordinary-user acceptance run.
   user configuration and run data unless the user explicitly chooses removal.
   [`docs/installation.md`](docs/installation.md) owns the lifecycle contract.
 - The fixed `function_specialized` evaluation workflow is executable. The
-  ordinary product instead derives its team from an approved task. The
-  `single_agent` and `implementation_domain_specialized` manifest entries are
-  defined but are not yet executable evaluation workflows.
+  `single_agent` one-pass evaluation path now uses the same isolated Git,
+  OpenClaw, budget, deterministic quality, and report boundaries; its offline
+  success and gate-failure integration checks pass. Its provider-backed
+  comparison remains unverified. The ordinary product derives its team from
+  an approved task. `implementation_domain_specialized` remains a defined but
+  non-executable manifest entry. The comparison procedure is in
+  [`docs/fixed-comparison.md`](docs/fixed-comparison.md).
 - Planning's wire and typed checks share one owner for user-only product
   decisions. Pure response-envelope and path normalization has a separate
   module; a content-free rule-audit tool can aggregate persisted Planning
@@ -65,8 +69,8 @@ provider switch, or manual slow-key terminal usability. Those conditions need
 their own targeted evidence. A successful offline gate does not substitute for
 a public release asset or ordinary-user installation.
 
-`single_agent` still needs a real isolated execution and delivery path before
-it can serve as a quality, cost, and latency baseline against fixed and
+`single_agent` still needs provider-backed comparison on multiple requests
+before it can support a quality, cost, or latency conclusion against fixed and
 task-defined teams. Comparative results must hold task, route, budget, and
 acceptance criteria constant and report failures as well as successes.
 Generated-project execution remains limited to the current local Python 3.12

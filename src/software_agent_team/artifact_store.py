@@ -537,13 +537,25 @@ class ArtifactStore:
 
         elif isinstance(artifact, IterationRecord):
             if artifact.implementation_plan is not None:
+                if self.team_plan.team_id == "single_agent":
+                    raise ArtifactStoreError(
+                        "single-agent baseline cannot claim a planning artifact"
+                    )
                 plan = self.load(artifact.implementation_plan)
                 if not isinstance(plan, ImplementationPlan):
                     raise ArtifactStoreError(
                         "iteration plan reference has the wrong type"
                     )
-            elif artifact.implementation_plan_sha256 != (
-                self.team_plan.implementation_plan_sha256
+            elif (
+                self.team_plan.team_id == "single_agent"
+                and artifact.implementation_plan_sha256 is not None
+            ) or (
+                self.team_plan.team_id != "single_agent"
+                and (
+                    artifact.implementation_plan_sha256 is None
+                    or artifact.implementation_plan_sha256
+                    != self.team_plan.implementation_plan_sha256
+                )
             ):
                 raise ArtifactStoreError(
                     "iteration plan digest differs from the approved TeamPlan"

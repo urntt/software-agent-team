@@ -1,0 +1,39 @@
+{
+  "run_id": "text-stats-comparison",
+  "title": "Offline text statistics CLI",
+  "source_request": "Build a small command-line tool that reports useful statistics for a UTF-8 text file.",
+  "requirements": [
+    "Expose a Python package textstats with python -m textstats PATH --json as the command-line entry point.",
+    "For a readable UTF-8 file, print one JSON object containing lines, words, characters, and unique_words as non-negative integers.",
+    "Count lines with str.splitlines(), characters with len(text), and words with Unicode-aware non-whitespace tokenization; unique_words counts casefolded distinct words.",
+    "For missing files and invalid UTF-8, exit nonzero with a useful stderr message and no JSON success output.",
+    "Provide automated pytest coverage and a README with installation, usage, tests, and limitations."
+  ],
+  "acceptance_criteria": [
+    {
+      "id": "AC_OUTPUT",
+      "description": "The CLI produces exactly the specified JSON counts for UTF-8 inputs, including empty and Unicode text.",
+      "verification": "Run CHECK_ACCEPTANCE against the isolated snapshot."
+    },
+    {
+      "id": "AC_ERRORS",
+      "description": "Missing paths and invalid UTF-8 fail with actionable stderr and no success JSON.",
+      "verification": "Run CHECK_ACCEPTANCE against the isolated snapshot."
+    },
+    {
+      "id": "AC_QUALITY",
+      "description": "The package compiles, passes Ruff and its own pytest suite, and contains a usable README.",
+      "verification": "Run every frozen deterministic gate."
+    }
+  ],
+  "constraints": [
+    "Use Python 3.12 and the standard library for the runtime tool.",
+    "Keep source, tests, and documentation inside the supplied Git repository.",
+    "Do not require network access, credentials, or a hosted service at runtime."
+  ],
+  "assumptions": [
+    "A path names one local regular file and input files are small enough to read into memory."
+  ],
+  "open_questions": [],
+  "confirmed": true
+}

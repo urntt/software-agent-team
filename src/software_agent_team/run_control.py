@@ -200,10 +200,9 @@ class RunTransition(BaseModel):
         )
         has_plan_artifact = ArtifactKind.IMPLEMENTATION_PLAN in kinds
         if plan_transition:
-            if has_plan_artifact == (self.implementation_plan_sha256 is not None):
+            if has_plan_artifact and self.implementation_plan_sha256 is not None:
                 raise ValueError(
-                    "planning transition requires exactly one implementation-plan "
-                    "artifact or approved digest"
+                    "planning transition cannot bind both a plan artifact and digest"
                 )
         elif self.implementation_plan_sha256 is not None:
             raise ValueError(
@@ -738,6 +737,18 @@ class RunStore:
                     raise RunIntegrityError(
                         "fixed planning transition cannot claim an adaptive digest"
                     )
+                if team_plan.team_id == "single_agent":
+                    if transition.artifacts:
+                        raise RunIntegrityError(
+                            "single-agent baseline cannot claim a planning artifact"
+                        )
+                elif team_plan.origin is TeamPlanOrigin.FIXED_MANIFEST and not any(
+                    item.kind is ArtifactKind.IMPLEMENTATION_PLAN
+                    for item in transition.artifacts
+                ):
+                    raise RunIntegrityError(
+                        "fixed team planning transition lacks its plan artifact"
+                    )
 
 
 Clock = Callable[[], datetime]
@@ -845,6 +856,16 @@ class RunController:
                 raise RunIntegrityError(
                     "fixed TeamPlan cannot start from an adaptive plan digest"
                 )
+            if team_plan.team_id == "single_agent":
+                if artifacts:
+                    raise RunIntegrityError("single-agent baseline cannot claim a plan")
+            elif (
+                not any(
+                    item.kind is ArtifactKind.IMPLEMENTATION_PLAN for item in artifacts
+                )
+                and team_plan.origin is TeamPlanOrigin.FIXED_MANIFEST
+            ):
+                raise RunIntegrityError("fixed team requires a planning artifact")
         elif implementation_plan_sha256 is not None:
             raise InvalidRunTransitionError(
                 "implementation-plan digest is valid only when planning starts"

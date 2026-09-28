@@ -19,6 +19,7 @@ references so that each fact has one clear owner.
 | Prepare, publish, or verify a SAT version and stable/dev channel | [`releases.md`](releases.md) |
 | Understand runtime authority, semantic responses, artifacts, persisted evidence, or safety boundaries | [`runtime-evidence.md`](runtime-evidence.md) |
 | Prepare and inspect a controlled Phase 1 provider-backed evaluation | [`phase1-runbook.md`](phase1-runbook.md) |
+| Compare the fixed team with the one-writer baseline on frozen requests | [`fixed-comparison.md`](fixed-comparison.md) |
 | Set up a development checkout, run checks, update the benchmark, or contribute | [`development.md`](development.md) |
 | Understand the first generated-project runtime and verification boundary | [`profiles/python/README.md`](../profiles/python/README.md) |
 | Read the frozen task-manager evaluation fixture | [`benchmarks/task_manager/requirements.md`](../benchmarks/task_manager/requirements.md) |
@@ -43,6 +44,7 @@ references so that each fact has one clear owner.
   contracts, implementation batches, and acceptance criteria; `STATUS.md`
   distinguishes implemented batches from remaining work.
 - `phase1-runbook.md` is an evaluation-operator procedure, and
+  `fixed-comparison.md` owns the fixed-topology comparison procedure;
   `development.md` is the contributor reference.
 - Other guides in `docs/` own one operating or engineering concern each.
 - Checked-in code and configuration remain authoritative for executable

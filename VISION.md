@@ -287,6 +287,8 @@ One generalist Agent implements the confirmed task brief once.
 
 This measures what the additional team structure must outperform or improve
 upon.
+The executable evaluation boundary and comparable fixture procedure are in
+[`docs/fixed-comparison.md`](docs/fixed-comparison.md).
 
 ### Configuration A: `function_specialized`
 

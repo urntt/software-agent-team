@@ -251,6 +251,7 @@ class _RuntimeLaunchOptions:
 class _WorkflowLaunchOptions(_RuntimeLaunchOptions):
     """Compatibility-only options for a fixed evaluation workflow."""
 
+    team_id: str
     stage_timeout_seconds: int | None
     artifact_repair_limit: int
     iteration_limit: int
@@ -2190,9 +2191,10 @@ def _execute_workflow(
         artifact_repair_limit=options.artifact_repair_limit,
         iteration_limit=options.iteration_limit,
         verification_concurrency=options.verification_concurrency,
+        team_id=options.team_id,
         progress_handler=options.progress_handler,
     )
-    cleanup_roles = tuple(manifest.get_team(manifest.default_team).roles)
+    cleanup_roles = tuple(manifest.get_team(options.team_id).roles)
     try:
         outcome = coordinator.execute(
             task_brief,
@@ -2392,6 +2394,10 @@ def _run_workflow(args: argparse.Namespace) -> int:
         if user_configuration is not None
         else 2
     )
+    if args.team == "single_agent":
+        if args.verification_concurrency not in (None, 1):
+            raise ValueError("single_agent permits only concurrency one")
+        concurrency = 1
     missing = [
         name
         for name, value in (
@@ -2410,6 +2416,11 @@ def _run_workflow(args: argparse.Namespace) -> int:
 
     task_brief = _load_json_model(args.task_brief, TaskBrief)
     configuration = load_quality_gate_configuration(args.policy, args.benchmark)
+    if args.team == "single_agent" and configuration.manifest.manual_review_criteria:
+        raise ValueError(
+            "single_agent requires a benchmark with deterministic-only "
+            "acceptance; use a comparison benchmark"
+        )
     expected_brief = configuration.task_brief.model_copy(
         update={"run_id": task_brief.run_id}
     )
@@ -2439,8 +2450,11 @@ def _run_workflow(args: argparse.Namespace) -> int:
             stage_timeout_seconds=timeout,
             cache_pricing=cache_pricing,
             artifact_repair_limit=args.artifact_repair_limit,
-            iteration_limit=EVALUATION_ITERATION_LIMIT,
+            iteration_limit=(
+                1 if args.team == "single_agent" else EVALUATION_ITERATION_LIMIT
+            ),
             verification_concurrency=concurrency,
+            team_id=args.team,
         ),
         software_version=_software_version_report(),
     )
@@ -4697,6 +4711,15 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("source_repository", type=Path)
     run.add_argument("--base-ref", default="HEAD")
     run.add_argument("--teams", type=Path, default=DEFAULT_TEAM_CONFIG)
+    run.add_argument(
+        "--team",
+        choices=("function_specialized", "single_agent"),
+        default="function_specialized",
+        help=(
+            "Fixed evaluation topology; single_agent requires "
+            "deterministic-only acceptance."
+        ),
+    )
     run.add_argument("--policy", type=Path, default=DEFAULT_RUN_POLICY)
     run.add_argument("--benchmark", type=Path, default=DEFAULT_BENCHMARK)
     run.add_argument("--runs-root", type=Path, default=DEFAULT_RUNS_ROOT)

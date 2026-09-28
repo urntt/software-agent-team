@@ -72,6 +72,9 @@ REPOSITORY_ROOT = Path(__file__).parents[1]
 TEAM_CONFIG = REPOSITORY_ROOT / "configs" / "teams.json"
 POLICY = REPOSITORY_ROOT / "configs" / "run-policy.json"
 BENCHMARK = REPOSITORY_ROOT / "benchmarks" / "task_manager" / "benchmark.json"
+COMPARISON_BENCHMARK = (
+    REPOSITORY_ROOT / "benchmarks" / "task_manager" / "comparison-benchmark.json"
+)
 SEED = REPOSITORY_ROOT / "benchmarks" / "task_manager" / "seed"
 FIXED_TIME = datetime(2026, 8, 10, 12, 0, tzinfo=UTC)
 
@@ -271,7 +274,10 @@ class DynamicWorkflowExecutor:
                     {"/summary": valid_payload["summary"]},
                 ),
             )
-        elif request.role is AgentRole.GENERALIST_DEVELOPER:
+        elif request.role in {
+            AgentRole.GENERALIST_DEVELOPER,
+            AgentRole.SINGLE_AGENT,
+        }:
             artifact = self._work(request)
         elif request.role is AgentRole.TESTER:
             if self._barrier is not None:
@@ -511,10 +517,12 @@ def coordinator(
     iteration_limit: int = 2,
     stage_timeout_seconds: int | None = 30,
     progress_handler: Callable[[RunEvent], None] | None = None,
+    team_id: str = "function_specialized",
+    benchmark: Path = BENCHMARK,
 ) -> WorkflowCoordinator:
     """Build a coordinator with the real gate runner and fake sandbox backend."""
 
-    configuration = load_quality_gate_configuration(POLICY, BENCHMARK)
+    configuration = load_quality_gate_configuration(POLICY, benchmark)
     backend = FakeSandboxBackend(executions or sandbox_executions())
 
     def gate_factory(
@@ -568,6 +576,7 @@ def coordinator(
         stage_timeout_seconds=stage_timeout_seconds,
         iteration_limit=iteration_limit,
         verification_concurrency=verification_concurrency,
+        team_id=team_id,
         progress_handler=progress_handler,
     )
 
@@ -580,6 +589,58 @@ def load_run_json(tmp_path: Path) -> dict[str, object]:
             encoding="utf-8"
         )
     )
+
+
+@pytest.mark.parametrize("gate_passed", [True, False])
+def test_single_agent_baseline_uses_one_writer_and_controller_gate(
+    tmp_path: Path,
+    gate_passed: bool,
+) -> None:
+    source = initialize_source(tmp_path)
+    brief = load_quality_gate_configuration(POLICY, COMPARISON_BENCHMARK).task_brief
+    workspace = tmp_path / "workspaces" / brief.run_id
+    executor = DynamicWorkflowExecutor(workspace)
+    executions = sandbox_executions(count=4)
+    if not gate_passed:
+        executions[0] = SandboxExecution(
+            exit_code=1,
+            timed_out=False,
+            duration_ms=5,
+            stdout=b"",
+            stderr=b"deterministic check failed",
+        )
+    outcome = coordinator(
+        tmp_path,
+        executor,
+        benchmark=COMPARISON_BENCHMARK,
+        executions=executions,
+        team_id="single_agent",
+        iteration_limit=1,
+        verification_concurrency=1,
+    ).execute(brief, source_repository=source)
+
+    assert [request.role for request in executor.requests] == [AgentRole.SINGLE_AGENT]
+    assert outcome.record.phase is (
+        RunPhase.COMPLETED if gate_passed else RunPhase.FAILED
+    )
+    run_directory = tmp_path / "runs" / brief.run_id
+    assert (run_directory / "budget-ledger.json").is_file()
+    assert (
+        run_directory / "iterations/01/agents/controller/test-report.json"
+    ).is_file()
+    assert (
+        run_directory / "iterations/01/agents/single_agent/work-result.json"
+    ).is_file()
+    assert not (run_directory / "iterations/01/agents/reviewer").exists()
+    report = json.loads((run_directory / "final-report.json").read_text())
+    if gate_passed:
+        assert all(
+            result["status"] == "passed" for result in report["acceptance_results"]
+        )
+        assert "no independent Agent review" in report["summary"]
+    else:
+        assert report["status"] == "failed"
+        assert report["termination_reason"] == "iteration_limit_reached"
 
 
 def test_offline_workflow_completes_with_parallel_independent_verification(

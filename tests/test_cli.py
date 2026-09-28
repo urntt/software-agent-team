@@ -4201,6 +4201,7 @@ def test_execute_workflow_cleans_run_sandboxes_after_interruption(
         artifact_repair_limit=1,
         iteration_limit=2,
         verification_concurrency=1,
+        team_id="function_specialized",
     )
 
     with pytest.raises(KeyboardInterrupt):
