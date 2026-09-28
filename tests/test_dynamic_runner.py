@@ -540,6 +540,7 @@ class DynamicExecutor:
         writer_presentation_arrays: bool = False,
         writer_summary: str = "Implemented and documented the greeting utility.",
         upstream_writer_mode: str | None = None,
+        upstream_readonly_mode: str | None = None,
         writer_no_change: bool = False,
         integration_tool_evidence: bool = False,
         integration_unresolved_issue: bool = False,
@@ -583,6 +584,15 @@ class DynamicExecutor:
         }:
             raise ValueError("unknown upstream writer mode")
         self.upstream_writer_mode = upstream_writer_mode
+        if upstream_readonly_mode not in {
+            None,
+            "complete_after_one",
+            "repeat_without_progress",
+            "missing_lifecycle",
+            "session_changed",
+        }:
+            raise ValueError("unknown upstream read-only mode")
+        self.upstream_readonly_mode = upstream_readonly_mode
         self.requests: list[AgentExecutionRequest] = []
         self._counts: dict[str, int] = {}
         self._lock = threading.Lock()
@@ -836,6 +846,33 @@ class DynamicExecutor:
                         stalled=True,
                     ),
                 ),
+            )
+        if (
+            request.agent_id == "reviewer"
+            and self.upstream_readonly_mode is not None
+            and (
+                count == 1
+                or (
+                    self.upstream_readonly_mode == "repeat_without_progress"
+                    and count == 2
+                )
+            )
+        ):
+            if self.mutate_reader == request.agent_id:
+                (self.workspace / "MUTATION.txt").write_text(
+                    "read-only Agent mutation\n",
+                    encoding="utf-8",
+                )
+            self._emit_lifecycle_stop(
+                request,
+                activity_handler,
+                InvocationStopReason.UPSTREAM_INCOMPLETE,
+            )
+            return self._upstream_incomplete_result(
+                request,
+                terminal_response=True,
+                read_only=True,
+                missing_lifecycle=(self.upstream_readonly_mode == "missing_lifecycle"),
             )
         if request.agent_id == "builder":
             if self.upstream_writer_mode is not None and count == 1:
@@ -1434,6 +1471,10 @@ class DynamicExecutor:
         omit_review_call = is_review and (
             (self.zero_review_tool_calls_once and self._counts[request.agent_id] == 1)
             or (
+                self.upstream_readonly_mode == "complete_after_one"
+                and self._counts[request.agent_id] == 2
+            )
+            or (
                 self.invalid_review_response_once
                 and self._counts[request.agent_id] == 2
             )
@@ -1532,7 +1573,13 @@ class DynamicExecutor:
             exit_code=0,
             stdout=response_text,
             stderr="",
-            session_id=f"session-{request.agent_id}",
+            session_id=(
+                "different-session"
+                if self.upstream_readonly_mode == "session_changed"
+                and request.agent_id == "reviewer"
+                and self._counts[request.agent_id] == 2
+                else f"session-{request.agent_id}"
+            ),
             provider="test",
             model=(None if self.omit_model_for == request.agent_id else request.model),
             provider_liveness=(
@@ -1613,6 +1660,8 @@ class DynamicExecutor:
         request: AgentExecutionRequest,
         *,
         terminal_response: bool = False,
+        read_only: bool = False,
+        missing_lifecycle: bool = False,
     ) -> AgentExecutionResult:
         contract = request.submission_contract
         assert contract is not None
@@ -1631,6 +1680,18 @@ class DynamicExecutor:
             output_sha256=hashlib.sha256(output).hexdigest(),
             output_bytes=len(output),
             output_excerpt=output.decode(),
+        )
+        tool_calls = (
+            tuple(
+                review_tool_call(
+                    "fake-review-observation"
+                    if index == 1
+                    else f"additional-review-observation-{index}"
+                ).model_copy(update={"id": f"tool-{index:03d}"})
+                for index in range(1, 42)
+            )
+            if read_only
+            else (tool_call,)
         )
         submission_evidence = rejected_submission_evidence(
             contract,
@@ -1668,6 +1729,80 @@ class DynamicExecutor:
                 session_id=f"session-{request.agent_id}",
                 provider="test",
                 model=request.model,
+                invocation_lifecycle=(
+                    InvocationLifecycleEvidence(
+                        transitions=(
+                            InvocationLifecycleTransition(
+                                sequence=1,
+                                phase=InvocationPhase.LAUNCHED,
+                                elapsed_ms=0,
+                            ),
+                            InvocationLifecycleTransition(
+                                sequence=2,
+                                phase=InvocationPhase.INITIALIZING,
+                                elapsed_ms=1,
+                                initialization_checkpoint=InitializationCheckpoint.CURRENT_TURN,
+                            ),
+                            InvocationLifecycleTransition(
+                                sequence=3,
+                                phase=InvocationPhase.PROVIDER_WAIT,
+                                elapsed_ms=2,
+                                initialization_checkpoint=InitializationCheckpoint.CURRENT_TURN,
+                            ),
+                            InvocationLifecycleTransition(
+                                sequence=4,
+                                phase=InvocationPhase.FINALIZING_RESPONSE,
+                                elapsed_ms=9,
+                            ),
+                            InvocationLifecycleTransition(
+                                sequence=5,
+                                phase=InvocationPhase.STOPPING,
+                                elapsed_ms=10,
+                                stop_reason=InvocationStopReason.UPSTREAM_INCOMPLETE,
+                            ),
+                            InvocationLifecycleTransition(
+                                sequence=6,
+                                phase=InvocationPhase.COLLECTING_EVIDENCE,
+                                elapsed_ms=10,
+                                stop_reason=InvocationStopReason.UPSTREAM_INCOMPLETE,
+                            ),
+                            InvocationLifecycleTransition(
+                                sequence=7,
+                                phase=InvocationPhase.STOPPED,
+                                elapsed_ms=10,
+                                stop_reason=InvocationStopReason.UPSTREAM_INCOMPLETE,
+                            ),
+                        ),
+                        initialization=InitializationLivenessEvidence(
+                            mode="enforced",
+                            policy_source="test read-only continuation",
+                            no_progress_seconds=90,
+                            stall_grace_seconds=15,
+                            checkpoints=(InitializationCheckpoint.CURRENT_TURN,),
+                        ),
+                        response_finalization=ResponseFinalizationEvidence(
+                            mode="enforced",
+                            policy_source="test read-only continuation",
+                            no_progress_seconds=60,
+                            stall_grace_seconds=10,
+                            terminal_response_observed=True,
+                        ),
+                        shutdown=InvocationShutdownEvidence(
+                            reason=InvocationStopReason.UPSTREAM_INCOMPLETE,
+                            shutdown_grace_seconds=35,
+                            process_started=True,
+                            exit_code=0,
+                            stdout_collected=True,
+                            stderr_collected=True,
+                            session_evidence_status="captured",
+                            submission_evidence_status="missing",
+                            process_lease_released=True,
+                            cleanup_completed=True,
+                        ),
+                    )
+                    if read_only and not missing_lifecycle
+                    else None
+                ),
                 usage=AgentTokenUsage(
                     input_tokens=10,
                     output_tokens=5,
@@ -1677,8 +1812,8 @@ class DynamicExecutor:
                 ),
                 tool_evidence_status=AgentToolEvidenceStatus.CAPTURED,
                 session_transcript_sha256="e" * 64,
-                session_record_count=3,
-                tool_calls=(tool_call,),
+                session_record_count=(77 if read_only else 3),
+                tool_calls=tool_calls,
             ),
             submission_evidence=submission_evidence,
         )
@@ -2313,6 +2448,82 @@ def test_dynamic_writer_missing_typed_submission_fails_without_correction(
     assert writer_record.submission_evidence.status is AgentSubmissionStatus.MISSING
     assert writer_record.submission_evidence.diagnostic_code == "submission_missing"
     assert writer_record.semantic_correction_request is None
+
+
+def test_readonly_review_continues_attributable_tools_and_reuses_their_evidence(
+    tmp_path: Path,
+) -> None:
+    runner, team_plan, executor, _, _ = runtime(
+        tmp_path,
+        executor_options={"upstream_readonly_mode": "complete_after_one"},
+    )
+
+    result = DagScheduler().execute(team_plan, runner)
+
+    assert result.status is ScheduleStatus.COMPLETED
+    requests = [
+        request for request in executor.requests if request.agent_id == "reviewer"
+    ]
+    assert len(requests) == 2
+    assert requests[0].session_key == requests[1].session_key
+    assert requests[0].model == requests[1].model
+    assert "CONTROLLED_READONLY_UPSTREAM_CONTINUATION_V1" in requests[1].prompt
+    records = [
+        runner.artifact_store.load(reference)
+        for reference in runner.execution_records
+        if "/reviewer-attempt-" in reference.path
+    ]
+    assert len(records) == 2
+    assert all(isinstance(record, AgentExecutionRecord) for record in records)
+    assert records[0].execution_status is AgentExecutionStatus.UPSTREAM_INCOMPLETE
+    assert len(records[0].tool_calls) == 41
+    assert records[0].submission_evidence is not None
+    assert records[0].submission_evidence.status is AgentSubmissionStatus.MISSING
+    assert records[1].execution_status is AgentExecutionStatus.COMPLETED
+    assert records[1].response_artifact is not None
+    assert [call.tool_name for call in records[1].tool_calls] == ["sat_submit_artifact"]
+
+
+@pytest.mark.parametrize(
+    ("mode", "mutate_reader", "expected_attempts"),
+    [
+        ("repeat_without_progress", None, 2),
+        ("missing_lifecycle", None, 1),
+        ("complete_after_one", "reviewer", 1),
+        ("session_changed", None, 2),
+    ],
+)
+def test_readonly_review_does_not_continue_without_new_trusted_evidence(
+    tmp_path: Path,
+    mode: str,
+    mutate_reader: str | None,
+    expected_attempts: int,
+) -> None:
+    runner, team_plan, executor, _, _ = runtime(
+        tmp_path,
+        executor_options={
+            "upstream_readonly_mode": mode,
+            "mutate_reader": mutate_reader,
+        },
+    )
+
+    result = DagScheduler().execute(team_plan, runner)
+
+    assert result.status is ScheduleStatus.FAILED
+    requests = [
+        request for request in executor.requests if request.agent_id == "reviewer"
+    ]
+    assert len(requests) == expected_attempts
+    assert (
+        len(
+            [
+                reference
+                for reference in runner.execution_records
+                if "/reviewer-attempt-" in reference.path
+            ]
+        )
+        == expected_attempts
+    )
 
 
 @pytest.mark.parametrize(

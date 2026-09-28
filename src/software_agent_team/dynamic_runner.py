@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -83,6 +84,7 @@ from software_agent_team.prompting import (
     DynamicUpstreamResult,
     DynamicUserGuidance,
     build_dynamic_agent_execution_request,
+    build_readonly_upstream_continuation_request,
     build_semantic_correction_request,
     build_upstream_continuation_request,
 )
@@ -148,6 +150,15 @@ class _UpstreamContinuation:
     progress: GitWorkspaceProgress
     prior_execution: ArtifactReference
     completed_tool_operations: int
+
+
+@dataclass(frozen=True)
+class _ReadOnlyContinuation:
+    """Captured tools from an incomplete, clean read-only invocation."""
+
+    prior_execution: ArtifactReference
+    completed_tool_operations: int
+    session_id: str
 
 
 _SCHEDULER_SUMMARY_LIMIT = 2_000
@@ -545,6 +556,8 @@ class DynamicAgentRunner:
         frozen_writer_commit: str | None = None
         continuation: _UpstreamContinuation | None = None
         seen_continuation_states: set[str] = set()
+        readonly_continuation: _ReadOnlyContinuation | None = None
+        seen_readonly_tool_states: set[str] = set()
         attempt = 1
         review_evidence_attempts: list[ReviewToolEvidenceAttempt] = []
         route_ids = self.team_plan.model_routes.authorized_route_ids(agent.id)
@@ -577,6 +590,8 @@ class DynamicAgentRunner:
             base_request = build_dynamic_agent_execution_request(prompt_inputs)
             current_continuation = continuation
             continuation = None
+            current_readonly_continuation = readonly_continuation
+            readonly_continuation = None
             if self.invocation_stop_provider is not None:
                 invocation_stop = self.invocation_stop_provider(agent.id)
                 if invocation_stop is not None:
@@ -593,7 +608,10 @@ class DynamicAgentRunner:
                         "stopped this work.",
                         invocation_stop,
                     )
-            if current_continuation is not None and correction_plan is not None:
+            if (
+                current_continuation is not None
+                or current_readonly_continuation is not None
+            ) and correction_plan is not None:
                 raise DynamicAgentRunnerError(
                     "semantic correction and upstream continuation cannot overlap",
                     TerminationReason.CONTROLLER_ERROR,
@@ -603,6 +621,14 @@ class DynamicAgentRunner:
                     base_request,
                     workspace_state_sha256=(current_continuation.progress.state_sha256),
                     changed_path_count=len(current_continuation.progress.changed_files),
+                )
+            elif current_readonly_continuation is not None:
+                request = build_readonly_upstream_continuation_request(
+                    base_request,
+                    verified_commit=input_commit,
+                    completed_tool_operations=(
+                        current_readonly_continuation.completed_tool_operations
+                    ),
                 )
             elif correction_plan is not None:
                 request = build_semantic_correction_request(
@@ -658,6 +684,41 @@ class DynamicAgentRunner:
                         ),
                     ),
                 )
+            elif current_readonly_continuation is not None:
+                self._emit_activity(
+                    agent,
+                    kind=ProgressEventKind.AGENT_RETRY,
+                    message=(
+                        f"{agent.label} ended after attributable tools without a "
+                        "typed submission; the read-only workspace and session "
+                        "evidence were verified. Continuing the same task and "
+                        "session under the approved budget."
+                    ),
+                    attempt=attempt,
+                    model=request.model,
+                    references=(
+                        RunEventReference(
+                            kind=RunEventReferenceKind.ARTIFACT,
+                            id=f"{agent.id}-invocation-{attempt - 1}",
+                            path=current_readonly_continuation.prior_execution.path,
+                            sha256=current_readonly_continuation.prior_execution.sha256,
+                        ),
+                    ),
+                    checkpoint=self._checkpoint_snapshot(
+                        agent,
+                        phase=InvocationPhase.STOPPED,
+                        last_verified_checkpoint=(
+                            "Read-only workspace and attributable tool evidence "
+                            "were verified"
+                        ),
+                        next_controller_checkpoint=(
+                            "Resume the same Agent session and require typed submission"
+                        ),
+                        completed_tool_operations=(
+                            current_readonly_continuation.completed_tool_operations
+                        ),
+                    ),
+                )
             result = self._execute(
                 request,
                 activity_handler=lambda activity, current_attempt=attempt: (
@@ -700,8 +761,18 @@ class DynamicAgentRunner:
             failure: Exception | None = None
             current_review_evidence: ReviewToolEvidenceAttempt | None = None
             next_continuation_progress: GitWorkspaceProgress | None = None
+            next_readonly_continuation = False
             try:
                 self._validate_execution_result(result, request)
+                if (
+                    current_readonly_continuation is not None
+                    and result.telemetry.session_id
+                    != current_readonly_continuation.session_id
+                ):
+                    raise DynamicAgentRunnerError(
+                        "read-only continuation changed its OpenClaw session",
+                        TerminationReason.SAFETY_BOUNDARY_CROSSED,
+                    )
                 if (
                     agent.capability is AgentCapability.REVIEW
                     and result.status is AgentExecutionStatus.COMPLETED
@@ -769,7 +840,66 @@ class DynamicAgentRunner:
                             expected_commit=input_commit,
                             require_clean=True,
                         )
-                        failure = execution_failure
+                        transcript_sha256 = result.telemetry.session_transcript_sha256
+                        lifecycle = result.telemetry.invocation_lifecycle
+                        safe_readonly_continuation = (
+                            result.status is AgentExecutionStatus.UPSTREAM_INCOMPLETE
+                            and correction_plan is None
+                            and result.semantic_submission is None
+                            and result.submission_evidence is not None
+                            and result.submission_evidence.status
+                            is AgentSubmissionStatus.MISSING
+                            and result.submission_evidence.diagnostic_code
+                            == "upstream_incomplete_after_terminal_response"
+                            and result.submission_evidence.tool_call_id is None
+                            and result.telemetry.tool_evidence_status
+                            is AgentToolEvidenceStatus.CAPTURED
+                            and transcript_sha256 is not None
+                            and result.telemetry.session_id is not None
+                            and bool(result.telemetry.tool_calls)
+                            and request.submission_contract is not None
+                            and all(
+                                call.tool_name != request.submission_contract.tool_name
+                                for call in result.telemetry.tool_calls
+                            )
+                            and lifecycle is not None
+                            and (
+                                lifecycle.response_finalization.terminal_response_observed
+                            )
+                            and lifecycle.shutdown.cleanup_completed
+                        )
+                        if safe_readonly_continuation:
+                            tool_state_sha256 = hashlib.sha256(
+                                json.dumps(
+                                    [
+                                        (
+                                            call.tool_name,
+                                            call.arguments_sha256,
+                                            call.output_sha256,
+                                            call.outcome,
+                                            call.is_error,
+                                        )
+                                        for call in result.telemetry.tool_calls
+                                    ],
+                                    separators=(",", ":"),
+                                ).encode()
+                            ).hexdigest()
+                            if tool_state_sha256 in seen_readonly_tool_states:
+                                failure = DynamicAgentRunnerError(
+                                    f"{record_error}; read-only continuation "
+                                    "repeated the same tool observations",
+                                    TerminationReason.DEPENDENCY_UNAVAILABLE,
+                                )
+                            else:
+                                seen_readonly_tool_states.add(tool_state_sha256)
+                                next_readonly_continuation = True
+                                if agent.capability is AgentCapability.REVIEW:
+                                    current_review_evidence = ReviewToolEvidenceAttempt(
+                                        execution_attempt=attempt,
+                                        tool_calls=result.telemetry.tool_calls,
+                                    )
+                        else:
+                            failure = execution_failure
                 elif (
                     correction_plan is not None
                     and agent.permission_profile is PermissionProfile.WORKSPACE_WRITE
@@ -1072,6 +1202,15 @@ class DynamicAgentRunner:
                     progress=next_continuation_progress,
                     prior_execution=persisted.reference,
                     completed_tool_operations=len(result.telemetry.tool_calls),
+                )
+                attempt += 1
+                continue
+            if next_readonly_continuation:
+                assert result.telemetry.session_id is not None
+                readonly_continuation = _ReadOnlyContinuation(
+                    prior_execution=persisted.reference,
+                    completed_tool_operations=len(result.telemetry.tool_calls),
+                    session_id=result.telemetry.session_id,
                 )
                 attempt += 1
                 continue

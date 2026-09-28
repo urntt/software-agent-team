@@ -838,6 +838,48 @@ instead of fabricating success.
     return request.model_copy(update={"prompt": f"{request.prompt}{continuation}"})
 
 
+def build_readonly_upstream_continuation_request(
+    request: AgentExecutionRequest,
+    *,
+    verified_commit: str,
+    completed_tool_operations: int,
+) -> AgentExecutionRequest:
+    """Finish an attributable read-only turn without accepting its prose."""
+
+    if request.submission_contract is None:
+        raise AgentPromptError("controlled continuation requires typed submission")
+    if not re.fullmatch(r"[0-9a-f]{40}", verified_commit):
+        raise AgentPromptError("read-only continuation requires a verified commit")
+    if completed_tool_operations < 1:
+        raise AgentPromptError("read-only continuation requires attributable tools")
+    review_command_note = (
+        "For a documented start command, use the Controller's clean-copy command "
+        "evidence when this Review sandbox alone prevents execution. A Review-only "
+        "noexec mount is not a product failure when that exact clean-copy "
+        "gate passed.\n"
+        if request.capability is AgentCapability.REVIEW
+        else ""
+    )
+    continuation = f"""
+
+CONTROLLED_READONLY_UPSTREAM_CONTINUATION_V1
+Your preceding tool-bearing invocation ended before the required terminal
+`{request.submission_contract.tool_name}` call. The Controller did not accept
+your assistant prose as a result. It verified that the read-only project is
+still clean at commit `{verified_commit}` and captured {completed_tool_operations}
+attributable tool operation(s) from that invocation.
+
+Continue the same approved task in the same Agent session. Use trustworthy
+observations already gathered rather than repeating probes without reason.
+{review_command_note}Submit one grounded typed artifact with
+`{request.submission_contract.tool_name}` now. If evidence is insufficient,
+submit the truthful blocked or failing assessment through that tool. The
+approved model route, permission scope, deadline, and aggregate USD budget
+are unchanged.
+"""
+    return request.model_copy(update={"prompt": f"{request.prompt}{continuation}"})
+
+
 def _dynamic_prompt_context(inputs: DynamicAgentPromptInputs) -> dict[str, object]:
     agent = inputs.agent
     route = inputs.team_plan.model_routes.get_route(inputs.model_route_id)
