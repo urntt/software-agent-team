@@ -9,21 +9,20 @@ status narrative remains available through the [historical source map](docs/hist
 
 ## Release and checkout boundary
 
-The latest published stable release is `v0.5.0`, tagged at
-`58365224f770b4474545c5b492eda9cdec4bb9bb`. Its exact-tag GitHub gate
+The latest published stable release is `v0.5.1`, tagged at
+`6de24f48d54b995f5dd09493f0345e644e82c72b`. Its exact-tag GitHub gate
 passed and published the release-bound `bootstrap.sh` and `sat-release.json`
 assets. The same clean commit passed a normal-user OVH canonical gate: doctor,
-format, lint, and 1,977 tests passed; one cross-UID fixture was skipped because
-it requires root. Isolated fresh-account checks then installed the public
-current-stable bootstrap, upgraded `v0.4.31` to `v0.5.0`, exercised rollback
-and stable/dev switching, verified state preservation, and completed export,
-uninstall, and exact cleanup without provider calls. A subsequent ordinary
-DeepSeek journey reached Planning, two implementation iterations, passing
-quality gates, and General Review, but its Security Reviewer overfilled
+format, lint, and 1,978 tests passed; one cross-UID fixture was skipped because
+it requires root. Isolated fresh-account checks installed both the exact dev
+candidate and the public current stable, verified identity and isolated runtime,
+and completed export, uninstall, and exact cleanup without provider calls.
+The patch constrains each Review boundary to one distinct post-assertion
+evidence marker. It has not yet completed a public ordinary-user journey.
+The prior `v0.5.0` journey reached Planning, two implementation iterations,
+passing quality gates, and General Review, but its Security Reviewer overfilled
 boundary evidence and exhausted targeted correction; the Controller correctly
-withheld delivery. The checkout declares an unpublished `0.5.1` patch candidate
-that constrains each Review boundary to one distinct post-assertion marker.
-That candidate has not yet completed a new public ordinary-user journey.
+withheld delivery.
 
 The prior `v0.4.31` Linux journey reached an approved plan, execution,
 independent Review, accepted delivery, and 13/13 external black-box checks,
