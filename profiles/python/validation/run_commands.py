@@ -36,6 +36,10 @@ EXPECTED_JSON_LABEL = re.compile(
     re.MULTILINE | re.IGNORECASE,
 )
 CODE_POINT_KEYS = ("code_point_count", "code_points")
+FIXTURE_HINT = (
+    "use printf '%s' 'hello world' > example.txt for plain text, or a "
+    "printf format containing only \\n, \\r, \\t, and \\\\ escapes"
+)
 
 
 @dataclass(frozen=True)
@@ -369,8 +373,12 @@ def _readme_json_examples(readme: str) -> tuple[tuple[str, object], ...]:
 
 def _fixture_content(tokens: list[str]) -> str:
     def decode_escapes(value: str, label: str) -> str:
-        if re.search(r"\\[^nrt\\]", value):
-            fail(f"README shell example uses an unsupported {label} escape")
+        unsupported = re.search(r"\\[^nrt\\]", value)
+        if unsupported:
+            fail(
+                f"README shell example uses an unsupported {label} escape "
+                f"{unsupported.group(0)!r}; {FIXTURE_HINT}"
+            )
         return re.sub(
             r"\\([nrt\\])",
             lambda match: {"n": "\n", "r": "\r", "t": "\t", "\\": "\\"}[match.group(1)],
@@ -383,9 +391,17 @@ def _fixture_content(tokens: list[str]) -> str:
         return tokens[2]
     if tokens[:1] == ["printf"] and len(tokens) == 2:
         if "%" in tokens[1]:
-            fail("README shell example uses an unsupported printf format")
+            fail(
+                "README shell example uses an unsupported printf format; "
+                f"{FIXTURE_HINT}"
+            )
         return decode_escapes(tokens[1], "printf")
-    fail("README JSON example fixture must use echo -e or supported printf")
+    if tokens[:1] == ["echo"]:
+        fail(f"README JSON example fixture uses unsupported echo flags; {FIXTURE_HINT}")
+    fail(
+        "README JSON example fixture must use one supported printf or echo -e "
+        f"form; {FIXTURE_HINT}"
+    )
 
 
 def _verify_code_point_newlines(

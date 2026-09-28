@@ -79,10 +79,17 @@ two-line shell form (one `echo -e`, `printf %s`, or bounded `printf "..."`
 root-file fixture, then the exact start command with optional arguments) so
 the clean-copy gate can compare documented JSON with actual stdout. Keep
 comments outside that fenced shell block; exactly two executable lines belong
-inside it. Do not
-guess example counts or values. When the product counts Unicode code points in
-files, count the decoded original input without universal-newline translation;
-include a mixed CRLF/LF and non-ASCII fixture in project tests.
+inside it. Prefer the portable fixture `printf '%s' 'hello world' > example.txt`
+with literal UTF-8 text. If line endings matter, a `printf` format may use
+only `\n`, `\r`, `\t`, and `\\` escapes; for example,
+`printf 'café\r\nüber line\n' > example.txt`. Do not use hexadecimal
+escapes, `\c`, or combined `echo` flags such as `-ne`: the deterministic
+checker does not interpret them. Execute the fixture and documented start
+command before committing. On a revision, follow the controller's specific
+checker diagnostic instead of trying another unsupported shell form. Do not
+guess example counts or values. When the product counts Unicode code points
+in files, count the decoded original input without universal-newline
+translation; include a mixed CRLF/LF and non-ASCII fixture in project tests.
 
 Run tests with visible per-test progress when diagnosing a delay; do not pipe
 the test runner into `tail` or another command that hides progress until exit.

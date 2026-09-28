@@ -5,24 +5,24 @@
 This document records current implementation and validation evidence. Product
 and architecture decisions belong to [`VISION.md`](VISION.md).
 
-Published `v0.4.24` passed its exact-tag hosted gate (1,917 passed, four
-environment skips) and produced one identity manifest. Its Planning
-classification fix passed a clean OVH canonical gate (1,920 passed, one
-root-only skip). A fresh ordinary-user public install completed first and
-later DeepSeek startup, Planning approval, in-run pause/resume, and three
-implementation iterations. In the third iteration all five deterministic
-commands passed, including 63 generated-project tests; general and security
-Review accepted. Experience Review returned `revise` because its read-only
-source mount and non-executable temporary mounts prevented a direct console
-script probe, despite the documented command passing in the clean executable
-committed-file copy. The controller failed at the approved iteration limit;
-there was no accepted delivery, independent acceptance, product export, or
-uninstall. The dedicated ordinary-user account and owned resources were
-cleaned up. The `0.4.25` candidate clarifies that a Review-only mount failure
-is a non-blocking environment observation when the clean-copy command gate
-passes; a failed gate or independently reproduced product failure remains
-blocking. The affected dynamic-prompt suite passed 64 tests. A clean candidate
-gate, exact-tag publication, and a fresh public delivery remain pending.
+Published `v0.4.25` passed an independent OVH candidate gate (1,920 passed,
+one root-only skip), a fresh dev-account lifecycle, and its exact-tag hosted
+gate (1,917 passed, four environment skips). A separate ordinary account
+successfully upgraded from public `v0.4.24` to `v0.4.25` with preserved state,
+rollback, export, uninstall, and exact cleanup. One fresh public `v0.4.25`
+DeepSeek journey completed installation, first and later startup, approved
+Planning, and in-run controls. In each of three implementation iterations,
+contract, compile, lint, and project-test gates passed, but the exact-command
+gate rejected a generated README fixture: first hexadecimal `printf` escapes,
+then combined `echo -ne` flags, then `echo -e` with `\c`. The controller
+stopped at the approved iteration limit. There was no Review, delivery,
+independent acceptance, product export, or uninstall; the dedicated account
+and owned resources were cleaned up. The `0.4.26` candidate makes the bounded
+fixture syntax explicit in the generation contract and gives a concrete
+correction in diagnostics. The affected profile and dynamic-prompt suite passed
+112 tests; a replay through the real pinned quality image rejected all three
+historic forms and accepted a portable `printf` correction. An independent
+candidate gate, publication, and fresh public delivery remain pending.
 
 Published `v0.4.19` installed and started successfully for a fresh normal user
 on Linux with Docker and a live DeepSeek provider check. Planning, approval,

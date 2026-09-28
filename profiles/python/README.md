@@ -64,10 +64,15 @@ or a bounded `printf "..." > file` format, followed by the exact start command
 with optional arguments. Put explanatory comments outside this fenced shell
 block: the fixture and command are its only two lines. The clean-copy command
 gate executes at most three such examples after setup, compares actual stdout
-as JSON, and rejects a mismatch, orphan label, or unsupported form. If a
-documented file example claims `code_point_count` or `code_points`, it also
-runs the same command on a
-mixed CRLF/LF Unicode fixture and checks the count against the original UTF-8
+as JSON, and rejects a mismatch, orphan label, or unsupported form. Prefer
+`printf '%s' 'hello world' > example.txt` with literal UTF-8 input. A bounded
+`printf` format or `echo -e` argument may contain only `\n`, `\r`, `\t`,
+and `\\` escapes; use `printf 'café\r\nüber line\n' > example.txt`
+when the fixture needs mixed CRLF/LF and Unicode text. Hexadecimal escapes,
+`\c`, and combined `echo` flags such as `-ne` are outside the checker
+contract. If a documented file example claims `code_point_count` or
+`code_points`, it also runs the same command on a mixed CRLF/LF Unicode
+fixture and checks the count against the original UTF-8
 decoded input. The independent Reviewer remains responsible for factual
 documentation outside this bounded format.
 

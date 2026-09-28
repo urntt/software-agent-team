@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.4.24",
-  "target_version": "0.4.25",
+  "baseline_version": "0.4.25",
+  "target_version": "0.4.26",
   "changes": [
     {
-      "id": "review-sandbox-command-attribution",
+      "id": "readme-example-fixture-contract",
       "impact": "patch",
-      "summary": "Attribute read-only Review sandbox command failures to the environment when clean committed-copy command gates pass, preserving blockers for independently reproduced product failures"
+      "summary": "Make generated README fixture syntax explicit and give actionable exact-command diagnostics for unsupported shell forms"
     }
   ]
 }

@@ -724,6 +724,62 @@ def test_exact_command_gate_checks_documented_json_against_running_cli(
         assert result.returncode == 0, result.stderr
 
 
+@pytest.mark.parametrize(
+    ("fixture", "expected_error"),
+    (
+        (
+            r"printf 'caf\xc3\xa9\r\n\xc3\xbcber line\n' > sample.txt",
+            "unsupported printf escape",
+        ),
+        (
+            r'echo -ne "café\r\nüber line\n" > sample.txt',
+            "unsupported echo flags",
+        ),
+        (
+            r"echo -e 'café\r\nüber line\n\c' > sample.txt",
+            "unsupported echo escape",
+        ),
+        (
+            r"printf 'café\r\nüber line\n' > sample.txt",
+            None,
+        ),
+    ),
+)
+def test_exact_command_gate_guides_historical_readme_fixture_corrections(
+    tmp_path: Path, fixture: str, expected_error: str | None
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    write_valid_project(project)
+    readme = project / "README.md"
+    readme.write_text(
+        readme.read_text(encoding="utf-8")
+        + "\nExpected JSON output:\n```bash\n"
+        + fixture
+        + "\nuv run link-checker . sample.txt\n```\n```json\n"
+        + json.dumps({"code_point_count": 16})
+        + "\n```\n",
+        encoding="utf-8",
+    )
+    commit_project(project)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    write_fake_uv(fake_bin)
+    result = run_command_validator(
+        project,
+        environment={
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "FAKE_UV_LOG": str(tmp_path / "uv.jsonl"),
+        },
+    )
+    if expected_error is None:
+        assert result.returncode == 0, result.stderr
+    else:
+        assert result.returncode == 1
+        assert expected_error in result.stderr
+        assert "printf '%s' 'hello world' > example.txt" in result.stderr
+
+
 def test_exact_command_gate_rejects_normalized_crlf_code_point_count(
     tmp_path: Path,
 ) -> None:
