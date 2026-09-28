@@ -239,7 +239,7 @@ immutable. A specialist-scope defect exposed after an evidence-selector repair
 is therefore a distinct targetable failure rather than an uncorrectable broad
 Review error.
 
-Before a Review invocation, the Controller also binds every model-owned
+Before an adaptive Review invocation, the Controller also binds every model-owned
 criterion reference in that response schema to the Reviewer's exact assigned
 set. This applies to criterion assessments, findings, security surfaces, and
 experience workflows. Each finding must name at least one assigned criterion.
@@ -249,6 +249,14 @@ therefore cannot turn an out-of-scope finding into an apparently valid repair by
 retaining a foreign criterion ID or replacing the list with an empty one. The
 post-application semantic validator remains the final fail-closed boundary for
 scope coverage and blocker relationships.
+
+The fixed evaluation Reviewer uses the legacy semantic response boundary.
+Its prompt schema binds criterion assessments to the configured manual-review
+scope, including an empty array when every acceptance criterion is covered by
+deterministic checks. Evidence-backed findings may still identify defects in
+any confirmed criterion. The Controller validates the final artifact against
+the same manual scope; a generic response schema must not invite extra manual
+assessments that the fixed run can never accept.
 
 For current Planning evidence, the Controller compiles Review scopes from the
 approved criterion graph. A criterion carrying all four Review boundaries must

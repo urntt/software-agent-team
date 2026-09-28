@@ -86,6 +86,7 @@ from software_agent_team.prompting import (
     AgentPromptInputs,
     build_agent_execution_request,
     build_semantic_correction_request,
+    fixed_response_schema,
 )
 from software_agent_team.quality_gates import (
     QualityGateBudgetExceeded,
@@ -1159,6 +1160,7 @@ class WorkflowCoordinator:
                     base_request,
                     correction_plan,
                     session_generation=attempt,
+                    response_schema=fixed_response_schema(inputs),
                 )
             )
             assert context.budget_ledger is not None

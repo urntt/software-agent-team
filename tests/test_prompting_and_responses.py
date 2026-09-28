@@ -487,6 +487,35 @@ def test_reviewer_prompt_receives_work_and_command_evidence_in_parallel() -> Non
     assert '"implementation_plan": {' not in rendered
 
 
+@pytest.mark.parametrize("manual_scope", [(), ("AC_CREATE",)])
+def test_fixed_reviewer_schema_binds_only_manual_assessments(
+    manual_scope: tuple[str, ...],
+) -> None:
+    rendered = render_agent_prompt(
+        prompt_inputs(
+            role=AgentRole.REVIEWER,
+            expected_kind=ArtifactKind.REVIEW_REPORT,
+            input_commit=OUTPUT_COMMIT,
+            upstream_artifacts=(work_result(),),
+            command_evidence=commands(),
+            manual_review_criteria=manual_scope,
+        )
+    )
+    schema = json.loads(
+        rendered.split("RESPONSE_SCHEMA_JSON\n", 1)[1].split(
+            "\n\nFINAL_RESPONSE_CONTRACT", 1
+        )[0]
+    )
+    assessments = schema["properties"]["criterion_assessments"]
+    assert assessments["minItems"] == len(manual_scope)
+    assert assessments["maxItems"] == len(manual_scope)
+    criterion = schema["$defs"]["ReviewCriterionAssessmentResponse"]["properties"][
+        "criterion_id"
+    ]
+    assert criterion["enum"] == list(manual_scope)
+    assert "When the manual-review list is empty" in rendered
+
+
 def test_verifier_prompts_receive_the_frozen_manual_review_scope() -> None:
     rendered = render_agent_prompt(
         prompt_inputs(

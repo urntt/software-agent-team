@@ -681,6 +681,50 @@ def _prompt_context(inputs: AgentPromptInputs) -> dict[str, object]:
     return context
 
 
+def fixed_response_schema(inputs: AgentPromptInputs) -> dict[str, object]:
+    """Bind fixed Review assessments to the controller's manual scope."""
+
+    model = RESPONSE_BODY_MODELS.get(inputs.expected_kind)
+    if model is None:
+        raise AgentPromptError(
+            f"no response model exists for {inputs.expected_kind.value}"
+        )
+    schema = model.model_json_schema()
+    if inputs.role is not AgentRole.REVIEWER:
+        return schema
+    properties = schema.get("properties")
+    assessments = (
+        properties.get("criterion_assessments")
+        if isinstance(properties, dict)
+        else None
+    )
+    definitions = schema.get("$defs")
+    assessment = (
+        definitions.get("ReviewCriterionAssessmentResponse")
+        if isinstance(definitions, dict)
+        else None
+    )
+    if not isinstance(assessments, dict):
+        raise AgentPromptError("fixed Review schema lacks criterion assessments")
+    allowed = list(inputs.manual_review_criteria)
+    assessments["minItems"] = len(allowed)
+    assessments["maxItems"] = len(allowed)
+    if allowed:
+        assessments.pop("default", None)
+        required = schema.setdefault("required", [])
+        if not isinstance(required, list):
+            raise AgentPromptError("fixed Review schema has invalid required fields")
+        if "criterion_assessments" not in required:
+            required.append("criterion_assessments")
+    criterion_id = _require_schema_property(
+        assessment,
+        definition_name="fixed review assessment",
+        property_name="criterion_id",
+    )
+    criterion_id["enum"] = allowed
+    return schema
+
+
 def render_agent_prompt(
     inputs: AgentPromptInputs,
     *,
@@ -698,11 +742,7 @@ def render_agent_prompt(
         raise AgentPromptError(
             f"cannot load prompt template: {template_name}"
         ) from error
-    model = RESPONSE_BODY_MODELS.get(inputs.expected_kind)
-    if model is None:
-        raise AgentPromptError(
-            f"no response model exists for {inputs.expected_kind.value}"
-        )
+    response_schema = fixed_response_schema(inputs)
     values = {
         "role": inputs.role.value,
         "expected_kind": inputs.expected_kind.value,
@@ -713,7 +753,7 @@ def render_agent_prompt(
             sort_keys=True,
         ),
         "response_schema_json": json.dumps(
-            model.model_json_schema(),
+            response_schema,
             ensure_ascii=False,
             indent=2,
             sort_keys=True,
@@ -759,6 +799,7 @@ def build_semantic_correction_request(
     plan: SemanticCorrectionPlan,
     *,
     session_generation: int,
+    response_schema: dict[str, object] | None = None,
 ) -> AgentExecutionRequest:
     """Request replacements in a fresh session bound to the prior typed result."""
 
@@ -769,10 +810,11 @@ def build_semantic_correction_request(
 
     contract = request.submission_contract
     if contract is None:
-        response_model = RESPONSE_BODY_MODELS.get(request.expected_kind)
-        response_schema = (
-            None if response_model is None else response_model.model_json_schema()
-        )
+        if response_schema is None:
+            response_model = RESPONSE_BODY_MODELS.get(request.expected_kind)
+            response_schema = (
+                None if response_model is None else response_model.model_json_schema()
+            )
         return request.model_copy(
             update={
                 "prompt": (
@@ -999,13 +1041,13 @@ def _require_schema_property(
 
     if not isinstance(definition, dict):
         raise AgentPromptError(
-            f"dynamic Review response schema lacks {definition_name} definition"
+            f"Review response schema lacks {definition_name} definition"
         )
     properties = definition.get("properties")
     value = properties.get(property_name) if isinstance(properties, dict) else None
     if not isinstance(value, dict):
         raise AgentPromptError(
-            f"dynamic Review response schema lacks {definition_name}.{property_name}"
+            f"Review response schema lacks {definition_name}.{property_name}"
         )
     return value
 

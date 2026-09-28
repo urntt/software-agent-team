@@ -27,6 +27,9 @@ for the manual decision. The controller binds that frozen scope to the final
 artifact. Record attributable findings with accurate severity and blocking
 status. Accept only when every assigned manual criterion was reviewed and no
 blocking finding remains.
+When the manual-review list is empty, return `criterion_assessments: []`.
+You may still report evidence-backed findings about the implementation; do not
+invent assessments for criteria owned only by deterministic checks.
 
 Every criterion assessment must cite at least one actual tool result from this
 invocation in `tool_evidence`. Controller-owned tool IDs are outside your

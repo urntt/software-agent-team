@@ -190,8 +190,10 @@ class DynamicWorkflowExecutor:
         developer_stderr: str = "",
         raise_for_role: AgentRole | None = None,
         nonblocking_review_iterations: tuple[int, ...] = (),
+        brief: TaskBrief | None = None,
     ) -> None:
         self.workspace = workspace
+        self.brief = brief or task_brief()
         self.review_verdicts = review_verdicts or {}
         self.invalid_plan_once = invalid_plan_once
         self.invalid_work_once = invalid_work_once
@@ -336,7 +338,7 @@ class DynamicWorkflowExecutor:
                 raise
 
     def _plan(self, request: AgentExecutionRequest) -> ImplementationPlanResponse:
-        brief = task_brief()
+        brief = self.brief
         return ImplementationPlanResponse(
             objective="Build the frozen task-management benchmark.",
             approach=(
@@ -641,6 +643,37 @@ def test_single_agent_baseline_uses_one_writer_and_controller_gate(
     else:
         assert report["status"] == "failed"
         assert report["termination_reason"] == "iteration_limit_reached"
+
+
+def test_fixed_team_accepts_the_same_deterministic_comparison_fixture(
+    tmp_path: Path,
+) -> None:
+    source = initialize_source(tmp_path)
+    brief = load_quality_gate_configuration(POLICY, COMPARISON_BENCHMARK).task_brief
+    executor = DynamicWorkflowExecutor(
+        tmp_path / "workspaces" / brief.run_id,
+        brief=brief,
+    )
+
+    outcome = coordinator(
+        tmp_path,
+        executor,
+        benchmark=COMPARISON_BENCHMARK,
+        verification_concurrency=1,
+    ).execute(brief, source_repository=source)
+
+    assert outcome.record.phase is RunPhase.COMPLETED
+    assert [request.role for request in executor.requests] == [
+        AgentRole.PLANNER,
+        AgentRole.GENERALIST_DEVELOPER,
+        AgentRole.TESTER,
+        AgentRole.REVIEWER,
+    ]
+    report = json.loads(
+        (tmp_path / "runs" / brief.run_id / "final-report.json").read_text()
+    )
+    assert len(report["acceptance_results"]) == len(brief.acceptance_criteria)
+    assert all(item["status"] == "passed" for item in report["acceptance_results"])
 
 
 def test_offline_workflow_completes_with_parallel_independent_verification(
