@@ -20,7 +20,7 @@ import tempfile
 import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal, Protocol, Self
@@ -33,6 +33,7 @@ from software_agent_team.docker_engine import (
     current_docker_engine,
     verify_bound_docker_engine,
 )
+from software_agent_team.integrity import canonical_model_sha256
 
 QUALITY_GATE_SCHEMA_VERSION = 1
 _MAX_MANIFEST_BYTES = 1_048_576
@@ -608,6 +609,54 @@ def load_quality_gate_configuration(
         manifest_sha256=digest(manifest_raw),
         task_brief_sha256=digest(task_raw),
         input_mounts=tuple(resolved_mounts),
+    )
+
+
+def bind_run_task_brief_mount(
+    configuration: QualityGateConfiguration,
+    *,
+    run_directory: Path,
+    expected_run_id: str,
+    expected_sha256: str,
+) -> QualityGateConfiguration:
+    """Bind the verified, approved brief as a read-only quality-gate input."""
+
+    mounts = tuple(
+        mount
+        for mount in configuration.input_mounts
+        if mount.id == "approved_task_brief"
+    )
+    if len(mounts) != 1:
+        raise QualityGateConfigurationError(
+            "quality profile must declare one approved_task_brief input mount"
+        )
+    source = run_directory / "task-brief.json"
+    if source.is_symlink() or not source.is_file():
+        raise QualityGateConfigurationError("approved run task brief is unavailable")
+    try:
+        raw = source.read_bytes()
+        if len(raw) > _MAX_MANIFEST_BYTES:
+            raise ValueError("approved run task brief is too large")
+        brief = TaskBrief.model_validate_json(raw)
+    except (OSError, ValueError) as error:
+        raise QualityGateConfigurationError(
+            "approved run task brief is invalid"
+        ) from error
+    if (
+        brief.run_id != expected_run_id
+        or canonical_model_sha256(brief) != expected_sha256
+    ):
+        raise QualityGateConfigurationError(
+            "approved run task brief does not match the frozen team plan"
+        )
+    return replace(
+        configuration,
+        input_mounts=tuple(
+            replace(mount, source=source.resolve(strict=True))
+            if mount.id == "approved_task_brief"
+            else mount
+            for mount in configuration.input_mounts
+        ),
     )
 
 

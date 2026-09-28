@@ -9,6 +9,12 @@
       "source": "validation",
       "target": "/opt/software-agent-team/inputs/python-product-contract",
       "read_only": true
+    },
+    {
+      "id": "approved_task_brief",
+      "source": "contract-template.json",
+      "target": "/opt/software-agent-team/inputs/approved-task-brief.json",
+      "read_only": true
     }
   ],
   "gates": [
@@ -51,7 +57,9 @@
         "python",
         "/opt/software-agent-team/inputs/python-product-contract/run_commands.py",
         "--repository",
-        "/workspace"
+        "/workspace",
+        "--task-brief",
+        "/opt/software-agent-team/inputs/approved-task-brief.json"
       ],
       "working_directory": ".",
       "timeout_seconds": 150,

@@ -28,6 +28,15 @@ external service integration, or existing-repository modification.
 - `validation/run_commands.py` copies the clean immutable project into fresh
   scratch and executes the exact setup, test, and start command contract.
 
+For an adaptive product run, the exact-command gate also receives the
+Controller-verified approved TaskBrief through a read-only input mount. When
+the original request explicitly says a final newline adds no extra line to a
+JSON file line count, the gate probes empty input and the same nonempty text
+with and without a final newline through the documented CLI command. This
+keeps project-authored tests and README examples from validating one another's
+incorrect line-count interpretation. Other tasks keep the generic command
+contract without this conditional probe.
+
 Every generated project must replace the starter entry point and provide:
 
 ```json
@@ -59,7 +68,8 @@ test it with a path on stdin and verify that stdout contains only the result.
 README headings may use ordinary terms such as Installation, Usage, and
 Testing, but the document must show the exact shell form of every manifest
 command.
-When a README explicitly labels a fenced JSON block `Expected JSON output:`,
+When a README explicitly labels a fenced JSON block `Expected JSON output`
+(with or without a trailing colon),
 the label may appear immediately before the shell block or between that shell
 block and its JSON block. The shell block must contain two lines: a new
 root-level fixture made with `echo -e "..." > file`, `printf '%s' '...' > file`,

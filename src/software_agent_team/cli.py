@@ -125,6 +125,7 @@ from software_agent_team.quality_gates import (
     DockerSandboxBackend,
     QualityGateConfiguration,
     QualityGateRunner,
+    bind_run_task_brief_mount,
     load_quality_gate_configuration,
 )
 from software_agent_team.releases import (
@@ -2125,8 +2126,18 @@ def _prepare_runtime_boundary(
                 )
             )
 
+        gate_configuration = (
+            bind_run_task_brief_mount(
+                configuration,
+                run_directory=run_directory,
+                expected_run_id=run_id,
+                expected_sha256=team_plan.task_brief_sha256,
+            )
+            if team_plan is not None
+            else configuration
+        )
         return QualityGateRunner(
-            configuration,
+            gate_configuration,
             run_directory=run_directory,
             workspace=workspace,
             sandbox_image_id=frozen_sandbox_image,

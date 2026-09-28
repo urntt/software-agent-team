@@ -108,6 +108,10 @@ guess example counts or values. When the product counts Unicode code points
 in files, count the decoded original input without universal-newline
 translation; the Agent assigned test authoring must include a mixed CRLF/LF
 and non-ASCII fixture in project tests.
+When the user requests a line count and says the final newline adds no extra
+line, count a nonempty final line even without its terminating newline. The
+test author must compare the same text with and without the final newline, plus
+an empty file; a passing test that only counts `\n` terminators is insufficient.
 
 Run tests with visible per-test progress when diagnosing a delay; do not pipe
 the test runner into `tail` or another command that hides progress until exit.

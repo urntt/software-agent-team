@@ -5,26 +5,25 @@
 This document records current implementation and validation evidence. Product
 and architecture decisions belong to [`VISION.md`](VISION.md).
 
-Published `v0.4.28` passed an independent OVH candidate gate (1,931 passed,
-one root-only skip), an exact-tag hosted gate (1,928 passed, four environment
-skips), a fresh dev-account lifecycle, and a public `v0.4.27` to `v0.4.28`
-stable upgrade with rollback and exact cleanup. A fresh public DeepSeek
-journey passed one-command installation, first and later startup, approved
-Planning, and in-run controls. The Implementation Agent then committed changes
-to README, project metadata, tests, and the lock outside its approved
-`repository/src` scope. The Controller correctly stopped the run at the Git
-safety boundary; no later Agent or delivery was accepted. The ordinary-user
-account and its owned resources were cleaned up exactly.
+Published `v0.4.29` passed its OVH candidate gate (1,933 passed, one root-only
+skip), exact-tag hosted gate (1,930 passed, four environment skips), fixed dev
+account lifecycle, and public `v0.4.28` to `v0.4.29` stable upgrade. A fresh
+ordinary-user DeepSeek run completed installation, first and later startup,
+Planning approval, in-run pause/resume, all Agents, independent Review, and
+delivery. Independent black-box acceptance passed 12 of 13 cases: a two-line
+file without its final newline was reported as one line. Export, uninstall,
+and exact account and Docker-resource cleanup completed. The project defect
+and its evidence are tracked in the private issue ledger.
 
-The `0.4.29` candidate requires Planning to name a writable test-suite owner
-when it promises pytest coverage. Writer prompts state the approved scope and
-assign test, metadata, documentation, and final-command work only to the
-responsible writer. The captured `v0.4.28` proposal is rejected by the new
-Planning invariant; a version with test authoring assigned to its existing
-Integration writer passes the same production validation, without provider
-calls. Planning schema 22 records remain readable under schema 23. Focused
-validation passed; canonical gate, release, and a fresh public delivery with
-independent acceptance remain pending.
+The `0.4.30` candidate binds the frozen user TaskBrief to the trusted Python
+quality gate, probes the documented CLI with terminated and unterminated line
+fixtures when the approved request requires logical line counts, and recognizes
+README expected-JSON headings with or without a colon. Planning, writer, and
+review prompts require the paired boundary case. Focused tests pass; a real
+Docker quality replay rejects the unchanged failed delivery at the exact
+command gate and accepts a separately corrected project copy. The canonical
+gate, publication, stable upgrade, and new ordinary-user acceptance are still
+pending for this candidate.
 
 Published `v0.4.19` installed and started successfully for a fresh normal user
 on Linux with Docker and a live DeepSeek provider check. Planning, approval,

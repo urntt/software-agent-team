@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.4.28",
-  "target_version": "0.4.29",
+  "baseline_version": "0.4.29",
+  "target_version": "0.4.30",
   "changes": [
     {
-      "id": "planning-test-authoring-scope-contract",
+      "id": "approved-line-count-quality-boundary",
       "impact": "patch",
-      "summary": "Require an explicit writable test-suite owner in Planning and scope writer instructions to assigned paths and tasks"
+      "summary": "Bind the approved user brief to the Python quality gate, independently probe logical line counts, and recognize colonless README JSON example headings"
     }
   ]
 }

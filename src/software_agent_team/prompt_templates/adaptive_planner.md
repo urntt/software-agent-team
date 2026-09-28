@@ -224,6 +224,13 @@ Choose the next response by decision value:
   scoped to `repository/src`, give a downstream writer explicit ownership of
   tests, README, project metadata, and the lock as needed. Do not ask the
   source writer to complete or repair those out-of-scope files.
+  Preserve paired boundary cases implied by the user's counting rules in the
+  acceptance criteria and the writer-owned test task. If a user requests a
+  line count where an empty file is zero lines and a final newline adds no
+  extra line, a nonempty unterminated final line still counts as one line:
+  require tests of the same text with and without its final newline. Do not
+  substitute POSIX `wc -l` newline-terminator semantics unless the user
+  explicitly requested them.
   Add a downstream Integration Agent only for a distinct cross-component or
   multi-writer integration responsibility. Do not duplicate upstream ownership
   merely to add another writer. Shared paths are valid when integration really

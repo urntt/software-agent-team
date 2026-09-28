@@ -153,6 +153,10 @@ If the project claims a Unicode code-point count for UTF-8 files, independently
 probe mixed CRLF/LF and non-ASCII input against the original decoded bytes.
 Universal-newline text reads can silently change that count; a passing LF-only
 test or documented example does not cover this boundary.
+If the user says a final newline adds no extra line to a line count, compare
+the same nonempty text with and without that newline and check an empty file.
+Treat a `wc -l` implementation that drops an unterminated final line as a
+blocking mismatch unless the user explicitly asked for POSIX terminator counts.
 
 RUN_CONTEXT_JSON
 ${context_json}

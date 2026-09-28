@@ -11,7 +11,12 @@ from pathlib import Path
 
 import pytest
 
-from software_agent_team.quality_gates import load_quality_gate_configuration
+from software_agent_team.integrity import canonical_model_sha256
+from software_agent_team.quality_gates import (
+    QualityGateConfigurationError,
+    bind_run_task_brief_mount,
+    load_quality_gate_configuration,
+)
 
 REPOSITORY_ROOT = Path(__file__).parents[1]
 PROFILE_ROOT = REPOSITORY_ROOT / "profiles" / "python"
@@ -173,6 +178,13 @@ elif (
     and argv[3].endswith(".txt")
 ):
     content = (cwd / argv[3]).read_bytes().decode("utf-8")
+    line_mode = os.environ.get("FAKE_UV_LINE_COUNT_MODE")
+    if line_mode:
+        lines = content.count("\\n")
+        if line_mode == "logical" and content and not content.endswith("\\n"):
+            lines += 1
+        print(json.dumps({"lines": lines}))
+        raise SystemExit(0)
     if os.environ.get("FAKE_UV_NORMALIZE_NEWLINES") == "1":
         content = content.replace("\\r\\n", "\\n")
     print(json.dumps({"code_point_count": len(content)}))
@@ -189,6 +201,7 @@ def run_command_validator(
     repository: Path,
     *,
     environment: dict[str, str],
+    task_brief: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
@@ -196,6 +209,7 @@ def run_command_validator(
             str(PROFILE_ROOT / "validation" / "run_commands.py"),
             "--repository",
             str(repository),
+            *(["--task-brief", str(task_brief)] if task_brief is not None else []),
         ],
         check=False,
         capture_output=True,
@@ -223,6 +237,56 @@ def test_product_profile_is_separate_from_the_task_manager_evaluation() -> None:
         }
     )
     assert "task-manager" not in serialized
+
+
+def test_adaptive_quality_mount_binds_only_the_frozen_run_brief(
+    tmp_path: Path,
+) -> None:
+    configuration = load_quality_gate_configuration(
+        REPOSITORY_ROOT / "configs" / "product-policy.json",
+        PROFILE_ROOT / "quality.json",
+    )
+    brief = configuration.task_brief.model_copy(update={"run_id": "sat-test-brief"})
+    run_directory = tmp_path / brief.run_id
+    run_directory.mkdir()
+    path = run_directory / "task-brief.json"
+    path.write_text(brief.model_dump_json(), encoding="utf-8")
+    digest = canonical_model_sha256(brief)
+
+    bound = bind_run_task_brief_mount(
+        configuration,
+        run_directory=run_directory,
+        expected_run_id=brief.run_id,
+        expected_sha256=digest,
+    )
+
+    assert (
+        next(
+            mount.source
+            for mount in bound.input_mounts
+            if mount.id == "approved_task_brief"
+        )
+        == path
+    )
+    assert (
+        next(
+            mount.source
+            for mount in configuration.input_mounts
+            if mount.id == "approved_task_brief"
+        )
+        == PROFILE_ROOT / "contract-template.json"
+    )
+    path.write_text(
+        brief.model_copy(update={"title": "changed"}).model_dump_json(),
+        encoding="utf-8",
+    )
+    with pytest.raises(QualityGateConfigurationError, match="frozen team plan"):
+        bind_run_task_brief_mount(
+            configuration,
+            run_directory=run_directory,
+            expected_run_id=brief.run_id,
+            expected_sha256=digest,
+        )
 
 
 def test_product_profile_exposes_fixed_command_ownership_to_planning() -> None:
@@ -276,6 +340,8 @@ def test_product_test_gate_matches_the_delivered_pytest_entrypoint() -> None:
         "/opt/software-agent-team/inputs/python-product-contract/run_commands.py",
         "--repository",
         "/workspace",
+        "--task-brief",
+        "/opt/software-agent-team/inputs/approved-task-brief.json",
     )
     assert exact_gate.criterion_ids == (
         "AC_RUNNABLE",
@@ -766,7 +832,7 @@ def test_exact_command_gate_guides_historical_readme_fixture_corrections(
     readme = project / "README.md"
     readme.write_text(
         readme.read_text(encoding="utf-8")
-        + "\nExpected JSON output:\n```bash\n"
+        + "\n### Expected JSON output\n```bash\n"
         + fixture
         + "\nuv run link-checker . sample.txt\n```\n```json\n"
         + json.dumps({"code_point_count": 16})
@@ -828,6 +894,60 @@ def test_exact_command_gate_rejects_normalized_crlf_code_point_count(
     assert "expected=5, actual=4" in result.stderr
     calls = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
     assert calls[-1]["argv"][-1] == "sat-example-1-mixed-newlines.txt"
+
+
+@pytest.mark.parametrize(
+    ("line_mode", "expected_exit"),
+    (("terminators", 1), ("logical", 0)),
+)
+def test_exact_command_gate_checks_approved_logical_line_relation(
+    tmp_path: Path, line_mode: str, expected_exit: int
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    write_valid_project(project)
+    readme = project / "README.md"
+    readme.write_text(
+        readme.read_text(encoding="utf-8")
+        + "\nExpected JSON output:\n```bash\n"
+        + 'printf "one two\\nthree\\n" > sample.txt\n'
+        + "uv run link-checker . sample.txt\n```\n```json\n"
+        + json.dumps({"lines": 2})
+        + "\n```\n",
+        encoding="utf-8",
+    )
+    commit_project(project)
+    brief = tmp_path / "task-brief.json"
+    brief.write_text(
+        json.dumps(
+            {
+                "source_request": (
+                    "Build a JSON CLI that reports a line count. Treat an empty "
+                    "file as zero lines; a final newline must not create an extra line."
+                )
+            }
+        ),
+        encoding="utf-8",
+    )
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    write_fake_uv(fake_bin)
+
+    result = run_command_validator(
+        project,
+        task_brief=brief,
+        environment={
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "FAKE_UV_LOG": str(tmp_path / "uv.jsonl"),
+            "FAKE_UV_LINE_COUNT_MODE": line_mode,
+        },
+    )
+
+    assert result.returncode == expected_exit, result.stderr
+    if expected_exit:
+        assert "lines miscounts unterminated logical lines" in result.stderr
+        assert "expected=2, actual=1" in result.stderr
+    assert not (project / "sample.txt").exists()
 
 
 def test_exact_command_gate_rejects_json_claim_without_executable_example(

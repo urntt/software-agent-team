@@ -32,10 +32,11 @@ SHUTDOWN_SECONDS = 5
 PUBLIC_UV_CACHE = Path("/opt/software-agent-team/uv-public-cache")
 FENCED_BLOCK = re.compile(r"^```([^\n]*)\n(.*?)^```[ \t]*$", re.MULTILINE | re.DOTALL)
 EXPECTED_JSON_LABEL = re.compile(
-    r"^[ \t]*(?:#{1,6}[ \t]+)?expected[ \t]+json[ \t]+output[ \t]*:[ \t]*$",
+    r"^[ \t]*(?:#{1,6}[ \t]+)?expected[ \t]+json[ \t]+output[ \t]*:?[ \t]*$",
     re.MULTILINE | re.IGNORECASE,
 )
 CODE_POINT_KEYS = ("code_point_count", "code_points")
+LINE_COUNT_KEYS = ("line_count", "lines")
 FIXTURE_HINT = (
     "use printf '%s' 'hello world' > example.txt for plain text, or a "
     "printf format containing only \\n, \\r, \\t, and \\\\ escapes"
@@ -477,6 +478,105 @@ def _verify_code_point_newlines(
         variant.unlink(missing_ok=True)
 
 
+def _requires_logical_line_probe(task_brief_path: Path | None) -> bool:
+    """Recognize one explicit user-owned line-count relation, not project prose."""
+
+    if task_brief_path is None:
+        return False
+    if task_brief_path.is_symlink() or not task_brief_path.is_file():
+        fail("approved task brief is unavailable")
+    raw = task_brief_path.read_bytes()
+    if len(raw) > 1_048_576:
+        fail("approved task brief is too large")
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        fail("approved task brief is invalid JSON")
+    if not isinstance(payload, dict) or not isinstance(
+        payload.get("source_request"), str
+    ):
+        fail("approved task brief has no source request")
+    request = re.sub(r"\s+", " ", payload["source_request"].casefold())
+    return bool(
+        re.search(r"\b(?:line count|number of lines)\b", request)
+        and re.search(r"\bjson\b", request)
+        and re.search(
+            r"\b(?:final|trailing) newline\b.{0,80}"
+            r"\b(?:not|no|without)\b.{0,80}"
+            r"\b(?:extra|additional)\b.{0,20}\bline\b",
+            request,
+        )
+    )
+
+
+def _verify_logical_line_count(
+    index: int,
+    argv: tuple[str, ...],
+    fixture: Path,
+    expected: dict[str, object],
+    clean: Path,
+    snapshot: dict[Path, tuple[str, int]],
+    environment_overrides: dict[str, str] | None,
+) -> None:
+    """Probe the approved relation across terminated and unterminated lines."""
+
+    keys = tuple(key for key in LINE_COUNT_KEYS if key in expected)
+    positions = [
+        position
+        for position, argument in enumerate(argv)
+        if argument in {fixture.name, f"./{fixture.name}"}
+    ]
+    if len(positions) != 1:
+        fail(f"README JSON example {index} cannot bind its line-count fixture")
+    cases = (
+        ("empty", "", 0),
+        ("unterminated", "one two\nthree", 2),
+        ("terminated", "one two\nthree\n", 2),
+        ("mixed", "one\r\ntwo\n", 2),
+    )
+    for name, content, required in cases:
+        variant = clean / f"sat-example-{index}-logical-lines-{name}.txt"
+        if (
+            variant.relative_to(clean) in snapshot
+            or variant.exists()
+            or variant.is_symlink()
+        ):
+            fail(f"README JSON example {index} {name} line fixture already exists")
+        variant.write_bytes(content.encode("utf-8"))
+        variant_argv = list(argv)
+        variant_argv[positions[0]] = variant.name
+        try:
+            result = _run(
+                tuple(variant_argv),
+                cwd=clean,
+                timeout_seconds=EXAMPLE_TIMEOUT_SECONDS,
+                environment_overrides=environment_overrides,
+            )
+            _require_success(f"README JSON example {index} {name} line check", result)
+            try:
+                actual = json.loads(result.stdout_tail)
+            except json.JSONDecodeError:
+                fail(f"README JSON example {index} {name} line check did not emit JSON")
+            if not isinstance(actual, dict):
+                fail(
+                    f"README JSON example {index} {name} line check needs a JSON object"
+                )
+            for key in keys:
+                observed = actual.get(key)
+                if type(observed) is not int or observed != required:
+                    detail = (
+                        str(observed)
+                        if type(observed) is int
+                        else type(observed).__name__
+                    )
+                    fail(
+                        f"README JSON example {index} {key} miscounts "
+                        f"{name} logical lines: expected={required}, actual={detail}"
+                    )
+        finally:
+            variant.unlink(missing_ok=True)
+
+
 def _example_fixture(
     line: str, clean: Path, snapshot: dict[Path, tuple[str, int]]
 ) -> Path:
@@ -508,9 +608,11 @@ def _verify_readme_examples(
     environment_overrides: dict[str, str] | None,
     *,
     start_waited_for_input: bool,
+    require_logical_line_probe: bool = False,
 ) -> None:
     readme = (clean / "README.md").read_text(encoding="utf-8")
     checked_interactive = False
+    checked_logical_lines = False
     for index, (script, expected) in enumerate(_readme_json_examples(readme), start=1):
         lines = [line.strip() for line in script.splitlines() if line.strip()]
         if len(lines) != 2:
@@ -575,15 +677,36 @@ def _verify_readme_examples(
             _verify_code_point_newlines(
                 index, argv, fixture, expected, clean, snapshot, environment_overrides
             )
+            if (
+                require_logical_line_probe
+                and isinstance(expected, dict)
+                and any(key in expected for key in LINE_COUNT_KEYS)
+            ):
+                _verify_logical_line_count(
+                    index,
+                    argv,
+                    fixture,
+                    expected,
+                    clean,
+                    snapshot,
+                    environment_overrides,
+                )
+                checked_logical_lines = True
         finally:
             fixture.unlink(missing_ok=True)
         _require_delivery_preserved(
             clean, snapshot, command_label=f"README JSON example {index}"
         )
+    if require_logical_line_probe and not checked_logical_lines:
+        fail(
+            "approved line-count task requires a README Expected JSON output "
+            "example with a lines or line_count field and a bound file fixture"
+        )
 
 
-def execute(repository: Path) -> None:
+def execute(repository: Path, task_brief_path: Path | None = None) -> None:
     commands: ProjectCommands = validate(repository)
+    require_logical_line_probe = _requires_logical_line_probe(task_brief_path)
     with tempfile.TemporaryDirectory(prefix="sat-project-commands-") as temporary:
         clean = Path(temporary) / "project"
         clean.mkdir()
@@ -652,6 +775,7 @@ def execute(repository: Path) -> None:
             commands,
             command_environment,
             start_waited_for_input=start.timed_out,
+            require_logical_line_probe=require_logical_line_probe,
         )
         mode = "running_after_grace" if start.timed_out else "exited_zero"
         print(
@@ -671,8 +795,9 @@ def execute(repository: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repository", required=True, type=Path)
+    parser.add_argument("--task-brief", type=Path)
     args = parser.parse_args()
-    execute(args.repository)
+    execute(args.repository, args.task_brief)
 
 
 if __name__ == "__main__":
