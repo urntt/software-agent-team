@@ -763,6 +763,16 @@ class ModelPricing(CachePriceSupport):
             + Decimal(self.max_output_tokens) * self.output_cost_per_million_usd
         ) / Decimal(1_000_000)
 
+    @model_serializer(mode="wrap")
+    def serialize_optional_call_limits(self, handler):
+        """Keep absent transient limits out of historical pricing bytes."""
+
+        result = handler(self)
+        for name in ("cache_pricing", "max_input_tokens", "max_output_tokens"):
+            if result.get(name) is None:
+                result.pop(name, None)
+        return result
+
     def estimate_cost(
         self,
         *,

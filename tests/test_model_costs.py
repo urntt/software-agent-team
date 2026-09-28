@@ -242,6 +242,11 @@ def test_legacy_pricing_extension_does_not_change_serialization() -> None:
         "pricing_observed_at": None,
     }
     assert ModelPricing.model_validate(legacy).model_dump(mode="json") == legacy
+    bounded = ModelPricing.model_validate(
+        {**legacy, "max_input_tokens": 100_000, "max_output_tokens": 20_000}
+    )
+    assert bounded.model_dump(mode="json")["max_input_tokens"] == 100_000
+    assert bounded.model_dump(mode="json")["max_output_tokens"] == 20_000
 
 
 def test_noninteractive_profile_cache_price_configuration(
