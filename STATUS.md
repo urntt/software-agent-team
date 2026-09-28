@@ -1,23 +1,28 @@
 # Project Status
 
-**Last updated:** September 27, 2026
+**Last updated:** September 28, 2026
 
 This document records current implementation and validation evidence. Product
 and architecture decisions belong to [`VISION.md`](VISION.md).
 
-Published `v0.4.23` passed its exact-tag hosted gate (1,915 passed, four
-environment skips) and produced one identity manifest. A fresh ordinary-user
-run completed public one-command installation, first DeepSeek configuration,
-and later startup, but Planning rejected three accepted provider submissions
-before proposal approval. The request's functional rule that a final newline
-must not create an extra line matched the generic absolute-guarantee detector,
-which required all four trust-boundary Review obligations for a counting rule.
-The `0.4.24` candidate classifies trust-boundary guarantees separately from
-functional negative rules while retaining the four-boundary requirement for
-symlink, access, and similar guarantees. Focused Planning and dynamic prompt
-suites passed (257 and 64 tests); clean canonical gate, exact-tag publication,
-and fresh public delivery remain pending. No Agent build, accepted delivery,
-independent acceptance, export, or uninstall was established by that run.
+Published `v0.4.24` passed its exact-tag hosted gate (1,917 passed, four
+environment skips) and produced one identity manifest. Its Planning
+classification fix passed a clean OVH canonical gate (1,920 passed, one
+root-only skip). A fresh ordinary-user public install completed first and
+later DeepSeek startup, Planning approval, in-run pause/resume, and three
+implementation iterations. In the third iteration all five deterministic
+commands passed, including 63 generated-project tests; general and security
+Review accepted. Experience Review returned `revise` because its read-only
+source mount and non-executable temporary mounts prevented a direct console
+script probe, despite the documented command passing in the clean executable
+committed-file copy. The controller failed at the approved iteration limit;
+there was no accepted delivery, independent acceptance, product export, or
+uninstall. The dedicated ordinary-user account and owned resources were
+cleaned up. The `0.4.25` candidate clarifies that a Review-only mount failure
+is a non-blocking environment observation when the clean-copy command gate
+passes; a failed gate or independently reproduced product failure remains
+blocking. The affected dynamic-prompt suite passed 64 tests. A clean candidate
+gate, exact-tag publication, and a fresh public delivery remain pending.
 
 Published `v0.4.19` installed and started successfully for a fresh normal user
 on Linux with Docker and a live DeepSeek provider check. Planning, approval,

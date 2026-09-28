@@ -646,6 +646,16 @@ def test_review_prompt_requires_adversarial_absolute_claim_boundaries() -> None:
     assert "exact start argv" in rendered
     assert "without adding arguments" in compact
     assert "clean-workspace pytest evidence" in rendered
+    assert "Review source mount is read-only" in compact
+    assert (
+        "`CHECK_EXACT_PROJECT_COMMANDS` result from a fresh committed-file copy"
+        in compact
+    )
+    assert (
+        "A failed clean-copy gate or an independently reproduced product "
+        "failure remains blocking"
+    ) in compact
+    assert "Do not require an alternate README entry point" in compact
     assert "criterion_assessments" in rendered
     assert "bounded foreground commands" in rendered
     assert "negative, empty, singleton, boundary" in rendered
@@ -939,6 +949,8 @@ def test_experience_specialization_persists_its_typed_assessment() -> None:
         AgentSpecialization.EXPERIENCE_ASSESSMENT,
         ArtifactKind.EXPERIENCE_ASSESSMENT,
     )
+    prompt = " ".join(render_dynamic_agent_prompt(inputs).split())
+    assert "do not turn it into a documentation recovery requirement" in prompt
     request = build_dynamic_agent_execution_request(inputs)
     response = ExperienceAssessmentResponse(
         verdict="accept",

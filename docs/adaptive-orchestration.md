@@ -1204,6 +1204,16 @@ into fresh scratch, then executes exact setup,
 test, and start argv through that cache. Its start argv
 must work from the project root without appended arguments. Independent Review
 probes task-specific runtime behavior that this generic contract cannot infer.
+The Reviewer's read-only source mount can contain ignored virtual environments
+created at a different path, and its writable temporary mounts can disallow
+executing new files. Those restrictions can prevent a direct replay of a
+documented command even when the command passes in the gate's clean executable
+copy. Review records that limitation without converting it into a product or
+documentation blocker; the clean-copy command result establishes command
+runnability, while task-specific behavior still needs independent evidence.
+An independently reproduced failure or a failed clean-copy command remains a
+blocker. Review does not prescribe a fallback entry point without verifying it
+in an approved target environment.
 An explicitly labeled README `Expected JSON output:` is also checked in that
 clean scratch: the bounded shell fixture creates one new root file, the documented
 exact start command runs with optional arguments, and parsed stdout must equal

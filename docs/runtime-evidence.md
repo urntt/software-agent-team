@@ -94,6 +94,12 @@ model evidence rather than a controller fact: a later concrete counterexample
 still invalidates acceptance and must be preserved as a product defect. The
 controller must never reinterpret a model's broad claim or self-authored test
 as deterministic proof.
+The exact project-command gate runs in a fresh executable committed-file copy.
+The Review source is read-only and can contain ignored setup files from another
+mount; its temporary mounts can prohibit executable files. Review treats a
+failure caused only by those restrictions as an environment observation when
+the clean-copy command gate passes. A failed gate or a product failure
+reproduced independently of the Review mount remains blocking.
 
 Reviewer severity and controller termination are separate concepts. Any
 correctable implementation defect, including a failed acceptance gate or a

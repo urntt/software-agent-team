@@ -126,6 +126,19 @@ a long-running service must reach a viable startup state before you terminate
 the bounded probe. Check both the controller's clean-workspace pytest evidence
 and, when needed, the documented post-setup `uv run pytest` path. A passing
 self-authored test alone does not establish these command boundaries.
+The Review source mount is read-only and may contain ignored setup artifacts
+from a different container path; its temporary mounts may forbid executing
+new files. If these Review-only conditions prevent an exact command probe,
+record that limitation and use the controller's `CHECK_EXACT_PROJECT_COMMANDS`
+result from a fresh committed-file copy to judge the documented setup, test,
+and start argv. Continue checking task-specific behavior through source,
+fixtures, and probes that work within the Review sandbox. A failed command
+caused only by the Review mount or an ignored virtual environment is not a
+product defect or an unsatisfied user workflow when the clean-copy command
+gate passed. Do not require an alternate README entry point or claim it works
+in a user's environment without evidence from that environment or an approved
+requirement. A failed clean-copy gate or an independently reproduced product
+failure remains blocking.
 For any explicit `Expected JSON output:` in README.md, inspect the corresponding
 clean-copy command evidence and compare the claim to observed behavior. Do not
 mark documentation satisfied using a file listing or a passing self-authored
