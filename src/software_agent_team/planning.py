@@ -90,6 +90,11 @@ from software_agent_team.model_runtime import (
     openclaw_invocation_thinking_level,
     runtime_profile_for_model,
 )
+from software_agent_team.planning_normalization import (
+    canonicalize_model_path,
+    normalize_response_envelope,
+    strip_redundant_stable_id_prefix,
+)
 from software_agent_team.progress import (
     RunEventVisibility,
     TerminalColorMode,
@@ -1183,12 +1188,6 @@ def _clean_unique(values: tuple[str, ...], *, label: str) -> tuple[str, ...]:
     return cleaned
 
 
-def _strip_redundant_stable_id_prefix(value: str, stable_id: str) -> str:
-    """Remove only repeated copies of the requirement's stable-ID presentation."""
-
-    return re.sub(rf"^(?:{re.escape(stable_id)}\s*:\s*)+", "", value)
-
-
 def _render_prefixed_text(prefix: str, value: str) -> tuple[str, ...]:
     """Render untrusted text without letting continuations escape their field."""
 
@@ -1221,24 +1220,6 @@ def _safe_path(value: str) -> str:
     ):
         raise ValueError("paths must be canonical safe relative POSIX paths")
     return cleaned
-
-
-def _canonicalize_model_path(value: object) -> object:
-    """Normalize only unambiguous safe relative-path presentation variants."""
-
-    if not isinstance(value, str):
-        return value
-    cleaned = value.strip()
-    path = PurePosixPath(cleaned)
-    if (
-        not cleaned
-        or "\\" in cleaned
-        or path.is_absolute()
-        or path == PurePosixPath(".")
-        or ".." in path.parts
-    ):
-        return value
-    return str(path)
 
 
 def _compile_task_dependency_projection(
@@ -1339,258 +1320,14 @@ def _compile_task_dependency_projection(
     return ("compiled cross-Agent task dependencies from the authoritative Agent DAG",)
 
 
-def _normalize_planning_response_payload(
-    payload: dict[str, object],
+def _normalize_planning_decision_relations(
+    proposal: dict[str, object],
+    product_dimensions: dict[str, object],
     *,
-    profile_criterion_ids: Collection[str] = (),
-    user_inputs: Collection[str] = (),
-    question_answers: Mapping[str, str] | None = None,
-    question_dimension_values: Mapping[
-        str,
-        Mapping[ProductDefinitionDimension, str],
-    ]
-    | None = None,
-) -> tuple[dict[str, object], tuple[str, ...]]:
-    """Apply bounded semantic-preserving normalization before strict validation."""
-
-    profile_criterion_ids = tuple(profile_criterion_ids)
-    normalized: dict[str, object] = json.loads(json.dumps(payload))
-    changes: list[str] = []
-    envelope_fields = {"kind", "question", "proposal"}
-    if not envelope_fields.intersection(normalized):
-        payload_fields = set(normalized)
-        bare_candidates: list[tuple[PlanningResponseKind, type[BaseModel]]] = []
-        for response_kind, body_type in (
-            (PlanningResponseKind.QUESTION, PlanningQuestion),
-            (PlanningResponseKind.PROPOSAL, PlanningProposalBody),
-        ):
-            allowed_fields = set(body_type.model_fields)
-            required_fields = {
-                name
-                for name, field in body_type.model_fields.items()
-                if field.is_required()
-            }
-            if required_fields.issubset(payload_fields) and payload_fields.issubset(
-                allowed_fields
-            ):
-                bare_candidates.append((response_kind, body_type))
-        if len(bare_candidates) == 1:
-            response_kind, _ = bare_candidates[0]
-            normalized = {
-                "kind": response_kind.value,
-                response_kind.value: normalized,
-            }
-            changes.append(
-                f"framed bare {response_kind.value} body as "
-                f"{response_kind.value} response"
-            )
-    if "kind" not in normalized:
-        candidates = tuple(
-            name
-            for name in ("question", "proposal")
-            if normalized.get(name) is not None
-        )
-        if len(candidates) == 1:
-            normalized["kind"] = candidates[0]
-            changes.append(f"inferred response kind as {candidates[0]}")
-
-    question = normalized.get("question")
-    if isinstance(question, dict):
-        try:
-            question_category = PlanningDecisionCategory(
-                question.get("decision_category")
-            )
-        except (TypeError, ValueError):
-            question_category = None
-        if question_category is not None:
-            expected_owner = _DECISION_AUTHORITY[question_category]
-            if question.get("decision_owner") != expected_owner.value:
-                question["decision_owner"] = expected_owner.value
-                changes.append(
-                    "compiled question.decision_owner from category "
-                    f"{question_category.value}"
-                )
-
-    proposal = normalized.get("proposal")
-    if not isinstance(proposal, dict):
-        return normalized, tuple(changes)
-    changes.extend(_compile_task_dependency_projection(proposal))
-    requirements = proposal.get("requirements")
-    if isinstance(requirements, list) and any(
-        isinstance(item, dict) for item in requirements
-    ):
-        if not all(isinstance(item, dict) for item in requirements):
-            raise _planning_context_invariant(
-                "planning_requirement_atom_shape",
-                (
-                    "proposal requirements must be one array of atomic objects; "
-                    "string and object entries cannot be mixed"
-                ),
-                paths=("/proposal/requirements",),
-            )
-        compiled_requirements: list[ProposedRequirement] = []
-        for requirement_index, item in enumerate(requirements):
-            try:
-                compiled_requirements.append(ProposedRequirement.model_validate(item))
-            except ValidationError as error:
-                raise _planning_context_invariant(
-                    "planning_requirement_atom_schema",
-                    (
-                        f"proposal requirement {requirement_index} must contain "
-                        "exactly one stable REQ_ id and one non-empty description: "
-                        f"{_safe_validation_detail(error)}"
-                    ),
-                    paths=(f"/proposal/requirements/{requirement_index}",),
-                ) from error
-        compiled_ids = tuple(item.id for item in compiled_requirements)
-        compiled_descriptions = tuple(
-            item.description for item in compiled_requirements
-        )
-        if len(compiled_ids) != len(set(compiled_ids)):
-            raise _planning_context_invariant(
-                "planning_requirement_atom_id_unique",
-                "proposal requirement objects must use unique stable REQ_ IDs",
-                paths=("/proposal/requirements",),
-            )
-        if len(compiled_descriptions) != len(set(compiled_descriptions)):
-            raise _planning_context_invariant(
-                "planning_requirement_atom_description_unique",
-                "proposal requirement objects must use unique descriptions",
-                paths=("/proposal/requirements",),
-            )
-        proposal["requirements"] = list(compiled_descriptions)
-        proposal["requirement_ids"] = list(compiled_ids)
-        requirements = proposal["requirements"]
-        changes.append(
-            "compiled atomic proposal.requirements into canonical descriptions "
-            "and stable IDs"
-        )
-    requirement_ids = proposal.get("requirement_ids")
-    if (
-        isinstance(requirements, list)
-        and isinstance(requirement_ids, list)
-        and len(requirements) == len(requirement_ids)
-    ):
-        for requirement_index, (description, requirement_id) in enumerate(
-            zip(requirements, requirement_ids, strict=True)
-        ):
-            if (
-                not isinstance(description, str)
-                or not isinstance(requirement_id, str)
-                or re.fullmatch(r"REQ_[A-Z0-9_]+", requirement_id) is None
-            ):
-                continue
-            canonical_description = _strip_redundant_stable_id_prefix(
-                description,
-                requirement_id,
-            )
-            if canonical_description != description:
-                requirements[requirement_index] = canonical_description
-                changes.append(
-                    "removed redundant stable ID prefix from "
-                    f"proposal.requirements[{requirement_index}]"
-                )
-
-    assumptions = proposal.get("assumptions")
-    if isinstance(assumptions, list) and (
-        not assumptions or any(isinstance(item, dict) for item in assumptions)
-    ):
-        if not all(isinstance(item, dict) for item in assumptions):
-            raise _planning_context_invariant(
-                "planning_assumption_atom_shape",
-                (
-                    "proposal assumptions must be one array of atomic objects; "
-                    "string and object entries cannot be mixed"
-                ),
-                paths=("/proposal/assumptions",),
-            )
-        compiled_assumptions: list[ProposedAssumption] = []
-        for assumption_index, item in enumerate(assumptions):
-            try:
-                compiled_assumptions.append(ProposedAssumption.model_validate(item))
-            except ValidationError as error:
-                raise _planning_context_invariant(
-                    "planning_assumption_atom_schema",
-                    (
-                        f"proposal assumption {assumption_index} must contain "
-                        "exactly one statement and one stable autonomous decision "
-                        f"reference: {_safe_validation_detail(error)}"
-                    ),
-                    paths=(f"/proposal/assumptions/{assumption_index}",),
-                ) from error
-        compiled_statements = tuple(item.statement for item in compiled_assumptions)
-        if len(compiled_statements) != len(set(compiled_statements)):
-            raise _planning_context_invariant(
-                "planning_assumption_atom_statement_unique",
-                "proposal assumption objects must use unique statements",
-                paths=("/proposal/assumptions",),
-            )
-        proposal["assumptions"] = list(compiled_statements)
-        proposal["assumption_decision_ids"] = [
-            item.decision_id for item in compiled_assumptions
-        ]
-        changes.append(
-            "compiled atomic proposal.assumptions into canonical statements "
-            "and autonomous decision references"
-        )
-
-    product_definition = proposal.get("product_definition")
-    product_dimensions = (
-        product_definition if isinstance(product_definition, dict) else {}
-    )
-    for dimension in ProductDefinitionDimension:
-        if dimension is ProductDefinitionDimension.DELIVERY_MATURITY:
-            continue
-        item = product_dimensions.get(dimension.value)
-        if (
-            not isinstance(item, dict)
-            or item.get("disposition")
-            != ProductDefinitionDisposition.RESOLVED_QUESTION.value
-            or not isinstance((question_id := item.get("source")), str)
-        ):
-            continue
-        answer = None if question_answers is None else question_answers.get(question_id)
-        dimension_values = (
-            {}
-            if question_dimension_values is None
-            else question_dimension_values.get(question_id, {})
-        )
-        resolved_answer = dimension_values.get(dimension, answer)
-        if (
-            resolved_answer is None
-            or not resolved_answer.strip()
-            or len(resolved_answer.strip()) > 1000
-            or item.get("statement") == resolved_answer.strip()
-        ):
-            continue
-        item["statement"] = resolved_answer.strip()
-        changes.append(
-            "compiled proposal.product_definition."
-            f"{dimension.value}.statement from exact question answer"
-        )
-    for dimension in ProductDefinitionDimension:
-        if dimension is ProductDefinitionDimension.PRIMARY_WORKFLOW:
-            # Core workflow materiality is never normalized away. Preserve the
-            # proposed trace so current validation can request an atomic repair.
-            continue
-        item = product_dimensions.get(dimension.value)
-        if (
-            not isinstance(item, dict)
-            or item.get("disposition")
-            != ProductDefinitionDisposition.NOT_MATERIAL.value
-        ):
-            continue
-        removed_references = False
-        for field_name in ("requirement_ids", "criterion_ids", "decision_ids"):
-            references = item.get(field_name)
-            if isinstance(references, list) and references:
-                item[field_name] = []
-                removed_references = True
-        if removed_references:
-            changes.append(
-                "removed downstream references from not-material "
-                f"proposal.product_definition.{dimension.value}"
-            )
+    user_inputs: Collection[str],
+    changes: list[str],
+) -> None:
+    """Compile decision identities and user-grounded relations in one owner."""
 
     decisions = proposal.get("decisions")
     assumption_decision_ids = proposal.get("assumption_decision_ids")
@@ -1856,6 +1593,235 @@ def _normalize_planning_response_payload(
                 continue
             retained_decisions.append(decision)
         proposal["decisions"] = retained_decisions
+
+
+def _normalize_planning_response_payload(
+    payload: dict[str, object],
+    *,
+    profile_criterion_ids: Collection[str] = (),
+    user_inputs: Collection[str] = (),
+    question_answers: Mapping[str, str] | None = None,
+    question_dimension_values: Mapping[
+        str,
+        Mapping[ProductDefinitionDimension, str],
+    ]
+    | None = None,
+) -> tuple[dict[str, object], tuple[str, ...]]:
+    """Apply bounded semantic-preserving normalization before strict validation."""
+
+    profile_criterion_ids = tuple(profile_criterion_ids)
+    normalized: dict[str, object] = json.loads(json.dumps(payload))
+    changes: list[str] = []
+    normalized, envelope_changes = normalize_response_envelope(
+        normalized,
+        body_types=(
+            (PlanningResponseKind.QUESTION.value, PlanningQuestion),
+            (PlanningResponseKind.PROPOSAL.value, PlanningProposalBody),
+        ),
+    )
+    changes.extend(envelope_changes)
+
+    question = normalized.get("question")
+    if isinstance(question, dict):
+        try:
+            question_category = PlanningDecisionCategory(
+                question.get("decision_category")
+            )
+        except (TypeError, ValueError):
+            question_category = None
+        if question_category is not None:
+            expected_owner = _DECISION_AUTHORITY[question_category]
+            if question.get("decision_owner") != expected_owner.value:
+                question["decision_owner"] = expected_owner.value
+                changes.append(
+                    "compiled question.decision_owner from category "
+                    f"{question_category.value}"
+                )
+
+    proposal = normalized.get("proposal")
+    if not isinstance(proposal, dict):
+        return normalized, tuple(changes)
+    changes.extend(_compile_task_dependency_projection(proposal))
+    requirements = proposal.get("requirements")
+    if isinstance(requirements, list) and any(
+        isinstance(item, dict) for item in requirements
+    ):
+        if not all(isinstance(item, dict) for item in requirements):
+            raise _planning_context_invariant(
+                "planning_requirement_atom_shape",
+                (
+                    "proposal requirements must be one array of atomic objects; "
+                    "string and object entries cannot be mixed"
+                ),
+                paths=("/proposal/requirements",),
+            )
+        compiled_requirements: list[ProposedRequirement] = []
+        for requirement_index, item in enumerate(requirements):
+            try:
+                compiled_requirements.append(ProposedRequirement.model_validate(item))
+            except ValidationError as error:
+                raise _planning_context_invariant(
+                    "planning_requirement_atom_schema",
+                    (
+                        f"proposal requirement {requirement_index} must contain "
+                        "exactly one stable REQ_ id and one non-empty description: "
+                        f"{_safe_validation_detail(error)}"
+                    ),
+                    paths=(f"/proposal/requirements/{requirement_index}",),
+                ) from error
+        compiled_ids = tuple(item.id for item in compiled_requirements)
+        compiled_descriptions = tuple(
+            item.description for item in compiled_requirements
+        )
+        if len(compiled_ids) != len(set(compiled_ids)):
+            raise _planning_context_invariant(
+                "planning_requirement_atom_id_unique",
+                "proposal requirement objects must use unique stable REQ_ IDs",
+                paths=("/proposal/requirements",),
+            )
+        if len(compiled_descriptions) != len(set(compiled_descriptions)):
+            raise _planning_context_invariant(
+                "planning_requirement_atom_description_unique",
+                "proposal requirement objects must use unique descriptions",
+                paths=("/proposal/requirements",),
+            )
+        proposal["requirements"] = list(compiled_descriptions)
+        proposal["requirement_ids"] = list(compiled_ids)
+        requirements = proposal["requirements"]
+        changes.append(
+            "compiled atomic proposal.requirements into canonical descriptions "
+            "and stable IDs"
+        )
+    requirement_ids = proposal.get("requirement_ids")
+    if (
+        isinstance(requirements, list)
+        and isinstance(requirement_ids, list)
+        and len(requirements) == len(requirement_ids)
+    ):
+        for requirement_index, (description, requirement_id) in enumerate(
+            zip(requirements, requirement_ids, strict=True)
+        ):
+            if (
+                not isinstance(description, str)
+                or not isinstance(requirement_id, str)
+                or re.fullmatch(r"REQ_[A-Z0-9_]+", requirement_id) is None
+            ):
+                continue
+            canonical_description = strip_redundant_stable_id_prefix(
+                description,
+                requirement_id,
+            )
+            if canonical_description != description:
+                requirements[requirement_index] = canonical_description
+                changes.append(
+                    "removed redundant stable ID prefix from "
+                    f"proposal.requirements[{requirement_index}]"
+                )
+
+    assumptions = proposal.get("assumptions")
+    if isinstance(assumptions, list) and (
+        not assumptions or any(isinstance(item, dict) for item in assumptions)
+    ):
+        if not all(isinstance(item, dict) for item in assumptions):
+            raise _planning_context_invariant(
+                "planning_assumption_atom_shape",
+                (
+                    "proposal assumptions must be one array of atomic objects; "
+                    "string and object entries cannot be mixed"
+                ),
+                paths=("/proposal/assumptions",),
+            )
+        compiled_assumptions: list[ProposedAssumption] = []
+        for assumption_index, item in enumerate(assumptions):
+            try:
+                compiled_assumptions.append(ProposedAssumption.model_validate(item))
+            except ValidationError as error:
+                raise _planning_context_invariant(
+                    "planning_assumption_atom_schema",
+                    (
+                        f"proposal assumption {assumption_index} must contain "
+                        "exactly one statement and one stable autonomous decision "
+                        f"reference: {_safe_validation_detail(error)}"
+                    ),
+                    paths=(f"/proposal/assumptions/{assumption_index}",),
+                ) from error
+        compiled_statements = tuple(item.statement for item in compiled_assumptions)
+        if len(compiled_statements) != len(set(compiled_statements)):
+            raise _planning_context_invariant(
+                "planning_assumption_atom_statement_unique",
+                "proposal assumption objects must use unique statements",
+                paths=("/proposal/assumptions",),
+            )
+        proposal["assumptions"] = list(compiled_statements)
+        proposal["assumption_decision_ids"] = [
+            item.decision_id for item in compiled_assumptions
+        ]
+        changes.append(
+            "compiled atomic proposal.assumptions into canonical statements "
+            "and autonomous decision references"
+        )
+
+    product_definition = proposal.get("product_definition")
+    product_dimensions = (
+        product_definition if isinstance(product_definition, dict) else {}
+    )
+    for dimension in ProductDefinitionDimension:
+        if dimension is ProductDefinitionDimension.DELIVERY_MATURITY:
+            continue
+        item = product_dimensions.get(dimension.value)
+        if (
+            not isinstance(item, dict)
+            or item.get("disposition")
+            != ProductDefinitionDisposition.RESOLVED_QUESTION.value
+            or not isinstance((question_id := item.get("source")), str)
+        ):
+            continue
+        answer = None if question_answers is None else question_answers.get(question_id)
+        dimension_values = (
+            {}
+            if question_dimension_values is None
+            else question_dimension_values.get(question_id, {})
+        )
+        resolved_answer = dimension_values.get(dimension, answer)
+        if (
+            resolved_answer is None
+            or not resolved_answer.strip()
+            or len(resolved_answer.strip()) > 1000
+            or item.get("statement") == resolved_answer.strip()
+        ):
+            continue
+        item["statement"] = resolved_answer.strip()
+        changes.append(
+            "compiled proposal.product_definition."
+            f"{dimension.value}.statement from exact question answer"
+        )
+    for dimension in ProductDefinitionDimension:
+        if dimension is ProductDefinitionDimension.PRIMARY_WORKFLOW:
+            # Core workflow materiality is never normalized away. Preserve the
+            # proposed trace so current validation can request an atomic repair.
+            continue
+        item = product_dimensions.get(dimension.value)
+        if (
+            not isinstance(item, dict)
+            or item.get("disposition")
+            != ProductDefinitionDisposition.NOT_MATERIAL.value
+        ):
+            continue
+        removed_references = False
+        for field_name in ("requirement_ids", "criterion_ids", "decision_ids"):
+            references = item.get(field_name)
+            if isinstance(references, list) and references:
+                item[field_name] = []
+                removed_references = True
+        if removed_references:
+            changes.append(
+                "removed downstream references from not-material "
+                f"proposal.product_definition.{dimension.value}"
+            )
+
+    _normalize_planning_decision_relations(
+        proposal, product_dimensions, user_inputs=user_inputs, changes=changes
+    )
     acceptance_criteria = proposal.get("acceptance_criteria")
     tasks = proposal.get("tasks")
     agents = proposal.get("agents")
@@ -1984,7 +1950,7 @@ def _normalize_planning_response_payload(
             if not isinstance(paths, list):
                 continue
             for path_index, value in enumerate(paths):
-                canonical = _canonicalize_model_path(value)
+                canonical = canonicalize_model_path(value)
                 if canonical != value:
                     paths[path_index] = canonical
                     changes.append(
@@ -1996,7 +1962,7 @@ def _normalize_planning_response_payload(
             if not isinstance(agent, dict) or "workspace_scope" not in agent:
                 continue
             value = agent["workspace_scope"]
-            canonical = _canonicalize_model_path(value)
+            canonical = canonicalize_model_path(value)
             if canonical != value:
                 agent["workspace_scope"] = canonical
                 changes.append(
@@ -9733,7 +9699,7 @@ def render_planning_overview(
         lines.extend(_render_prefixed_text("    - ", item))
     lines.append("  Requirements:")
     for requirement_id, description in requirement_pairs:
-        canonical_description = _strip_redundant_stable_id_prefix(
+        canonical_description = strip_redundant_stable_id_prefix(
             description,
             requirement_id,
         )

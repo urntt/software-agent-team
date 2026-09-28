@@ -1013,6 +1013,24 @@ to its authoritative owner.
 
 ## Contribution Workflow
 
+Planning rule changes should first be checked against persisted turn evidence.
+`scripts/audit_planning_rules.py` accepts turn JSON files from one known source
+version and emits only aggregate normalization and validator rule IDs, model
+fingerprints, failure classes, turn results, and correction outcomes. For example:
+
+```bash
+python scripts/audit_planning_rules.py --source-version v0.4.31 \
+  /path/to/one-run/planning/turns/*.json > planning-rule-report.json
+```
+
+Keep runs from different source versions in separate reports. The source version
+is supplied by the operator and must be checked against that run's provenance;
+the script cannot infer it from a turn. `unclassified_*` counts indicate that
+the classifier needs an explicit rule owner before comparing reports. Trigger
+counts describe observations, not causal benefit: retain user-authority and
+safety guards unless counterexamples and production-interface tests support a
+change. Never publish the input turns merely to share this summary.
+
 1. Inspect `git status` before editing.
 2. Read `VISION.md` before changing architecture, scope, or experiments.
 3. Keep every experimental variable and budget explicit.

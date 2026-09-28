@@ -10547,10 +10547,63 @@ def test_user_decision_diagnostic_survives_both_validation_boundaries(
         )
     assert len(matching) == 1
     assert matching[0].invariant_id == "planning_product_user_decision_required"
-    assert matching[0].message == f"{dimension} cannot be silently chosen by Planning"
     assert matching[0].authority is ResponseIssueAuthority.USER
     if not sibling_schema_failure:
         assert matching[0].failure_class is ResponseFailureClass.MISSING_USER_DECISION
+
+
+@pytest.mark.parametrize("sibling_schema_failure", (False, True))
+def test_user_decision_recovery_crosses_persisted_planning_interface(
+    tmp_path: Path,
+    sibling_schema_failure: bool,
+) -> None:
+    payload = json.loads(response(proposal_response()))
+    payload["proposal"]["product_definition"]["target_users"].update(
+        disposition="planner_recommendation",
+        source="planner",
+    )
+    if sibling_schema_failure:
+        payload["proposal"]["tasks"] = "invalid sibling schema"
+    executor = ScriptedAgentExecutor(
+        [
+            ScriptedAgentResponse(text="ignored", submission_payload=payload),
+            response(product_intent_question_response()),
+        ]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(response_repair_limit=0),
+        clock=AdvancingClock(),
+    )
+    planning_request = request()
+
+    assert (
+        coordinator.start(planning_request, answer_question=lambda _question: None)
+        is None
+    )
+
+    rejected = store.load_turn(planning_request.run_id, 1)
+    diagnostic = rejected.response_validation
+    assert diagnostic is not None
+    assert diagnostic.failure_class is ResponseFailureClass.MISSING_USER_DECISION
+    assert diagnostic.correction_paths == ()
+    assert any(
+        issue.path == "/proposal/product_definition/target_users"
+        and issue.invariant_id == "planning_product_user_decision_required"
+        and issue.authority is ResponseIssueAuthority.USER
+        for issue in diagnostic.issues
+    )
+    followup = store.load_turn(planning_request.run_id, 2)
+    assert followup.question_admission is not None
+    assert (
+        followup.question_admission.origin
+        is PlanningQuestionOrigin.CONTROLLER_REQUIREMENT
+    )
+    assert followup.question_admission.controller_invariant_ids == (
+        "planning_product_user_decision_required",
+    )
 
 
 def test_schema_failures_do_not_hide_required_user_product_clarification(

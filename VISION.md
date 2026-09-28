@@ -423,7 +423,8 @@ Each concept has one authoritative owner.
 | Development workflow and repository reference | `docs/development.md` |
 | Versioned fixed evaluation topology fixtures | `configs/teams.json` |
 | Run-scoped TeamPlan, AgentSpec, ModelRoutePlan, validation, and fixed-manifest compatibility compilation | `src/software_agent_team/teams.py` |
-| Adaptive Planning dialogue, proposal compilation, overview, approval, and write-once evidence | `src/software_agent_team/planning.py` |
+| Adaptive Planning dialogue, semantic proposal compilation, validation, overview, approval, and write-once evidence | `src/software_agent_team/planning.py` |
+| Pure pre-schema Planning envelope, stable-ID presentation, and path normalization | `src/software_agent_team/planning_normalization.py` |
 | Task-admission and plan-execution self-check schema, dependency freshness, rendering, and write-once evidence | `src/software_agent_team/self_check.py` |
 | Provider subprocess identity leases and orphan recovery | `src/software_agent_team/process_lifecycle.py` |
 | ProductDefinition, TaskBrief, phase, and handoff artifact schemas | `src/software_agent_team/artifacts.py` |
