@@ -17,8 +17,13 @@ format, lint, and 1,977 tests passed; one cross-UID fixture was skipped because
 it requires root. Isolated fresh-account checks then installed the public
 current-stable bootstrap, upgraded `v0.4.31` to `v0.5.0`, exercised rollback
 and stable/dev switching, verified state preservation, and completed export,
-uninstall, and exact cleanup without provider calls. The ordinary
-Planning-to-delivery journey for `v0.5.0` remains unverified.
+uninstall, and exact cleanup without provider calls. A subsequent ordinary
+DeepSeek journey reached Planning, two implementation iterations, passing
+quality gates, and General Review, but its Security Reviewer overfilled
+boundary evidence and exhausted targeted correction; the Controller correctly
+withheld delivery. The checkout declares an unpublished `0.5.1` patch candidate
+that constrains each Review boundary to one distinct post-assertion marker.
+That candidate has not yet completed a new public ordinary-user journey.
 
 The prior `v0.4.31` Linux journey reached an approved plan, execution,
 independent Review, accepted delivery, and 13/13 external black-box checks,
@@ -62,8 +67,8 @@ not automatically to `v0.5.0`, another provider, WSL device, or Docker mode.
 ## Validation limits and open capabilities
 
 The prior tagged DeepSeek journey demonstrates one Linux managed-install and
-single-route delivery path. The new release lifecycle checks do not establish
-`v0.5.0` Planning-to-delivery acceptance or a fresh WSL recovery run,
+single-route delivery path. The new release lifecycle checks and failed Review
+run do not establish `v0.5.1` Planning-to-delivery acceptance or a fresh WSL recovery run,
 rootless Docker without a host Docker group, every Gemini route, a live
 provider switch, or manual slow-key terminal usability. Those conditions need
 their own targeted evidence. A successful offline gate does not substitute for

@@ -1,37 +1,12 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.4.31",
-  "target_version": "0.5.0",
+  "baseline_version": "0.5.0",
+  "target_version": "0.5.1",
   "changes": [
     {
-      "id": "release-bound-stable-bootstrap",
+      "id": "review-boundary-evidence-cardinality",
       "impact": "patch",
-      "summary": "Bind stable installation to an immutable release asset and add main push and pull-request checks"
-    },
-    {
-      "id": "admission-and-budget-integrity",
-      "impact": "patch",
-      "summary": "Reserve concurrent paid calls safely and retain compatibility with legacy pricing records"
-    },
-    {
-      "id": "planning-contract-ownership",
-      "impact": "patch",
-      "summary": "Share user decision invariants and isolate Planning normalization and rule audit ownership"
-    },
-    {
-      "id": "fixed-single-agent-evaluation",
-      "impact": "minor",
-      "summary": "Add an executable one-agent fixed evaluation entry point with shared isolation and quality gates"
-    },
-    {
-      "id": "fixed-review-and-benchmark-corrections",
-      "impact": "patch",
-      "summary": "Bind fixed Reviewer manual scope and accept canonical same-origin absolute task redirects"
-    },
-    {
-      "id": "documentation-and-evaluation-evidence",
-      "impact": "patch",
-      "summary": "Consolidate current documentation ownership and report the first paired fixed-topology evaluation"
+      "summary": "Require one distinct post-assertion evidence marker per approved Review boundary to keep correction bounded"
     }
   ]
 }
