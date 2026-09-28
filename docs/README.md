@@ -20,6 +20,7 @@ references so that each fact has one clear owner.
 | Understand runtime authority, semantic responses, artifacts, persisted evidence, or safety boundaries | [`runtime-evidence.md`](runtime-evidence.md) |
 | Prepare and inspect a controlled Phase 1 provider-backed evaluation | [`phase1-runbook.md`](phase1-runbook.md) |
 | Compare the fixed team with the one-writer baseline on frozen requests | [`fixed-comparison.md`](fixed-comparison.md) |
+| Inspect the first provider-backed fixed-topology comparison | [`evaluation-results/2026-09-28-fixed-topology.md`](evaluation-results/2026-09-28-fixed-topology.md) |
 | Set up a development checkout, run checks, update the benchmark, or contribute | [`development.md`](development.md) |
 | Understand the first generated-project runtime and verification boundary | [`profiles/python/README.md`](../profiles/python/README.md) |
 | Read the frozen task-manager evaluation fixture | [`benchmarks/task_manager/requirements.md`](../benchmarks/task_manager/requirements.md) |
@@ -46,6 +47,9 @@ references so that each fact has one clear owner.
 - `phase1-runbook.md` is an evaluation-operator procedure, and
   `fixed-comparison.md` owns the fixed-topology comparison procedure;
   `development.md` is the contributor reference.
+- `evaluation-results/` retains dated, reproducible summaries of completed
+  controlled trials; it does not define current product direction or change
+  the frozen benchmark contract.
 - Other guides in `docs/` own one operating or engineering concern each.
 - Checked-in code and configuration remain authoritative for executable
   contracts; documentation explains those contracts and links to their owner.

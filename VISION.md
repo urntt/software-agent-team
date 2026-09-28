@@ -361,6 +361,14 @@ constant. Model routing is evaluated separately by holding both the TaskBrief
 and TeamPlan constant. Dynamic team formation and multi-model routing must not
 change in the same controlled trial.
 
+The one-writer baseline remains an explicit evaluation configuration. Do not
+change the ordinary user's team default or claim that a team improves first
+delivery from a two-request, one-model feasibility comparison. The next
+topology decision requires repeated paired requests across more task types
+and model sizes, with external quality scoring and terminal delivery status
+reported separately. Add a task-defined team only after its approved plan can
+be frozen without changing the TaskBrief or model policy.
+
 ## Decision Record
 
 The titles below are stable decision identities. Each row keeps the durable

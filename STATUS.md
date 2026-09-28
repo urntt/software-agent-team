@@ -23,8 +23,8 @@ asset. The one-command URL in the current README therefore needs the next
 published release before it can install this checkout. A public install,
 upgrade, and rollback of that release-bound entry point remain unverified.
 
-The post-release source revision `d425a9e5a92b511bfa9a64d9a378c9584bbe3612`
-passed a clean, normal-user OVH canonical gate: doctor, format, lint, and 1,957
+The post-release source revision `7af665007c23333f66c05a09270f3a7f7a2710fc`
+passed a clean, normal-user OVH canonical gate: doctor, format, lint, and 1,977
 tests passed; one cross-UID fixture was skipped because it requires root. This
 is offline validation of that revision, not a new public release or a fresh
 ordinary-user acceptance run.
@@ -50,8 +50,11 @@ ordinary-user acceptance run.
 - The fixed `function_specialized` evaluation workflow is executable. The
   `single_agent` one-pass evaluation path now uses the same isolated Git,
   OpenClaw, budget, deterministic quality, and report boundaries; its offline
-  success and gate-failure integration checks pass. Its provider-backed
-  comparison remains unverified. The ordinary product derives its team from
+  success and gate-failure integration checks pass. A [two-request
+  provider-backed comparison](docs/evaluation-results/2026-09-28-fixed-topology.md)
+  completed: this baseline delivered 2/2, while the fixed team delivered 1/2
+  because one Reviewer response was invalid after its generated code passed
+  every deterministic gate. The ordinary product derives its team from
   an approved task. `implementation_domain_specialized` remains a defined but
   non-executable manifest entry. The comparison procedure is in
   [`docs/fixed-comparison.md`](docs/fixed-comparison.md).
@@ -69,10 +72,11 @@ provider switch, or manual slow-key terminal usability. Those conditions need
 their own targeted evidence. A successful offline gate does not substitute for
 a public release asset or ordinary-user installation.
 
-`single_agent` still needs provider-backed comparison on multiple requests
-before it can support a quality, cost, or latency conclusion against fixed and
-task-defined teams. Comparative results must hold task, route, budget, and
-acceptance criteria constant and report failures as well as successes.
+The two-request, one-route comparison is too small to establish general
+quality, cost, or latency superiority, and it does not include a frozen
+task-defined TeamPlan or a browser-based keyboard-only walkthrough.
+Comparative results must continue to hold task, route, budget, and acceptance
+criteria constant and report failures as well as successes.
 Generated-project execution remains limited to the current local Python 3.12
 profile. Automatic resume after an interrupted CLI process and durable
 cross-process run controls are not available.
