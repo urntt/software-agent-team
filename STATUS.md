@@ -18,16 +18,16 @@ it requires root. Isolated fresh-account checks installed both the exact dev
 candidate and the public current stable, verified identity and isolated runtime,
 and completed export, uninstall, and exact cleanup without provider calls.
 The patch constrains each Review boundary to one distinct post-assertion
-evidence marker. It has not yet completed a public ordinary-user journey.
-The prior `v0.5.0` journey reached Planning, two implementation iterations,
-passing quality gates, and General Review, but its Security Reviewer overfilled
-boundary evidence and exhausted targeted correction; the Controller correctly
-withheld delivery.
-
-The prior `v0.4.31` Linux journey reached an approved plan, execution,
-independent Review, accepted delivery, and 13/13 external black-box checks,
-followed by export and uninstall. That evidence applies to its tagged release,
-not automatically to `v0.5.0`, another provider, WSL device, or Docker mode.
+evidence marker. A fresh public stable installation on Linux completed the
+official DeepSeek provider check, subsequent startup, four Planning calls,
+user approval, run controls, an unchanged Integration handoff, all three
+independent Reviews, and accepted delivery. The Security Reviewer corrected
+two invalid evidence attempts within its approved scope before acceptance.
+The delivered project passed 13/13 independent black-box checks, followed by
+export, uninstall, and exact account cleanup. The run recorded 13 model calls,
+an estimated $0.225933 in model spend, and no unknown-cost calls under its
+$1.50 authorization. These observations apply to the tagged DeepSeek/Linux
+route; they do not establish another provider or host mode.
 
 ## Implemented in the checkout
 
@@ -65,13 +65,12 @@ not automatically to `v0.5.0`, another provider, WSL device, or Docker mode.
 
 ## Validation limits and open capabilities
 
-The prior tagged DeepSeek journey demonstrates one Linux managed-install and
-single-route delivery path. The new release lifecycle checks and failed Review
-run do not establish `v0.5.1` Planning-to-delivery acceptance or a fresh WSL recovery run,
+The tagged `v0.5.1` DeepSeek journey demonstrates one Linux managed-install
+and single-route delivery path. It does not establish a fresh WSL recovery run,
 rootless Docker without a host Docker group, every Gemini route, a live
-provider switch, or manual slow-key terminal usability. Those conditions need
-their own targeted evidence. A successful offline gate does not substitute for
-a new ordinary-user Planning-to-delivery journey.
+provider switch, manual slow-key terminal usability, or paths requiring a
+specific failure or later implementation iteration. Those conditions need
+their own targeted evidence.
 
 The two-request, one-route comparison is too small to establish general
 quality, cost, or latency superiority, and it does not include a frozen
