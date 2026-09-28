@@ -11,6 +11,8 @@ references so that each fact has one clear owner.
 | --- | --- |
 | Understand the product, users, problem, architecture decisions, experiment, scope, or roadmap | [`VISION.md`](../VISION.md) |
 | See what is implemented, what provider-backed evidence exists, and what remains | [`STATUS.md`](../STATUS.md) |
+| Retrieve pre-consolidation status history and its owner map | [`history/README.md`](history/README.md) |
+| Trace the earlier long Vision decision wording to its current contract owner | [`history/vision-2026-09-28.md`](history/vision-2026-09-28.md) |
 | Maintain or verify acceptance criteria for the guided installation-to-delivery journey | [`product-demo-slice.md`](product-demo-slice.md) |
 | Understand or implement Adaptive Planning, task-defined teams, progress, controls, and model routing | [`adaptive-orchestration.md`](adaptive-orchestration.md) |
 | Install, configure a provider/model default, export local data, or uninstall | [`installation.md`](installation.md) |
@@ -32,7 +34,9 @@ references so that each fact has one clear owner.
 - `VISION.md` serves product and engineering decision-makers by owning durable
   product, architecture, experiment, scope, and roadmap decisions.
 - `STATUS.md` serves maintainers and evaluators by owning time-sensitive
-  implementation, evidence, gaps, and next-milestone facts.
+  implementation, evidence, and remaining capability gaps.
+- `history/README.md` maps the old status narrative to its immutable Git
+  original and the current fact or contract owner; it does not define current status.
 - `product-demo-slice.md` is a contributor-facing acceptance specification for
   the guided user journey; it does not own implementation status.
 - `adaptive-orchestration.md` owns the detailed target interaction, runtime
