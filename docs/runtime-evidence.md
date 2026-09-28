@@ -551,6 +551,11 @@ semantic evidence; the Controller replaces the handle with exact bytes and recor
 the binding as a normalization. No eligible candidate means no evidence-selector
 correction call. SAT does not ask the model to regenerate the assessment array and
 does not infer a replacement fragment from explanatory prose.
+Each approved boundary check carries exactly one fragment. A direct probe may
+assert several properties before emitting that boundary's post-assertion marker;
+the model cannot overfill boundary evidence with redundant selectors that make
+an otherwise grounded report impractical to correct. The one-fragment limit
+does not waive positive-output matching or cross-boundary distinctness.
 
 An invalid candidate choice is a typed model-submission failure, not a
 Controller exception. If an entirely catalog-backed submission has valid slot

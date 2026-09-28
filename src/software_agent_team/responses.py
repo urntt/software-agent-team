@@ -1137,7 +1137,9 @@ class ReviewBoundaryCheckResponse(BaseModel):
 
     boundary: ReviewBoundaryKind
     adversarial_check: str = Field(min_length=1, max_length=1000)
-    tool_evidence: tuple[ReviewToolEvidenceClaim, ...] = Field(min_length=1)
+    tool_evidence: tuple[ReviewToolEvidenceClaim, ...] = Field(
+        min_length=1, max_length=1
+    )
 
     @field_validator("adversarial_check")
     @classmethod

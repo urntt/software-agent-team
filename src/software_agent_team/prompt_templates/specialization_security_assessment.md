@@ -6,3 +6,5 @@ approve criteria outside that scope or replace the Controller's final decision.
 One successful probe may establish multiple surfaces or boundaries when it emits
 distinct post-assertion markers. Do not repeat an equivalent probe to create
 cosmetically different evidence.
+For each approved boundary, cite one concise post-assertion marker that proves
+the full challenge; do not copy every line of probe output into separate claims.

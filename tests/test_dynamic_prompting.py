@@ -754,6 +754,7 @@ def test_review_prompt_requires_adversarial_absolute_claim_boundaries() -> None:
     assert "passing substring from an overall failed result" in rendered
     assert "return `boundary_checks` explicitly" in rendered
     assert "distinct from every other" in rendered
+    assert "supplies exactly one evidence fragment" in rendered
     schema_text = rendered.split("RESPONSE_SCHEMA_JSON\n", 1)[1].split(
         "\n\nFINAL_RESPONSE_CONTRACT",
         1,
@@ -772,6 +773,7 @@ def test_review_prompt_requires_adversarial_absolute_claim_boundaries() -> None:
         "adversarial_check",
         "tool_evidence",
     }
+    assert boundary_schema["properties"]["tool_evidence"]["maxItems"] == 1
     claim_schema = response_schema["$defs"]["ReviewToolEvidenceClaim"]
     assert claim_schema["required"] == ["observable"]
     assert "tool_call_id" not in claim_schema["properties"]
@@ -2758,6 +2760,19 @@ def test_review_strips_unapproved_and_rejects_duplicate_approved_boundaries() ->
             task_brief=brief,
             team_plan=team_plan(brief),
             reviewed_criterion_ids=("AC_LINKS",),
+        )
+
+
+def test_review_rejects_overclaimed_boundary_evidence_before_grounding() -> None:
+    """The observed five-selector Security Review cannot exhaust leaf repairs."""
+
+    with pytest.raises(ValidationError, match="at most 1 item"):
+        ReviewBoundaryCheckResponse(
+            boundary=ReviewBoundaryKind.FAILURE_PATH,
+            adversarial_check="Probe the missing and invalid UTF-8 paths.",
+            tool_evidence=tuple(
+                review_tool_claim(f"FAILURE_BOUNDARY_{index}_OK") for index in range(5)
+            ),
         )
 
 

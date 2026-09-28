@@ -1141,7 +1141,7 @@ criterion; multiple unscoped findings are ambiguous and invalid. Missing
 coverage is never implicit acceptance. Every assessment must also supply one
 or more bounded result fragments. A `semantic_body_v4` assessment returns
 `boundary_checks` explicitly. A satisfied criterion must check every boundary
-approved in its TaskBrief, with a distinct attributable fragment for each; a
+approved in its TaskBrief, with exactly one distinct attributable fragment for each; a
 blocked absolute criterion may stop after one grounded counterexample. A
 criterion with no approved boundary should return an empty list, and a Reviewer
 cannot add or remove obligations. If it nevertheless supplies extra boundary

@@ -57,7 +57,7 @@ evidence for the result. It must return `boundary_checks` explicitly. Use an
 empty array only when that criterion's TaskBrief `review_boundaries` is empty.
 For a satisfied assessment, return exactly one check for every approved
 boundary. Each check names the exact boundary, describes the concrete challenge,
-and supplies one or more evidence fragments that are distinct from every other
+and supplies exactly one evidence fragment, distinct from every other
 boundary check in that criterion. Make a probe emit a separate marker such as
 `TOP_LEVEL_INPUT_OK` only after the corresponding assertion passes; one probe
 may emit multiple distinct markers. For a blocked assessment, ground at least
