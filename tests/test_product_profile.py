@@ -151,6 +151,18 @@ elif argv == ["run", "pytest"]:
 elif argv == ["run", "link-checker", "."]:
     if not (cwd / ".venv" / "ready").is_file():
         raise SystemExit(34)
+    if os.environ.get("FAKE_UV_INTERACTIVE_JSON"):
+        stream = (
+            sys.stdout
+            if os.environ["FAKE_UV_INTERACTIVE_JSON"] == "stdout"
+            else sys.stderr
+        )
+        print("File path: ", end="", file=stream, flush=True)
+        path = sys.stdin.readline().strip()
+        if not path:
+            raise SystemExit(36)
+        content = (cwd / path).read_bytes().decode("utf-8")
+        print(json.dumps({"code_point_count": len(content)}))
     if os.environ.get("FAKE_UV_WAIT_FOR_STDIN") == "1":
         print("Enter file path: ", end="", file=sys.stderr, flush=True)
         if sys.stdin.buffer.read(1) == b"":
@@ -905,6 +917,45 @@ def test_exact_command_gate_keeps_interactive_start_stdin_open(
         ["run", "pytest"],
         ["run", "link-checker", "."],
     ]
+
+
+@pytest.mark.parametrize("prompt_stream", ("stdout", "stderr"))
+def test_exact_command_gate_checks_interactive_json_stdout(
+    tmp_path: Path, prompt_stream: str,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    write_valid_project(project)
+    readme = project / "README.md"
+    readme.write_text(
+        readme.read_text(encoding="utf-8")
+        + "\nExpected JSON output:\n```bash\n"
+        + "printf '%s' 'hello world' > sample.txt\n"
+        + "uv run link-checker . sample.txt\n```\n"
+        + "```json\n{\"code_point_count\": 11}\n```\n",
+        encoding="utf-8",
+    )
+    commit_project(project)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    write_fake_uv(fake_bin)
+    result = run_command_validator(
+        project,
+        environment={
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "FAKE_UV_LOG": str(tmp_path / "uv.jsonl"),
+            "FAKE_UV_INTERACTIVE_JSON": prompt_stream,
+        },
+    )
+    assert (result.returncode == 0) == (prompt_stream == "stderr"), result.stderr
+    if prompt_stream == "stdout":
+        assert "interactive start did not emit one JSON value" in result.stderr
+        assert "write prompts to stderr" in result.stderr
+    calls = [
+        json.loads(line)["argv"]
+        for line in (tmp_path / "uv.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert calls.count(["run", "link-checker", "."]) == 2
 
 
 def test_exact_command_gate_still_reports_an_immediate_start_failure(

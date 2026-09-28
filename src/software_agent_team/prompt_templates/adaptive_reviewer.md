@@ -144,6 +144,11 @@ clean-copy command evidence and compare the claim to observed behavior. Do not
 mark documentation satisfied using a file listing or a passing self-authored
 test as evidence for an example's output; probe other factual examples that the
 generic command gate cannot execute.
+When a CLI claims machine-readable stdout and prompts for input with no
+arguments, inspect whether that prompt is on stderr and whether the complete
+stdout remains parseable. The exact-command gate may exercise this case using
+the documented JSON fixture; source and project tests should cover other
+interactive paths. An exit-0 no-argument probe alone is insufficient.
 If the project claims a Unicode code-point count for UTF-8 files, independently
 probe mixed CRLF/LF and non-ASCII input against the original decoded bytes.
 Universal-newline text reads can silently change that count; a passing LF-only

@@ -5,24 +5,21 @@
 This document records current implementation and validation evidence. Product
 and architecture decisions belong to [`VISION.md`](VISION.md).
 
-Published `v0.4.25` passed an independent OVH candidate gate (1,920 passed,
-one root-only skip), a fresh dev-account lifecycle, and its exact-tag hosted
-gate (1,917 passed, four environment skips). A separate ordinary account
-successfully upgraded from public `v0.4.24` to `v0.4.25` with preserved state,
-rollback, export, uninstall, and exact cleanup. One fresh public `v0.4.25`
+Published `v0.4.26` passed the independent OVH candidate gate (1,924 passed,
+one root-only skip), fresh dev-account lifecycle, exact-tag hosted gate (1,921
+passed, four environment skips), and a separate public `v0.4.25` to `v0.4.26`
+stable upgrade with rollback and exact cleanup. One fresh public `v0.4.26`
 DeepSeek journey completed installation, first and later startup, approved
-Planning, and in-run controls. In each of three implementation iterations,
-contract, compile, lint, and project-test gates passed, but the exact-command
-gate rejected a generated README fixture: first hexadecimal `printf` escapes,
-then combined `echo -ne` flags, then `echo -e` with `\c`. The controller
-stopped at the approved iteration limit. There was no Review, delivery,
-independent acceptance, product export, or uninstall; the dedicated account
-and owned resources were cleaned up. The `0.4.26` candidate makes the bounded
-fixture syntax explicit in the generation contract and gives a concrete
-correction in diagnostics. The affected profile and dynamic-prompt suite passed
-112 tests; a replay through the real pinned quality image rejected all three
-historic forms and accepted a portable `printf` correction. An independent
-candidate gate, publication, and fresh public delivery remain pending.
+Planning, in-run controls, five deterministic gates, all Agents and Reviews,
+accepted delivery, export, uninstall, and exact account/resource cleanup. Its
+independent acceptance failed: the generated CLI printed its no-argument path
+prompt before JSON on stdout, while self-authored tests parsed only from the
+first `{`. The `0.4.27` candidate tests a README fixture through the waiting
+start command's stdin and requires a complete JSON stdout value; it also tells
+writers and Reviewers to keep interactive prompts on stderr. The captured
+project fails this candidate gate in the real pinned quality image, while a
+temporary copy with corrected prompt and tests passes. Independent candidate
+gate, publication, and fresh public delivery validation remain pending.
 
 Published `v0.4.19` installed and started successfully for a fresh normal user
 on Linux with Docker and a live DeepSeek provider check. Planning, approval,

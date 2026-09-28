@@ -258,6 +258,7 @@ def _run(
     cwd: Path,
     timeout_seconds: int,
     keep_stdin_open: bool = False,
+    stdin_data: bytes | None = None,
     environment_overrides: dict[str, str] | None = None,
     clear_environment_prefixes: tuple[str, ...] = (),
 ) -> CommandResult:
@@ -273,7 +274,11 @@ def _run(
                 argv,
                 cwd=cwd,
                 env=environment,
-                stdin=subprocess.PIPE if keep_stdin_open else subprocess.DEVNULL,
+                stdin=(
+                    subprocess.PIPE
+                    if keep_stdin_open or stdin_data is not None
+                    else subprocess.DEVNULL
+                ),
                 stdout=stdout,
                 stderr=stderr,
                 start_new_session=True,
@@ -287,11 +292,14 @@ def _run(
             )
         timed_out = False
         try:
-            process.wait(timeout=timeout_seconds)
+            if stdin_data is None:
+                process.wait(timeout=timeout_seconds)
+            else:
+                process.communicate(input=stdin_data, timeout=timeout_seconds)
         except subprocess.TimeoutExpired:
             timed_out = True
             _terminate(process)
-        if process.stdin is not None:
+        if process.stdin is not None and not process.stdin.closed:
             process.stdin.close()
         result = CommandResult(
             exit_code=None if timed_out else process.returncode,
@@ -498,8 +506,11 @@ def _verify_readme_examples(
     snapshot: dict[Path, tuple[str, int]],
     commands: ProjectCommands,
     environment_overrides: dict[str, str] | None,
+    *,
+    start_waited_for_input: bool,
 ) -> None:
     readme = (clean / "README.md").read_text(encoding="utf-8")
+    checked_interactive = False
     for index, (script, expected) in enumerate(_readme_json_examples(readme), start=1):
         lines = [line.strip() for line in script.splitlines() if line.strip()]
         if len(lines) != 2:
@@ -528,6 +539,39 @@ def _verify_readme_examples(
                     f"README JSON example {index} output differs from documented "
                     f"JSON: actual={json.dumps(actual, ensure_ascii=False)[:500]}"
                 )
+            suffix = argv[len(commands.start) :]
+            if (
+                start_waited_for_input
+                and not checked_interactive
+                and len(suffix) == 1
+                and suffix[0] in {fixture.name, f"./{fixture.name}"}
+            ):
+                checked_interactive = True
+                interactive = _run(
+                    commands.start,
+                    cwd=clean,
+                    timeout_seconds=EXAMPLE_TIMEOUT_SECONDS,
+                    stdin_data=(suffix[0] + "\n").encode("utf-8"),
+                    environment_overrides=environment_overrides,
+                )
+                if not interactive.timed_out:
+                    _require_success(
+                        f"README JSON example {index} interactive start",
+                        interactive,
+                    )
+                    try:
+                        interactive_json = json.loads(interactive.stdout_tail)
+                    except json.JSONDecodeError:
+                        fail(
+                            f"README JSON example {index} interactive start did "
+                            "not emit one JSON value on stdout; write prompts to "
+                            "stderr"
+                        )
+                    if interactive_json != expected:
+                        fail(
+                            f"README JSON example {index} interactive start "
+                            "output differs from documented JSON"
+                        )
             _verify_code_point_newlines(
                 index, argv, fixture, expected, clean, snapshot, environment_overrides
             )
@@ -602,7 +646,13 @@ def execute(repository: Path) -> None:
                 completed_stages=("portable lock check", "setup", "test"),
             )
         _require_delivery_preserved(clean, snapshot, command_label="start")
-        _verify_readme_examples(clean, snapshot, commands, command_environment)
+        _verify_readme_examples(
+            clean,
+            snapshot,
+            commands,
+            command_environment,
+            start_waited_for_input=start.timed_out,
+        )
         mode = "running_after_grace" if start.timed_out else "exited_zero"
         print(
             json.dumps(

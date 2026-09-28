@@ -53,6 +53,9 @@ start command.
 The deterministic clean-copy gate executes that exact argv because static
 manifest validation cannot infer whether a project entry point has required
 positional arguments.
+For a CLI that promises machine-readable stdout, write interactive prompts
+and diagnostics to stderr. If the exact start command waits for a file path,
+test it with a path on stdin and verify that stdout contains only the result.
 README headings may use ordinary terms such as Installation, Usage, and
 Testing, but the document must show the exact shell form of every manifest
 command.
@@ -75,6 +78,11 @@ contract. If a documented file example claims `code_point_count` or
 fixture and checks the count against the original UTF-8
 decoded input. The independent Reviewer remains responsible for factual
 documentation outside this bounded format.
+If the exact start command waits for input and an example passes one fixture
+path as its only added argument, the gate also sends that path to the exact
+start command's stdin. A completed interactive result must equal the example
+JSON without a stdout prompt. Long-running services that still wait after the
+bounded input probe retain the existing startup behavior.
 
 The validated setup contract also protects the first-use repository state.
 The root `.venv` must be ignored, while a bounded regular root `uv.lock` must be

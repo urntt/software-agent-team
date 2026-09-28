@@ -66,6 +66,10 @@ than relying on an editable install left behind by setup. The clean-copy
 check must run on a filesystem that permits executing its generated
 entry point; `/tmp` may be mounted `noexec` in the sandbox. A mount-only failure
 must be rerun on an executable filesystem before drawing a product conclusion.
+If the user requires JSON or another machine-readable stdout format, put CLI
+prompts and diagnostics on stderr. Feed a valid path to a no-argument entry
+point through stdin and parse its entire stdout as one result in tests; a
+prompt prefix before JSON violates that contract even when the process exits 0.
 The delivered project's README.md must show the exact shell form of the manifest
 setup, start, and test argv; Installation, Usage, and Testing headings are
 acceptable. Edit
