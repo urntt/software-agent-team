@@ -172,6 +172,11 @@ uv run --frozen python -m software_agent_team.loopback_validation \
   --output /absolute/private/evidence/loopback.json
 ```
 
+For the pinned SQLite compression boundary, select only
+`--scenario submission-contract --prompt-padding-chars 100000` and inspect
+the retained session store for an `event_zstd` row. This drives the actual
+OpenClaw adapter and a local endpoint without an external provider call.
+
 Use `make format` when source formatting changes are required. Select checks
 according to the [validation policy](#validation-policy), not commit count.
 

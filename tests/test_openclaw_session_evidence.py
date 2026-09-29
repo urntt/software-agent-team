@@ -10,6 +10,7 @@ from copy import deepcopy
 from pathlib import Path
 
 import pytest
+import zstandard
 
 import software_agent_team.openclaw_session_evidence as session_evidence
 from software_agent_team.artifacts import (
@@ -226,6 +227,88 @@ def test_sqlite_session_binds_current_turn_and_tool_result(tmp_path: Path) -> No
     assert len(captured.tool_calls) == 1
     assert captured.tool_calls[0].output_excerpt == "SQLITE_BOUND"
     assert captured.terminal_state is OpenClawInvocationTerminalState.ASSISTANT_RESPONSE
+
+
+def test_sqlite_session_accepts_bounded_compressed_current_turn(
+    tmp_path: Path,
+) -> None:
+    invocation = request(prompt="Explain the task. " * 4000)
+    records = [
+        session_record(),
+        user_record(invocation.prompt),
+        tool_call_record("current-call", command="python /tmp/probe.py"),
+        tool_result_record("current-call", output="COMPRESSED_BOUND"),
+        assistant_record(),
+    ]
+    database = write_sqlite_session_state(
+        tmp_path, invocation=invocation, records=records
+    )
+    compressed = zstandard.ZstdCompressor().compress(
+        json.dumps(records[1]).encode("utf-8")
+    )
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "UPDATE transcript_events SET event_json=NULL, event_zstd=? WHERE seq=1",
+            (compressed,),
+        )
+
+    observation = inspect_openclaw_initialization(
+        state_dir=tmp_path,
+        agent_id=invocation.agent_id,
+        session_key=invocation.session_key,
+        prompt=invocation.prompt,
+    )
+    captured = capture(tmp_path, invocation)
+
+    assert observation is not None
+    assert observation.checkpoint is InitializationCheckpoint.CURRENT_TURN
+    assert captured.record_count == 4
+    assert captured.tool_calls[0].output_excerpt == "COMPRESSED_BOUND"
+
+
+@pytest.mark.parametrize(
+    ("compressed", "message"),
+    [
+        pytest.param(b"invalid zstd frame", "compressed event", id="invalid-frame"),
+        pytest.param(
+            zstandard.ZstdCompressor().compress(b"x" * 1_048_577),
+            "size limit",
+            id="oversized-output",
+        ),
+    ],
+)
+def test_sqlite_session_rejects_invalid_or_oversized_compressed_event(
+    tmp_path: Path,
+    compressed: bytes,
+    message: str,
+) -> None:
+    invocation = request()
+    records = [session_record(), user_record(invocation.prompt), assistant_record()]
+    database = write_sqlite_session_state(
+        tmp_path, invocation=invocation, records=records
+    )
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "UPDATE transcript_events SET event_json=NULL, event_zstd=? WHERE seq=1",
+            (compressed,),
+        )
+    with pytest.raises(OpenClawSessionEvidenceError, match=message):
+        capture(tmp_path, invocation)
+
+
+def test_sqlite_session_rejects_dual_event_representations(tmp_path: Path) -> None:
+    invocation = request()
+    records = [session_record(), user_record(invocation.prompt), assistant_record()]
+    database = write_sqlite_session_state(
+        tmp_path, invocation=invocation, records=records
+    )
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "UPDATE transcript_events SET event_zstd=? WHERE seq=1",
+            (zstandard.ZstdCompressor().compress(json.dumps(records[1]).encode()),),
+        )
+    with pytest.raises(OpenClawSessionEvidenceError, match="unsupported event"):
+        capture(tmp_path, invocation)
 
 
 def test_sqlite_session_rejects_wrong_session_and_incomplete_sequence(

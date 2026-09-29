@@ -601,7 +601,10 @@ SQLite session store read-only. It verifies the direct file and directory
 boundary, exact `session_nodes` key, `session_windows` ID and key, ordered
 `transcript_events` sequence, and session header. The latest user record must
 exactly match the current prompt, and attribution stops at the next user turn.
-The transcript digest covers the bounded event sequence. Unsupported compressed
+The transcript digest covers the bounded decompressed event sequence. The
+pinned runtime may store an event as zstd instead of JSON text; SAT decodes
+exactly one representation with bounded compressed size, output size, window,
+and UTF-8/JSON validation. Invalid compressed frames, dual representations,
 or discontinuous events fail closed; they cannot authorize a submission.
 The old JSONL reader remains only for existing replay fixtures and historical
 evidence. Remove it after those fixtures are migrated to the pinned SQLite

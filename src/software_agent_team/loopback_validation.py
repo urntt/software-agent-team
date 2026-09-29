@@ -764,6 +764,7 @@ def execute_scenario(
     sandbox_image: str,
     sandbox_user: str,
     scenario: str,
+    prompt_padding_chars: int = 0,
 ) -> dict[str, object]:
     """Execute one real OpenClaw transport scenario through the SAT adapter."""
 
@@ -805,13 +806,16 @@ def execute_scenario(
         validation_identity = hashlib.sha256(
             str(scenario_root.resolve()).encode()
         ).hexdigest()[:12]
+        prompt = 'Reply with exactly: {"status":"ok"}'
+        if scenario == "submission-contract" and prompt_padding_chars:
+            prompt += "\nCompression boundary fixture: " + "P" * prompt_padding_chars
         request = AgentExecutionRequest(
             run_id=f"loopback-{scenario}-{validation_identity}",
             team_id="loopback_validation",
             iteration=1,
             role=AgentRole.PLANNER,
             expected_kind=ArtifactKind.IMPLEMENTATION_PLAN,
-            prompt='Reply with exactly: {"status":"ok"}',
+            prompt=prompt,
             timeout_seconds=0,
             model=MODEL,
             submission_contract=(
@@ -922,6 +926,7 @@ def execute_scenario(
     final_invocation = invocations[-1]
     return {
         "scenario": scenario,
+        "prompt_padding_chars": prompt_padding_chars,
         **final_invocation,
         "invocations": invocations,
         "server_events": list(server.events),
@@ -939,6 +944,8 @@ def _run_matrix(args: argparse.Namespace) -> dict[str, object]:
         repository / "benchmarks/task_manager/benchmark.json",
     )
     scenarios = tuple(args.scenario or SCENARIOS)
+    if args.prompt_padding_chars and scenarios != ("submission-contract",):
+        raise ValueError("prompt padding requires only submission-contract")
     if args.work_root is not None:
         root = args.work_root.resolve()
         root.mkdir(parents=True, exist_ok=False)
@@ -951,6 +958,7 @@ def _run_matrix(args: argparse.Namespace) -> dict[str, object]:
                 configuration.policy.sandbox.image,
                 args.sandbox_user,
                 scenario,
+                args.prompt_padding_chars,
             )
             for scenario in scenarios
         ]
@@ -965,6 +973,7 @@ def _run_matrix(args: argparse.Namespace) -> dict[str, object]:
                     configuration.policy.sandbox.image,
                     args.sandbox_user,
                     scenario,
+                    args.prompt_padding_chars,
                 )
                 for scenario in scenarios
             ]
@@ -1009,7 +1018,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--work-root", type=Path)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--prompt-padding-chars", type=int, default=0)
     args = parser.parse_args(argv)
+    if not 0 <= args.prompt_padding_chars <= 200_000:
+        parser.error("prompt padding must be between 0 and 200000 characters")
 
     payload = _run_matrix(args)
     _write_result(payload, args.output)

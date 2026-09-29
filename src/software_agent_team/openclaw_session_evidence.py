@@ -15,6 +15,7 @@ from enum import StrEnum
 from pathlib import Path
 from urllib.parse import quote
 
+import zstandard
 from pydantic import ValidationError
 
 from software_agent_team.artifacts import (
@@ -36,6 +37,7 @@ _MAX_RECORD_BYTES = 1024 * 1024
 _MAX_TOOL_OUTPUT_BYTES = 1024 * 1024
 _MAX_TOOL_CALLS = 999
 _MAX_SQLITE_BYTES = 2 * 1024 * 1024 * 1024
+_MAX_ZSTD_WINDOW_BYTES = 8 * _MAX_RECORD_BYTES
 _OUTPUT_EXCERPT_CHARACTERS = 4096
 _TRUNCATION_MARKER = "\n... controller excerpt truncated ...\n"
 
@@ -459,15 +461,30 @@ def _read_sqlite_bound_transcript(
     records: list[dict[str, object]] = []
     total_bytes = 0
     for expected_seq, (seq, event_json, event_zstd) in enumerate(rows):
-        if (
-            seq != expected_seq
-            or not isinstance(event_json, str)
-            or event_zstd is not None
-        ):
+        if seq != expected_seq:
             raise OpenClawSessionEvidenceError(
                 "OpenClaw SQLite transcript contains an unsupported event"
             )
-        payload = event_json.encode("utf-8", errors="strict")
+        if isinstance(event_json, str) and event_zstd is None:
+            payload = event_json.encode("utf-8", errors="strict")
+        elif event_json is None and isinstance(event_zstd, bytes):
+            if len(event_zstd) > _MAX_RECORD_BYTES:
+                raise OpenClawSessionEvidenceError(
+                    "OpenClaw SQLite transcript exceeds its size limit"
+                )
+            try:
+                payload = zstandard.ZstdDecompressor(
+                    max_window_size=_MAX_ZSTD_WINDOW_BYTES
+                ).decompress(event_zstd, max_output_size=_MAX_RECORD_BYTES)
+                payload.decode("utf-8", errors="strict")
+            except (zstandard.ZstdError, UnicodeDecodeError) as error:
+                raise OpenClawSessionEvidenceError(
+                    "OpenClaw SQLite transcript contains invalid compressed event"
+                ) from error
+        else:
+            raise OpenClawSessionEvidenceError(
+                "OpenClaw SQLite transcript contains an unsupported event"
+            )
         total_bytes += len(payload)
         if len(payload) > _MAX_RECORD_BYTES or total_bytes > _MAX_CHAIN_BYTES:
             raise OpenClawSessionEvidenceError(
