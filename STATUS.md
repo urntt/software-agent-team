@@ -29,6 +29,12 @@ an estimated $0.225933 in model spend, and no unknown-cost calls under its
 $1.50 authorization. These observations apply to the tagged DeepSeek/Linux
 route; they do not establish another provider or host mode.
 
+The checkout now declares `0.5.2` as an unpublished patch candidate for the
+Planning and runner structure changes, owned timeout evidence, isolated
+OpenClaw compatibility update, and fixed-comparison fixtures described below.
+Its release identity and ordinary-user evidence remain pending until an exact
+clean candidate is gated, published, and installed from the stable channel.
+
 ## Implemented in the checkout
 
 - The normal `sat` journey checks the local runtime, configures an isolated
