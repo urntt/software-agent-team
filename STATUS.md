@@ -69,7 +69,20 @@ route; they do not establish another provider or host mode.
   and normalization cases occupy a focused test module. A clean-checkout OVH
   canonical gate for revision `1e8b684` passed doctor, formatting, lint, and
   1,978 tests, with one root-only cross-UID test skipped. No provider-backed
-  behavior improvement is inferred from this structural refactor.
+  behavior improvement is inferred from this structural refactor. Two captured
+  Planning submissions replayed identically before and after the split; focused
+  normalization and runtime-invocation tests now cross the coordinator and
+  persisted-turn boundary without importing a large test module for fixtures.
+- The checkout pins private OpenClaw `2026.9.6` and emits its current keyed
+  Agent configuration. An adapter compatibility check confirms Gemini 3.8
+  thinking fallback maps to `LOW` rather than unsupported `MINIMAL`; a minimal
+  DeepSeek call succeeded through the updated runtime. Gemini 3.8 provider
+  validation remains outstanding after a free-tier 429 and an unavailable paid
+  balance. Owned Agent timeouts with a positive wrapper exit retain their
+  timeout lifecycle and actual exit in the execution record; the production
+  execution-to-storage regression passes. The integrated checkout tree
+  `98f70bb2c202bb251f72edc41c2deb20eadf750a` passed doctor, formatting,
+  lint, and 1,987 tests on OVH, with one root-only cross-UID test skipped.
 
 ## Validation limits and open capabilities
 
