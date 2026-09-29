@@ -1595,53 +1595,11 @@ def _normalize_planning_decision_relations(
         proposal["decisions"] = retained_decisions
 
 
-def _normalize_planning_response_payload(
-    payload: dict[str, object],
-    *,
-    profile_criterion_ids: Collection[str] = (),
-    user_inputs: Collection[str] = (),
-    question_answers: Mapping[str, str] | None = None,
-    question_dimension_values: Mapping[
-        str,
-        Mapping[ProductDefinitionDimension, str],
-    ]
-    | None = None,
-) -> tuple[dict[str, object], tuple[str, ...]]:
-    """Apply bounded semantic-preserving normalization before strict validation."""
+def _compile_atomic_requirement_relations(
+    proposal: dict[str, object], changes: list[str]
+) -> None:
+    """Compile model-authored requirement atoms without changing their authority."""
 
-    profile_criterion_ids = tuple(profile_criterion_ids)
-    normalized: dict[str, object] = json.loads(json.dumps(payload))
-    changes: list[str] = []
-    normalized, envelope_changes = normalize_response_envelope(
-        normalized,
-        body_types=(
-            (PlanningResponseKind.QUESTION.value, PlanningQuestion),
-            (PlanningResponseKind.PROPOSAL.value, PlanningProposalBody),
-        ),
-    )
-    changes.extend(envelope_changes)
-
-    question = normalized.get("question")
-    if isinstance(question, dict):
-        try:
-            question_category = PlanningDecisionCategory(
-                question.get("decision_category")
-            )
-        except (TypeError, ValueError):
-            question_category = None
-        if question_category is not None:
-            expected_owner = _DECISION_AUTHORITY[question_category]
-            if question.get("decision_owner") != expected_owner.value:
-                question["decision_owner"] = expected_owner.value
-                changes.append(
-                    "compiled question.decision_owner from category "
-                    f"{question_category.value}"
-                )
-
-    proposal = normalized.get("proposal")
-    if not isinstance(proposal, dict):
-        return normalized, tuple(changes)
-    changes.extend(_compile_task_dependency_projection(proposal))
     requirements = proposal.get("requirements")
     if isinstance(requirements, list) and any(
         isinstance(item, dict) for item in requirements
@@ -1718,6 +1676,12 @@ def _normalize_planning_response_payload(
                     f"proposal.requirements[{requirement_index}]"
                 )
 
+
+def _compile_atomic_assumption_relations(
+    proposal: dict[str, object], changes: list[str]
+) -> None:
+    """Compile assumption atoms and their explicit decision references."""
+
     assumptions = proposal.get("assumptions")
     if isinstance(assumptions, list) and (
         not assumptions or any(isinstance(item, dict) for item in assumptions)
@@ -1760,6 +1724,17 @@ def _normalize_planning_response_payload(
             "compiled atomic proposal.assumptions into canonical statements "
             "and autonomous decision references"
         )
+
+
+def _compile_product_dimension_sources(
+    proposal: dict[str, object],
+    *,
+    question_answers: Mapping[str, str] | None,
+    question_dimension_values: Mapping[str, Mapping[ProductDefinitionDimension, str]]
+    | None,
+    changes: list[str],
+) -> dict[str, object]:
+    """Bind answered dimensions to exact user sources and trim inert links."""
 
     product_definition = proposal.get("product_definition")
     product_dimensions = (
@@ -1819,12 +1794,18 @@ def _normalize_planning_response_payload(
                 f"proposal.product_definition.{dimension.value}"
             )
 
-    _normalize_planning_decision_relations(
-        proposal, product_dimensions, user_inputs=user_inputs, changes=changes
-    )
+    return product_dimensions
+
+
+def _deconflict_profile_criteria(
+    proposal: dict[str, object],
+    profile_criterion_ids: Collection[str],
+    changes: list[str],
+) -> None:
+    """Keep Controller-owned criteria distinct from model-authored coverage."""
+
     acceptance_criteria = proposal.get("acceptance_criteria")
     tasks = proposal.get("tasks")
-    agents = proposal.get("agents")
     controller_owned_ids = set(profile_criterion_ids)
     if isinstance(acceptance_criteria, list) and controller_owned_ids:
 
@@ -1942,6 +1923,15 @@ def _normalize_planning_response_payload(
                     if binding not in deduplicated_bindings:
                         deduplicated_bindings.append(binding)
                 task["acceptance_criteria"] = deduplicated_bindings
+
+
+def _canonicalize_proposed_workspace_paths(
+    proposal: dict[str, object], changes: list[str]
+) -> None:
+    """Normalize only safe task and Agent path presentation variants."""
+
+    tasks = proposal.get("tasks")
+    agents = proposal.get("agents")
     if isinstance(tasks, list):
         for task_index, task in enumerate(tasks):
             if not isinstance(task, dict):
@@ -1968,6 +1958,69 @@ def _normalize_planning_response_payload(
                 changes.append(
                     f"canonicalized proposal.agents[{agent_index}].workspace_scope"
                 )
+
+
+def _normalize_planning_response_payload(
+    payload: dict[str, object],
+    *,
+    profile_criterion_ids: Collection[str] = (),
+    user_inputs: Collection[str] = (),
+    question_answers: Mapping[str, str] | None = None,
+    question_dimension_values: Mapping[
+        str,
+        Mapping[ProductDefinitionDimension, str],
+    ]
+    | None = None,
+) -> tuple[dict[str, object], tuple[str, ...]]:
+    """Apply bounded semantic-preserving normalization before strict validation."""
+
+    profile_criterion_ids = tuple(profile_criterion_ids)
+    normalized: dict[str, object] = json.loads(json.dumps(payload))
+    changes: list[str] = []
+    normalized, envelope_changes = normalize_response_envelope(
+        normalized,
+        body_types=(
+            (PlanningResponseKind.QUESTION.value, PlanningQuestion),
+            (PlanningResponseKind.PROPOSAL.value, PlanningProposalBody),
+        ),
+    )
+    changes.extend(envelope_changes)
+
+    question = normalized.get("question")
+    if isinstance(question, dict):
+        try:
+            question_category = PlanningDecisionCategory(
+                question.get("decision_category")
+            )
+        except (TypeError, ValueError):
+            question_category = None
+        if question_category is not None:
+            expected_owner = _DECISION_AUTHORITY[question_category]
+            if question.get("decision_owner") != expected_owner.value:
+                question["decision_owner"] = expected_owner.value
+                changes.append(
+                    "compiled question.decision_owner from category "
+                    f"{question_category.value}"
+                )
+
+    proposal = normalized.get("proposal")
+    if not isinstance(proposal, dict):
+        return normalized, tuple(changes)
+    changes.extend(_compile_task_dependency_projection(proposal))
+    _compile_atomic_requirement_relations(proposal, changes)
+    _compile_atomic_assumption_relations(proposal, changes)
+
+    product_dimensions = _compile_product_dimension_sources(
+        proposal,
+        question_answers=question_answers,
+        question_dimension_values=question_dimension_values,
+        changes=changes,
+    )
+    _normalize_planning_decision_relations(
+        proposal, product_dimensions, user_inputs=user_inputs, changes=changes
+    )
+    _deconflict_profile_criteria(proposal, profile_criterion_ids, changes)
+    _canonicalize_proposed_workspace_paths(proposal, changes)
     changes.extend(_compile_unique_specialist_verifier_projection(proposal))
     changes.extend(
         _compile_review_task_scope_projection(

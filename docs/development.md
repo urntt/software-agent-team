@@ -1031,6 +1031,19 @@ counts describe observations, not causal benefit: retain user-authority and
 safety guards unless counterexamples and production-interface tests support a
 change. Never publish the input turns merely to share this summary.
 
+Planning response normalization keeps one entry point in `planning.py` and
+separates atomic requirement and assumption compilation, exact user-answer
+projection, controller-owned profile-criterion deconfliction, and safe workspace
+path canonicalization into named stages. The dynamic runner similarly separates
+non-completed invocation evidence and completed typed-response acceptance from
+the retry loop. These stages share their existing authority and persisted
+diagnostic contracts; they are not alternate validation paths. Keep small
+normalization examples in `tests/test_planning_normalization.py`, shared valid
+inputs in `tests/planning_factories.py`, and coordinator/lifecycle integration
+coverage in the behavior-owning test modules. A test that exercises the real
+CLI process should import its fixture inputs explicitly rather than execute a
+whole test module for its globals.
+
 1. Inspect `git status` before editing.
 2. Read `VISION.md` before changing architecture, scope, or experiments.
 3. Keep every experimental variable and budget explicit.

@@ -153,6 +153,30 @@ class _UpstreamContinuation:
 
 
 @dataclass(frozen=True)
+class _CompletedAttemptDisposition:
+    """Persisted result or bounded correction from one completed Agent call."""
+
+    response_reference: ArtifactReference | None
+    ignored_fields: tuple[str, ...]
+    normalizations: tuple[str, ...]
+    validation: ResponseValidationDiagnostic | None
+    next_correction_plan: SemanticCorrectionPlan | None
+    correction_outcome: SemanticCorrectionOutcome | None
+    record_error: str | None
+    failure: Exception | None
+
+
+@dataclass(frozen=True)
+class _IncompleteAttemptDisposition:
+    """Verified continuation and failure decision for a nonterminal attempt."""
+
+    failure: DynamicAgentRunnerError | None
+    writer_progress: GitWorkspaceProgress | None
+    readonly_continuation: bool
+    review_evidence: ReviewToolEvidenceAttempt | None
+
+
+@dataclass(frozen=True)
 class _ReadOnlyContinuation:
     """Captured tools from an incomplete, clean read-only invocation."""
 
@@ -525,6 +549,334 @@ class DynamicAgentRunner:
             error=safe_detail,
         )
 
+    def _classify_incomplete_attempt(
+        self,
+        *,
+        agent: AgentSpec,
+        request: AgentExecutionRequest,
+        result: AgentExecutionResult,
+        input_commit: str,
+        correction_plan: SemanticCorrectionPlan | None,
+        recoverable_stream_failure: bool,
+        seen_continuation_states: set[str],
+        seen_readonly_tool_states: set[str],
+        attempt: int,
+        execution_failure: DynamicAgentRunnerError,
+    ) -> _IncompleteAttemptDisposition:
+        """Verify workspace evidence before allowing a same-session continuation."""
+
+        record_error = str(execution_failure)
+        failure: DynamicAgentRunnerError | None = None
+        next_continuation_progress: GitWorkspaceProgress | None = None
+        next_readonly_continuation = False
+        current_review_evidence: ReviewToolEvidenceAttempt | None = None
+        if agent.permission_profile is PermissionProfile.WORKSPACE_WRITE:
+            progress = self.workspace_manager.inspect_progress(
+                self.workspace,
+                input_commit=input_commit,
+            )
+            self._validate_workspace_scope(agent, progress.changed_files)
+            if (
+                result.status is AgentExecutionStatus.UPSTREAM_INCOMPLETE
+                and correction_plan is None
+            ):
+                if not progress.made_progress:
+                    failure = DynamicAgentRunnerError(
+                        f"{record_error}; no verifiable workspace progress "
+                        "exists for controlled continuation",
+                        TerminationReason.DEPENDENCY_UNAVAILABLE,
+                    )
+                elif progress.state_sha256 in seen_continuation_states:
+                    failure = DynamicAgentRunnerError(
+                        f"{record_error}; controlled continuation made no "
+                        "measurable workspace progress and was stopped",
+                        TerminationReason.DEPENDENCY_UNAVAILABLE,
+                    )
+                else:
+                    seen_continuation_states.add(progress.state_sha256)
+                    next_continuation_progress = progress
+            elif (
+                recoverable_stream_failure
+                and correction_plan is None
+                and progress.made_progress
+            ):
+                seen_continuation_states.add(progress.state_sha256)
+                next_continuation_progress = progress
+                failure = execution_failure
+            else:
+                failure = execution_failure
+        else:
+            self.workspace_manager.verify_workspace(
+                self.workspace,
+                expected_commit=input_commit,
+                require_clean=True,
+            )
+            transcript_sha256 = result.telemetry.session_transcript_sha256
+            lifecycle = result.telemetry.invocation_lifecycle
+            safe_readonly_continuation = (
+                result.status is AgentExecutionStatus.UPSTREAM_INCOMPLETE
+                and correction_plan is None
+                and result.semantic_submission is None
+                and result.submission_evidence is not None
+                and result.submission_evidence.status is AgentSubmissionStatus.MISSING
+                and result.submission_evidence.diagnostic_code
+                == "upstream_incomplete_after_terminal_response"
+                and result.submission_evidence.tool_call_id is None
+                and result.telemetry.tool_evidence_status
+                is AgentToolEvidenceStatus.CAPTURED
+                and transcript_sha256 is not None
+                and result.telemetry.session_id is not None
+                and bool(result.telemetry.tool_calls)
+                and request.submission_contract is not None
+                and all(
+                    call.tool_name != request.submission_contract.tool_name
+                    for call in result.telemetry.tool_calls
+                )
+                and lifecycle is not None
+                and (lifecycle.response_finalization.terminal_response_observed)
+                and lifecycle.shutdown.cleanup_completed
+            )
+            if safe_readonly_continuation:
+                tool_state_sha256 = hashlib.sha256(
+                    json.dumps(
+                        [
+                            (
+                                call.tool_name,
+                                call.arguments_sha256,
+                                call.output_sha256,
+                                call.outcome,
+                                call.is_error,
+                            )
+                            for call in result.telemetry.tool_calls
+                        ],
+                        separators=(",", ":"),
+                    ).encode()
+                ).hexdigest()
+                if tool_state_sha256 in seen_readonly_tool_states:
+                    failure = DynamicAgentRunnerError(
+                        f"{record_error}; read-only continuation "
+                        "repeated the same tool observations",
+                        TerminationReason.DEPENDENCY_UNAVAILABLE,
+                    )
+                else:
+                    seen_readonly_tool_states.add(tool_state_sha256)
+                    next_readonly_continuation = True
+                    if agent.capability is AgentCapability.REVIEW:
+                        current_review_evidence = ReviewToolEvidenceAttempt(
+                            execution_attempt=attempt,
+                            tool_calls=result.telemetry.tool_calls,
+                        )
+            else:
+                failure = execution_failure
+        return _IncompleteAttemptDisposition(
+            failure=failure,
+            writer_progress=next_continuation_progress,
+            readonly_continuation=next_readonly_continuation,
+            review_evidence=current_review_evidence,
+        )
+
+    def _accept_completed_attempt(
+        self,
+        *,
+        agent: AgentSpec,
+        request: AgentExecutionRequest,
+        base_request: AgentExecutionRequest,
+        result: AgentExecutionResult,
+        assigned_task_ids: tuple[str, ...],
+        manual_scope: tuple[str, ...],
+        review_evidence_attempts: list[ReviewToolEvidenceAttempt],
+        current_review_evidence: ReviewToolEvidenceAttempt | None,
+        commands: tuple[CommandEvidence, ...],
+        correction_plan: SemanticCorrectionPlan | None,
+        seen_correction_fingerprints: set[str],
+        input_commit: str,
+        snapshot: GitSnapshot | None,
+        upstream: Mapping[str, AgentRunOutcome],
+    ) -> _CompletedAttemptDisposition:
+        """Bind one completed typed response to verified facts and correction state."""
+
+        response_reference: ArtifactReference | None = None
+        ignored_fields: tuple[str, ...] = ()
+        response_normalizations: tuple[str, ...] = ()
+        correction_binding_normalizations: tuple[str, ...] = ()
+        response_validation: ResponseValidationDiagnostic | None = None
+        next_correction_plan: SemanticCorrectionPlan | None = None
+        current_correction_outcome = (
+            None if correction_plan is None else SemanticCorrectionOutcome.NOT_EVALUATED
+        )
+        correction_applied = correction_plan is None
+        record_error: str | None = None
+        failure: Exception | None = None
+        try:
+            controller_semantic_payload: dict[str, object] | None = None
+            if correction_plan is not None:
+                if result.semantic_submission is None:
+                    raise AgentArtifactResponseError(
+                        "semantic correction omitted its typed submission"
+                    )
+                application = apply_semantic_correction_with_evidence(
+                    result.semantic_submission.payload,
+                    correction_plan,
+                    response_schema=(
+                        None
+                        if base_request.submission_contract is None
+                        else (base_request.submission_contract.parameters_schema())
+                    ),
+                )
+                controller_semantic_payload = application.payload
+                correction_binding_normalizations = application.normalizations
+                correction_applied = True
+            parsed = parse_dynamic_agent_response(
+                result,
+                request,
+                task_brief=self.task_brief,
+                team_plan=self.team_plan,
+                assigned_task_ids=assigned_task_ids,
+                reviewed_criterion_ids=manual_scope,
+                review_tool_evidence_attempts=(
+                    *review_evidence_attempts,
+                    *(
+                        ()
+                        if current_review_evidence is None
+                        else (current_review_evidence,)
+                    ),
+                ),
+                review_command_evidence=commands,
+                controller_semantic_payload=controller_semantic_payload,
+            )
+        except SemanticCorrectionSubmissionError as error:
+            record_error = self._error_detail(error)
+            response_validation = error.diagnostic
+            response_normalizations = error.normalizations
+            next_correction_plan = error.recovery_plan
+            current_correction_outcome = (
+                SemanticCorrectionOutcome.IMPROVED
+                if next_correction_plan is not None
+                else SemanticCorrectionOutcome.INVALID_SUBMISSION
+            )
+            failure = error
+        except AgentArtifactResponseError as error:
+            record_error = self._error_detail(error)
+            response_normalizations = tuple(
+                dict.fromkeys(
+                    (
+                        *correction_binding_normalizations,
+                        *error.response_normalizations,
+                    )
+                )
+            )
+            response_validation = error.diagnostic
+            if correction_plan is None:
+                if error.semantic_payload is not None and error.diagnostic is not None:
+                    next_correction_plan = build_semantic_correction_plan(
+                        error.semantic_payload,
+                        error.diagnostic,
+                    )
+                    if (
+                        next_correction_plan is not None
+                        and agent.capability is AgentCapability.REVIEW
+                    ):
+                        next_correction_plan = (
+                            bind_review_evidence_correction_candidates(
+                                next_correction_plan,
+                                evidence_attempts=(
+                                    *review_evidence_attempts,
+                                    *(
+                                        ()
+                                        if current_review_evidence is None
+                                        else (current_review_evidence,)
+                                    ),
+                                ),
+                                command_evidence=commands,
+                            )
+                        )
+                    seen_correction_fingerprints.add(error.diagnostic.fingerprint)
+            elif not correction_applied:
+                current_correction_outcome = (
+                    SemanticCorrectionOutcome.INVALID_SUBMISSION
+                )
+            elif error.diagnostic is not None:
+                current_correction_outcome = correction_outcome(
+                    correction_plan,
+                    error.diagnostic,
+                    seen_fingerprints=frozenset(seen_correction_fingerprints),
+                )
+                if (
+                    current_correction_outcome is SemanticCorrectionOutcome.IMPROVED
+                    and error.semantic_payload is not None
+                ):
+                    next_correction_plan = build_semantic_correction_plan(
+                        error.semantic_payload,
+                        error.diagnostic,
+                    )
+                    if (
+                        next_correction_plan is not None
+                        and agent.capability is AgentCapability.REVIEW
+                    ):
+                        next_correction_plan = (
+                            bind_review_evidence_correction_candidates(
+                                next_correction_plan,
+                                evidence_attempts=(
+                                    *review_evidence_attempts,
+                                    *(
+                                        ()
+                                        if current_review_evidence is None
+                                        else (current_review_evidence,)
+                                    ),
+                                ),
+                                command_evidence=commands,
+                            )
+                        )
+                    seen_correction_fingerprints.add(error.diagnostic.fingerprint)
+            else:
+                current_correction_outcome = (
+                    SemanticCorrectionOutcome.INVALID_SUBMISSION
+                )
+            failure = error
+        except (ValueError, ValidationError) as error:
+            record_error = self._error_detail(error)
+            if correction_plan is not None:
+                current_correction_outcome = (
+                    SemanticCorrectionOutcome.INVALID_SUBMISSION
+                )
+            failure = error
+        else:
+            ignored_fields = parsed.ignored_controller_fields
+            response_normalizations = tuple(
+                dict.fromkeys(
+                    (
+                        *correction_binding_normalizations,
+                        *parsed.response_normalizations,
+                    )
+                )
+            )
+            if correction_plan is not None:
+                current_correction_outcome = SemanticCorrectionOutcome.ACCEPTED
+            artifact = self._assemble_response(
+                agent,
+                parsed.body,
+                input_commit=input_commit,
+                commands=commands,
+                manual_scope=manual_scope,
+                snapshot=snapshot,
+                result=result,
+                upstream=upstream,
+            )
+            response_reference = self.artifact_store.write(
+                artifact,
+                description=(f"Controller-assembled response from {agent.id}."),
+            )
+        return _CompletedAttemptDisposition(
+            response_reference=response_reference,
+            ignored_fields=ignored_fields,
+            normalizations=response_normalizations,
+            validation=response_validation,
+            next_correction_plan=next_correction_plan,
+            correction_outcome=current_correction_outcome,
+            record_error=record_error,
+            failure=failure,
+        )
+
     def _invoke_agent(
         self,
         agent: AgentSpec,
@@ -745,7 +1097,6 @@ class DynamicAgentRunner:
             response_reference: ArtifactReference | None = None
             ignored_fields: tuple[str, ...] = ()
             response_normalizations: tuple[str, ...] = ()
-            correction_binding_normalizations: tuple[str, ...] = ()
             response_validation: ResponseValidationDiagnostic | None = None
             correction_request = (
                 None if correction_plan is None else correction_plan.evidence
@@ -755,7 +1106,6 @@ class DynamicAgentRunner:
                 if correction_plan is None
                 else SemanticCorrectionOutcome.NOT_EVALUATED
             )
-            correction_applied = correction_plan is None
             next_correction_plan: SemanticCorrectionPlan | None = None
             record_error: str | None = None
             failure: Exception | None = None
@@ -799,107 +1149,23 @@ class DynamicAgentRunner:
                         record_error,
                         self._execution_termination_reason(result.status),
                     )
-                    if agent.permission_profile is PermissionProfile.WORKSPACE_WRITE:
-                        progress = self.workspace_manager.inspect_progress(
-                            self.workspace,
-                            input_commit=input_commit,
-                        )
-                        self._validate_workspace_scope(agent, progress.changed_files)
-                        if (
-                            result.status is AgentExecutionStatus.UPSTREAM_INCOMPLETE
-                            and correction_plan is None
-                        ):
-                            if not progress.made_progress:
-                                failure = DynamicAgentRunnerError(
-                                    f"{record_error}; no verifiable workspace progress "
-                                    "exists for controlled continuation",
-                                    TerminationReason.DEPENDENCY_UNAVAILABLE,
-                                )
-                            elif progress.state_sha256 in seen_continuation_states:
-                                failure = DynamicAgentRunnerError(
-                                    f"{record_error}; controlled continuation made no "
-                                    "measurable workspace progress and was stopped",
-                                    TerminationReason.DEPENDENCY_UNAVAILABLE,
-                                )
-                            else:
-                                seen_continuation_states.add(progress.state_sha256)
-                                next_continuation_progress = progress
-                        elif (
-                            recoverable_stream_failure
-                            and correction_plan is None
-                            and progress.made_progress
-                        ):
-                            seen_continuation_states.add(progress.state_sha256)
-                            next_continuation_progress = progress
-                            failure = execution_failure
-                        else:
-                            failure = execution_failure
-                    else:
-                        self.workspace_manager.verify_workspace(
-                            self.workspace,
-                            expected_commit=input_commit,
-                            require_clean=True,
-                        )
-                        transcript_sha256 = result.telemetry.session_transcript_sha256
-                        lifecycle = result.telemetry.invocation_lifecycle
-                        safe_readonly_continuation = (
-                            result.status is AgentExecutionStatus.UPSTREAM_INCOMPLETE
-                            and correction_plan is None
-                            and result.semantic_submission is None
-                            and result.submission_evidence is not None
-                            and result.submission_evidence.status
-                            is AgentSubmissionStatus.MISSING
-                            and result.submission_evidence.diagnostic_code
-                            == "upstream_incomplete_after_terminal_response"
-                            and result.submission_evidence.tool_call_id is None
-                            and result.telemetry.tool_evidence_status
-                            is AgentToolEvidenceStatus.CAPTURED
-                            and transcript_sha256 is not None
-                            and result.telemetry.session_id is not None
-                            and bool(result.telemetry.tool_calls)
-                            and request.submission_contract is not None
-                            and all(
-                                call.tool_name != request.submission_contract.tool_name
-                                for call in result.telemetry.tool_calls
-                            )
-                            and lifecycle is not None
-                            and (
-                                lifecycle.response_finalization.terminal_response_observed
-                            )
-                            and lifecycle.shutdown.cleanup_completed
-                        )
-                        if safe_readonly_continuation:
-                            tool_state_sha256 = hashlib.sha256(
-                                json.dumps(
-                                    [
-                                        (
-                                            call.tool_name,
-                                            call.arguments_sha256,
-                                            call.output_sha256,
-                                            call.outcome,
-                                            call.is_error,
-                                        )
-                                        for call in result.telemetry.tool_calls
-                                    ],
-                                    separators=(",", ":"),
-                                ).encode()
-                            ).hexdigest()
-                            if tool_state_sha256 in seen_readonly_tool_states:
-                                failure = DynamicAgentRunnerError(
-                                    f"{record_error}; read-only continuation "
-                                    "repeated the same tool observations",
-                                    TerminationReason.DEPENDENCY_UNAVAILABLE,
-                                )
-                            else:
-                                seen_readonly_tool_states.add(tool_state_sha256)
-                                next_readonly_continuation = True
-                                if agent.capability is AgentCapability.REVIEW:
-                                    current_review_evidence = ReviewToolEvidenceAttempt(
-                                        execution_attempt=attempt,
-                                        tool_calls=result.telemetry.tool_calls,
-                                    )
-                        else:
-                            failure = execution_failure
+                    disposition = self._classify_incomplete_attempt(
+                        agent=agent,
+                        request=request,
+                        result=result,
+                        input_commit=input_commit,
+                        correction_plan=correction_plan,
+                        recoverable_stream_failure=recoverable_stream_failure,
+                        seen_continuation_states=seen_continuation_states,
+                        seen_readonly_tool_states=seen_readonly_tool_states,
+                        attempt=attempt,
+                        execution_failure=execution_failure,
+                    )
+                    failure = disposition.failure
+                    next_continuation_progress = disposition.writer_progress
+                    next_readonly_continuation = disposition.readonly_continuation
+                    if disposition.review_evidence is not None:
+                        current_review_evidence = disposition.review_evidence
                 elif (
                     correction_plan is not None
                     and agent.permission_profile is PermissionProfile.WORKSPACE_WRITE
@@ -919,183 +1185,30 @@ class DynamicAgentRunner:
                             input_commit if snapshot is None else snapshot.output_commit
                         )
                 if result.status is AgentExecutionStatus.COMPLETED:
-                    try:
-                        controller_semantic_payload: dict[str, object] | None = None
-                        if correction_plan is not None:
-                            if result.semantic_submission is None:
-                                raise AgentArtifactResponseError(
-                                    "semantic correction omitted its typed submission"
-                                )
-                            application = apply_semantic_correction_with_evidence(
-                                result.semantic_submission.payload,
-                                correction_plan,
-                                response_schema=(
-                                    None
-                                    if base_request.submission_contract is None
-                                    else (
-                                        base_request.submission_contract.parameters_schema()
-                                    )
-                                ),
-                            )
-                            controller_semantic_payload = application.payload
-                            correction_binding_normalizations = (
-                                application.normalizations
-                            )
-                            correction_applied = True
-                        parsed = parse_dynamic_agent_response(
-                            result,
-                            request,
-                            task_brief=self.task_brief,
-                            team_plan=self.team_plan,
-                            assigned_task_ids=assigned_task_ids,
-                            reviewed_criterion_ids=manual_scope,
-                            review_tool_evidence_attempts=(
-                                *review_evidence_attempts,
-                                *(
-                                    ()
-                                    if current_review_evidence is None
-                                    else (current_review_evidence,)
-                                ),
-                            ),
-                            review_command_evidence=commands,
-                            controller_semantic_payload=controller_semantic_payload,
-                        )
-                    except SemanticCorrectionSubmissionError as error:
-                        record_error = self._error_detail(error)
-                        response_validation = error.diagnostic
-                        response_normalizations = error.normalizations
-                        next_correction_plan = error.recovery_plan
-                        current_correction_outcome = (
-                            SemanticCorrectionOutcome.IMPROVED
-                            if next_correction_plan is not None
-                            else SemanticCorrectionOutcome.INVALID_SUBMISSION
-                        )
-                        failure = error
-                    except AgentArtifactResponseError as error:
-                        record_error = self._error_detail(error)
-                        response_normalizations = tuple(
-                            dict.fromkeys(
-                                (
-                                    *correction_binding_normalizations,
-                                    *error.response_normalizations,
-                                )
-                            )
-                        )
-                        response_validation = error.diagnostic
-                        if correction_plan is None:
-                            if (
-                                error.semantic_payload is not None
-                                and error.diagnostic is not None
-                            ):
-                                next_correction_plan = build_semantic_correction_plan(
-                                    error.semantic_payload,
-                                    error.diagnostic,
-                                )
-                                if (
-                                    next_correction_plan is not None
-                                    and agent.capability is AgentCapability.REVIEW
-                                ):
-                                    next_correction_plan = (
-                                        bind_review_evidence_correction_candidates(
-                                            next_correction_plan,
-                                            evidence_attempts=(
-                                                *review_evidence_attempts,
-                                                *(
-                                                    ()
-                                                    if current_review_evidence is None
-                                                    else (current_review_evidence,)
-                                                ),
-                                            ),
-                                            command_evidence=commands,
-                                        )
-                                    )
-                                seen_correction_fingerprints.add(
-                                    error.diagnostic.fingerprint
-                                )
-                        elif not correction_applied:
-                            current_correction_outcome = (
-                                SemanticCorrectionOutcome.INVALID_SUBMISSION
-                            )
-                        elif error.diagnostic is not None:
-                            current_correction_outcome = correction_outcome(
-                                correction_plan,
-                                error.diagnostic,
-                                seen_fingerprints=frozenset(
-                                    seen_correction_fingerprints
-                                ),
-                            )
-                            if (
-                                current_correction_outcome
-                                is SemanticCorrectionOutcome.IMPROVED
-                                and error.semantic_payload is not None
-                            ):
-                                next_correction_plan = build_semantic_correction_plan(
-                                    error.semantic_payload,
-                                    error.diagnostic,
-                                )
-                                if (
-                                    next_correction_plan is not None
-                                    and agent.capability is AgentCapability.REVIEW
-                                ):
-                                    next_correction_plan = (
-                                        bind_review_evidence_correction_candidates(
-                                            next_correction_plan,
-                                            evidence_attempts=(
-                                                *review_evidence_attempts,
-                                                *(
-                                                    ()
-                                                    if current_review_evidence is None
-                                                    else (current_review_evidence,)
-                                                ),
-                                            ),
-                                            command_evidence=commands,
-                                        )
-                                    )
-                                seen_correction_fingerprints.add(
-                                    error.diagnostic.fingerprint
-                                )
-                        else:
-                            current_correction_outcome = (
-                                SemanticCorrectionOutcome.INVALID_SUBMISSION
-                            )
-                        failure = error
-                    except (ValueError, ValidationError) as error:
-                        record_error = self._error_detail(error)
-                        if correction_plan is not None:
-                            current_correction_outcome = (
-                                SemanticCorrectionOutcome.INVALID_SUBMISSION
-                            )
-                        failure = error
-                    else:
-                        ignored_fields = parsed.ignored_controller_fields
-                        response_normalizations = tuple(
-                            dict.fromkeys(
-                                (
-                                    *correction_binding_normalizations,
-                                    *parsed.response_normalizations,
-                                )
-                            )
-                        )
-                        if correction_plan is not None:
-                            current_correction_outcome = (
-                                SemanticCorrectionOutcome.ACCEPTED
-                            )
-                        artifact = self._assemble_response(
-                            agent,
-                            parsed.body,
-                            input_commit=input_commit,
-                            commands=commands,
-                            manual_scope=manual_scope,
-                            snapshot=snapshot,
-                            result=result,
-                            upstream=upstream,
-                        )
-                        response_reference = self.artifact_store.write(
-                            artifact,
-                            description=(
-                                f"Controller-assembled response from {agent.id}."
-                            ),
-                        )
+                    completed = self._accept_completed_attempt(
+                        agent=agent,
+                        request=request,
+                        base_request=base_request,
+                        result=result,
+                        assigned_task_ids=assigned_task_ids,
+                        manual_scope=manual_scope,
+                        review_evidence_attempts=review_evidence_attempts,
+                        current_review_evidence=current_review_evidence,
+                        commands=commands,
+                        correction_plan=correction_plan,
+                        seen_correction_fingerprints=seen_correction_fingerprints,
+                        input_commit=input_commit,
+                        snapshot=snapshot,
+                        upstream=upstream,
+                    )
+                    response_reference = completed.response_reference
+                    ignored_fields = completed.ignored_fields
+                    response_normalizations = completed.normalizations
+                    response_validation = completed.validation
+                    next_correction_plan = completed.next_correction_plan
+                    current_correction_outcome = completed.correction_outcome
+                    record_error = completed.record_error
+                    failure = completed.failure
             except Exception as error:
                 if failure is None:
                     failure = error

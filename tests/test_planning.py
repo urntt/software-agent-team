@@ -11,12 +11,20 @@ import subprocess
 import sys
 import time
 from copy import deepcopy
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal
 from io import StringIO
 from pathlib import Path
 
 import pytest
+from planning_factories import (
+    FIXED_TIME,
+    policy,
+    proposal,
+    proposal_body,
+    proposal_response,
+    request,
+)
 from pydantic import ValidationError
 
 import software_agent_team.planning as planning
@@ -25,12 +33,9 @@ from software_agent_team.artifacts import (
     AgentToolEvidenceStatus,
     ArtifactKind,
     DeliveryMaturity,
-    ProductDefinition,
     ProductDefinitionDimension,
     ProductDefinitionDisposition,
-    ProductDefinitionImpact,
     ProductDefinitionStatement,
-    ProductMaturityDefinition,
     ProviderLivenessEvidence,
     ReviewBoundaryKind,
 )
@@ -63,7 +68,6 @@ from software_agent_team.planning import (
     AdaptivePlanningCoordinator,
     AgentWorkload,
     ApprovedPlanningResult,
-    CapabilityTimeoutPolicy,
     PlanningActivity,
     PlanningActivityKind,
     PlanningDecisionAuthority,
@@ -76,7 +80,6 @@ from software_agent_team.planning import (
     PlanningModelResponse,
     PlanningOption,
     PlanningOptionValue,
-    PlanningPolicy,
     PlanningPreview,
     PlanningProposal,
     PlanningProposalBody,
@@ -134,7 +137,6 @@ from software_agent_team.teams import (
     TeamPlanOrigin,
 )
 
-FIXED_TIME = datetime(2026, 8, 26, 12, 0, tzinfo=UTC)
 AMBIGUOUS_LINK_REQUEST = (
     "For developers who will use it repeatedly, build a usable local product that "
     "checks Markdown links."
@@ -151,296 +153,6 @@ class AdvancingClock:
         value = self.current
         self.current += timedelta(seconds=1)
         return value
-
-
-def request(
-    *,
-    source_request: str = (
-        "For developers who will use it repeatedly, build a usable local product "
-        "that checks Markdown links in files and fragments without fetching "
-        "remote URLs."
-    ),
-) -> PlanningRequest:
-    """Return direct input with explicit pre-model authorization."""
-
-    return PlanningRequest(
-        run_id="sat-adaptive-001",
-        project_name="link-checker",
-        source_request=source_request,
-        destination="/tmp/link-checker",
-        execution_profile=(
-            "Small greenfield Python 3.12 project",
-            "No network access during deterministic verification",
-        ),
-        base_constraints=("Use the versioned uv environment",),
-        model="provider/model",
-        authorization="user_confirmed",
-        authorized_at=FIXED_TIME,
-    )
-
-
-def policy(**updates: object) -> PlanningPolicy:
-    """Return the controller authority used by adaptive plan tests."""
-
-    values: dict[str, object] = {
-        "budget": AgentBudget(
-            max_calls=14,
-            max_input_tokens=1_000_000,
-            max_output_tokens=200_000,
-            max_agent_duration_seconds=7_200,
-            max_estimated_cost_usd="25",
-        ),
-        "capability_timeouts": {
-            AgentCapability.IMPLEMENTATION: CapabilityTimeoutPolicy(
-                default_seconds=600,
-                ceiling_seconds=900,
-            ),
-            AgentCapability.INTEGRATION: CapabilityTimeoutPolicy(
-                default_seconds=600,
-                ceiling_seconds=900,
-            ),
-            AgentCapability.TESTING: CapabilityTimeoutPolicy(
-                default_seconds=240,
-                ceiling_seconds=300,
-            ),
-            AgentCapability.REVIEW: CapabilityTimeoutPolicy(
-                default_seconds=240,
-                ceiling_seconds=300,
-            ),
-        },
-    }
-    values.update(updates)
-    return PlanningPolicy.model_validate(values)
-
-
-def proposal_body(
-    *,
-    title: str = "Markdown Link Checker",
-    question_id: str | None = None,
-) -> PlanningProposalBody:
-    """Return one complete task-defined team proposal."""
-
-    decisions = (
-        PlanningDecisionRecord(
-            id="DECISION_ACCEPTANCE",
-            category=PlanningDecisionCategory.ACCEPTANCE_SCOPE,
-            authority=PlanningDecisionAuthority.PLANNER_PROPOSAL,
-            provenance=PlanningDecisionProvenance(
-                kind=PlanningDecisionProvenanceKind.PLANNER_RECOMMENDATION,
-                source="planner",
-            ),
-            summary="Verify observable scan failures and diagnostic locations.",
-            rationale="These behaviors make the requested CLI testable.",
-        ),
-        PlanningDecisionRecord(
-            id="DECISION_DELIVERY",
-            category=PlanningDecisionCategory.DELIVERY,
-            authority=PlanningDecisionAuthority.PLANNER_PROPOSAL,
-            provenance=PlanningDecisionProvenance(
-                kind=PlanningDecisionProvenanceKind.PLANNER_RECOMMENDATION,
-                source="planner",
-            ),
-            summary="Deliver one runnable local CLI project.",
-            rationale="The request is for a local command-line tool.",
-        ),
-        PlanningDecisionRecord(
-            id="DECISION_TEAM",
-            category=PlanningDecisionCategory.TEAM,
-            authority=PlanningDecisionAuthority.PLANNER_PROPOSAL,
-            provenance=PlanningDecisionProvenance(
-                kind=PlanningDecisionProvenanceKind.PLANNER_RECOMMENDATION,
-                source="planner",
-            ),
-            summary="Use one writer and two downstream quality Agents.",
-            rationale="The cohesive implementation still needs independent checks.",
-        ),
-        PlanningDecisionRecord(
-            id="DECISION_MODEL_ROUTE",
-            category=PlanningDecisionCategory.MODEL_ROUTE,
-            authority=PlanningDecisionAuthority.PLANNER_PROPOSAL,
-            provenance=PlanningDecisionProvenance(
-                kind=PlanningDecisionProvenanceKind.PLANNER_RECOMMENDATION,
-                source="planner",
-            ),
-            summary="Use capability-compatible configured model routes.",
-            rationale="No task evidence justifies a route override.",
-        ),
-        PlanningDecisionRecord(
-            id="DECISION_SCAN_STRUCTURE",
-            category=PlanningDecisionCategory.LOCAL_IMPLEMENTATION,
-            authority=PlanningDecisionAuthority.AGENT_AUTONOMY,
-            provenance=PlanningDecisionProvenance(
-                kind=PlanningDecisionProvenanceKind.AGENT_AUTONOMY,
-                source="agent",
-            ),
-            summary="Use one single-process scan before considering parallelism.",
-            rationale="The small initial workload does not justify added coordination.",
-        ),
-    )
-    if question_id is not None:
-        decisions = (
-            *decisions,
-            PlanningDecisionRecord(
-                id="DECISION_LINK_SCOPE_ANSWER",
-                category=PlanningDecisionCategory.PRODUCT_REQUIREMENT,
-                authority=PlanningDecisionAuthority.USER,
-                provenance=PlanningDecisionProvenance(
-                    kind=PlanningDecisionProvenanceKind.RESOLVED_QUESTION,
-                    source=question_id,
-                ),
-                summary="Keep the first release limited to local links.",
-                rationale="The user selected the deterministic local-only option.",
-            ),
-        )
-    return PlanningProposalBody(
-        title=title,
-        product_definition=ProductDefinition(
-            target_users=ProductDefinitionStatement(
-                statement="developers",
-                disposition=ProductDefinitionDisposition.EXPLICIT_INPUT,
-                source="developers",
-                rationale="The request names developers as the recurring users.",
-                requirement_ids=("REQ_SCAN",),
-            ),
-            primary_workflow=ProductDefinitionStatement(
-                statement="checks Markdown links",
-                disposition=ProductDefinitionDisposition.EXPLICIT_INPUT,
-                source="checks Markdown links",
-                rationale="The requested scan is the primary repeated workflow.",
-                requirement_ids=("REQ_SCAN", "REQ_REPORT"),
-            ),
-            delivery_maturity=ProductMaturityDefinition(
-                level=DeliveryMaturity.USABLE_LOCAL_PRODUCT,
-                disposition=ProductDefinitionDisposition.EXPLICIT_INPUT,
-                source="usable local product",
-                rationale="The request explicitly asks for a reusable local tool.",
-                requirement_ids=("REQ_SCAN",),
-            ),
-            usability_expectations=ProductDefinitionStatement(
-                statement="Failures are actionable from ordinary terminal output.",
-                disposition=ProductDefinitionDisposition.PLANNER_RECOMMENDATION,
-                source="planner",
-                rationale="A repeatedly used CLI needs understandable diagnostics.",
-                criterion_ids=("AC_REPORT",),
-                decision_ids=("DECISION_ACCEPTANCE",),
-            ),
-            operational_expectations=ProductDefinitionStatement(
-                statement="Local scans are deterministic and avoid network access.",
-                disposition=ProductDefinitionDisposition.PLANNER_RECOMMENDATION,
-                source="planner",
-                rationale="Deterministic local operation matches the approved scope.",
-                criterion_ids=("AC_SCAN",),
-                decision_ids=("DECISION_ACCEPTANCE",),
-            ),
-            delivery_expectations=ProductDefinitionStatement(
-                statement="Deliver a documented, runnable local CLI project.",
-                disposition=ProductDefinitionDisposition.PLANNER_RECOMMENDATION,
-                source="planner",
-                rationale="The user needs a repeatable project rather than a snippet.",
-                requirement_ids=("REQ_SCAN",),
-                decision_ids=("DECISION_DELIVERY",),
-            ),
-            impact=ProductDefinitionImpact(
-                architecture="Separate scanning from terminal presentation.",
-                team="Use one cohesive writer with downstream quality authority.",
-                cost="Keep the small cohesive implementation within the task budget.",
-                delivery="Include runnable commands, tests, and user documentation.",
-            ),
-        ),
-        requirements=(
-            "Scan Markdown files below a selected path.",
-            "Report broken local links with source locations.",
-        ),
-        requirement_ids=("REQ_SCAN", "REQ_REPORT"),
-        non_goals=("Fetching or validating remote web links is not included.",),
-        acceptance_criteria=(
-            ProposedCriterion(
-                id="AC_SCAN",
-                description="Broken local links produce a non-zero exit status.",
-                verification="Run the CLI against valid and broken fixtures.",
-                requirement_ids=("REQ_SCAN",),
-                verification_agent_ids=("acceptance_tester",),
-            ),
-            ProposedCriterion(
-                id="AC_REPORT",
-                description="Every failure includes the file and line number.",
-                verification="Assert structured output for a broken fixture.",
-                requirement_ids=("REQ_REPORT",),
-                verification_agent_ids=("acceptance_tester", "quality_reviewer"),
-            ),
-        ),
-        constraints=("Use only the standard library at runtime.",),
-        assumptions=("The initial implementation uses a single-process scan.",),
-        assumption_decision_ids=("DECISION_SCAN_STRUCTURE",),
-        decisions=decisions,
-        objective="Deliver a documented, tested Markdown link-checking CLI.",
-        approach=(
-            "Parse Markdown link targets without fetching network resources.",
-            "Separate scanning, resolution, and CLI presentation.",
-        ),
-        tasks=(
-            ProposedTask(
-                id="TASK_IMPLEMENT",
-                owner_agent_id="cli_developer",
-                description="Implement scanning, resolution, and CLI output.",
-                acceptance_criteria=("AC_SCAN", "AC_REPORT"),
-                expected_paths=("src", "tests"),
-            ),
-        ),
-        risks=("Markdown edge cases may require explicit documented limits.",),
-        agents=(
-            ProposedAgent(
-                id="cli_developer",
-                label="CLI Developer",
-                responsibility="Implement the complete CLI and its focused tests.",
-                rationale="The small cohesive codebase does not need split writers.",
-                capability=AgentCapability.IMPLEMENTATION,
-                stage_id="implement",
-                workspace_scope="repository",
-                workload=AgentWorkload.ROUTINE,
-            ),
-            ProposedAgent(
-                id="acceptance_tester",
-                label="Acceptance Tester",
-                responsibility="Verify deterministic behavior against every criterion.",
-                rationale="Testing remains independent from implementation.",
-                capability=AgentCapability.TESTING,
-                stage_id="verify",
-                dependencies=("cli_developer",),
-                workspace_scope="repository",
-                workload=AgentWorkload.ROUTINE,
-            ),
-            ProposedAgent(
-                id="quality_reviewer",
-                label="Quality Reviewer",
-                responsibility="Review correctness, maintainability, and evidence.",
-                rationale="A separate reviewer prevents self-approval.",
-                capability=AgentCapability.REVIEW,
-                stage_id="verify",
-                dependencies=("cli_developer",),
-                workspace_scope="repository",
-                workload=AgentWorkload.ROUTINE,
-            ),
-        ),
-        iteration_limit=2,
-        max_concurrency=2,
-        revision_enabled=True,
-    )
-
-
-def proposal(
-    *,
-    revision: int = 1,
-    body: PlanningProposalBody | None = None,
-) -> PlanningProposal:
-    return PlanningProposal(
-        run_id=request().run_id,
-        revision=revision,
-        created_at=FIXED_TIME,
-        source=PlanningProposalSource.MODEL,
-        source_turn_sequence=revision,
-        body=body or proposal_body(),
-    )
 
 
 def strip_v8_decision_fields(body_payload: dict[str, object]) -> None:
@@ -965,15 +677,6 @@ def resolved_product_body() -> PlanningProposalBody:
                 }
             )
         }
-    )
-
-
-def proposal_response(
-    body: PlanningProposalBody | None = None,
-) -> PlanningModelResponse:
-    return PlanningModelResponse(
-        kind=PlanningResponseKind.PROPOSAL,
-        proposal=body or proposal_body(),
     )
 
 
@@ -4704,347 +4407,6 @@ def test_mixed_functional_and_trust_boundary_request_keeps_security_review() -> 
     )
 
 
-def test_response_normalizer_canonicalizes_only_safe_presentation_variants() -> None:
-    payload = proposal_response().model_dump(mode="json")
-    payload.pop("kind")
-    payload["proposal"]["tasks"][0]["expected_paths"] = [
-        " tests/ ",
-        "./src//link_checker.py",
-    ]
-    payload["proposal"]["agents"][0]["workspace_scope"] = "repository/"
-    original = json.loads(json.dumps(payload))
-
-    normalized, changes = planning._normalize_planning_response_payload(payload)
-    parsed = PlanningModelResponse.model_validate(normalized)
-
-    assert payload == original
-    assert parsed.kind is PlanningResponseKind.PROPOSAL
-    assert parsed.proposal is not None
-    assert parsed.proposal.tasks[0].expected_paths == (
-        "tests",
-        "src/link_checker.py",
-    )
-    assert parsed.proposal.agents[0].workspace_scope == "repository"
-    assert changes == (
-        "inferred response kind as proposal",
-        "canonicalized proposal.tasks[0].expected_paths[0]",
-        "canonicalized proposal.tasks[0].expected_paths[1]",
-        "canonicalized proposal.agents[0].workspace_scope",
-    )
-
-
-def test_response_normalizer_uses_parallel_requirement_ids_and_disposition() -> None:
-    payload = proposal_response().model_dump(mode="json")
-    proposal_payload = payload["proposal"]
-    proposal_payload["requirements"][0] = (
-        "REQ_SCAN: REQ_SCAN: Scan Markdown files below a selected path."
-    )
-    proposal_payload["requirements"][1] = (
-        "REQ_SCAN: Report broken local links with source locations."
-    )
-    target_users = proposal_payload["product_definition"]["target_users"]
-    target_users.update(
-        {
-            "disposition": "not_material",
-            "source": "planner",
-            "rationale": "The approved throwaway has no material audience.",
-            "requirement_ids": ["REQ_SCAN"],
-            "criterion_ids": ["AC_SCAN"],
-            "decision_ids": ["DECISION_TEAM"],
-        }
-    )
-    original = json.loads(json.dumps(payload))
-
-    normalized, changes = planning._normalize_planning_response_payload(payload)
-    parsed = PlanningModelResponse.model_validate(normalized)
-
-    assert payload == original
-    assert parsed.proposal is not None
-    assert parsed.proposal.requirements[0] == (
-        "Scan Markdown files below a selected path."
-    )
-    assert parsed.proposal.requirements[1].startswith("REQ_SCAN:")
-    normalized_target = parsed.proposal.product_definition
-    assert normalized_target is not None
-    assert not normalized_target.target_users.requirement_ids
-    assert not normalized_target.target_users.criterion_ids
-    assert not normalized_target.target_users.decision_ids
-    assert changes[:2] == (
-        "removed redundant stable ID prefix from proposal.requirements[0]",
-        (
-            "removed downstream references from not-material "
-            "proposal.product_definition.target_users"
-        ),
-    )
-
-
-def test_response_normalizer_compiles_atomic_requirements_without_mutating_raw() -> (
-    None
-):
-    payload = proposal_response().model_dump(mode="json")
-    proposal_payload = payload["proposal"]
-    descriptions = proposal_payload["requirements"]
-    requirement_ids = proposal_payload["requirement_ids"]
-    proposal_payload["requirements"] = [
-        {
-            "id": requirement_id,
-            "description": f"{requirement_id}: {description}",
-        }
-        for requirement_id, description in zip(
-            requirement_ids,
-            descriptions,
-            strict=True,
-        )
-    ]
-    proposal_payload["requirement_ids"] = ["REQ_CONFLICTING_REDUNDANT_FIELD"]
-    original = json.loads(json.dumps(payload))
-
-    normalized, changes = planning._normalize_planning_response_payload(payload)
-    parsed = PlanningModelResponse.model_validate(normalized)
-
-    assert payload == original
-    assert parsed.proposal is not None
-    assert parsed.proposal.requirement_ids == tuple(requirement_ids)
-    assert parsed.proposal.requirements == tuple(descriptions)
-    assert changes == (
-        (
-            "compiled atomic proposal.requirements into canonical descriptions "
-            "and stable IDs"
-        ),
-        "removed redundant stable ID prefix from proposal.requirements[0]",
-        "removed redundant stable ID prefix from proposal.requirements[1]",
-    )
-
-
-def test_response_normalizer_rejects_mixed_requirement_shapes() -> None:
-    payload = proposal_response().model_dump(mode="json")
-    payload["proposal"]["requirements"] = [
-        {"id": "REQ_SCAN", "description": "Scan Markdown files."},
-        "Report broken links.",
-    ]
-
-    with pytest.raises(PlanningError, match="cannot be mixed"):
-        planning._normalize_planning_response_payload(payload)
-
-
-def test_response_normalizer_compiles_atomic_assumptions_without_mutating_raw() -> None:
-    payload = proposal_response().model_dump(mode="json")
-    proposal_payload = payload["proposal"]
-    statements = [
-        "Use one single-process scan.",
-        "Keep the first implementation local and synchronous.",
-    ]
-    proposal_payload["assumptions"] = [
-        {
-            "statement": statement,
-            "decision_id": "DECISION_SCAN_STRUCTURE",
-        }
-        for statement in statements
-    ]
-    proposal_payload["assumption_decision_ids"] = ["DECISION_CONFLICTING"]
-    original = json.loads(json.dumps(payload))
-
-    normalized, changes = planning._normalize_planning_response_payload(payload)
-    parsed = PlanningModelResponse.model_validate(normalized)
-
-    assert payload == original
-    assert parsed.proposal is not None
-    assert parsed.proposal.assumptions == tuple(statements)
-    assert parsed.proposal.assumption_decision_ids == (
-        "DECISION_SCAN_STRUCTURE",
-        "DECISION_SCAN_STRUCTURE",
-    )
-    assert changes == (
-        "compiled atomic proposal.assumptions into canonical statements "
-        "and autonomous decision references",
-    )
-
-
-def test_response_normalizer_rejects_mixed_assumption_shapes() -> None:
-    payload = proposal_response().model_dump(mode="json")
-    payload["proposal"]["assumptions"] = [
-        {
-            "statement": "Use one single-process scan.",
-            "decision_id": "DECISION_SCAN_STRUCTURE",
-        },
-        "Keep the first implementation local.",
-    ]
-
-    with pytest.raises(PlanningError, match="cannot be mixed"):
-        planning._normalize_planning_response_payload(payload)
-
-
-def test_current_proposal_context_uses_atomic_relations_without_rewriting_body() -> (
-    None
-):
-    body = proposal_body()
-    canonical = body.model_dump(mode="json")
-
-    projected = planning._planning_proposal_body_for_model(body)
-
-    assert body.model_dump(mode="json") == canonical
-    assert "requirement_ids" not in projected
-    assert projected["requirements"] == [
-        {"id": requirement_id, "description": description}
-        for requirement_id, description in zip(
-            body.requirement_ids,
-            body.requirements,
-            strict=True,
-        )
-    ]
-    assert "assumption_decision_ids" not in projected
-    assert projected["assumptions"] == [
-        {"statement": statement, "decision_id": decision_id}
-        for statement, decision_id in zip(
-            body.assumptions,
-            body.assumption_decision_ids,
-            strict=True,
-        )
-    ]
-
-
-def test_response_normalizer_canonicalizes_unambiguous_decision_tokens() -> None:
-    payload = proposal_response().model_dump(mode="json")
-    decisions = payload["proposal"]["decisions"]
-    canonical_ids = [decision["id"] for decision in decisions]
-    lowercase_ids = [
-        "DECISION_" + decision_id.removeprefix("DECISION_").lower()
-        for decision_id in canonical_ids
-    ]
-    for decision, lowercase_id in zip(decisions, lowercase_ids, strict=True):
-        decision["id"] = lowercase_id
-    payload["proposal"]["assumption_decision_ids"] = ["DECISION_scan_structure"]
-    original = json.loads(json.dumps(payload))
-
-    normalized, changes = planning._normalize_planning_response_payload(payload)
-    parsed = PlanningModelResponse.model_validate(normalized)
-
-    assert payload == original
-    assert parsed.proposal is not None
-    assert [decision.id for decision in parsed.proposal.decisions] == canonical_ids
-    assert parsed.proposal.assumption_decision_ids == ("DECISION_SCAN_STRUCTURE",)
-    assert len(changes) == len(canonical_ids) + 1
-    assert changes[0] == (
-        "canonicalized proposal.decisions[0].id as DECISION_ACCEPTANCE"
-    )
-    assert changes[-1] == (
-        "canonicalized proposal.assumption_decision_ids[0] as DECISION_SCAN_STRUCTURE"
-    )
-
-
-def test_response_normalizer_compiles_decision_authority_and_legacy_sources() -> None:
-    payload = proposal_response().model_dump(mode="json")
-    proposal_payload = payload["proposal"]
-    for decision in proposal_payload["decisions"]:
-        decision.pop("provenance")
-        decision.pop("authority")
-    proposal_payload["decisions"][1]["authority"] = "user"
-    proposal_payload["decisions"][:0] = [
-        {
-            "id": "DECISION_TARGET_USERS",
-            "category": "product_requirement",
-            "authority": "user",
-            "summary": "A developer is the intended user.",
-            "rationale": "This interpretation came from the product definition.",
-        },
-        {
-            "id": "DECISION_WORKFLOW",
-            "category": "product_requirement",
-            "authority": "user",
-            "summary": "The user checks Markdown links.",
-            "rationale": "This interpretation came from the product definition.",
-        },
-    ]
-    proposal_payload["decisions"].append(
-        {
-            "id": "DECISION_NO_REMOTE_FETCH",
-            "category": "privacy_or_data",
-            "summary": "without fetching remote URLs",
-            "rationale": "The request states this boundary directly.",
-        }
-    )
-    definition = proposal_payload["product_definition"]
-    definition["target_users"]["decision_ids"] = ["DECISION_TARGET_USERS"]
-    definition["primary_workflow"]["decision_ids"] = ["DECISION_WORKFLOW"]
-    definition["delivery_maturity"]["decision_ids"] = ["DECISION_DELIVERY"]
-    original = json.loads(json.dumps(payload))
-
-    normalized, changes = planning._normalize_planning_response_payload(
-        payload,
-        user_inputs=(request().source_request,),
-    )
-    parsed = PlanningModelResponse.model_validate(normalized)
-
-    assert payload == original
-    assert parsed.proposal is not None
-    assert [item.id for item in parsed.proposal.decisions] == [
-        "DECISION_ACCEPTANCE",
-        "DECISION_DELIVERY",
-        "DECISION_TEAM",
-        "DECISION_MODEL_ROUTE",
-        "DECISION_SCAN_STRUCTURE",
-        "DECISION_NO_REMOTE_FETCH",
-    ]
-    assert all(item.provenance is not None for item in parsed.proposal.decisions)
-    assert parsed.proposal.decisions[1].authority is (
-        PlanningDecisionAuthority.PLANNER_PROPOSAL
-    )
-    assert (
-        parsed.proposal.decisions[1].provenance.kind
-        is PlanningDecisionProvenanceKind.PLANNER_RECOMMENDATION
-    )
-    assert not parsed.proposal.product_definition.target_users.decision_ids
-    assert not parsed.proposal.product_definition.primary_workflow.decision_ids
-    assert not parsed.proposal.product_definition.delivery_maturity.decision_ids
-    assert parsed.proposal.decisions[-1].provenance == PlanningDecisionProvenance(
-        kind=PlanningDecisionProvenanceKind.EXPLICIT_INPUT,
-        source="without fetching remote URLs",
-    )
-    assert any("compiled proposal.decisions[3].authority" in item for item in changes)
-    assert any(
-        "removed redundant direct-input decision DECISION_TARGET_USERS" in item
-        for item in changes
-    )
-
-
-def test_response_normalizer_removes_current_direct_product_duplicate() -> None:
-    payload = proposal_response().model_dump(mode="json")
-    proposal_payload = payload["proposal"]
-    maturity = proposal_payload["product_definition"]["delivery_maturity"]
-    assert maturity["disposition"] == "explicit_input"
-    assert maturity["decision_ids"] == []
-    proposal_payload["decisions"].insert(
-        0,
-        {
-            "id": "DECISION_DUPLICATE_MATURITY",
-            "category": "delivery",
-            "authority": "user",
-            "provenance": {
-                "kind": "explicit_input",
-                "source": maturity["source"],
-            },
-            "summary": "Paraphrased delivery maturity.",
-            "rationale": "The product definition already carries this fact.",
-        },
-    )
-    original = json.loads(json.dumps(payload))
-
-    normalized, changes = planning._normalize_planning_response_payload(payload)
-    parsed = PlanningModelResponse.model_validate(normalized)
-
-    assert payload == original
-    assert parsed.proposal is not None
-    assert "DECISION_DUPLICATE_MATURITY" not in {
-        item.id for item in parsed.proposal.decisions
-    }
-    assert changes == (
-        "compiled proposal.decisions[0].authority from category delivery",
-        "compiled proposal.decisions[0].summary from exact direct-input source",
-        "removed redundant direct-input decision DECISION_DUPLICATE_MATURITY "
-        "from proposal.decisions[0]",
-    )
-
-
 def test_long_direct_input_keeps_a_bounded_grounded_decision_summary() -> None:
     payload = proposal_response().model_dump(mode="json")
     source = " ".join(f"requirement-{index:03d}" for index in range(40))
@@ -5114,58 +4476,6 @@ def test_long_direct_input_rejects_an_ungrounded_bounded_summary() -> None:
             normalized_inputs=(planning._normalized_evidence_text(source),),
             require_current_provenance=True,
         )
-
-
-def test_response_normalizer_preserves_same_source_independent_user_decision() -> None:
-    payload = proposal_response().model_dump(mode="json")
-    proposal_payload = payload["proposal"]
-    operations = proposal_payload["product_definition"]["operational_expectations"]
-    operations.update(
-        {
-            "statement": "Do not fetch remote URLs.",
-            "disposition": "explicit_input",
-            "source": "without fetching remote URLs",
-            "rationale": "The user supplied this operational boundary.",
-            "criterion_ids": ["AC_SCAN"],
-            "decision_ids": [],
-        }
-    )
-    proposal_payload["decisions"].append(
-        {
-            "id": "DECISION_PRIVACY_BOUNDARY",
-            "category": "privacy_or_data",
-            "provenance": {
-                "kind": "explicit_input",
-                "source": "without fetching remote URLs",
-            },
-            "summary": "without fetching remote URLs",
-            "rationale": "The same words also establish a data-access boundary.",
-        }
-    )
-    original = json.loads(json.dumps(payload))
-
-    normalized, changes = planning._normalize_planning_response_payload(
-        payload,
-        user_inputs=(request().source_request,),
-    )
-    parsed = PlanningModelResponse.model_validate(normalized)
-
-    assert payload == original
-    assert parsed.proposal is not None
-    privacy_decision = next(
-        item
-        for item in parsed.proposal.decisions
-        if item.id == "DECISION_PRIVACY_BOUNDARY"
-    )
-    assert privacy_decision.authority is PlanningDecisionAuthority.USER
-    assert privacy_decision.provenance == PlanningDecisionProvenance(
-        kind=PlanningDecisionProvenanceKind.EXPLICIT_INPUT,
-        source="without fetching remote URLs",
-    )
-    assert not any(
-        "removed redundant direct-input decision DECISION_PRIVACY_BOUNDARY" in item
-        for item in changes
-    )
 
 
 def test_current_decision_schema_exposes_source_but_not_derived_authority() -> None:
@@ -5566,98 +4876,6 @@ def test_whole_agent_correction_opens_task_and_verifier_references() -> None:
     )
 
 
-def test_response_normalizer_compiles_question_owner_from_category() -> None:
-    payload = product_intent_question_response().model_dump(mode="json")
-    payload["question"].pop("decision_owner")
-    original = json.loads(json.dumps(payload))
-
-    normalized, changes = planning._normalize_planning_response_payload(payload)
-    parsed = PlanningModelResponse.model_validate(normalized)
-
-    assert payload == original
-    assert parsed.question is not None
-    assert parsed.question.decision_owner is PlanningDecisionAuthority.USER
-    assert changes == (
-        "compiled question.decision_owner from category product_requirement",
-    )
-
-
-def test_response_normalizer_leaves_case_collisions_for_strict_rejection() -> None:
-    payload = proposal_response().model_dump(mode="json")
-    payload["proposal"]["decisions"][0]["id"] = "DECISION_COLLISION"
-    payload["proposal"]["decisions"][1]["id"] = "DECISION_collision"
-
-    normalized, changes = planning._normalize_planning_response_payload(payload)
-
-    assert normalized["proposal"]["decisions"][0]["id"] == "DECISION_COLLISION"
-    assert normalized["proposal"]["decisions"][1]["id"] == "DECISION_collision"
-    assert changes == ()
-    with pytest.raises(ValidationError, match="String should match pattern"):
-        PlanningModelResponse.model_validate(normalized)
-
-
-def test_response_normalizer_leaves_unsafe_paths_for_strict_rejection() -> None:
-    payload = proposal_response().model_dump(mode="json")
-    payload["proposal"]["tasks"][0]["expected_paths"] = ["../secret/"]
-
-    normalized, changes = planning._normalize_planning_response_payload(payload)
-
-    assert normalized["proposal"]["tasks"][0]["expected_paths"] == ["../secret/"]
-    assert changes == ()
-    with pytest.raises(ValidationError, match="canonical safe relative POSIX paths"):
-        PlanningModelResponse.model_validate(normalized)
-
-
-def test_response_normalizer_removes_only_active_profile_criterion_echoes() -> None:
-    profile_criterion = AcceptanceCriterion(
-        id="AC_PROFILE",
-        description="The controller owns this canonical contract.",
-        verification="Run the controller-owned profile gate.",
-    )
-    payload = proposal_response().model_dump(mode="json")
-    payload["proposal"]["acceptance_criteria"].append(
-        {
-            "id": "AC_PROFILE",
-            "description": "A model-authored rewrite must not replace the contract.",
-            "verification": "A model-authored verification must not be authoritative.",
-            "review_boundaries": ["top_level_input"],
-        }
-    )
-    payload["proposal"]["tasks"].append(
-        quality_task_payload(acceptance_criteria=["AC_PROFILE"])
-    )
-    original = json.loads(json.dumps(payload))
-
-    normalized, changes = planning._normalize_planning_response_payload(
-        payload,
-        profile_criterion_ids=(profile_criterion.id,),
-    )
-    parsed = PlanningModelResponse.model_validate(normalized)
-
-    assert payload == original
-    assert parsed.proposal is not None
-    assert [item.id for item in parsed.proposal.acceptance_criteria] == [
-        "AC_SCAN",
-        "AC_REPORT",
-    ]
-    assert parsed.proposal.tasks[-1].acceptance_criteria == ("AC_PROFILE",)
-    assert changes == (
-        "removed controller-owned profile criterion AC_PROFILE from "
-        "proposal.acceptance_criteria[2]",
-    )
-
-    unchanged, unchanged_changes = planning._normalize_planning_response_payload(
-        payload
-    )
-    assert unchanged == payload
-    assert unchanged_changes == ()
-    with pytest.raises(
-        ValidationError,
-        match="writer tasks do not cover proposal acceptance criteria: AC_PROFILE",
-    ):
-        PlanningModelResponse.model_validate(unchanged)
-
-
 def quality_task_payload(
     *,
     acceptance_criteria: list[str] | None = None,
@@ -5701,39 +4919,6 @@ def multi_task_quality_payload(*, review_dependencies: list[str]) -> dict[str, o
         }
     )
     return payload
-
-
-def test_response_normalizer_compiles_cross_agent_task_dependencies() -> None:
-    payload = multi_task_quality_payload(review_dependencies=[])
-    payload["proposal"]["tasks"][-1].pop("dependencies")
-    original = deepcopy(payload)
-
-    normalized, changes = planning._normalize_planning_response_payload(payload)
-    parsed = PlanningModelResponse.model_validate(normalized)
-
-    assert payload == original
-    assert parsed.proposal is not None
-    tasks = {task.id: task for task in parsed.proposal.tasks}
-    assert tasks["TASK_TESTS"].dependencies == ("TASK_IMPLEMENT",)
-    assert tasks["TASK_REVIEW"].dependencies == (
-        "TASK_IMPLEMENT",
-        "TASK_TESTS",
-    )
-    assert changes == (
-        "compiled cross-Agent task dependencies from the authoritative Agent DAG",
-    )
-    persisted = PlanningProposal(
-        run_id=request().run_id,
-        revision=1,
-        created_at=FIXED_TIME,
-        source=PlanningProposalSource.MODEL,
-        source_turn_sequence=1,
-        body=parsed.proposal,
-    )
-    assert persisted.body.tasks[-1].dependencies == (
-        "TASK_IMPLEMENT",
-        "TASK_TESTS",
-    )
 
 
 def test_current_proposal_rejects_uncompiled_task_dependency_projection() -> None:
@@ -12879,14 +12064,21 @@ def test_real_cli_sigint_persists_planning_lifecycle_before_exit_130(
     )
     binary.chmod(0o700)
     script = f"""
-import runpy
+import sys
 import time
 from pathlib import Path
+sys.path.insert(0, {str(Path(__file__).resolve().parent)!r})
+from planning_factories import FIXED_TIME, policy, request
 from software_agent_team import cli
+from software_agent_team.budgets import (
+    AgentBudget, AgentBudgetLedger, BudgetAuthority, ModelPricing,
+)
 from software_agent_team.execution import OpenClawSubprocessExecutor
+from software_agent_team.model_costs import CachePricing
+from software_agent_team.model_metadata import ModelMetadataSource
+from software_agent_team.planning import AdaptivePlanningCoordinator, PlanningStore
 from software_agent_team.process_lifecycle import ProcessLeaseStore
-fixtures = runpy.run_path({str(Path(__file__).resolve())!r})
-store = fixtures['PlanningStore'](Path({str(tmp_path / "planning")!r}))
+store = PlanningStore(Path({str(tmp_path / "planning")!r}))
 class DelayedProcessLeaseStore(ProcessLeaseStore):
     def acquire(self, *args, **kwargs):
         lease = super().acquire(*args, **kwargs)
@@ -12898,27 +12090,27 @@ executor = OpenClawSubprocessExecutor(
     liveness_poll_seconds=5,
     process_lease_store=DelayedProcessLeaseStore(Path({str(tmp_path / "leases")!r})),
 )
-budget = fixtures['AgentBudget'](
-    authority=fixtures['BudgetAuthority'].USER_TASK,
+budget = AgentBudget(
+    authority=BudgetAuthority.USER_TASK,
     max_estimated_cost_usd='2',
 )
-coordinator = fixtures['AdaptivePlanningCoordinator'](
-    executor=executor, store=store, policy=fixtures['policy'](budget=budget),
+coordinator = AdaptivePlanningCoordinator(
+    executor=executor, store=store, policy=policy(budget=budget),
     route_id='default',
-    budget_ledger=fixtures['AgentBudgetLedger'](budget),
-    pricing=fixtures['ModelPricing'](
+    budget_ledger=AgentBudgetLedger(budget),
+    pricing=ModelPricing(
         model='provider/model', input_cost_per_million_usd='1',
         output_cost_per_million_usd='2',
-        pricing_source=fixtures['ModelMetadataSource'].USER_SUPPLIED,
-        cache_pricing=fixtures['CachePricing'](
+        pricing_source=ModelMetadataSource.USER_SUPPLIED,
+        cache_pricing=CachePricing(
             read_cost_per_million_usd='0.1', write_cost_per_million_usd='0',
-            source=fixtures['ModelMetadataSource'].USER_SUPPLIED,
-            observed_at=fixtures['FIXED_TIME'],
+            source=ModelMetadataSource.USER_SUPPLIED,
+            observed_at=FIXED_TIME,
         ),
     ),
 )
 cli._run_product = lambda: coordinator.start(
-    fixtures['request'](), answer_question=lambda question: None,
+    request(), answer_question=lambda question: None,
 )
 raise SystemExit(cli.main([]))
 """
@@ -14116,3 +13308,102 @@ def test_record_correction_keeps_unrelated_relations_immutable() -> None:
         "/proposal/acceptance_criteria/0/review_boundaries",
     )
     assert not plan.require_all_targets
+
+
+def test_response_normalizer_compiles_question_owner_from_category() -> None:
+    payload = product_intent_question_response().model_dump(mode="json")
+    payload["question"].pop("decision_owner")
+    original = json.loads(json.dumps(payload))
+
+    normalized, changes = planning._normalize_planning_response_payload(payload)
+    parsed = PlanningModelResponse.model_validate(normalized)
+
+    assert payload == original
+    assert parsed.question is not None
+    assert parsed.question.decision_owner is PlanningDecisionAuthority.USER
+    assert changes == (
+        "compiled question.decision_owner from category product_requirement",
+    )
+
+
+def test_response_normalizer_removes_only_active_profile_criterion_echoes() -> None:
+    profile_criterion = AcceptanceCriterion(
+        id="AC_PROFILE",
+        description="The controller owns this canonical contract.",
+        verification="Run the controller-owned profile gate.",
+    )
+    payload = proposal_response().model_dump(mode="json")
+    payload["proposal"]["acceptance_criteria"].append(
+        {
+            "id": "AC_PROFILE",
+            "description": "A model-authored rewrite must not replace the contract.",
+            "verification": "A model-authored verification must not be authoritative.",
+            "review_boundaries": ["top_level_input"],
+        }
+    )
+    payload["proposal"]["tasks"].append(
+        quality_task_payload(acceptance_criteria=["AC_PROFILE"])
+    )
+    original = json.loads(json.dumps(payload))
+
+    normalized, changes = planning._normalize_planning_response_payload(
+        payload,
+        profile_criterion_ids=(profile_criterion.id,),
+    )
+    parsed = PlanningModelResponse.model_validate(normalized)
+
+    assert payload == original
+    assert parsed.proposal is not None
+    assert [item.id for item in parsed.proposal.acceptance_criteria] == [
+        "AC_SCAN",
+        "AC_REPORT",
+    ]
+    assert parsed.proposal.tasks[-1].acceptance_criteria == ("AC_PROFILE",)
+    assert changes == (
+        "removed controller-owned profile criterion AC_PROFILE from "
+        "proposal.acceptance_criteria[2]",
+    )
+
+    unchanged, unchanged_changes = planning._normalize_planning_response_payload(
+        payload
+    )
+    assert unchanged == payload
+    assert unchanged_changes == ()
+    with pytest.raises(
+        ValidationError,
+        match="writer tasks do not cover proposal acceptance criteria: AC_PROFILE",
+    ):
+        PlanningModelResponse.model_validate(unchanged)
+
+
+def test_response_normalizer_compiles_cross_agent_task_dependencies() -> None:
+    payload = multi_task_quality_payload(review_dependencies=[])
+    payload["proposal"]["tasks"][-1].pop("dependencies")
+    original = deepcopy(payload)
+
+    normalized, changes = planning._normalize_planning_response_payload(payload)
+    parsed = PlanningModelResponse.model_validate(normalized)
+
+    assert payload == original
+    assert parsed.proposal is not None
+    tasks = {task.id: task for task in parsed.proposal.tasks}
+    assert tasks["TASK_TESTS"].dependencies == ("TASK_IMPLEMENT",)
+    assert tasks["TASK_REVIEW"].dependencies == (
+        "TASK_IMPLEMENT",
+        "TASK_TESTS",
+    )
+    assert changes == (
+        "compiled cross-Agent task dependencies from the authoritative Agent DAG",
+    )
+    persisted = PlanningProposal(
+        run_id=request().run_id,
+        revision=1,
+        created_at=FIXED_TIME,
+        source=PlanningProposalSource.MODEL,
+        source_turn_sequence=1,
+        body=parsed.proposal,
+    )
+    assert persisted.body.tasks[-1].dependencies == (
+        "TASK_IMPLEMENT",
+        "TASK_TESTS",
+    )
