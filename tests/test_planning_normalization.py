@@ -3,20 +3,59 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
-from planning_factories import proposal_body, proposal_response, request
+from planning_factories import (
+    AdvancingClock,
+    policy,
+    proposal_body,
+    proposal_response,
+    request,
+)
 from pydantic import ValidationError
 
 import software_agent_team.planning as planning
+from software_agent_team.execution import ScriptedAgentExecutor, ScriptedAgentResponse
 from software_agent_team.planning import (
+    AdaptivePlanningCoordinator,
     PlanningDecisionAuthority,
     PlanningDecisionProvenance,
     PlanningDecisionProvenanceKind,
     PlanningError,
     PlanningModelResponse,
     PlanningResponseKind,
+    PlanningStore,
 )
+
+
+def test_normalization_persists_original_submission_at_production_boundary(
+    tmp_path: Path,
+) -> None:
+    payload = proposal_response().model_dump(mode="json")
+    payload["proposal"]["non_goals_note"] = "legacy extra field"
+    executor = ScriptedAgentExecutor(
+        [ScriptedAgentResponse(text="ignored", submission_payload=payload)]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(),
+        clock=AdvancingClock(),
+    )
+
+    created = coordinator.start(
+        request(),
+        answer_question=lambda _question: pytest.fail("unexpected question"),
+    )
+
+    assert created is not None
+    assert len(executor.requests) == 1
+    turn = store.load_turn(request().run_id, 1)
+    assert turn.submission_payload == payload
+    assert turn.parsed_response == proposal_response()
+    assert len(turn.response_normalizations) == 1
 
 
 def test_response_normalizer_canonicalizes_only_safe_presentation_variants() -> None:

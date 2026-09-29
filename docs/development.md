@@ -1047,7 +1047,10 @@ the retry loop. These stages share their existing authority and persisted
 diagnostic contracts; they are not alternate validation paths. Keep small
 normalization examples in `tests/test_planning_normalization.py`, shared valid
 inputs in `tests/planning_factories.py`, and coordinator/lifecycle integration
-coverage in the behavior-owning test modules. A test that exercises the real
+coverage in the behavior-owning test modules. Normalization persistence and
+runtime thinking selection are checked through the production coordinator in
+`tests/test_planning_normalization.py` and `tests/test_planning_runtime.py`.
+A test that exercises the real
 CLI process should import its fixture inputs explicitly rather than execute a
 whole test module for its globals.
 

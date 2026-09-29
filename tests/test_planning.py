@@ -11,7 +11,7 @@ import subprocess
 import sys
 import time
 from copy import deepcopy
-from datetime import datetime, timedelta
+from datetime import timedelta
 from decimal import Decimal
 from io import StringIO
 from pathlib import Path
@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 from planning_factories import (
     FIXED_TIME,
+    AdvancingClock,
     policy,
     proposal,
     proposal_body,
@@ -141,18 +142,6 @@ AMBIGUOUS_LINK_REQUEST = (
     "For developers who will use it repeatedly, build a usable local product that "
     "checks Markdown links."
 )
-
-
-class AdvancingClock:
-    """Return deterministic increasing timestamps for persisted evidence."""
-
-    def __init__(self) -> None:
-        self.current = FIXED_TIME
-
-    def __call__(self) -> datetime:
-        value = self.current
-        self.current += timedelta(seconds=1)
-        return value
 
 
 def strip_v8_decision_fields(body_payload: dict[str, object]) -> None:
@@ -744,61 +733,6 @@ def test_planning_uses_typed_submission_instead_of_assistant_text(
     loaded = PlanningTurn.model_validate(without_presentation)
     assert loaded.response_text is None
     assert loaded.parsed_response == proposal_response()
-
-
-def test_planning_compiles_thinking_from_the_runtime_profile(tmp_path: Path) -> None:
-    executor = ScriptedAgentExecutor(
-        [
-            ScriptedAgentResponse(
-                text="ignored",
-                submission_payload=proposal_response().model_dump(mode="json"),
-            )
-        ]
-    )
-    coordinator = AdaptivePlanningCoordinator(
-        executor=executor,
-        store=PlanningStore(tmp_path / "planning"),
-        policy=policy(),
-        clock=AdvancingClock(),
-    )
-    gemini_request = request().model_copy(update={"model": "google/gemini-3.8-flash"})
-
-    coordinator.start(
-        gemini_request,
-        answer_question=lambda _question: pytest.fail("unexpected question"),
-    )
-
-    assert executor.requests[0].thinking_level == "medium"
-
-
-def test_planning_captures_extra_fields_before_deterministic_normalization(
-    tmp_path: Path,
-) -> None:
-    payload = proposal_response().model_dump(mode="json")
-    payload["proposal"]["non_goals_note"] = "legacy extra field"
-    executor = ScriptedAgentExecutor(
-        [ScriptedAgentResponse(text="ignored", submission_payload=payload)]
-    )
-    store = PlanningStore(tmp_path / "planning")
-    coordinator = AdaptivePlanningCoordinator(
-        executor=executor,
-        store=store,
-        policy=policy(),
-        clock=AdvancingClock(),
-    )
-
-    created = coordinator.start(
-        request(),
-        answer_question=lambda _question: pytest.fail("unexpected question"),
-    )
-
-    assert created is not None
-    assert len(executor.requests) == 1
-    turn = store.load_turn(request().run_id, 1)
-    assert turn.submission_payload == payload
-    assert turn.response_normalizations == (
-        "removed schema-forbidden field /proposal/non_goals_note",
-    )
 
 
 def test_planning_repairs_schema_then_all_invalid_product_dimensions_together(

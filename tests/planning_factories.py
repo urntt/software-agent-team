@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from software_agent_team.artifacts import (
     DeliveryMaturity,
@@ -39,6 +39,18 @@ from software_agent_team.teams import (
 )
 
 FIXED_TIME = datetime(2026, 8, 26, 12, 0, tzinfo=UTC)
+
+
+class AdvancingClock:
+    """Return deterministic increasing timestamps for persisted evidence."""
+
+    def __init__(self) -> None:
+        self.current = FIXED_TIME
+
+    def __call__(self) -> datetime:
+        value = self.current
+        self.current += timedelta(seconds=1)
+        return value
 
 
 def request(
