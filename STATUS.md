@@ -17,8 +17,19 @@ fixtures skipped), and published the release-bound `bootstrap.sh` and
 canonical gate with 1,987 tests passing and one root-only fixture skipped.
 Fresh-account checks installed the exact dev candidate and the public current
 stable, verified release identity and isolated runtime paths, then completed
-export, uninstall, and exact cleanup without provider calls. A provider-backed
-ordinary-user task on `v0.5.2` remains unvalidated.
+export, uninstall, and exact cleanup without provider calls. A fresh-account
+DeepSeek task on the published `v0.5.2` reached first Planning but failed when
+the provider rejected a named submission-tool choice absent from the request's
+direct tool list. It did not reach approval or delivery.
+
+The subsequent main-branch fix keeps bound submission tools directly visible
+and reads the pinned OpenClaw 2026.9.6 per-Agent SQLite session evidence. A
+local mock-provider invocation through the actual OpenClaw and SAT execution
+adapter accepted a bound Planning submission; its provider request, tool
+result, and session attribution were checked. The same candidate diff passed
+the OVH canonical gate with 1,990 tests passing and one root-only fixture
+skipped. This is offline integration evidence, not a published-release or
+provider-backed ordinary-user success.
 
 The previous `v0.5.1` release completed a DeepSeek/Linux ordinary-user delivery
 and 13/13 independent black-box checks. That historical success does not
@@ -89,7 +100,8 @@ establish `v0.5.2` provider-backed behavior or another provider/host mode.
 
 The tagged `v0.5.1` DeepSeek journey demonstrates one Linux managed-install
 and single-route delivery path. The `v0.5.2` stable installation checks cover
-identity and lifecycle without a provider-backed task. Neither establishes a
+identity and lifecycle, while its first provider-backed task failed in Planning.
+The newer checkout fix has not yet completed a provider-backed task. None establishes a
 fresh WSL recovery run,
 rootless Docker without a host Docker group, every Gemini route, a live
 provider switch, manual slow-key terminal usability, or paths requiring a
