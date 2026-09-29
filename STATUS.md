@@ -1,6 +1,6 @@
 # Project Status
 
-**Last reviewed:** September 28, 2026
+**Last reviewed:** September 29, 2026
 
 This page records current implementation and validation facts. Product direction
 and experiments belong to [`VISION.md`](VISION.md); behavioral contracts and
@@ -62,6 +62,14 @@ route; they do not establish another provider or host mode.
   decisions. Pure response-envelope and path normalization has a separate
   module; a content-free rule-audit tool can aggregate persisted Planning
   diagnostics by source version, stage, model fingerprint, and outcome.
+  Response normalization now separates atomic relations, exact answered
+  dimensions, profile-criterion ownership, and safe path presentation into
+  named steps; the dynamic runner separates incomplete-call evidence from
+  completed typed-response acceptance. The input fixture has one test owner,
+  and normalization cases occupy a focused test module. A clean-checkout OVH
+  canonical gate for revision `1e8b684` passed doctor, formatting, lint, and
+  1,978 tests, with one root-only cross-UID test skipped. No provider-backed
+  behavior improvement is inferred from this structural refactor.
 
 ## Validation limits and open capabilities
 
